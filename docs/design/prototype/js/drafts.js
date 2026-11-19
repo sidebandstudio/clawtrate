@@ -25,7 +25,6 @@
     answer: P.get("answer") || "applied",
     vanswer: P.get("vanswer") || "confirmed",
     tool: P.get("tool") || "reports",
-    newcall: P.get("newcall") || "matches",
     folded: true,
     value: "",
     hosts: ["api.example.com"],
@@ -36,8 +35,9 @@
     saving: null,
   };
   if (S.s === "hosts") S.hosts = ["api.example.com", "api.example.net"];
-  if (S.d === "differs") S.newcall = "differs";
-  if (["editsent", "match", "differs"].includes(S.d)) S.fromEdit = true;
+  // The states of an edited draft (section 4): the edit is the plugin's, held a second time.
+  const EDIT_STATES = ["edited", "elsewhere", "editsent", "editdiscarded", "editexpired", "editrestart"];
+  if (EDIT_STATES.includes(S.d)) S.edited = true;
 
   // The data ---------------------------------------------------------------
   const TOOL = { email: "mail_send", slack: "message" };
@@ -52,13 +52,15 @@
   };
   const SLACK = { workspace: "Example Co", to: "#ops", thread: "Disk alerts", text: "Media box disk at 91%. Last month's logs are in archive/." };
   const EDITED = {
-    email: { ...EMAIL, subject: "Media box report: disk at 91%", body: "Hi Dana,\n\nThe disk is at 91%. Last month's logs are in archive/, and the report is attached.\n\nOtto" },
+    email: {
+      ...EMAIL,
+      to: ["dana@example.com", "sam@example.net"],
+      subject: "Media box report: disk at 91%",
+      body: "Hi Dana and Sam,\n\nThe disk is at 91%. Last month's logs are in archive/, and the report is attached.\n\nOtto",
+    },
     slack: { ...SLACK, text: "Disk at 91% on the media box. Logs moved to archive/." },
   };
-  const BOT_RETYPED = {
-    email: { ...EDITED.email, body: "Hi Dana,\n\nThe disk is at 91%. I moved the logs to archive/. Report attached.\n\nOtto" },
-    slack: { ...EDITED.slack, text: "Disk at 91%. Logs moved to archive/." },
-  };
+  const CHANGED = { email: ["To", "Subject", "Body"], slack: ["Body"] };
   const VAULT = [
     { name: "BUILD_REGION", kind: "Readable by bots", hosts: [], updated: "Nov 3", refs: [] },
     { name: "MEDIA_BOX_TOKEN", kind: "Protected", hosts: ["media.example.net"], updated: "Nov 12", refs: [] },
@@ -135,12 +137,12 @@
 
   // The draft card ------------------------------------------------------------
   const rowsOf = (m, kind, changed = []) => {
-    const mark = (k) => (changed.includes(k) ? `<span class="d-changed">Changed</span>` : "");
+    const mark = (k) => (changed.includes(k) ? `<span class="d-changed">Edited</span>` : "");
     const rows =
       kind === "email"
         ? [
             ["From", esc(m.from)],
-            ["To", esc(m.to.join(", "))],
+            ["To", esc(m.to.join(", ")) + mark("To")],
             ["Cc", esc(m.cc.join(", "))],
             ["Subject", esc(m.subject) + mark("Subject")],
           ]
@@ -155,7 +157,7 @@
     const text = kind === "email" ? m.body : m.text;
     const long = text.split("\n").length > 8;
     return (
-      `<p class="d-body" data-folded="${long && S.folded}">${esc(text)}${changed.includes("Body") ? `<span class="d-changed">Changed</span>` : ""}</p>` +
+      `<p class="d-body" data-folded="${long && S.folded}">${esc(text)}${changed.includes("Body") ? `<span class="d-changed">Edited</span>` : ""}</p>` +
       (long ? `<p class="d-sentence"><button type="button" class="link-button" data-d="fold">${S.folded ? "Show more" : "Show less"}</button></p>` : "")
     );
   };
@@ -182,11 +184,17 @@
       : "Otto wants to post this through its Slack channel, with the message tool.";
   const recipient = (m, kind) => (kind === "email" ? m.to[0] : m.to);
 
-  function pendingCard(m, kind, { fresh = false, match = null } = {}) {
+  function pendingCard(m, kind) {
     const st = S.d;
+    // An edited draft: the second hold (section 4, step 3), or the first hold
+    // after another device gave the plugin its edit.
+    const editedView = st === "edited" || st === "elsewhere" || (S.edited && ["sending", "refused", "noanswer"].includes(st));
+    if (editedView) m = EDITED[kind];
+    const changed = editedView ? CHANGED[kind] : [];
     const sending = st === "sending" || st === "discarding";
     const answering = S.access !== "read";
-    const region = `${title(kind)} to ${recipient(m, kind)}. Ready to send.`;
+    const heading = editedView ? (kind === "email" ? "Edited email" : "Edited Slack message") : title(kind);
+    const region = `${heading} to ${recipient(m, kind)}. Ready to send.`;
     let decision = "";
     if (sending) decision = `<p class="d-say">${icon("clock")} Sending your decision…</p>`;
     if (st === "refused")
@@ -195,17 +203,24 @@
       decision = `<p class="d-say" data-tone="warn">No answer from the gateway. Your decision may or may not have been applied.</p>`;
     if (st === "disabled") decision = `<p class="d-say" data-tone="accent">Drafts off for Otto. This draft is still waiting for you.</p>`;
     if (st === "disablefailed") decision = `<p class="d-say" data-tone="danger">Couldn't save. Drafts are still on for Otto.</p>`;
-    if (st === "editfailed") decision = `<p class="d-say" data-tone="danger">This request is still waiting, so your version wasn't sent to Otto.</p>`;
-    const matchLine = match
-      ? match.same
-        ? `<p class="d-match">Matches the version you sent at 5:44 PM.</p>`
-        : `<p class="d-match" data-tone="warn">Differs from the version you sent at 5:44 PM: ${match.fields.join(", ")}. <button type="button" class="link-button" data-d="show-mine">Show what you sent</button></p>`
+    if (st === "editsaving") decision = `<p class="d-say">${icon("clock")} Giving your edit to the drafts plugin…</p>`;
+    if (st === "editfailed") decision = `<p class="d-say" data-tone="danger">Clawtrate's drafts plugin didn't take your edit. Nothing was sent; the draft is still waiting.</p>`;
+    const noun = kind === "email" ? "email" : "message";
+    const matchLine = editedView
+      ? `<p class="d-match">${st === "elsewhere" ? "Edited on another device at 5:44 PM." : `You edited Otto's ${noun}. This is what will be sent.`} <button type="button" class="link-button" data-d="show-original">${S.showOriginal ? "Hide Otto's version" : "Show Otto's version"}</button></p>`
       : "";
     let actions = "";
     if (answering) {
       if (st === "noanswer") actions = button("Check again", 'data-d="check"') + `<span class="spacer"></span>` + button("Discard", 'data-d="discard"', "quiet");
-      else if (st === "refused" || st === "editfailed")
-        actions = button("Try again", `data-d="${st === "editfailed" ? "edit-send" : "send"}"`, "primary") + `<span class="spacer"></span>` + button("Discard", 'data-d="discard"', "quiet");
+      else if (st === "refused") actions = button("Try again", 'data-d="send"', "primary") + `<span class="spacer"></span>` + button("Discard", 'data-d="discard"', "quiet");
+      else if (st === "editfailed")
+        actions =
+          button("Try again", 'data-d="edit-send"', "primary") + button("Cancel edit", 'data-d="edit-cancel"') + `<span class="spacer"></span>` + button("Discard", 'data-d="discard"', "quiet");
+      else if (editedView)
+        actions =
+          button(sending && S.last === "send" ? "Sending…" : `Send edited ${noun}`, `data-d="send"${sending ? " disabled" : ""}`, "primary") +
+          `<span class="spacer"></span>` +
+          button("Discard", 'data-d="discard"', "quiet");
       else
         actions =
           button(sending && S.last === "send" ? "Sending…" : sendLabel(kind), `data-d="send"${sending ? " disabled" : ""}`, "primary") +
@@ -218,12 +233,13 @@
         ? `<div class="request-inset d-full"><dl class="d-facts"><dt>Tool</dt><dd><code>${TOOL[kind]}</code></dd><dt>Bot</dt><dd>Otto</dd><dt>Task</dt><dd>Disk almost full on the media box</dd><dt>Asked</dt><dd>5:42 PM, expires 5:52 PM</dd><dt>Held by</dt><dd>Clawtrate's drafts plugin: "Send this draft?"</dd></dl></div>`
         : "";
     return (
-      `<section class="card request d-card" data-kind="draft" data-state="pending" role="region" aria-label="${esc(region)}" data-testid="${fresh ? "draft-new" : "draft"}">` +
-      `<header class="request-head"><div><h3 class="request-title">${title(kind)}</h3><p class="d-sub">${subline(kind)}</p>${matchLine}</div><span class="tag" data-tone="warn">Ready to send</span></header>` +
-      rowsOf(m, kind, match && !match.same ? match.fields : []) +
-      bodyOf(m, kind, match && !match.same ? match.fields : []) +
+      `<section class="card request d-card" data-kind="draft" data-state="pending" role="region" aria-label="${esc(region)}" data-testid="draft">` +
+      `<header class="request-head"><div><h3 class="request-title">${heading}</h3><p class="d-sub">${subline(kind)}</p>${matchLine}</div><span class="tag" data-tone="warn">Ready to send</span></header>` +
+      rowsOf(m, kind, changed) +
+      bodyOf(m, kind, changed) +
       filesOf(m, kind) +
-      (S.showMine && match && !match.same ? `<div class="d-editnote"><b>What you sent at 5:44 PM</b>${bodyOf(EDITED[kind], kind)}</div>` : "") +
+      (editedView && S.showOriginal ? originalOf(kind) : "") +
+      (st === "edited" ? `<p class="d-hint">The gateway asks again because you edited it. This answer sends it.</p>` : "") +
       decision +
       (answering ? `<div class="request-actions">${actions}</div>` : accessBar("Answering needs approvals access.")) +
       `<p class="d-sentence"><button type="button" class="link-button" data-d="full">${st === "full" ? "Hide full request" : "Show full request"}</button></p>` +
@@ -233,8 +249,14 @@
     );
   }
 
+  const originalOf = (kind) =>
+    `<div class="d-editnote" data-testid="original"><b>Otto's version</b>${rowsOf(kind === "email" ? EMAIL : SLACK, kind)}${bodyOf(kind === "email" ? EMAIL : SLACK, kind)}</div>`;
+
   function editCard(kind) {
     const m = kind === "email" ? EMAIL : SLACK;
+    const st = S.d;
+    const busy = st === "editsaving";
+    const noun = kind === "email" ? "email" : "message";
     const fields =
       kind === "email"
         ? `<label for="e-to">To</label><input class="input" id="e-to" value="${esc(m.to.join(", "))}" /><label for="e-cc">Cc</label><input class="input" id="e-cc" value="${esc(m.cc.join(", "))}" /><label for="e-subject">Subject</label><input class="input" id="e-subject" value="${esc(m.subject)}" />`
@@ -243,17 +265,40 @@
       `<section class="card request d-card" data-kind="draft" data-state="editing" role="region" aria-label="${title(kind)}. Editing." data-testid="draft">` +
       `<header class="request-head"><div><h3 class="request-title">${title(kind)}</h3><p class="d-sub">${subline(kind)}</p></div><span class="tag" data-tone="warn">Ready to send</span></header>` +
       `<div class="d-edit">${fields}<textarea id="e-body" aria-label="${kind === "email" ? "Body" : "Message"}">${esc(kind === "email" ? m.body : m.text)}</textarea></div>` +
-      `<p class="d-editnote">Edits can't be added to a waiting request. Sending your version discards this one and asks Otto to send yours instead. Otto's new ${kind === "email" ? "email" : "message"} will wait here for you again.</p>` +
-      `<div class="request-actions">${button("Send your version to Otto", 'data-d="edit-send"', "primary")}${button("Cancel edit", 'data-d="edit-cancel"')}<span class="spacer"></span>${button("Discard", 'data-d="discard"', "quiet")}</div>` +
+      (kind === "email" ? `${filesOf(m, kind)}<p class="d-hint">From and the attachments stay as Otto set them.</p>` : "") +
+      `<p class="d-editnote">Your edit goes to Clawtrate's drafts plugin, for this draft only. Sending it releases Otto's ${noun} to the plugin, which swaps in your edit. The gateway then asks once more, for the edited ${noun}, and that answer sends it.</p>` +
+      (busy ? `<p class="d-say">${icon("clock")} Giving your edit to the drafts plugin…</p>` : "") +
+      (st === "editfailed"
+        ? `<p class="d-say" data-tone="danger">Clawtrate's drafts plugin didn't take your edit. Nothing was sent; the draft is still waiting.${S.editWhy ? ` ${S.editWhy}` : ""}</p>`
+        : "") +
+      `<div class="request-actions">${button(st === "editfailed" ? "Try again" : `Send edited ${noun}`, `data-d="edit-send"${busy ? " disabled" : ""}`, "primary")}${button("Cancel edit", `data-d="edit-cancel"${busy ? " disabled" : ""}`)}<span class="spacer"></span>${button("Discard", 'data-d="discard"', "quiet")}</div>` +
       `<div class="d-foot">${pluginMark()}</div></section>`
     );
   }
 
-  function resolvedCard(m, kind, tag, tone, sentence) {
+  const showOriginalLink = () =>
+    `<button type="button" class="link-button" data-d="show-original">${S.showOriginal ? "Hide Otto's version" : "Show Otto's version"}</button>`;
+
+  // The bot's own action card for the call: its arguments are the bot's, so the
+  // edit is said from the drafts plugin's record (section 4).
+  function actionCard(kind) {
+    const m = kind === "email" ? EMAIL : SLACK;
+    const line =
+      S.p === "running" && !S.recordGone
+        ? `Edited before sending: ${CHANGED[kind].join(", ")}. What was sent is on the draft card.`
+        : "Clawtrate can't tell whether this was edited: its drafts plugin isn't answering.";
+    return (
+      `<section class="card d-card" data-kind="action" role="region" aria-label="Otto used ${TOOL[kind]}." data-testid="action">` +
+      `<div class="d-resolved"><span class="tag">Done</span><span>Otto used <code>${TOOL[kind]}</code></span><span class="d-time">5:44 PM</span></div>` +
+      `<div style="padding: 0 14px 14px"><p class="d-sentence">Otto asked to send to ${esc(kind === "email" ? m.to.join(", ") : m.to)}${kind === "email" ? `, subject "${esc(m.subject)}"` : ""}.</p><p class="d-sentence" data-testid="edit-line">${line}</p></div></section>`
+    );
+  }
+
+  function resolvedCard(m, kind, tag, tone, sentence, edited = false) {
     return (
       `<section class="card request d-card" data-kind="draft" data-state="resolved" role="region" aria-label="${esc(`${title(kind)} to ${recipient(m, kind)}. ${tag}.`)}" data-testid="draft-resolved">` +
       `<div class="d-resolved"><span class="tag"${tone ? ` data-tone="${tone}"` : ""}>${tag}</span><span>${title(kind)} to ${esc(recipient(m, kind))}</span><span class="d-time">5:43 PM</span></div>` +
-      `<div style="padding: 0 14px 14px">${rowsOf(m, kind)}${bodyOf(m, kind)}${filesOf(m, kind)}<p class="d-sentence">${sentence}</p></div></section>`
+      `<div style="padding: 0 14px 14px">${rowsOf(m, kind, edited ? CHANGED[kind] : [])}${bodyOf(m, kind, edited ? CHANGED[kind] : [])}${filesOf(m, kind)}<p class="d-sentence">${sentence}</p>${edited && S.showOriginal ? originalOf(kind) : ""}</div></section>`
     );
   }
 
@@ -275,23 +320,11 @@
       return (
         `<div class="d-line">${icon("message")} Otto used <code>${TOOL[kind]}</code>. It wasn't held as a draft; its result is on its action card.</div>` + notRunningNote
       );
-    const editedNew = ["match", "differs", "editsent"].includes(st) || (S.fromEdit && ["sending", "sent", "sentnoreport", "failed", "discarded", "refused", "noanswer", "already"].includes(st));
-    if (editedNew) {
-      const old = resolvedCard(m, kind, "Discarded", "", "Discarded: you sent your own version to Otto at 5:44 PM.");
-      const yours = EDITED[kind];
-      const msg =
-        `<div class="msg" data-role="user"><div class="bubble" data-testid="edit-message">Please send this instead:<br />` +
-        (kind === "email"
-          ? `To: ${esc(yours.to.join(", "))}<br />Cc: ${esc(yours.cc.join(", "))}<br />Subject: ${esc(yours.subject)}<br /><br />${esc(yours.body).replace(/\n/g, "<br />")}`
-          : `To: ${esc(yours.to)}<br />Thread: ${esc(yours.thread)}<br /><br />${esc(yours.text)}`) +
-        `</div></div>`;
-      if (st === "editsent") return old + msg + `<p class="d-line">Otto is working on your message.</p>`;
-      const nm = S.newcall === "differs" ? BOT_RETYPED[kind] : EDITED[kind];
-      const match = S.newcall === "differs" ? { same: false, fields: ["Body"] } : { same: true };
-      const next = ["match", "differs"].includes(st) || ["sending", "refused", "noanswer"].includes(st) ? pendingCard(nm, kind, { fresh: true, match }) : finished(nm, kind);
-      return old + msg + next;
+    if (S.edited && ["editsent", "editdiscarded", "editexpired", "editrestart", "failed", "sentnoreport", "already"].includes(st)) {
+      const done = finished(EDITED[kind], kind);
+      return (st === "editsent" ? actionCard(kind) : "") + done;
     }
-    if (["edit"].includes(st)) return editCard(kind);
+    if (["edit", "editsaving", "editfailed"].includes(st)) return editCard(kind);
     const done = finished(m, kind);
     return done || pendingCard(m, kind);
   }
@@ -308,12 +341,18 @@
     if (st === "cancelled") return resolvedCard(m, kind, "Cancelled", "", "You stopped the run before answering. Nothing was sent.");
     if (st === "filechanged")
       return resolvedCard(
-        m,
+        kind === "email" ? EMAIL : SLACK,
         kind,
         "Not sent",
         "danger",
-        "report.txt changed after Otto asked (28 bytes then, 44 now), so nothing was sent. Otto was told why. If it asks again, the new draft appears below.",
+        "report.txt changed after Otto asked (28 bytes then, 44 now), so nothing was sent. Otto was told why. If it asks again, the new draft appears below." +
+          (S.editGiven ? " Your edit wasn't used." : ""),
       );
+    if (st === "editsent")
+      return resolvedCard(m, kind, "Answered", "accent", `${sentSentence(m, kind)} You edited this before it was sent. ${showOriginalLink()}`, true);
+    if (st === "editdiscarded") return resolvedCard(m, kind, "Discarded", "", "Discarded at 5:44 PM. Nothing was sent. Your edit wasn't used.", true);
+    if (st === "editexpired") return resolvedCard(m, kind, "Expired", "", "Expired at 5:54 PM without an answer. Nothing was sent. Your edit wasn't used.", true);
+    if (st === "editrestart") return resolvedCard(m, kind, "Closed", "", "The gateway restarted before this was sent. Nothing was sent, and your edit wasn't used.", true);
     return "";
   }
 
@@ -322,7 +361,7 @@
     return (
       `<div class="b-dialog-shim"><dialog class="b-dialog d-dialog" data-kind="confirm" role="alertdialog" open aria-labelledby="dis-title" aria-describedby="dis-text" data-testid="disable-dialog">` +
       `<div class="b-head"><h2 id="dis-title">Send Otto's emails and messages without drafts?</h2></div>` +
-      `<div class="b-body"><p id="dis-text">Otto's sends through <code>${TOOL.email}</code> and the message tool won't wait for you. They'll run as Otto's rules allow: <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rules">what Otto may do</a>. This is a setting of Clawtrate's drafts plugin; it holds only while the plugin runs.</p></div>` +
+      `<div class="b-body"><p id="dis-text">Otto's sends through <code>${TOOL.email}</code> and the message tool won't wait for you. They'll run as Otto's rules allow: <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rules">what Otto may do</a>. The gateway's automatic review covers commands, not sends. This is a setting of Clawtrate's drafts plugin; it holds only while the plugin runs.</p></div>` +
       `<div class="b-foot b-actions">${button("Send without drafts", 'data-d="disable-yes"', "primary")}${button("Cancel", 'data-d="disable-no"')}</div></dialog></div>`
     );
   }
@@ -342,7 +381,7 @@
     const resolved = ["saved", "already", "skipped", "expired"].includes(st);
     if (resolved) {
       const words = {
-        saved: ["Saved", "accent", `Saved securely to your gateway as ${name} at 5:44 PM. Otto can't read it back.`],
+        saved: ["Saved", "accent", `Saved to your gateway as ${name} at 5:44 PM. Otto can't read it back.`],
         already: ["Answered", "", "Already answered on another device. Nothing was sent from here."],
         skipped: ["Skipped", "", "Skipped. Otto was told no secret arrived."],
         expired: ["Expired", "", "Expired without an answer. Otto was told no secret arrived."],
@@ -377,7 +416,7 @@
       if (st === "noanswer") actions = button("Check", 'data-d="s-check"', "primary");
       else
         actions =
-          button(saving ? "Saving…" : "Save securely", `data-d="s-save"${saving || !S.value ? " disabled" : ""}`, "primary") +
+          button(saving ? "Saving…" : "Save to the gateway", `data-d="s-save"${saving || !S.value ? " disabled" : ""}`, "primary") +
           `<span class="spacer"></span>` +
           button("Skip", `data-d="s-skip"${saving ? " disabled" : ""}`, "quiet");
     }
@@ -385,7 +424,7 @@
       `<section class="card request d-card" data-kind="secret" data-state="pending" role="region" aria-label="Otto asks for a secret: ${name}." data-testid="secret">` +
       `<header class="request-head"><div><h3 class="request-title">Otto asks for a secret</h3></div><span class="tag">Secret</span></header>` +
       `<dl class="d-rows"><dt>Name</dt><dd><code>${name}</code></dd><dt>Why</dt><dd>"To read prices from the store's API for your tracker."</dd></dl>` +
-      `<p class="d-sentence">It will be saved to your gateway's shared secret store.${S.s === "exists" ? " This replaces the value saved as STORE_API_KEY on Nov 19." : ""}</p>` +
+      `<p class="d-sentence">It will be saved to your gateway's shared secret store. The gateway keeps it in its state database on its own machine and doesn't encrypt it there. Skip saves nothing.${S.s === "exists" ? " This replaces the value saved as STORE_API_KEY on Nov 19." : ""}</p>` +
       hosts +
       field +
       note +
@@ -407,7 +446,7 @@
     const cards = secret ? secretCards() : draftCards();
     const pending =
       (secret && ["pending", "typed", "hosts", "exists", "saving", "refused", "noanswer"].includes(S.s)) ||
-      (!secret && S.p === "running" && !finished(S.kind === "email" ? EMAIL : SLACK, S.kind) && S.d !== "editsent" && !(S.fromEdit && ["sent", "sentnoreport", "failed", "discarded", "already"].includes(S.d)));
+      (!secret && S.p === "running" && !finished(S.kind === "email" ? EMAIL : SLACK, S.kind));
     const shelf = pending
       ? `<div class="composer-shelf"><div class="shelf-row" data-tone="warn">${icon("approval")}<span class="shelf-text">${secret ? "Otto asked you for a secret" : `Otto has a draft waiting for you`}</span><span class="spacer"></span>${button("Review", 'data-d="review" data-size="sm"')}</div></div>`
       : "";
@@ -451,7 +490,7 @@
     const admin = S.access === "admin";
     let html = `<p class="d-mark"${running ? "" : ' data-tone="danger"'}>${icon(running ? "plug" : "warning")}${pluginWords[S.p]}</p>`;
     html += running
-      ? `<div class="b-note">${icon("approval")}<div><p>When a bot sends an email or a message through one of these tools, Clawtrate's drafts plugin holds it here until you send or discard it. It holds only while the plugin runs.</p></div></div>`
+      ? `<div class="b-note">${icon("approval")}<div><p>When a bot sends an email or a message through one of these tools, Clawtrate's drafts plugin holds it here until you send or discard it. It holds only while the plugin runs. Without drafts, a bot's sends follow its rules; the gateway's automatic review covers commands, not sends.</p></div></div>`
       : notRunningNote;
     if (!admin && running) html += accessBar("Changing drafts needs admin access.");
     html += `<h4 class="d-group">Bots</h4>`;
@@ -518,6 +557,7 @@
     html +=
       `<dl class="d-facts"><dt>Name</dt><dd><code>${e.name}</code></dd><dt>Kind</dt><dd>${e.kind}</dd><dt>Allowed hosts</dt><dd>${e.hosts.length ? e.hosts.join(", ") : "No hosts"}</dd>` +
       `<dt>Updated</dt><dd>${e.updated}</dd><dt>Reference</dt><dd><code>store · default · ${e.name}</code></dd></dl>`;
+    html += `<p class="d-sentence">The gateway keeps this value in its state database on its own machine and doesn't encrypt it there.</p>`;
     if (e.kind === "Readable by bots") html += `<p class="d-say" data-tone="warn">Bots can read this value: it is listed to them and given to their commands.</p>`;
     html +=
       `<div class="b-note">${icon("eye")}<div><p><b>Who can use it.</b> Any bot on this gateway can use this through settings that refer to it, and, when the egress proxy is on, in commands on the gateway's machine sent to its hosts. Any bot offered the Secrets tool sees its name and hosts and can remove it. The gateway doesn't limit an item to chosen bots.</p>` +
@@ -603,16 +643,18 @@
 
   function decide(which) {
     S.last = which;
+    const firstOfEdited = S.d === "elsewhere";
     go({ d: which === "send" ? "sending" : "discarding" });
     later(() => {
       const a = S.answer;
       if (a === "refused") return go({ d: "refused" }, "The gateway refused this decision");
       if (a === "already") return go({ d: "already" }, "Already answered on another device");
       if (a === "noanswer") return go({ d: "noanswer" }, "No answer from the gateway");
-      if (which === "discard") return go({ d: "discarded" }, "Discarded");
+      if (which === "discard") return go({ d: S.edited || S.editGiven ? "editdiscarded" : "discarded" }, "Discarded");
+      if (firstOfEdited) return go({ d: "edited", edited: true }, "The gateway asks again, for the edited version");
       if (S.file === "changed") return go({ d: "filechanged" }, "Not sent");
       if (S.tool === "fails") return go({ d: "failed" }, "Not sent");
-      go({ d: S.tool === "silent" ? "sentnoreport" : "sent" }, "Sent");
+      go({ d: S.edited ? "editsent" : S.tool === "silent" ? "sentnoreport" : "sent" }, "Sent");
     });
   }
 
@@ -625,7 +667,7 @@
       if (a === "already") return go({ s: "already" });
       if (a === "noanswer") return go({ s: "noanswer" });
       S.hostsBack = false;
-      go({ s: "saved" }, "Saved securely");
+      go({ s: "saved" }, "Saved to the gateway");
       later(() => go({ hostsBack: true }), 400);
     });
   }
@@ -660,7 +702,7 @@
       case "discard":
         return decide("discard");
       case "check":
-        return go({ d: S.fromEdit ? "sent" : "sent" }, "Sent");
+        return go({ d: S.edited ? "editsent" : "sent" }, "Sent");
       case "fold":
         return go({ folded: !S.folded });
       case "full":
@@ -680,15 +722,21 @@
       case "edit-cancel":
         return go({ d: "pending" });
       case "edit-send":
-        go({ d: "sending", last: "discard" });
+        go({ d: "editsaving", editWhy: "" });
         return later(() => {
-          if (S.answer === "refused" || S.answer === "noanswer") return go({ d: "editfailed" }, "Your version wasn't sent");
-          S.fromEdit = true;
-          go({ d: "editsent" }, "Edits sent to Otto");
-          later(() => go({ d: S.newcall === "differs" ? "differs" : "match" }), 700);
+          if (S.answer === "refused" || S.answer === "noanswer") return go({ d: "editfailed" }, "Your edit wasn't taken");
+          if (S.answer === "already") return go({ d: "editfailed", editWhy: "This draft was already edited on another device." }, "Your edit wasn't taken");
+          S.editGiven = true;
+          S.last = "send";
+          go({ d: "sending" }, "Edit taken");
+          later(() => {
+            if (S.file === "changed") return go({ d: "filechanged" }, "Not sent");
+            S.edited = true;
+            go({ d: "edited" }, "The gateway asks again, for the edited version");
+          }, 600);
         });
-      case "show-mine":
-        return go({ showMine: !S.showMine });
+      case "show-original":
+        return go({ showOriginal: !S.showOriginal });
       case "disable":
         return go({ d: "disable" });
       case "disable-no":
@@ -707,7 +755,7 @@
         clearSecret();
         return go({ s: "skipped" }, "Skipped");
       case "s-check":
-        return go({ s: "saved", hostsBack: true }, "Saved securely");
+        return go({ s: "saved", hostsBack: true }, "Saved to the gateway");
       case "reveal": {
         const f = document.getElementById("secret-value");
         if (f) {
@@ -785,10 +833,11 @@
       sel("Gateway answers", "answer", [["applied", "Applied"], ["refused", "Refused"], ["already", "Already answered"], ["noanswer", "No answer"]]) +
       sel("Vault", "vanswer", [["confirmed", "Confirmed"], ["unconfirmed", "Unconfirmed"], ["refused", "Unreadable / refused"]]) +
       sel("Tool result", "tool", [["reports", "Reports what it sent"], ["silent", "Says nothing"], ["fails", "Fails"]]) +
-      sel("Otto's new call", "newcall", [["matches", "Matches"], ["differs", "Differs"]]) +
+
       `<button type="button" data-proto-event="file">Change report.txt</button>` +
       `<button type="button" data-proto-event="expire">Expire</button>` +
       `<button type="button" data-proto-event="close">Run ends</button>` +
+      `<button type="button" data-proto-event="restart">Restart</button>` +
       `<button type="button" data-proto-event="stop">Stop</button>`;
     extra.addEventListener("change", (e) => {
       const s = e.target.closest("[data-proto]");
@@ -800,6 +849,8 @@
       const ev = b.dataset.protoEvent;
       if (ev === "file") return go({ file: "changed" }, "report.txt changed on the gateway's machine");
       if (S.view === "secret") return go({ s: ev === "expire" ? "expired" : "skipped" });
+      if (ev === "restart") return S.edited || S.editGiven || S.d === "edit" ? go({ d: "editrestart", edited: true }) : undefined;
+      if (S.edited && ev === "expire") return go({ d: "editexpired" });
       go({ d: ev === "expire" ? "expired" : ev === "close" ? "closed" : "cancelled" });
     });
   });

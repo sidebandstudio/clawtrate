@@ -1351,11 +1351,11 @@
     {
       id: "drafts",
       title: "Drafts and the Vault",
-      note: "What docs/design/drafts-and-vault.md adds: a draft card that shows exactly what will be sent and is sent or discarded, never edited in place; the masked secret card; and Settings, Drafts and Vault. Each link opens drafts.html in that state, as section 14 lists them.",
+      note: "What docs/design/drafts-and-vault.md adds: a draft card that shows exactly what will be sent, is sent or discarded, and is edited in place with a second answer; the masked secret card; and Settings, Drafts and Vault. Each link opens drafts.html in that state, as section 14 lists them.",
       specimens: [
         ...[
-          ["Email drafts", (d) => `view=draft&d=${d}`, ["pending", "full", "sending", "sent", "sentnoreport", "failed", "discarded", "refused", "noanswer", "already", "expired", "closed", "cancelled", "filechanged", "unchecked", "edit", "editsent", "editfailed", "match", "differs", "disable", "disabled", "disablefailed"]],
-          ["Slack drafts", (d) => `view=draft&kind=slack&d=${d}`, ["pending", "sent", "discarded", "edit", "match"]],
+          ["Email drafts", (d) => `view=draft&d=${d}`, ["pending", "full", "sending", "sent", "sentnoreport", "failed", "discarded", "refused", "noanswer", "already", "expired", "closed", "cancelled", "filechanged", "unchecked", "edit", "editsaving", "editfailed", "edited", "elsewhere", "editsent", "editdiscarded", "editexpired", "editrestart", "disable", "disabled", "disablefailed"]],
+          ["Slack drafts", (d) => `view=draft&kind=slack&d=${d}`, ["pending", "sent", "discarded", "edit", "edited", "editsent"]],
           ["Drafts on other connections and with the plugin stopped", (q) => q, ["view=draft&access=read", "view=draft&access=read&req=requested", "view=draft&access=interactive", "view=draft&p=stopped"]],
           ["The masked secret card", (s) => `view=secret&s=${s}`, ["pending", "typed", "hosts", "exists", "saving", "saved", "refused", "noanswer", "already", "skipped", "expired", "cannotask"]],
           ["The secret card on a read-only connection", (q) => q, ["view=secret&access=read"]],

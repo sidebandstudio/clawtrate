@@ -63,12 +63,17 @@ const states = [
   ["view=draft&d=cancelled", ["You stopped the run before answering. Nothing was sent."]],
   ["view=draft&d=filechanged", ["Not sent", "report.txt changed after Otto asked (28 bytes then, 44 now), so nothing was sent. Otto was told why. If it asks again, the new draft appears below."]],
   ["view=draft&d=unchecked", ["Couldn't check report.txt: it isn't in Otto's workspace. If it changes before it's sent, Clawtrate can't tell.", "Send email"]],
-  ["view=draft&d=edit", ["Edits can't be added to a waiting request. Sending your version discards this one and asks Otto to send yours instead. Otto's new email will wait here for you again.", "Send your version to Otto", "Cancel edit", "Discard"]],
-  ["view=draft&d=editsent", ["Discarded: you sent your own version to Otto at 5:44 PM.", "Please send this instead:", "Subject: Media box report: disk at 91%"]],
-  ["view=draft&d=editfailed", ["This request is still waiting, so your version wasn't sent to Otto.", "Try again"]],
-  ["view=draft&d=match", ["Matches the version you sent at 5:44 PM.", "Media box report: disk at 91%", "Send email"]],
-  ["view=draft&d=differs", ["Differs from the version you sent at 5:44 PM: Body.", "Changed", "Show what you sent"]],
-  ["view=draft&d=disable", ["Send Otto's emails and messages without drafts?", "won't wait for you. They'll run as Otto's rules allow", "what Otto may do", "it holds only while the plugin runs.", "Send without drafts", "Cancel"]],
+  ["view=draft&d=edit", ["Your edit goes to Clawtrate's drafts plugin, for this draft only. Sending it releases Otto's email to the plugin, which swaps in your edit. The gateway then asks once more, for the edited email, and that answer sends it.", "From and the attachments stay as Otto set them.", "Send edited email", "Cancel edit", "Discard"]],
+  ["view=draft&d=editsaving", ["Giving your edit to the drafts plugin…"]],
+  ["view=draft&d=editfailed", ["Clawtrate's drafts plugin didn't take your edit. Nothing was sent; the draft is still waiting.", "Try again", "Cancel edit", "Discard"]],
+  ["view=draft&d=edited", ["Edited email", "Ready to send", "You edited Otto's email. This is what will be sent.", "Show Otto's version", "dana@example.com, sam@example.net", "Media box report: disk at 91%", "Edited", "Send edited email", "Discard", "The gateway asks again because you edited it. This answer sends it."]],
+  ["view=draft&d=elsewhere", ["Edited on another device at 5:44 PM.", "Send edited email", "Discard"]],
+  ["view=draft&d=editsent", ["Answered", "Sent from otto@example.com to dana@example.com, sam@example.net", "Read back from the email tool's result.", "You edited this before it was sent.", "Otto used mail_send", "Otto asked to send to dana@example.com, subject \"Media box report\".", "Edited before sending: To, Subject, Body. What was sent is on the draft card."]],
+  ["view=draft&d=editsent&p=stopped", ["Clawtrate's drafts plugin isn't answering"]],
+  ["view=draft&d=editdiscarded", ["Discarded at 5:44 PM. Nothing was sent. Your edit wasn't used."]],
+  ["view=draft&d=editexpired", ["Expired at 5:54 PM without an answer. Nothing was sent. Your edit wasn't used."]],
+  ["view=draft&d=editrestart", ["Closed", "The gateway restarted before this was sent. Nothing was sent, and your edit wasn't used."]],
+  ["view=draft&d=disable", ["Send Otto's emails and messages without drafts?", "won't wait for you. They'll run as Otto's rules allow", "what Otto may do", "The gateway's automatic review covers commands, not sends.", "it holds only while the plugin runs.", "Send without drafts", "Cancel"]],
   ["view=draft&d=disabled", ["Drafts off for Otto. This draft is still waiting for you."]],
   ["view=draft&d=disablefailed", ["Couldn't save. Drafts are still on for Otto."]],
   ["view=draft&kind=slack", ["Slack message", "Otto wants to post this through its Slack channel, with the message tool.", "Workspace", "Example Co", "#ops", "Thread", "Disk alerts", "Send message", "Discard"]],
@@ -76,11 +81,11 @@ const states = [
   ["view=draft&access=read", ["Read-only.", "Answering needs approvals access.", "Request approvals access"]],
   ["view=draft&access=read&req=requested", ["Waiting for the gateway's owner.", "openclaw devices approve"]],
   ["view=draft&p=stopped", ["It wasn't held as a draft", "Clawtrate's drafts plugin isn't answering, so nothing waits as a draft. Otto, Pip and Marlow send as their rules allow."]],
-  ["view=secret", ["Otto asks for a secret", "Secret", "Name", "PRICE_TRACKER_KEY", "Why", "To read prices from the store's API for your tracker.", "It will be saved to your gateway's shared secret store.", "Allowed hosts", "api.example.com", "The egress proxy sends this secret only to these hosts.", "Secret value", "Save securely", "Skip", "Never shown to Otto, and not kept by Clawtrate. Bots on this gateway see its name and hosts, not its value.", "About filling this field", "Raw"]],
+  ["view=secret", ["Otto asks for a secret", "Secret", "Name", "PRICE_TRACKER_KEY", "Why", "To read prices from the store's API for your tracker.", "It will be saved to your gateway's shared secret store. The gateway keeps it in its state database on its own machine and doesn't encrypt it there. Skip saves nothing.", "Allowed hosts", "api.example.com", "The egress proxy sends this secret only to these hosts.", "Secret value", "Save to the gateway", "Skip", "Never shown to Otto, and not kept by Clawtrate. Bots on this gateway see its name and hosts, not its value.", "About filling this field", "Raw"]],
   ["view=secret&s=hosts", ["api.example.com", "api.example.net"]],
   ["view=secret&s=exists", ["STORE_API_KEY", "This replaces the value saved as STORE_API_KEY on Nov 19."]],
   ["view=secret&s=saving", ["Saving…"]],
-  ["view=secret&s=saved", ["Saved", "Saved securely to your gateway as PRICE_TRACKER_KEY at 5:44 PM. Otto can't read it back.", "Allowed hosts now: api.example.com."]],
+  ["view=secret&s=saved", ["Saved", "Saved to your gateway as PRICE_TRACKER_KEY at 5:44 PM. Otto can't read it back.", "Allowed hosts now: api.example.com."]],
   ["view=secret&s=refused", ["The gateway didn't save it", "Type it again to retry."]],
   ["view=secret&s=noanswer", ["No answer from the gateway. The secret may or may not have been saved.", "Check"]],
   ["view=secret&s=already", ["Already answered on another device."]],
@@ -91,7 +96,7 @@ const states = [
   ["view=vault", ["Vault", "Secrets on this gateway. Every bot on the gateway can use them, through the hosts each allows; none can read a protected value back.", "New item", "BUILD_REGION", "Readable by bots", "No hosts", "MEDIA_BOX_TOKEN", "STORE_API_KEY", "Protected", "Updated Nov 19", "Where a bot's secrets come from", "This Vault: values the gateway keeps.", "the value is given to the bot, which can see it.", "Nothing on the gateway makes a bot try these in an order. Each bot chooses which to use."]],
   ["view=vault&v=empty", ["No secrets yet. A bot can ask for one in a conversation, or add one here."]],
   ["view=vault&v=error", ["Couldn't read the Vault.", "Try again"]],
-  ["view=vault&v=item", ["STORE_API_KEY", "Kind", "Protected", "Allowed hosts", "Reference", "store · default · STORE_API_KEY", "Who can use it.", "The gateway doesn't limit an item to chosen bots.", "Offered the Secrets tool: Otto, Pip and Marlow", "Replace…", "Remove…"]],
+  ["view=vault&v=item", ["STORE_API_KEY", "Kind", "Protected", "Allowed hosts", "Reference", "store · default · STORE_API_KEY", "The gateway keeps this value in its state database on its own machine and doesn't encrypt it there.", "Who can use it.", "The gateway doesn't limit an item to chosen bots.", "Offered the Secrets tool: Otto, Pip and Marlow", "Replace…", "Remove…"]],
   ["view=vault&v=item&item=BUILD_REGION", ["Bots can read this value: it is listed to them and given to their commands."]],
   ["view=vault&v=new", ["New item", "Name", "Uppercase letters, digits and _.", "Secret value", "Kind", "Protected", "Readable by bots", "Allowed hosts", "Save", "Cancel"]],
   ["view=vault&v=replace", ["Replace STORE_API_KEY", "STORE_API_KEY exists. Saving replaces its value and hosts."]],
@@ -104,7 +109,7 @@ const states = [
   ["view=vault&v=removeunknown", ["Removed? The gateway answered, but the Vault couldn't be read to confirm.", "Check"]],
   ["view=vault&access=interactive", ["Admin access needed.", "Seeing the Vault needs admin access. The gateway shows its secret store to admin connections only.", "Request admin access"]],
   ["view=vault&access=read&req=denied", ["The request was denied. Nothing changed."]],
-  ["view=drafts", ["Drafts", "Drafts plugin answered at 5:46 PM.", "When a bot sends an email or a message through one of these tools, Clawtrate's drafts plugin holds it here until you send or discard it. It holds only while the plugin runs.", "Bots", "Otto", "Pip", "Marlow", "Juniper", "Sending tools", "mail_send", "To from to", "message", "A tool not on this list never makes a draft; its calls follow the bot's rules."]],
+  ["view=drafts", ["Drafts", "Drafts plugin answered at 5:46 PM.", "When a bot sends an email or a message through one of these tools, Clawtrate's drafts plugin holds it here until you send or discard it. It holds only while the plugin runs.", "Bots", "Otto", "Pip", "Marlow", "Juniper", "Sending tools", "mail_send", "To from to", "message", "A tool not on this list never makes a draft; its calls follow the bot's rules.", "the gateway's automatic review covers commands, not sends."]],
   ["view=drafts&p=stopped", ["Clawtrate's drafts plugin isn't answering.", "Not held now: the drafts plugin isn't running", "nothing waits as a draft"]],
   ["view=drafts&p=absent", ["Drafts methods unavailable on this gateway."]],
   ["view=drafts&access=interactive", ["Changing drafts needs admin access."]],
@@ -134,7 +139,7 @@ const attrs = await p.evaluate(() => {
   return [f.type, f.getAttribute("autocomplete"), f.getAttribute("spellcheck"), f.getAttribute("autocapitalize"), f.labels[0]?.textContent];
 });
 check("the Secure Form's field: password, no autocomplete, no spelling, no capitals, labelled", JSON.stringify(attrs) === JSON.stringify(["password", "off", "false", "off", "Secret value"]), JSON.stringify(attrs));
-check("Save securely starts disabled", await p.locator('[data-d="s-save"]').isDisabled());
+check("Save to the gateway starts disabled", await p.locator('[data-d="s-save"]').isDisabled());
 check("the secret card is a region named for its secret", (await p.getAttribute('[data-testid="secret"]', "aria-label")) === "Otto asks for a secret: PRICE_TRACKER_KEY.");
 await p.close();
 p = await open("view=vault&v=remove");
@@ -161,13 +166,26 @@ const pause = (ms) => (pg) => pg.waitForTimeout(ms);
 (await walk("Send, no answer → Check again → Answered", "view=draft", [answer("noanswer"), tap('[data-d="send"]'), pause(700), tap('[data-d="check"]')], ["Answered"])).close();
 (await walk("Send, already answered elsewhere", "view=draft", [answer("already"), tap('[data-d="send"]')], ["Already answered on another device at 5:25 PM. Your decision was not applied."])).close();
 (await walk("A file changes while waiting → Send → Not sent", "view=draft", [tap('[data-proto-event="file"]'), tap('[data-d="send"]')], ["Not sent", "report.txt changed after Otto asked (28 bytes then, 44 now), so nothing was sent."])).close();
-(await walk("Edit → send your version → the new draft matches → Send", "view=draft", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1500), tap('[data-testid="draft-new"] [data-d="send"]')], ["Discarded: you sent your own version", "Please send this instead:", "Answered"])).close();
-p = await walk("Edit → the new draft differs", "view=draft", [(pg) => bar(pg, "newcall", "differs"), tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1500)], ["Differs from the version you sent at 5:44 PM: Body.", "Changed"]);
-await click(p, '[data-d="show-mine"]');
-check("walk: Show what you sent opens the person's version", (await text(p)).includes("What you sent at 5:44 PM"));
+p = await walk("Edit → Send edited email → the edit is taken → the second hold → Send → sent as edited", "view=draft", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1400)], ["Edited email", "You edited Otto's email. This is what will be sent.", "Send edited email"]);
+await click(p, '[data-d="show-original"]');
+check("walk: Show Otto's version opens the bot's own version", (await p.locator('[data-testid="original"]').count()) === 1 && (await text(p)).includes("Otto's version"));
+await click(p, '[data-d="send"]');
+check("walk: the second answer sends the edit, read back, with the action card's line", await waitText(p, ["Sent from otto@example.com to dana@example.com, sam@example.net", "You edited this before it was sent.", "Edited before sending: To, Subject, Body."]));
 await p.close();
+(await walk("Edit → the plugin refuses the edit → Try again → taken", "view=draft", [answer("refused"), tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(700), answer("applied"), tap('[data-d="edit-send"]'), pause(1400)], ["Edited email"])).close();
+(await walk("Edit, already edited on another device", "view=draft", [answer("already"), tap('[data-d="edit"]'), tap('[data-d="edit-send"]')], ["Clawtrate's drafts plugin didn't take your edit.", "This draft was already edited on another device."])).close();
 (await walk("Edit → Cancel edit → back to the draft", "view=draft", [tap('[data-d="edit"]'), tap('[data-d="edit-cancel"]')], ["Send email", "Edit"])).close();
-(await walk("Edit, the discard refused → your version not sent", "view=draft", [answer("refused"), tap('[data-d="edit"]'), tap('[data-d="edit-send"]')], ["This request is still waiting, so your version wasn't sent to Otto."])).close();
+(await walk("Edit → the second hold → Discard → your edit wasn't used", "view=draft", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1400), tap('[data-d="discard"]')], ["Discarded at 5:44 PM. Nothing was sent. Your edit wasn't used."])).close();
+(await walk("Edit → the second hold expires", "view=draft", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1400), tap('[data-proto-event="expire"]')], ["Expired at 5:54 PM without an answer. Nothing was sent. Your edit wasn't used."])).close();
+(await walk("Edit → the gateway restarts", "view=draft", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1400), tap('[data-proto-event="restart"]')], ["The gateway restarted before this was sent. Nothing was sent, and your edit wasn't used."])).close();
+(await walk("Edit, a file changed → Not sent, the edit unused", "view=draft", [tap('[data-proto-event="file"]'), tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1400)], ["report.txt changed after Otto asked (28 bytes then, 44 now)", "Your edit wasn't used."])).close();
+(await walk("Edited on another device → Send edited email → the second hold → Send", "view=draft&d=elsewhere", [tap('[data-d="send"]'), pause(700), tap('[data-d="send"]')], ["You edited this before it was sent.", "Edited before sending"])).close();
+p = await open("view=draft&d=edited");
+check("the edited draft marks To, Subject and Body as edited, in words", (await p.locator(".d-changed").count()) === 3);
+await p.close();
+p = await open("view=draft&d=elsewhere");
+check("another device: no Edit, since the call already has its edit", (await p.locator('[data-d="edit"]').count()) === 0);
+await p.close();
 (await walk("Disable drafts → Send without drafts → off, this draft still waits", "view=draft", [tap('[data-d="disable"]'), tap('[data-d="disable-yes"]')], ["Drafts off for Otto. This draft is still waiting for you.", "Send email"])).close();
 (await walk("Disable drafts, refused → still on", "view=draft", [answer("refused"), tap('[data-d="disable"]'), tap('[data-d="disable-yes"]')], ["Couldn't save. Drafts are still on for Otto."])).close();
 (await walk("Disable drafts → Cancel", "view=draft", [tap('[data-d="disable"]'), tap('[data-d="disable-no"]')], ["Disable drafts for Otto"])).close();
@@ -178,7 +196,7 @@ await p.close();
 (await walk("Show more, then Show less", "view=draft", [tap('[data-d="fold"]')], ["Show less", "transcode/ (64 GB)"])).close();
 (await walk("Slack: Send message → posted, read back", "view=draft&kind=slack", [tap('[data-d="send"]')], ["Posted to #ops in Example Co, in the thread Disk alerts"])).close();
 (await walk("Slack: Discard", "view=draft&kind=slack", [tap('[data-d="discard"]')], ["Discarded at 5:43 PM. Nothing was sent."])).close();
-(await walk("Slack: Edit → the new message matches", "view=draft&kind=slack", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1500)], ["Matches the version you sent at 5:44 PM.", "Disk at 91% on the media box."])).close();
+(await walk("Slack: Edit → the second hold → Send edited message", "view=draft&kind=slack", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1400), tap('[data-d="send"]')], ["Posted to #ops in Example Co", "Disk at 91% on the media box.", "You edited this before it was sent."])).close();
 (await walk("Read-only: Request approvals access → waiting", "view=draft&access=read", [tap('[data-d="request"]')], ["Waiting for the gateway's owner."])).close();
 p = await walk("Review moves focus to the waiting card", "view=draft", [tap('[data-d="review"]')], ["Send email"]);
 check("walk: Review focuses the card", await p.evaluate(() => document.activeElement?.dataset.testid === "draft"));
@@ -193,9 +211,9 @@ await p.close();
 const VALUE = "example-secret-value-check";
 p = await open("view=secret", { chrome: "1" });
 await p.fill("#secret-value", VALUE);
-check("typing a value enables Save securely", !(await p.locator('[data-d="s-save"]').isDisabled()));
+check("typing a value enables Save to the gateway", !(await p.locator('[data-d="s-save"]').isDisabled()));
 await click(p, '[data-d="s-save"]');
-check("walk: Save securely → Saved, with hosts read back", await waitText(p, ["Saved securely to your gateway as PRICE_TRACKER_KEY", "Allowed hosts now: api.example.com."]));
+check("walk: Save to the gateway → Saved, with hosts read back", await waitText(p, ["Saved to your gateway as PRICE_TRACKER_KEY", "Allowed hosts now: api.example.com."]));
 check("after saving the value is nowhere on the page or in the live region", await p.evaluate((v) => !document.documentElement.outerHTML.includes(v) && ![...document.querySelectorAll("input")].some((i) => i.value === v), VALUE));
 check("the field is gone after Saved", (await p.locator("#secret-value").count()) === 0);
 await p.close();
@@ -212,7 +230,7 @@ await click(p, '[data-d="s-save"]');
 await waitText(p, ["may or may not have been saved"]);
 check("no answer: the value is not kept", await p.evaluate((v) => !document.documentElement.outerHTML.includes(v), VALUE));
 await click(p, '[data-d="s-check"]');
-check("walk: Save, no answer → Check → Saved", await waitText(p, ["Saved securely"]));
+check("walk: Save, no answer → Check → Saved", await waitText(p, ["Saved to your gateway"]));
 await p.close();
 p = await open("view=secret", { chrome: "1" });
 await bar(p, "answer", "already");
@@ -228,10 +246,10 @@ await p.press("#add-host", "Enter");
 check("walk: add a host with Enter", await waitText(p, ["api.example.org"]));
 await p.fill("#secret-value", VALUE);
 await p.press("#secret-value", "Escape");
-check("Escape clears the field and does not skip", (await p.inputValue("#secret-value")) === "" && (await text(p)).includes("Save securely"));
+check("Escape clears the field and does not skip", (await p.inputValue("#secret-value")) === "" && (await text(p)).includes("Save to the gateway"));
 await p.fill("#secret-value", VALUE);
 await p.press("#secret-value", "Enter");
-check("Enter in the field saves", await waitText(p, ["Saved securely"]));
+check("Enter in the field saves", await waitText(p, ["Saved to your gateway"]));
 await p.close();
 p = await open("view=secret", { chrome: "1" });
 await p.fill("#secret-value", VALUE);
@@ -290,7 +308,7 @@ check("800: a section opens as one pane", (await p.locator(".b-section").isVisib
 await p.close();
 
 // Part 3: widths, themes, the phone ------------------------------------------------------------------
-const views = ["view=draft", "view=draft&d=edit", "view=draft&kind=slack", "view=secret", "view=secret&s=saved", "view=vault", "view=vault&v=item", "view=vault&v=new", "view=drafts"];
+const views = ["view=draft", "view=draft&d=edit", "view=draft&d=edited", "view=draft&d=editsent", "view=draft&kind=slack", "view=secret", "view=secret&s=saved", "view=vault", "view=vault&v=item", "view=vault&v=new", "view=drafts"];
 for (const [label, width, w] of [["1440", 1440, "full"], ["1100", 1100, "1100"], ["800", 800, "800"], ["390", 390, "phone"]]) {
   for (const v of views) {
     p = await open(`${v}&width=${w}`, { width, height: 844 });
@@ -328,7 +346,7 @@ p = await b.newPage();
 await p.goto(pageUrl("gallery.html") + "?chrome=1&section=drafts");
 await p.waitForTimeout(100);
 const links = await p.evaluate(() => [...document.querySelectorAll('#drafts a[href^="drafts.html"]')].map((a) => a.getAttribute("href")));
-check("gallery: the Drafts and the Vault section links to every state", links.length === 65, String(links.length));
+check("gallery: the Drafts and the Vault section links to every state", links.length === 70, String(links.length));
 check("the prototype bar links to the drafts page", await p.evaluate(() => [...document.querySelectorAll("#proto-bar a")].some((a) => a.getAttribute("href") === "drafts.html")));
 await p.close();
 let broken = [];
@@ -340,6 +358,13 @@ for (const href of links) {
   await pg.close();
 }
 check("every gallery link opens a drawn state with no error", broken.length === 0, broken.join(" "));
+const promising = [];
+for (const href of links) {
+  const pg = await open(href.split("?")[1] || "");
+  if (/securely/i.test(await pg.evaluate(() => document.body.textContent))) promising.push(href);
+  await pg.close();
+}
+check("no state says \"securely\": the gateway keeps values in plain text", promising.length === 0, promising.join(" "));
 p = await b.newPage();
 await p.goto(pageUrl("gallery.html") + "?chrome=1");
 await p.waitForTimeout(100);
