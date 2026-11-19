@@ -11,7 +11,7 @@ pnpm visual      # screenshots and behaviour of the fixture mode; the baselines 
 pnpm mobile:check  # on a Mac, after pnpm mobile:build: the iOS app in the Simulator (see ios.md)
 ```
 
-CI runs lint, typecheck and the unit tests on Linux, `pnpm e2e` on Linux with OpenClaw 2026.10.6 from npm, `pnpm visual` and an unsigned `pnpm package:mac` on macOS 15, and on Windows Server 2025 an unsigned `pnpm package:win`, a silent install, a check of the Start menu shortcut, `pnpm check:packaged` against the installed app, and a silent uninstall that must leave nothing the installer made.
+CI runs lint, typecheck and the unit tests on Linux, `pnpm e2e` on Linux with OpenClaw 2026.10.6 from npm, split by file across three runners, `pnpm visual` on every core and an unsigned `pnpm package:mac` on macOS 15, and on Windows Server 2025 an unsigned `pnpm package:win`, a silent install, a check of the Start menu shortcut, `pnpm check:packaged` against the installed app, and a silent uninstall that must leave nothing the installer made. A pull request that changes only documentation (`docs/`, the Markdown files at the top level, the issue and pull request templates) runs the Linux `check` job alone.
 
 ## The scenario check
 
