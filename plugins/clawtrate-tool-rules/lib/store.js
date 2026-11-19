@@ -133,6 +133,8 @@ export class RulesStore {
     this.path = join(dir, RULES_FILE);
     this.now = now;
     this.seen = undefined;
+    /** The fingerprint last looked at, read or not; `seen` is the one last read. */
+    this.observed = undefined;
     /** The last rules this process read or wrote, with when. */
     this.good = null;
     /** @type {{ kind: "none" | "read" | "lost" | "unread", scopes: Map<string, any> | null, readAt: number | null, problem: string | null }} */
@@ -164,6 +166,7 @@ export class RulesStore {
     } catch (error) {
       const changed = this.seen !== "error";
       this.seen = "error";
+      this.observed = "error";
       if (changed) {
         this.#set(this.#lost(`the rules file cannot be read (${error.code ?? "error"})`), true);
       }
@@ -171,8 +174,11 @@ export class RulesStore {
     }
     const key = statKey(stat);
     if (key === this.seen) return;
-    const first = this.seen === undefined;
+    const first = this.seen === undefined && this.observed === undefined;
+    // The file changed since it was last looked at, not only since it was last read.
+    const external = !first && key !== this.observed;
     this.seen = key;
+    this.observed = key;
     let next;
     // No file: nothing was saved, unless this process read rules from one or knew them lost.
     if (stat !== null) {
@@ -182,7 +188,11 @@ export class RulesStore {
     } else {
       next = { kind: "none", scopes: new Map(), readAt: null, problem: null };
     }
-    this.#set(next, !first);
+    // A read that failed with an I/O error is tried again at the next refresh;
+    // contents that were read and found invalid are remembered until the file changes.
+    if (next.retry) this.seen = undefined;
+    const { retry: _retry, ...state } = next;
+    this.#set(state, external);
   }
 
   #read(stat) {
@@ -190,15 +200,20 @@ export class RulesStore {
     if (stat.size > MAX_RULES_BYTES) {
       return this.#lost("the rules file is larger than the plugin reads");
     }
+    let text;
+    try {
+      text = readFileSync(this.path, "utf8");
+    } catch (error) {
+      return {
+        ...this.#lost(`the rules file cannot be read (${error.code ?? "error"})`),
+        retry: true,
+      };
+    }
     let parsed;
     try {
-      parsed = JSON.parse(readFileSync(this.path, "utf8"));
-    } catch (error) {
-      return this.#lost(
-        error instanceof SyntaxError
-          ? "the rules file is not JSON"
-          : `the rules file cannot be read (${error.code ?? "error"})`,
-      );
+      parsed = JSON.parse(text);
+    } catch {
+      return this.#lost("the rules file is not JSON");
     }
     try {
       return { kind: "read", scopes: parseRules(parsed), readAt: this.now(), problem: null };
@@ -260,6 +275,7 @@ export class RulesStore {
     } catch {
       this.seen = undefined;
     }
+    this.observed = this.seen;
     this.#set({ kind: "read", scopes, readAt: this.now(), problem: null }, false);
   }
 }
