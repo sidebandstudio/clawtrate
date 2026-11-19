@@ -241,6 +241,8 @@ Two changes were tried while a plugin card waited (row 33): saving the bot's den
 - An answer and what then happened are two facts, shown apart (section 18).
 - Before a setting is saved while a request of the bot's waits, the line's page says so beside the choice: "A pending request may stay open after you change a setting. Its answer and its outcome are shown separately." with "Show the request".
 
+Two plugin cards can be pending at once. OpenClaw 2026.10.6 accepted an answer to one of them and then cancelled the waiting call. Render the gateway's call result independently of the acknowledged answer.
+
 ### What a refused call looks like
 
 A refused call never runs. In the transcript it is the action card's Not run outcome (`conversation.md` §7.3), shown as failed so it stays in view, and its opened view says what decided it, from what was reported at the time:

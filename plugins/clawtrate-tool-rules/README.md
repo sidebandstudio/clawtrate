@@ -162,7 +162,7 @@ The plugin reads the gateway's current config for each card. A redacted card sti
 What the gateway does with it (OpenClaw 2026.10.6, seen on a development gateway):
 
 - The card reaches the device whose message started the run, and admin connections. Another device with `operator.approvals`, and a read-only device, do not receive it or list it.
-- Allow once runs that call once; the next identical call asks again. Deny refuses it with "Denied by user. The tool call did not run."
+- Allow once authorizes only the pending call. OpenClaw can still cancel that call after accepting the answer, including when approvals overlap. Check the call result to see whether it ran. An identical later call asks again. Deny refuses it with "Denied by user. The tool call did not run."
 - **A routine's run** has no one to ask: the gateway raises no card and refuses the call at once (the plugin's record shows the ask answered `cancelled`; the audit log counts the call `failed`). The routine's own summary can still say the work was done.
 - **A run started by another bot's message** has no one to ask either: no card reaches any device, the call is refused with "Plugin approval required (gateway unavailable)", and the record shows `cancelled`.
 - **A change while a card waits**: after a change to this plugin's rules, the card stays and Allow once runs the call. After a change to the gateway's settings (a bot's deny list was tried), the card stays listed, an answer is acknowledged, and the call fails with "Plugin approval required (gateway unavailable)".
@@ -203,7 +203,7 @@ The decision record keeps metadata only. Rules can contain saved patterns and no
 While it runs, for every agent tool call that reaches the gateway's `before_tool_call` hook, with the rules read (or, while they are lost, the copy read earlier; with no copy, every call but `ask_user` is asked about):
 
 - a matching Never blocks the call, naming the rule, its version and its id in the call's result (`details.status: "blocked"`);
-- a matching Ask, or "Ask when nothing else decides" with no matching Allow, raises the gateway's card with Allow once and Deny only;
+- A matching Ask or fallback requests the gateway's approval. Where the gateway can reach an eligible reviewer, the card offers only Allow once and Deny. With no eligible reviewer or if approval authority changes, OpenClaw can refuse the call.
 - an Allow never passes an Ask or a Never;
 - `ask_user` is never asked about or blocked;
 - the call's parameters are never changed;
