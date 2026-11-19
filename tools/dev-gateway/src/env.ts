@@ -266,6 +266,25 @@ export class OpenclawRunner {
       detached: true,
     });
   }
+
+  /**
+   * The scripted node host (`scripted-node.ts`): the same guard and profile,
+   * with its own state folder inside the instance's, where it also runs.
+   */
+  spawnNodeGated(args: string[], env: NodeJS.ProcessEnv, options: SpawnOptions): Gated {
+    this.assertAllowed();
+    const base = this.baseOptions();
+    const dir = env.OPENCLAW_STATE_DIR;
+    if (typeof dir !== "string" || !dir.startsWith(`${this.stateDir}/`)) {
+      throw new SpawnRefusedError("the node's state folder must be inside the instance's");
+    }
+    return gatedSpawn(this.spawnImpl, this.bin, guardArgs(args, this.instance), {
+      ...options,
+      cwd: dir,
+      env: { ...base.env, ...env },
+      detached: true,
+    });
+  }
 }
 
 /**
