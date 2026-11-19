@@ -645,9 +645,11 @@ export class MachinesEngine {
       const name = cap(plugin, MAX_MACHINE_NAME_CHARS);
       try {
         if (!baseHash) throw new Error("The gateway reported no configuration hash.");
-        const declared = list(
-          rec(await this.ctx.request("plugins.inspect", { pluginId: plugin })).credentials,
-        ).filter((field) => Array.isArray(rec(field).path));
+        const declared = rec(
+          await this.ctx.request("plugins.inspect", { pluginId: plugin }),
+        ).credentials;
+        if (!Array.isArray(declared) || declared.some((field) => !Array.isArray(rec(field).path)))
+          throw new Error("The gateway did not report credential fields.");
         const fields: CredentialField[] = [];
         for (const field of declared.slice(0, MAX_PLUGIN_FIELDS)) {
           const answer = rec(

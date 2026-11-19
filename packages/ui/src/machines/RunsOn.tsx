@@ -530,9 +530,9 @@ export function RunsOnPage({
                       server.deniedBy
                         ? `${server.deniedBy.list === "bot" ? `${botName}'s` : "every bot's"} deny list: ${server.deniedBy.entry}`
                         : server.offered === true
-                          ? "offered in the latest task"
+                          ? "offered in the latest task listed here"
                           : server.offered === false
-                            ? "not offered in the latest task"
+                            ? "not offered in the latest task listed here"
                             : "configured"
                     })`,
                 )
@@ -543,7 +543,7 @@ export function RunsOnPage({
             inventory.secrets.length === 0 ? (
               "None in the gateway's secret store"
             ) : (
-              `Names in the gateway's secret store, shared by every bot: ${inventory.secrets.join(", ")}`
+              `Names in the gateway's secret store: ${inventory.secrets.join(", ")}`
             )
           ) : (
             <span className="b-faint">{unavailableWords(inventory.secrets.status)}</span>
@@ -552,7 +552,7 @@ export function RunsOnPage({
         <Fact label="Plugin credentials" testId="inventory-signins">
           {Array.isArray(inventory.pluginCredentials) ? (
             inventory.pluginCredentials.length === 0 ? (
-              "No plugin is turned on in the gateway's settings"
+              "No plugin entries to inspect in the gateway's settings"
             ) : (
               inventory.pluginCredentials
                 .map(
@@ -565,7 +565,7 @@ export function RunsOnPage({
                           : each.fields
                               .map((field) => `${field.label}, ${credentialWords(field)}`)
                               .join("; ")
-                    }`,
+                    }${each.fieldsOmitted > 0 ? ` · ${each.fieldsOmitted} more fields not read` : ""}`,
                 )
                 .join(" · ") +
               (inventory.pluginsOmitted > 0 ? ` · ${inventory.pluginsOmitted} more not read` : "")
@@ -583,7 +583,7 @@ export function RunsOnPage({
       <p className="b-hint" data-testid="runs-on-read-at">
         From {botName}'s settings and the gateway's, read at {clockTime(placement.readAt)}.
         {inventory.listing
-          ? ` Tool servers offered: the listing of ${botName}'s latest task, read at ${clockTime(inventory.listing.readAt)}.`
+          ? ` Tool servers offered: the listing of ${botName}'s latest task listed here, read at ${clockTime(inventory.listing.readAt)}.`
           : ""}
         {placement.nodesOmitted > 0
           ? ` ${placement.nodesOmitted} more machines aren't listed.`

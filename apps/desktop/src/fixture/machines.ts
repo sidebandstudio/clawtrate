@@ -16,6 +16,7 @@
 //   override=1        media-box's file has an entry for Otto that asks every time
 //   mwrite=refused|conflict|unconfirmed|pending|notapplied   how a change goes
 //   mslow=<bot>       that bot's placement read never answers
+//   plugins=none      the settings hold no plugin entries to inspect
 //   pairing=grant     a request for device access is approved after a moment
 
 import {
@@ -37,6 +38,7 @@ export type MachineParams = {
   override: boolean;
   write: string | null;
   slow: string | null;
+  plugins: string | null;
   pairing: string | null;
 };
 
@@ -47,6 +49,7 @@ export function machineParams(params: URLSearchParams): MachineParams {
     override: params.get("override") === "1",
     write: params.get("mwrite"),
     slow: params.get("mslow"),
+    plugins: params.get("plugins"),
     pairing: params.get("pairing"),
   };
 }
@@ -57,6 +60,7 @@ export const NO_MACHINE_PARAMS: MachineParams = {
   override: false,
   write: null,
   slow: null,
+  plugins: null,
   pairing: null,
 };
 
@@ -280,13 +284,15 @@ export function machineCommands(now: number, params: MachineParams) {
           ? ["router-admin", "nas-backup", "camera-feed"]
           : { status: "needs-admin" },
         pluginCredentials: admin(state)
-          ? [
-              {
-                plugin: "clawtrate-computer",
-                fields: { status: "failed", message: "Credential metadata is unavailable." },
-                fieldsOmitted: 0,
-              },
-            ]
+          ? params.plugins === "none"
+            ? []
+            : [
+                {
+                  plugin: "clawtrate-computer",
+                  fields: { status: "failed", message: "Credential metadata is unavailable." },
+                  fieldsOmitted: 0,
+                },
+              ]
           : { status: "needs-admin" },
         pluginsOmitted: 0,
         workspaceOnly: { value: true, set: "every-bot" },

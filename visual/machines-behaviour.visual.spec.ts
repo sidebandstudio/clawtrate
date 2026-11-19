@@ -245,6 +245,20 @@ test("F-046 F-047: below admin every value shows, nothing can be changed, and th
   ]);
 });
 
+test("F-047: the inventory says only what the gateway listed: store names, and no plugin entries to inspect", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin&plugins=none`, "light");
+  await openRunsOn(page);
+  await expect(page.getByTestId("inventory-secrets")).toHaveText(
+    "Names in the gateway's secret store: router-admin, nas-backup, camera-feed",
+  );
+  await expect(page.getByTestId("runs-on-inventory")).not.toContainText("shared by every bot");
+  await expect(page.getByTestId("inventory-signins")).toHaveText(
+    "No plugin entries to inspect in the gateway's settings",
+  );
+});
+
 test("F-046: a host that only reads offers no change and no request", async ({ page }) => {
   await openFixture(page, `scene=access-pinned&${OTTO_DISK}&panel=open&tab=settings`, "light");
   await openRunsOn(page);

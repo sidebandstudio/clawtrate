@@ -503,6 +503,47 @@ describe("where a bot runs: the engine", () => {
     ]);
   });
 
+  it("F-047: a missing or malformed field list, or a refused second field, is unavailable; an explicit empty list stays empty", async () => {
+    const plugins = { empty: {}, missing: {}, pathless: {}, second: {} };
+    const gw = gateway({
+      config: { agents: { entries: { otto: {} } }, plugins: { entries: plugins } },
+    });
+    const path = (name: string) => ["plugins", "entries", "second", "config", name];
+    gw.plugins.empty = [];
+    gw.plugins.pathless = [{ label: "Key", status: "configured" }];
+    gw.plugins.second = [
+      { path: path("a"), label: "A", status: "literal" },
+      { path: path("b"), label: "B", status: "literal" },
+    ];
+    const inspect = gw.handlers["plugins.inspect"]!;
+    gw.handlers["plugins.inspect"] = (params) =>
+      params.pluginId === "missing" ? { ok: true } : inspect(params);
+    const credentials = gw.handlers["plugins.credentials.inspect"]!;
+    gw.handlers["plugins.credentials.inspect"] = (params) => {
+      if (JSON.stringify(params.path) === JSON.stringify(path("b")))
+        throw new Error("Credential metadata is unavailable. Reload Settings and try again.");
+      return credentials(params);
+    };
+    const read = await engine(gw, { admin: true }).readPlacement("otto");
+    const unreported = {
+      status: "failed",
+      message: "The gateway did not report credential fields.",
+    };
+    expect(read.inventory.pluginCredentials).toEqual([
+      { plugin: "empty", fields: [], fieldsOmitted: 0 },
+      { plugin: "missing", fields: unreported, fieldsOmitted: 0 },
+      { plugin: "pathless", fields: unreported, fieldsOmitted: 0 },
+      {
+        plugin: "second",
+        fields: {
+          status: "failed",
+          message: "Credential metadata is unavailable. Reload Settings and try again.",
+        },
+        fieldsOmitted: 0,
+      },
+    ]);
+  });
+
   it("F-272: bots with the same stored node or the same reported path are named as having the same setting", async () => {
     const gw = gateway();
     await engine(gw, { admin: true }).setCommandMachine(
