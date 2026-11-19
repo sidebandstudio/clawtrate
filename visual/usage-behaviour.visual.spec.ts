@@ -291,6 +291,14 @@ test("S17 a saved budget's row in Settings opens its own form; Escape returns to
   // The routine's row opens the routine's form.
   await settings.locator('[data-budget="routine:weekly-cleanup"] button').click();
   await expect(settings.getByTestId("budget-edit-form")).toContainText("routine Weekly cleanup");
+  // Escape in Add a budget's target choice closes that form, not Settings, and returns to Add a budget.
+  await page.keyboard.press("Escape");
+  await settings.getByTestId("budget-add").click();
+  await settings.getByTestId("budget-target").focus();
+  await page.keyboard.press("Escape");
+  await expect(settings).toBeVisible();
+  await expect(settings.getByTestId("budget-add-form")).toHaveCount(0);
+  await expect(settings.getByTestId("budget-add")).toBeFocused();
 });
 
 test("F-235: provider limits carry their window, reset, the gateway's time and no account (fixture)", async ({

@@ -255,7 +255,20 @@ function Budgets({
         </div>
       )}
       {canSet && adding && (
-        <div className="c-form" data-testid="budget-add-form">
+        <div
+          className="c-form"
+          data-testid="budget-add-form"
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            setAdding(false);
+            setTarget("");
+            requestAnimationFrame(() =>
+              document.querySelector<HTMLElement>('[data-testid="budget-add"]')?.focus(),
+            );
+          }}
+        >
           <label>
             For
             <select
