@@ -355,9 +355,9 @@ test.describe("approval cards on a real gateway", () => {
     for (const name of ["Allow once", "Always allow…", "Deny"]) {
       await expect(approval.getByRole("button", { name })).toBeVisible();
     }
-    // The gateway's expiry is 30 minutes from the request; the card counts down from then, and
-    // on a loaded machine a minute can pass before the card is first drawn.
-    await expect(approval).toContainText(/Expires in (29|30) minutes/);
+    // The deadline the gateway recorded, 30 minutes from the request; on a loaded machine a
+    // minute can pass before the card is first drawn.
+    await expect(approval).toContainText(/Expires at \d+:\d\d [AP]M, in (29|30) minutes\./);
     await shot(approval, "approval-pending");
     // On a read-only connection the gateway sends no pending approvals: none is shown.
     await openTask(reader, "Otto", title);
@@ -400,7 +400,15 @@ test.describe("approval cards on a real gateway", () => {
     await approval.getByRole("button", { name: "Deny" }).click();
     await expect(approval.locator(".tag")).toHaveText("Denied", { timeout: 30_000 });
     await approval.locator("summary").first().click();
-    await expect(approval).toContainText("Denied. The command was not run.");
+    // The gateway's decision and who made it, then what became of the command, from the call's
+    // own result.
+    await expect(approval.locator(".request-resolved-body > p").first()).toHaveText(
+      /^Denied( by .+)? at \d+:\d\d [AP]M\.$/,
+    );
+    await expect(approval.getByTestId("approval-then")).toHaveText(
+      "The gateway reported that it did not run the command.",
+      { timeout: 30_000 },
+    );
     await shot(approval, "approval-denied");
   });
 
