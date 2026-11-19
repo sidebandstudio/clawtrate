@@ -55,6 +55,7 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
+const actual = await vi.importActual<typeof fs>("node:fs");
 const { nextScope } = await import("../lib/rules.js");
 const { DecisionLog, RulesStore, serializeRules } = await import("../lib/store.js");
 const { tempState } = await import("./harness.ts");
@@ -202,5 +203,38 @@ describe("a decision that could not be written, on an idle gateway", () => {
     expect(log.problem).toBeNull();
     const reread = new DecisionLog(dir, { now: () => 1 }).list({ limit: 10 }).records;
     expect(reread.map((r) => r.id)).toEqual([id]);
+  });
+});
+
+describe("a decision record that could not be read at start", () => {
+  it("is read again before anything is written, so no record joins a torn line", () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    const file = join(dir, "decisions.jsonl");
+    // Read past the injected failures, which are for the plugin's reads.
+    const disk = (path: string) => actual.readFileSync(path, "utf8");
+    const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+    const first = new DecisionLog(dir, { now: () => 1 });
+    for (let i = 0; i < 10; i += 1) first.add(fields);
+    const torn = `${disk(file)}{"id":"torn`;
+    writeFileSync(file, torn);
+    io.path = file;
+    // Unreadable at start, at the first write and at the next maintenance.
+    io.failures = 3;
+    const log = new DecisionLog(dir, { now: () => 2 });
+    expect(log.problem).toMatch(/cannot be read \(EIO\)/);
+    const a = log.add({ ...fields, tool: "write" });
+    expect(disk(file)).toBe(torn);
+    expect(log.problem).toMatch(/cannot be read/);
+    log.prune();
+    expect(disk(file)).toBe(torn);
+    // Readable again: the next write reads it, cuts the torn line, and writes it all.
+    const b = log.add({ ...fields, tool: "edit" });
+    expect(log.problem).toBeNull();
+    const reread = new DecisionLog(dir, { now: () => 3 }).list({ limit: 50 }).records;
+    expect(reread).toHaveLength(12);
+    expect(reread.slice(0, 2).map((r) => r.id)).toEqual([b, a]);
+    expect(disk(file)).not.toContain('"torn');
   });
 });

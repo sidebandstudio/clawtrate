@@ -379,11 +379,28 @@ export class DecisionLog {
     this.tornTail = null;
     /** Records and answers kept in memory that a failed write left off the disk. */
     this.unsaved = 0;
+    /** Whether the record on disk was read (or is missing); until then nothing is written. */
+    this.loaded = false;
     this.problem = null;
     this.#load();
   }
 
+  /**
+   * Read the record into memory. A file that cannot be read (other than
+   * missing) leaves `loaded` false: until it is read, nothing is appended or
+   * rewritten, and each write first tries the load again. Records held in
+   * memory meanwhile are kept after the file's, and written with them.
+   */
   #load() {
+    const held = this.records;
+    this.records = [];
+    this.byId = new Map();
+    const keep = () => {
+      for (const record of held) {
+        this.records.push(record);
+        this.byId.set(record.id, record);
+      }
+    };
     let text;
     try {
       // A file past the cap is not read into memory: it is set aside, and a new one started.
@@ -393,15 +410,23 @@ export class DecisionLog {
         const asideAt = this.now() / 1000;
         utimesSync(this.oversizePath, asideAt, asideAt);
         this.problem = `the decision record was larger than ${MAX_DECISIONS_BYTES} bytes; it was set aside as ${DECISIONS_FILE}.oversize and a new one started`;
+        this.loaded = true;
+        keep();
+        this.unsaved += held.length;
         return;
       }
       text = readFileSync(this.path, "utf8");
     } catch (error) {
+      keep();
       if (error?.code !== "ENOENT") {
         this.problem = `the decision record cannot be read (${error.code ?? "error"})`;
+        return;
       }
+      this.loaded = true;
+      this.unsaved += held.length;
       return;
     }
+    this.loaded = true;
     // A last line with no newline was torn by a write that did not finish: cut
     // it (or end it, if it is whole) before anything is appended after it.
     if (text.length > 0 && !text.endsWith("\n")) {
@@ -426,6 +451,9 @@ export class DecisionLog {
         this.byId.set(record.id, record);
       }
     }
+    // What this process held before the file could be read is not on disk yet.
+    keep();
+    this.unsaved += held.length;
     this.prune();
     this.#maintain();
   }
@@ -435,6 +463,11 @@ export class DecisionLog {
    * file when it holds a fifth more lines than records kept.
    */
   #maintain(force = false) {
+    // Never rewrite a record that could not be read from what memory holds of it.
+    if (!this.loaded) {
+      this.#load();
+      return;
+    }
     const cutoff = this.now() - this.retentionMs;
     let drop = 0;
     while (drop < this.records.length && this.records[drop].at < cutoff) drop += 1;
@@ -493,6 +526,12 @@ export class DecisionLog {
    * is written instead, and the problem is cleared only when that succeeds.
    */
   #append(value) {
+    if (!this.loaded) {
+      // Read it first; once read, what memory holds (this line too) is written with it.
+      this.unsaved += 1;
+      this.#load();
+      return;
+    }
     if (this.unsaved > 0 || !this.#repairTail()) {
       this.unsaved += 1;
       this.#maintain(true);
