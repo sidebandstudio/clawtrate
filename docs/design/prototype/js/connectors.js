@@ -297,7 +297,7 @@
         ? [
             ["Address", `<span class="mono">${s.url}</span>`],
             ["Headers", s.headers.length ? `${s.headers.map((h) => `<span class="mono">${h}</span>`).join(", ")}. Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.` : "None"],
-            ["Sign-in", s.signin === "oauth" ? "Signs in with OAuth" : s.signin === "each" ? "Each person signs in" : "None"],
+            ["Sign-in", s.signin === "oauth" ? "Signs in with OAuth" : s.signin === "each" ? "Uses the gateway\'s requester sign-in. Set up and use it in a channel where the gateway identifies each sender." : "None"],
           ]
         : [["Command", `<span class="mono">${esc([s.command, ...s.args].join(" "))}</span>`]]),
     ];
@@ -313,7 +313,7 @@
         `<p class="c-state" data-c="signin">Not reported.</p>` +
         `<p class="c-line">The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.</p>` +
         (signedFromHere ? `<p class="c-line">Last signed in from Clawtrate: Nov 19, 5:12 PM.</p>` : "") +
-        (s.signin === "each" ? `<p class="c-line">Each person connects their own account when a bot first uses it, from the conversation.</p>` : "") +
+        (s.signin === "each" ? `<p class="c-line">Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender. Clawtrate offers no sign-in for it.</p>` : "") +
         (s.signin === "oauth" && admin ? `<div class="c-actions">${link("Sign in", preview ? "signin-starting" : "signin-cli", { id: name, server: "1" })}</div>` : "") +
         (s.kind === "remote"
           ? group("Accounts") +
@@ -349,8 +349,6 @@
                 `<fieldset class="c-signin"><legend>Sign-in</legend>` +
                 radio("signin", "none", "None", !base) +
                 radio("signin", "oauth", "Sign in with OAuth", Boolean(base)) +
-                radio("signin", "each", "Each person signs in", false) +
-                `<p class="c-line" id="c-each-line" hidden>Needs the gateway's public address (<code>gateway.publicOrigin</code>). Without it, a bot can't ask anyone to sign in.</p>` +
                 `<p class="c-line">OpenClaw registers itself with the server when it signs in.</p></fieldset>`
               : field("c-command", "Command", "", "", "/path/to/server") +
                 `<label class="c-field"><span>Arguments</span><textarea class="input" id="c-args" rows="3" aria-describedby="c-args-hint" placeholder="One per line"></textarea><span class="c-line" id="c-args-hint">One per line. Each is passed as one argument, never through a shell.</span></label>` +
@@ -433,17 +431,19 @@
     const host = "auth.teamnotes.example";
     const cardHtml = {
       open:
-        `<p class="c-card-title"><b>Connect your team-notes account</b></p><p class="c-card-text">Pip asked to use team-notes for you. After you sign in, its tools reach Pip from your next message.</p>` +
+        `<p class="c-card-title"><b>team-notes asks for a sign-in</b></p><p class="c-card-text">The gateway sees every device using Clawtrate as one sender, so this sign-in is shared by everyone who uses this gateway from Clawtrate.</p>` +
         address(host) +
         `<div class="c-open"><a class="button" data-size="sm" data-variant="primary" href="${go("chat", { card: "opened" })}">Open in your browser</a></div>` +
-        `<p class="c-line" data-tone="${params.get("shared") === "1" ? "warn" : ""}">Anyone who opens this link signs in for you.</p>`,
+        `<p class="c-line">After you sign in, ask Pip again.</p>` +
+        `<p class="c-line" data-tone="${params.get("shared") === "1" ? "warn" : ""}">Anyone who opens this link completes this sign-in.</p>`,
       opened:
-        `<p class="c-card-title"><b>Connect your team-notes account</b></p><p class="c-card-text">Opened at 5:12 PM. If the page didn't finish, open it again.</p>` +
+        `<p class="c-card-title"><b>team-notes asks for a sign-in</b></p><p class="c-card-text">Opened at 5:12 PM. If the page didn't finish, open it again.</p>` +
         address(host) +
         `<div class="c-open"><a class="button" data-size="sm" href="${go("chat", { card: "opened" })}">Reopen</a></div>` +
-        `<p class="c-line">Anyone who opens this link signs in for you.</p>`,
-      connected: `<p class="c-card-title">Connected team-notes. Its tools reach Pip from your next message.</p>`,
-      error: `<p class="c-card-title"><b>team-notes can't ask you to sign in here:</b></p><p class="c-card-text mono">MCP server "team-notes" needs requester sign-in, but gateway.publicOrigin is not configured. Ask the operator to set the public Gateway HTTP(S) origin.</p>`,
+        `<p class="c-line">After you sign in, ask Pip again.</p>` +
+        `<p class="c-line">Anyone who opens this link completes this sign-in.</p>`,
+      connected: `<p class="c-card-title">Used team-notes connect</p><p class="c-card-text">MCP server "team-notes" is connected. Its tools become available on the next message.</p>`,
+      error: `<p class="c-card-title"><b>team-notes can't ask for a sign-in here:</b></p><p class="c-card-text mono">MCP server "team-notes" needs requester sign-in, but gateway.publicOrigin is not configured. Ask the operator to set the public Gateway HTTP(S) origin.</p>`,
     }[card];
     return (
       `<div class="c-chat"><div class="c-chat-head"><span class="c-chat-title">Pip · Standup notes</span></div><div class="c-transcript">` +
@@ -746,8 +746,6 @@
   // The tool server form: Clawtrate's own checks, then the gateway's answer (sections 12, 13).
   const form = document.getElementById("c-server-form");
   if (form) {
-    const each = form.querySelectorAll("input[name='signin']");
-    each.forEach((r) => r.addEventListener("change", () => (document.getElementById("c-each-line").hidden = form.querySelector("input[name='signin']:checked").value !== "each")));
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const errors = [];

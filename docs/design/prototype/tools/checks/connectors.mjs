@@ -99,14 +99,14 @@ const STATES = [
   ["screen=server&id=notes-work&last=unavailable", ["Unavailable at Pip's run at 5:12 PM:", "server unavailable"]],
   ["screen=server&id=notes-work&last=none", ["Not reported: the gateway's tool list doesn't mention this server."]],
   ["screen=server&id=search-index", ["Runs a command", "/opt/example/bin/search-server --stdio --index ./notes", "spawn /opt/example/bin/search-server ENOENT"]],
-  ["screen=server&id=team-notes", ["Each person signs in", "Each person connects their own account when a bot first uses it, from the conversation."]],
+  ["screen=server&id=team-notes", ["Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender.", "Clawtrate offers no sign-in for it."]],
   ["screen=server&id=notes-work&signed=1", ["Last signed in from Clawtrate: Nov 19, 5:12 PM."]],
   ["screen=server&id=notes-work&device=iphone", ["Change it from Clawtrate on your computer."]],
   ["screen=server-remove-confirm&id=notes-work", ["Remove notes-work from the gateway?", "the server's entry in the gateway's settings, with its headers", "its tools, from every bot that has them", "its sign-in, kept by the gateway in its state, not encrypted there. Removing the server does not delete it, and the gateway finds it again if a server with the same name and URL is added.", "To sign out first, run this on the gateway's machine before removing the server:", "openclaw mcp logout notes-work"]],
   ["screen=server-remove-confirm&id=search-index", ["Remove search-index from the gateway?", "nothing else: it has no sign-in the gateway keeps"]],
   ["screen=server-removed&id=notes-work", ["Removed notes-work.", "The gateway's settings no longer list it."]],
   ["screen=server-remove-failed&id=notes-work", ["notes-work is still listed:", "Try again"]],
-  ["screen=add-server", ["Add a custom connector", "Type", "Remote HTTPS", "Command", "Name", "Server URL", "Headers", "Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved.", "Sign-in", "None", "Sign in with OAuth", "Each person signs in", "OpenClaw registers itself with the server when it signs in.", "Add to gateway"]],
+  ["screen=add-server", ["Add a custom connector", "Type", "Remote HTTPS", "Command", "Name", "Server URL", "Headers", "Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved.", "Sign-in", "None", "Sign in with OAuth", "OpenClaw registers itself with the server when it signs in.", "Add to gateway"]],
   ["screen=add-server&type=command", ["Command", "Arguments", "One per line. Each is passed as one argument, never through a shell.", "Working folder", "The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can.", "Continue"]],
   ["screen=add-server&access=read", ["Read-only.", "Adding a custom connector needs admin access."]],
   ["screen=command-confirm&name=search-index&cmd=/opt/example/bin/search-server&args=--stdio", ["Run this command on the gateway's machine?", "Home gateway will run, on its own machine (studio.example), as the user it runs as:", "/opt/example/bin/search-server", "--stdio", "with that user's access to files, programs and the network.", "Run it on the gateway"]],
@@ -126,10 +126,10 @@ const STATES = [
   ["screen=signin-cli&id=calendrop", ["The gateway starts this sign-in from its own command line or its own settings page.", "On the gateway's machine, run:", "openclaw mcp login calendrop", "It prints an address. Open it in a browser and sign in to Calendrop.", "MCP OAuth credentials saved", "openclaw mcp login calendrop --code <code>", "Or sign in from Settings on the gateway's own web page."]],
   ["screen=signin-waiting&id=calendrop&app=preview&loopback=1", ["The sign-in page returns to the gateway's own address, which only a browser on the gateway's machine can reach.", "openclaw mcp login calendrop"]],
   ["screen=signin-waiting&id=notes-work&server=1", ["Sign in to notes-work", "auth.notes.example"]],
-  ["screen=chat", ["Add today's standup to team-notes.", "Connect your team-notes account", "Pip asked to use team-notes for you. After you sign in, its tools reach Pip from your next message.", "auth.teamnotes.example", "https://auth.teamnotes.example/authorize?response_type=code", "Open in your browser", "Anyone who opens this link signs in for you."]],
+  ["screen=chat", ["Add today's standup to team-notes.", "team-notes asks for a sign-in", "The gateway sees every device using Clawtrate as one sender, so this sign-in is shared by everyone who uses this gateway from Clawtrate.", "After you sign in, ask Pip again.", "auth.teamnotes.example", "https://auth.teamnotes.example/authorize?response_type=code", "Open in your browser", "Anyone who opens this link completes this sign-in."]],
   ["screen=chat&card=opened", ["Opened at 5:12 PM. If the page didn't finish, open it again.", "Reopen"]],
-  ["screen=chat&card=connected", ["Connected team-notes. Its tools reach Pip from your next message."]],
-  ["screen=chat&card=error", ["team-notes can't ask you to sign in here:", "gateway.publicOrigin is not configured"]],
+  ["screen=chat&card=connected", ["MCP server \"team-notes\" is connected. Its tools become available on the next message."]],
+  ["screen=chat&card=error", ["team-notes can't ask for a sign-in here:", "gateway.publicOrigin is not configured"]],
   ["screen=picker", ["What do you use every day?", "Pick the apps you use. Nothing is connected now; they come first in Connect apps.", "Search apps", "Quillnote", "Huddlewick", "Skip", "Next"]],
 ];
 for (const [query, words] of STATES) {
@@ -314,8 +314,10 @@ await walk("add a server by address: Clawtrate's checks, then saved", "screen=ad
 }
 {
   const p = await open("screen=add-server");
-  await p.locator("input[name=signin][value=each]").check();
-  check("each person signs in: the public address line shows", await p.locator("#c-each-line").isVisible());
+  check("the form offers no per-requester sign-in (ruling 1)", (await p.locator("input[name=signin]").count()) === 2 && !(await text(p)).includes("Each person signs in"));
+  const card = await open("screen=chat");
+  check("the connect card never says the sign-in is yours alone", !/your team-notes account|signs in for you/.test(await text(card)));
+  await card.close();
   await p.close();
 }
 await walk("add a server started by a command, through its confirmation", "screen=add-server&type=command", [
@@ -343,14 +345,14 @@ await walk("add a server started by a command, through its confirmation", "scree
   await p.close();
 }
 await walk("the connect card, opened and reopened", "screen=chat", [[link("Open in your browser"), "chat"], [link("Reopen"), "chat"]], ["Reopen", "Opened at 5:12 PM."]);
-await walk("the connect card in a shared task", "screen=chat", [[link("In a shared task"), "chat"]], ["Anyone who opens this link signs in for you."]);
+await walk("the connect card in a shared task", "screen=chat", [[link("In a shared task"), "chat"]], ["Anyone who opens this link completes this sign-in."]);
 {
   const p = await open("screen=chat&shared=1");
-  check("in a shared task, the warning line is in --warn", (await p.locator(".c-card .c-line").getAttribute("data-tone")) === "warn");
+  check("in a shared task, the warning line is in --warn", (await p.locator(".c-card .c-line[data-tone]").last().getAttribute("data-tone")) === "warn");
   await p.close();
 }
 await walk("the connect card: no public address", "screen=chat", [[link("No public address"), "chat"]], ["gateway.publicOrigin is not configured"]);
-await walk("the connect card: already connected", "screen=chat", [[link("Already connected"), "chat"]], ["Connected team-notes."]);
+await walk("the connect card: already connected", "screen=chat", [[link("Already connected"), "chat"]], ["is connected. Its tools become available on the next message."]);
 await walk("what do you use every day: tick, then Browse leads with them", "screen=home", [
   [link("What do you use every day?"), "picker"],
   [tick("Quillnote")],
