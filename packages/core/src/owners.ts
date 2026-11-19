@@ -244,6 +244,11 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // A task's model and effort (`task-models.ts`): the save on its way for each followed task, which
   // a message to that task waits for. Its view, lines and efforts are the state's `taskModels`.
   "taskModels.saves": { max: T, each: ID, row: "bookkeeping" },
+  // Reads and writes of this device's record still to make: one per followed task, only for the
+  // present gateway (others are dropped when one is queued), each its gateway's key and the task's.
+  "taskModels.storeQueue": { max: T, each: 3 * ID + 3 * N, row: "bookkeeping" },
+  // Which opening of each followed task the jobs belong to.
+  "taskModels.openings": { max: T, each: ID + N, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.
   "fileTransfers.held": {
@@ -266,7 +271,6 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "accounts.ctx": "the client's own functions, handed to the accounts engine",
   "accounts.signInAbort": "a handle that ends the one sign-in request that waits",
   "taskModels.ctx": "the client's own functions, handed to the task models engine",
-  "taskModels.storing": "the one read or write of this device's record under way",
 };
 
 /** The class of each client property whose own collections are named under it. */

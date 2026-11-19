@@ -338,6 +338,15 @@ export class TaskModelAccessError extends Error {
   }
 }
 
+/** Reads and writes of one task's record for one gateway, joined. */
+type StoreJob = {
+  storageKey: string;
+  key: string;
+  opening: number;
+  load: boolean;
+  persist: boolean;
+};
+
 /** How a save ended. */
 type SaveOutcome = "saved" | "unconfirmed" | "dropped" | { refused: string };
 
@@ -353,8 +362,16 @@ export class TaskModelsEngine {
   private readonly ctx: TaskModelsContext;
   /** A save on its way, per followed task: a message to that task waits for it. */
   private readonly saves = new Map<string, Promise<void>>();
-  /** Reads and writes of the storage key, one after another. */
-  private storing: Promise<void> = Promise.resolve();
+  /**
+   * Reads and writes of this device's record still to make, one per gateway
+   * and task: a second request for the same pair joins the first. Only the
+   * present gateway's are kept, so at most one per followed task.
+   */
+  private readonly storeQueue = new Map<string, StoreJob>();
+  private storeRunning = false;
+  /** Which opening of each followed task a job belongs to: a job for an earlier one is dropped. */
+  private readonly openings = new Map<string, number>();
+  private nextOpening = 0;
 
   constructor(ctx: TaskModelsContext) {
     this.ctx = ctx;
@@ -367,14 +384,16 @@ export class TaskModelsEngine {
   /** A task is followed: its view, its lines and efforts from the storage, and its models. */
   open(key: string): void {
     if (this.ctx.get()[key]) return;
+    this.openings.set(key, (this.nextOpening += 1));
     this.ctx.update((all) => ({ ...all, [key]: emptyTaskModel }));
-    void this.loadLog(key);
+    this.loadLog(key);
     if (this.ctx.connected()) void this.readCatalog(key);
   }
 
   /** A task is let go. Its record stays in the storage. */
   close(key: string): void {
     if (this.hasWork(key)) return;
+    this.openings.delete(key);
     this.ctx.update((all) => {
       if (!all[key]) return all;
       const next = { ...all };
@@ -391,7 +410,7 @@ export class TaskModelsEngine {
   /** After a reconnect: every followed task's models again, and any held change once nothing runs. */
   reconnected(): void {
     for (const key of Object.keys(this.ctx.get())) {
-      void this.loadLog(key);
+      this.loadLog(key);
       void this.readCatalog(key);
       this.ctx.released(key);
     }
@@ -686,39 +705,84 @@ export class TaskModelsEngine {
 
   // The record on this device ----------------------------------------------------------------
 
-  private chain(step: () => Promise<void>): Promise<void> {
-    const next = this.storing.then(step, step).catch((error: unknown) => {
-      this.ctx.log(`the task model record was not read or written: ${errorText(error)}`);
-    });
-    this.storing = next;
-    return next;
-  }
-
-  private loadLog(key: string): Promise<void> {
-    return this.chain(async () => {
-      const storageKey = this.ctx.storageKey();
-      if (!storageKey) return;
-      const entry = readLog(await this.ctx.storage.get(storageKey)).find(([k]) => k === key)?.[1];
-      if (!entry) return;
-      this.patch(key, (view) => ({
-        ...view,
-        events: mergeEvents(entry.events, view.events),
-        requested: mergeRequested(entry.requested, view.requested),
-      }));
-    });
+  private loadLog(key: string): void {
+    this.queueStore(key, "load");
   }
 
   private persist(key: string): void {
-    void this.chain(async () => {
-      const storageKey = this.ctx.storageKey();
-      const view = this.ctx.get()[key];
-      if (!storageKey || !view) return;
-      const tasks = readLog(await this.ctx.storage.get(storageKey)).filter(([k]) => k !== key);
-      tasks.push([key, { events: view.events, requested: view.requested }]);
+    this.queueStore(key, "persist");
+  }
+
+  private queueStore(key: string, what: "load" | "persist"): void {
+    const storageKey = this.ctx.storageKey();
+    const opening = this.openings.get(key);
+    if (!storageKey || opening === undefined) return;
+    // Jobs for another gateway are stale: this device now follows this one.
+    for (const [id, job] of this.storeQueue)
+      if (job.storageKey !== storageKey) this.storeQueue.delete(id);
+    const id = `${storageKey}\u0000${key}`;
+    const job = this.storeQueue.get(id) ?? {
+      storageKey,
+      key,
+      opening,
+      load: false,
+      persist: false,
+    };
+    job[what] = true;
+    job.opening = opening;
+    this.storeQueue.set(id, job);
+    void this.runStore();
+  }
+
+  /** One job at a time; each reads the record once, and acts only if its gateway and task are still current. */
+  private async runStore(): Promise<void> {
+    if (this.storeRunning) return;
+    this.storeRunning = true;
+    try {
+      for (
+        let next = this.storeQueue.entries().next();
+        !next.done;
+        next = this.storeQueue.entries().next()
+      ) {
+        const [id, job] = next.value;
+        this.storeQueue.delete(id);
+        try {
+          await this.store(job);
+        } catch (error) {
+          this.ctx.log(`the task model record was not read or written: ${errorText(error)}`);
+        }
+      }
+    } finally {
+      this.storeRunning = false;
+    }
+  }
+
+  private async store(job: StoreJob): Promise<void> {
+    const current = () =>
+      this.ctx.storageKey() === job.storageKey &&
+      this.openings.get(job.key) === job.opening &&
+      this.ctx.get()[job.key] !== undefined;
+    if (!current()) return;
+    const tasks = readLog(await this.ctx.storage.get(job.storageKey));
+    // Read for another gateway, or for an earlier opening of the task: dropped.
+    if (!current()) return;
+    if (job.load) {
+      const entry = tasks.find(([k]) => k === job.key)?.[1];
+      if (entry)
+        this.patch(job.key, (view) => ({
+          ...view,
+          events: mergeEvents(entry.events, view.events),
+          requested: mergeRequested(entry.requested, view.requested),
+        }));
+    }
+    if (job.persist) {
+      const view = this.ctx.get()[job.key]!;
+      const rest = tasks.filter(([k]) => k !== job.key);
+      rest.push([job.key, { events: view.events, requested: view.requested }]);
       await this.ctx.storage.set(
-        storageKey,
-        JSON.stringify({ v: 1, tasks: tasks.slice(-MAX_LOGGED_TASKS) }),
+        job.storageKey,
+        JSON.stringify({ v: 1, tasks: rest.slice(-MAX_LOGGED_TASKS) }),
       );
-    });
+    }
   }
 }

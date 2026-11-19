@@ -502,6 +502,84 @@ describe("a task's model and effort", () => {
     expect(again.view().events[0]?.model).toBe("acme/dev-2");
   });
 
+  it("F-045: a read of this device's record that crosses a change of gateway is dropped", async () => {
+    const r = rig();
+    let gateway = "clawtrate.task-models:old";
+    r.ctx.storageKey = () => gateway;
+    let finishOld!: (value: string) => void;
+    const reads: string[] = [];
+    r.ctx.storage = {
+      get: async (name) => {
+        reads.push(name);
+        if (name.endsWith(":old")) return new Promise<string>((resolve) => (finishOld = resolve));
+        return null;
+      },
+      set: async () => {},
+      delete: async () => {},
+    };
+    r.engine.open(KEY);
+    await until(() => reads.length === 1);
+    r.engine.close(KEY);
+    gateway = "clawtrate.task-models:new";
+    r.engine.open(KEY);
+    finishOld(
+      JSON.stringify({
+        tasks: [
+          [
+            KEY,
+            {
+              events: [
+                {
+                  id: "old-line",
+                  outcome: "changed",
+                  at: 1,
+                  after: 1,
+                  model: "acme/dev-2",
+                  sessionId: "session-1",
+                },
+              ],
+              requested: [],
+            },
+          ],
+        ],
+      }),
+    );
+    await until(() => reads.length === 2);
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 20));
+    expect(reads).toEqual(["clawtrate.task-models:old", "clawtrate.task-models:new"]);
+    expect(r.view().events).toEqual([]);
+  });
+
+  it("F-045: writes of the record for one gateway and task, queued while storage is slow, are joined", async () => {
+    const r = rig();
+    let release!: () => void;
+    let gets = 0;
+    const sets: string[] = [];
+    r.ctx.storage = {
+      get: async () => {
+        gets += 1;
+        if (gets === 1) await new Promise<void>((resolve) => (release = resolve));
+        return sets.at(-1) ?? null;
+      },
+      set: async (_name, value) => {
+        sets.push(value);
+      },
+      delete: async () => {},
+    };
+    await opened(r);
+    // Five saves while the first read waits: one job for the task, not five.
+    for (const effort of ["high", "medium", "minimal", "high", "medium"]) {
+      await r.engine.choose(KEY, { model: null, effort });
+    }
+    release();
+    await until(() => sets.length >= 1);
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 20));
+    expect(gets).toBe(2);
+    expect(sets).toHaveLength(1);
+    const kept = JSON.parse(sets[0]!) as { tasks: Array<[string, { events: unknown[] }]> };
+    expect(kept.tasks[0]![1].events).toHaveLength(5);
+  });
+
   it("F-044: a record that is not one is ignored", async () => {
     const r = rig();
     await r.storage.set("clawtrate.task-models:gateway-1", "{not json");
