@@ -140,6 +140,8 @@ The window's title is "Connect apps". On the phone it is a sheet, one pane at a 
 
 ## 4. Browse: search, categories, Recommended
 
+**When the gateway's settings are read-only.** `plugins.list` reports `mutationAllowed: false` when the gateway runs with its configuration read-only (R§3). That is the gateway's own state, not this device's access: Browse, On this gateway and a connector's page say "**This gateway's settings are read-only.** Plugins can't be added, turned on or off, or removed here, from any app." and offer no Add, Turn off, Turn on or Remove, and no request for admin access.
+
 **Opening.** Browse asks `plugins.catalog.browse {}` (with no query, ClawHub's overview with its categories) and, at the same time, `plugins.catalog.browse {intent: "featured"}` (R§2).
 
 | State                        | It shows                                                                                                                                                                                                     |
@@ -166,7 +168,10 @@ Choosing a row opens its page (section 6); "Add" goes straight to the confirmati
 
 **Categories.** A chip shows its category's `label`; choosing it asks `browse {category: <slug>}` and lists the rows under the chip's label. "All" returns to the overview.
 
-**Search** asks `browse {query}` and `skills.search {query}` as the person types, after 300 ms without a key. Results come in two groups, "Apps" and "Skills". A skill row has the initial, the skill's name and description, and opens the skill in its own page, which is not designed here (section 20). With no match in either: "No apps or skills match "<query>"." The chips and Recommended are hidden while a query is in the field.
+**Search** asks `browse {query}` and `skills.search {query}` as the person types, after 300 ms without a key. Results come in two groups, "Apps" and "Skills". A skill row has the initial, the skill's name and description, and opens the skill in its own page, which is not designed here (section 20). The chips and Recommended are hidden while a query is in the field.
+
+- **Each group says which source answered.** When `browse` comes back with `remoteError`, its rows are the gateway's own, under "On this gateway", and the group says "The catalog didn't answer this search." When `skills.search` fails, the Skills group says "Skills search didn't answer." A source that failed never reads "No match".
+- "No apps or skills match "<query>"." only when both answered and both are empty; "No apps match." or "No skills match." for one group whose source answered.
 
 **More.** When the gateway returns `nextCursor`, "Show more" at the foot of the list asks the next page.
 
@@ -193,10 +198,15 @@ Everything the catalog and a plugin give (a name, a summary, an author, the read
 **The confirmation** (role `alertdialog`, focus on Cancel):
 
 > **Add Quillnote to the gateway?**
-> The gateway downloads Quillnote 2.4.1 from the catalog and installs it, with the packages it depends on, on the gateway's machine. It then runs inside the gateway, with the gateway's access, and its tools are offered to bots that don't deny them. The gateway doesn't restart.
+> Package: `@quillnote-labs/quillnote`, from ClawHub. Version 2.4.1, the release reviewed here.
+> The gateway installs this package and can run it with the gateway's access. The gateway will tell you if it needs a restart.
 > [Cancel] [Add]
 
-The version is the catalog's `latestVersion`. "Bots that don't deny them" links to `controls.md` §4.
+**The request** is the gateway's own: `plugins.install` with the source and identifier the catalog row gives in `local.install` (R§3):
+
+- `{source: "clawhub", packageName, version, expectedIntegrity?}`: the version and integrity of the release on the reviewed page are passed, so the gateway installs that release or refuses. The confirmation names that version.
+- `{source: "official", pluginId}`: the gateway picks the release from its own catalog, and the request cannot name one. The confirmation then says "The gateway picks the release from its catalog." and promises no version.
+- An acknowledgement goes only with the answer that asked for it: `acknowledgeCapabilities: {reviewToken}` carries the token from that same review, and `acknowledgeInstallPolicyWarning: true` follows only the warning that was shown, for this request. A new request starts without either.
 
 **Then the gateway may ask first** (R§3), before anything is written:
 
@@ -230,7 +240,7 @@ Every plugin `plugins.list` returns as installed, then every entry of `config.ge
 
 ## 8. A connector's page
 
-A plugin's page: the initial at 56 px, the name, "by <author>" or "Comes with OpenClaw", the version, the state in words, the description; then "Tools", "Accounts", and the actions. It reads `plugins.list` (the row), `plugins.inspect {pluginId}` and, when it came from the catalog, `plugins.catalog.get` (R§8).
+A plugin's page: the initial at 56 px, the name, "by <author>" or, only for `origin: "bundled"`, "Comes with OpenClaw", the version, the state in words, the description; then "Tools", "Accounts", and the actions. It reads `plugins.list` (the row), `plugins.inspect {pluginId}` and, when it came from the catalog, `plugins.catalog.get` (R§8).
 
 **Tools** lists what the plugin gives, from `inspect`'s `components`: each server ("quillnote, a tool server"), each skill, each command. Under the list: "Which bots may use these is in each bot's settings." linking to `controls.md` §4.
 
@@ -243,7 +253,7 @@ A plugin's page: the initial at 56 px, the name, "by <author>" or "Comes with Op
 | `disabled`                                       | "Turned off. Its tools aren't offered to any bot."                                                                                                                                                                            | Turn on, Remove  |
 | `needs-setup`                                    | "Needs setup. Open Settings on the gateway to finish setup." When `inspect` reports credential fields with `status: "missing"`, their labels follow: "The gateway reports missing: Account address." No other field is named. | Remove           |
 | `error`, or `runtime.state: "service-failed"`    | "Not working:" and `runtime.error` or `error`, as given                                                                                                                                                                       | Turn off, Remove |
-| `removable: false`                               | (any of the above) and "Comes with OpenClaw, so it can be turned off but not removed."                                                                                                                                        | no Remove        |
+| `removable: false`                               | (any of the above), with no Remove. When `origin: "bundled"`, also "Comes with OpenClaw, so it can be turned off but not removed."                                                                                            | no Remove        |
 
 Editing a plugin's settings is not designed here (section 20); "Needs setup" says where to finish it, and names only fields the gateway reports missing.
 
@@ -407,14 +417,15 @@ Each argument is shown on its own line, in mono, never shortened, so an argument
 
 Every removal is a confirmation that says exactly what goes and what stays, then a result in the same two lists, each item marked by what was read back (the removal list, section 2).
 
-**A connector** (`plugins.uninstall`, admin, R§4):
+**A connector** (`plugins.uninstall {pluginId}`, admin, R§4). The gateway removes a plugin by the package that owns it, which can hold several plugins:
 
 > **Remove Quillnote from the gateway?**
-> Goes: Quillnote's files on the gateway's machine; its settings on the gateway; its tools.
+> The package `@quillnote-labs/quillnote`, with: Quillnote, Quillnote sync. (the plugins `plugins.list` shows with that package; when the inventory doesn't establish them: "The gateway removes the package that owns Quillnote, and any other plugins in it.")
+> Goes: the package's files on the gateway's machine; its settings on the gateway; its tools.
 > Stays: any saved sign-ins, kept by the gateway in its state, not encrypted there; a note on the gateway that Quillnote is off, so nothing turns it back on by itself.
 > [Cancel] [Remove]
 
-After the removal, `plugins.list` is read: "Removed Quillnote. The gateway no longer lists it." A connector that comes with OpenClaw has no Remove (section 8).
+The answer's `removed` lists the plugins the gateway removed. Then `plugins.list` is read, and each of them is "No longer installed" only when its row there has `installed: false` or is gone; an official plugin can stay listed as not installed, and that is the same outcome. When the read fails: "**Couldn't confirm the removal.** Check again." with "Check again". `removable` decides only whether Remove is offered; a connector that comes with OpenClaw has none (section 8).
 
 **A tool server** (section 12's contract: `null`, with `replacePaths` for a command's arguments, and the `hash` read when the confirmation opened, R§5):
 

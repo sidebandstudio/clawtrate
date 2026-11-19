@@ -17,7 +17,7 @@
     String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
   // Every display setting and the access tier are kept when moving between screens.
-  const KEEP = ["theme", "width", "motion", "chrome", "access", "picked", "device"];
+  const KEEP = ["theme", "width", "motion", "chrome", "access", "picked", "device", "readonly", "skills"];
   // On the iPhone the window is "Plugins" (F-380), with its own words.
   const iphone = params.get("device") === "iphone";
   const go = (to, extra = {}) => {
@@ -26,7 +26,10 @@
     for (const [key, value] of Object.entries(extra)) if (value !== null) next.set(key, value);
     return `connectors.html?${next}`;
   };
-  const admin = access === "admin" || req === "granted";
+  // The gateway's own read-only configuration (mutationAllowed: false), whatever this device's access.
+  const readonlyGw = params.get("readonly") === "1";
+  const admin = (access === "admin" || req === "granted") && !readonlyGw;
+  const readonlyNote = () => (readonlyGw ? `<div class="b-note" role="status">${CT.icon("lock")}<div><p><b>This gateway's settings are read-only.</b> Plugins can't be added, turned on or off, or removed here, from any app.</p></div></div>` : "");
 
   // Samples --------------------------------------------------------------------------
 
@@ -41,7 +44,7 @@
     { id: "quillnote", name: "Quillnote", summary: "Notes and notebooks your bots can read and add to.", author: "quillnote-labs", cats: ["productivity"], featured: true, version: "2.4.1", local: "install", servers: [["quillnote", true]], skills: ["Daily notes"], host: "auth.quillnote.example", readme: "Quillnote keeps notes in notebooks. With this connector a bot can search your notes, read a page and add one.\nIt signs in to your Quillnote account with OAuth; the gateway keeps the sign-in." },
     { id: "tasktide", name: "Tasktide", summary: "Tasks, due dates and lists.", author: "tasktide", official: true, cats: ["productivity"], featured: true, version: "1.9.0", local: "enabled", servers: [["tasktide", true]], auth: "authorized", host: "auth.tasktide.example" },
     { id: "calendrop", name: "Calendrop", summary: "Calendars and free time.", author: "calendrop", cats: ["productivity"], featured: true, version: "3.0.2", local: "enabled", servers: [["calendrop", true]], auth: "unauthenticated", host: "auth.calendrop.example" },
-    { id: "chartwick", name: "Chartwick", summary: "Dashboards and charts from your sheets.", author: "chartwick", cats: ["productivity"], version: "0.8.0", local: "install", servers: [["chartwick", false]] },
+    { id: "chartwick", name: "Chartwick", summary: "Dashboards and charts from your sheets.", author: "chartwick", official: true, cats: ["productivity"], version: "0.8.0", local: "install", servers: [["chartwick", false]] },
     { id: "ledgerkin", name: "Ledgerkin", summary: "Invoices and expenses, read-only.", author: "ledgerkin", cats: ["finance"], version: "1.2.0", local: "disabled", servers: [["ledgerkin", true]] },
     { id: "boxwharf", name: "Boxwharf", summary: "Files and shared folders.", author: "boxwharf", cats: ["files"], featured: true, version: "2.1.0", local: "error", error: "boxwharf-sync: the token store couldn't be read" },
     { id: "postlark", name: "Postlark", summary: "Mail: read, draft and file messages.", author: "postlark", cats: ["mail"], version: "1.0.4", local: "needs-setup", missing: ["Account address"] },
@@ -113,7 +116,7 @@
 
   // The access bar of bots.md §2, in an admin action's place.
   const accessBar = (what) => {
-    if (admin) return "";
+    if (admin || readonlyGw) return "";
     const state = req || (access === "read" ? "read" : "interactive");
     const rows = {
       read: [`${icon("eye")}<span class="shelf-text"><b>Read-only.</b> ${what}</span>`, link("Request admin access", screen, keepHere({ req: "asking" }), { variant: "primary" })],
@@ -204,6 +207,7 @@
   const browseLoaded = () => {
     const pickedRows = APPS.filter((a) => picked.includes(a.name));
     return (
+      readonlyNote() +
       search(iphone ? "Search plugins" : "Search across apps and skills") +
       chips("") +
       `<div id="c-results">` +
@@ -274,6 +278,7 @@
       title: a.name,
       back: go("installed"),
       body:
+        readonlyNote() +
         (params.get("busy") === "1" ? note("warn", "The gateway is busy with another change.", "Try again in a moment.", `<div class="c-actions">${link("Try again", "turnoff-confirm", { id: a.id })}</div>`) : "") +
         (said === "on" ? note("", `Turned on ${a.name}.`, `The gateway lists it as added.`) : said === "off" ? note("", `Turned off ${a.name}.`, "The gateway lists it as turned off.") : "") +
         `<div class="c-hero">${initial(a.name, "lg")}<div><p class="c-hero-name">${a.name}</p><p class="c-faint">${a.bundled ? "Comes with OpenClaw" : `by ${a.author}`} · ${a.version}</p></div></div>` +
@@ -509,14 +514,20 @@
         foot: a.local === "install" ? (admin ? link("Add", "add-confirm", { id: a.id }, { variant: "primary" }) : accessBar("Adding apps needs admin access.")) : "",
       });
     },
-    "add-confirm": () =>
-      windowHtml({ title: A().name, back: go("app", { id: A().id }), body: "" }) +
-      confirm(
-        `Add ${A().name} to the gateway?`,
-        `<p>The gateway downloads ${A().name} ${A().version} from the catalog and installs it, with the packages it depends on, on the gateway's machine. It then runs inside the gateway, with the gateway's access, and its tools are offered to bots that don't deny them. The gateway doesn't restart.</p>`,
-        [link("Cancel", "app", { id: A().id }, { variant: "quiet", attrs: "data-autofocus" }), link("Add", params.get("ask") || "add-progress", { id: A().id }, { variant: "primary" })],
-        proto("the gateway first asks for", [link("A review", "add-confirm", { id: A().id, ask: "add-consent" }, { variant: "quiet" }), link("An install warning", "add-confirm", { id: A().id, ask: "add-warning" }, { variant: "quiet" }), link("Nothing", "add-confirm", { id: A().id }, { variant: "quiet" })]),
-      ),
+    "add-confirm": () => {
+      const a = A();
+      const official = a.official;
+      return (
+        windowHtml({ title: a.name, back: go("app", { id: a.id }), body: "" }) +
+        confirm(
+          `Add ${a.name} to the gateway?`,
+          `<p>Package: <span class="mono">@${a.author}/${a.id}</span>, from ${official ? "the gateway's official catalog" : "ClawHub"}. ${official ? "The gateway picks the release from its catalog." : `Version ${a.version}, the release reviewed here.`}</p>` +
+            `<p>The gateway installs this package and can run it with the gateway's access. The gateway will tell you if it needs a restart.</p>`,
+          [link("Cancel", "app", { id: a.id }, { variant: "quiet", attrs: "data-autofocus" }), link("Add", params.get("ask") || "add-progress", { id: a.id }, { variant: "primary" })],
+          proto("the gateway first asks for", [link("A review", "add-confirm", { id: a.id, ask: "add-consent" }, { variant: "quiet" }), link("An install warning", "add-confirm", { id: a.id, ask: "add-warning" }, { variant: "quiet" }), link("Nothing", "add-confirm", { id: a.id }, { variant: "quiet" })]),
+        )
+      );
+    },
     "add-consent": () =>
       windowHtml({ title: A().name, back: go("app", { id: A().id }), body: "" }) +
       confirm(`${A().name} asks for more than the catalog listed.`, `<ul class="c-list"><li>A hook: <span class="mono">before_tool_call</span></li><li>A tool server: <span class="mono">quillnote-sync</span></li></ul>`, [link("Cancel", "app", { id: A().id }, { variant: "quiet" }), link("Add anyway", "add-progress", { id: A().id }, { variant: "primary" })]),
@@ -549,6 +560,7 @@
       windowHtml({
         title: "On this gateway",
         body:
+          readonlyNote() +
           search("Search what's on this gateway") +
           group("Turned on") +
           rows(APPS.filter((a) => !a.bundled && ["enabled", "error"].includes(a.local)), "connector") +
@@ -578,14 +590,20 @@
         windowHtml(connectorPage()) +
         confirm(
           `Remove ${a.name} from the gateway?`,
-          goes([`${a.name}'s files on the gateway's machine`, "its settings on the gateway", "its tools"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", `a note on the gateway that ${a.name} is off, so nothing turns it back on by itself`]),
+          `<p data-c="package">The package <span class="mono">@${a.author}/${a.id}</span>, with: ${a.name}, ${a.name} sync.</p>` +
+            goes(["the package's files on the gateway's machine", "its settings on the gateway", "its tools"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", `a note on the gateway that ${a.name} is off, so nothing turns it back on by itself`]),
           [link("Cancel", "connector", { id: a.id }, { variant: "quiet" }), link("Remove", "removed", { id: a.id }, { variant: "primary" })],
+          proto("the read-back", [link("The read fails", "removed-unconfirmed", { id: a.id }, { variant: "quiet" })]),
         )
       );
     },
     removed: () => {
       const a = app(params.get("id") || "tasktide");
-      return windowHtml({ title: a.name, back: go("installed"), body: result("", "check", `Removed ${a.name}.`, "The gateway no longer lists it.") + goes([`${a.name}'s files`, "its settings", "its tools"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", "the note that it is off"], "done") + `<div class="c-actions">${link("Back to the list", "installed")}</div>` });
+      return windowHtml({ title: a.name, back: go("installed"), body: result("", "check", `Removed ${a.name}.`, `No longer installed: ${a.name}, ${a.name} sync. The gateway's list shows each with installed: false.`) + goes(["the package's files", "its settings", "its tools"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", "the note that it is off"], "done") + `<div class="c-actions">${link("Back to the list", "installed")}</div>` });
+    },
+    "removed-unconfirmed": () => {
+      const a = app(params.get("id") || "tasktide");
+      return windowHtml({ title: a.name, back: go("connector", { id: a.id }), body: note("warn", "Couldn't confirm the removal.", "The gateway's plugin list couldn't be read.", `<div class="c-actions">${link("Check again", "removed", { id: a.id })}</div>`) });
     },
     server: () => windowHtml(serverPage()),
     "server-remove-confirm": () => {
@@ -755,14 +773,16 @@
       root.querySelector(".c-chips")?.setAttribute("hidden", "");
       const pool = offline ? APPS.filter((a) => a.local !== "install" && a.local !== "unavailable") : APPS;
       const apps = pool.filter((a) => `${a.name} ${a.summary}`.toLowerCase().includes(text));
-      const skills = offline ? [] : SKILLS.filter((s) => `${s.name} ${s.text}`.toLowerCase().includes(text));
+      const skillsFailed = params.get("skills") === "fail";
+      const skills = offline || skillsFailed ? [] : SKILLS.filter((s) => `${s.name} ${s.text}`.toLowerCase().includes(text));
       results.innerHTML =
-        !apps.length && !skills.length && !offline
+        !apps.length && !skills.length && !offline && !skillsFailed
           ? `<p class="c-state" data-c="none">No apps or skills match "${esc(q.value.trim())}".</p>`
-          : group("Apps") +
+          : group(offline ? "On this gateway" : "Apps") +
+            (offline ? `<p class="c-line">The catalog didn't answer this search.</p>` : "") +
             (apps.length ? rows(apps, offline ? "connector" : "app") : `<p class="c-line">No apps match.</p>`) +
             group("Skills") +
-            (offline ? `<p class="c-line">Searching skills needs the catalog.</p>` : skills.length ? `<ul class="c-rows">${skills.map((s) => `<li class="c-row"><span class="c-row-main">${initial(s.name)}<span class="c-row-text"><span class="c-row-name">${s.name}</span><span class="c-row-sub">${s.text}</span></span></span></li>`).join("")}</ul>` : `<p class="c-line">No skills match.</p>`);
+            (offline ? `<p class="c-line">Searching skills needs the catalog.</p>` : skillsFailed ? `<p class="c-line">Skills search didn't answer.</p>` : skills.length ? `<ul class="c-rows">${skills.map((s) => `<li class="c-row"><span class="c-row-main">${initial(s.name)}<span class="c-row-text"><span class="c-row-name">${s.name}</span><span class="c-row-sub">${s.text}</span></span></span></li>`).join("")}</ul>` : `<p class="c-line">No skills match.</p>`);
       document.getElementById("c-live").textContent = apps.length || skills.length ? `${apps.length} apps, ${skills.length} skills` : "No apps match";
     });
   }

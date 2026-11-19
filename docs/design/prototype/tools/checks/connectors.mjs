@@ -70,7 +70,8 @@ const STATES = [
   ["screen=app&id=quillnote", ["Quillnote", "by quillnote-labs", "What it adds", "quillnote, a tool server that signs in with OAuth", "Daily notes, a skill", "About", "Version 2.4.1", "Add"]],
   ["screen=app&id=docklet", ["Not available for this gateway's version."]],
   ["screen=app&id=quillnote&access=read", ["Read-only.", "Adding apps needs admin access.", "Request admin access"]],
-  ["screen=add-confirm&id=quillnote", ["Add Quillnote to the gateway?", "The gateway downloads Quillnote 2.4.1 from the catalog and installs it, with the packages it depends on, on the gateway's machine.", "It then runs inside the gateway, with the gateway's access", "The gateway doesn't restart.", "Cancel", "Add"]],
+  ["screen=add-confirm&id=quillnote", ["Add Quillnote to the gateway?", "Package: @quillnote-labs/quillnote, from ClawHub.", "Version 2.4.1, the release reviewed here.", "The gateway installs this package and can run it with the gateway's access. The gateway will tell you if it needs a restart.", "Cancel", "Add"]],
+  ["screen=add-confirm&id=chartwick", ["from the gateway's official catalog", "The gateway picks the release from its catalog."]],
   ["screen=add-consent&id=quillnote", ["Quillnote asks for more than the catalog listed.", "before_tool_call", "Add anyway"]],
   ["screen=add-warning&id=quillnote", ["The gateway's install check found something.", "Warning:", "line 12", "Add anyway"]],
   ["screen=add-progress&id=quillnote", ["Adding Quillnote", "Finding the release", "Downloading", "Unpacking", "Writing files", "Installing what it needs", "Starting it on the gateway"]],
@@ -92,8 +93,11 @@ const STATES = [
   ["screen=connector&id=linkpeek", ["Comes with OpenClaw", "Added. Not loaded yet: it loads when a bot first needs it.", "Comes with OpenClaw, so it can be turned off but not removed."]],
   ["screen=connector&id=tasktide&access=read", ["Read-only.", "Changing connectors needs admin access.", "Request admin access"]],
   ["screen=turnoff-confirm&id=tasktide", ["Turn off Tasktide?", "The gateway stops offering its tools. Its settings and any saved sign-ins stay."]],
-  ["screen=remove-confirm&id=tasktide", ["Remove Tasktide from the gateway?", "Goes", "Tasktide's files on the gateway's machine", "its settings on the gateway", "its tools", "Stays", "any saved sign-ins, kept by the gateway in its state, not encrypted there", "a note on the gateway that Tasktide is off, so nothing turns it back on by itself"]],
-  ["screen=removed&id=tasktide", ["Removed Tasktide.", "The gateway no longer lists it."]],
+  ["screen=remove-confirm&id=tasktide", ["Remove Tasktide from the gateway?", "The package @tasktide/tasktide, with: Tasktide, Tasktide sync.", "Goes", "the package's files on the gateway's machine", "its settings on the gateway", "its tools", "Stays", "any saved sign-ins, kept by the gateway in its state, not encrypted there", "a note on the gateway that Tasktide is off, so nothing turns it back on by itself"]],
+  ["screen=removed&id=tasktide", ["Removed Tasktide.", "No longer installed: Tasktide, Tasktide sync."]],
+  ["screen=removed-unconfirmed&id=tasktide", ["Couldn't confirm the removal.", "Check again"]],
+  ["screen=browse&readonly=1", ["This gateway's settings are read-only.", "Plugins can't be added, turned on or off, or removed here, from any app."]],
+  ["screen=connector&id=tasktide&readonly=1", ["This gateway's settings are read-only."]],
   ["screen=server&id=notes-work", ["notes-work", "Name on the gateway", "Added by address", "https://notes.example/mcp", "Authorization", "Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.", "Signs in with OAuth", "Gateway tool listing", "Gateway tool listing for Pip's task, read at 5:12 PM: 8 tools", "A listing shows what the gateway has discovered for this task. A bot's tool rules still decide what it is offered.", "Sign-in", "Not reported.", "The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.", "Sign in", "Accounts", "A second name for the same server, with its own sign-in. Bots tell them apart by name.", "Add another account", "Remove…"]],
   ["screen=server&id=notes-work&last=notyet", ["The gateway hasn't listed this server's tools for this task."]],
   ["screen=server&id=notes-work&last=unavailable", ["Gateway tool listing for Pip's task, read at 5:12 PM:", "server unavailable"]],
@@ -178,6 +182,21 @@ for (const [query, words] of STATES) {
   check("no screen claims a run, a time of use or every bot (ruling 7)", claims.length === 0, claims.join(" | "));
 }
 
+{
+  const p = await open("screen=browse&readonly=1&access=read");
+  check("read-only gateway settings: no Add, and no request for admin access (ruling 10)", (await p.locator(".c-row-end .button").count()) === 0 && !(await text(p)).includes("Request admin access"));
+  await p.close();
+  const q = await open("screen=connector&id=tasktide&readonly=1");
+  check("read-only gateway settings: no Turn off and no Remove", (await q.getByRole("link", { name: /Turn off|Remove/ }).count()) === 0);
+  await q.close();
+  const r = await open("screen=connector&id=pathfinder");
+  check("Comes with OpenClaw only for a bundled plugin", (await text(r)).includes("Comes with OpenClaw"));
+  await r.close();
+  const t = await open("screen=connector&id=tasktide");
+  check("a plugin that isn't bundled never says Comes with OpenClaw", !(await text(t)).includes("Comes with OpenClaw"));
+  await t.close();
+}
+
 // Part 2: the walks, clicked through, each destination asserted -----------------------------------
 async function walk(name, start, stepsList, finalWords = []) {
   const p = await open(start);
@@ -252,6 +271,8 @@ await walk("the catalog loads after 4 s", "screen=browse-loading", [[link("4 s p
 await walk("the gateway refuses the catalog, try again", "screen=browse-loading", [[link("The gateway refuses"), "browse-error"], [link("Try again"), "browse-loading"]]);
 await walk("search across apps and skills", "screen=browse", [[typeIn("#c-q", "weekly")]], ["Skills", "Weekly review"]);
 await walk("search with no match", "screen=browse", [[typeIn("#c-q", "zzzz")]], ['No apps or skills match "zzzz".']);
+await walk("search when skills search fails: never No match for skills", "screen=browse&skills=fail", [[typeIn("#c-q", "zzzz")]], ["Skills search didn't answer.", "No apps match."]);
+await walk("removal: the read fails", "screen=remove-confirm&id=tasktide", [[link("The read fails"), "removed-unconfirmed"], [link("Check again"), "removed"]], ["No longer installed"]);
 const chip = (name) => (p) => p.getByRole("radio", { name, exact: true }).click();
 await walk("Show more asks the next page", "screen=browse", [[link("Show more"), "browse"]], ["Mapwhistle", "Tunebarrow"]);
 await walk("a category chip", "screen=browse", [[chip("Finance"), "browse-category"], [chip("All"), "browse"]], ["All apps"]);
