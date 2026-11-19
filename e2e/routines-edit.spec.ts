@@ -104,6 +104,17 @@ async function bridgeCommand(command: Record<string, unknown>): Promise<unknown>
   );
 }
 
+// Control when one write's answer reaches the page while gateway events still go through.
+type Reply = (value?: unknown) => void;
+let heldWrite: { type: string; forward: boolean; ready: (reply: Reply) => void } | null = null;
+const unanswered = { status: "unknown", error: "The gateway didn't answer." };
+
+function holdWrite(type: "updateRoutine" | "removeRoutine", forward: boolean): Promise<Reply> {
+  const ready = Promise.withResolvers<Reply>();
+  heldWrite = { type, forward, ready: ready.resolve };
+  return ready.promise;
+}
+
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(240_000);
   expect(INSTANCE, "a named instance").toMatch(/^[a-z0-9-]+$/);
@@ -125,6 +136,36 @@ test.beforeAll(async ({ browser }) => {
   });
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   page = await context.newPage();
+  await page.routeWebSocket(/\/bridge$/, (ws) => {
+    const server = ws.connectToServer();
+    let hold: { id: string; ready: (reply: Reply) => void } | null = null;
+    ws.onMessage((message) => {
+      const request = JSON.parse(String(message)) as { id: string; command?: { type: string } };
+      const write = heldWrite;
+      if (write && request.command?.type === write.type) {
+        heldWrite = null;
+        if (write.forward) hold = { id: request.id, ready: write.ready };
+        else {
+          write.ready((value) =>
+            ws.send(JSON.stringify({ type: "result", id: request.id, ok: true, value })),
+          );
+          return;
+        }
+      }
+      server.send(message);
+    });
+    server.onMessage((message) => {
+      const response = JSON.parse(String(message)) as {
+        type: string;
+        id?: string;
+        value?: unknown;
+      };
+      if (hold && response.type === "result" && response.id === hold.id) {
+        hold.ready((value = response.value) => ws.send(JSON.stringify({ ...response, value })));
+        hold = null;
+      } else ws.send(message);
+    });
+  });
   await page.goto(url);
   await page.getByRole("button", { name: "Use the development gateway" }).click();
   await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
@@ -339,7 +380,7 @@ test("F-351: Run now runs it, reads Running until done, and says when one is alr
   await expect(view().getByRole("button", { name: "Run once now" })).toBeVisible();
 });
 
-test("F-352: deleting asks first, and the routine is gone from the gateway and the list", async () => {
+test("F-352: an unanswered delete checks both a routine still present and a routine already gone", async () => {
   const job = await add(scriptedRoutine(`Delete me ${STAMP}`));
   await openPage(job.name);
   await view().getByRole("button", { name: "More" }).click();
@@ -348,7 +389,22 @@ test("F-352: deleting asks first, and the routine is gone from the gateway and t
   await expect(dialog).toContainText(
     "It won't run again, and Clawtrate can't show its runs afterwards. It hasn't run yet.",
   );
+  const missed = holdWrite("removeRoutine", false);
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  (await missed)(unanswered);
+  const check = dialog.getByRole("button", { name: "Check now" });
+  await expect(check).toBeFocused();
+  await expect(dialog.getByRole("button", { name: "Delete again" })).toHaveCount(0);
+  await check.click();
+  await expect(dialog).toContainText(
+    "The gateway still lists this routine. The delete may still arrive.",
+  );
+  expect((await get(job.id)).id).toBe(job.id);
+  const landed = holdWrite("removeRoutine", true);
+  await dialog.getByRole("button", { name: "Delete again" }).click();
+  (await landed)(unanswered);
+  await expect(check).toBeFocused();
+  await check.click();
   await expect(dialog).toHaveCount(0);
   await expect(view().getByRole("heading", { name: "Routines" })).toBeVisible();
   await expect(row(job.name)).toHaveCount(0);

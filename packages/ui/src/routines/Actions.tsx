@@ -243,37 +243,57 @@ export function DeleteRoutine({
   onDeleted: () => void;
 }) {
   const bridge = useBridge();
-  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<"idle" | "deleting" | "unknown" | "checking" | "present">(
+    "idle",
+  );
   const [error, setError] = useState<string | null>(null);
   const [now] = useState(() => Date.now());
+  const checkButton = useRef<HTMLButtonElement>(null);
+  const needsCheck = status === "unknown" || status === "checking";
+  useEffect(() => {
+    if (status === "unknown") checkButton.current?.focus();
+  }, [status]);
   const last =
     routine.lastRunAt === null
       ? "It hasn't run yet."
       : `Its last run was ${when(routine.lastRunAt, now, routine.schedule.tz ?? viewerZone()).replace(/ (\d{1,2}:\d{2}\s[AP]M)$/u, " at $1")}.`;
   const remove = async () => {
-    setBusy(true);
+    setStatus("deleting");
     setError(null);
     try {
       const result = await bridge.invoke({ type: "removeRoutine", id: routine.id });
       if (result.status === "removed") return onDeleted();
+      if (result.status === "unknown") return setStatus("unknown");
       setError(
         result.status === "not-sent"
           ? "Nothing was sent: this connection can't change routines."
-          : result.status === "unknown"
-            ? `The gateway didn't answer (${result.error}). It may still have deleted it.`
-            : result.error,
+          : result.error,
       );
+      setStatus("idle");
+    } catch {
+      setStatus("unknown");
+    }
+  };
+  const check = async () => {
+    setStatus("checking");
+    setError(null);
+    try {
+      const fresh = await bridge.invoke({ type: "readRoutine", id: routine.id });
+      if (fresh === null) return onDeleted();
+      setStatus("present");
     } catch (failure) {
       setError(errorText(failure));
+      setStatus("unknown");
     }
-    setBusy(false);
   };
   return (
     <Dialog
       kind="confirm"
       labelledBy="r-delete-title"
       describedBy="r-delete-text"
-      onClose={onCancel}
+      onClose={() => {
+        if (!needsCheck && status !== "deleting") onCancel();
+      }}
       role="alertdialog"
       testId="routine-delete"
     >
@@ -282,32 +302,62 @@ export function DeleteRoutine({
         <p id="r-delete-text">
           It won&apos;t run again, and Clawtrate can&apos;t show its runs afterwards. {last}
         </p>
-        {error && (
-          <Note tone="danger" testId="delete-error">
-            <p role="alert">
-              <strong>Couldn&apos;t delete it.</strong> {error}
+        {needsCheck || status === "present" ? (
+          <Note tone="warn" testId="delete-check">
+            <p role="status">
+              {needsCheck
+                ? "The gateway didn't answer. This routine may have been deleted."
+                : "The gateway still lists this routine. The delete may still arrive."}
+              {error && ` Couldn't check: ${error}`}
             </p>
           </Note>
+        ) : (
+          error && (
+            <Note tone="danger" testId="delete-error">
+              <p role="alert">
+                <strong>Couldn&apos;t delete it.</strong> {error}
+              </p>
+            </Note>
+          )
         )}
         <div className="b-actions">
-          <button
-            type="button"
-            className="button"
-            data-variant="quiet"
-            onClick={onCancel}
-            data-b-focus=""
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="button"
-            data-tone="danger"
-            disabled={busy}
-            onClick={() => void remove()}
-          >
-            {busy ? "Deleting…" : "Delete"}
-          </button>
+          {needsCheck ? (
+            <button
+              type="button"
+              className="button"
+              ref={checkButton}
+              disabled={status === "checking"}
+              onClick={() => void check()}
+            >
+              {status === "checking" ? "Checking…" : error ? "Check again" : "Check now"}
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="button"
+                data-variant="quiet"
+                onClick={onCancel}
+                disabled={status === "deleting"}
+                data-b-focus=""
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="button"
+                data-tone="danger"
+                disabled={status === "deleting"}
+                onClick={() => void remove()}
+              >
+                {status === "deleting"
+                  ? "Deleting…"
+                  : status === "present"
+                    ? "Delete again"
+                    : "Delete"}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </Dialog>
