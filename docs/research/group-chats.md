@@ -10,6 +10,11 @@ How to read the citations, as in `gateway-capabilities.md` and `setup-flow.md`:
 
 Where things were run: a named development instance, `pnpm dev-gateway start --instance d9grp`, with its four seeded bots and the scripted model, and the probe in `group-chats/group-probe.ts`, which pairs its own devices through the tool's `openOperator` (its pairing approved by id through the tool's guarded runner) and removes them when it ends. Each experiment is `node docs/research/group-chats/group-probe.ts <experiment> --instance d9grp`. On this gateway Juniper's agent id is `main`; the others are `otto`, `marlow` and `pip`. Ids, keys and run ids below are from those runs; the owner's display name and the state folder's path are left out.
 
+## Two facts other designs rely on
+
+- **An approval request reaches, and can be resolved by, only the device that sent the message that started the run:** a second device of the same person, holding `operator.approvals` and subscribed to the task with approvals, received no request, listed none in `exec.approval.list` and was refused "unknown or expired approval id" when it answered by id, while a read-only device saw only the run's `waiting-approval` phase; an admin connection may see and resolve it, which was read in the source (`canAccessOperatorApproval`) and not run (section 9).
+- **A `chat.send` to a task that was deleted starts a new, empty task under the same key without saying so:** `sessions.describe` answered `{session: null}`, the send answered `{status: "started"}` with no error, and the key then described a new task, so a client must check that a task exists before it sends to one (section 3).
+
 ## Summary
 
 | # | Question | Answer | Section |
