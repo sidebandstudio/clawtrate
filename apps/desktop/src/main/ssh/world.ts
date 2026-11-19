@@ -8,9 +8,10 @@
 // resolve inside the real home's `.ssh` folder, or that would use the real key
 // agent, is refused before anything is read or started.
 
-import { realpathSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+
+import { physicalPath, within } from "./paths.ts";
 
 export type SshWorld = {
   /** The person's home folder: where `~` in their SSH configuration points. */
@@ -71,39 +72,35 @@ function realHome(): string {
   }
 }
 
-const fold = (path: string, platform: NodeJS.Platform) =>
-  platform === "darwin" || platform === "win32" ? path.toLowerCase() : path;
-
-function inside(path: string, dir: string, platform: NodeJS.Platform): boolean {
-  const p = fold(path, platform);
-  const d = fold(dir, platform);
-  return p === d || p.startsWith(d.endsWith(sep) ? d : d + sep);
-}
-
 /**
- * The path as the file system resolves it: the nearest existing ancestor's real
- * path joined with the rest. Called only for paths already outside `.ssh` by
- * name, so it never looks inside the real `.ssh` folder.
+ * Throws `SshWorldRefused` when any of `paths` is not absolute or lands inside
+ * `protectedDir`: first by its spelling, so such a path is never touched, then
+ * as the file system walks it, links and a `..` after a link included.
  */
-function resolvedThroughLinks(path: string): string {
-  let current = resolve(path);
-  const rest: string[] = [];
-  for (;;) {
-    try {
-      return join(realpathSync(current), ...rest.reverse());
-    } catch {
-      const parent = dirname(current);
-      if (parent === current) return resolve(path);
-      rest.push(current.slice(parent.length).replace(/^[\\/]+/, ""));
-      current = parent;
+export function guardPaths(
+  paths: readonly string[],
+  protectedDir: string,
+  platform: NodeJS.Platform,
+): void {
+  // The protected folder's parent through its links, then the folder by name: nothing inside is looked at.
+  const protectedPhysical = join(physicalPath(dirname(protectedDir)), basename(protectedDir));
+  for (const path of paths) {
+    if (!isAbsolute(path)) throw new SshWorldRefused("A path the SSH world uses is not absolute.");
+    if (within(resolve(path), protectedDir, platform)) {
+      throw new SshWorldRefused("An automated run must not use the real home's .ssh folder.");
+    }
+  }
+  for (const path of paths) {
+    if (within(physicalPath(path), protectedPhysical, platform)) {
+      throw new SshWorldRefused("An automated run must not use the real home's .ssh folder.");
     }
   }
 }
 
 /**
- * Throws `SshWorldRefused` under an automated run when any path resolves inside
- * the real `.ssh` folder, or when the world would use the real key agent. The
- * check by name comes first, so a refused path is never touched.
+ * Throws `SshWorldRefused` under an automated run when any path the world
+ * names, or any of `extraPaths`, lands inside the real home's `.ssh` folder, or
+ * when the world would use a key agent. Called before each path is opened.
  */
 export function guardWorld(
   world: SshWorld,
@@ -116,27 +113,11 @@ export function guardWorld(
       'An automated run must not use the real SSH agent: give the world agent "none".',
     );
   }
-  const real = resolve(realHome(), ".ssh");
-  // The home resolved through links, then `.ssh` by name: nothing inside it is looked at.
-  const realLinked = join(resolvedThroughLinks(realHome()), ".ssh");
-  const paths = [
-    world.home,
-    world.personConfig,
-    world.personKnownHosts,
-    world.appDir,
-    ...extraPaths,
-  ];
-  for (const path of paths) {
-    if (!isAbsolute(path)) throw new SshWorldRefused(`A path the SSH world uses is not absolute.`);
-    if (inside(resolve(path), real, world.platform)) {
-      throw new SshWorldRefused("An automated run must not use the real home's .ssh folder.");
-    }
-  }
-  for (const path of paths) {
-    if (inside(resolvedThroughLinks(path), realLinked, world.platform)) {
-      throw new SshWorldRefused("An automated run must not use the real home's .ssh folder.");
-    }
-  }
+  guardPaths(
+    [world.home, world.personConfig, world.personKnownHosts, world.appDir, ...extraPaths],
+    resolve(realHome(), ".ssh"),
+    world.platform,
+  );
 }
 
 /** The environment `ssh` is started with: the world's, without the agent when it is "none". */

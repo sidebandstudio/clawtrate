@@ -50,7 +50,10 @@ export function routeConfigText(
     `  HostName ${target.hostName}`,
     `  User ${target.user}`,
     `  Port ${target.port}`,
-    ...target.identityFiles.map((file) => `  IdentityFile ${p(file)}`),
+    // Always named: OpenSSH adds the account's default keys to a list left empty.
+    ...(target.identityFiles.length
+      ? target.identityFiles.map((file) => `  IdentityFile ${p(file)}`)
+      : ["  IdentityFile none"]),
     ...(target.identitiesOnly === null
       ? []
       : [`  IdentitiesOnly ${target.identitiesOnly ? "yes" : "no"}`]),

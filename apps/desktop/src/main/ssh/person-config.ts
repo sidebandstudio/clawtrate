@@ -6,11 +6,11 @@
 // so is any setting this file does not know. The file is never given to `ssh`,
 // and `ssh -G` is never used: it would evaluate `Match exec`.
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 import { type Destination, isHost, isUser, parsePort } from "./destination.ts";
-import type { SshWorld } from "./world.ts";
+import { guardWorld, type SshWorld, SshWorldRefused } from "./world.ts";
 
 export type RefusalCategory =
   "jump-host" | "command-or-forward" | "host-key" | "unsupported" | "invalid-value" | "unreadable";
@@ -214,14 +214,16 @@ export function resolvePersonPath(raw: string, world: SshWorld): string | null {
   if (world.platform === "win32") value = value.replaceAll("\\", "/");
   if (/[%$`'"\\]/.test(value) || /\p{Cc}/u.test(value)) return null;
   let path: string;
-  if (value === "~" || value.startsWith("~/")) path = join(world.home, value.slice(2));
+  // Kept as spelled, so that what is checked is what `ssh` opens: a `..` after a link is not undone here.
+  if (value === "~" || value.startsWith("~/")) path = `${world.home}/${value.slice(2)}`;
   else if (value.startsWith("~")) return null;
   else if (isAbsolute(value) || /^[A-Za-z]:\//.test(value)) path = value;
   else return null;
-  path = resolve(path);
+  // Under a test run, a path into the real .ssh folder is refused before anything looks at it.
+  guardWorld(world, [path]);
   const shown = world.platform === "win32" ? path.replaceAll("\\", "/") : path;
   if (!PATH_CHARS.test(shown)) return null;
-  if (!insideHome(path, world.home, world.platform)) return null;
+  if (!insideHome(resolve(path), world.home, world.platform)) return null;
   return path;
 }
 
@@ -254,14 +256,15 @@ function includedFiles(raw: string, from: string, world: SshWorld): string[] {
   const value = singleValue(raw);
   if (value === null || /[%$]/.test(value)) throw new Unreadable();
   let path: string;
-  if (value.startsWith("~/")) path = join(world.home, value.slice(2));
+  // As spelled, as with key paths; each file is guarded before it is opened (`walk`).
+  if (value.startsWith("~/")) path = `${world.home}/${value.slice(2)}`;
   else if (isAbsolute(value)) path = value;
-  else path = join(dirname(from), value);
-  path = resolve(path);
-  if (!insideHome(path, world.home, world.platform)) throw new Unreadable();
+  else path = `${dirname(from)}/${value}`;
+  if (!insideHome(resolve(path), world.home, world.platform)) throw new Unreadable();
   const last = basename(path);
   if (/[*?]/.test(dirname(path))) throw new Unreadable();
   if (!/[*?]/.test(last)) return [path];
+  guardWorld(world, [dirname(path)]);
   let names: string[];
   try {
     names = readdirSync(dirname(path));
@@ -271,7 +274,7 @@ function includedFiles(raw: string, from: string, world: SshWorld): string[] {
   return names
     .filter((name) => globMatch(last, name) && !name.startsWith("."))
     .sort()
-    .map((name) => join(dirname(path), name));
+    .map((name) => `${dirname(path)}/${name}`);
 }
 
 type Walk = { files: number; refusal: [RefusalCategory, string] | null };
@@ -287,6 +290,8 @@ function walk(
 ): void {
   if (state.refusal) return;
   if (depth > MAX_DEPTH || ++state.files > MAX_FILES) throw new Unreadable();
+  // Under a test run, a file in the real .ssh folder is refused before it is opened.
+  guardWorld(world, [path]);
   const text = read(path);
   if (text === null) return;
   let active = true; // the part before any Host line applies to every host
@@ -364,6 +369,26 @@ function walk(
   }
 }
 
+/** The key names OpenSSH tries when a configuration names none, in its order. */
+export const DEFAULT_IDENTITIES = [
+  "id_rsa",
+  "id_ecdsa",
+  "id_ecdsa_sk",
+  "id_ed25519",
+  "id_ed25519_sk",
+];
+
+/**
+ * When the person's configuration names no key: OpenSSH's default key names in
+ * the world's home that exist, named explicitly, so that `ssh` never adds the
+ * account's own defaults. None there gives `IdentityFile none`.
+ */
+function defaultIdentities(world: SshWorld): string[] {
+  const candidates = DEFAULT_IDENTITIES.map((name) => join(world.home, ".ssh", name));
+  guardWorld(world, candidates);
+  return candidates.filter((path) => resolvePersonPath(path, world) !== null && existsSync(path));
+}
+
 /**
  * The target for a validated destination: the six settings from the blocks
  * of the person's configuration that apply to its host, or a refusal that
@@ -379,7 +404,8 @@ export function resolveTarget(
   const state: Walk = { files: 0, refusal: null };
   try {
     walk(world.personConfig, name, world, read, found, state, 0);
-  } catch {
+  } catch (error) {
+    if (error instanceof SshWorldRefused) throw error;
     return refusal("unreadable", "", name);
   }
   if (state.refusal) return refusal(state.refusal[0], state.refusal[1], name);
@@ -392,7 +418,7 @@ export function resolveTarget(
     hostName: found.hostName ?? destination.host,
     user,
     port: found.port ?? 22,
-    identityFiles: found.identityFiles,
+    identityFiles: found.identityFiles.length ? found.identityFiles : defaultIdentities(world),
     identitiesOnly: found.identitiesOnly ?? null,
     certificateFiles: found.certificateFiles,
   };

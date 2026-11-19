@@ -6,6 +6,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -24,6 +25,7 @@ import {
   KEYGEN,
   keygen,
   makeWorld,
+  SSH,
   sshdAvailability,
   startSshd,
   statusJson,
@@ -473,6 +475,32 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       expect(s.args[0]).toBe("-F");
       expect(s.args[1]!.startsWith(join(t.world.appDir, "route-"))).toBe(true);
       expect(s.config).toContain("  IdentityAgent none\n");
+    }
+  });
+
+  it("every configuration it ran, read back by ssh -G, offers only the test's keys and no agent", () => {
+    const texts = [...new Set(started.map((s) => s.config).filter((c): c is string => c !== null))];
+    expect(texts.length).toBeGreaterThan(1);
+    const realHomeSsh = join(userInfo().homedir, ".ssh");
+    for (const [i, text] of texts.entries()) {
+      const file = join(root, `readback-${i}.conf`);
+      writeFileSync(file, text);
+      const alias = /^Host (\S+)$/m.exec(text)![1]!;
+      // `-G` reads the file and connects nowhere.
+      const lines = execFileSync(SSH, ["-G", "-F", file, "--", alias], {
+        env: testEnv(),
+        encoding: "utf8",
+      }).split("\n");
+      const keys = lines.filter((line) => /^(identityfile|certificatefile) /.test(line));
+      expect(keys.length, text).toBeGreaterThan(0);
+      for (const line of keys) {
+        const path = line.slice(line.indexOf(" ") + 1);
+        expect(path === "none" || path.startsWith(`${t.home}/`), line).toBe(true);
+      }
+      expect(lines).toContain("identityagent none");
+      expect(lines.filter((line) => line.includes("~/.ssh") || line.includes(realHomeSsh))).toEqual(
+        [],
+      );
     }
   });
 });

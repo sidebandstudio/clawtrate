@@ -3,6 +3,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -438,6 +439,69 @@ describe("the configuration the host writes", () => {
     ).toThrow();
     expect(() => routeConfigText("1", target({ user: "a b" }), world, "/srv/kh")).toThrow();
     expect(() => routeConfigText("1", target({ port: 0 }), world, "/srv/kh")).toThrow();
+  });
+
+  it.skipIf(!existsSync(SSH))(
+    "names its keys explicitly, so ssh adds none of the account's own and uses no agent",
+    () => {
+      const dir = join(root, "explicit");
+      mkdirSync(dir, { recursive: true });
+      const home = userInfo().homedir;
+      for (const [name, identityFiles] of [
+        ["none", []],
+        ["one", [join(dir, "id_ed25519")]],
+      ] as const) {
+        const file = join(dir, `${name}.conf`);
+        writeFileSync(
+          file,
+          routeConfigText(
+            "1",
+            target({ identityFiles: [...identityFiles] }),
+            world,
+            join(dir, "kh"),
+          ),
+        );
+        // `-G` on the host's own file only: no Match in it, nothing evaluated, no connection.
+        const run = spawnSync(SSH, ["-G", "-F", file, "--", "clawtrate-route-1"], {
+          env: testEnv(),
+          encoding: "utf8",
+        });
+        expect(run.status).toBe(0);
+        const lines = run.stdout.split("\n");
+        expect(lines.filter((line) => line.startsWith("identityfile "))).toEqual(
+          identityFiles.length
+            ? identityFiles.map((path) => `identityfile ${path}`)
+            : ["identityfile none"],
+        );
+        expect(lines).toContain("identityagent none");
+        // No path of any home's .ssh, spelled with `~` or in full, beyond the keys named.
+        const homeSsh = lines.filter(
+          (line) =>
+            line.includes("~/.ssh") || line.includes(join(home, ".ssh")) || line.includes("/.ssh/"),
+        );
+        expect(homeSsh, name).toEqual([]);
+      }
+    },
+  );
+
+  it("names OpenSSH's default keys of the world's home when the configuration names none", () => {
+    writeFileSync(join(world.home, ".ssh", "id_ed25519"), "");
+    writeFileSync(join(world.home, ".ssh", "id_rsa"), "");
+    try {
+      expect(resolveWith("Host devbox\n  HostName devbox.example\n")).toMatchObject({
+        identityFiles: [`${world.home}/.ssh/id_rsa`, `${world.home}/.ssh/id_ed25519`],
+      });
+      // Named ones replace the defaults.
+      expect(resolveWith("Host devbox\n  IdentityFile ~/.ssh/work\n")).toMatchObject({
+        identityFiles: [`${world.home}/.ssh/work`],
+      });
+    } finally {
+      rmSync(join(world.home, ".ssh", "id_ed25519"));
+      rmSync(join(world.home, ".ssh", "id_rsa"));
+    }
+    expect(resolveWith("Host devbox\n  HostName devbox.example\n")).toMatchObject({
+      identityFiles: [],
+    });
   });
 
   it.skipIf(!existsSync(SSH))(
