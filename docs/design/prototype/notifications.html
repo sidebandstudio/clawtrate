@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: notifications</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/conversation.css" />
+    <link rel="stylesheet" href="css/bots.css" />
+    <link rel="stylesheet" href="css/notifications.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/icons.js"></script>
+    <script src="js/prototype.js"></script>
+    <script src="js/components.js" defer></script>
+    <script src="js/notifications.js" defer></script>
+  </head>
+  <body>
+    <header class="proto-bar" id="proto-bar"></header>
+    <main class="proto-stage">
+      <div class="proto-frame">
+        <!-- The shell's own structure, drawn by js/notifications.js for what
+             docs/design/notifications.md needs: the rail, a task, the Work pane
+             with its Details and Settings tabs, and Settings with its
+             Notifications section. The notification itself is a picture,
+             labelled as one; the system draws the real thing. -->
+        <div class="app" id="root">
+          <div class="shell" data-panel="closed" data-view="detail">
+            <nav class="rail" aria-label="Bots">
+              <div class="rail-top">
+                <button type="button" class="icon-button rail-status" data-n="settings" aria-label="Settings" title="Settings (⌘,)">
+                  <i data-icon="settings"></i>
+                  <span class="status-dot" data-status="connected"></span>
+                </button>
+                <button type="button" class="icon-button" aria-label="Search" title="Search (⌘K)" disabled>
+                  <i data-icon="search"></i>
+                </button>
+              </div>
+              <ul class="bot-list" id="bot-list" data-testid="bot-list"></ul>
+              <div class="rail-footer">
+                <div class="gateway-pill">
+                  <span class="status-dot" data-status="connected" id="gateway-dot"></span>
+                  <span class="gateway-pill-text">
+                    <strong>Home gateway</strong>
+                    <span id="gateway-state">Connected</span>
+                  </span>
+                </div>
+              </div>
+            </nav>
+
+            <div class="main-pane">
+              <section class="conversation" aria-label="Conversation">
+                <div class="status-strip" id="status-strip" role="status" data-testid="status-strip" hidden></div>
+                <header class="conversation-header">
+                  <div class="header-side">
+                    <button type="button" class="icon-button back-button" data-n="back" aria-label="Back to bots">
+                      <i data-icon="back"></i>
+                    </button>
+                  </div>
+                  <button type="button" class="title-pill" id="title-pill" data-n="panel"></button>
+                  <div class="header-side" data-side="end">
+                    <button type="button" class="icon-button" id="panel-button" data-n="panel" aria-pressed="false" aria-label="Show work panel" title="Work panel (⌘\)">
+                      <i data-icon="panel"></i>
+                    </button>
+                  </div>
+                </header>
+                <div class="transcript-wrap">
+                  <div class="transcript" id="transcript" tabindex="0" data-testid="transcript"></div>
+                </div>
+              </section>
+
+              <button type="button" class="drawer-scrim" data-n="panel-close" aria-label="Close work panel" tabindex="-1"></button>
+
+              <aside class="work-panel" id="work-panel" aria-label="Work" data-testid="work-panel">
+                <button type="button" class="icon-button work-close" data-n="panel-close" aria-label="Close work panel">
+                  <i data-icon="x"></i>
+                </button>
+                <div class="work-hero" id="work-hero"></div>
+                <div class="tabs" role="tablist" aria-label="Work">
+                  <button type="button" class="tab" role="tab" id="tab-details" aria-controls="panel-details" aria-selected="true" data-tab="details">Details</button>
+                  <button type="button" class="tab" role="tab" id="tab-files" aria-controls="panel-files" aria-selected="false" tabindex="-1" data-tab="files">Files</button>
+                  <button type="button" class="tab" role="tab" id="tab-computer" aria-controls="panel-computer" aria-selected="false" tabindex="-1" data-tab="computer">Computer</button>
+                  <button type="button" class="tab" role="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="false" tabindex="-1" data-tab="settings">Settings</button>
+                </div>
+                <div class="work-sections">
+                  <div role="tabpanel" id="panel-details" aria-labelledby="tab-details" tabindex="0"></div>
+                  <div role="tabpanel" id="panel-files" aria-labelledby="tab-files" tabindex="0" hidden>
+                    <div class="work-empty"><span class="empty-mark"><i data-icon="file"></i></span><h4>Files</h4><p>Designed in work-pane.md.</p></div>
+                  </div>
+                  <div role="tabpanel" id="panel-computer" aria-labelledby="tab-computer" tabindex="0" hidden>
+                    <div class="work-empty"><span class="empty-mark"><i data-icon="screen"></i></span><h4>Computer</h4><p>Designed in work-pane.md.</p></div>
+                  </div>
+                  <div role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" tabindex="0" hidden></div>
+                </div>
+                <p class="visually-hidden" id="pane-live" aria-live="polite"></p>
+              </aside>
+            </div>
+          </div>
+          <!-- Prototype chrome: pictures of system notifications, and what the
+               host decided when nothing was shown. Not product code. -->
+          <div class="n-layer" id="n-layer" aria-label="Pictures of system notifications" role="region"></div>
+          <ul class="menu n-menu" id="n-menu" role="menu" hidden></ul>
+          <dialog class="b-dialog" id="settings-dialog" data-kind="settings" aria-labelledby="settings-title"></dialog>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

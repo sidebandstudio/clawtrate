@@ -1,0 +1,298 @@
+/* What docs/design/notifications.md adds: the time pair, the rows of the
+   Notifications section and the task's setting. The picture of a system
+   notification and the host's decision are prototype chrome, at the end. */
+
+/* The Settings dialog's content holder: the frame fills it. */
+.n-settings-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* A switch row's second line wraps under its title. */
+.n-row .b-row-main small {
+  max-width: 52ch;
+}
+
+.n-row {
+  gap: var(--space-4);
+}
+
+.n-botname {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.n-botname .avatar {
+  --size: 22px;
+  width: 22px;
+  height: 22px;
+}
+
+/* new: the time pair. Two native time fields, side by side at every width. */
+.n-times {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.n-time {
+  display: grid;
+  gap: 2px;
+  min-height: 52px;
+  padding: 7px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+}
+
+.n-time small {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.n-time input {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  color-scheme: light dark;
+}
+
+.n-time input:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.n-time input:disabled {
+  color: var(--text-faint);
+}
+
+.n-now {
+  margin: 8px 2px 0;
+  font-size: var(--text-md);
+  color: var(--text);
+}
+
+.n-reading .skeleton {
+  margin-top: 8px;
+}
+
+/* The task's setting in the Details tab: a label and a select on one row. */
+.n-select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  min-height: 52px;
+}
+
+.n-select-label {
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+
+.b-select.n-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  min-height: 36px;
+  padding: 0 32px 0 12px;
+  background: var(--bg-pane);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.b-select.n-select:disabled {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.n-menu {
+  position: absolute;
+  z-index: 40;
+}
+
+.n-asker {
+  margin: 12px 0 0;
+}
+
+#panel-details .b-hint,
+#panel-details .b-field-error {
+  margin: 8px 2px 0;
+}
+
+/* Prototype chrome ----------------------------------------------------------------------------- */
+
+/* Pictures of system notifications: drawn by this prototype, in no system's
+   style, and labelled as pictures. */
+.n-layer {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 30;
+  display: grid;
+  gap: 10px;
+  width: min(360px, calc(100% - 32px));
+  pointer-events: none;
+}
+
+.n-layer > * {
+  pointer-events: auto;
+}
+
+.n-pic {
+  position: relative;
+  padding: 6px 6px 8px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+}
+
+.n-pic-label {
+  margin: 0 8px 4px;
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+}
+
+.n-pic-body {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.n-pic-body:hover {
+  background: var(--bg-hover);
+}
+
+.n-pic-app {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.n-pic-app img {
+  border-radius: 4px;
+}
+
+.n-pic-when {
+  margin-left: auto;
+  margin-right: 4px;
+  color: var(--text-faint);
+}
+
+.n-pic-title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-strong);
+}
+
+.n-pic-text,
+.n-pic-preview {
+  font-size: var(--text-md);
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.n-pic-preview {
+  color: var(--text-faint);
+}
+
+.n-pic-close {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+}
+
+.n-pic-label {
+  padding-right: 36px;
+}
+
+/* What the host decided when nothing was shown. */
+.n-why {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  font-size: var(--text-md);
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.n-why span {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.n-bar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #b4b6b9;
+  font-size: 12px;
+}
+
+.n-bar select {
+  height: 26px;
+  max-width: 160px;
+  border: 0;
+  border-radius: 999px;
+  background: #26282b;
+  color: #f3f3f2;
+  font-size: 12px;
+}
+
+.n-bar button[data-bar="quiet"][aria-pressed="true"] {
+  background: #3ee6c1;
+  color: #04261f;
+}
+
+.n-bar button {
+  background: #26282b;
+  color: #f3f3f2;
+  font-weight: 400;
+}
+
+.n-bar button[data-bar="fire"] {
+  background: #3ee6c1;
+  color: #04261f;
+  font-weight: 600;
+}
+
+@container app (max-width: 687px) {
+  .n-layer {
+    right: 16px;
+    left: 16px;
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .n-pic {
+    transition: none;
+  }
+}
