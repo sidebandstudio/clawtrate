@@ -295,3 +295,23 @@ describe("expired records on disk", () => {
     expect(log.problem).toBeNull();
   });
 });
+
+describe("a decision record whose last line is torn", () => {
+  const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+
+  it("is cut back at load, so the next record is not appended to the torn line", () => {
+    const dir = folder();
+    const log = new DecisionLog(dir, { now: () => 1 });
+    for (let i = 0; i < 10; i += 1) log.add(fields);
+    writeFileSync(
+      join(dir, "decisions.jsonl"),
+      `${readFileSync(join(dir, "decisions.jsonl"), "utf8")}{"id":"torn`,
+    );
+    const again = new DecisionLog(dir, { now: () => 2 });
+    const id = again.add({ ...fields, tool: "write" });
+    const reread = new DecisionLog(dir, { now: () => 3 });
+    expect(reread.list({ limit: 50 }).records).toHaveLength(11);
+    expect(reread.list({ limit: 1 }).records[0]?.id).toBe(id);
+    expect(readFileSync(join(dir, "decisions.jsonl"), "utf8")).not.toContain('"torn');
+  });
+});

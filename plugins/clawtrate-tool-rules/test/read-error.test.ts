@@ -4,11 +4,17 @@
 // the file changes.
 
 import type * as fs from "node:fs";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const io = vi.hoisted(() => ({ failures: 0, code: "EIO", path: "", reads: 0 }));
+const io = vi.hoisted(() => ({
+  failures: 0,
+  code: "EIO",
+  path: "",
+  reads: 0,
+  truncateFails: false,
+}));
 vi.mock("node:fs", async (importOriginal) => {
   const real = await importOriginal<typeof fs>();
   return {
@@ -21,16 +27,21 @@ vi.mock("node:fs", async (importOriginal) => {
       }
       return real.readFileSync(...args);
     },
+    truncateSync: (...args: Parameters<typeof real.truncateSync>) => {
+      if (io.truncateFails) throw Object.assign(new Error("injected"), { code: "EIO" });
+      return real.truncateSync(...args);
+    },
   };
 });
 
 const { nextScope } = await import("../lib/rules.js");
-const { RulesStore, serializeRules } = await import("../lib/store.js");
+const { DecisionLog, RulesStore, serializeRules } = await import("../lib/store.js");
 const { tempState } = await import("./harness.ts");
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
   io.failures = 0;
+  io.truncateFails = false;
   cleanups.splice(0).forEach((done) => done());
 });
 const scope = (tool: string) =>
@@ -75,5 +86,26 @@ describe("a read that fails with an I/O error", () => {
     // Looked at again, the same bad file is not read again.
     expect(rules.view().problem).toBe("the rules file is not JSON");
     expect(io.reads).toBe(reads);
+  });
+});
+
+describe("a torn last line that cannot be cut", () => {
+  it("gets nothing appended after it, and the record says so", () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+    const log = new DecisionLog(dir, { now: () => 1 });
+    // Enough records that one torn line does not make the file due for a rewrite.
+    for (let i = 0; i < 10; i += 1) log.add(fields);
+    const file = join(dir, "decisions.jsonl");
+    const torn = `${readFileSync(file, "utf8")}{"id":"torn`;
+    writeFileSync(file, torn);
+    io.truncateFails = true;
+    const again = new DecisionLog(dir, { now: () => 2 });
+    expect(again.problem).toMatch(/last line is torn and could not be repaired/);
+    again.add({ ...fields, tool: "write" });
+    expect(readFileSync(file, "utf8")).toBe(torn);
+    expect(again.problem).toMatch(/last line is torn/);
   });
 });

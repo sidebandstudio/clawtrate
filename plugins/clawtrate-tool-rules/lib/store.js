@@ -22,6 +22,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  truncateSync,
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -368,6 +369,8 @@ export class DecisionLog {
     /** Lines in the file beyond one per record kept: answers, and records since dropped. */
     this.extraLines = 0;
     this.expiryPending = false;
+    /** A torn last line still to repair: "end", the byte length to keep, or null. */
+    this.tornTail = null;
     this.problem = null;
     this.#load();
   }
@@ -387,6 +390,14 @@ export class DecisionLog {
         this.problem = `the decision record cannot be read (${error.code ?? "error"})`;
       }
       return;
+    }
+    // A last line with no newline was torn by a write that did not finish: cut
+    // it (or end it, if it is whole) before anything is appended after it.
+    if (text.length > 0 && !text.endsWith("\n")) {
+      const cut = text.lastIndexOf("\n") + 1;
+      const whole = parseLine(text.slice(cut)) !== null;
+      this.tornTail = whole ? "end" : Buffer.byteLength(text.slice(0, cut));
+      if (this.#repairTail() && !whole) text = text.slice(0, cut);
     }
     for (const line of text.split("\n")) {
       if (!line) continue;
@@ -432,6 +443,7 @@ export class DecisionLog {
       const lines = this.records.map((record) => JSON.stringify(record));
       writeFileAtomic(this.dir, DECISIONS_FILE, lines.length > 0 ? `${lines.join("\n")}\n` : "");
       this.extraLines = 0;
+      this.tornTail = null;
       this.expiryPending = false;
       this.problem = null;
     } catch (error) {
@@ -439,7 +451,25 @@ export class DecisionLog {
     }
   }
 
+  /**
+   * End or cut a torn last line (`tornTail`: "end", or the byte length to keep).
+   * On failure, nothing is appended after it, and `status` says so.
+   */
+  #repairTail() {
+    if (this.tornTail === null) return true;
+    try {
+      if (this.tornTail === "end") appendFileSync(this.path, "\n");
+      else truncateSync(this.path, this.tornTail);
+      this.tornTail = null;
+      return true;
+    } catch (error) {
+      this.problem = `the decision record's last line is torn and could not be repaired (${error.code ?? "error"}); nothing is appended after it`;
+      return false;
+    }
+  }
+
   #append(value) {
+    if (!this.#repairTail()) return;
     try {
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
       appendFileSync(this.path, `${JSON.stringify(value)}\n`, { mode: 0o600 });
