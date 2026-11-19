@@ -356,9 +356,14 @@ for (const [expr, ok] of [["*/5 * * * *", true], ["0 8 * * 1-5", true], ["0,30 *
 p = await open("edit=new&editstate=invalid");
 check("invalid state from the address: the interval error", (await text(p, "#e-when-error")) === "Routines run at least 5 minutes apart.");
 await p.close();
-p = await open("access=read&edit=open&routine=digest");
-check("read: the editor is never offered", !(await has(p, '[data-r="edit"]')) && !(await has(p, '.r-head [data-r="new"]')));
-await p.close();
+const openDialogs = (p) => p.evaluate(() => [...document.querySelectorAll("dialog")].filter((d) => d.open).map((d) => d.id).join());
+const MUTATIONS = '#e-name, #e-instr, [data-r="save"], [data-r="confirm-delete"], [data-ci], [data-r="ci-save"], .b-switch, [data-r="run-now"], [data-r="edit"], [data-r="new"], [data-r="more"]';
+for (const access of ["read", "write"])
+  for (const q of ["edit=open&routine=digest", "edit=new", "editstate=locked", "edit=open&routine=digest&editstate=refused", "confirm=delete&routine=digest", "view=routine&routine=digest&confirm=delete", "dialog=open&bot=juniper", "view=checkins&bot=juniper&dialog=open&catch=1"]) {
+    p = await open(`access=${access}&${q}`);
+    check(`${access}: the address ${q} opens no dialog and offers no change`, (await openDialogs(p)) === "" && (await count(p, MUTATIONS)) === 0 && (await has(p, ".access-bar")));
+    await p.close();
+  }
 
 // Check-ins -------------------------------------------------------------------------------------
 p = await open("view=checkins&bot=marlow");

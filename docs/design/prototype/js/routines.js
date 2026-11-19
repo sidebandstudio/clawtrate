@@ -729,7 +729,9 @@
 
   // Actions ---------------------------------------------------------------------------------------------------------
 
+  // Every change needs admin: the address reaches these too, so the guard is here, not only on the buttons.
   function toggle(id) {
+    if (!isAdmin()) return;
     const r = routines.find((x) => x.id === id);
     if (P.get("pausefail") === "1" && r.enabled) {
       S.rowError = id;
@@ -742,6 +744,7 @@
     paint(`[data-r="toggle"][data-id="${id}"]`);
   }
   function runNow(id) {
+    if (!isAdmin()) return;
     const r = routines.find((x) => x.id === id);
     if (r.running) {
       S.already = true;
@@ -770,6 +773,7 @@
 
   const confirmDialog = $("#confirm-dialog");
   function askDelete(id) {
+    if (!isAdmin()) return;
     const r = routines.find((x) => x.id === id);
     const l = lastRun(r);
     confirmDialog.innerHTML =
@@ -946,6 +950,7 @@
     (focusSel ? $(focusSel, editDialog) : null)?.focus() || (!focusSel && $("#edit-title", editDialog).focus());
   }
   function openEditor(id) {
+    if (!isAdmin()) return;
     D = draftFrom(id && routines.find((x) => x.id === id));
     renderEditor();
   }
@@ -1081,6 +1086,7 @@
     (focusSel ? $(focusSel, ciDialog) : $("#checkins-title", ciDialog)).focus();
   }
   function openCheckins(bot) {
+    if (!isAdmin()) return;
     const c = checkins[bot];
     const choice = ciChoice(c);
     C = { bot, choice, initial: choice, every: "2h", prompt: c?.prompt || "", status: "" };
@@ -1331,11 +1337,11 @@
   if (S.edit === "new" || S.edit === "open" || S.editstate === "locked") {
     if (S.editstate === "locked") S.routine = "renewal";
     openEditor(S.edit === "new" ? null : S.routine);
-    if (S.editstate === "invalid") {
+    if (D && S.editstate === "invalid") {
       Object.assign(D, { kind: "every", n: 2, unit: "minutes" });
       D.errors = validate(D);
       renderEditor();
-    } else if (["refused", "conflict", "deleted", "noanswer", "saving"].includes(S.editstate)) {
+    } else if (D && ["refused", "conflict", "deleted", "noanswer", "saving"].includes(S.editstate)) {
       D.status = S.editstate;
       renderEditor();
     }

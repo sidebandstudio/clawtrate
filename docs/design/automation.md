@@ -312,6 +312,7 @@ Everything is readable on a read or interactive connection: the list, the calend
 - The access bar at the foot of the view, with this view's words (section 2). After "Admin access granted", the controls appear where they belong and focus stays where it was.
 - A bot's check-ins block shows its values and no "Change".
 - The empty state says "No routines yet" and its sentence, with no button.
+- A link or an address that would open the editor, the delete confirmation or the check-ins setting opens only the view behind it: no dialog, no switch, no Save. The tier is checked where the action starts, not only where its button is drawn, so every way in meets the same guard.
 
 There is no write-tier path to pause or run a routine. A plugin could offer one (row 18, an unverified proposal in the capability map); this design does not assume it.
 
@@ -499,7 +500,7 @@ The development gateway runs with its scheduler off, so a scheduled run never fi
 
 ### Prototype states
 
-`prototype/routines.html` takes the prototype's common parameters (`theme`, `width`, `motion`, `chrome`) and these:
+`prototype/routines.html` takes the prototype's common parameters (`theme`, `width`, `motion`, `chrome`) and these. `edit`, `confirm` and `dialog` open their dialogs only with `access=admin`, as section 11 says.
 
 | Parameter         | Values                                                                                                                                                                                                                                                                                                                                                                                |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
