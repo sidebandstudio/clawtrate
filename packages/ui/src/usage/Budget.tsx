@@ -32,16 +32,6 @@ const PERIOD_OPTIONS: ReadonlyArray<readonly [BudgetPeriod, string]> = [
   ["weekly", "Weekly"],
 ];
 
-/** Ask once, while the person acts, whether the 80 percent warning may notify them. */
-function askToNotify() {
-  try {
-    if (typeof Notification !== "undefined" && Notification.permission === "default")
-      void Notification.requestPermission().catch(() => {});
-  } catch {
-    // No notifications here; the line in the task still warns.
-  }
-}
-
 /** The budget form: Daily or Weekly, a whole number of tokens, Save budget. */
 export function BudgetForm({
   target,
@@ -72,7 +62,6 @@ export function BudgetForm({
   const shownError = invalid && value.trim() !== "" ? tokens : null;
   const save = async () => {
     if (typeof tokens !== "number" || saving) return;
-    askToNotify();
     setSaving(true);
     setFailure(null);
     try {
@@ -281,9 +270,8 @@ export function BudgetPart({
         <ShownOnly />
       </p>
       <p className="b-hint">
-        A warning: at 80% a line in {name}'s task and a notification, at 100% a note above the
-        composer. Other apps, channels and routines aren't stopped, and nothing on the gateway stops{" "}
-        {name} at the limit.
+        A warning: at 80% a line in {name}'s task, at 100% a note above the composer. Other apps,
+        channels and routines aren't stopped, and nothing on the gateway stops {name} at the limit.
       </p>
       {percent !== null && percent >= 100 ? (
         <Note tone="warn" testId="budget-reached">

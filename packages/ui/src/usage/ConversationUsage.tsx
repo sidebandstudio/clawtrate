@@ -1,18 +1,11 @@
 // Budgets and provider limits in the conversation (docs/design/controls.md,
 // sections 16 to 18): the grey line at 80 percent of a bot's budget, the note
 // above the composer at 100 percent, the note near a provider's reported
-// limit, and the desktop notification at 80 percent. Each is a warning: none
-// says a run or a send was stopped, held or refused.
+// limit. Each is a warning: none says a run or a send was stopped, held or
+// refused. A system notification waits for the notifications design.
 
-import {
-  BUDGET_WARN_PERCENT,
-  budgetPercent,
-  currentCount,
-  LIMIT_NOTE_PERCENT,
-  type Bot,
-  type UsageState,
-} from "@clawtrate/core";
-import { useEffect, useState } from "react";
+import { BUDGET_WARN_PERCENT, LIMIT_NOTE_PERCENT, type Bot } from "@clawtrate/core";
+import { useState } from "react";
 import { useClawtrateState } from "../bridge.tsx";
 import { CloseIcon } from "../icons.tsx";
 import { requestUsagePage } from "./navigation.ts";
@@ -114,67 +107,4 @@ export function UsageNotes({ bot, canSet }: { bot: Bot; canSet: boolean }) {
       )}
     </div>
   );
-}
-
-const NOTIFIED = "clawtrate.budget-notified";
-
-function readNotified(): Record<string, string> {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(NOTIFIED) ?? "{}");
-    return value && typeof value === "object" ? (value as Record<string, string>) : {};
-  } catch {
-    return {};
-  }
-}
-
-/**
- * A system notification when a budget's count first passes 80 percent in its
- * period (F-396), once per budget and period on this device. Only where the
- * platform allows notifications: the desktop app does; a browser only once the
- * person allowed them, which the budget form asks when a budget is saved.
- */
-export function useBudgetNotifications(usage: UsageState | undefined, bots: readonly Bot[]): void {
-  useEffect(() => {
-    if (!usage || usage.budgets.length === 0) return;
-    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-    const now = Date.now();
-    const notified = readNotified();
-    let changed = false;
-    for (const budget of usage.budgets) {
-      const count = currentCount(usage, budget, now);
-      const percent = budgetPercent(budget, count?.used ?? null);
-      if (!count || percent === null || percent < BUDGET_WARN_PERCENT) continue;
-      const mark = `${count.range.startDate}:${percent >= 100 ? "reached" : "warned"}`;
-      if (notified[budget.id] === mark) continue;
-      if (percent < 100 && notified[budget.id] === `${count.range.startDate}:reached`) continue;
-      notified[budget.id] = mark;
-      changed = true;
-      const name = bots.find((bot) => bot.id === budget.botId)?.name ?? budget.botId;
-      const who = budget.routineId
-        ? `${name}'s routine ${budget.routineName ?? budget.routineId}`
-        : name;
-      try {
-        new Notification(
-          percent >= 100
-            ? `${who} reached its warning budget`
-            : `${who} used ${percent}% of its budget`,
-          {
-            body:
-              percent >= 100
-                ? "This is shown only: nothing was stopped."
-                : warnedLine(who, budget, count.used!, percent),
-            tag: `clawtrate-budget-${budget.id}`,
-          },
-        );
-      } catch {
-        // The platform refused it; the line in the task still warns.
-      }
-    }
-    if (changed)
-      try {
-        localStorage.setItem(NOTIFIED, JSON.stringify(notified));
-      } catch {
-        // Storage may be unavailable; the next count may notify again.
-      }
-  }, [usage, bots]);
 }

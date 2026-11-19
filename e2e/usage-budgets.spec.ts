@@ -103,20 +103,9 @@ async function startOwnHost(readOnly = false): Promise<Host> {
   return host;
 }
 
-/** A page on its own host, paired as the person pairs it; notifications recorded, not shown. */
+/** A page on its own host, paired as the person pairs it. */
 async function pairedPage(browser: Browser, host: Host): Promise<Page> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-  await context.addInitScript(() => {
-    const notes: Array<[string, string]> = [];
-    class Recorded {
-      static permission = "granted";
-      static requestPermission = async () => "granted";
-      constructor(title: string, options?: { body?: string }) {
-        notes.push([title, options?.body ?? ""]);
-      }
-    }
-    Object.assign(window, { Notification: Recorded, __notes: notes });
-  });
   const next = await context.newPage();
   await next.goto(host.url);
   await next.getByRole("button", { name: "Use the development gateway" }).click();
@@ -600,7 +589,7 @@ test("F-234: a Daily and a Weekly budget are each counted over their own days, a
   expect(week.total).toBeGreaterThanOrEqual(today.total);
 });
 
-test("F-396: the warning appears in the task and as a notification once the gateway's figure passes 80 percent, and a send still works", async () => {
+test("F-396: the warning appears in the bot's task once the gateway's figure passes 80 percent, and a send still works", async () => {
   test.setTimeout(420_000);
   // A task of Juniper's own for this check.
   const label = `Budget check ${STAMP}`;
@@ -644,11 +633,6 @@ test("F-396: the warning appears in the task and as a notification once the gate
   await expect(page.getByTestId("budget-warned")).toContainText(
     `Juniper has used ${percent}% of its weekly budget.`,
   );
-  const notes = await page.evaluate(() => (window as unknown as { __notes: string[][] }).__notes);
-  expect(notes).toContainEqual([
-    `Juniper used ${percent}% of its budget`,
-    expect.stringContaining("weekly budget"),
-  ]);
   await shot(page, "conversation-warned");
   // Lowered below what was used: reached, said as a warning, and a send still goes ahead.
   await setBudget(page, "Weekly", 1_000);
