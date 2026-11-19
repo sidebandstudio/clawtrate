@@ -128,7 +128,11 @@ export type UsageReportRequest = {
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-/** Run each job with at most `limit` running at once, in order. */
+/**
+ * Run each job with at most `limit` running at once, in order. After the first
+ * failure no job starts, and the failure is thrown once the started ones have
+ * ended, so nothing is still asking when the caller goes on.
+ */
 async function inTurn<T, R>(
   items: readonly T[],
   limit: number,
@@ -136,13 +140,19 @@ async function inTurn<T, R>(
 ): Promise<R[]> {
   const out: R[] = new Array<R>(items.length);
   let next = 0;
+  const failures: unknown[] = [];
   const worker = async () => {
-    while (next < items.length) {
+    while (failures.length === 0 && next < items.length) {
       const at = next++;
-      out[at] = await job(items[at]!);
+      try {
+        out[at] = await job(items[at]!);
+      } catch (error) {
+        failures.push(error);
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  if (failures.length > 0) throw failures[0];
   return out;
 }
 

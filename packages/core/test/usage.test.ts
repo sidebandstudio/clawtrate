@@ -12,6 +12,7 @@ import {
   COUNT_EVERY_MS,
   LIMITS_EVERY_MS,
   MAX_USAGE_REPORTS,
+  USAGE_REQUESTS_AT_ONCE,
   UsageEngine,
   type UsageContext,
   type UsageReportRequest,
@@ -1497,6 +1498,66 @@ describe("the usage engine", () => {
       detail: true,
       bots: [],
     });
+    expect(report.sources).toBeNull();
+    expect(report.detailError).toMatch(/don't agree yet/);
+    engine.onClose();
+  });
+
+  it("F-237: once a history disagrees with its task's figure, no further history is read, and the report ends only when the started reads have", async () => {
+    const gateway = fakeGateway();
+    const T = Date.UTC(2026, 10, 19, 6);
+    const keys = Array.from({ length: 8 }, (_, i) => `agent:otto:t${i}`);
+    const held: Array<() => void> = [];
+    let inFlight = 0;
+    let most = 0;
+    const histories: string[] = [];
+    const apart: typeof gateway.request = async (method, raw) => {
+      if (method === "usage.cost")
+        return { updatedAt: 1, totals: totals(80, 0), cacheStatus: fresh };
+      if (method === "sessions.usage")
+        return {
+          updatedAt: 1,
+          cacheStatus: fresh,
+          totals: totals(80, 0),
+          sessions: keys.map((key) => ({ key, usage: totals(10, 0) })),
+        };
+      if (method !== "chat.history") return gateway.request(method, raw);
+      const { sessionKey } = raw as { sessionKey: string };
+      histories.push(sessionKey);
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      try {
+        // The first task's history holds more than its own figure; the others answer when let go.
+        if (sessionKey === keys[0])
+          return { messages: [person("r0", T), assistant("r0", T + 1, 50)], hasMore: false };
+        await new Promise<void>((resolve) => held.push(resolve));
+        return { messages: [], hasMore: false };
+      } finally {
+        inFlight -= 1;
+      }
+    };
+    const { engine } = engineOn({ ...gateway, request: apart });
+    let ended = false;
+    const reading = reportOf(engine, {
+      botId: "otto",
+      period: "week",
+      timeZone: NY,
+      detail: true,
+      bots: [],
+    }).finally(() => (ended = true));
+    await until(() => held.length === USAGE_REQUESTS_AT_ONCE - 1);
+    await flush();
+    // The report, and its slot, stay while its reads are still out.
+    expect(ended).toBe(false);
+    expect(inFlight).toBe(USAGE_REQUESTS_AT_ONCE - 1);
+    while (held.length > 0) {
+      held.shift()!();
+      await flush();
+    }
+    const report = await reading;
+    expect(inFlight).toBe(0);
+    expect(most).toBeLessThanOrEqual(USAGE_REQUESTS_AT_ONCE);
+    expect(histories).toEqual(keys.slice(0, USAGE_REQUESTS_AT_ONCE));
     expect(report.sources).toBeNull();
     expect(report.detailError).toMatch(/don't agree yet/);
     engine.onClose();
