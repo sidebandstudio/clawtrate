@@ -21,6 +21,7 @@ const running: SetupLook = {
   service: "launchagent",
   port: 18789,
   authMode: null,
+  access: "new",
   others: [],
 };
 
@@ -34,7 +35,7 @@ const failed = (kind: NonNullable<SetupState["failure"]>["kind"], extra = {}): S
   ...initialSetupState,
   phase: "failed",
   look: running,
-  failure: { kind, exitCode: null, port: null, ...extra },
+  failure: { kind, exitCode: null, port: null, reason: null, ...extra },
 });
 
 /** Every setup state the fixture shows, by the name used in `?setup=`. */
@@ -64,8 +65,18 @@ export const SETUP_STATES: Record<string, SetupState> = {
   refused: {
     ...initialSetupState,
     phase: "failed",
-    failure: { kind: "refused", exitCode: null, port: null },
+    failure: { kind: "refused", exitCode: null, port: null, reason: "file" },
   },
+  "refused-home": {
+    ...initialSetupState,
+    phase: "failed",
+    failure: { kind: "refused", exitCode: null, port: null, reason: "home" },
+  },
+  "found-paired": looked({ access: "more" }),
+  "found-not-reported": looked({ listens: null, service: null }),
+  "cant-run": looked({ outcome: "cant-run", version: null, profile: null }),
+  endpoint: looked({ outcome: "cant-tell", reason: "endpoint" }),
+  bots: failed("bots", { port: 18789 }),
 };
 
 export function isSetupState(name: string | null): name is string {

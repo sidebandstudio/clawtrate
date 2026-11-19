@@ -9,9 +9,10 @@ import type {
   LookService,
   SetupFailureKind,
   SetupLook,
+  SetupRefusal,
   SetupState,
 } from "@clawtrate/core";
-import { TESTED_OPENCLAW_VERSION } from "@clawtrate/core";
+import { OLDEST_OPENCLAW_VERSION, TESTED_OPENCLAW_VERSION } from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import logoUrl from "../assets/logo-mark.png";
 import { useCommand } from "../bridge.tsx";
@@ -239,17 +240,36 @@ const SERVICE_WORDS: Record<LookService, string> = {
   "launchagent-stopped": "LaunchAgent, stopped",
   systemd: "systemd user service, starts with your session",
   "systemd-stopped": "systemd user service, stopped",
-  none: "None, started by hand",
+  none: "None registered",
 };
+
+/** A fact the look established, or "Not reported". */
+const NOT_REPORTED = "Not reported";
+const serviceWords = (service: LookService | null) =>
+  service ? SERVICE_WORDS[service] : NOT_REPORTED;
 
 function runningFacts(look: SetupLook): Array<[string, string]> {
   return [
-    ["Version", look.version ?? ""],
-    ["Profile", look.profile ?? ""],
-    ["Listens", look.listens === "loopback" ? "On this computer only" : "On your network too"],
-    ["Service", look.service ? SERVICE_WORDS[look.service] : ""],
+    ["Version", look.version ?? NOT_REPORTED],
+    ["Profile", look.profile ?? NOT_REPORTED],
+    [
+      "Listens",
+      look.listens === "loopback"
+        ? "On this computer only"
+        : look.listens === "network"
+          ? "On your network too"
+          : NOT_REPORTED,
+    ],
+    ["Service", serviceWords(look.service)],
   ];
 }
+
+/** What Connect does, said only as far as it is true for this device. */
+const CONNECT_HINT: Record<NonNullable<SetupLook["access"]>, string> = {
+  new: "Connect pairs this computer with the gateway as a device that can only read, and the gateway keeps it. Sending or changing anything is asked for later.",
+  read: "This device is already paired with this gateway and can only read.",
+  more: "This device is already paired with this gateway and can also send.",
+};
 
 /** Other services and profiles the look saw: named, never used. */
 function Others({ others, onAdvanced }: { others: string[]; onAdvanced: () => void }) {
@@ -273,6 +293,8 @@ const CANT_TELL: Record<string, string> = {
   "no-answer":
     "OpenClaw's gateway didn't answer, though something runs on its port or as its service.",
   "not-set-up": "OpenClaw is installed here, but no gateway is set up for it.",
+  endpoint:
+    "Clawtrate couldn't confirm where this gateway answers, so it doesn't connect to it by itself. Use Advanced.",
 };
 
 /** The found card and actions for each result of the look (§6). */
@@ -317,10 +339,7 @@ function LookResult({
                   Connect
                 </button>
               </Actions>
-              <Hint>
-                Connect pairs this computer with the gateway as a device that can only read, and the
-                gateway keeps it. Sending or changing anything is asked for later.
-              </Hint>
+              <Hint>{CONNECT_HINT[look.access ?? "new"]}</Hint>
             </>
           ) : (
             <>
@@ -351,7 +370,7 @@ function LookResult({
     case "too-old":
       return (
         <Found mark={<CloseIcon />} tone="danger" heading="This OpenClaw is too old for Clawtrate">
-          <Lede>{`OpenClaw ${look.version} speaks an older protocol than ${PRODUCT_NAME} needs. Update it, then look again.`}</Lede>
+          <Lede>{`OpenClaw ${look.version} is older than the oldest version this ${PRODUCT_NAME} connects to (${OLDEST_OPENCLAW_VERSION}). Update it, then look again.`}</Lede>
           <Actions>
             <Primary onClick={lookAgain}>Look again</Primary>
           </Actions>
@@ -364,8 +383,8 @@ function LookResult({
           mark={<PauseIcon />}
           heading="OpenClaw is installed but not running"
           facts={[
-            ["Version", look.version ?? ""],
-            ["Service", look.service ? SERVICE_WORDS[look.service] : ""],
+            ["Version", look.version ?? NOT_REPORTED],
+            ["Service", serviceWords(look.service)],
             ["Port", `Nothing listening on ${look.port}`],
           ]}
         >
@@ -402,6 +421,19 @@ function LookResult({
           heading="Clawtrate couldn't tell what is on this computer"
         >
           <Lede>{CANT_TELL[look.reason ?? "shape"]}</Lede>
+          <Actions>
+            {advanced}
+            <Quiet onClick={lookAgain}>Look again</Quiet>
+          </Actions>
+        </Found>
+      );
+    case "cant-run":
+      return (
+        <Found mark={<WarnIcon />} tone="warn" heading="Clawtrate couldn't run OpenClaw here">
+          <Lede>
+            Clawtrate found OpenClaw's program, but it didn't start. Check that OpenClaw runs here,
+            or use Advanced.
+          </Lede>
           <Actions>
             {advanced}
             <Quiet onClick={lookAgain}>Look again</Quiet>
@@ -461,7 +493,7 @@ const FAILURES: Record<
   {
     lead: string;
     text?: (port: number | null, exit: number | null) => string;
-    next: "retry" | "look" | "back" | "advanced";
+    next: "retry" | "look" | "back" | "advanced" | "bots";
     step: number;
   }
 > = {
@@ -502,6 +534,12 @@ const FAILURES: Record<
     step: 0,
   },
   refused: { lead: "", next: "advanced", step: 0 },
+  bots: {
+    lead: "Connected, but Clawtrate couldn't read your bots.",
+    text: () => "Try again, or go back.",
+    next: "bots",
+    step: 2,
+  },
   other: {
     lead: "Clawtrate couldn't connect to the gateway.",
     text: () => "Try again, or use Advanced.",
@@ -510,11 +548,22 @@ const FAILURES: Record<
   },
 };
 
-const CONNECT_STEPS = [
-  "Making a one-time code",
-  "Pairing this computer, read-only",
-  "Loading your bots",
-];
+/** Connect's steps: a new pairing, or a device that is already paired there. */
+const CONNECT_STEPS: Record<NonNullable<SetupLook["access"]>, string[]> = {
+  new: ["Making a one-time code", "Pairing this computer, read-only", "Loading your bots"],
+  read: ["Checking the gateway", "Connecting this computer, read-only", "Loading your bots"],
+  more: ["Checking the gateway", "Connecting this computer", "Loading your bots"],
+};
+
+/** Why a sandbox was refused, in words. */
+const REFUSED: Record<SetupRefusal, string> = {
+  file: "its file is missing, isn't in the temporary folder, or has the wrong shape.",
+  home: "its home or working folder is in this computer's home folder.",
+  profile: "it names a profile that isn't this run's development instance.",
+  state: "its state folder would reach this computer's own OpenClaw.",
+  program: "its program isn't the repository's stand-in for OpenClaw.",
+  port: "the gateway's port isn't its instance's own.",
+};
 const LOOK_STEPS = ["Finding OpenClaw", "Checking its version", "Asking the gateway"];
 
 /** A screen's identity, so that a new one takes focus and is announced. */
@@ -621,9 +670,7 @@ export function SetupFlow({
         <Title id="setup-title">On this computer</Title>
         <Found mark={<WarnIcon />} tone="warn" heading="Looking on this computer is off here">
           <Lede>
-            This copy of Clawtrate is a development build or runs under a test, so it looks only in
-            a sandbox, and the one it was given would reach this computer's own OpenClaw. Use
-            Advanced.
+            {`This copy of ${PRODUCT_NAME} is a development build or runs under a test, so it looks only in a sandbox, and the sandbox it was given was refused: ${REFUSED[setup.failure.reason ?? "file"]} Use Advanced.`}
           </Lede>
           <Actions>
             <Primary onClick={advanced}>Use Advanced</Primary>
@@ -647,7 +694,7 @@ export function SetupFlow({
         <Mark />
         <Title id="setup-title">Connecting</Title>
         <Steps
-          steps={CONNECT_STEPS}
+          steps={CONNECT_STEPS[setup.look?.access ?? "new"]}
           current={failure ? copy!.step : setup.step}
           failed={!!failure}
         />
@@ -665,6 +712,9 @@ export function SetupFlow({
               )}
               {copy.next === "advanced" && <Primary onClick={advanced}>Use Advanced</Primary>}
               {copy.next === "back" && <Primary onClick={backFromConnect}>Back</Primary>}
+              {copy.next === "bots" && (
+                <Primary onClick={() => void send({ type: "retry" })}>Try again</Primary>
+              )}
             </Actions>
           </>
         )}
