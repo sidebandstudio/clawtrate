@@ -98,7 +98,7 @@ export function registerMemory(api, sdk) {
       maxEntries: MAX_SAVERS,
     }));
 
-  function remember(key, metadata) {
+  async function remember(key, metadata) {
     return savers().register(key, { ...metadata, at: Date.now() });
   }
 
@@ -382,7 +382,7 @@ export function registerMemory(api, sdk) {
         if (method === "delete") {
           if (file.hash === null) throw new Refusal("Note does not exist");
           await applyCas(fs, path, file, assertCurrent, (guard) =>
-            fs.remove(path, { assertBeforeMutation: guard, force: false }),
+            fs.remove(`./${path}`, { assertBeforeMutation: guard, force: false }),
           );
           await savers()
             .delete(key)
@@ -397,7 +397,9 @@ export function registerMemory(api, sdk) {
       }
       const newHash = sha256(content);
       // Root writes return no publication identity to attach to saver metadata.
-      await remember(key, { ...call.saver, hash: newHash }).catch(() => {});
+      await remember(key, { ...call.saver, hash: newHash }).catch(() =>
+        api.logger.warn("Could not record the memory note saver"),
+      );
       changed();
       return { hash: newHash };
     });
@@ -439,7 +441,9 @@ export function registerMemory(api, sdk) {
         throw error;
       }
       const hash = sha256(content);
-      await remember(saverKey(fs, ROOT_FILE), { ...call.saver, hash }).catch(() => {});
+      await remember(saverKey(fs, ROOT_FILE), { ...call.saver, hash }).catch(() =>
+        api.logger.warn("Could not record the root memory saver"),
+      );
       changed();
       return { hash };
     });
@@ -570,6 +574,32 @@ export function registerMemory(api, sdk) {
                 : batch
                   ? await copies(method, params, call)
                   : await note(method, params, call);
+          } catch (error) {
+            if (
+              !batch &&
+              params.agentId !== undefined &&
+              error instanceof Refusal &&
+              Object.hasOwn(error.details ?? {}, "currentHash")
+            ) {
+              assertAuthority();
+              const latest = context.getRuntimeConfig();
+              if (latest !== config) {
+                const visible = await visibleAgents();
+                assertAuthority();
+                if (context.getRuntimeConfig() !== latest)
+                  throw new Refusal("Gateway access or configuration changed");
+                const id = allowedAgent(params.agentId, { config: latest, visible });
+                if (
+                  api.runtime.agent.resolveAgentWorkspaceDir(config, id) !==
+                  api.runtime.agent.resolveAgentWorkspaceDir(latest, id)
+                ) {
+                  throw new Refusal(
+                    "The bot's workspace changed. Read the note again before retrying",
+                  );
+                }
+              }
+            }
+            throw error;
           } finally {
             if (mutation) pendingWrites -= 1;
           }

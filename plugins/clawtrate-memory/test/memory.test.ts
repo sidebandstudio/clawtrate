@@ -63,6 +63,7 @@ function setup({
   entries = { main: {}, other: { bootstrapMaxChars: 160 } },
   root = (...args: Parameters<typeof fs.root>) => fs.root(...args),
   stateDir = directory,
+  failSaver = false,
 }: {
   visible?: string[];
   extraPaths?: unknown[];
@@ -71,6 +72,7 @@ function setup({
   entries?: Record<string, object>;
   root?: typeof fs.root;
   stateDir?: string;
+  failSaver?: boolean;
 } = {}) {
   const workspace = join(directory, "workspace");
   const other = join(directory, otherPath);
@@ -78,6 +80,7 @@ function setup({
   for (const folder of [workspace, other, shared]) mkdirSync(folder, { recursive: true });
   const methods = new Map<string, { handler: Handler; scope: string }>();
   const events: Change[] = [];
+  const warn = vi.fn();
   let config = {
     agents: { entries },
     memory: { search: { enabled: true, extraPaths: extraPaths ?? [shared] } },
@@ -86,6 +89,7 @@ function setup({
   const savers = new Map<string, object>();
   registerMemory(
     {
+      logger: { warn },
       runtime: {
         state: {
           openKeyedStore: ({
@@ -99,6 +103,7 @@ function setup({
             expect(maxEntries).toBe(512);
             return {
               register: async (key: string, value: object) => {
+                if (failSaver) throw new Error("Saver store unavailable");
                 savers.delete(key);
                 savers.set(key, value);
                 if (savers.size > maxEntries) savers.delete(savers.keys().next().value!);
@@ -160,6 +165,7 @@ function setup({
     events,
     hook,
     savers,
+    warn,
     call,
     reload: (entries = config.agents.entries) => {
       config = { ...config, agents: { entries } };
@@ -403,6 +409,101 @@ it("stages complete new notes and root files on the POSIX SDK fallback", async (
 
 describe("memory changes", () => {
   beforeEach(() => vi.stubEnv("FS_SAFE_NATIVE_MODE", "require"));
+
+  it("creates, reads, lists, updates and deletes a literal shared tilde path", async () => {
+    const { call, shared } = setup();
+    const sharedRoot = sha256(await fs.canonicalPathFromExistingAncestor(shared));
+    const note = { sharedRoot, path: "~/note.md" };
+    const firstHash = sha256("first");
+    writeFileSync(join(shared, "other.md"), "other");
+    expect(await call("write", { ...note, content: "first", expectedHash: null })).toMatchObject({
+      ok: true,
+      payload: { hash: firstHash },
+    });
+    expect(readFileSync(join(shared, note.path), "utf8")).toBe("first");
+    expect(await call("read", note)).toMatchObject({
+      ok: true,
+      payload: { path: note.path, content: "first" },
+    });
+    expect(await call("list", { sharedRoot })).toMatchObject({
+      ok: true,
+      payload: {
+        files: expect.arrayContaining([
+          expect.objectContaining({ path: note.path }),
+          expect.objectContaining({ path: "other.md" }),
+        ]),
+        truncated: false,
+      },
+    });
+    const secondHash = sha256("second");
+    expect(
+      await call("write", { ...note, content: "second", expectedHash: firstHash }),
+    ).toMatchObject({
+      ok: true,
+      payload: { hash: secondHash },
+    });
+    expect(await call("delete", { ...note, expectedHash: secondHash })).toMatchObject({
+      ok: true,
+      payload: { deleted: true },
+    });
+    expect(readdirSync(join(shared, "~"))).toEqual([]);
+  });
+
+  it("keeps committed note and root writes successful when saver registration fails", async () => {
+    const { call, workspace, shared, events, warn } = setup({ failSaver: true });
+    expect(await call("write", initial)).toMatchObject({
+      ok: true,
+      payload: { hash: sha256(initial.content) },
+    });
+    writeFileSync(join(shared, "sample.md"), "source");
+    const sharedRoot = sha256(await fs.canonicalPathFromExistingAncestor(shared));
+    const copy = await call("copy", {
+      item: { sharedRoot, path: "sample.md" },
+      agents: ["main"],
+      expectedHashes: { main: null },
+    });
+    expect(copy).toMatchObject({ ok: true, payload: { results: [{ copied: true }] } });
+    expect(readFileSync(join(workspace, note.path), "utf8")).toBe(initial.content);
+    expect(readFileSync(join(workspace, "MEMORY.md"), "utf8")).toContain("source");
+    expect(events).toHaveLength(2);
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([false, true])(
+    "returns only current-workspace note conflict hashes (workspace moved=%s)",
+    async (moved) => {
+      let onRead = () => {};
+      const { call, workspace, other, reload } = setup({
+        root: async (...args: Parameters<typeof fs.root>) => {
+          const root = await fs.root(...args);
+          const read = root.read.bind(root);
+          root.read = async (path: string) => {
+            const file = await read(path);
+            onRead();
+            return file;
+          };
+          return root;
+        },
+      });
+      onRead = () => reload({ main: moved ? { workspace: other } : {}, other: {} });
+      mkdirSync(join(workspace, "memory/nested"), { recursive: true });
+      writeFileSync(join(workspace, note.path), "first");
+      const reply = await call("write", { ...initial, content: "second" });
+      if (moved) {
+        expect(reply).toMatchObject({
+          ok: false,
+          error: { message: expect.stringContaining("workspace changed. Read the note again") },
+        });
+        expect(reply.error).not.toHaveProperty("details.currentHash");
+      } else {
+        expect(reply).toMatchObject({
+          ok: false,
+          error: { details: { currentHash: sha256("first") } },
+        });
+      }
+      expect(readFileSync(join(workspace, note.path), "utf8")).toBe("first");
+    },
+  );
 
   it("writes atomically and reports only a stored revision, plus metadata and an empty event", async () => {
     const { call, workspace, savers, events } = setup();
@@ -813,7 +914,11 @@ describe("memory changes", () => {
           ok: true,
           payload: {
             results: [
-              { agentId: "main", copied: true },
+              {
+                agentId: "main",
+                copied: true,
+                hash: sha256(readFileSync(join(workspace, "MEMORY.md"))),
+              },
               { agentId: "other", refused: true },
             ],
           },
@@ -882,13 +987,12 @@ describe("memory changes", () => {
     writeFileSync(join(workspace, "MEMORY.md"), "existing");
     writeFileSync(join(shared, "sample.md"), "source");
     const sharedRoot = sha256(await fs.canonicalPathFromExistingAncestor(shared));
-    expect(
-      await call("copy", {
-        item: { sharedRoot, path: "sample.md" },
-        agents: ["main"],
-        expectedHashes: { main: sha256("existing") },
-      }),
-    ).toMatchObject({
+    const reply = await call("copy", {
+      item: { sharedRoot, path: "sample.md" },
+      agents: ["main"],
+      expectedHashes: { main: sha256("existing") },
+    });
+    expect(reply).toMatchObject({
       ok: true,
       payload: {
         results: [
@@ -896,6 +1000,7 @@ describe("memory changes", () => {
         ],
       },
     });
+    expect((reply.payload as { results: object[] }).results[0]).not.toHaveProperty("hash");
     expect(readFileSync(join(workspace, "MEMORY.md"), "utf8")).toContain("source");
     expect(readdirSync(newWorkspace)).toEqual([]);
   });

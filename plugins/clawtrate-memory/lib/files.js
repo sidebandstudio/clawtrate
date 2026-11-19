@@ -62,7 +62,8 @@ export async function sharedDirectory(state, configured) {
 
 export async function read(root, path) {
   try {
-    const { buffer, realPath, stat } = await root.read(path);
+    // The SDK expands a leading ~/ unless the path is explicitly relative.
+    const { buffer, realPath, stat } = await root.read(`./${path}`);
     const content = buffer.toString("utf8");
     if (!Buffer.from(content).equals(buffer)) throw new Refusal("File is not UTF-8");
     return { content, hash: sha256(buffer), realPath, stat };
@@ -92,8 +93,8 @@ export function writeCas(root, path, file, assertCurrent, content, mkdir) {
   return applyCas(root, path, file, assertCurrent, (guard) => {
     const options = { assertBeforeMutation: guard, mkdir };
     return file.hash === null
-      ? root.create(path, content, { ...options, atomic: true })
-      : root.write(path, content, options);
+      ? root.create(`./${path}`, content, { ...options, atomic: true })
+      : root.write(`./${path}`, content, options);
   });
 }
 

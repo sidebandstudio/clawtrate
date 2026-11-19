@@ -25,7 +25,7 @@ Copy and uncopy accept up to 32 distinct bots and a map of their expected `MEMOR
 
 The workspace lock serializes plugin writes. An outside writer can still change a file between its last check and publication. Mutations require the gateway to run with `FS_SAFE_NATIVE_MODE=require` and a filesystem supported by OpenClaw's native helper. Reads remain available without native mode. If a note mutation returns `details.unknown`, read the note again before retrying.
 
-A successful plugin write records the saver and content hash in the gateway's bounded plugin store. Reads omit `savedBy` because the pinned filesystem SDK returns no publication identity for the write. Successful `write` and `edit` tool receipts are observed as metadata, with no revision attached, since the gateway exposes the tool's path argument and no file hash. The store keeps up to 512 saver records across restarts. The event `plugin.clawtrate-memory.changed` carries an empty object when a plugin RPC changed or may have changed a file. Tool receipts only update the saver store.
+After a plugin write, the gateway records the saver and content hash on a best-effort basis. A failed saver registration logs a warning. The write still succeeds. Reads omit `savedBy` because the pinned filesystem SDK returns no publication identity for the write. Successful `write` and `edit` tool receipts are observed as metadata, with no revision attached, since the gateway exposes the tool's path argument and no file hash. The store keeps up to 512 saver records across restarts. The event `plugin.clawtrate-memory.changed` carries an empty object when a plugin RPC changed or may have changed a file. Tool receipts only update the saver store.
 
 ## What it needs
 
