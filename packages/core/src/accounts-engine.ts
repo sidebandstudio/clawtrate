@@ -3,8 +3,10 @@
 // collections it keeps are its own properties, registered in `owners.ts`.
 //
 // What the person types into a sign-in or the API key path is an argument of
-// one request and is kept nowhere: not in the state, not in a field here, not
-// in an error. `withoutSecret` takes it out of anything the gateway answers.
+// one request. The engine holds it in one bounded collection (`secrets`) only
+// while that request lasts, to take it out of whatever the gateway answers in
+// the meantime, and drops it when the request ends. Nothing later is filtered
+// with it: what the gateway sends for that sign-in afterwards is not shown.
 
 import {
   ACCOUNT_READ_CONCURRENCY,
@@ -135,12 +137,19 @@ export class AccountsEngine {
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
   private signInAbort: AbortController | null = null;
   /**
-   * What the person typed into the sign-in under way (a key, a pasted code or
-   * address), in the forms the gateway may echo it, held only while that
-   * sign-in lasts: every string the gateway sends back is scrubbed of them
-   * before it enters the state or a log line. Forgotten when the sign-in ends.
+   * What the person typed (a key, a pasted code or address), in the forms the
+   * gateway may echo it, held only while the request that carries it lasts:
+   * every string the gateway sends back meanwhile, its read-back included, is
+   * scrubbed of them before it enters the state or a log line. Dropped when
+   * that request ends.
    */
   private readonly secrets: string[] = [];
+  /**
+   * The sign-in a typed value was sent in, once that request has ended:
+   * nothing holds the value any more, so the gateway's later text for it,
+   * which could carry it back, is not taken (`scrubbed`).
+   */
+  private typedIn: string | null = null;
   private slowTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(ctx: AccountsContext) {
@@ -249,7 +258,12 @@ export class AccountsEngine {
     const entries = asRecord(agents.entries) ?? {};
     const defaults = asRecord(agents.defaults) ?? {};
     const defaultModel = readModelConfig(defaults.model).primary;
-    const accounts = mergeAccounts(views, this.kinds);
+    // A label read while a typed value is held is scrubbed of it, as every other answer is.
+    const accounts = mergeAccounts(views, this.kinds).map((account) =>
+      account.label && this.secrets.length > 0
+        ? { ...account, label: this.scrub(account.label) }
+        : account,
+    );
     const main = asRecord(entries.main);
     const anyView = views.get("main") ?? [...views.values()][0];
     const bindings = [...views.keys()].map((botId) => {
@@ -440,6 +454,7 @@ export class AccountsEngine {
     // What the provider has just before it starts, read fresh where the gateway answers: an
     // account another client added since the last read is not this sign-in's.
     this.forgetSecrets();
+    this.typedIn = null;
     if (key !== null) this.holdSecret(key);
     ctx.update((a) => ({ ...a, signIn: { ...signIn, known: this.accountsOf(signIn.provider) } }));
     const before = await this.knownBefore(signIn.provider, signIn.forBot);
@@ -494,7 +509,7 @@ export class AccountsEngine {
   }
 
   private setSignIn(id: string, patch: Partial<SignInState>): void {
-    const clean = this.scrubbed(patch);
+    const clean = this.scrubbed(id, patch);
     this.ctx.update((a) => (a.signIn?.id === id ? { ...a, signIn: { ...a.signIn, ...clean } } : a));
   }
 
@@ -511,13 +526,6 @@ export class AccountsEngine {
     this.secrets.splice(0, this.secrets.length, ...kept.slice(0, MAX_SIGNIN_SECRETS));
   }
 
-  /** Take one value's forms out of what is held: its use is over, while a sign-in may go on. */
-  private releaseSecret(value: string): void {
-    const forms = secretForms(value);
-    const left = this.secrets.filter((form) => !forms.includes(form));
-    this.secrets.splice(0, this.secrets.length, ...left);
-  }
-
   /** The sign-in is over: nothing it was given is held any more. */
   private forgetSecrets(): void {
     this.secrets.length = 0;
@@ -532,8 +540,20 @@ export class AccountsEngine {
     return out;
   }
 
-  /** Every string a sign-in's patch carries from the gateway, scrubbed. */
-  private scrubbed(patch: Partial<SignInState>): Partial<SignInState> {
+  /**
+   * Every string a sign-in's patch carries from the gateway, scrubbed while
+   * what the person typed is held. Once its request has ended, the gateway's
+   * later text for that sign-in is not taken: the screens say it in their own
+   * words (bots.md section 5).
+   */
+  private scrubbed(id: string, patch: Partial<SignInState>): Partial<SignInState> {
+    if (this.secrets.length === 0 && this.typedIn === id) {
+      const out: Partial<SignInState> = { ...patch };
+      if (typeof out.error === "string") out.error = null;
+      if (out.step)
+        out.step = { ...out.step, title: null, message: null, url: null, placeholder: null };
+      return out;
+    }
     if (this.secrets.length === 0) return patch;
     const out: Partial<SignInState> = { ...patch };
     if (typeof out.error === "string") out.error = this.scrub(out.error);
@@ -684,10 +704,22 @@ export class AccountsEngine {
     if (typeof value !== "string" || value.length === 0 || value.length > MAX_SECRET_CHARS)
       throw new Error("That can't be sent.");
     const stepId = signIn.step.id;
+    // A code or an address pasted back is a secret; a company address asked for first is not.
+    const secret = signIn.step.sensitive || signIn.step.url !== null;
     this.holdSecret(value);
     this.setSignIn(signIn.id, { stage: "checking" });
     const before = this.accountsOf(signIn.provider);
-    await this.paused((pause) => this.follow(signIn.id, { stepId, value }, null, before, pause));
+    try {
+      await this.paused((pause) => this.follow(signIn.id, { stepId, value }, null, before, pause));
+    } finally {
+      this.dropTyped(signIn.id, secret);
+    }
+  }
+
+  /** The request that carried a typed value has ended: nothing of it is held from here on. */
+  private dropTyped(id: string, secret = true): void {
+    this.forgetSecrets();
+    if (secret && this.ctx.get().signIn?.id === id) this.typedIn = id;
   }
 
   /**
@@ -775,6 +807,7 @@ export class AccountsEngine {
     if (signIn && isActive(signIn) && !(await this.cancelSignIn()).cancelled)
       return { dismissed: false };
     this.forgetSecrets();
+    this.typedIn = null;
     this.ctx.update((a) => ({ ...a, signIn: null }));
     return { dismissed: true };
   }
@@ -923,29 +956,33 @@ export class AccountsEngine {
       : null;
     if (method) {
       const id = `clawtrate-${this.ctx.randomId()}`;
-      await this.begin(
-        {
-          id,
-          method: method.id,
-          provider,
-          label: method.label,
-          flow: "key",
-          forBot: this.signInTarget(botId),
-          keptOnly: !this.ctx.get().mainShared,
-          stage: "starting",
-          step: null,
-          error: null,
-          cancelling: false,
-          saving: false,
-          startedAt: this.ctx.now(),
-          result: null,
-          byKey: true,
-          known: [],
-          cancelUnknown: false,
-        },
-        key,
-        true,
-      );
+      try {
+        await this.begin(
+          {
+            id,
+            method: method.id,
+            provider,
+            label: method.label,
+            flow: "key",
+            forBot: this.signInTarget(botId),
+            keptOnly: !this.ctx.get().mainShared,
+            stage: "starting",
+            step: null,
+            error: null,
+            cancelling: false,
+            saving: false,
+            startedAt: this.ctx.now(),
+            result: null,
+            byKey: true,
+            known: [],
+            cancelUnknown: false,
+          },
+          key,
+          true,
+        );
+      } finally {
+        this.dropTyped(id);
+      }
       const after = this.ctx.get().signIn;
       return { profileId: after?.id === id ? (after.result?.added[0] ?? null) : null };
     }
@@ -1007,7 +1044,7 @@ export class AccountsEngine {
       // eslint-disable-next-line preserve-caught-error
       throw new Error(message);
     } finally {
-      this.releaseSecret(key);
+      this.forgetSecrets();
     }
   }
 

@@ -1244,6 +1244,48 @@ describe("a typed API key leaves no trace", () => {
     client.stop();
   });
 
+  it("a gateway that echoes a key in a structured profile label puts it in no store and no viewer's snapshot", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    fake.gateway.handlers["models.authStatus"] = (params) => {
+      const answer = status(params) as {
+        providers: Array<{ profiles: Array<Record<string, unknown>> }>;
+      };
+      for (const profile of answer.providers.flatMap((provider) => provider.profiles))
+        if (profile.profileId === "globex:manual") profile.displayName = `Key ${KEY}`;
+      return answer;
+    };
+    const viewer = createBridgeSession(client);
+    const snapshots: string[] = [];
+    const stop = client.store.subscribe((state) => void snapshots.push(JSON.stringify(state)));
+    await viewer.apply({ type: "saveApiKey", provider: "globex", key: KEY, botId: null });
+    stop();
+    expect(snapshots.length).toBeGreaterThan(0);
+    expect(snapshots.join("")).not.toContain(KEY);
+    await traceless(client, storage, logs, KEY);
+    viewer.dispose();
+    client.stop();
+  });
+
+  it("a pasted code is dropped when the request that carries it ends, though the sign-in goes on", async () => {
+    const { client, storage, logs, fake } = await keyClient();
+    const code = "one-time-code-dropped-7Q";
+    const next = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) =>
+      (params as { answer?: unknown }).answer
+        ? { done: false, status: "running", step: { id: "second", type: "text", sensitive: true } }
+        : next(params);
+    await client.startSignIn(CHOICES.browser, null);
+    await client.answerSignIn(code);
+    expect(client.state.accounts.signIn).toMatchObject({
+      stage: "entering",
+      step: { id: "second" },
+    });
+    expect(held(client)).toEqual([]);
+    await traceless(client, storage, logs, code);
+    client.stop();
+  });
+
   /** The engine's own copy of what was typed, which must be gone once the sign-in has ended. */
   const held = (client: ClawtrateClient) =>
     (client as unknown as { accounts: { secrets: string[] } }).accounts.secrets;
@@ -1615,12 +1657,20 @@ describe("the bounds", () => {
       (params as { answer?: unknown }).answer
         ? { done: false, status: "running", step: { id: "wait", type: "text", message: "Wait" } }
         : next(params);
+    // Measured while the request that carries it is under way: it is dropped when that ends.
+    let during: string[] = [];
+    const wizard = fake.gateway.handlers["wizard.next"]!;
+    fake.gateway.handlers["wizard.next"] = (params) => {
+      if ((params as { answer?: unknown }).answer) during = [...engine.secrets];
+      return wizard(params);
+    };
     await client.startSignIn(CHOICES.browser, null);
     await client.answerSignIn("\u0003".repeat(MAX_SECRET_CHARS));
-    expect(engine.secrets).toHaveLength(1);
-    expect(JSON.stringify(engine.secrets[0]).length).toBeLessThanOrEqual(
+    expect(during).toHaveLength(1);
+    expect(JSON.stringify(during[0]).length).toBeLessThanOrEqual(
       CLIENT_OWNERS["accounts.secrets"]!.each,
     );
+    expect(engine.secrets).toEqual([]);
     client.stop();
   });
 

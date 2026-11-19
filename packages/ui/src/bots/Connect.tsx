@@ -964,7 +964,7 @@ export function useConnect({
     body = (
       <>
         <Result tone="danger" mark="warning" title="Couldn't connect">
-          {current.error ?? `${who} refused the sign-in.`}
+          {current.error ?? "The gateway ended the sign-in without saving it."}
         </Result>
         {reread(current)}
       </>
@@ -1057,7 +1057,7 @@ export function useConnect({
     body = (
       <>
         <Result tone="warn" mark="clock" title="Saved, not confirmed">
-          {current.error}
+          {current.error ?? "The gateway saved the sign-in, but couldn't confirm it."}
         </Result>
         {several && chooser(current)}
       </>
