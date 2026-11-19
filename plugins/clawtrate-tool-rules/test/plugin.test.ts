@@ -74,6 +74,7 @@ describe("status says only what the plugin itself knows", () => {
         enforcing: "nothing",
         hook: { registered: true, lastCallAt: null },
         matches: { tools: [], fallback: [], exempt: ["ask_user"] },
+        cardDetails: { mode: "full", because: "no-forwarding" },
       },
     });
     await h.save("otto", [{ action: "ask", tools: ["write", "edit"] }], true);
@@ -635,5 +636,69 @@ describe("status says whether rules are being enforced", () => {
       enforcing: "not-enforced",
       hook: { registered: false, lastCallAt: null },
     });
+  });
+});
+
+describe("who can see a card's text", () => {
+  const FORWARDING = { approvals: { plugin: { enabled: true, mode: "targets", targets: [] } } };
+  const askNotes = [{ action: "ask", tools: ["write", "exec"] }];
+  const card = async (options: Partial<Parameters<typeof load>[0]>) => {
+    const h = host(options);
+    await h.save("otto", askNotes);
+    const write = h.before("otto", "write", { path: "notes/disk-report.md" })!.requireApproval!;
+    const exec = h.before("otto", "exec", { command: "rm -rf build" })!.requireApproval!;
+    const { cardDetails } = (await h.call("status")).payload!;
+    return { write, exec, cardDetails };
+  };
+
+  it("carries the target when approvals are not forwarded", async () => {
+    const { write, exec, cardDetails } = await card({});
+    expect(write.description).toContain("notes/disk-report.md");
+    expect(exec.description).toContain("rm -rf build");
+    expect(cardDetails).toEqual({ mode: "full", because: "no-forwarding" });
+  });
+
+  for (const [what, config] of [
+    ["plugin approvals are forwarded", FORWARDING],
+    [
+      "a channel has a plugin reviewer policy",
+      { approvals: { plugin: { slack: { approvers: [] } } } },
+    ],
+    ["a chat channel is configured", { channels: { telegram: { enabled: true } } }],
+  ] as const) {
+    it(`leaves out the path, the command and the bot when ${what}`, async () => {
+      const { write, exec, cardDetails } = await card({ config });
+      for (const approval of [write, exec]) {
+        expect(approval.description).not.toMatch(/notes\/disk-report\.md|rm -rf|otto/);
+        expect(approval.title).not.toMatch(/otto/);
+        expect(approval.description).toMatch(/The details are in Clawtrate\.$/);
+        expect(approval.description).toMatch(
+          /a rule for this bot \(rule [0-9a-f]{12}, version 1, Ask first\)/,
+        );
+      }
+      expect(cardDetails).toEqual({ mode: "redacted", because: "forwarding-configured" });
+    });
+  }
+
+  it("leaves the target out of the fallback's card and the lost-rules card too", async () => {
+    const h = host({ config: FORWARDING });
+    await h.save("*", [], true);
+    const fallback = h.before("otto", "read", { path: "notes/x.md" })!.requireApproval!;
+    expect(fallback.description).toBe(
+      `Asked by Clawtrate's rules plugin: "Ask when nothing else decides" is on for every bot. The call: read. The details are in Clawtrate.`,
+    );
+    writeFileSync(rulesFile(h.stateDir), "{ broken");
+    const h2 = load({ stateDir: h.stateDir, config: FORWARDING });
+    const lost = h2.before("otto", "read", { path: "notes/x.md" })!.requireApproval!;
+    expect(lost.description).not.toContain("notes/x.md");
+  });
+
+  it("follows a setting that forces either", async () => {
+    const full = await card({ config: FORWARDING, pluginConfig: { cardDetails: "full" } });
+    expect(full.write.description).toContain("notes/disk-report.md");
+    expect(full.cardDetails).toEqual({ mode: "full", because: "setting" });
+    const redacted = await card({ pluginConfig: { cardDetails: "redacted" } });
+    expect(redacted.write.description).not.toContain("notes/disk-report.md");
+    expect(redacted.cardDetails).toEqual({ mode: "redacted", because: "setting" });
   });
 });

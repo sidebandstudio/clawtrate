@@ -151,27 +151,74 @@ function targetWords(target) {
     : ` on ${clip(target.value || ".", 200)}`;
 }
 
-/** The card's title and description, within the gateway's limits. */
-export function approvalText(result, tool, target) {
+const REDACTED_TAIL = " The details are in Clawtrate.";
+const ACTION_WORDS = { ask: "Ask first", never: "Never", allow: "Allow" };
+
+/**
+ * Whether a card may reach more than the run's device and admin
+ * connections: plugin approvals forwarded (`approvals.plugin.enabled`), a
+ * channel's reviewer policy for plugin approvals (`approvals.plugin.<channel>`),
+ * or any chat channel configured, which can deliver a card to its own reviewers.
+ */
+export function mayForward(config) {
+  const approvals = isPlainObject(config?.approvals) ? config.approvals : {};
+  const plugin = approvals.plugin;
+  const forwarding = isPlainObject(plugin) && plugin.enabled === true;
+  const reviewers =
+    isPlainObject(plugin) &&
+    Object.keys(plugin).some(
+      (key) => !["enabled", "mode", "agentFilter", "sessionFilter", "targets"].includes(key),
+    );
+  const channels =
+    isPlainObject(config?.channels) &&
+    Object.values(config.channels).some((channel) => channel !== null && channel !== false);
+  return forwarding || reviewers || channels;
+}
+
+/** Whether a card names its target: `full` or `redacted`, and why. */
+export function cardDetails(setting, config) {
+  if (setting === "full" || setting === "redacted") return { mode: setting, because: "setting" };
+  return mayForward(config)
+    ? { mode: "redacted", because: "forwarding-configured" }
+    : { mode: "full", because: "no-forwarding" };
+}
+
+/**
+ * The card's title and description, within the gateway's limits. Redacted,
+ * it names the tool and the rule and leaves out the path, the command and
+ * the bot's id.
+ */
+export function approvalText(result, tool, target, redacted = false) {
   const title = clip(`${tool}: Clawtrate's rules plugin asks first`, TITLE_MAX);
   const source = result.source;
-  const asker =
-    source.kind === "fallback"
-      ? `"Ask when nothing else decides" is on for ${source.scope === EVERY_BOT ? "every bot" : source.scope}`
-      : `${scopeWords(source.scope)} '${ruleLabel(result.rule)}', version ${source.version} (rule ${source.ruleId})`;
-  const description = clip(
-    `Asked by Clawtrate's rules plugin: ${asker}. The call: ${tool}${targetWords(target)}.`,
-    DESCRIPTION_MAX,
-  );
+  const forEvery = source.scope === EVERY_BOT;
+  let asker;
+  if (source.kind === "fallback") {
+    asker = `"Ask when nothing else decides" is on for ${forEvery ? "every bot" : redacted ? "this bot" : source.scope}`;
+  } else if (redacted) {
+    asker = `${forEvery ? "a rule for every bot" : "a rule for this bot"} (rule ${source.ruleId}, version ${source.version}, ${ACTION_WORDS[source.action]})`;
+  } else {
+    asker = `${scopeWords(source.scope)} '${ruleLabel(result.rule)}', version ${source.version} (rule ${source.ruleId})`;
+  }
+  const description = redacted
+    ? clip(
+        `Asked by Clawtrate's rules plugin: ${asker}. The call: ${tool}.${REDACTED_TAIL}`,
+        DESCRIPTION_MAX,
+      )
+    : clip(
+        `Asked by Clawtrate's rules plugin: ${asker}. The call: ${tool}${targetWords(target)}.`,
+        DESCRIPTION_MAX,
+      );
   return { title, description };
 }
 
 /** The card while the rules are lost and no copy was read: every call is asked about. */
-export function lostRulesText(tool, target) {
+export function lostRulesText(tool, target, redacted = false) {
+  const call = redacted ? `${tool}.${REDACTED_TAIL}` : `${tool}${targetWords(target)}.`;
   return {
     title: clip(`${tool}: Clawtrate's rules could not be read`, TITLE_MAX),
     description: clip(
-      `Clawtrate's rules plugin could not read its rules, so it asks before every tool call until they can be read. The call: ${tool}${targetWords(target)}.`,
+      `Clawtrate's rules plugin could not read its rules, so it asks before every tool call until they can be read. The call: ${call}`,
       DESCRIPTION_MAX,
     ),
   };
@@ -206,6 +253,8 @@ export function createToolRules(api, options = {}) {
   const logger = api.logger ?? {};
   const registration = Symbol("registration");
   const now = options.now ?? Date.now;
+  /** "auto" (the default), "full" or "redacted": whether a card names what the call acts on. */
+  const cardSetting = isPlainObject(api.pluginConfig) ? api.pluginConfig.cardDetails : undefined;
 
   /** The names a bot's workspace folder goes by, for an absolute path. */
   const workspaceOf = (agentId) => () => {
@@ -245,6 +294,7 @@ export function createToolRules(api, options = {}) {
     }
     const view = store.view();
     const rules = view.kind === "lost" ? (view.kept ? "kept" : "lost") : view.kind;
+    const redacted = cardDetails(cardSetting, currentConfig()).mode === "redacted";
     const target = readTarget(tool, event?.params, workspaceOf(agentId));
     const ask = (text, id) => ({
       requireApproval: {
@@ -259,7 +309,7 @@ export function createToolRules(api, options = {}) {
     if (view.enforced === null) {
       // Lost, with no copy: nothing a person forbade may run unasked.
       const id = log.add({ ...base, rules, decision: "ask", source: { kind: "rules-lost" } });
-      return ask(lostRulesText(tool, target), id);
+      return ask(lostRulesText(tool, target, redacted), id);
     }
     const result = evaluate(view.enforced, { agentId, tool, target });
     const id = log.add({ ...base, rules, decision: result.decision, source: result.source });
@@ -267,7 +317,7 @@ export function createToolRules(api, options = {}) {
     if (result.decision !== "ask") return undefined;
     return {
       requireApproval: {
-        ...approvalText(result, tool, target),
+        ...approvalText(result, tool, target, redacted),
         severity: "warning",
         timeoutMs: APPROVAL_TIMEOUT_MS,
         allowedDecisions: [...ALLOWED_DECISIONS],
@@ -338,6 +388,7 @@ export function createToolRules(api, options = {}) {
         lastCallAt: shared.lastCallAt,
       },
       matches: view.enforced ? matchesOf(view.enforced) : null,
+      cardDetails: cardDetails(cardSetting, currentConfig()),
     };
   });
 

@@ -44,6 +44,7 @@ export function load(
     slots?: Map<unknown, unknown>;
     on?: boolean;
     config?: Json;
+    pluginConfig?: Json;
     workspaces?: Record<string, string>;
     now?: () => number;
     log?: { now?: () => number; retentionMs?: number; max?: number };
@@ -58,7 +59,7 @@ export function load(
   const infos: string[] = [];
   const config = options.config ?? {};
   const api: Json = {
-    pluginConfig: {},
+    pluginConfig: options.pluginConfig ?? {},
     config,
     runtime: {
       config: { current: () => config },
