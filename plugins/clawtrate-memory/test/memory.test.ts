@@ -62,6 +62,7 @@ function setup({
   otherPath = "other",
   entries = { main: {}, other: { bootstrapMaxChars: 160 } },
   root = (...args: Parameters<typeof fs.root>) => fs.root(...args),
+  stateDir = directory,
 }: {
   visible?: string[];
   extraPaths?: unknown[];
@@ -69,6 +70,7 @@ function setup({
   otherPath?: string;
   entries?: Record<string, object>;
   root?: typeof fs.root;
+  stateDir?: string;
 } = {}) {
   const workspace = join(directory, "workspace");
   const other = join(directory, otherPath);
@@ -120,7 +122,7 @@ function setup({
       },
       registerService: (service: { start: (ctx: object) => void }) =>
         service.start({
-          stateDir: directory,
+          stateDir,
           gatewayEvents: {
             emit: (name: string, payload: unknown, options: unknown) =>
               events.push({ name, payload, options }),
@@ -209,11 +211,14 @@ describe("memory paths", () => {
     }
     expect(readdirSync(shared)).toEqual(["outside.md"]);
     expect(readFileSync(outside, "utf8")).toBe("outside");
+    writeFileSync(join(shared, "another.md"), "also outside");
     rmSync(join(workspace, "memory"), { recursive: true });
     symlinkSync(shared, join(workspace, "memory"), "dir");
     expect((await call("write", initial)).ok).toBe(false);
-    expect((await call("list", { agentId: "main" })).payload).not.toMatchObject({
-      files: [expect.objectContaining({ path: "memory/outside.md" })],
+    expect(await call("list", { agentId: "main" })).toMatchObject({
+      ok: false,
+      payload: undefined,
+      error: { message: "The notes folder must be a real directory" },
     });
   });
 
@@ -281,6 +286,38 @@ describe("memory paths", () => {
       ok: true,
       payload: { folders: [{ searchConfiguredFor: ["other"] }] },
     });
+  });
+
+  it("combines patterns and bot IDs for both spellings of a shared folder", async () => {
+    const stateDir = join(directory, "state-alias");
+    symlinkSync(directory, stateDir, "dir");
+    const canonical = await fs.canonicalPathFromExistingAncestor(directory);
+    const { call, shared } = setup({
+      stateDir,
+      entries: {
+        main: {
+          memory: { search: { extraPaths: [{ path: join(stateDir, "shared"), pattern: "a.md" }] } },
+        },
+        other: {
+          memory: {
+            search: { extraPaths: [{ path: join(canonical, "shared"), pattern: "b.md" }] },
+          },
+        },
+      },
+      extraPaths: [],
+    });
+    const sharedRoot = sha256(join(canonical, "shared"));
+    expect(await call("list", {})).toMatchObject({
+      ok: true,
+      payload: { folders: [{ sharedRoot, searchConfiguredFor: ["main", "other"] }] },
+    });
+    for (const path of ["a.md", "b.md"]) {
+      writeFileSync(join(shared, path), path);
+      expect(await call("read", { sharedRoot, path })).toMatchObject({
+        ok: true,
+        payload: { content: path },
+      });
+    }
   });
 
   it("accepts a configured underscore bot and records its tool receipts", async () => {
@@ -579,7 +616,7 @@ describe("memory changes", () => {
     expect(truncated).toBe(true);
   });
 
-  it("records successful tool saves without a revision or tool content", async () => {
+  it("records tool save metadata without a revision, content or a change event", async () => {
     const { hook, savers, events } = setup();
     const context = { agentId: "main", sessionKey: "agent:main:script" };
     const event = {
@@ -598,7 +635,7 @@ describe("memory changes", () => {
     expect([...savers.values()]).toEqual([
       { kind: "bot", ...context, path: note.path, at: expect.any(Number) },
     ]);
-    expect(events).toHaveLength(1);
+    expect(events).toHaveLength(0);
   });
 
   it("copies and uncopies independently using keyed bot budgets", async () => {
@@ -861,5 +898,43 @@ describe("memory changes", () => {
     });
     expect(readFileSync(join(workspace, "MEMORY.md"), "utf8")).toContain("source");
     expect(readdirSync(newWorkspace)).toEqual([]);
+  });
+
+  it("withholds a conflict hash when the bot moves to another workspace", async () => {
+    let onWrite = () => {};
+    const { call, workspace, other, shared, reload } = setup({
+      entries: { main: {}, other: {} },
+      root: async (...args: Parameters<typeof fs.root>) => {
+        const root = await fs.root(...args);
+        const write = root.write.bind(root);
+        root.write = async (...options: unknown[]) => {
+          await write(...options);
+          onWrite();
+        };
+        return root;
+      },
+    });
+    const newWorkspace = join(directory, "moved");
+    mkdirSync(newWorkspace);
+    onWrite = () => reload({ main: { workspace: newWorkspace }, other: {} });
+    writeFileSync(join(workspace, "MEMORY.md"), "old main memory");
+    writeFileSync(join(other, "MEMORY.md"), "other memory");
+    writeFileSync(join(shared, "sample.md"), "source");
+    const sharedRoot = sha256(await fs.canonicalPathFromExistingAncestor(shared));
+    const reply = await call("copy", {
+      item: { sharedRoot, path: "sample.md" },
+      agents: ["main", "other"],
+      expectedHashes: { main: null, other: sha256("other memory") },
+    });
+    expect(reply).toMatchObject({
+      ok: true,
+      payload: {
+        results: [
+          { agentId: "main", refused: true, reason: expect.stringContaining("workspace changed") },
+          { agentId: "other", copied: true },
+        ],
+      },
+    });
+    expect((reply.payload as { results: object[] }).results[0]).not.toHaveProperty("currentHash");
   });
 });

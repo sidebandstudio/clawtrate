@@ -25,7 +25,7 @@ Copy and uncopy accept up to 32 distinct bots and a map of their expected `MEMOR
 
 The workspace lock serializes plugin writes. An outside writer can still change a file between its last check and publication. Mutations require the gateway to run with `FS_SAFE_NATIVE_MODE=require` and a filesystem supported by OpenClaw's native helper. Reads remain available without native mode. If a note mutation returns `details.unknown`, read the note again before retrying.
 
-A successful plugin write records the saver and content hash in the gateway's bounded plugin store. Reads omit `savedBy` because the pinned filesystem SDK returns no publication identity for the write. Successful `write` and `edit` tool receipts are observed as metadata, with no revision attached, since the gateway exposes the tool's path argument and no file hash. The store keeps up to 512 saver records across restarts. The event `plugin.clawtrate-memory.changed` carries an empty object when a plugin RPC changed or may have changed a file. The gateway runs file-tool observation outside the RPC broadcaster, so an observed tool save alone does not send this event.
+A successful plugin write records the saver and content hash in the gateway's bounded plugin store. Reads omit `savedBy` because the pinned filesystem SDK returns no publication identity for the write. Successful `write` and `edit` tool receipts are observed as metadata, with no revision attached, since the gateway exposes the tool's path argument and no file hash. The store keeps up to 512 saver records across restarts. The event `plugin.clawtrate-memory.changed` carries an empty object when a plugin RPC changed or may have changed a file. Tool receipts only update the saver store.
 
 ## What it needs
 
@@ -36,6 +36,8 @@ A successful plugin write records the saver and content hash in the gateway's bo
 ## Installing and checking it
 
 Run this from the checkout with the pinned OpenClaw on `PATH`. The development gateway loads the plugin from its own copy. The check uses the scripted model, configures a throwaway shared folder and opens paired operators at different scope tiers.
+
+Reserve `memplugin` for this check. The start command stops an existing tool-owned instance with that name and replaces all its state. Reset deletes the new state. Run these commands only if you can discard that instance.
 
 ```bash
 FS_SAFE_NATIVE_MODE=require pnpm dev-gateway start --instance memplugin --with-plugin clawtrate-memory --no-seed

@@ -172,19 +172,25 @@ export function registerMemory(api, sdk) {
     const workspaces = await Promise.all(
       locations.map((location) => sdk.canonicalPathFromExistingAncestor(location)),
     );
-    const folders = [];
+    const folders = new Map();
     for (const [location, candidate] of candidates) {
       try {
         const path = await sharedDirectory(state, location);
         if (workspaces.some((dir) => dir === path || inside(dir, path) || inside(path, dir))) {
           throw new Refusal("A shared folder overlaps a bot workspace");
         }
-        folders.push({ ...candidate, path, sharedRoot: sha256(path) });
+        const existing = folders.get(path);
+        if (existing) {
+          existing.rules.push(...candidate.rules);
+          for (const id of candidate.agents) existing.agents.add(id);
+        } else {
+          folders.set(path, { ...candidate, path, sharedRoot: sha256(path) });
+        }
       } catch (error) {
         if (!(error instanceof Refusal) && !missing(error)) throw error;
       }
     }
-    return folders;
+    return [...folders.values()];
   }
 
   async function folderFor(params, call) {
@@ -576,14 +582,15 @@ export function registerMemory(api, sdk) {
                 const updated = { ...call, config: latest, visible: access };
                 for (const [index, id] of params.agents.entries()) {
                   allowedAgent(id, updated);
+                  const result = data.results[index];
                   if (
-                    data.results[index].hash &&
+                    (result.hash || Object.hasOwn(result, "currentHash")) &&
                     api.runtime.agent.resolveAgentWorkspaceDir(config, id) !==
                       api.runtime.agent.resolveAgentWorkspaceDir(latest, id)
                   ) {
                     data.results[index] = {
                       agentId: id,
-                      unknown: true,
+                      ...(result.refused ? { refused: true } : { unknown: true }),
                       reason: "The bot's workspace changed. Read its root memory before retrying",
                     };
                   }
@@ -651,7 +658,6 @@ export function registerMemory(api, sdk) {
       if (!confirmed) return;
       // The hook gives an argument and a result, with no canonical target or revision.
       await remember(sha256(`${agentId}\0${path}`), { kind: "bot", agentId, sessionKey, path });
-      changed();
     },
     { matcher: ["write", "edit"] },
   );
