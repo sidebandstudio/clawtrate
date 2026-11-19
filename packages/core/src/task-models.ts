@@ -44,7 +44,13 @@ export type TaskModelChoice = { model: string | null; effort: string | null };
 /** One line in the conversation (25.4): a change saved, or refused. */
 export type TaskModelEvent = {
   id: string;
-  outcome: "changed" | "refused";
+  /**
+   * `changed`: the gateway's answer, or a read after it, shows the change;
+   * `refused`: the gateway answered with an error; `unconfirmed`: it accepted
+   * the request and its answer does not show (all of) the change, or no
+   * answer came, so what it has is read again.
+   */
+  outcome: "changed" | "refused" | "unconfirmed";
   /** When it was saved or refused, on this device's clock. */
   at: number;
   /**
@@ -89,6 +95,8 @@ export type TaskModelView = {
   /** A change made while a turn was active, saved once it settles. */
   held: (TaskModelChoice & { at: number; sessionId: string | null }) | null;
   saving: boolean;
+  /** What a save on its way asks for, shown as pending until the gateway answers (25.2). */
+  pending: TaskModelChoice | null;
   /** The last refusal, until the next change. */
   refused: { error: string; at: number } | null;
   events: TaskModelEvent[];
@@ -101,6 +109,7 @@ export const emptyTaskModel: TaskModelView = {
   models: [],
   held: null,
   saving: false,
+  pending: null,
   refused: null,
   events: [],
   requested: [],
@@ -125,6 +134,11 @@ export type TaskModelsContext = {
   applyRow(key: string, fields: RawRecord): void;
   /** Read the task list again, so the row shows what the gateway has. */
   refreshTasks(): void;
+  /**
+   * The gateway answered the request with an error (or it never left this
+   * client): a refusal. Any other error is an answer that did not come.
+   */
+  refusal(error: unknown): boolean;
   /** A held change was saved or refused: what waited behind it may start. */
   released(key: string): void;
   storage: KeyValueStore;
@@ -201,15 +215,25 @@ export function followingEffort(model: CatalogModel | undefined, was: string | n
 /** What the chip and the Details show (25.2): the held change over what the gateway has. */
 export function shownChoice(task: Task | null | undefined, view: TaskModelView | undefined) {
   const held = view?.held ?? null;
+  const pending = held ? null : (view?.pending ?? null);
   return {
-    model: held?.model ?? task?.model ?? null,
-    effort: held?.effort ?? rowEffort(task),
+    model: held?.model ?? pending?.model ?? task?.model ?? null,
+    effort: held?.effort ?? pending?.effort ?? rowEffort(task),
     held: held !== null,
+    pending: pending !== null,
   };
 }
 
 /** The words of a line (25.4). */
 export function taskModelLine(event: TaskModelEvent, word: (level: string) => string): string {
+  if (event.outcome === "unconfirmed") {
+    const what = event.model
+      ? `the model to ${event.model}${event.effort ? ` and the effort to ${word(event.effort)}` : ""}`
+      : event.effort
+        ? `the effort to ${word(event.effort)}`
+        : "the change";
+    return `Couldn't confirm the change of ${what}. Reading the task again.`;
+  }
   if (event.outcome === "refused") {
     const what = event.model
       ? `the model to ${event.model}`
@@ -236,7 +260,10 @@ function readEvent(value: unknown): TaskModelEvent | null {
   const raw = asRecord(value);
   if (!raw) return null;
   const id = shortId(raw.id);
-  const outcome = raw.outcome === "changed" || raw.outcome === "refused" ? raw.outcome : null;
+  const outcome =
+    raw.outcome === "changed" || raw.outcome === "refused" || raw.outcome === "unconfirmed"
+      ? raw.outcome
+      : null;
   const at = typeof raw.at === "number" && Number.isFinite(raw.at) ? raw.at : null;
   const after = typeof raw.after === "number" && Number.isFinite(raw.after) ? raw.after : null;
   if (!id || !outcome || at === null || after === null) return null;
@@ -308,6 +335,17 @@ export class TaskModelAccessError extends Error {
   constructor() {
     super("Changing this task's model needs a connection that can send.");
     this.name = "TaskModelAccessError";
+  }
+}
+
+/** How a save ended. */
+type SaveOutcome = "saved" | "unconfirmed" | "dropped" | { refused: string };
+
+/** The gateway refused the change; its reason is the message. */
+export class TaskModelRefusedError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "TaskModelRefusedError";
   }
 }
 
@@ -422,7 +460,10 @@ export class TaskModelsEngine {
    * turn of the task is active, otherwise held. Choosing what the task has
    * already lets go of a held change.
    */
-  async choose(key: string, choice: TaskModelChoice): Promise<"saved" | "held" | "unchanged"> {
+  async choose(
+    key: string,
+    choice: TaskModelChoice,
+  ): Promise<"saved" | "held" | "unchanged" | "unconfirmed"> {
     if (!this.ctx.canWrite()) throw new TaskModelAccessError();
     const task = this.ctx.task(key);
     const view = this.ctx.get()[key];
@@ -452,8 +493,9 @@ export class TaskModelsEngine {
       }));
       return "held";
     }
-    await this.save(key, desired, task.sessionId);
-    return "saved";
+    const outcome = await this.save(key, desired, task.sessionId);
+    if (typeof outcome === "object") throw new TaskModelRefusedError(outcome.refused);
+    return outcome === "dropped" ? "unchanged" : outcome;
   }
 
   /**
@@ -504,18 +546,22 @@ export class TaskModelsEngine {
     return this.saves.get(key) ?? Promise.resolve();
   }
 
-  private save(key: string, desired: TaskModelChoice, sessionId: string | null): Promise<void> {
-    const run = (async () => {
+  private save(
+    key: string,
+    desired: TaskModelChoice,
+    sessionId: string | null,
+  ): Promise<SaveOutcome> {
+    const run = (async (): Promise<SaveOutcome> => {
       const task = this.ctx.task(key);
       const view = this.ctx.get()[key];
       if (!task || !view) {
         // Gone since the change was held: dropped here, so nothing releases it again.
         this.drop(key);
-        return;
+        return "dropped";
       }
       const change = this.writes(task, view, desired);
       this.patch(key, (current) => ({ ...current, held: null, refused: null }));
-      if (!change.model && !change.effort) return;
+      if (!change.model && !change.effort) return "dropped";
       const wasModel = task.model ?? null;
       const wasEffort = rowEffort(task);
       const effort = desired.effort && desired.effort !== wasEffort ? desired.effort : null;
@@ -531,20 +577,31 @@ export class TaskModelsEngine {
       if (change.effort) params.thinkingLevel = change.effort;
       // A task replaced or removed meanwhile is refused, never made again (25.3).
       if (sessionId) params.expectedSessionId = sessionId;
-      this.patch(key, (current) => ({ ...current, saving: true }));
-      const event = (outcome: TaskModelEvent["outcome"], error: string | null): TaskModelEvent => ({
+      this.patch(key, (current) => ({
+        ...current,
+        saving: true,
+        pending: { model: change.model, effort },
+      }));
+      const event = (
+        outcome: TaskModelEvent["outcome"],
+        fields: TaskModelChoice,
+        error: string | null,
+      ): TaskModelEvent => ({
         id: this.ctx.randomId(),
         outcome,
         at: this.ctx.now(),
         after: this.ctx.lastTurnEnd(key) ?? this.ctx.now(),
-        model: change.model,
-        effort,
+        model: fields.model,
+        effort: fields.effort,
         wasModel,
         wasEffort,
-        followed,
+        followed: followed && fields.model !== null && fields.effort !== null,
         error,
         sessionId,
       });
+      let outcome: SaveOutcome;
+      const lines: TaskModelEvent[] = [];
+      let refused: { error: string; at: number } | null = null;
       try {
         await this.ctx.ensureWrite();
         let answer: RawRecord | null = null;
@@ -559,8 +616,16 @@ export class TaskModelsEngine {
             await (this.ctx.pause ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(wait);
           }
         }
+        // What the answer itself shows: the model it resolved, and the level it keeps or uses.
         const resolved = asRecord(answer?.resolved);
         const entry = asRecord(answer?.entry);
+        const answeredModel =
+          typeof resolved?.modelProvider === "string" && typeof resolved.model === "string"
+            ? `${resolved.modelProvider}/${resolved.model}`
+            : null;
+        const answeredLevels = [entry?.thinkingLevel, resolved?.thinkingLevel].filter(
+          (level): level is string => typeof level === "string",
+        );
         const fields: RawRecord = {};
         if (typeof resolved?.model === "string") fields.model = resolved.model;
         if (typeof resolved?.modelProvider === "string")
@@ -568,33 +633,54 @@ export class TaskModelsEngine {
         if (typeof entry?.thinkingLevel === "string") fields.thinkingLevel = entry.thinkingLevel;
         if (typeof entry?.sessionId === "string") fields.sessionId = entry.sessionId;
         this.ctx.applyRow(key, fields);
-        const saved = event("changed", null);
-        this.patch(key, (current) => ({
-          ...current,
-          saving: false,
-          events: mergeEvents(current.events, [saved]),
-        }));
+        const confirmed: TaskModelChoice = {
+          model: change.model && answeredModel === change.model ? change.model : null,
+          effort: effort && answeredLevels.includes(effort) ? effort : null,
+        };
+        const missing: TaskModelChoice = {
+          model: change.model && !confirmed.model ? change.model : null,
+          effort: effort && !confirmed.effort ? effort : null,
+        };
+        if (confirmed.model || confirmed.effort) lines.push(event("changed", confirmed, null));
+        if (missing.model || missing.effort) lines.push(event("unconfirmed", missing, null));
+        outcome = missing.model || missing.effort ? "unconfirmed" : "saved";
       } catch (error) {
         const reason = cut(errorText(error), MAX_TASK_MODEL_ERROR_CHARS);
-        this.ctx.log(`the change of ${key}'s model was not saved: ${reason}`);
-        const refused = event("refused", reason);
-        this.patch(key, (current) => ({
-          ...current,
-          saving: false,
-          refused: { error: reason, at: refused.at },
-          events: mergeEvents(current.events, [refused]),
-        }));
-        // What the gateway has now, whatever that is.
-        this.ctx.refreshTasks();
+        if (this.ctx.refusal(error)) {
+          this.ctx.log(`the change of ${key}'s model was refused: ${reason}`);
+          const line = event("refused", { model: change.model, effort }, reason);
+          lines.push(line);
+          refused = { error: reason, at: line.at };
+          outcome = { refused: reason };
+        } else {
+          // No answer: whether it landed is not known; the read below shows what the gateway has.
+          this.ctx.log(`the change of ${key}'s model was not confirmed: ${reason}`);
+          lines.push(event("unconfirmed", { model: change.model, effort }, null));
+          outcome = "unconfirmed";
+        }
       }
+      this.patch(key, (current) => ({
+        ...current,
+        saving: false,
+        pending: null,
+        refused,
+        events: mergeEvents(current.events, lines),
+      }));
+      // What the gateway has now, whatever the answer was.
+      this.ctx.refreshTasks();
       this.persist(key);
       void this.readCatalog(key);
+      return outcome;
     })();
     const tracked = run.finally(() => {
-      if (this.saves.get(key) === tracked) this.saves.delete(key);
+      if (this.saves.get(key) === done) this.saves.delete(key);
       this.ctx.released(key);
     });
-    this.saves.set(key, tracked);
+    const done = tracked.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.saves.set(key, done);
     return tracked;
   }
 

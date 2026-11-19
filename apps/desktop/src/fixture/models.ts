@@ -131,6 +131,7 @@ function view(state: ClawtrateState, change: Partial<TaskModelView>): TaskModelV
     models: FIXTURE_MODELS,
     held: null,
     saving: false,
+    pending: null,
     refused: null,
     events: [],
     requested: runs

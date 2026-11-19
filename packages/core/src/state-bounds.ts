@@ -37,6 +37,7 @@ import {
   MAX_TASK_MODEL_ID_CHARS,
   MAX_TASK_MODELS,
   type RequestedEffort,
+  type TaskModelChoice,
   type TaskModelEvent,
   type TaskModelView,
 } from "./task-models.ts";
@@ -910,6 +911,7 @@ export const TASK_MODEL: Bound = object<TaskModelView>()({
     sessionId: ID,
   }),
   saving: FLAG,
+  pending: object<TaskModelChoice>()({ model: taskModelId, effort: taskModelId }),
   refused: object<NonNullable<TaskModelView["refused"]>>()({
     error: text(MAX_TASK_MODEL_ERROR_CHARS),
     at: NUMBER,

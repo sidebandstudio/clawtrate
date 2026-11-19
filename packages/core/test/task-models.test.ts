@@ -7,6 +7,7 @@ import {
   followingEffort,
   shownChoice,
   TaskModelAccessError,
+  TaskModelRefusedError,
   TaskModelsEngine,
   taskModelLine,
   type TaskModelsContext,
@@ -64,6 +65,9 @@ const listAnswer = (selected: string | null = null) => ({
     ? { kind: "shared", authProfileId: selected, source: "user" }
     : { kind: "automatic" },
 });
+/** An answer that never came, as a timeout or a dropped connection gives. */
+class LostAnswer extends Error {}
+
 const word = (level: string) => level[0]!.toUpperCase() + level.slice(1);
 
 /** An engine over a plain context: what it asks the gateway, and what it changes. */
@@ -105,13 +109,22 @@ function rig(options: { task?: Partial<Task>; active?: boolean; write?: boolean 
             sessionId: "session-1",
             ...(p.thinkingLevel ? { thinkingLevel: p.thinkingLevel } : {}),
           },
-          resolved: ref
-            ? { modelProvider: ref.split("/")[0], model: ref.split("/")[1] }
-            : { modelProvider: "acme", model: task.model!.split("/")[1] },
+          // As the gateway answers: the model it resolved and the level the task now uses.
+          resolved: {
+            ...(ref
+              ? { modelProvider: ref.split("/")[0], model: ref.split("/")[1] }
+              : { modelProvider: "acme", model: task.model!.split("/")[1] }),
+            thinkingLevel:
+              p.thinkingLevel ??
+              task.effort ??
+              MODELS.find((m) => `${m.provider}/${m.id}` === (ref ?? task.model))?.defaultLevel ??
+              "low",
+          },
         };
       }
       return {};
     },
+    refusal: (error) => !(error instanceof LostAnswer),
     get: () => views,
     update: (change) => {
       views = change(views);
@@ -233,6 +246,7 @@ describe("a task's model and effort", () => {
       model: "acme/dev-2",
       effort: "low",
       held: true,
+      pending: false,
     });
     // Choosing an effort too joins the held change.
     await r.engine.choose(KEY, { model: null, effort: "high" });
@@ -313,7 +327,10 @@ describe("a task's model and effort", () => {
     const r = rig();
     await opened(r);
     r.state.refuse = 'thinkingLevel "high" is not supported for acme/dev-lite (use off|ultra)';
-    await r.engine.choose(KEY, { model: null, effort: "high" });
+    await expect(r.engine.choose(KEY, { model: null, effort: "high" })).rejects.toBeInstanceOf(
+      TaskModelRefusedError,
+    );
+    expect(r.view().events.some((each) => each.outcome === "changed")).toBe(false);
     expect(r.task().effort).toBeUndefined();
     expect(r.view().refused?.error).toContain("is not supported for acme/dev-lite");
     const line = r.view().events[0]!;
@@ -322,6 +339,82 @@ describe("a task's model and effort", () => {
       `Couldn't change the effort to High: thinkingLevel "high" is not supported for acme/dev-lite (use off|ultra)`,
     );
     expect(r.state.refreshed).toBe(1);
+  });
+
+  it("F-042 F-043: an accepted answer that does not show the change posts no change line, says it could not confirm it and reads the task again", async () => {
+    const r = rig();
+    await opened(r);
+    r.ctx.request = async (method, params) => {
+      r.requests.push({ method, params: params as Record<string, unknown> });
+      if (method === "models.list") return listAnswer();
+      // Accepted, and the gateway still has dev-1 at Low.
+      return {
+        ok: true,
+        entry: { sessionId: "session-1", thinkingLevel: "low" },
+        resolved: { modelProvider: "acme", model: "dev-1", thinkingLevel: "low" },
+      };
+    };
+    await expect(r.engine.choose(KEY, { model: "acme/dev-2", effort: "high" })).resolves.toBe(
+      "unconfirmed",
+    );
+    expect(r.view().events.map((each) => each.outcome)).toEqual(["unconfirmed"]);
+    expect(taskModelLine(r.view().events[0]!, word)).toBe(
+      "Couldn't confirm the change of the model to acme/dev-2 and the effort to High. Reading the task again.",
+    );
+    expect(r.state.refreshed).toBe(1);
+  });
+
+  it("F-042 F-043: a line names only what the answer confirms", async () => {
+    const r = rig();
+    await opened(r);
+    r.ctx.request = async (method, params) => {
+      r.requests.push({ method, params: params as Record<string, unknown> });
+      if (method === "models.list") return listAnswer();
+      return {
+        ok: true,
+        entry: { sessionId: "session-1" },
+        resolved: { modelProvider: "acme", model: "dev-2", thinkingLevel: "low" },
+      };
+    };
+    await r.engine.choose(KEY, { model: "acme/dev-2", effort: "high" });
+    expect(r.view().events.map((each) => [each.outcome, each.model, each.effort])).toEqual([
+      ["changed", "acme/dev-2", null],
+      ["unconfirmed", null, "high"],
+    ]);
+  });
+
+  it("F-042: an answer that never comes is said as not confirmed, followed by a read", async () => {
+    const r = rig();
+    await opened(r);
+    r.ctx.request = async (method, params) => {
+      r.requests.push({ method, params: params as Record<string, unknown> });
+      if (method === "models.list") return listAnswer();
+      throw new LostAnswer("timed out");
+    };
+    await expect(r.engine.choose(KEY, { model: "acme/dev-2", effort: null })).resolves.toBe(
+      "unconfirmed",
+    );
+    expect(r.view().events.map((each) => each.outcome)).toEqual(["unconfirmed"]);
+    expect(r.view().refused).toBeNull();
+    expect(r.state.refreshed).toBe(1);
+  });
+
+  it("F-042: while a save is on its way the chosen value is shown as pending", async () => {
+    const r = rig();
+    await opened(r);
+    let answer!: () => void;
+    const request = r.ctx.request;
+    r.ctx.request = async (method, params) => {
+      if (method === "sessions.patch") await new Promise<void>((resolve) => (answer = resolve));
+      return request(method, params);
+    };
+    const saving = r.engine.choose(KEY, { model: "acme/dev-2", effort: null });
+    await until(() => r.view().saving);
+    expect(shownChoice(r.task(), r.view())).toMatchObject({ model: "acme/dev-2", pending: true });
+    answer();
+    await saving;
+    expect(r.view().pending).toBeNull();
+    expect(shownChoice(r.task(), r.view())).toMatchObject({ model: "acme/dev-2", pending: false });
   });
 
   it("F-045: a save the gateway answers as retryable, as a turn ends, is sent again; any other refusal is not", async () => {
@@ -346,7 +439,9 @@ describe("a task's model and effort", () => {
     expect(r.view().events.at(-1)?.outcome).toBe("changed");
     // A refusal that is not retryable is said at once.
     r.state.refuse = "not this one";
-    await r.engine.choose(KEY, { model: null, effort: "high" });
+    await expect(r.engine.choose(KEY, { model: null, effort: "high" })).rejects.toThrow(
+      "not this one",
+    );
     expect(r.patches()).toHaveLength(4);
     expect(r.view().events.at(-1)?.outcome).toBe("refused");
   });
@@ -521,8 +616,9 @@ describe("the client around a task's model", () => {
   it("F-045: a refused change leaves a line with the gateway's reason", async () => {
     const { client, gateway } = await openTask({ gateway: gatewayWithTask() });
     await until(() => client.state.taskModels[KEY]?.catalog === "ready");
-    await client.setTaskModel(KEY, null, "ultra");
+    await expect(client.setTaskModel(KEY, null, "ultra")).rejects.toThrow("not this one");
     expect(gateway.calls("sessions.patch")).toHaveLength(1);
+    expect(client.state.taskModels[KEY]?.events.map((each) => each.outcome)).toEqual(["refused"]);
     expect(client.state.taskModels[KEY]?.events[0]).toMatchObject({
       outcome: "refused",
       effort: "ultra",

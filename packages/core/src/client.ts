@@ -849,6 +849,8 @@ export class ClawtrateClient {
     ensureWrite: () => this.ensureScope(WRITE_SCOPE),
     applyRow: (key, fields) => this.applyRowFields(key, fields),
     refreshTasks: () => this.scheduleRefresh(this.generation),
+    refusal: (error) =>
+      error instanceof GatewayProtocolRequestError || error instanceof NotSentError,
     released: (key) => this.afterActivity(key),
     storage: {
       get: (key) => this.host.storage.get(key),
@@ -3572,7 +3574,7 @@ export class ClawtrateClient {
     key: string,
     model: string | null,
     effort: string | null,
-  ): Promise<"saved" | "held" | "unchanged"> {
+  ): Promise<"saved" | "held" | "unchanged" | "unconfirmed"> {
     return this.taskModels.choose(key, { model, effort });
   }
 

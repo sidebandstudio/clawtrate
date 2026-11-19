@@ -41,6 +41,7 @@ function useTaskModel(task: Task, announce: (text: string) => void) {
           effort: choice.effort,
         });
         if (outcome === "held") announce("Held until this turn ends");
+        else if (outcome === "unconfirmed") announce("Couldn't confirm the change");
         else if (outcome === "saved")
           announce(choice.model ? "Model changed for this task" : "Effort changed for this task");
       } catch {
@@ -121,6 +122,7 @@ function chipName(shown: ReturnType<typeof shownChoice>, interactive: boolean): 
   return (
     `Model for this task: ${shown.model}, ${levelWord(shown.effort)} effort.` +
     (shown.held ? " Held until this turn ends." : "") +
+    (shown.pending ? " Saving." : "") +
     (interactive ? " Change." : "")
   );
 }
@@ -334,7 +336,9 @@ function lineDetail(event: TaskModelEvent): string {
   const when =
     event.outcome === "refused"
       ? `Refused at ${clock(event.at)}.`
-      : `Changed at ${clock(event.at)} on this device.`;
+      : event.outcome === "unconfirmed"
+        ? `Sent at ${clock(event.at)} from this device; the gateway's answer did not show it.`
+        : `Changed at ${clock(event.at)} on this device.`;
   return `${followed}${was} ${when}`.trim();
 }
 
@@ -346,12 +350,12 @@ export function TaskModelLine({ event }: { event: TaskModelEvent }) {
     <p
       className="event-line model-line"
       data-side="center"
-      data-tone={event.outcome === "refused" ? "warn" : undefined}
+      data-tone={event.outcome === "changed" ? undefined : "warn"}
       data-testid="model-line"
       title={detail}
       aria-label={`${text}. ${detail}`}
     >
-      {event.outcome === "refused" && <WarnIcon />}
+      {event.outcome !== "changed" && <WarnIcon />}
       {text}
     </p>
   );

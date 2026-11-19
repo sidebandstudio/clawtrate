@@ -232,7 +232,7 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                       : C extends { type: "listArchived" }
                                         ? ArchivedList
                                         : C extends { type: "setTaskModel" }
-                                          ? "saved" | "held" | "unchanged"
+                                          ? "saved" | "held" | "unchanged" | "unconfirmed"
                                           : void;
 
 export type HostInfo = {
