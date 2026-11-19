@@ -4,6 +4,7 @@
 
 import { createContext, useContext } from "react";
 import { readView, viewKeys, writeView } from "../actions/view-state.ts";
+import { markTranscriptNavigation } from "../reading-line.ts";
 
 /** What "Open file" asks the pane to show. */
 export type FileRequest = {
@@ -93,6 +94,7 @@ export function revealStep(taskKey: string, callId: string): boolean {
       if (scroller) {
         const band = 100;
         const top = step.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+        markTranscriptNavigation(scroller);
         scroller.scrollTop += top - band;
       }
       step.dataset.flash = "true";

@@ -28,6 +28,7 @@ import { useCardEnv } from "../cards/context.tsx";
 import { ChevronIcon } from "../icons.tsx";
 import { actionDomId, rawContentOf, ThoughtLine, useActionEnv } from "./ActionCards.tsx";
 import { onSummaryClick, readView, useView, viewKeys, writeView } from "./view-state.ts";
+import { markTranscriptNavigation } from "../reading-line.ts";
 
 const W = actionWords.T3_WORDS;
 
@@ -537,11 +538,13 @@ export function showThread(taskKey: string, headId: string, callId: string): boo
     card.open = true;
     // A call of its own is no item of the thread it asked for: the card's line takes focus.
     if (!item) {
+      markTranscriptNavigation(card);
       card.scrollIntoView({ block: "nearest" });
       card.querySelector<HTMLElement>(":scope > summary")?.focus({ preventScroll: true });
       return;
     }
     item.open = true;
+    markTranscriptNavigation(item);
     item.scrollIntoView({ block: "nearest" });
     item.querySelector<HTMLElement>(":scope > summary")?.focus({ preventScroll: true });
   };
@@ -555,6 +558,7 @@ export function showWhereItHappened(callId: string): void {
     `.card.action[data-call="${CSS.escape(callId)}"]`,
   );
   if (!line) return;
+  markTranscriptNavigation(line);
   line.scrollIntoView({ block: "nearest" });
   line.querySelector<HTMLElement>(":scope > summary")?.focus({ preventScroll: true });
 }

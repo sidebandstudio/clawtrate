@@ -32,6 +32,7 @@ import { cardDomId, placeCards, type CardRef } from "./placement.ts";
 import { QuestionCardView } from "./QuestionCard.tsx";
 import { useCards } from "./useCards.ts";
 import "./cards.css";
+import { markTranscriptNavigation } from "../reading-line.ts";
 
 type Scope = {
   placement: ReturnType<typeof placeCards>;
@@ -132,6 +133,7 @@ export function CardScope({
       );
       if (!element) return false;
       element.open = true;
+      markTranscriptNavigation(element);
       element.scrollIntoView({ block: "center" });
       element.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
       return true;
@@ -160,9 +162,13 @@ export function CardScope({
       element.open = true;
       const scroller = element.closest<HTMLElement>('[data-testid="transcript"]');
       if (scroller && back.scrollTop !== null) {
+        markTranscriptNavigation(scroller);
         scroller.scrollTop = back.scrollTop;
         scroller.dispatchEvent(new Event("scroll"));
-      } else element.scrollIntoView({ block: "center" });
+      } else {
+        markTranscriptNavigation(element);
+        element.scrollIntoView({ block: "center" });
+      }
       const button = [...element.querySelectorAll<HTMLButtonElement>(".card-actions button")].find(
         (each) => each.textContent?.startsWith("Open in"),
       );
@@ -196,6 +202,7 @@ export function CardScope({
 export function focusPending(ref: CardRef): void {
   const element = document.getElementById(cardDomId(ref));
   if (!element) return;
+  markTranscriptNavigation(element);
   element.scrollIntoView({ block: "nearest" });
   const first =
     ref.kind === "question" ? element.querySelector<HTMLElement>('.option[tabindex="0"]') : null;

@@ -61,6 +61,7 @@ import {
   type ActionEnv,
 } from "./ActionCards.tsx";
 import { T3FeedContext, T3ThreadCard, type T3Feed, type T3ThreadInfo } from "./T3Thread.tsx";
+import { markTranscriptNavigation } from "../reading-line.ts";
 
 /** What a non-action entry of a record is. */
 export type FeedRef =
@@ -967,6 +968,7 @@ export function showAction(callId: string, root: ParentNode = document): boolean
   if (!element) return false;
   const fold = element.closest<HTMLDetailsElement>(".action[data-fold]");
   const line = fold && !fold.open ? fold : element;
+  markTranscriptNavigation(line);
   line.scrollIntoView({ block: "nearest" });
   line.querySelector<HTMLElement>(":scope > summary")?.focus({ preventScroll: true });
   return true;

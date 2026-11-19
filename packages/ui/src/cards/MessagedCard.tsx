@@ -30,6 +30,7 @@ import {
   type RawContent,
 } from "./parts.tsx";
 import type { StepRawState } from "./useCards.ts";
+import { markTranscriptNavigation } from "../reading-line.ts";
 
 /** A bot for an avatar: the listed one, or one drawn from its id. */
 function botFor(bots: Bot[], id: string | null, name: string): Bot {
@@ -598,6 +599,7 @@ export function focusCard(domId: string): void {
   const element = document.getElementById(domId);
   if (!element) return;
   if (element instanceof HTMLDetailsElement) element.open = true;
+  markTranscriptNavigation(element);
   element.scrollIntoView({ block: "nearest" });
   const target =
     element instanceof HTMLDetailsElement

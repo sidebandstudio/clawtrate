@@ -18,6 +18,7 @@ import {
   useState,
   type ReactNode,
   type RefObject,
+  type UIEvent,
 } from "react";
 import { AccessBar } from "./AccessBar.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
@@ -191,12 +192,29 @@ function useHoldPlace(
       if (own && !following.current) hold();
       record();
     };
+    // A change of content that moves the reading line without changing any size (a box above
+    // growing as much as one below shrinks) is held too.
+    const contentChange = new MutationObserver(() => {
+      if (following.current) return;
+      hold();
+      record();
+    });
     record();
     observer.observe(element);
-    if (element.firstElementChild) observer.observe(element.firstElementChild);
+    if (element.firstElementChild) {
+      observer.observe(element.firstElementChild);
+      contentChange.observe(element.firstElementChild, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ["open", "class", "style", "hidden"],
+      });
+    }
     element.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       observer.disconnect();
+      contentChange.disconnect();
       element.removeEventListener("scroll", onScroll);
     };
   }, [scroller, following, toEnd]);
@@ -243,6 +261,19 @@ function TranscriptView({
     followTop.current = element.scrollTop;
   }, []);
 
+  // The reader's own input, or a jump the page makes for them, marks the next scroll as theirs
+  // for a moment. A scroll without it is a layout pass, which never stops following.
+  const scrollIntentUntil = useRef(0);
+  const markScrollIntent = useCallback(() => {
+    scrollIntentUntil.current = performance.now() + 750;
+  }, []);
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+    element.addEventListener("clawtrate:transcript-navigation", markScrollIntent);
+    return () => element.removeEventListener("clawtrate:transcript-navigation", markScrollIntent);
+  }, [markScrollIntent]);
+
   // What the reader has just opened stays in view (section 18): following the
   // end never pushes the line of a card, a fold or a row they opened above the
   // top of the view. That line is held at the top instead, and the reader is
@@ -279,19 +310,26 @@ function TranscriptView({
     setAtEnd(false);
   }, [toEnd]);
 
-  const onScroll = useCallback(() => {
-    const element = scroller.current;
-    if (!element) return;
-    const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
-    const kept =
-      following.current && followTop.current !== null && element.scrollTop >= followTop.current - 1;
-    const near = kept || distance < NEAR_BOTTOM_PX;
-    if (kept && distance > 1) toEnd();
-    else followTop.current = near ? element.scrollTop : null;
-    following.current = near;
-    setAtEnd(near);
-    if (near) setSeenSize(contentSize);
-  }, [contentSize, toEnd]);
+  const onScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      const element = scroller.current;
+      if (!element) return;
+      const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+      const readerMoved =
+        !event.nativeEvent.isTrusted || performance.now() <= scrollIntentUntil.current;
+      const kept =
+        following.current &&
+        followTop.current !== null &&
+        (!readerMoved || element.scrollTop >= followTop.current - 1);
+      const near = kept || distance < NEAR_BOTTOM_PX;
+      if (kept && distance > 1) toEnd();
+      else followTop.current = near ? element.scrollTop : null;
+      following.current = near;
+      setAtEnd(near);
+      if (near) setSeenSize(contentSize);
+    },
+    [contentSize, toEnd],
+  );
 
   const jumpToLatest = useCallback(() => {
     following.current = true;
@@ -351,6 +389,20 @@ function TranscriptView({
         className="transcript"
         ref={scroller}
         onScroll={onScroll}
+        onWheelCapture={(event) => {
+          if (event.deltaY < 0) markScrollIntent();
+        }}
+        onTouchMoveCapture={markScrollIntent}
+        onPointerDownCapture={(event) => {
+          if (event.target === event.currentTarget) markScrollIntent();
+        }}
+        onKeyDownCapture={(event) => {
+          if (
+            ["ArrowUp", "PageUp", "Home"].includes(event.key) ||
+            (event.shiftKey && event.key === " ")
+          )
+            markScrollIntent();
+        }}
         tabIndex={0}
         role="region"
         aria-label="Transcript"
