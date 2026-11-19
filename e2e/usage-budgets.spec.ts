@@ -119,6 +119,31 @@ async function gatewayTotal(
   }
 }
 
+/**
+ * Wait until the gateway's task aggregate (`sessions.usage` `totals`) and its total
+ * (`usage.cost`) agree for a period: the page shows task and source figures only then.
+ */
+async function gatewayAgrees(botId: string | null, period: UsagePeriod) {
+  const range = rangeFor(period, Date.now(), timeZone);
+  const scope = botId ? { agentId: botId } : { agentScope: "all" };
+  await expect
+    .poll(
+      async () => {
+        const [cost, tasks] = await Promise.all([
+          gateway.request<{ totals: Json }>("usage.cost", { ...scope, ...rangeParams(range) }),
+          gateway.request<{ totals?: Json }>("sessions.usage", {
+            ...scope,
+            ...rangeParams(range),
+            limit: 200,
+          }),
+        ]);
+        return Number(tasks.totals?.totalTokens) === Number(cost.totals.totalTokens);
+      },
+      { timeout: 90_000, intervals: [2_000] },
+    )
+    .toBe(true);
+}
+
 const n = (text: string | null) => Number((text ?? "").replace(/[^\d]/g, ""));
 
 async function startOwnHost(readOnly = false): Promise<Host> {
@@ -312,6 +337,7 @@ test("F-232 F-237: a bot's Usage page shows the gateway's own totals for each pe
     ["Today", "today"],
     ["30 days", "month"],
   ] as const) {
+    await gatewayAgrees("otto", period);
     await page.getByTestId("usage-page").getByRole("radio", { name: choice }).click();
     const expected = await gatewayTotal("otto", period);
     expect(expected.counting, "the gateway finished counting").toBe(false);
@@ -354,6 +380,7 @@ test("F-232 F-237: a bot's Usage page shows the gateway's own totals for each pe
       .locator("dd"),
   ).toHaveText(`${Number(largest.usage!.totalTokens).toLocaleString("en-US")} tokens`);
   // Settings → Usage: every bot's bar is that bot's own total, and the sum the gateway's.
+  await gatewayAgrees(null, "week");
   await page.keyboard.press("ControlOrMeta+,");
   const settings = page.getByRole("dialog", { name: "Settings" });
   await settings.getByRole("button", { name: "Usage", exact: true }).click();
@@ -496,6 +523,7 @@ async function settledWeek(bot: string, botId: string, since: number) {
       intervals: [2_000],
     })
     .toBe(true);
+  await gatewayAgrees(botId, "week");
   await usagePage(page, bot);
   await page.getByTestId("usage-page").getByRole("radio", { name: "This week" }).click();
   await expect(page.getByTestId("usage-source")).not.toContainText("still being counted", {

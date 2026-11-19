@@ -556,6 +556,7 @@ export class UsageEngine {
       const listed = asRecord(
         await ask("sessions.usage", { ...scope, ...params, limit: SESSIONS_LIMIT }),
       );
+      const listedTotal = asRecord(listed?.totals)?.totalTokens;
       const tasks = tasksOf(listed);
       report.tasks = tasks.slice(0, MAX_REPORT_TASKS);
       report.tasksOmitted = Math.max(0, tasks.length - MAX_REPORT_TASKS);
@@ -563,6 +564,12 @@ export class UsageEngine {
         Array.isArray(listed?.sessions) && listed.sessions.length >= SESSIONS_LIMIT;
       report.detailCounting =
         stillCounting(listed?.cacheStatus) || tasks.some((task) => task.computing);
+      if (typeof listedTotal !== "number" || listedTotal !== figure.tokens.total) {
+        report.tasks = null;
+        report.detailError =
+          "The tasks' records and the gateway's total don't agree yet, so the task and source figures aren't shown.";
+        return report;
+      }
       const counting =
         figure.counting ||
         report.detailCounting ||

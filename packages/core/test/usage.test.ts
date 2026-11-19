@@ -530,6 +530,17 @@ function fakeGateway(options: { identity?: boolean; meddle?: number; counting?: 
       assistant("p1", T + 4),
     ],
   };
+  /** A bot's (or every bot's) total for the range asked, the same in each of the gateway's answers. */
+  const total = (params: Record<string, unknown>) => {
+    const week = params.startDate !== params.endDate;
+    const byAgent: Record<string, number> = {
+      marlow: week ? 1700 : 900,
+      otto: week ? 1800 : 1800,
+      pip: 600,
+      all: 4100,
+    };
+    return byAgent[(params.agentId as string | undefined) ?? "all"] ?? 0;
+  };
   const request = async (method: string, raw: unknown): Promise<unknown> => {
     const params = (raw ?? {}) as Record<string, unknown>;
     calls.push({ method, params });
@@ -553,24 +564,17 @@ function fakeGateway(options: { identity?: boolean; meddle?: number; counting?: 
         prefs = (params.entries as Record<string, unknown>)[BUDGETS_PREF_KEY];
         return { status: "ok" };
       }
-      case "usage.cost": {
-        const agent = params.agentId ?? "all";
-        const week = params.startDate !== params.endDate;
-        const byAgent: Record<string, number> = {
-          marlow: week ? 1700 : 900,
-          otto: week ? 1800 : 1800,
-          pip: 600,
-          all: 4100,
-        };
+      case "usage.cost":
         return {
           updatedAt: 4242,
-          totals: totals(byAgent[agent as string] ?? 0, 0),
+          totals: totals(total(params), 0),
           cacheStatus: options.counting ? { status: "refreshing", pendingFiles: 3 } : fresh,
         };
-      }
       case "sessions.usage":
         return {
           updatedAt: 4343,
+          // The aggregate over every matching task: the same as the headline in this snapshot.
+          totals: totals(total(params), 0),
           sessions:
             params.agentId === "otto"
               ? [
@@ -1090,6 +1094,38 @@ describe("the usage engine", () => {
       partial: true,
     });
     two.engine.onClose();
+    // The opposite: a settled 400-token headline beside a settled aggregate of 500 over tasks of
+    // 450 and 50. Neither the tasks nor the sources are shown.
+    const gateway3 = fakeGateway();
+    const apart3: typeof gateway3.request = async (method, raw) => {
+      if (method === "usage.cost")
+        return { updatedAt: 1, totals: totals(240, 160), cacheStatus: fresh };
+      if (method === "sessions.usage")
+        return {
+          updatedAt: 1,
+          cacheStatus: fresh,
+          totals: totals(300, 200),
+          sessions: [
+            { key: "agent:otto:cron:job1", usage: totals(30, 20) },
+            { key: "agent:otto:main", usage: totals(270, 180) },
+          ],
+        };
+      return gateway3.request(method, raw);
+    };
+    const three = engineOn({ ...gateway3, request: apart3 });
+    const opposite = await reportOf(three.engine, {
+      botId: "otto",
+      period: "week",
+      timeZone: NY,
+      detail: true,
+      bots: [],
+    });
+    // The headline is still the gateway's figure for its own answer.
+    expect(opposite.figure.tokens.total).toBe(400);
+    expect(opposite.tasks).toBeNull();
+    expect(opposite.sources).toBeNull();
+    expect(opposite.detailError).toMatch(/don't agree yet/);
+    three.engine.onClose();
   });
 
   it("F-237: a task list the gateway capped says so, and the sources read from it are partial", async () => {
@@ -1100,6 +1136,7 @@ describe("the usage engine", () => {
       return {
         updatedAt: 1,
         cacheStatus: fresh,
+        totals: totals(1700, 0),
         sessions: Array.from({ length: limit }, (_, i) => ({
           key: `agent:marlow:task-${i}`,
           usage: totals(i < 10 ? 1 : 0, 0),
