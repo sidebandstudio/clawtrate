@@ -200,7 +200,7 @@ pnpm package:mac      # Clawtrate.app, a .dmg and a .zip for Apple silicon and I
 pnpm check:packaged   # launches the packaged app and pairs it with a development gateway of its own
 ```
 
-`pnpm package:win` builds an x64 installer on Windows. The builds are unsigned unless signing variables are set. [CONTRIBUTING.md](CONTRIBUTING.md) explains signing and how to open an unsigned build. A packaged app does not offer the development gateway.
+`pnpm package:win` builds an x64 installer on Windows; CI installs it, runs the launch check against the installed app and uninstalls it. The builds are unsigned unless signing variables are set. [CONTRIBUTING.md](CONTRIBUTING.md) explains signing and how to open an unsigned build. A packaged app does not offer the development gateway.
 
 ## Checks
 
