@@ -5,12 +5,13 @@
 // screens and the host's confirmations call it.
 
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 
 import { MAX_SSH_CAPTURES, MAX_SSH_FORWARDS } from "@clawtrate/core";
 
+import { createOwn, readOwn, removeOwn, secureDir, UnsafeAppFile, writeOwn } from "./app-files.ts";
 import {
   accountText,
   isGatewayPort,
@@ -188,8 +189,7 @@ export class SshTransport {
     this.world = world;
     this.processes = new ProcessTable(options.spawn);
     this.now = options.now ?? Date.now;
-    mkdirSync(world.appDir, { recursive: true, mode: 0o700 });
-    if (world.platform !== "win32") chmodSync(world.appDir, 0o700);
+    secureDir(world.appDir);
     this.known = new AppKnownHosts(join(world.appDir, "known_hosts"));
   }
 
@@ -221,7 +221,7 @@ export class SshTransport {
   }
 
   /** A route from what was typed, or the refusal that names why not. Writes the route's files. */
-  prepareRoute(
+  private prepareRouteInner(
     routeId: string,
     typed: unknown,
   ): (Route & { ok: true }) | ConfigRefusal | InvalidDestination {
@@ -263,7 +263,7 @@ export class SshTransport {
   private writeConfigs(route: Route): void {
     for (const purpose of ["normal", "lookup"] as const) {
       const text = routeConfigText(route.id, route.target, this.world, this.known.path, purpose);
-      writeFileSync(this.configPath(route, purpose), text, { mode: 0o600 });
+      writeOwn(this.configPath(route, purpose), text);
     }
   }
 
@@ -316,7 +316,7 @@ export class SshTransport {
    * already trusts, first contact, or changed. A key is captured without
    * signing in; a changed key is never replaced here.
    */
-  async checkHostKey(route: Route): Promise<HostKeyCheck | Failed | NotSupportedHere> {
+  private async checkHostKeyInner(route: Route): Promise<HostKeyCheck | Failed | NotSupportedHere> {
     const client = await this.checkClient();
     if (!client.ok) return client;
     const pin = this.known.get(route.alias);
@@ -416,14 +416,11 @@ export class SshTransport {
     const file = join(this.world.appDir, `capture-${id}`);
     // The capture has a configuration of its own, so that its file's path is a quoted value, never split.
     const config = join(this.world.appDir, `capture-${id}.conf`);
-    writeFileSync(file, "", { mode: 0o600, flag: "wx" });
+    createOwn(file, "");
     try {
-      writeFileSync(config, routeConfigText(route.id, route.target, this.world, file, "capture"), {
-        mode: 0o600,
-        flag: "wx",
-      });
+      createOwn(config, routeConfigText(route.id, route.target, this.world, file, "capture"));
       const { run } = await this.probe(config, route.alias);
-      const lines = readFileSync(file, "utf8")
+      const lines = (readOwn(file, 64 * 1024) ?? "")
         .split("\n")
         .filter((line) => line.trim() !== "");
       const parsed = lines.length === 1 ? parseKnownHostsLine(lines[0]!) : null;
@@ -444,8 +441,8 @@ export class SshTransport {
       this.keepCapture(capture);
       return { ok: true, capture };
     } finally {
-      rmSync(file, { force: true });
-      rmSync(config, { force: true });
+      removeOwn(file);
+      removeOwn(config);
     }
   }
 
@@ -480,7 +477,7 @@ export class SshTransport {
   }
 
   /** After the host's confirmation: pins exactly the bytes captured at first contact. */
-  trustCapturedKey(route: Route, captureId: string): PinResult {
+  private trustInner(route: Route, captureId: string): PinResult {
     if (this.known.get(route.alias)) return { ok: false, kind: "already-pinned" };
     const capture = this.takeCapture(route, captureId, false);
     if (!capture) return { ok: false, kind: "no-such-capture" };
@@ -495,7 +492,7 @@ export class SshTransport {
   }
 
   /** After the host's confirmation with its checkbox: replaces a changed key by the one captured. */
-  replaceTrustedKey(route: Route, captureId: string): PinResult {
+  private replaceInner(route: Route, captureId: string): PinResult {
     if (!this.known.get(route.alias)) return { ok: false, kind: "nothing-to-replace" };
     const capture = this.takeCapture(route, captureId, true);
     if (!capture) return { ok: false, kind: "no-such-capture" };
@@ -510,7 +507,10 @@ export class SshTransport {
   }
 
   /** Runs the LOOK script through the pinned connection, and returns its facts. */
-  async look(route: Route, options: { signal?: AbortSignal } = {}): Promise<LookResult> {
+  private async lookInner(
+    route: Route,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<LookResult> {
     const client = await this.checkClient();
     if (!client.ok) return client;
     if (!this.known.get(route.alias)) return { ok: false, kind: "not-pinned" };
@@ -615,15 +615,76 @@ export class SshTransport {
   }
 
   /** Forgets the route: its pin and its files. Its forwards must be closed first. */
-  forget(route: Route): void {
+  private forgetInner(route: Route): void {
     this.known.remove(route.alias);
-    for (const purpose of ["normal", "lookup"] as const)
-      rmSync(this.configPath(route, purpose), { force: true });
+    for (const purpose of ["normal", "lookup"] as const) removeOwn(this.configPath(route, purpose));
+  }
+
+  /** A route from what was typed, or the refusal that names why not. Writes the route's files. */
+  prepareRoute(
+    routeId: string,
+    typed: unknown,
+  ): (Route & { ok: true }) | ConfigRefusal | InvalidDestination | AppFilesUnsafe {
+    return guarded(() => this.prepareRouteInner(routeId, typed));
+  }
+
+  /**
+   * Where the route's host key stands: pinned, pinned now from a key the person
+   * already trusts, first contact, or changed. A key is captured without
+   * signing in; a changed key is never replaced here.
+   */
+  checkHostKey(route: Route): Promise<HostKeyCheck | Failed | NotSupportedHere | AppFilesUnsafe> {
+    return guardedAsync(() => this.checkHostKeyInner(route));
+  }
+
+  /** After the host's confirmation: pins exactly the bytes captured at first contact. */
+  trustCapturedKey(route: Route, captureId: string): PinResult | AppFilesUnsafe {
+    return guarded(() => this.trustInner(route, captureId));
+  }
+
+  /** After the host's confirmation with its checkbox: replaces a changed key by the one captured. */
+  replaceTrustedKey(route: Route, captureId: string): PinResult | AppFilesUnsafe {
+    return guarded(() => this.replaceInner(route, captureId));
+  }
+
+  /** Runs the LOOK script through the pinned connection, and returns its facts. */
+  look(route: Route, options: { signal?: AbortSignal } = {}): Promise<LookResult | AppFilesUnsafe> {
+    return guardedAsync(() => this.lookInner(route, options));
+  }
+
+  /** Forgets the route: its pin and its files. Its forwards must be closed first. */
+  forget(route: Route): { ok: true } | AppFilesUnsafe {
+    return guarded(() => {
+      this.forgetInner(route);
+      return { ok: true } as const;
+    });
   }
 
   /** Closes every forward and ends every process this transport started. */
   async closeAll(): Promise<void> {
     await Promise.all([...this.forwards].map((forward) => forward.close()));
+  }
+}
+
+/** An app SSH file is a link, another account's, or not a plain file: nothing was done with it. */
+export type AppFilesUnsafe = { ok: false; kind: "app-files-unsafe" };
+const APP_FILES_UNSAFE: AppFilesUnsafe = { ok: false, kind: "app-files-unsafe" };
+
+function guarded<T>(run: () => T): T | AppFilesUnsafe {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof UnsafeAppFile) return APP_FILES_UNSAFE;
+    throw error;
+  }
+}
+
+async function guardedAsync<T>(run: () => Promise<T>): Promise<T | AppFilesUnsafe> {
+  try {
+    return await run();
+  } catch (error) {
+    if (error instanceof UnsafeAppFile) return APP_FILES_UNSAFE;
+    throw error;
   }
 }
 

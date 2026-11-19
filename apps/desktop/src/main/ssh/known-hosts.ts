@@ -4,7 +4,7 @@
 // known-hosts file is only ever read, never written.
 
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readOwn, writeOwn } from "./app-files.ts";
 
 import { MAX_HOST_KEY_CHARS } from "@clawtrate/core";
 
@@ -84,11 +84,8 @@ export class AppKnownHosts {
   }
 
   private readLines(): string[] {
-    if (!existsSync(this.path)) return [];
-    const text = readFileSync(this.path, "utf8");
-    if (text.length > MAX_KNOWN_HOSTS_BYTES)
-      throw new Error("The app's known-hosts file is too large.");
-    return text.split("\n").filter((line) => line.trim() !== "");
+    const text = readOwn(this.path, MAX_KNOWN_HOSTS_BYTES);
+    return text === null ? [] : text.split("\n").filter((line) => line.trim() !== "");
   }
 
   get(alias: string): Pin | null {
@@ -124,10 +121,7 @@ export class AppKnownHosts {
     const parsed = parseKnownHostsLine(line);
     if (!parsed || parsed.fingerprint !== key.fingerprint)
       throw new Error("The key does not match.");
-    const temp = `${this.path}.${process.pid}.part`;
-    writeFileSync(temp, [...others, line].join("\n") + "\n", { mode: 0o600 });
-    renameSync(temp, this.path);
-    chmodSync(this.path, 0o600);
+    writeOwn(this.path, [...others, line].join("\n") + "\n");
     return { alias, ...key, endpoint, pinnedAt };
   }
 
@@ -135,8 +129,6 @@ export class AppKnownHosts {
     const lines = this.readLines();
     const others = lines.filter((line) => parseKnownHostsLine(line)?.hosts !== alias);
     if (others.length === lines.length) return;
-    const temp = `${this.path}.${process.pid}.part`;
-    writeFileSync(temp, others.length ? others.join("\n") + "\n" : "", { mode: 0o600 });
-    renameSync(temp, this.path);
+    writeOwn(this.path, others.length ? others.join("\n") + "\n" : "");
   }
 }
