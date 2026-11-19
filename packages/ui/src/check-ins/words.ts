@@ -83,19 +83,31 @@ export function everyFor(choice: Choice, every: string): string {
         : every;
 }
 
-/** `quiet`: the bot will get the gateway's own prompt, which asks it to reply NO_REPLY when nothing needs attention. */
-export function choiceWords(choice: Choice, name: string, quiet: boolean): string {
+/**
+ * What the prompt in effect asks, as far as words can say: `asks` for the
+ * gateway's own, which asks for NO_REPLY when nothing needs attention;
+ * `unasked` for one that never mentions NO_REPLY; `unknown` for a custom one
+ * that does, since mentioning it is not asking for it.
+ */
+export type Quiet = "asks" | "unasked" | "unknown";
+
+const QUIET: Record<Quiet, string> = {
+  asks: " Its prompt asks it to stay quiet when nothing does.",
+  unasked: " Its prompt doesn't ask it to reply NO_REPLY, so it may answer every check-in.",
+  unknown: "",
+};
+
+/** The words under a choice; every choice that checks in ends with what its prompt asks. */
+export function choiceWords(choice: Choice, name: string, quiet: Quiet): string {
   switch (choice) {
     case "off":
       return `${name} doesn't check in on a schedule.`;
     case "daily":
-      return `Once a day, ${name} looks for anything that needs you.`;
+      return `Once a day, ${name} looks for anything that needs you.${QUIET[quiet]}`;
     case "asneeded":
-      return quiet
-        ? `Every 30 minutes, ${name} looks for anything that needs you. Its prompt asks it to stay quiet when nothing does.`
-        : `Every 30 minutes, ${name} looks for anything that needs you.`;
+      return `Every 30 minutes, ${name} looks for anything that needs you.${QUIET[quiet]}`;
     case "every":
-      return `${name} looks for anything that needs you as often as you choose.`;
+      return `${name} looks for anything that needs you as often as you choose.${QUIET[quiet]}`;
   }
 }
 

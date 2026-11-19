@@ -319,6 +319,7 @@ function CheckInsDialog({
   // A prompt shown cut may ask for NO_REPLY past where it is cut.
   const shownWhole = empty ? !checkIns.defaults?.promptCut : !base.promptCut;
   const promptWarning = shownWhole && !asksForSilence(empty ? (inheritedPrompt ?? "") : prompt);
+  const quiet = builtIn ? "asks" : promptWarning ? "unasked" : "unknown";
   const checkedHere = save?.status === "unknown" && draft.rebased === save.id;
   const title = `${bot.name}'s check-ins`;
 
@@ -356,7 +357,7 @@ function CheckInsDialog({
                 >
                   <span className="b-choice-text">
                     <span className="b-choice-title">{label}</span>
-                    <span className="b-choice-sub">{choiceWords(value, bot.name, builtIn)}</span>
+                    <span className="b-choice-sub">{choiceWords(value, bot.name, quiet)}</span>
                   </span>
                   <CheckIcon className="b-tick" />
                 </button>
