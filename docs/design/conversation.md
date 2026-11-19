@@ -1590,6 +1590,8 @@ Words: an effort is "Off", "Minimal", "Low", "Medium", "High", "Ultra" or the ga
 
 **What is written.** One `sessions.patch` with `key`, `model` and `thinkingLevel` (only those that change) and `expectedSessionId`, the task's session as it was when the person chose, so that a task replaced or removed meanwhile is refused instead of made again. The model is written with an account when one belongs to it: the account the task's conversation selected (`accountSelection` names it), otherwise the bot's account when the bot is bound to one of the same provider, otherwise none (a bot set to "Gateway chooses"). Nothing else is written; nothing here needs admin.
 
+**Retried when the gateway says so.** A patch sent as a turn ends can meet the gateway still settling that turn; it answers `UNAVAILABLE`, marked retryable ("Session patch failed unexpectedly. Retry the request."). Such an answer is sent again, up to five times with a growing pause, while the connection holds; any other answer is final.
+
 **After it.** Accepted: the task's row and its list are read again, and the event line is posted. Refused: the chip and the selects show what the gateway has, the Details line gives the gateway's reason, and an event line says it was refused. Lost connection: a held change stays held and is saved once the connection is back and nothing runs; a save whose answer never came is shown as not saved, with the reason, and the task's row is read again so the chip shows what the gateway has.
 
 ### 25.4 The event line
@@ -1608,6 +1610,7 @@ Its tooltip, and the line's accessible name, add what it was and when: "Was acme
 
 - The gateway records no change, so the line is the app's record of its own change. The app keeps it on the device that made it, and shows it there live and after a reload or a restart. A change made on another device or by another client shows in the chip, the Details and the next turn's record, and has no line here.
 - The line is placed by the gateway's own times: after the end of the turn it followed, before the first message after it.
+- A line belongs to the conversation it was made in: a task the gateway starts afresh under the same key (a reset) shows none of the earlier lines.
 
 ### 25.5 The turn's record
 
