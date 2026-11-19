@@ -64,7 +64,9 @@ const SCENES: Scene[] = [
     name: "F-178-saved-read",
     query: `scene=main&${OTTO_DISK}&access=read`,
     ready: permissions("Saved approvals", (page) =>
-      expect(page.getByRole("button", { name: "Request access" })).toBeVisible(),
+      expect(
+        page.getByTestId("admin-bar").getByRole("button", { name: "Request access" }),
+      ).toBeVisible(),
     ),
   },
   {
