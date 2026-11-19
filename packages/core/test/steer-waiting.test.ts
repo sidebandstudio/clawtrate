@@ -68,6 +68,23 @@ async function waitingOn(card: "approval" | "question") {
   return { ...task, steering };
 }
 
+/** Drop the connection and wait for the task's history as the new connection loaded it. */
+async function reconnected(task: Awaited<ReturnType<typeof waitingOn>>) {
+  const before = task.client.state.connection.connectedAt;
+  task.gateway.dropAll();
+  await until(() => {
+    const at = task.client.state.connection.connectedAt;
+    const loaded = task.transcript().loadedAt;
+    return (
+      task.client.state.connection.status === "connected" &&
+      at !== null &&
+      at !== before &&
+      loaded !== null &&
+      loaded >= at
+    );
+  }, 10_000);
+}
+
 const run = (task: Awaited<ReturnType<typeof waitingOn>>) =>
   task.transcript().runs.find((each) => each.id === RUN)!;
 
@@ -80,9 +97,7 @@ describe("a steered run that waits on you (F-468, F-096)", () => {
     // The history read after the steer, as the gateway then answers it.
     await sleep(100);
     expect(run(task).state).toBe("waiting");
-    task.gateway.dropAll();
-    await until(() => task.client.state.connection.status === "connected");
-    await until(() => task.gateway.calls("chat.history").length >= 3);
+    await reconnected(task);
     await sleep(100);
     expect(run(task)).toMatchObject({ state: "waiting" });
     expect(task.transcript().approvals.map((each) => each.status)).toEqual(["pending"]);
@@ -97,9 +112,7 @@ describe("a steered run that waits on you (F-468, F-096)", () => {
     task.client.sendMessage(KEY, "Only the notes folder.");
     expect(task.transcript().outbox[0]!.status).toBe("held");
     task.steering.on = true;
-    task.gateway.dropAll();
-    await until(() => task.client.state.connection.status === "connected");
-    await until(() => task.gateway.calls("chat.history").length >= 2);
+    await reconnected(task);
     await sleep(100);
     expect(run(task).state).toBe("waiting");
     expect(task.transcript().questions[0]!.status).toBe("pending");
