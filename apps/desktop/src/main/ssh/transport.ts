@@ -11,6 +11,7 @@ import { join } from "node:path";
 
 import { MAX_SSH_CAPTURES, MAX_SSH_FORWARDS, MAX_SSH_ROUTES } from "@clawtrate/core";
 
+import { probeHttp } from "./http-probe.ts";
 import { createOwn, readOwn, removeOwn, secureDir, UnsafeAppFile, writeOwn } from "./app-files.ts";
 import {
   accountText,
@@ -128,6 +129,24 @@ export function failureNote(
         next: null,
       };
   }
+}
+
+/** The fixed copy for a forward's cause that has no SSH failure of its own. */
+export function forwardNote(
+  cause: { kind: "forwarding-refused" } | { kind: "gateway-not-running" },
+  route: Route,
+): { title: string; sentence: string } {
+  const name = route.target.destination.host;
+  if (cause.kind === "forwarding-refused") {
+    return {
+      title: `${name} doesn't allow forwarding`,
+      sentence: `The SSH server on ${name} refused to open a connection to the gateway. Its sshd needs AllowTcpForwarding set to yes or local.`,
+    };
+  }
+  return {
+    title: `OpenClaw stopped on ${name}`,
+    sentence: "The gateway there isn't answering on its port.",
+  };
 }
 
 /** A captured key as the person sees it: never its bytes, and never taken back from the page. */
@@ -604,6 +623,7 @@ export class SshTransport {
     const forward = new ForwardSupervisor({
       pickPort: freeLoopbackPort,
       start: (localPort) => this.startForward(route, localPort, gatewayPort),
+      probe: (localPort, process) => probeHttp(localPort, gatewayPort, () => process.channel()),
       verify: async (): Promise<VerifyResult> => {
         const look = await this.look(route);
         if (look.ok) {
@@ -644,6 +664,7 @@ export class SshTransport {
     const listening: Array<() => void> = [];
     const exits: Array<(failure: SshFailure) => void> = [];
     let heard = false;
+    const channel = { refused: false, connectFailed: false };
     child.stdin?.on("error", () => {});
     child.stdin?.end();
     child.stdout?.resume();
@@ -653,6 +674,11 @@ export class SshTransport {
       pending += chunk;
       const lines = pending.split("\n");
       pending = (lines.pop() ?? "").slice(-4096);
+      for (const line of lines) {
+        if (/^channel [0-9]+: open failed: administratively prohibited/.test(line))
+          channel.refused = true;
+        if (/^channel [0-9]+: open failed: connect failed/.test(line)) channel.connectFailed = true;
+      }
       if (!heard && lines.some((line) => forwardListening(line, localPort))) {
         heard = true;
         for (const listener of listening) listener();
@@ -667,6 +693,7 @@ export class SshTransport {
       pid: child.pid ?? null,
       onListening: (listener) => listening.push(listener),
       onExit: (listener) => exits.push(listener),
+      channel: () => ({ ...channel }),
       end: () => endProcess(child),
     };
   }

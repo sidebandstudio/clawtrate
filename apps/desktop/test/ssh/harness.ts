@@ -15,7 +15,8 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createServer, type Server, type Socket } from "node:net";
+import { createServer as createHttpServer, request as httpRequest } from "node:http";
+import { createServer, type Socket } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 
@@ -246,6 +247,7 @@ export async function startSshd(
   root: string,
   home: string,
   authorizedKey: string,
+  options: { forwarding?: "local" | "no" } = {},
 ): Promise<TestSshd> {
   const dir = join(root, "sshd");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -272,7 +274,7 @@ export async function startSshd(
       "PermitUserRC no",
       "PermitUserEnvironment no",
       "AllowAgentForwarding no",
-      "AllowTcpForwarding local",
+      `AllowTcpForwarding ${options.forwarding ?? "local"}`,
       "X11Forwarding no",
       // Sessions see the test's home, not the account's: their start-up files and the LOOK's places.
       `SetEnv HOME=${home} ZDOTDIR=${home}`,
@@ -380,22 +382,29 @@ export function assertSessionHome(
   }
 }
 
-/** A loopback TCP echo server standing in for the gateway's port. */
-export function echoServer(): Promise<{ port: number; server: Server; close(): Promise<void> }> {
+/** A loopback HTTP server standing in for the gateway's port: every request gets 200. */
+export function httpGateway(): Promise<{
+  port: number;
+  requests: string[];
+  close(): Promise<void>;
+}> {
   return new Promise((resolve) => {
     const sockets = new Set<Socket>();
-    const server = createServer((socket) => {
+    const requests: string[] = [];
+    const server = createHttpServer((request, response) => {
+      requests.push(`${request.method} ${request.url} ${JSON.stringify(request.headers)}`);
+      response.end("ok");
+    });
+    server.on("connection", (socket) => {
       sockets.add(socket);
       socket.once("close", () => sockets.delete(socket));
-      socket.on("error", () => {});
-      socket.pipe(socket);
     });
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
       resolve({
         port,
-        server,
+        requests,
         close: () =>
           new Promise<void>((done) => {
             server.close(() => done());
@@ -403,5 +412,24 @@ export function echoServer(): Promise<{ port: number; server: Server; close(): P
           }),
       });
     });
+  });
+}
+
+/** A GET through a local port: the status code, or null when nothing answered as HTTP. */
+export function httpGet(port: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    const request = httpRequest(
+      { host: "127.0.0.1", port, path: "/", timeout: 3000 },
+      (response) => {
+        response.resume();
+        resolve(response.statusCode ?? null);
+      },
+    );
+    request.on("error", () => resolve(null));
+    request.on("timeout", () => {
+      request.destroy();
+      resolve(null);
+    });
+    request.end();
   });
 }

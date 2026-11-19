@@ -7,6 +7,7 @@
 
 import { MAX_FORWARD_LISTENERS } from "@clawtrate/core";
 
+import type { ChannelFacts, ProbeResult } from "./http-probe.ts";
 import type { SshFailure, UnreachableCause } from "./ssh-output.ts";
 
 /** Seconds before each try after a failure: 1, 2, 4, 8 and 16, then every 30. */
@@ -31,7 +32,9 @@ export type ForwardCause =
   /** The LOOK found the gateway's service on that port, but stopped or not answering. */
   | { kind: "gateway-not-running" }
   /** The LOOK found no gateway service on that port, or answered in a way that couldn't be read. */
-  | { kind: "cant-tell" };
+  | { kind: "cant-tell" }
+  /** The other computer's SSH server refused to forward a connection to the gateway's port. */
+  | { kind: "forwarding-refused" };
 
 export type ForwardState =
   | { phase: "starting"; attempt: number }
@@ -54,6 +57,8 @@ export type ForwardProcess = {
   onListening(listener: () => void): void;
   /** Called once, when the process has ended, with what its error output showed. */
   onExit(listener: (failure: SshFailure) => void): void;
+  /** What its output said about its forwarded connections so far. */
+  channel(): ChannelFacts;
   /** Ends it by PID and resolves once it is gone. */
   end(): Promise<void>;
 };
@@ -68,6 +73,8 @@ export type VerifyResult =
 export type ForwardDeps = {
   pickPort(): Promise<number>;
   start(localPort: number): ForwardProcess;
+  /** Makes one connection through the forward: did the far end answer as an HTTP service? */
+  probe(localPort: number, process: ForwardProcess): Promise<ProbeResult>;
   /** Runs the LOOK again and compares the gateway service on the gateway's port. */
   verify(): Promise<VerifyResult>;
   now(): number;
@@ -194,10 +201,20 @@ export class ForwardSupervisor {
       if (generation !== this.generation || this.closed()) return;
       this.portRetries = 0;
       this.set({ phase: "verifying", localPort: port, attempt: this.failures + 1 });
-      void this.deps.verify().then(
-        (result) => this.verified(generation, port, result),
-        () => this.verified(generation, port, { kind: "cant-tell" }),
-      );
+      // The listener is only the cue: up needs one answered connection through it, then the LOOK.
+      void this.deps
+        .probe(port, process)
+        .catch((): ProbeResult => "no-answer")
+        .then((answer) => {
+          if (generation !== this.generation || this.closed()) return;
+          if (answer === "forwarding-refused") return this.restart({ kind: "forwarding-refused" });
+          if (answer === "gateway-closed") return this.restart({ kind: "gateway-not-running" });
+          if (answer !== "http") return this.restart({ kind: "cant-tell" });
+          return this.deps.verify().then(
+            (result) => this.verified(generation, port, result),
+            () => this.verified(generation, port, { kind: "cant-tell" }),
+          );
+        });
     });
   }
 

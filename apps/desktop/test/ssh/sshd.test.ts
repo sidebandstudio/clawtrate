@@ -13,7 +13,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { connect } from "node:net";
 import { userInfo } from "node:os";
 import { basename, join } from "node:path";
 
@@ -23,11 +22,12 @@ import type { ForwardState } from "../../src/main/ssh/forward.ts";
 import { serviceOnPort } from "../../src/main/ssh/look.ts";
 import type { Spawn } from "../../src/main/ssh/run.ts";
 import { defaultSpawn } from "../../src/main/ssh/run.ts";
-import { type Route, SshTransport } from "../../src/main/ssh/transport.ts";
+import { forwardNote, type Route, SshTransport } from "../../src/main/ssh/transport.ts";
 import {
   alive,
   assertSessionHome,
-  echoServer,
+  httpGateway,
+  httpGet,
   freePort,
   installStubOpenclaw,
   KEYGEN,
@@ -75,7 +75,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     return child;
   };
   let stub: ReturnType<typeof installStubOpenclaw>;
-  let gateway: Awaited<ReturnType<typeof echoServer>>;
+  let gateway: Awaited<ReturnType<typeof httpGateway>>;
   let route: Route;
 
   const prepare = (id: string, typed: string): Route => {
@@ -89,7 +89,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     t = makeWorld(root);
     sshd = await startSshd(root, t.home, t.userKey);
     assertSessionHome(root, sshd, t.world, t.userKey);
-    gateway = await echoServer();
+    gateway = await httpGateway();
     stub = installStubOpenclaw(t.home);
     stub.setVersion("OpenClaw 2026.10.6 (fe06181)\n");
     stub.setStatus("default", statusJson({ port: gateway.port, home: t.home }));
@@ -442,20 +442,13 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     forward.onState((state) => states.push(state));
     const upNow = () => forward.state.phase === "up";
     await waitFor(upNow, 20000, "the forward to come up");
-    const echo = async (port: number) =>
-      new Promise<string>((resolve, reject) => {
-        const socket = connect(port, "127.0.0.1", () => socket.write("ping"));
-        socket.setEncoding("utf8");
-        socket.once("data", (data: string) => {
-          socket.destroy();
-          resolve(data);
-        });
-        socket.once("error", reject);
-      });
     const first = forward.state;
     if (first.phase !== "up") throw new Error();
     expect(first.restored).toBe(false);
-    expect(await echo(first.localPort)).toBe("ping");
+    expect(await httpGet(first.localPort)).toBe(200);
+    // The check before "up" was one plain request through the forward, with no credential.
+    expect(gateway.requests[0]).toMatch(/^GET \/healthz /);
+    expect(gateway.requests[0]).not.toMatch(/authorization|cookie|token/i);
     const forwardPid = started.findLast((s) => s.args.includes("-L"))!.pid!;
 
     // Dropped: the connection's session ends; the forward reports it and comes back by itself.
@@ -478,7 +471,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     // The LOOK ran again before the route was usable.
     expect(started.filter((s) => s.args.includes("/bin/sh")).length).toBe(looksBefore + 1);
     expect(states.slice(-2).map((s) => s.phase)).toEqual(["verifying", "up"]);
-    expect(await echo(again.localPort)).toBe("ping");
+    expect(await httpGet(again.localPort)).toBe(200);
 
     // The computer stops answering: sshd is down; the forward waits with the cause, then comes back.
     await sshd.stop();
@@ -540,6 +533,46 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       await waitFor(() => forward.state.phase === "up", 20000, "the forward to come up");
     } finally {
       await forward.close();
+    }
+  });
+
+  it("a server that refuses forwarding is its own state, and the forward is never up", async () => {
+    const strict = await startSshd(join(root, "noforward"), t.home, t.userKey, {
+      forwarding: "no",
+    });
+    const before = readFileSync(t.world.personConfig, "utf8");
+    t.writeConfig(
+      `Host strict\n  HostName 127.0.0.1\n  Port ${strict.port}\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n`,
+    );
+    try {
+      const strictRoute = prepare("strict", "strict");
+      const contact = await transport.checkHostKey(strictRoute);
+      if (!contact.ok || contact.state !== "first-contact")
+        throw new Error("expected first contact");
+      transport.trustCapturedKey(strictRoute, contact.presented.captureId);
+      const look = await transport.look(strictRoute);
+      if (!look.ok) throw new Error("look failed");
+      const found = serviceOnPort(look.facts, gateway.port);
+      if (!found.ok) throw new Error("no service");
+      const forward = transport.openForward(strictRoute, found);
+      const states: ForwardState[] = [];
+      forward.onState((state) => states.push(state));
+      await waitFor(() => forward.state.phase === "waiting", 20000, "the refusal");
+      expect(forward.state).toMatchObject({
+        phase: "waiting",
+        cause: { kind: "forwarding-refused" },
+      });
+      expect(states.some((s) => s.phase === "up")).toBe(false);
+      expect(forwardNote({ kind: "forwarding-refused" }, strictRoute)).toEqual({
+        title: "strict doesn't allow forwarding",
+        sentence:
+          "The SSH server on strict refused to open a connection to the gateway. Its sshd needs AllowTcpForwarding set to yes or local.",
+      });
+      await forward.close();
+      transport.forget(strictRoute);
+    } finally {
+      await strict.stop();
+      t.writeConfig(before);
     }
   });
 

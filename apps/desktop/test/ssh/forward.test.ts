@@ -14,6 +14,7 @@ import {
   LONG_OUTAGE_MS,
   type VerifyResult,
 } from "../../src/main/ssh/forward.ts";
+import type { ProbeResult } from "../../src/main/ssh/http-probe.ts";
 import type { SshFailure } from "../../src/main/ssh/ssh-output.ts";
 
 type FakeProcess = ForwardProcess & {
@@ -23,7 +24,8 @@ type FakeProcess = ForwardProcess & {
   port: number;
 };
 
-function harness(verifyResults: VerifyResult[] = []) {
+function harness(verifyResults: VerifyResult[] = [], probeResults: ProbeResult[] = []) {
+  let verifyCalls = 0;
   let now = 0;
   const timers: Array<{ at: number; callback: () => void; id: number }> = [];
   let nextId = 1;
@@ -41,6 +43,7 @@ function harness(verifyResults: VerifyResult[] = []) {
         ended: false,
         onListening: (listener) => listening.push(listener),
         onExit: (listener) => exits.push(listener),
+        channel: () => ({ refused: false, connectFailed: false }),
         end: async () => {
           if (process.ended) return;
           process.ended = true;
@@ -55,8 +58,9 @@ function harness(verifyResults: VerifyResult[] = []) {
       processes.push(process);
       return process;
     },
+    probe: async () => probeResults.shift() ?? "http",
     verify: () =>
-      verifyResults.length
+      ++verifyCalls && verifyResults.length
         ? Promise.resolve(verifyResults.shift()!)
         : new Promise((resolve) => verifies.push(resolve)),
     now: () => now,
@@ -73,7 +77,9 @@ function harness(verifyResults: VerifyResult[] = []) {
   const forward = new ForwardSupervisor(deps);
   const states: ForwardState[] = [];
   forward.onState((state) => states.push(state));
-  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const flush = async () => {
+    for (let i = 0; i < 4; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  };
   return {
     forward,
     states,
@@ -81,6 +87,7 @@ function harness(verifyResults: VerifyResult[] = []) {
     verifies,
     flush,
     pending: () => timers.map((timer) => timer.at - now),
+    verifyCalls: () => verifyCalls,
     async advance(ms: number) {
       now += ms;
       for (const timer of timers.filter((t) => t.at <= now)) {
@@ -125,6 +132,36 @@ describe("the forward's states", () => {
     await h.up();
     expect(h.states.map((s) => s.phase)).toEqual(["starting", "verifying", "up"]);
     expect(h.forward.state).toEqual({ phase: "up", localPort: 50000, restored: false });
+  });
+
+  it("is up only after a connection through it was answered as HTTP, and only then runs the LOOK", async () => {
+    const h = harness(
+      [{ kind: "same" }],
+      ["no-answer", "forwarding-refused", "gateway-closed", "http"],
+    );
+    h.forward.open();
+    await h.up();
+    expect(h.forward.state).toMatchObject({ phase: "waiting", cause: { kind: "cant-tell" } });
+    expect(h.verifyCalls()).toBe(0);
+    expect(h.processes[0]!.ended).toBe(true);
+    await h.advance(1000);
+    await h.up();
+    expect(h.forward.state).toMatchObject({
+      phase: "waiting",
+      cause: { kind: "forwarding-refused" },
+    });
+    await h.advance(2000);
+    await h.up();
+    expect(h.forward.state).toMatchObject({
+      phase: "waiting",
+      cause: { kind: "gateway-not-running" },
+    });
+    expect(h.verifyCalls()).toBe(0);
+    expect(h.states.some((s) => s.phase === "up")).toBe(false);
+    await h.advance(4000);
+    await h.up();
+    expect(h.verifyCalls()).toBe(1);
+    expect(h.forward.state.phase).toBe("up");
   });
 
   it("is not up while the LOOK is still running", async () => {
