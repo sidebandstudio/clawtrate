@@ -102,6 +102,8 @@ export type BrowserSettings = {
   /** The bot's own `tools.allow` and `tools.deny`, and the gateway's for every bot, as stored. */
   own: ToolLists;
   everyBot: ToolLists;
+  /** The gateway's own switches as stored: `browser.enabled` and the browser plugin's `enabled`. */
+  gateway: { control: boolean | null; plugin: boolean | null };
   /** Clawtrate's computer plugin's entry: the profile named for this bot, and its `enabled` flag. */
   plugin: { present: boolean; enabled: boolean | null; profile: string | null };
 };
@@ -317,10 +319,16 @@ const toolLists = (tools: RawRecord): ToolLists => ({
 
 /** What a bot's settings store about the browser: the tool lists and the computer plugin's entry. */
 export function readBrowserSettings(config: RawRecord, botId: string): BrowserSettings {
-  const plugin = asRecord(rec(rec(config.plugins).entries)["clawtrate-computer"]);
+  const entries = rec(rec(config.plugins).entries);
+  const plugin = asRecord(entries["clawtrate-computer"]);
+  const flag = (value: unknown) => (typeof value === "boolean" ? value : null);
   return {
     own: toolLists(rec(entryOf(config, botId).tools)),
     everyBot: toolLists(toolsOf(config)),
+    gateway: {
+      control: flag(rec(config.browser).enabled),
+      plugin: flag(rec(entries.browser).enabled),
+    },
     plugin: {
       present: plugin !== null,
       enabled: typeof plugin?.enabled === "boolean" ? plugin.enabled : null,

@@ -250,6 +250,7 @@ export function machineCommands(now: number, params: MachineParams) {
       browser: {
         own: { allow: null, deny: botId === "otto" || botId === "juniper" ? ["browser"] : null },
         everyBot: { allow: null, deny: [] },
+        gateway: { control: null, plugin: true },
         plugin: ownBrowser
           ? { present: true, enabled: true, profile: "bot-otto" }
           : { present: false, enabled: null, profile: null },

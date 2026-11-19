@@ -12,7 +12,15 @@ import { CopyValue } from "../AccessBar.tsx";
 import { clockTime } from "../format.ts";
 import { BackIcon, ChevronIcon, EyeIcon, LockIcon, WarnIcon } from "../icons.tsx";
 import { AdminBar, GrantedBar, Note, Select, useGranted } from "../bots/parts.tsx";
-import { credentialWords, hostWords, lastSeen, listWords, names, runsOnValue } from "./words.ts";
+import {
+  credentialWords,
+  hostWords,
+  lastSeen,
+  listWords,
+  names,
+  runsOnValue,
+  switchWords,
+} from "./words.ts";
 import "./machines.css";
 
 type Read =
@@ -440,6 +448,10 @@ export function RunsOnPage({
         </Fact>
         <Fact label="Every bot's tool lists">
           Allow: {listWords(browser.everyBot.allow)} · Deny: {listWords(browser.everyBot.deny)}
+        </Fact>
+        <Fact label="The gateway's browser switches" testId="runs-on-browser-gateway">
+          Browser control: {switchWords(browser.gateway.control)} · Browser plugin:{" "}
+          {switchWords(browser.gateway.plugin)}
         </Fact>
         <Fact label="Clawtrate's computer plugin" testId="runs-on-browser-profile">
           {!browser.plugin.present

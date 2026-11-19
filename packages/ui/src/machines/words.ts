@@ -93,6 +93,11 @@ export function credentialWords(field: CredentialField): string {
   }
 }
 
+/** A stored on/off setting: "on", "off" or "not set". */
+export function switchWords(value: boolean | null): string {
+  return value === null ? "not set" : value ? "on" : "off";
+}
+
 /** A stored tool list: "not set", "empty", or its entries. */
 export function listWords(entries: readonly string[] | null): string {
   if (entries === null) return "not set";

@@ -495,12 +495,20 @@ describe("where a bot runs: the engine", () => {
     expect(readBrowserSettings(config, "pip")).toEqual({
       own: { allow: null, deny: null },
       everyBot: { allow: null, deny: [] },
+      gateway: { control: null, plugin: null },
       plugin: { present: true, enabled: true, profile: "bot-pip" },
     });
     expect(readBrowserSettings(config, "otto")).toMatchObject({
       own: { allow: null, deny: ["browser"] },
       plugin: { profile: null },
     });
+    // The gateway's own switches are shown as stored, never read as a browser bots share.
+    expect(
+      readBrowserSettings(
+        { browser: { enabled: false }, plugins: { entries: { browser: { enabled: true } } } },
+        "pip",
+      ).gateway,
+    ).toEqual({ control: false, plugin: true });
     expect(readBrowserSettings({}, "pip").plugin).toEqual({
       present: false,
       enabled: null,
