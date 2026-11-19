@@ -629,23 +629,35 @@
 
     // Updates (section 10) -------------------------------------------------------------------------------
 
+    // Each screen state comes from the update engine's typed state (issue #68): not-configured,
+    // idle, checking, up-to-date, available, downloading, ready, failed {stage, cause}.
+    const SOURCE = "updates.example.com";
     function updatesRow() {
       if (S.dev) return ["A development build. It doesn't update itself.", ""];
       if (!S.feed) return ["This copy can't check for updates: no update source is set up for it.", ""];
       if (S.os === "linux") return ["Updates are managed by your package manager.", ""];
-      const check = button("Check for Updates", 'data-s="check" data-size="sm"');
+      const check = (label = "Check for Updates") => button(label, 'data-s="check" data-size="sm"');
       return {
-        idle: ["Checked at 9:05 AM", check],
-        checking: ["Checking for updates…", ""],
-        current: [`You're up to date. Checked at 5:41 PM.`, check],
-        downloading: [`Downloading Clawtrate 0.2.0…`, ""],
-        ready: ["Clawtrate 0.2.0 is ready. It installs when Clawtrate restarts.", button("Restart to Update", 'data-s="restart-update" data-size="sm"', "primary")],
-        error: ["Couldn't check for updates.", button("Try again", 'data-s="check" data-size="sm"')],
+        idle: ["Not checked yet.", check()],
+        checking: [`Checking ${SOURCE}…`, ""],
+        current: ["No newer version was offered for this build by its update source. Checked at 5:41 PM.", check()],
+        available: ["Clawtrate 0.2.0 is offered by the update source.", button("Download", 'data-s="download" data-size="sm"')],
+        downloading: ["Downloading Clawtrate 0.2.0… 41 of 120 MB", ""],
+        ready: S.install
+          ? ["Clawtrate 0.2.0 is downloaded, and its size and checksum match the update source. Ready to install.", button("Restart to Update", 'data-s="restart-update" data-size="sm"', "primary")]
+          : ["Clawtrate 0.2.0 is downloaded, and its size and checksum match the update source. This build can't install it itself.", ""],
+        failcheck: ["Couldn't check for updates.", check("Try again")],
+        nofile: ["The update source has no file for this system.", check()],
+        faildl: ["Couldn't download the update. Try again.", check("Try again")],
+        restarted: [`Clawtrate ${S.version} is running.`, check()],
       }[S.upd];
     }
     CT.botsSectionViews.updates = () => {
       const [line, action] = updatesRow();
+      const live = S.feed && !S.dev && S.os !== "linux";
       const future = S.feed && !S.dev ? `<p class="s-future">${S.os === "linux" ? "When a Linux package is built" : "When releases are published"}: a future example. No update source exists today.</p>` : "";
+      const source = live && ["idle", "current", "failcheck", "nofile", "faildl", "restarted"].includes(S.upd) ? `<p class="b-hint" data-testid="update-source">Checks ${SOURCE} for a newer build, only when you choose to.</p>` : "";
+      const cannot = live && !S.install ? note("<p>This build can't install updates itself.</p>", "warn") : "";
       const auto =
         S.feed && !S.dev && S.os !== "linux"
           ? `<div class="s-setting" style="margin-top:14px"><span class="s-setting-main"><strong>Automatic Updates</strong>` +
@@ -654,8 +666,10 @@
           : "";
       const body =
         future +
+        cannot +
         `<dl class="facts" data-testid="updates"><div><dt>Version</dt><dd>Clawtrate ${S.version}</dd></div><div><dt>Updates</dt><dd data-testid="updates-line">${line}</dd></div></dl>` +
         (action ? `<div class="b-actions" style="margin-top:14px">${action}</div>` : "") +
+        source +
         auto;
       return { title: "Updates", back: back("Back to settings", "to-nav"), body };
     };
@@ -663,15 +677,19 @@
       S.upd = "checking";
       rs();
       setTimeout(() => {
-        S.upd = p("next") === "update" ? "downloading" : "current";
+        S.upd = { update: "available", failcheck: "failcheck", nofile: "nofile" }[p("next")] || "current";
         rs();
-        if (S.upd === "current") announce("You're up to date");
-        if (S.upd === "downloading")
-          setTimeout(() => {
-            S.upd = "ready";
-            rs();
-            announce("Clawtrate 0.2.0 is ready");
-          }, 900);
+        announce({ current: "No newer version was offered", available: "Clawtrate 0.2.0 is offered", failcheck: "Couldn't check for updates", nofile: "No file for this system" }[S.upd]);
+      }, 900);
+    }
+    function download() {
+      S.upd = "downloading";
+      rs();
+      setTimeout(() => {
+        S.upd = p("dl") === "fail" && !S.dlTried ? "faildl" : "ready";
+        S.dlTried = true;
+        rs();
+        announce(S.upd === "ready" ? "Clawtrate 0.2.0 is downloaded" : "Couldn't download the update");
       }, 900);
     }
     // A restart discards what waits to be sent, so it asks first when something does.
@@ -878,10 +896,13 @@
           return check();
         case "restart-update":
           return restart("Restart to update?", () => {
+            // After the restart the running version is read from the app itself.
             S.version = "0.2.0";
-            S.upd = "current";
-            announce("Restarted. Clawtrate 0.2.0");
+            S.upd = "restarted";
+            announce("Clawtrate 0.2.0 is running");
           });
+        case "download":
+          return download();
         case "auto":
           S.auto = !S.auto;
           rs();

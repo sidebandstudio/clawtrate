@@ -376,35 +376,57 @@ await stateWords("Updates, a development build", "open=settings&section=updates&
   await p.close();
 }
 {
-  const p = await open("open=settings&section=updates&feed=1");
+  const p = await open("open=settings&section=updates&feed=1&install=1");
   const [ok, miss] = await has(p, settings, [
     "When releases are published: a future example. No update source exists today.",
-    "Checked at 9:05 AM",
+    "Not checked yet.",
     "Check for Updates",
-    "Automatic Updates",
-    "Install a downloaded update by itself while you're away: when the screen is locked, the computer has been idle for 10 minutes, and no run is active on the gateway Clawtrate is using.",
-    "Clawtrate can't tell when a screen saver is on, so only a locked screen counts.",
+    "Checks updates.example.com for a newer build, only when you choose to.",
   ]);
-  check("Updates, with a source: labelled as a future example, the rule's words", ok, miss);
+  check("Updates, with a source: a future example; the source named before any check", ok, miss);
   await press(p, "button", "Check for Updates");
-  check("walk: Check for Updates: checking", (await text(p, settings)).includes("Checking for updates…"));
+  check("walk: Check for Updates: checking the named source", (await text(p, settings)).includes("Checking updates.example.com…"));
   await p.waitForTimeout(1000);
-  check("walk: Check for Updates: up to date, announced", (await text(p, settings)).includes("You're up to date. Checked at 5:41 PM.") && (await announced(p)) === "You're up to date");
-  const auto = p.locator('#settings-dialog [data-s="auto"]');
-  check("Updates: Automatic Updates off by default", (await auto.getAttribute("aria-checked")) === "false");
+  check("walk: Check for Updates, nothing newer: not 'up to date'", (await text(p, settings)).includes("No newer version was offered for this build by its update source. Checked at 5:41 PM.") && !/up to date/i.test(await text(p, settings)));
   await p.close();
 }
 {
-  const p = await open("open=settings&section=updates&feed=1&next=update&waiting=1");
+  const p = await open("open=settings&section=updates&feed=1");
+  check("Updates, a build that can't install itself says so", (await text(p, settings)).includes("This build can't install updates itself."));
+  await p.close();
+}
+{
+  const p = await open("open=settings&section=updates&feed=1&upd=ready");
+  const t = await text(p, settings);
+  check("Updates, downloaded but not installable: no Restart to Update", t.includes("This build can't install it itself.") && !t.includes("Restart to Update"));
+  await p.close();
+}
+for (const [next, words] of [["failcheck", "Couldn't check for updates."], ["nofile", "The update source has no file for this system."]]) {
+  const p = await open(`open=settings&section=updates&feed=1&install=1&next=${next}`);
   await press(p, "button", "Check for Updates", 1100);
-  check("walk: an update: downloading, no percentage", (await text(p, settings)).includes("Downloading Clawtrate 0.2.0…") && !(await text(p, settings)).includes("%"));
+  check(`walk: Check for Updates, ${next}: its own words`, (await text(p, settings)).includes(words));
+  await p.close();
+}
+{
+  const p = await open("open=settings&section=updates&feed=1&install=1&next=update&dl=fail");
+  await press(p, "button", "Check for Updates", 1100);
+  await press(p, "button", "Download", 1100);
+  check("walk: a failed download has its own words", (await text(p, settings)).includes("Couldn't download the update. Try again."));
+  await p.close();
+}
+{
+  const p = await open("open=settings&section=updates&feed=1&install=1&next=update&waiting=1");
+  await press(p, "button", "Check for Updates", 1100);
+  check("walk: an update: offered, then a separate choice to download", (await text(p, settings)).includes("Clawtrate 0.2.0 is offered by the update source.") && (await p.getByRole("button", { name: "Download", exact: true }).count()) === 1);
+  await press(p, "button", "Download");
+  check("walk: an update: downloading, with what has arrived", (await text(p, settings)).includes("Downloading Clawtrate 0.2.0… 41 of 120 MB"));
   await p.waitForTimeout(1000);
-  check("walk: an update: ready, installs when Clawtrate restarts", (await text(p, settings)).includes("Clawtrate 0.2.0 is ready. It installs when Clawtrate restarts."));
+  check("walk: an update: ready to install, only with the installer's confirmation", (await text(p, settings)).includes("Ready to install.") && !/verified|secure/i.test(await text(p, settings)));
   await press(p, "button", "Restart to Update");
   const [ok, miss] = await has(p, confirm, ["Restart to update?", "1 message to Otto hasn't been sent yet. Restarting discards it: it isn't kept as a draft."]);
   check("walk: Restart to Update with a message waiting: asks first", ok, miss);
   await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
-  check("walk: Restart to Update: Clawtrate 0.2.0", (await text(p, settings)).includes("Clawtrate 0.2.0") && (await text(p, settings)).includes("You're up to date"));
+  check("walk: Restart to Update: the running version after the restart", (await text(p, settings)).includes("Clawtrate 0.2.0 is running."));
   await p.close();
 }
 // F-518: one walk, parameterized by direction and by the number of saved gateways.
