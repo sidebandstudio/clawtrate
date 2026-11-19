@@ -13,6 +13,7 @@ import {
   readDevices,
   readInventoryAccounts,
   readNodes,
+  readToolServers,
   type MachinesContext,
 } from "../src/machines.ts";
 
@@ -474,6 +475,31 @@ describe("where a bot runs: the engine", () => {
     expect(gw.calls.map(([method]) => method)).not.toContain("secrets.store.list");
     const admin = await engine(gw, { admin: true }).readPlacement("otto");
     expect(admin.inventory.secrets).toEqual(["router-admin", "nas-backup"]);
+  });
+
+  it("F-047: a tool server is offered by a listed tool of its own, named by the gateway's server field", () => {
+    const long = "a-tool-server-named-past-thirty-characters";
+    const config = { mcp: { servers: { coder: {}, [long]: {}, t3code: {} } } };
+    // Rows as OpenClaw 2026.10.6's tools.effective lists them: the id carries a shortened
+    // server name, `mcpServer` the configured one.
+    const listing = {
+      groups: [
+        {
+          tools: [
+            { id: "coder__lookup", mcpServer: "coder" },
+            { id: "a-tool-server-named-past-th__run", mcpServer: long },
+            { id: "t3code__read", mcpServer: "t3code" },
+          ],
+        },
+      ],
+    };
+    expect(
+      readToolServers(config, "otto", listing).map((server) => [server.name, server.offered]),
+    ).toEqual([
+      ["coder", true],
+      [long, true],
+      ["t3code", true],
+    ]);
   });
 
   it("F-047: accounts are told apart and matched to the model by their whole ids", () => {

@@ -359,11 +359,13 @@ export function readToolServers(
   listing: unknown | null,
 ): ToolServer[] {
   const names = Object.keys(rec(rec(config.mcp).servers)).slice(0, MAX_INVENTORY);
+  // A server is offered when the listing has a tool of it, by the gateway's own server name
+  // (tool ids carry a shortened one).
   const offered = new Set<string>();
   for (const group of list(rec(listing).groups))
     for (const tool of list(rec(group).tools)) {
-      const id = str(rec(tool).id);
-      if (id) offered.add(id);
+      const server = rec(tool).mcpServer;
+      if (typeof server === "string") offered.add(server);
     }
   const botTools = rec(entryOf(config, botId).tools);
   return names.map((name) => {
@@ -376,7 +378,7 @@ export function readToolServers(
         : every
           ? { list: "every-bot", entry: every }
           : null,
-      offered: listing === null ? null : [...offered].some((id) => id.startsWith(`${name}__`)),
+      offered: listing === null ? null : offered.has(name),
     };
   });
 }
