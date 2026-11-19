@@ -93,6 +93,7 @@ const base = (over: Partial<Routine> & Pick<Routine, "id" | "botId" | "name">): 
   deliveryChannel: null,
   nextRunAt: null,
   lastRunAt: null,
+  lastEndedAt: null,
   lastStatus: null,
   lastError: null,
   runningAt: null,

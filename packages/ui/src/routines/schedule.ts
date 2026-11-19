@@ -340,6 +340,13 @@ function scheduled(schedule: RoutineSchedule, next: number, from: number, to: nu
   return out;
 }
 
+/**
+ * Which run is which (automation.md section 7): its job's id and its `runId`,
+ * or its job's id and its start while it runs or when it has no `runId`.
+ */
+export const runKey = (jobId: string, runId: string | null, runAt: number) =>
+  runId === null ? `${jobId}:at:${runAt}` : `${jobId}:run:${runId}`;
+
 /** "Succeeded · 2.6 s · 600 tokens", "Failed: …", and so on (automation.md section 6). */
 export function runOutcome(run: RoutineRun): { text: string; mark: "failed" | "stopped" | null } {
   if (run.status === "error")

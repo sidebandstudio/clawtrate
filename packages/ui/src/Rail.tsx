@@ -173,7 +173,8 @@ function RoutineRows({
         each.target === "isolated" &&
         each.payload === "agentTurn" &&
         (each.runningAt !== null ||
-          (each.lastRunAt !== null && now - each.lastRunAt < ROUTINE_ROW_MS)),
+          (each.lastRunAt !== null &&
+            now - (each.lastEndedAt ?? each.lastRunAt) < ROUTINE_ROW_MS)),
     )
     .sort((a, b) => (b.runningAt ?? b.lastRunAt ?? 0) - (a.runningAt ?? a.lastRunAt ?? 0));
   if (rows.length === 0) return null;

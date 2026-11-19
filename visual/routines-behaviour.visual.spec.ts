@@ -245,6 +245,25 @@ test.describe("1440", () => {
     await expect(when).toHaveText("Marlow · Today 8:00 AM");
   });
 
+  test("F-193: a routine's row stays for a day from when its latest run finished, not from when it started", async ({
+    page,
+  }) => {
+    await openFixture(page, ROUTINES, "light");
+    const hour = 3_600_000;
+    const ran = (startedAgo: number, endedAgo: number) =>
+      change(
+        page,
+        `(store) => ({ ...store, routines: store.routines.map((each) =>
+          each.id === "routine-digest"
+            ? { ...each, lastRunAt: Date.now() - ${startedAgo}, lastEndedAt: Date.now() - ${endedAgo} }
+            : each) })`,
+      );
+    await ran(25 * hour, 23 * hour);
+    await expect(rail(page, "Marlow")).toHaveCount(1);
+    await ran(26 * hour, 25 * hour);
+    await expect(rail(page, "Marlow")).toHaveCount(0);
+  });
+
   test("F-193: a running row opens the routine with its run in progress", async ({ page }) => {
     await openFixture(page, "scene=main&routines=running", "light");
     await rail(page, "Marlow").click();

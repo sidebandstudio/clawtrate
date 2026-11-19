@@ -17,6 +17,7 @@ import {
   fullWhen,
   ownerOf,
   routineZone,
+  runKey,
   runOutcome,
   scheduleWords,
   triggerWords,
@@ -452,7 +453,7 @@ function Page({
               const outcome = runOutcome(run);
               const at = when(run.runAt, now, viewer);
               return (
-                <li key={`${run.runId ?? ""}:${run.runAt}`}>
+                <li key={runKey(run.jobId, run.runId, run.runAt)}>
                   <button
                     type="button"
                     className="r-run"
@@ -808,7 +809,7 @@ export function RoutinesView({
           nav.run ? (
             run ? (
               <RunView
-                key={`${run.runId ?? ""}:${run.runAt}`}
+                key={runKey(run.jobId, run.runId, run.runAt)}
                 gateway={gateway}
                 routine={shown.routine}
                 run={run}

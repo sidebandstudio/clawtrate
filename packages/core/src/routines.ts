@@ -69,6 +69,8 @@ export type Routine = {
   deliveryChannel: string | null;
   nextRunAt: number | null;
   lastRunAt: number | null;
+  /** When the last run ended: its start plus its duration, when the gateway gives both. */
+  lastEndedAt?: number | null;
   lastStatus: "ok" | "error" | "skipped" | null;
   lastError: string | null;
   /** Set from `started` until `finished` (`state.runningAtMs`). */
@@ -208,6 +210,10 @@ export function parseRoutine(value: unknown): Routine | null {
     deliveryChannel: str(delivery?.channel),
     nextRunAt: num(state.nextRunAtMs),
     lastRunAt: num(state.lastRunAtMs),
+    lastEndedAt:
+      num(state.lastRunAtMs) !== null && num(state.lastDurationMs) !== null
+        ? num(state.lastRunAtMs)! + num(state.lastDurationMs)!
+        : null,
     lastStatus: last === "ok" || last === "error" || last === "skipped" ? last : null,
     lastError: cut(str(state.lastError), MAX_ROUTINE_RUN_TEXT_CHARS),
     runningAt: num(state.runningAtMs),
