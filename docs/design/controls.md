@@ -709,7 +709,7 @@ Each plugin is written from its list, each item checked by a test or a review, a
 - [ ] `clawtrate-tool-rules.status` (read): version, rules schema version, whether its hook is registered, the time its hook last saw a call, and which tools it matches; "Rules unavailable" if reading its rules fails.
 - [ ] Methods `get`, `decisions.list` (read); `set {scope, rules, expectedVersion}` (admin, which the gateway checks when it registers the method). An empty invalidation event; readers re-fetch on receipt.
 
-**What it must never do.** Rewrite a call's parameters; get ahead of the gateway's own policy; ask or block for `ask_user`; let an Allow outrank a Never or an Ask; make a standing permission from a card's answer; store or log arguments or results; carry paths, commands or bot ids in an event a broader audience can read.
+**What it must never do.** Rewrite a call's parameters; get ahead of the gateway's own policy; ask or block for `ask_user`; let an Allow outrank a Never or an Ask; make a standing permission from a card's answer; put arguments or results into the plugin's decision record or its own log messages. OpenClaw may include arguments or results in its task data and may log arguments when a tool is denied or fails; carry paths, commands or bot ids in an event a broader audience can read.
 
 ### Clawtrate's memory plugin (`clawtrate-memory`, P2)
 
