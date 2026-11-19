@@ -86,7 +86,35 @@ describe("F-094: Raw holds only what the engine took, and says where it came fro
     });
     const { client, transcript } = await openTask({ gateway });
     const run = transcript().runs.find((each) => each.id === "run-h");
-    expect(run?.lifecycle).toEqual([{ via: "chat.history (the run's last row)", record: row }]);
+    expect(run?.lifecycle).toEqual([
+      { via: "chat.history (the run's last correlated row)", record: row },
+    ]);
+    client.stop();
+  });
+
+  it("a failed run read from history keeps its last correlated row under the ordinary history-row label, never as the row its end was read from", async () => {
+    const gateway = grantingGateway();
+    const tag = (id: string) => ({ id, runId: "run-history" });
+    const failed = {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: "Gateway failed.",
+      __openclaw: tag("a1"),
+    };
+    const late = {
+      role: "toolResult",
+      toolCallId: "call_late",
+      content: [{ type: "text", text: "A late result." }],
+      __openclaw: tag("t1"),
+    };
+    gateway.handlers["chat.history"] = () => ({ messages: [failed, late] });
+    const { client, transcript } = await openTask({ gateway });
+    const run = transcript().runs.find((each) => each.id === "run-history")!;
+    expect(run.state).toBe("failed");
+    expect(run.lifecycle).toEqual([
+      { via: "chat.history (the run's last correlated row)", record: late },
+    ]);
     client.stop();
   });
   it("a run stopped by the chat's abort keeps that frame; the lifecycle end after it, which the engine does not take, is not kept as its end", async () => {

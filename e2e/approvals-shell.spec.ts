@@ -676,17 +676,15 @@ test("F-094: a failed turn's card, its run line and a line the gateway wrote its
   await expect(raw(line)).toContainText("(agent (lifecycle start))");
   await expect(raw(line)).toContainText(key);
   await shot(page.getByTestId("transcript"), "raw-run-line");
-  // Read anew from history once the page reloads: the run line shows the history row its end
-  // was read from, said to be that, and no event this host did not receive again.
+  // Read anew from history once the page reloads: the run line shows a received history row for
+  // the run, said to be that, and no event this host did not receive again.
   await page.reload();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
   await openTask(page, "Pip", title);
   const reread = page.getByTestId("run-line").last();
   await reread.locator("summary").click();
   await reread.getByRole("button", { name: "Raw" }).click();
-  await expect(raw(reread)).toContainText(
-    "The row its end was read from, as the gateway's history keeps it (chat.history)",
-  );
+  await expect(raw(reread)).toContainText("A received history row for this run (chat.history)");
   await expect(raw(reread)).not.toContainText("(agent (lifecycle");
   // The gateway's own boundary row after a reset is a line of its own, with that row in Raw.
   await (await adminClient()).request("sessions.reset", { key });

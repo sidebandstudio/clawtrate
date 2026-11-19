@@ -927,8 +927,8 @@ export function RunLineView({
 /**
  * The run line's Raw: what was received about the run's start and end, each
  * labelled with where it came from. A frame the engine did not take is never
- * here; a run read from history shows the row its end was read from; where
- * nothing was received, it says so.
+ * here; a run read from history shows a received history row for it; where
+ * none is retained, it says so.
  */
 export function runRaw(
   runId: string,
@@ -940,14 +940,14 @@ export function runRaw(
       (each) =>
         [
           each.via.startsWith("chat.history")
-            ? "The row its end was read from, as the gateway's history keeps it (chat.history)"
+            ? "A received history row for this run (chat.history)"
             : `The event, as the gateway sent it (${each.via})`,
           each.record,
         ] as [string, unknown],
     );
   const notes: string[] = [];
   if (!lifecycle || lifecycle.length === 0) {
-    notes.push("Nothing the gateway sent about this run's start or end was received here.");
+    notes.push("This view has no retained start or end record for the run.");
   } else if (events.length < lifecycle.length) {
     notes.push("An event was too long for this app to keep as received.");
   }

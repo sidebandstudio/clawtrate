@@ -207,19 +207,17 @@ for (const size of SIZES) {
         await line.getByRole("button", { name: "Raw" }).click();
         await line.getByRole("button", { name: "Raw" }).click();
         await expect(raw(line)).toContainText(
-          "Nothing the gateway sent about this run's start or end was received here.",
+          "This view has no retained start or end record for the run.",
         );
         await expect(raw(line)).not.toContainText("history");
-        // A run read from history: the row its end was read from, labelled as that.
+        // A run read from history: a received history row for it, labelled as that.
         await setRunLifecycle(page, [
           {
-            via: "chat.history (the run's last row)",
+            via: "chat.history (the run's last correlated row)",
             record: { role: "assistant", stopReason: "stop", __openclaw: { runId: "run-live" } },
           },
         ]);
-        await expect(raw(line)).toContainText(
-          "The row its end was read from, as the gateway's history keeps it (chat.history)",
-        );
+        await expect(raw(line)).toContainText("A received history row for this run (chat.history)");
         await openFixture(
           page,
           "scene=run-failed&bot=otto&task=agent:otto:disk-space&panel=closed",

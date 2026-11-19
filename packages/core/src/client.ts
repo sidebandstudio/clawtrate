@@ -652,14 +652,15 @@ function withLive(transcript: Transcript): Transcript {
 }
 
 /**
- * A run that ended with no event of its own received here (read from history)
- * keeps, for its run line's Raw, the last history row its end was read from,
- * labelled as such (F-094). A run that has events of its own keeps those.
+ * A run whose end was read from history rows (`endFromRows`), with no event of
+ * its own received here, keeps for its run line's Raw the last history row
+ * correlated with it, labelled as such (F-094). A run that has events of its
+ * own keeps those.
  */
 function withHistoryRows(runs: Run[], messages: unknown): Run[] {
   if (!Array.isArray(messages) || messages.length === 0) return runs;
   return runs.map((run) => {
-    if (!isTerminal(run.state) || (run.lifecycle?.length ?? 0) > 0) return run;
+    if (!isTerminal(run.state) || !run.endFromRows || (run.lifecycle?.length ?? 0) > 0) return run;
     let last: unknown = undefined;
     for (const message of messages) {
       const meta = asRecord(asRecord(message)?.__openclaw);
@@ -667,7 +668,10 @@ function withHistoryRows(runs: Run[], messages: unknown): Run[] {
     }
     return last === undefined
       ? run
-      : { ...run, lifecycle: [{ via: "chat.history (the run's last row)", record: last }] };
+      : {
+          ...run,
+          lifecycle: [{ via: "chat.history (the run's last correlated row)", record: last }],
+        };
   });
 }
 
