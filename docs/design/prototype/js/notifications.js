@@ -1,15 +1,18 @@
 // notifications.html: docs/design/notifications.md. When a notification is
 // shown, what it says, what a click opens, and the settings that decide it.
 // The host's decision (section 3) is one function, `decide`; opening (section
-// 5) is `open`. Every bot, task and reply is a local fixture. A notification is
-// drawn as a labelled picture: the system draws the real one.
+// 5) is `open`; quiet hours (section 6) are `quietInterval`. Every bot, task,
+// figure and reply is a local fixture. A notification is drawn as a labelled
+// picture: the system draws the real one.
 //
 // Address parameters (section 15 of the design lists them):
-//   open=settings|bot|details   event=<kind>   device=sender|other|read
-//   focus=<bot>  quiet=1  os=mac|windows|linux  master/previews/budgetsw=0|1
-//   bot=otto=off  task=on|off  click=gone|offline|othergw|stale
-//   prefs=reading|readfail|device|conflict|savefail|elsewhere  access=read
-//   failed=1  tasks=full
+//   open=settings|bot|details   event=<kind>   device=sender|other|read|admin
+//   focus=<bot>  quiet=1  quietset=1  os=mac|windows|linux  platform=none
+//   master/names/budgetsw=0|1   bot=otto=off   task=on|off   tasks=full   botsfull=1
+//   click=gone|unlisted|botgone|itemgone|offline|othergw|stale
+//   conn=down   budgetend=<outcome>
+//   prefs=reading|readfail|device|conflict|savefail|unknown|elsewhere
+//   access=read   req=asking|requested|denied|expired|failed   failed=1
 
 (function () {
   const CT = window.CT;
@@ -22,9 +25,6 @@
   const icon = (name, cls) => CT.icon(name, cls);
   const glyph = (state) => CT.glyph(state);
   const LOGO = "../../../packages/ui/src/assets/logo-mark.png";
-  // A bell, drawn for this prototype.
-  const BELL =
-    '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2a3.6 3.6 0 0 0-3.6 3.6v2.3L3.2 10.4h9.6l-1.2-2.3V5.8A3.6 3.6 0 0 0 8 2.2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M6.6 12.4a1.5 1.5 0 0 0 2.8 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
 
   // Fixtures ---------------------------------------------------------------------------------------
 
@@ -50,18 +50,35 @@
     for (const b of BOTS) for (const t of b.tasks) if (t.id === id) return { b, t };
     return null;
   };
-  // 39 other tasks with their own setting, for tasks=full.
-  const FILLER = Array.from({ length: 39 }, (_, i) => [`x${i}`, i % 2 ? "on" : "off"]);
+
+  // The gateway measures a preference as the UTF-8 bytes of its JSON (section 9).
+  const LIMIT = 4096;
+  const bytes = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
+  // Long task keys, as the gateway accepts them, filling the overrides almost to the limit (tasks=full).
+  function filler() {
+    const out = {};
+    for (let i = 0; ; i += 1) {
+      const key = `agent:otto:dashboard:${String(i).padStart(4, "0")}-${"a".repeat(104)}`;
+      const next = { ...out, [key]: i % 2 ? "on" : "off" };
+      if (bytes({ o4: "off", ...next }) > LIMIT - 60) return out;
+      Object.assign(out, { [key]: next[key] });
+    }
+  }
 
   // The events of the prototype's bar, and what each carries (section 3).
   const EVENTS = {
-    finished: { label: "Otto finishes", bot: "otto", task: "o3", kind: "finished" },
-    failed: { label: "Otto's run fails", bot: "otto", task: "o5", kind: "failed" },
-    stopped: { label: "Otto's run is stopped", bot: "otto", task: "o3", kind: "stopped" },
-    approval: { label: "Otto asks to run a command", bot: "otto", task: "o1", kind: "approval", command: "du -sh /var/lib/transcode-cache" },
-    question: { label: "Juniper asks a question", bot: "juniper", task: "j1", kind: "question", question: "Which matters more to you: running cost or upfront price?" },
-    marlow: { label: "Marlow asks, for Pip's message", bot: "marlow", task: "m1", kind: "question", question: "Should the plan keep Saturday morning free?", via: "pip" },
-    budget: { label: "Otto passes 80% of its budget", bot: "otto", task: "o1", kind: "budget" },
+    finished: { label: "Otto finishes", bot: "otto", task: "o3", kind: "finished", run: "r-o3-1" },
+    yielded: { label: "Otto ends without a visible reply", bot: "otto", task: "o3", kind: "yielded", run: "r-o3-2" },
+    failed: { label: "Otto's run fails", bot: "otto", task: "o5", kind: "failed", run: "r-o5-1" },
+    stopped: { label: "Otto's run is stopped", bot: "otto", task: "o3", kind: "stopped", run: "r-o3-3" },
+    approval: { label: "Otto asks to run a command", bot: "otto", task: "o1", kind: "approval", approval: "exec", run: "r-o1-1", command: "du -sh /var/lib/transcode-cache" },
+    generic: { label: "Otto asks for a plugin's approval", bot: "otto", task: "o3", kind: "approval", approval: "plugin", run: "r-o3-4" },
+    question: { label: "Juniper asks a question", bot: "juniper", task: "j1", kind: "question", run: "r-j1-1", question: "Which matters more to you: running cost or upfront price?" },
+    unsupported: { label: "Juniper asks something this app can't answer", bot: "juniper", task: "j1", kind: "question", unsupported: true, run: "r-j1-2" },
+    marlow: { label: "Marlow asks, for Pip's message", bot: "marlow", task: "m1", kind: "question", run: "r-m1-1", question: "Should the plan keep Saturday morning free?", via: "pip" },
+    routinetask: { label: "A routine fails in Otto's task", bot: "otto", task: "o5", kind: "failed", run: "r-o5-routine", routine: "task" },
+    routineisolated: { label: "An isolated routine of Otto's ends", bot: "otto", task: null, kind: "routine", run: "r-cron-1" },
+    budget: { label: "Otto passes 80% of its budget", bot: "otto", task: "o1", kind: "budget", budget: "bot:otto", period: "2026-11-16" },
   };
 
   // State --------------------------------------------------------------------------------------------
@@ -69,19 +86,24 @@
   const S = {
     os: ["mac", "windows", "linux"].includes(p("os")) ? p("os") : "mac",
     none: p("platform") === "none", // this build cannot show notifications (section 10)
-    device: ["sender", "other", "read"].includes(p("device")) ? p("device") : "sender",
+    device: ["sender", "other", "read", "admin"].includes(p("device")) ? p("device") : "sender",
     master: p("master") !== "0",
-    previews: p("previews") === "1",
+    names: p("names") !== "0",
     budgetsw: p("budgetsw") !== "0",
     bots: { juniper: true, marlow: true, otto: p("bot") !== "otto=off", pip: true },
-    tasks: Object.assign({ o4: "off" }, p("task") ? { o3: p("task") } : {}, p("tasks") === "full" ? Object.fromEntries(FILLER) : {}),
+    botsFull: p("botsfull") === "1",
+    tasks: Object.assign({ o4: "off" }, p("task") ? { o3: p("task") } : {}, p("tasks") === "full" ? filler() : {}),
     quiet: { enabled: p("quiet") === "1" || p("quietset") === "1", from: "22:00", to: "07:00" },
     quietNow: p("quiet") === "1",
     focus: p("focus") || null, // the bot on screen in a focused window
     click: p("click") || "", // what the host finds at a click
-    prefs: p("prefs") || "ok", // reading, readfail, device, conflict, savefail, elsewhere
+    conn: p("conn") === "down" ? "down" : "up",
+    budgetEnd: p("budgetend") || "still", // the fresh figure read when quiet hours end
+    prefs: p("prefs") || "ok", // reading, readfail, device, conflict, savefail, unknown, elsewhere
+    unconfirmed: false, // a save whose outcome could not be confirmed
     access: p("access") === "read" ? "read" : "write",
-    req: "none", // the access bar's request
+    req: p("req") || "none", // the access bar's request
+    granted: false,
     failedAt: p("failed") === "1" ? "5:41 PM" : null,
     sel: { bot: "otto", task: "o1" },
     panel: false,
@@ -89,21 +111,41 @@
     bview: "main",
     view: "detail",
     strip: null,
-    pics: [], // pictures shown, newest first
-    held: [], // waits held during quiet hours
+    pics: [], // pictures shown, in the order they were posted
+    held: [], // waits held during quiet hours, by task and card
+    budgetHold: null, // the one budget warning held, keyed by budget and period start
+    warned: new Set(), // budget warnings shown, by budget and period start
+    runs: new Set(), // runs already notified as finished or failed
     why: "", // what the host decided when nothing was shown
-    saving: null, // the control being saved
-    error: {}, // a control's "Couldn't save" line
+    saving: null,
+    error: {},
     conflictNote: false,
     timeError: false,
-    taskLimit: false,
+    taskRoom: false,
+    botRoom: false,
     resolved: new Set(), // waits answered or ended
     sectionOpen: "notifications",
     settingsPane: "section",
   };
-  if (S.prefs === "conflict" || S.prefs === "savefail") S.prefsFail = S.prefs; // the next write ends that way
+  if (["conflict", "savefail", "unknown"].includes(S.prefs)) S.prefsFail = S.prefs; // the next write ends that way
   const sharedReadable = () => S.prefs !== "reading" && S.prefs !== "readfail";
-  const canChangeShared = () => S.access !== "read" && sharedReadable();
+  const canChangeShared = () => S.access !== "read" && sharedReadable() && !S.unconfirmed;
+
+  // What this device holds that is a credential, for the scrub of a bot's name (section 4).
+  const HELD_SECRETS = ["gw-sample-token-0000", "dev-sample-token-1111"];
+  const NAME_CHARS = 40;
+  /** The native title: the bot's name, without the credentials this device holds, cut to 40 characters; or "Clawtrate". */
+  function nativeTitle(name) {
+    if (!S.names) return "Clawtrate";
+    let out = name;
+    for (const secret of [...HELD_SECRETS].sort((a, b) => b.length - a.length)) out = out.split(secret).join("…");
+    const chars = [...out];
+    return chars.length <= NAME_CHARS ? out : `${chars.slice(0, NAME_CHARS - 1).join("")}…`;
+  }
+  // Opaque local identifiers for the native notification and its group (section 4).
+  let nextId = 1;
+  const groupIds = {};
+  const groupOf = (botId) => (groupIds[botId] ??= `g${Object.keys(groupIds).length + 1}`);
 
   // The host's decision (section 3) ------------------------------------------------------------------
 
@@ -113,17 +155,25 @@
     if (own === "off") return false;
     return S.bots[ev.bot];
   };
+  /** Whether this device has the pending record: a question on every interactive device; an approval on the sender, an admin or reviewer device. */
+  const hasRecord = (ev) => (ev.kind === "question" ? S.device !== "read" : S.device === "sender" || S.device === "admin");
+  const budgetKey = (ev) => `${ev.budget}:${ev.period}`;
 
   /** Returns { show: picture } or { hold: why } or { none: why }, by the design's order. */
   function decide(ev) {
     const b = bot(ev.bot);
     if (S.none) return { none: "This copy of Clawtrate can't show notifications here. The rail and the badge show it." };
     if (!S.master) return { none: "Show notifications is off on this computer." };
-    if (!sharedReadable()) return { none: "Your settings haven't been read from the gateway, so no notification about a bot is shown." };
+    if (S.conn === "down") return { none: "The connection is down: this device receives nothing until it reconnects." };
+    if (!sharedReadable() || S.unconfirmed) return { none: "Your settings aren't confirmed from the gateway, so no notification about a bot is shown." };
     if (ev.kind === "stopped") return { none: "A stopped run isn't notified: someone chose to stop it." };
-    if (ev.kind === "question" && S.device === "read") return { none: "A read-only device receives nothing that says a question waits." };
+    if (ev.kind === "yielded") return { none: "A run that ended without a visible reply isn't notified." };
+    if (ev.kind === "routine") return { none: "Isolated routines and cron completion events do not notify here." };
+    if ((ev.kind === "finished" || ev.kind === "failed") && S.runs.has(ev.run)) return { none: "This run was already notified." };
+    if (ev.kind === "question" && !hasRecord(ev)) return { none: "A read-only device receives nothing that says a question waits." };
     if (ev.kind === "budget") {
       if (!S.budgetsw) return { none: "Budget warnings are off on this computer." };
+      if (S.warned.has(budgetKey(ev))) return { none: "This budget was already warned about in this period." };
     } else if (!eff(ev)) {
       return { none: S.tasks[ev.task] === "off" ? `This task's notifications are off.` : `Notifications for ${b.name} are off.` };
     }
@@ -132,132 +182,235 @@
       if (S.focus === ev.bot) return { none: `${b.name} is on screen in the focused window.` };
     }
     if (S.quietNow) {
-      if (ev.kind === "budget") return { hold: `Held until ${S.quiet.to}: ${b.name}'s budget warning, shown then if the budget is still at or over 80% for this period.` };
-      const wait = ev.kind === "approval" || ev.kind === "question";
-      return wait ? { hold: `Held until ${S.quiet.to}: ${b.name} is waiting for you.` } : { none: "Quiet hours: this is never shown later. The rail and the task hold it." };
+      if (ev.kind === "budget") return { hold: `Held until ${S.quiet.to}: ${b.name}'s budget warning. It needs a fresh figure for this period then.` };
+      if (ev.kind === "approval" && !hasRecord(ev)) return { none: "Quiet hours: a wait this device has no request for isn't held. It can't be confirmed later." };
+      if (ev.kind === "approval" || ev.kind === "question") return { hold: `Held until ${S.quiet.to}: ${b.name} is waiting for you.` };
+      return { none: "Quiet hours: this is never shown later. The rail and the task hold it." };
     }
     return { show: picture(ev) };
   }
 
-  // What a notification says (section 4).
-  function picture(ev) {
-    const b = bot(ev.bot);
-    const { t } = findTask(ev.task);
-    let body;
-    let preview = "";
-    if (ev.kind === "finished") (body = "Finished."), (preview = `${t.title}: ${t.reply}`);
-    if (ev.kind === "failed") (body = "Its run failed."), (preview = t.title);
+  // What a notification says (section 4): a fixed sentence for the kind, never gateway text.
+  function words(ev) {
+    const n = S.names;
+    if (ev.kind === "finished") return n ? "Finished." : "A bot finished.";
+    if (ev.kind === "failed") return n ? "Its run failed." : "A bot's run failed.";
     if (ev.kind === "approval") {
-      if (S.device === "sender") (body = "Wants to run a command."), (preview = `${t.title}: ${ev.command}`);
-      else if (S.device === "other") (body = "Is waiting for an approval. It can be answered on the device that sent the message."), (preview = t.title);
-      else (body = "Is waiting for an approval. This device can only read."), (preview = t.title);
+      if (!hasRecord(ev)) return "A run is waiting for approval. This device doesn't have the approval request.";
+      if (ev.approval === "exec") return n ? "Wants to run a command." : "A bot wants to run a command.";
+      return n ? "Needs your approval." : "A bot needs your approval.";
     }
-    if (ev.kind === "question") (body = "Asked you a question."), (preview = `${t.title}: ${ev.question}`);
-    if (ev.kind === "budget") body = "Used 82% of its weekly budget. Shown only: nothing was stopped.";
-    if (ev.kind === "budget") preview = "";
-    return { id: `${ev.task}:${ev.kind}`, ev, title: b.name, body, preview: S.previews ? cut(preview, 90) : "" };
+    if (ev.kind === "question" && ev.unsupported) return n ? "Asked something this app can't answer yet." : "A bot asked something this app can't answer yet.";
+    if (ev.kind === "question") return n ? "Asked you a question." : "A bot asked you a question.";
+    if (ev.kind === "budget") return n ? "Reached 80% of its budget. Shown only: nothing was stopped." : "A bot reached 80% of its budget. Shown only: nothing was stopped.";
+    return "";
   }
-  const cut = (text, n) => (text.length <= n ? text : `${text.slice(0, text.lastIndexOf(" ", n - 1))}…`);
+  function picture(ev) {
+    return { id: `n${nextId++}`, group: groupOf(ev.bot), ev, title: nativeTitle(bot(ev.bot).name), body: words(ev) };
+  }
+  // One per task, apart from a budget warning, which has its own slot (sections 3 and 11).
+  const slotOf = (pic) => (pic.ev.kind === "budget" ? budgetKey(pic.ev) : pic.ev.task);
+
+  function post(pic) {
+    const ev = pic.ev;
+    if (ev.kind === "finished" || ev.kind === "failed") S.runs.add(ev.run);
+    if (ev.kind === "budget") S.warned.add(budgetKey(ev));
+    S.pics = [...S.pics.filter((x) => slotOf(x) !== slotOf(pic)), pic];
+    // A later shown callback clears the note about a failed post (section 7).
+    S.failedAt = null;
+  }
 
   function fire(name) {
     const ev = EVENTS[name];
     if (!ev) return;
-    S.resolved.delete(`${ev.task}:${ev.kind}`);
-    markRail(ev);
+    if (ev.task) S.resolved.delete(`${ev.task}:${ev.kind}`);
+    if (S.conn === "up") markRail(ev);
     const outcome = decide(ev);
     if (outcome.show) {
-      // One per task: a newer one for the task replaces the one shown.
-      S.pics = [outcome.show, ...S.pics.filter((x) => x.ev.task !== ev.task)];
+      post(outcome.show);
       S.why = "";
     } else if (outcome.hold) {
-      S.held = [...S.held.filter((x) => x.task !== ev.task), ev];
+      if (ev.kind === "budget") S.budgetHold = ev;
+      else S.held = [...S.held.filter((x) => x.task !== ev.task), ev];
       S.why = outcome.hold;
     } else S.why = `No notification. ${outcome.none}`;
     renderLayer();
     renderRail();
-    if (S.sectionOpen && $("#settings-dialog").open) renderSettings();
+    if ($("#settings-dialog").open) renderSettings();
   }
 
   // The rail goes on updating, notifications or not (section 6).
   function markRail(ev) {
+    if (!ev.task) return;
     const { t } = findTask(ev.task);
-    if (ev.kind === "approval" || ev.kind === "question") t.wait = ev.kind === "question" ? "question" : "approval";
+    if (ev.kind === "approval" || ev.kind === "question") t.wait = ev.kind === "question" ? "question" : hasRecord(ev) ? "approval" : "phase";
     if (ev.kind === "finished") t.unread = true;
     if (ev.kind === "failed") t.status = "failed";
   }
 
+  // When quiet hours end: each held wait needs a fresh pending record this device can see, and the
+  // held budget warning a fresh figure for the same budget and period (sections 6 and 11).
+  const BUDGET_END = {
+    still: { show: true, why: "" },
+    raised: { show: true, why: "" },
+    over100: { show: true, why: "" },
+    below: { show: false, why: "the fresh figure is under 80% of the latest saved budget" },
+    refreshing: { show: false, why: "the gateway was still counting, so the figure is unknown" },
+    readfail: { show: false, why: "the usage read failed" },
+    rollover: { show: false, why: "the period rolled over" },
+    removed: { show: false, why: "the budget was removed" },
+  };
   function quietEnds() {
     S.quietNow = false;
+    if (S.conn === "down") {
+      S.held = [];
+      S.budgetHold = null;
+      S.why = "Quiet hours ended while the connection was down. The holds were dropped; your tasks show what waits.";
+      return refresh();
+    }
     const shown = [];
     for (const ev of S.held) {
-      if (S.resolved.has(`${ev.task}:${ev.kind}`)) continue;
+      if (S.resolved.has(`${ev.task}:${ev.kind}`) || !hasRecord(ev)) continue;
       const outcome = decide(ev);
       if (outcome.show) shown.push(outcome.show);
     }
+    // A wait is posted before a budget warning when both are due.
+    let budgetWhy = "";
+    if (S.budgetHold) {
+      const end = BUDGET_END[S.budgetEnd] || BUDGET_END.still;
+      if (end.show) {
+        const outcome = decide(S.budgetHold);
+        if (outcome.show) shown.push(outcome.show);
+      } else budgetWhy = ` The budget warning was dropped: ${end.why}.`;
+    }
     S.held = [];
-    S.pics = [...shown, ...S.pics];
-    S.why = shown.length ? "" : "Quiet hours ended. Nothing still waiting, so nothing was shown.";
-    renderLayer();
-    if ($("#settings-dialog").open) renderSettings();
+    S.budgetHold = null;
+    shown.forEach(post);
+    S.why = shown.length ? budgetWhy.trim() : `Quiet hours ended. Nothing still waiting, so nothing was shown.${budgetWhy}`;
+    refresh();
   }
-
-  // The budget was raised, or its period rolled over, while quiet hours were on.
-  function budgetLapsed() {
-    for (const ev of S.held) if (ev.kind === "budget") S.resolved.add(`${ev.task}:${ev.kind}`);
-    S.why = "Otto's budget is no longer at 80% for this period.";
-    renderLayer();
+  function wakeAfterEnd() {
+    S.quietNow = false;
+    S.held = [];
+    S.budgetHold = null;
+    S.why = "Woke after quiet hours ended. Nothing from while it slept is replayed, and the holds were dropped.";
+    refresh();
   }
-
   function answeredElsewhere() {
     for (const ev of S.held) {
-      if (ev.kind === "budget") continue;
       S.resolved.add(`${ev.task}:${ev.kind}`);
       findTask(ev.task).t.wait = null;
     }
     S.why = "The wait was answered on another device.";
+    refresh();
+  }
+  // Disconnect: phase-only waits are cleared and their notifications withdrawn (section 3).
+  function dropConnection() {
+    S.conn = "down";
+    for (const b of BOTS) for (const t of b.tasks) if (t.wait === "phase") t.wait = null;
+    S.pics = S.pics.filter((pic) => !(pic.ev.kind === "approval" && !hasRecord(pic.ev)));
+    S.held = S.held.filter((ev) => hasRecord(ev));
+    S.why = "Disconnected. Waits this device has no request for were cleared, and their notifications withdrawn.";
+    setStrip({ tone: "warn", text: "Reconnecting in 4s", more: "showing saved messages" });
+    refresh();
+  }
+  // Reconnect: the rail, the reloaded transcripts and visible pending cards update; nothing is posted.
+  function reconnect() {
+    S.conn = "up";
+    findTask("o3").t.unread = true; // a reply missed while down shows as unread
+    S.why = "Reconnected. Missed events can appear in your tasks; no notification is posted for them.";
+    setStrip(null);
+    refresh();
+  }
+  function refresh() {
     renderLayer();
     renderRail();
+    if ($("#settings-dialog").open) renderSettings();
+  }
+
+  // Quiet hours across a clock change (section 6) -----------------------------------------------------
+
+  const fmt = (zone) => new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const localOf = (ms, zone) => {
+    const parts = Object.fromEntries(fmt(zone).formatToParts(ms).map((x) => [x.type, x.value]));
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
+  };
+  const addDays = (date, n) => new Date(Date.parse(`${date}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+  /** The instants a wall time on a date has in a zone: none (skipped), one, or two (repeated). */
+  function instants(date, hhmm, zone) {
+    const wall = `${date} ${hhmm}`;
+    const base = Date.parse(`${date}T${hhmm}:00Z`);
+    const found = [];
+    for (let k = -56; k <= 56; k += 1) {
+      const ms = base - k * 15 * 60000;
+      if (localOf(ms, zone) === wall) found.push(ms);
+    }
+    return found.sort((a, b) => a - b);
+  }
+  /** The first instant whose wall time in the zone is at or after the given one: a skipped time's first valid time after the jump. */
+  function firstAfter(date, hhmm, zone) {
+    const wall = `${date} ${hhmm}`;
+    const base = Date.parse(`${date}T${hhmm}:00Z`) - 15 * 3600000;
+    for (let ms = base; ms < base + 30 * 3600000; ms += 60000) if (localOf(ms, zone) >= wall) return ms;
+    return null;
+  }
+  /** One interval per start date in the saved zone: a repeated start is its first occurrence, a repeated end its last, a skipped one the first valid time after. */
+  function quietInterval(startDate, from, to, zone) {
+    const endDate = to > from ? startDate : addDays(startDate, 1);
+    const s = instants(startDate, from, zone);
+    const e = instants(endDate, to, zone);
+    return {
+      start: s.length ? s[0] : firstAfter(startDate, from, zone),
+      end: e.length ? e[e.length - 1] : firstAfter(endDate, to, zone),
+    };
   }
 
   // Opening (section 5) -------------------------------------------------------------------------------
 
   function open(pic) {
-    S.pics = S.pics.filter((x) => x !== pic);
     S.why = "";
     const ev = pic.ev;
     setStrip(null);
-    if (S.click === "othergw") {
-      setStrip({ tone: "warn", text: "That notification came from Studio gateway. Clawtrate is using Home gateway now.", action: "Your gateways" });
-      return renderLayer();
-    }
+    // The record is cleared only once the window has received its target (below).
+    const done = () => (S.pics = S.pics.filter((x) => x !== pic));
     if (S.click === "stale") {
+      done();
       S.why = "Clawtrate came forward as it was. It has no record of that notification, so nothing opened.";
       return renderLayer();
     }
+    if (S.click === "othergw") {
+      done();
+      setStrip({ tone: "warn", text: "That notification came from Studio gateway. Clawtrate is using Home gateway now.", action: "Your gateways" });
+      return renderLayer();
+    }
+    if (S.click === "botgone") {
+      done();
+      setStrip({ tone: "warn", text: "Clawtrate couldn't open that bot on this gateway." });
+      return renderLayer();
+    }
     if (S.click === "gone") {
+      // Not in the rail, and the by-key read found nothing this connection may see.
       S.sel = { bot: ev.bot, task: null };
       S.view = "detail";
-      // The task list no longer has it: the rail drops it, as the reload does.
-      const owner = bot(ev.bot);
-      owner.tasks = owner.tasks.filter((x) => x.id !== ev.task);
-      setStrip({ tone: "warn", text: "That task is no longer on the gateway." });
+      setStrip({ tone: "warn", text: "Clawtrate couldn't find that task on this gateway." });
+      done();
       renderLayer();
       render();
       return requestAnimationFrame(() => $(`.bot[data-bot="${ev.bot}"]`)?.focus());
     }
-    if (S.click === "offline") setStrip({ tone: "warn", text: "Reconnecting in 4s", more: "showing saved messages" });
     S.sel = { bot: ev.bot, task: ev.task };
     S.view = "detail";
-    S.opened = ev;
+    S.opened = S.click === "itemgone" ? null : ev;
+    if (S.click === "itemgone") setStrip({ tone: "warn", text: "Clawtrate couldn't find that item in this task." });
+    if (S.click === "offline") setStrip({ tone: "warn", text: "Reconnecting in 4s", more: "showing saved messages" });
     if (ev.kind === "finished") findTask(ev.task).t.unread = false;
-    renderLayer();
     render();
     requestAnimationFrame(() => {
-      const target = $("#n-target");
-      if (target) {
-        target.scrollIntoView({ block: "center" });
-        target.focus();
-      }
+      const target = $("#n-target") || $("#transcript");
+      target.scrollIntoView({ block: "center" });
+      target.focus();
+      done();
+      renderLayer();
     });
   }
 
@@ -266,8 +419,9 @@
     const el = $("#status-strip");
     el.hidden = !strip;
     $(".conversation").dataset.strip = String(Boolean(strip));
-    $("#gateway-dot").dataset.status = S.click === "offline" && strip ? "reconnecting" : "connected";
-    $("#gateway-state").textContent = S.click === "offline" && strip ? "Reconnecting…" : "Connected";
+    const down = S.conn === "down" || (S.click === "offline" && strip);
+    $("#gateway-dot").dataset.status = down ? "reconnecting" : "connected";
+    $("#gateway-state").textContent = down ? "Reconnecting…" : "Connected";
     if (!strip) return;
     el.dataset.tone = strip.tone;
     el.innerHTML =
@@ -282,12 +436,11 @@
     const pics = S.pics
       .map(
         (pic) =>
-          `<div class="n-pic" data-testid="n-pic" data-kind="${pic.ev.kind}" data-bot="${pic.ev.bot}">` +
+          `<div class="n-pic" data-testid="n-pic" data-kind="${pic.ev.kind}" data-bot="${pic.ev.bot}" data-native-id="${pic.id}" data-native-group="${pic.group}">` +
           `<p class="n-pic-label">Picture of a system notification</p>` +
-          `<button type="button" class="n-pic-body" data-n-open="${esc(pic.id)}" aria-label="${esc(`${pic.title}. ${pic.body}${pic.preview ? " " + pic.preview : ""} Open.`)}">` +
+          `<button type="button" class="n-pic-body" data-n-open="${esc(pic.id)}" aria-label="${esc(`${pic.title}. ${pic.body} Open.`)}">` +
           `<span class="n-pic-app"><img src="${LOGO}" alt="" width="16" height="16" />Clawtrate<span class="n-pic-when">now</span></span>` +
           `<span class="n-pic-title">${esc(pic.title)}</span><span class="n-pic-text">${esc(pic.body)}</span>` +
-          (pic.preview ? `<span class="n-pic-preview">${esc(pic.preview)}</span>` : "") +
           `</button><button type="button" class="icon-button n-pic-close" data-n-close="${esc(pic.id)}" aria-label="Close the picture">${icon("x")}</button></div>`,
       )
       .join("");
@@ -302,7 +455,8 @@
 
   function waitWords(t) {
     if (!t.wait) return "";
-    if (S.device === "sender" || t.wait === "question") return t.wait === "question" ? "Waiting for you: a question" : "Waiting for you: approve a command";
+    if (t.wait === "question") return "Waiting for you: a question";
+    if (t.wait === "approval") return "Waiting for you: approve a command";
     return "Waiting for an approval";
   }
 
@@ -310,7 +464,7 @@
     const el = $("#bot-list");
     el.innerHTML = BOTS.map((b) => {
       const open = b.id === S.sel.bot;
-      const waiting = b.tasks.find((t) => t.wait && !(t.wait === "question" && S.device === "read"));
+      const waiting = b.tasks.find((t) => t.wait);
       const latest = b.tasks[0];
       const preview = waiting ? waitWords(waiting) : latest.reply;
       const unread = b.tasks.some((t) => t.unread);
@@ -326,7 +480,7 @@
             b.tasks
               .map((t) => {
                 const current = S.sel.task === t.id;
-                const mark = t.wait && !(t.wait === "question" && S.device === "read") ? glyph("waiting") : t.status === "failed" ? glyph("failed") : t.unread && !current ? '<span class="unread-dot" aria-hidden="true"></span>' : "";
+                const mark = t.wait ? glyph("waiting") : t.status === "failed" ? glyph("failed") : t.unread && !current ? '<span class="unread-dot" aria-hidden="true"></span>' : "";
                 return `<li><button type="button" class="task" data-bot="${b.id}" data-task="${t.id}" aria-current="${current}" data-testid="task"><span class="task-title">${esc(t.title)}</span><time class="task-time">${t.when}</time>${mark}</button></li>`;
               })
               .join("") +
@@ -347,6 +501,15 @@
 
   const turn = (role, html) => `<div class="turn" data-role="${role}">${html}</div>`;
   const user = (text) => turn("user", CT.msg({ role: "user", html: esc(text) }));
+  // Offline, a cached card's answers stay disabled until the gateway confirms the request (section 5).
+  const OFFLINE_LINE = `<p class="request-ended" data-testid="offline-line">Clawtrate is reconnecting. You can answer once the gateway confirms this request is still open.</p>`;
+  function offlineCard(html) {
+    if (S.click !== "offline") return html;
+    return html
+      .replace(/<button type="button" class="(button|option|icon-button)"/g, '<button type="button" disabled class="$1"')
+      .replace(/<input type="text"/g, "<input disabled type=\"text\"")
+      .replace('<div class="card-actions">', `${OFFLINE_LINE}<div class="card-actions">`);
+  }
 
   function transcript() {
     const b = bot(S.sel.bot);
@@ -362,41 +525,50 @@
     if (t.from) body += `<p class="event-line" data-side="center">A message from ${bot(t.from).name}</p>`;
     if (t.ask) body += user(t.ask);
     if (ev?.kind === "approval") {
-      if (S.device === "sender") {
+      if (hasRecord(ev)) {
+        const exec = ev.approval === "exec";
         body += turn(
           "assistant",
-          `<div id="n-target-wrap">` +
+          offlineCard(
             CT.approval({
               id: "n-target",
               bot: "otto",
-              summary: `List the size of each folder under <b>/var/lib</b> on the <b>media box</b>.`,
-              full: { reason: "To find what fills the disk.", command: ev.command, fields: [["Runs on", "media-box"], ["Folder", "/var/lib"], ["Asked by", "Otto"]] },
-              request: { command: ev.command, cwd: "/var/lib", host: "media-box", agentId: "otto" },
-              raw: { events: [["exec.approval.requested, as the gateway sends it", '{ "id": "6af68f8a-…", "request": { "command": "du -sh /var/lib/transcode-cache" } }']], ids: [["Approval", "6af68f8a"]] },
-            }) +
-            `</div>`,
+              what: exec ? "run a command" : "use the notes plugin",
+              summary: exec ? `List the size of each folder under <b>/var/lib</b> on the <b>media box</b>.` : `Read the notes the plugin keeps for this task.`,
+              full: exec
+                ? { reason: "To find what fills the disk.", command: ev.command, fields: [["Runs on", "media-box"], ["Folder", "/var/lib"], ["Asked by", "Otto"]] }
+                : { reason: "To check the renewal date.", command: "notes.read", fields: [["Plugin", "notes"], ["Asked by", "Otto"]] },
+              request: exec ? { command: ev.command, cwd: "/var/lib", host: "media-box", agentId: "otto" } : null,
+              decisions: exec ? ["once", "always", "deny"] : ["once", "deny"],
+              raw: { events: [["approval requested, as the gateway sends it", '{ "id": "6af68f8a-…", "status": "pending" }']], ids: [["Approval", "6af68f8a"]] },
+            }),
+          ),
         );
         body += CT.statusLine({ bot: "otto", state: "waiting", phrase: "Waiting for you", elapsed: "0:12", badge: "waiting" });
       } else {
         const words =
           S.device === "read"
             ? `<p><b>Otto is waiting for an approval or an answer.</b> This device can't see it on a read-only connection.</p><p>${CT.linkButton("Request access")}</p>`
-            : `<p><b>Otto is waiting for an approval.</b> This device can't answer it: the device that sent the message can.</p>`;
+            : `<p><b>A run is waiting for approval.</b> This device doesn't have the approval request.</p>`;
         body += `<div class="turn-note" id="n-target" tabindex="-1" data-testid="unseen-wait">${glyph("blocked")}<div>${words}</div></div>`;
         body += CT.statusLine({ bot: "otto", state: "thinking", badge: "blocked", phrase: "Waiting for an answer", elapsed: "0:12" });
       }
     } else if (ev?.kind === "question") {
       if (t.from) body += `<p class="request-asker n-asker">Marlow is working on a message from Pip.</p>`;
-      body += turn(
-        "assistant",
-        CT.question({
-          id: "n-target",
-          bot: ev.bot,
-          title: ev.question,
-          options: ev.bot === "marlow" ? [["Yes, keep it free"], ["No, it can be used"]] : [["Running cost", "Over ten years"], ["Upfront price", "What I pay this year"]],
-          raw: { events: [["question.requested, as the gateway sends it", '{ "id": "ask_ebb5ae55…", "status": "pending" }']], ids: [["Question", "ask_ebb5ae55"]] },
-        }),
-      );
+      body += ev.unsupported
+        ? turn("assistant", CT.questionReadOnly({ id: "n-target", bot: ev.bot, questions: [{ question: "Pick a supplier and attach the signed quote.", options: ["Supplier A", "Supplier B"], why: "It asks for a file, which this app can't send yet." }], raw: { events: [["question.requested", "{}"]], ids: [["Question", "ask_7d1e"]] } }))
+        : turn(
+            "assistant",
+            offlineCard(
+              CT.question({
+                id: "n-target",
+                bot: ev.bot,
+                title: ev.question,
+                options: ev.bot === "marlow" ? [["Yes, keep it free"], ["No, it can be used"]] : [["Running cost", "Over ten years"], ["Upfront price", "What I pay this year"]],
+                raw: { events: [["question.requested, as the gateway sends it", '{ "id": "ask_ebb5ae55…", "status": "pending" }']], ids: [["Question", "ask_ebb5ae55"]] },
+              }),
+            ),
+          );
     } else if (ev?.kind === "failed") {
       body += CT.turnError({ title: "Otto couldn't finish this turn", reason: "The model request failed. Nothing ran.", retry: S.access !== "read" }).replace('class="card turn-error"', 'class="card turn-error" id="n-target" tabindex="-1"');
     } else if (ev?.kind === "budget") {
@@ -435,14 +607,47 @@
   const switchRow = (id, title, sub, on, attrs, label) =>
     `<div class="b-row n-row" data-row="${id}"><span class="b-row-main"><span>${title}</span><small id="n-sub-${id}">${sub}</small></span>${sw(on, attrs, label, `n-sub-${id}`)}</div>`;
   const note = (html, tone = "") => `<div class="b-note"${tone ? ` data-tone="${tone}"` : ""}>${icon(tone ? "warning" : "approval")}<div>${html}</div></div>`;
-  const accessBar = (need) => {
+  // The access bar of conversation.md section 3, in all its states (section 2).
+  function accessBar(need) {
+    const row = (state, lead, text, action = "", tone = "") =>
+      `<section class="access-bar" role="region" aria-label="Access" data-state="${state}"${tone ? ` data-tone="${tone}"` : ""} data-testid="access-bar"><div class="access-row">${lead}<span class="shelf-text">${text}</span>${action}</div>`;
+    const button = (label, n) => `<button type="button" class="button" data-variant="primary" data-size="sm" data-n="${n}">${label}</button>`;
+    if (S.req === "asking") return row("asking", glyph("sending"), `<span aria-busy="true">Asking the gateway…</span>`) + `</section>`;
     if (S.req === "requested")
       return (
-        `<section class="access-bar" role="region" aria-label="Access" data-state="requested"><div class="access-row">${glyph("waiting")}<span class="shelf-text"><b>Waiting for the gateway's owner.</b> Approve this request on the gateway's machine:</span></div>` +
+        row("requested", glyph("waiting"), "<b>Waiting for the gateway's owner.</b> Approve this request on the gateway's machine:") +
         `<div class="command-line"><code>openclaw devices approve 7c41d09e</code></div>` +
         `<div class="access-row"><span class="shelf-text">This changes by itself as soon as the owner approves or denies the request, or it expires.</span></div></section>`
       );
-    return `<section class="access-bar" role="region" aria-label="Access" data-state="none"><div class="access-row">${icon("eye")}<span class="shelf-text"><b>Read-only.</b> ${need}</span><button type="button" class="button" data-variant="primary" data-size="sm" data-n="request">Request access</button></div></section>`;
+    if (S.req === "denied") return row("denied", glyph("stopped"), "<b>The request was denied.</b> Nothing changed. This device can still read.", button("Request again", "request")) + `</section>`;
+    if (S.req === "expired") return row("expired", glyph("stopped"), "<b>The request expired</b> before it was approved.", button("Request again", "request")) + `</section>`;
+    if (S.req === "failed") return row("failed", icon("warning"), "<b>Couldn't send the request.</b> The gateway did not answer.", button("Try again", "request"), "danger") + `</section>`;
+    return row("none", icon("eye"), `<b>Read-only.</b> ${need}`, button("Request access", "request")) + `</section>`;
+  }
+  function askAccess() {
+    S.req = "asking";
+    renderAll();
+    setTimeout(() => {
+      S.req = "requested";
+      renderAll();
+    }, 300);
+  }
+  // The owner's answer to the request (the prototype's bar, or the check).
+  function resolveReq(answer) {
+    if (answer === "granted") {
+      S.req = "none";
+      S.access = "write";
+      S.granted = true;
+      renderAll();
+      say("settings", "Access granted");
+      return;
+    }
+    S.req = answer;
+    renderAll();
+  }
+  const renderAll = () => {
+    if ($("#settings-dialog").open) renderSettings();
+    renderPanel();
   };
   const NEED = "Changing quiet hours and your bots' notifications needs more access.";
 
@@ -460,8 +665,11 @@
       ? "Kept on this computer: this connection has no profile on the gateway to keep it in, so your other devices won't show it."
       : "Kept for you on this gateway, so your other devices show the same.";
   const kept = (id, words) => `<p class="b-hint n-kept" data-testid="kept-${id}">${words}</p>`;
-  const NONE_HERE = (what) => `This copy of Clawtrate can't show notifications. ${what} applies on your other devices.`;
+  // A build that cannot show notifications; with only local settings, nothing "applies on your other devices".
+  const NONE_HERE = (what) =>
+    S.prefs === "device" ? "This copy of Clawtrate can't show notifications on this computer." : `This copy of Clawtrate can't show notifications. ${what} applies on your other devices.`;
   const savingLine = (key, idle) => (S.saving === key ? "Saving…" : S.error[key] || idle);
+  const UNCONFIRMED_NOTE = `<p>Couldn't confirm your notification settings with the gateway. Until Clawtrate reads them again, it shows no notifications about your bots.</p><div class="b-actions"><button type="button" class="button" data-size="sm" data-n="check-again">Check again</button></div>`;
 
   function renderPanel() {
     const b = bot(S.sel.bot);
@@ -477,9 +685,8 @@
         `<button type="button" class="b-select n-select" data-n="task-menu" aria-haspopup="menu" aria-expanded="false" aria-labelledby="n-task-label n-task-value"${shared && S.saving !== "task" ? "" : " disabled"}>` +
         `<span id="n-task-value">${S.saving === "task" ? "Saving…" : esc(taskValue(t.id, b.id))}</span>${icon("chevron")}</button></div>` +
         (S.error.task ? `<p class="b-field-error" data-testid="task-error">${S.error.task}</p>` : "") +
-        (S.taskLimit
-          ? `<p class="b-field-error" data-testid="task-limit">Up to 40 tasks can have their own setting. Set one back to "Same as" its bot first. <button type="button" class="link-button" data-n="bot-page">${b.name}'s notifications</button></p>`
-          : "") +
+        (S.taskRoom ? `<p class="b-field-error" data-testid="task-room">There's no room for another task setting. Set a task back to "Same as bot" first. <button type="button" class="link-button" data-n="bot-page">${b.name}'s notifications</button></p>` : "") +
+        (S.unconfirmed ? note(UNCONFIRMED_NOTE, "warn") : "") +
         kept("task", keptShared()) +
         `<p class="b-hint">${S.none ? NONE_HERE("This setting") : `On or Off wins over ${b.name}'s switch. This computer's switch, focus and quiet hours still apply.`}</p>` +
         (S.access === "read" ? `<div class="b-panel-foot">${accessBar(NEED)}</div>` : "")
@@ -520,9 +727,10 @@
       `<div class="b-subhead"><button type="button" class="icon-button" data-variant="quiet" data-n="bot-back" aria-label="Back to settings">${icon("back")}</button><h3 tabindex="-1" data-n-focus>Notifications</h3></div>`;
     if (S.none) html += note(`<p>${NONE_HERE("This switch")}</p>`);
     else if (!S.master) html += note(`<p>Notifications are off on this computer.</p><div class="b-actions"><button type="button" class="link-button" data-n="settings">Settings</button></div>`);
-    if (S.quietNow) html += note(`<p>Quiet until ${S.quiet.to}.</p>`);
+    if (S.quietNow) html += note(`<p>${quietUntil()}</p>`);
     if (S.prefs === "reading") return html + `<div aria-busy="true" class="n-reading"><div class="skeleton" style="height:58px;width:100%"></div></div><p class="b-hint">Reading your settings from the gateway…</p>`;
     if (S.prefs === "readfail") return html + note(`<p>Couldn't read your notification settings from the gateway. Until Clawtrate can, it shows no notifications about your bots.</p><div class="b-actions"><button type="button" class="button" data-size="sm" data-n="retry-read">Try again</button></div>`, "danger");
+    if (S.unconfirmed) html += note(UNCONFIRMED_NOTE, "warn");
     if (S.conflictNote) html += note(`<p>Changed on another of your devices a moment ago. This is what's set now.</p>`, "warn");
     html +=
       `<dl class="facts">` +
@@ -565,18 +773,28 @@
     if (refocus) menu.opener?.focus();
   }
 
-  // Saving your settings: written with a compare-and-set, then read back (section 2).
-  function saveShared(key, apply, revertWords, doneWords, where) {
+  // Saving your settings: written with a compare-and-set, then read back (section 2). Three outcomes
+  // are told apart: confirmed, refused with the value read back, and unknown.
+  let readSeq = 0;
+  function saveShared(key, apply, lastRead, doneWords, where) {
     S.saving = key;
     delete S.error[key];
     S.conflictNote = false;
     repaint(where);
+    const seq = ++readSeq;
     setTimeout(() => {
+      if (seq !== readSeq) return; // an older read never overwrites a newer one
       S.saving = null;
       if (S.prefsFail === "savefail") {
         S.prefsFail = null;
-        S.error[key] = `Couldn't save. ${revertWords}`;
-        say(where, "Couldn't save");
+        S.error[key] = `The gateway refused the change. ${lastRead.replace("were last read as", "are")}`;
+        say(where, "The gateway refused the change");
+      } else if (S.prefsFail === "unknown") {
+        S.prefsFail = null;
+        S.unconfirmed = true;
+        S.pendingApply = apply;
+        S.error[key] = `Couldn't confirm the change. ${lastRead}`;
+        say(where, "Couldn't confirm the change");
       } else if (S.prefsFail === "conflict") {
         S.prefsFail = null;
         // Another device turned Pip off a moment before; that is what is read back.
@@ -592,6 +810,16 @@
       repaint(where);
     }, 500);
   }
+  function checkAgain() {
+    // A fresh read shows the change had landed.
+    S.unconfirmed = false;
+    S.pendingApply?.();
+    S.pendingApply = null;
+    S.error = {};
+    renderAll();
+    renderRail();
+    say(S.tab === "details" && S.panel ? "pane" : "settings", "Read from the gateway");
+  }
   function repaint(where) {
     if (where === "pane") renderPanel();
     else renderSettings();
@@ -602,10 +830,13 @@
     const t = findTask(S.sel.task).t;
     const b = bot(S.sel.bot);
     closeMenu(false);
-    S.taskLimit = false;
-    const count = Object.keys(S.tasks).length;
-    if (value !== "same" && !S.tasks[t.id] && count >= 40) {
-      S.taskLimit = true;
+    S.taskRoom = false;
+    // The encoded value is measured before the write; removing an entry always fits.
+    const next = { ...S.tasks };
+    if (value === "same") delete next[t.id];
+    else next[`agent:${b.id}:dashboard:${t.id}-3f9a2c71-4b0e-4d7a-9a51-6c0f2e1d8b44`] = value;
+    if (value !== "same" && bytes(next) > LIMIT) {
+      S.taskRoom = true;
       renderPanel();
       return $('[data-n="task-menu"]').focus();
     }
@@ -616,7 +847,7 @@
         if (value === "same") delete S.tasks[t.id];
         else S.tasks[t.id] = value;
       },
-      `This task is still ${before}.`,
+      `This task was last read as ${before}.`,
       () => `This task: ${taskValue(t.id, b.id)}`,
       "pane",
     );
@@ -639,17 +870,15 @@
     ["system", "System", "settings.md, in review"],
     ["updates", "Updates", "settings.md, in review"],
   ];
-  // Held waits, for the "Quiet until" line; a held budget warning is not a bot waiting.
-  const waits = () => S.held.filter((ev) => ev.kind !== "budget").length;
+  const AFTER = "Clawtrate can notify you after quiet hours if the item is still waiting and your settings allow it.";
+  const heldCount = () => S.held.length + (S.budgetHold ? 1 : 0);
+  // "Quiet until" comes from tonight's interval in the saved zone (section 6).
+  const quietUntil = () => `Quiet until ${S.quiet.to}, Lisbon time.${heldCount() ? ` ${heldCount() === 1 ? "1 item is" : `${heldCount()} items are`} held. ${AFTER}` : ""}`;
+  const RECEIVED = "Clawtrate shows desktop notifications for events it receives while running and connected. Missed events can appear in your tasks when it reconnects.";
   const SYSTEM_NOTE = {
-    mac: "Clawtrate shows notifications while it's open, also with its window closed. It can't see whether macOS allows them or whether a Focus is on.",
-    windows: "Clawtrate shows notifications while it's open. Closing its window quits it. It can't see whether Windows allows them or whether Do Not Disturb is on.",
-    linux: "Clawtrate shows notifications while it's open, and none while its window is focused.",
-  };
-  const minutes = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3));
-  const shift = (hhmm, h) => {
-    const m = (minutes(hhmm) + h * 60 + 1440) % 1440;
-    return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    mac: `${RECEIVED} It shows them also with its window closed. It can't see whether macOS allows them or whether a Focus is on.`,
+    windows: `${RECEIVED} Closing its window quits it. It can't see whether Windows allows them or whether Do Not Disturb is on.`,
+    linux: `${RECEIVED} None is shown while its window is focused.`,
   };
 
   function openSettings(opener) {
@@ -697,23 +926,37 @@
     const shared = canChangeShared();
     const dis = (key) => (shared && S.saving !== key ? "" : " disabled");
     let body = "";
-    if (S.failedAt) body += note(`<p>Your system didn't show Clawtrate's notification at ${S.failedAt}. Check Clawtrate in your system's notification settings.</p>`, "warn");
+    if (S.failedAt)
+      body += note(
+        `<p data-testid="failed-note">Clawtrate couldn't post a notification at ${S.failedAt}. Check your system's notification settings.</p><div class="b-actions"><button type="button" class="link-button" data-n="dismiss-failed">Dismiss</button></div>`,
+        "warn",
+      );
+    if (S.granted) body += `<p class="b-hint" data-testid="granted">Access granted. You can change these now.</p>`;
     if (S.none)
       body +=
         `<h4 class="b-group">This computer</h4>` +
         note(
-          `<p data-testid="none-note">This copy of Clawtrate can't show notifications on ${S.os === "windows" ? "Windows" : "macOS"}. What your bots finish or wait on shows in the rail and on ${S.os === "windows" ? "the taskbar button" : "the dock's badge"}.</p><p>Quiet hours and your bots' switches below apply on your other devices.</p>`,
+          `<p data-testid="none-note">This copy of Clawtrate can't show notifications on ${S.os === "windows" ? "Windows" : "macOS"}. What your bots finish or wait on shows in the rail and on ${S.os === "windows" ? "the taskbar button" : "the dock's badge"}.</p>` +
+            (S.prefs === "device" ? "" : `<p>Quiet hours and your bots' switches below apply on your other devices.</p>`),
         );
     else {
       body +=
         `<h4 class="b-group">This computer</h4><dl class="facts">` +
-      switchRow("master", "Show notifications", savingLine("master", S.master ? "When a bot finishes or waits for you." : "No notifications on this computer. Your other devices keep theirs."), S.master, `data-n-set="master"${S.saving === "master" ? " disabled" : ""}`, "Show notifications") +
-      switchRow("previews", "Show previews", savingLine("previews", "Adds a task's title and the first words of a reply, a command or a question. Anyone who can see your screen can read them, also when it's locked, unless your system hides previews."), S.previews, `data-n-set="previews"${S.saving === "previews" ? " disabled" : ""}`, "Show previews") +
-      switchRow("budgetsw", "Budget warnings", savingLine("budgetsw", "When a bot has used 80% of a budget."), S.budgetsw, `data-n-set="budgetsw"${S.saving === "budgetsw" ? " disabled" : ""}`, "Budget warnings") +
-      `</dl>` +
-      kept("device", KEPT_DEVICE) +
-      `<p class="b-hint" data-testid="system-note">${SYSTEM_NOTE[S.os]}</p>`;
+        switchRow("master", "Show notifications", savingLine("master", S.master ? "When a bot finishes or waits for you." : "No notifications on this computer. Your other devices keep theirs."), S.master, `data-n-set="master"${S.saving === "master" ? " disabled" : ""}`, "Show notifications") +
+        switchRow(
+          "names",
+          "Show bot names in notifications",
+          savingLine("names", S.names ? "A bot's name can be read on a locked screen and stays in your system's notification list." : `Notifications say "Clawtrate" and the kind of event, without a bot's name.`),
+          S.names,
+          `data-n-set="names"${S.saving === "names" ? " disabled" : ""}`,
+          "Show bot names in notifications",
+        ) +
+        switchRow("budgetsw", "Budget warnings", savingLine("budgetsw", "When a bot has used 80% of a budget."), S.budgetsw, `data-n-set="budgetsw"${S.saving === "budgetsw" ? " disabled" : ""}`, "Budget warnings") +
+        `</dl>` +
+        kept("device", KEPT_DEVICE) +
+        `<p class="b-hint" data-testid="system-note">${SYSTEM_NOTE[S.os]}</p>`;
     }
+    if (S.unconfirmed) body += note(UNCONFIRMED_NOTE, "warn");
     if (S.conflictNote) body += note(`<p>Changed on another of your devices a moment ago. This is what's set now.</p>`, "warn");
     body += `<h4 class="b-group">Quiet hours</h4>`;
     if (S.prefs === "reading") body += `<div aria-busy="true" class="n-reading"><div class="skeleton" style="height:58px;width:100%"></div><div class="skeleton" style="height:120px;width:100%"></div></div><p class="b-hint" data-testid="reading">Reading your settings from the gateway…</p>`;
@@ -722,7 +965,7 @@
     else {
       body +=
         `<dl class="facts">` +
-        switchRow("quiet", "Quiet hours", savingLine("quiet", "Nothing is shown during them. A bot still waiting for you when they end is shown then."), S.quiet.enabled, `data-n-set="quiet"${dis("quiet")}`, "Quiet hours") +
+        switchRow("quiet", "Quiet hours", savingLine("quiet", `Clawtrate posts no new notifications during quiet hours. ${AFTER}`), S.quiet.enabled, `data-n-set="quiet"${dis("quiet")}`, "Quiet hours") +
         `</dl>`;
       if (S.quiet.enabled) {
         const elsewhere = S.prefs === "elsewhere";
@@ -733,12 +976,10 @@
           (S.timeError ? `<p class="b-field-error" id="n-time-error" data-testid="time-error">Start and end can't be the same time.</p>` : "") +
           `<p class="b-hint" data-testid="zone-line">${
             elsewhere
-              ? `${S.quiet.from} to ${S.quiet.to}, Lisbon time, where they were set. That's ${shift(S.quiet.from, 1)} to ${shift(S.quiet.to, 1)} here. Saving here sets them in Berlin time.`
+              ? `${S.quiet.from} to ${S.quiet.to}, Lisbon time, where they were set. Tonight that's ${tonightHere()} here. Saving here sets them in Berlin time.`
               : `${S.quiet.from} to ${S.quiet.to}, Lisbon time. Set on this computer.`
           }</p>` +
-          (S.quietNow
-            ? `<p class="n-now" data-testid="quiet-now">Quiet until ${S.quiet.to}.${waits() ? ` ${waits()} bot${waits() === 1 ? " is" : "s are"} waiting for you. ${waits() === 1 ? "It" : "They"} will be shown then.` : ""}</p>`
-            : "");
+          (S.quietNow ? `<p class="n-now" data-testid="quiet-now">${quietUntil()}</p>` : "");
       }
       body += kept("quiet", keptShared());
       body +=
@@ -749,14 +990,21 @@
           return switchRow(`bot-${b.id}`, `<span class="n-botname"><span class="avatar" data-bot="${b.id}"></span>${b.name}</span>`, savingLine(`bot-${b.id}`, line), S.bots[b.id], `data-n-bot="${b.id}"${dis(`bot-${b.id}`)}`, `${b.name}'s notifications`);
         }).join("") +
         `</dl>` +
+        (S.botRoom ? `<p class="b-field-error" data-testid="bot-room">There's no room to save this switch with your quiet hours. Turn another bot back on first.</p>` : "") +
         kept("bots", keptShared());
     }
     const foot = S.access === "read" ? accessBar(NEED) : "";
     return { title: "Notifications", body, foot };
   }
+  // Tonight's interval, converted from the saved zone (Lisbon) to this device's (Berlin).
+  function tonightHere() {
+    const { start, end } = quietInterval("2026-11-19", S.quiet.from, S.quiet.to, "Europe/Lisbon");
+    const here = (ms) => localOf(ms, "Europe/Berlin").slice(11);
+    return `${here(start)} to ${here(end)}`;
+  }
 
   function toggleDevice(key) {
-    const names = { master: "Notifications on this computer are", previews: "Previews are", budgetsw: "Budget warnings are" };
+    const names = { master: "Notifications on this computer are", budgetsw: "Budget warnings are" };
     S.saving = key;
     renderSettings();
     setTimeout(() => {
@@ -764,25 +1012,26 @@
       S[key] = !S[key];
       renderSettings();
       renderPanel();
-      say("settings", key === "previews" ? (S.previews ? "Previews are shown" : "Previews are hidden") : `${names[key]} ${S[key] ? "on" : "off"}`);
+      say("settings", key === "names" ? (S.names ? "Bot names are shown in notifications" : "Bot names are hidden in notifications") : `${names[key]} ${S[key] ? "on" : "off"}`);
     }, 300);
   }
 
+  const lastReadOf = (on) => (on ? "On" : "Off");
   function toggleQuiet() {
     const next = !S.quiet.enabled;
-    saveShared(
-      "quiet",
-      () => (S.quiet.enabled = next),
-      `Quiet hours are still ${S.quiet.enabled ? "on" : "off"}.`,
-      () => (S.quiet.enabled ? `Quiet hours are on, ${S.quiet.from} to ${S.quiet.to}` : "Quiet hours are off"),
-      "settings",
-    );
+    saveShared("quiet", () => (S.quiet.enabled = next), `Quiet hours were last read as ${lastReadOf(S.quiet.enabled)}.`, () => (S.quiet.enabled ? `Quiet hours are on, ${S.quiet.from} to ${S.quiet.to}` : "Quiet hours are off"), "settings");
   }
 
   function toggleBot(id, where) {
     const b = bot(id);
     const next = !S.bots[id];
-    saveShared(`bot-${id}`, () => (S.bots[id] = next), `${b.name}'s notifications are still ${S.bots[id] ? "on" : "off"}.`, () => `${b.name}'s notifications are ${S.bots[id] ? "on" : "off"}`, where);
+    S.botRoom = false;
+    // Turning a bot off adds an entry; the encoded value is measured first. Turning one on always fits.
+    if (!next && S.botsFull) {
+      S.botRoom = true;
+      return repaint(where);
+    }
+    saveShared(`bot-${id}`, () => (S.bots[id] = next), `${b.name}'s notifications were last read as ${lastReadOf(S.bots[id])}.`, () => `${b.name}'s notifications are ${S.bots[id] ? "on" : "off"}`, where);
   }
 
   function setTime(which, value) {
@@ -793,7 +1042,7 @@
       return;
     }
     S.timeError = false;
-    saveShared("quiet", () => (S.quiet[which] = value), "Quiet hours are as they were.", () => `Quiet hours are on, ${S.quiet.from} to ${S.quiet.to}`, "settings");
+    saveShared("quiet", () => (S.quiet[which] = value), `Quiet hours were last read as ${S.quiet.from} to ${S.quiet.to}.`, () => `Quiet hours are on, ${S.quiet.from} to ${S.quiet.to}`, "settings");
   }
 
   // The prototype's bar -----------------------------------------------------------------------------------
@@ -804,15 +1053,19 @@
     const opt = (v, l, cur) => `<option value="${v}"${v === cur ? " selected" : ""}>${l}</option>`;
     extra.innerHTML =
       `<span class="run-controls n-bar">` +
-      `<label>This device <select data-bar="device">${opt("sender", "sent the message", S.device)}${opt("other", "another device", S.device)}${opt("read", "read-only", S.device)}</select></label>` +
+      `<label>This device <select data-bar="device">${opt("sender", "sent the message", S.device)}${opt("other", "another device", S.device)}${opt("read", "read-only", S.device)}${opt("admin", "admin or reviewer", S.device)}</select></label>` +
       `<label>Event <select data-bar="event">${Object.entries(EVENTS).map(([k, e]) => opt(k, e.label, "finished")).join("")}</select></label>` +
       `<button type="button" data-bar="fire">Happens</button>` +
       `<label>Focus <select data-bar="focus">${opt("", "none", S.focus || "")}${opt("otto", "Otto on screen", S.focus || "")}${opt("pip", "Pip on screen", S.focus || "")}</select></label>` +
       `<button type="button" data-bar="quiet" aria-pressed="${S.quietNow}">Quiet hours now</button>` +
       `<button type="button" data-bar="answered">Answered elsewhere</button>` +
-      `<button type="button" data-bar="lapsed">Budget raised</button>` +
+      `<label>Budget at the end <select data-bar="budgetend">${Object.keys(BUDGET_END).map((k) => opt(k, k, S.budgetEnd)).join("")}</select></label>` +
       `<button type="button" data-bar="quietend">Quiet hours end</button>` +
-      `<label>At the click <select data-bar="click">${opt("", "all well", S.click)}${opt("gone", "task deleted", S.click)}${opt("offline", "connection down", S.click)}${opt("othergw", "another gateway", S.click)}${opt("stale", "no record", S.click)}</select></label>` +
+      `<button type="button" data-bar="wake">Wake after the end</button>` +
+      `<button type="button" data-bar="drop">Drop connection</button>` +
+      `<button type="button" data-bar="reconnect">Reconnect</button>` +
+      `<label>At the click <select data-bar="click">${opt("", "all well", S.click)}${opt("unlisted", "not in the rail, found", S.click)}${opt("gone", "not found", S.click)}${opt("botgone", "bot gone", S.click)}${opt("itemgone", "item gone", S.click)}${opt("offline", "connection down", S.click)}${opt("othergw", "another gateway", S.click)}${opt("stale", "no record", S.click)}</select></label>` +
+      `<label>Owner <select data-bar="req">${opt("", "—", "")}${opt("granted", "approves", "")}${opt("denied", "denies", "")}${opt("expired", "lets it expire", "")}${opt("failed", "request fails", "")}</select></label>` +
       `<button type="button" data-bar="settings">Settings</button>` +
       `</span>`;
     extra.addEventListener("change", (event) => {
@@ -820,6 +1073,8 @@
       if (el.dataset.bar === "device") (S.device = el.value), render();
       if (el.dataset.bar === "focus") S.focus = el.value || null;
       if (el.dataset.bar === "click") S.click = el.value;
+      if (el.dataset.bar === "budgetend") S.budgetEnd = el.value;
+      if (el.dataset.bar === "req" && el.value) resolveReq(el.value);
     });
     extra.addEventListener("click", (event) => {
       const el = event.target.closest("[data-bar]");
@@ -831,8 +1086,10 @@
         el.setAttribute("aria-pressed", String(S.quietNow));
       }
       if (el.dataset.bar === "quietend") quietEnds();
+      if (el.dataset.bar === "wake") wakeAfterEnd();
       if (el.dataset.bar === "answered") answeredElsewhere();
-      if (el.dataset.bar === "lapsed") budgetLapsed();
+      if (el.dataset.bar === "drop") dropConnection();
+      if (el.dataset.bar === "reconnect") reconnect();
       if (el.dataset.bar === "settings") openSettings(el);
     });
   }
@@ -917,10 +1174,11 @@
       return $('[data-n="bot-page"]')?.focus();
     }
     if (n === "task-menu") return $("#n-menu").hidden ? openTaskMenu(t.closest("[data-n]")) : closeMenu();
-    if (n === "request") {
-      S.req = "requested";
-      renderSettings();
-      return renderPanel();
+    if (n === "request") return askAccess();
+    if (n === "check-again") return checkAgain();
+    if (n === "dismiss-failed") {
+      S.failedAt = null;
+      return renderSettings();
     }
     if (n === "retry-read") {
       S.prefs = "ok";
@@ -958,6 +1216,7 @@
 
   const first = p("open");
   if (S.focus) S.sel = { bot: S.focus, task: bot(S.focus).tasks[0].id };
+  if (S.conn === "down") setStrip({ tone: "warn", text: "Reconnecting in 4s", more: "showing saved messages" });
   render();
   renderLayer();
   // The prototype's bar is filled at DOMContentLoaded by prototype.js, whose listener comes first.
@@ -976,5 +1235,5 @@
     S.tab = "details";
     render();
   }
-  window.notif = { S, fire, decide, open, quietEnds, budgetLapsed };
+  window.notif = { S, fire, decide, open, quietEnds, wakeAfterEnd, answeredElsewhere, dropConnection, reconnect, quietInterval, nativeTitle, resolveReq, bytes, LIMIT };
 })();

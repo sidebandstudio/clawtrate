@@ -59,25 +59,32 @@ async function notShown(name, query, words) {
   await p.close();
 }
 
-const PRIVATE = ["du -sh", "3:25 AM", "Weekly backup check", "Disk almost full", "running cost", "Router firmware"];
+const PRIVATE = ["du -sh", "3:25 AM", "Weekly backup check", "Disk almost full", "running cost", "Router firmware", "Heat pump", "Notes for Pip", "notes plugin", "supplier"];
+// Ruling 1: no gateway text ever, a fixed sentence for the kind; the bot's name, or "Clawtrate".
 await shown("a reply, on the device that sent the message", "event=finished", ["Otto", "Finished."], { not: PRIVATE });
 await shown("a reply, on another device", "event=finished&device=other", ["Otto", "Finished."], { not: PRIVATE });
 await shown("a reply, on a read-only device", "event=finished&device=read", ["Otto", "Finished."], { not: PRIVATE });
-await shown("a reply with previews: the task's title and the reply's first words", "event=finished&previews=1", ["Otto", "Finished.", "Weekly backup check: Yes. Last night's backup finished at 3:25 AM"]);
-await shown("a failure", "event=failed", ["Otto", "Its run failed."], { not: PRIVATE });
-await shown("a failure with previews: the task's title, never the error's words", "event=failed&previews=1", ["Its run failed.", "Router firmware"], { not: ["model request"] });
+await shown("a reply with bot names off: Clawtrate and a fixed sentence", "event=finished&names=0", ["Clawtrate", "A bot finished."], { not: [...PRIVATE, "Otto"] });
+await shown("a failure", "event=failed", ["Otto", "Its run failed."], { not: [...PRIVATE, "model request"] });
+await shown("a failure with bot names off", "event=failed&names=0", ["A bot's run failed."], { not: ["Otto"] });
 await notShown("a stop", "event=stopped", ["A stopped run isn't notified: someone chose to stop it."]);
-await shown("an approval on the device that sent the message: its kind", "event=approval", ["Otto", "Wants to run a command."], { not: PRIVATE });
-await shown("an approval with previews: the command", "event=approval&previews=1", ["Wants to run a command.", "Disk almost full on the media box: du -sh /var/lib/transcode-cache"]);
-await shown("an approval another device sent: only that it waits", "event=approval&device=other", ["Otto", "Is waiting for an approval. It can be answered on the device that sent the message."], { not: ["Wants to run a command", ...PRIVATE] });
-await shown("an approval on a read-only device", "event=approval&device=read", ["Otto", "Is waiting for an approval. This device can only read."], { not: PRIVATE });
-await shown("a question on the device that sent the message", "event=question", ["Juniper", "Asked you a question."], { not: ["running cost", "Heat pump"] });
-await shown("a question on another interactive device", "event=question&device=other", ["Juniper", "Asked you a question."]);
+await notShown("a run that ended without a visible reply", "event=yielded", ["A run that ended without a visible reply isn't notified."]);
+await shown("an approval on the device that sent the message: its kind, never the command", "event=approval", ["Otto", "Wants to run a command."], { not: PRIVATE });
+await shown("an approval with bot names off", "event=approval&names=0", ["Clawtrate", "A bot wants to run a command."], { not: [...PRIVATE, "Otto"] });
+await shown("an approval on an admin or reviewer device: the card's kind", "event=approval&device=admin", ["Otto", "Wants to run a command."], { not: PRIVATE });
+await shown("a plugin's approval: a fixed sentence, never its title", "event=generic", ["Otto", "Needs your approval."], { not: PRIVATE });
+await shown("an approval another device sent: this device doesn't have it", "event=approval&device=other", ["Otto", "A run is waiting for approval. This device doesn't have the approval request."], { not: ["Wants to run a command", ...PRIVATE] });
+await shown("an approval on a read-only device", "event=approval&device=read", ["Otto", "A run is waiting for approval. This device doesn't have the approval request."], { not: PRIVATE });
+await shown("a question on the device that sent the message", "event=question", ["Juniper", "Asked you a question."], { not: PRIVATE });
+await shown("a question on another interactive device", "event=question&device=other", ["Juniper", "Asked you a question."], { not: PRIVATE });
+await shown("a question this app can't answer", "event=unsupported", ["Juniper", "Asked something this app can't answer yet."], { not: PRIVATE });
 await notShown("a question on a read-only device", "event=question&device=read", ["A read-only device receives nothing that says a question waits."]);
-await shown("a question in another bot's task names that bot", "event=marlow", ["Marlow", "Asked you a question."]);
-await shown("a budget warning", "event=budget", ["Otto", "Used 82% of its weekly budget. Shown only: nothing was stopped."]);
+await shown("a question in another bot's task names that bot", "event=marlow", ["Marlow", "Asked you a question."], { not: PRIVATE });
+await shown("a routine that failed in an ordinary task", "event=routinetask", ["Otto", "Its run failed."]);
+await notShown("an isolated routine", "event=routineisolated", ["Isolated routines and cron completion events do not notify here."]);
+await shown("a budget warning", "event=budget", ["Otto", "Reached 80% of its budget. Shown only: nothing was stopped."], { not: ["82%", "tokens"] });
 await notShown("a budget warning with Budget warnings off", "event=budget&budgetsw=0", ["Budget warnings are off on this computer."]);
-await shown("a budget warning while the bot is off: it has its own switch", "event=budget&bot=otto=off", ["Used 82%"]);
+await shown("a budget warning while the bot is off: it has its own switch", "event=budget&bot=otto=off", ["Reached 80% of its budget."]);
 await notShown("anything with Show notifications off", "event=approval&master=0", ["Show notifications is off on this computer."]);
 await notShown("a bot switched off", "event=finished&bot=otto=off", ["Notifications for Otto are off."]);
 await shown("a task On while its bot is off", "event=finished&bot=otto=off&task=on", ["Otto", "Finished."]);
@@ -88,12 +95,23 @@ await shown("Pip on screen does not silence Otto", "event=approval&focus=pip", [
 await notShown("Linux: nothing while the window is focused", "event=question&focus=otto&os=linux", ["On Linux nothing is shown then."]);
 await shown("Linux: shown while the window is not focused", "event=question&os=linux", ["Juniper"]);
 await notShown("a build that can't show notifications", "event=approval&platform=none", ["This copy of Clawtrate can't show notifications here. The rail and the badge show it."]);
-await notShown("before your settings are read", "event=finished&prefs=reading", ["Your settings haven't been read from the gateway"]);
+await notShown("before your settings are read", "event=finished&prefs=reading", ["Your settings aren't confirmed from the gateway"]);
+await notShown("an event while the connection is down", "event=finished&conn=down", ["The connection is down: this device receives nothing until it reconnects."]);
 await notShown("a reply during quiet hours: never shown later", "event=finished&quiet=1", ["Quiet hours: this is never shown later."]);
-await notShown("a wait during quiet hours is held", "event=approval&quiet=1", ["Held until 07:00: Otto is waiting for you."]);
+await notShown("a wait with a card during quiet hours is held", "event=approval&quiet=1", ["Held until 07:00: Otto is waiting for you."]);
+await notShown("a wait this device has no request for is not held", "event=approval&quiet=1&device=other", ["a wait this device has no request for isn't held. It can't be confirmed later."]);
 
-// Quiet hours end: a held wait still waiting is shown; one answered meanwhile is not.
-let p = await open("event=approval&quiet=1");
+let p = await open("event=finished");
+check("ruling 1: the native id and group are opaque, never a task key", await p.evaluate(() => { const el = document.querySelector('[data-testid="n-pic"]'); return /^n\d+$/.test(el.dataset.nativeId) && /^g\d+$/.test(el.dataset.nativeGroup); }));
+check("ruling 1: the title is scrubbed of credentials this device holds", (await p.evaluate(() => window.notif.nativeTitle("Ops gw-sample-token-0000"))) === "Ops …");
+check("ruling 1: the title is cut to 40 characters", await p.evaluate(() => { const t = window.notif.nativeTitle("A".repeat(60)); return [...t].length === 40 && t.endsWith("…"); }));
+await p.evaluate(() => window.notif.fire("finished"));
+await p.waitForTimeout(60);
+check("ruling 4: one finished notification per run", (await pics(p)).length === 1 && (await why(p)).includes("This run was already notified."));
+await p.close();
+
+// Quiet hours end: a held wait with a fresh pending record is shown; one answered meanwhile is not.
+p = await open("event=approval&quiet=1");
 check("quiet hours: the rail still shows the wait", (await text(p, ".bot-list")).includes("Waiting for you: approve a command"));
 await p.evaluate(() => window.notif.quietEnds());
 await p.waitForTimeout(60);
@@ -109,31 +127,90 @@ await p.evaluate(() => window.notif.quietEnds());
 await p.waitForTimeout(60);
 check("quiet hours end: a reply from during them is not shown later", (await pics(p)).length === 0);
 await p.close();
+p = await open("event=approval&quiet=1&chrome=1");
+await click(p, '[data-bar="drop"]');
+await click(p, '[data-bar="quietend"]');
+check("ruling 2: quiet hours that end offline drop the hold", (await pics(p)).length === 0 && (await why(p)).includes("Quiet hours ended while the connection was down. The holds were dropped"), await why(p));
+await p.close();
+p = await open("event=approval&quiet=1&chrome=1");
+await click(p, '[data-bar="wake"]');
+check("ruling 6: waking after the end replays nothing", (await pics(p)).length === 0 && (await why(p)).includes("Nothing from while it slept is replayed"), await why(p));
+await p.close();
 
-// A budget warning in quiet hours: held, shown at the end if it still holds; nothing if it lapsed.
-await notShown("a budget warning during quiet hours is held", "event=budget&quiet=1", ["Held until 07:00: Otto's budget warning, shown then if the budget is still at or over 80% for this period."]);
+// Ruling 2: a disconnect clears phase-only waits; a reconnect posts no catch-up notification.
+p = await open("event=approval&device=other&chrome=1");
+check("ruling 2: a phase-only wait is shown while connected", (await pics(p)).length === 1);
+await click(p, '[data-bar="drop"]');
+check("ruling 2: a disconnect withdraws it and clears its mark", (await pics(p)).length === 0 && !(await text(p, ".bot-list")).includes("Waiting for an approval"));
+await click(p, '[data-bar="reconnect"]');
+check("ruling 2: a reconnect posts nothing", (await pics(p)).length === 0 && (await why(p)).includes("Reconnected. Missed events can appear in your tasks; no notification is posted for them."), await why(p));
+await p.close();
+p = await open("event=approval&chrome=1");
+await click(p, '[data-bar="drop"]');
+check("ruling 2: a card this device has stays shown through a disconnect", (await pics(p)).length === 1);
+await p.close();
+
+// Ruling 5: a held budget warning, released only with a fresh figure for the same budget and period.
+await notShown("a budget warning during quiet hours is held", "event=budget&quiet=1", ["Held until 07:00: Otto's budget warning. It needs a fresh figure for this period then."]);
+for (const [end, show, words] of [
+  ["still", true, ""],
+  ["raised", true, ""],
+  ["over100", true, ""],
+  ["below", false, "under 80% of the latest saved budget"],
+  ["refreshing", false, "the gateway was still counting, so the figure is unknown"],
+  ["readfail", false, "the usage read failed"],
+  ["rollover", false, "the period rolled over"],
+  ["removed", false, "the budget was removed"],
+]) {
+  p = await open(`event=budget&quiet=1&budgetend=${end}`);
+  await p.evaluate(() => window.notif.quietEnds());
+  await p.waitForTimeout(60);
+  const list = await pics(p);
+  check(
+    `ruling 5: at the end, ${end}: ${show ? "one 80% warning" : "dropped"}`,
+    show ? list.length === 1 && list[0].includes("Reached 80% of its budget.") : list.length === 0 && (await why(p)).includes(words),
+    `${JSON.stringify(list)} ${await why(p)}`,
+  );
+  await p.close();
+}
 p = await open("event=budget&quiet=1");
 await p.evaluate(() => window.notif.quietEnds());
-await p.waitForTimeout(60);
-check("quiet hours end: a held budget warning still at 80% is shown, once", (await pics(p)).length === 1 && (await pics(p))[0].includes("Used 82% of its weekly budget."), JSON.stringify(await pics(p)));
-await p.evaluate(() => window.notif.quietEnds());
-await p.waitForTimeout(60);
-check("quiet hours end: it is not shown a second time", (await pics(p)).length === 1);
-await p.close();
-p = await open("event=budget&quiet=1&chrome=1");
-await click(p, '[data-bar="lapsed"]');
-await click(p, '[data-bar="quietend"]');
-check("quiet hours end: a budget raised or a period rolled over meanwhile shows nothing", (await pics(p)).length === 0 && (await why(p)).includes("Nothing still waiting"), await why(p));
-await p.close();
-
-// One per task: a newer event for the task replaces the picture shown.
-p = await open("event=approval");
 await p.evaluate(() => window.notif.fire("budget"));
 await p.waitForTimeout(60);
-check("one per task: a newer event replaces the one shown", (await pics(p)).length === 1 && (await pics(p))[0].includes("Used 82%"), JSON.stringify(await pics(p)));
-await p.evaluate(() => window.notif.fire("question"));
+check("ruling 5: once per budget and period", (await pics(p)).length === 1 && (await why(p)).includes("already warned about in this period"));
+await p.close();
+p = await open("event=approval&quiet=1");
+await p.evaluate(() => window.notif.fire("budget"));
+await p.evaluate(() => window.notif.quietEnds());
 await p.waitForTimeout(60);
-check("several bots: each gets its own", (await pics(p)).length === 2);
+let order = await pics(p);
+check("ruling 5: a wait is posted before a budget warning, and neither replaces the other", order.length === 2 && order[0].includes("Wants to run a command.") && order[1].includes("Reached 80%"), JSON.stringify(order));
+await p.close();
+
+// One per task: a newer event for the task replaces the picture shown; a budget warning has its own slot.
+p = await open("event=question");
+await p.evaluate(() => window.notif.fire("unsupported"));
+await p.waitForTimeout(60);
+check("one per task: a newer event replaces the one shown", (await pics(p)).length === 1 && (await pics(p))[0].includes("can't answer yet"), JSON.stringify(await pics(p)));
+await p.evaluate(() => window.notif.fire("approval"));
+await p.evaluate(() => window.notif.fire("budget"));
+await p.waitForTimeout(60);
+check("several bots, and a budget beside a wait: each its own", (await pics(p)).length === 3);
+await p.close();
+
+// Ruling 6: one interval per start date in the saved zone, across clock changes.
+p = await open("");
+const iv = (d, f, t, z) => p.evaluate(([d, f, t, z]) => { const r = window.notif.quietInterval(d, f, t, z); return [new Date(r.start).toISOString(), new Date(r.end).toISOString()]; }, [d, f, t, z]);
+let r = await iv("2026-10-31", "22:00", "07:00", "America/New_York");
+check("ruling 6: across midnight and the autumn change, 22:00 to 07:00", r[0] === "2026-11-01T02:00:00.000Z" && r[1] === "2026-11-01T12:00:00.000Z", r.join(" "));
+r = await iv("2026-10-31", "22:00", "01:30", "America/New_York");
+check("ruling 6: a repeated end ends on its last occurrence", r[1] === "2026-11-01T06:30:00.000Z", r.join(" "));
+r = await iv("2026-11-01", "01:15", "07:00", "America/New_York");
+check("ruling 6: a repeated start starts on its first occurrence", r[0] === "2026-11-01T05:15:00.000Z", r.join(" "));
+r = await iv("2026-03-07", "22:00", "02:30", "America/New_York");
+check("ruling 6: a skipped end uses the first valid time after it", r[1] === "2026-03-08T07:00:00.000Z", r.join(" "));
+r = await iv("2026-03-08", "02:30", "07:00", "America/New_York");
+check("ruling 6: a skipped start uses the first valid time after it", r[0] === "2026-03-08T07:00:00.000Z", r.join(" "));
 await p.close();
 
 // The bar fires events by clicking.
@@ -144,7 +221,7 @@ check("the bar: Happens fires the chosen event", (await pics(p)).join(" ").inclu
 await p.selectOption('[data-bar="device"]', "read");
 await p.selectOption('[data-bar="event"]', "approval");
 await click(p, '[data-bar="fire"]');
-check("the bar: a read-only device's approval words", (await pics(p)).join(" ").includes("This device can only read."));
+check("the bar: a read-only device's approval words", (await pics(p)).join(" ").includes("This device doesn't have the approval request."));
 await p.close();
 
 // Part 2: what a click opens ---------------------------------------------------------------------------
@@ -164,7 +241,10 @@ async function opens(name, query, expect) {
 await opens("a reply: the task, at the reply, focused", "event=finished", { pill: "Weekly backup check", words: ["Yes. Last night's backup finished at 3:25 AM"], focus: "n-target" });
 await opens("a failure: the task, at the turn error", "event=failed", { pill: "Router firmware", words: ["Otto couldn't finish this turn"], focus: "n-target" });
 await opens("an approval it received: the card, focused", "event=approval", { pill: "Disk almost full on the media box", words: ["Otto wants to run a command", "Needs approval", "Allow once", "Deny"], focus: "n-target" });
-await opens("a wait it only saw: the task with the note, no answer offered", "event=approval&device=other", { words: ["Otto is waiting for an approval. This device can't answer it: the device that sent the message can."], focus: "n-target", not: ["Allow once", "Deny"] });
+await opens("a wait it only saw: the task with the note, no answer offered", "event=approval&device=other", { words: ["A run is waiting for approval. This device doesn't have the approval request."], focus: "n-target", not: ["Allow once", "Deny"] });
+await opens("an approval on an admin or reviewer device: the card", "event=approval&device=admin", { words: ["Otto wants to run a command", "Allow once", "Deny"], focus: "n-target" });
+await opens("a plugin's approval: its card", "event=generic", { pill: "Weekly backup check", words: ["Otto wants to use the notes plugin", "Allow", "Deny"], focus: "n-target" });
+await opens("a question this app can't answer: the readable card", "event=unsupported", { words: ["Juniper asked something this app can't answer yet", "Nothing is sent for it from here."], focus: "n-target" });
 await opens("a wait on a read-only device: conversation.md §3's note", "event=approval&device=read", { words: ["This device can't see it on a read-only connection.", "Request access"], focus: "n-target", not: ["Allow once"] });
 await opens("a question: the card, focused", "event=question", { pill: "Heat pump vs. gas furnace", words: ["Which matters more to you: running cost or upfront price?"], focus: "n-target" });
 await opens("a question in another bot's task: that bot and task", "event=marlow", { pill: "Notes for Pip", words: ["Marlow is working on a message from Pip.", "Should the plan keep Saturday morning free?"], focus: "n-target" });
@@ -186,8 +266,11 @@ async function clickFails(name, query, expect) {
   check(`at the click: ${name}`, ok && !p.errors.length, `strip: ${strip} why: ${w} transcript: ${t.slice(0, 160)}`);
   await p.close();
 }
-await clickFails("a task that is gone opens its bot's list and says so; nothing is sent", "event=finished&click=gone", { strip: "That task is no longer on the gateway.", words: ["Pick a task"], not: ["3:25 AM"] });
-await clickFails("the connection is down: the task opens from what was loaded", "event=approval&click=offline", { strip: "Reconnecting in 4s", words: ["Otto wants to run a command"] });
+await clickFails("not in the rail and not found by its key: it says it couldn't find the task, never that it was deleted", "event=finished&click=gone", { strip: "Clawtrate couldn't find that task on this gateway.", words: ["Pick a task"], not: ["3:25 AM", "deleted", "no longer"] });
+await clickFails("not in the rail but found by its key: the task opens", "event=finished&click=unlisted", { words: ["Yes. Last night's backup finished at 3:25 AM"] });
+await clickFails("the bot is gone: the current page stays", "event=finished&click=botgone", { strip: "Clawtrate couldn't open that bot on this gateway.", words: ["Disk almost full on the media box"] });
+await clickFails("the item is gone from a confirmed task: the task opens and says so", "event=approval&click=itemgone", { strip: "Clawtrate couldn't find that item in this task.", words: ["Disk almost full on the media box"], not: ["Allow once"] });
+await clickFails("the connection is down: the task opens from what was loaded", "event=approval&click=offline", { strip: "Reconnecting in 4s", words: ["Otto wants to run a command", "Clawtrate is reconnecting. You can answer once the gateway confirms this request is still open."] });
 await clickFails("another gateway: nothing opens", "event=approval&click=othergw", { strip: "That notification came from Studio gateway. Clawtrate is using Home gateway now.", not: ["Otto wants to run a command"] });
 await clickFails("no record: Clawtrate comes forward and opens nothing", "event=approval&click=stale", { why: "It has no record of that notification, so nothing opened.", not: ["Otto wants to run a command"] });
 p = await open("event=approval&click=othergw");
@@ -199,9 +282,16 @@ await p.close();
 p = await open("event=finished&click=gone");
 await click(p, "[data-n-open]");
 check("a task that is gone: no composer and no task is selected", await p.evaluate(() => !document.querySelector(".composer-input") && !document.querySelector('.task[aria-current="true"]')));
-check("a task that is gone: the rail no longer lists it", !(await text(p, ".bot-list")).includes("Weekly backup check"));
+check("a task not found: the rail is not changed by the click", (await text(p, ".bot-list")).includes("Weekly backup check"));
 await p.close();
 
+for (const ev of ["approval", "question"]) {
+  p = await open(`event=${ev}&click=offline`);
+  await click(p, "[data-n-open]");
+  await p.waitForTimeout(150);
+  check(`offline: the cached ${ev} card's answers are disabled`, await p.evaluate(() => [...document.querySelectorAll("#n-target button.button, #n-target button.option, #n-target input")].every((x) => x.disabled)));
+  await p.close();
+}
 p = await open("event=finished");
 await click(p, '.task[data-task="o3"]');
 check("opening the task in Clawtrate withdraws its notification", (await pics(p)).length === 0);
@@ -218,20 +308,21 @@ check(
     "This computer",
     "Show notifications",
     "When a bot finishes or waits for you.",
-    "Show previews",
-    "Anyone who can see your screen can read them, also when it's locked, unless your system hides previews.",
+    "Show bot names in notifications",
+    "A bot's name can be read on a locked screen and stays in your system's notification list.",
     "Budget warnings",
     "When a bot has used 80% of a budget.",
+    "Clawtrate shows desktop notifications for events it receives while running and connected. Missed events can appear in your tasks when it reconnects.",
     "It can't see whether macOS allows them or whether a Focus is on.",
     "Quiet hours",
-    "Nothing is shown during them. A bot still waiting for you when they end is shown then.",
+    "Clawtrate posts no new notifications during quiet hours. Clawtrate can notify you after quiet hours if the item is still waiting and your settings allow it.",
     "Your bots",
     "Juniper",
     "Marlow",
     "Otto",
     "Pip",
   ]),
-  missing(s, ["Show previews"]),
+  missing(s, ["Show bot names in notifications"]),
 );
 check(
   "Settings: each group says where it is kept",
@@ -240,7 +331,7 @@ check(
     (await text(p, '[data-testid="kept-bots"]')) === "Kept for you on this gateway, so your other devices show the same.",
 );
 check("Settings: the section sits after Appearance and before System", await p.evaluate(() => [...document.querySelectorAll("[data-n-section]")].map((x) => x.textContent.trim()).join(",").includes("Appearance,Notifications,System")));
-check("Settings: previews are off and the others on by default", await p.evaluate(() => ["master", "budgetsw"].every((k) => document.querySelector(`[data-n-set="${k}"]`).getAttribute("aria-checked") === "true") && document.querySelector('[data-n-set="previews"]').getAttribute("aria-checked") === "false"));
+check("Settings: every switch on this computer is on by default, and there is no previews switch", await p.evaluate(() => ["master", "names", "budgetsw"].every((k) => document.querySelector(`[data-n-set="${k}"]`).getAttribute("aria-checked") === "true") && !document.querySelector('[data-n-set="previews"]')));
 check("Settings: Otto's line counts a task with its own setting", s.includes("On · 1 task off"));
 check("Settings: every switch has role switch and a name", await p.evaluate(() => [...document.querySelectorAll("#settings-dialog .b-switch")].every((x) => x.getAttribute("role") === "switch" && x.getAttribute("aria-label"))));
 check("Settings: the title takes focus", (await focusedId(p)) === "b-section-title");
@@ -249,9 +340,9 @@ check("saving: the switch is disabled and says Saving…", (await text(p, '[data
 await p.waitForTimeout(650);
 check("saved: the switch shows what was read back", (await p.getAttribute('[data-n-bot="otto"]', "aria-checked")) === "false");
 check("saved: announced only once read back", (await text(p, "#settings-live")) === "Otto's notifications are off");
-await click(p, '[data-n-set="previews"]');
+await click(p, '[data-n-set="names"]');
 await p.waitForTimeout(450);
-check("this computer's switch: saved and announced", (await p.getAttribute('[data-n-set="previews"]', "aria-checked")) === "true" && (await text(p, "#settings-live")) === "Previews are shown");
+check("Show bot names off: saved, announced, and its line says what notifications say", (await p.getAttribute('[data-n-set="names"]', "aria-checked")) === "false" && (await text(p, "#settings-live")) === "Bot names are hidden in notifications" && (await text(p, '[data-row="names"]')).includes('Notifications say "Clawtrate" and the kind of event, without a bot\'s name.'));
 await click(p, '[data-n-set="master"]');
 await p.waitForTimeout(450);
 check("Show notifications off: the line says what that means", (await text(p, '[data-row="master"]')).includes("No notifications on this computer. Your other devices keep theirs."));
@@ -271,8 +362,8 @@ check("Escape closes Settings", !(await p.evaluate(() => document.querySelector(
 await p.close();
 
 for (const [os, words] of [
-  ["windows", "Closing its window quits it. It can't see whether Windows allows them or whether Do Not Disturb is on."],
-  ["linux", "Clawtrate shows notifications while it's open, and none while its window is focused."],
+  ["windows", "while running and connected. Missed events can appear in your tasks when it reconnects. Closing its window quits it. It can't see whether Windows allows them or whether Do Not Disturb is on."],
+  ["linux", "while running and connected. Missed events can appear in your tasks when it reconnects. None is shown while its window is focused."],
 ]) {
   p = await open(`open=settings&os=${os}`);
   check(`Settings on ${os}: the system's note`, (await text(p, '[data-testid="system-note"]')).includes(words));
@@ -293,18 +384,34 @@ await settingsState(
   "a build that can't show notifications, macOS: no switch promises one",
   "platform=none",
   ["This copy of Clawtrate can't show notifications on macOS. What your bots finish or wait on shows in the rail and on the dock's badge.", "Quiet hours and your bots' switches below apply on your other devices.", "Kept for you on this gateway, so your other devices show the same."],
-  () => !document.querySelector('[data-n-set="master"], [data-n-set="previews"], [data-n-set="budgetsw"], [data-testid="system-note"]'),
+  () => !document.querySelector('[data-n-set="master"], [data-n-set="names"], [data-n-set="budgetsw"], [data-testid="system-note"]'),
 );
 await settingsState("a build that can't show notifications, Windows", "platform=none&os=windows", ["can't show notifications on Windows.", "in the rail and on the taskbar button."]);
-await settingsState("set on a device in another zone", "prefs=elsewhere&quietset=1", ["22:00 to 07:00, Lisbon time, where they were set. That's 23:00 to 08:00 here. Saving here sets them in Berlin time."]);
-await settingsState("the system refused one", "failed=1", ["Your system didn't show Clawtrate's notification at 5:41 PM. Check Clawtrate in your system's notification settings."]);
+await settingsState("set on a device in another zone: tonight's interval, converted", "prefs=elsewhere&quietset=1", ["22:00 to 07:00, Lisbon time, where they were set. Tonight that's 23:00 to 08:00 here. Saving here sets them in Berlin time."]);
+await settingsState("a post that failed", "failed=1", ["Clawtrate couldn't post a notification at 5:41 PM. Check your system's notification settings.", "Dismiss"], () => !document.body.textContent.includes("didn't show"));
+await settingsState("a build that can't show notifications, settings kept only here", "platform=none&prefs=device", ["This copy of Clawtrate can't show notifications on macOS."], () => !document.querySelector("#settings-dialog").textContent.includes("apply on your other devices"));
 await settingsState(
   "read-only: values shown, your settings disabled, this computer's not",
   "access=read",
   ["Read-only.", "Changing quiet hours and your bots' notifications needs more access.", "Request access"],
   () => [...document.querySelectorAll("[data-n-bot], [data-n-set='quiet']")].every((x) => x.disabled) && !document.querySelector('[data-n-set="master"]').disabled,
 );
-await settingsState("quiet now, with a wait held", "quiet=1&event=approval", ["Quiet until 07:00. 1 bot is waiting for you. It will be shown then."]);
+await settingsState("quiet now, with a wait held", "quiet=1&event=approval", ["Quiet until 07:00, Lisbon time. 1 item is held. Clawtrate can notify you after quiet hours if the item is still waiting and your settings allow it."], () => !document.querySelector("#settings-dialog").textContent.includes("It will be shown then"));
+await settingsState("no room to turn a bot off", "botsfull=1", ["Your bots"]);
+p = await open("open=settings&botsfull=1");
+await click(p, '[data-n-bot="otto"]');
+check("ruling 8: no room for a bot switch: the line, nothing saved", (await text(p, '[data-testid="bot-room"]')) === "There's no room to save this switch with your quiet hours. Turn another bot back on first." && (await p.getAttribute('[data-n-bot="otto"]', "aria-checked")) === "true");
+await p.close();
+p = await open("open=settings&failed=1");
+await click(p, '[data-n="dismiss-failed"]');
+check("ruling 9: the failed note is cleared when dismissed", !(await p.$('[data-testid="failed-note"]')));
+await p.close();
+p = await open("failed=1");
+await p.evaluate(() => window.notif.fire("finished"));
+await p.keyboard.press("Meta+,");
+await p.waitForTimeout(80);
+check("ruling 9: the failed note is cleared by a later shown callback", !(await p.$('[data-testid="failed-note"]')));
+await p.close();
 
 p = await open("open=settings&prefs=readfail");
 await click(p, '[data-n="retry-read"]');
@@ -312,12 +419,40 @@ check("couldn't read: Try again reads and shows the settings", (await text(p, "#
 await p.close();
 p = await open("open=settings&access=read");
 await click(p, '#settings-dialog [data-n="request"]');
-check("read-only: Request access shows the request waiting for the owner", (await text(p, "#settings-dialog")).includes("Waiting for the gateway's owner."));
+check("read-only: Request access asks the gateway", (await text(p, "#settings-dialog")).includes("Asking the gateway…"));
+await p.waitForTimeout(400);
+check("read-only: then waits for the owner", (await text(p, "#settings-dialog")).includes("Waiting for the gateway's owner."));
+await p.evaluate(() => window.notif.resolveReq("granted"));
+await p.waitForTimeout(80);
+check("ruling 7: approved: the switches are enabled and it says so", !(await p.isDisabled('[data-n-bot="otto"]')) && (await text(p, "#settings-dialog")).includes("Access granted. You can change these now.") && !(await p.$('[data-testid="access-bar"]')));
 await p.close();
+for (const [answer, words] of [
+  ["denied", "The request was denied. Nothing changed. This device can still read."],
+  ["expired", "The request expired before it was approved."],
+  ["failed", "Couldn't send the request. The gateway did not answer."],
+]) {
+  p = await open("open=settings&access=read");
+  await click(p, '#settings-dialog [data-n="request"]');
+  await p.waitForTimeout(400);
+  await p.evaluate((a) => window.notif.resolveReq(a), answer);
+  await p.waitForTimeout(80);
+  check(`ruling 7: the request ${answer}: its words, the switches still disabled`, (await text(p, "#settings-dialog")).includes(words) && (await p.isDisabled('[data-n-bot="otto"]')));
+  await p.close();
+}
 p = await open("open=settings&prefs=savefail");
 await click(p, '[data-n-bot="otto"]');
 await p.waitForTimeout(650);
-check("couldn't save: the switch stays and says so", (await p.getAttribute('[data-n-bot="otto"]', "aria-checked")) === "true" && (await text(p, '[data-row="bot-otto"]')).includes("Couldn't save. Otto's notifications are still on."));
+check("ruling 7: refused, with the value read back: it says so", (await p.getAttribute('[data-n-bot="otto"]', "aria-checked")) === "true" && (await text(p, '[data-row="bot-otto"]')).includes("The gateway refused the change. Otto's notifications are On."));
+await p.close();
+p = await open("open=settings&prefs=unknown");
+await click(p, '[data-n-bot="otto"]');
+await p.waitForTimeout(650);
+check("ruling 7: an outcome that couldn't be confirmed says so, as last read", (await text(p, '[data-row="bot-otto"]')).includes("Couldn't confirm the change. Otto's notifications were last read as On.") && !(await text(p, "#settings-dialog")).includes("still on"));
+check("ruling 7: until a new read, your settings can't be changed", await p.isDisabled('[data-n-bot="pip"]'));
+check("ruling 7: and no notification about a bot is shown", await p.evaluate(() => window.notif.decide({ bot: "otto", task: "o3", kind: "finished", run: "x" }).none?.includes("aren't confirmed")));
+await click(p, '[data-n="check-again"]');
+await p.waitForTimeout(80);
+check("ruling 7: Check again reads what the gateway holds", (await p.getAttribute('[data-n-bot="otto"]', "aria-checked")) === "false" && !(await p.isDisabled('[data-n-bot="pip"]')));
 await p.close();
 p = await open("open=settings&prefs=conflict");
 await click(p, '[data-n-bot="otto"]');
@@ -345,7 +480,7 @@ check("Back: the row shows Off, with focus on it", (await text(p, '[data-testid=
 await p.close();
 p = await open("open=bot&master=0&quiet=1");
 s = await text(p, "#panel-settings");
-check("the bot's page: notes for this computer's switch and quiet hours", !missing(s, ["Notifications are off on this computer.", "Settings", "Quiet until 07:00."]));
+check("the bot's page: notes for this computer's switch and quiet hours", !missing(s, ["Notifications are off on this computer.", "Settings", "Quiet until 07:00, Lisbon time."]));
 await p.close();
 p = await open("open=bot&access=read");
 check("the bot's page, read-only: the switch disabled and the access bar", (await p.isDisabled('#panel-settings [data-n-bot="otto"]')) && (await text(p, "#panel-settings")).includes("Request access"));
@@ -391,7 +526,8 @@ await p.close();
 p = await open("open=details&tasks=full");
 await click(p, '[data-n="task-menu"]');
 await click(p, '[data-n-task="on"]');
-check("41st task: the bound, nothing saved", (await text(p, '[data-testid="task-limit"]')).includes('Up to 40 tasks can have their own setting. Set one back to "Same as" its bot first.') && (await p.evaluate(() => !window.notif.S.tasks.o3)));
+check("ruling 8: no room for another task setting: the words, nothing saved", (await text(p, '[data-testid="task-room"]')).includes('There\'s no room for another task setting. Set a task back to "Same as bot" first.') && (await p.evaluate(() => !window.notif.S.tasks.o3)));
+check("ruling 8: the full value is within the gateway's 4,096 bytes as it measures them", await p.evaluate(() => window.notif.bytes(window.notif.S.tasks) <= window.notif.LIMIT));
 await p.close();
 p = await open("open=details&access=read");
 check("Details, read-only: the select disabled and the access bar", (await p.isDisabled('[data-n="task-menu"]')) && (await text(p, "#panel-details")).includes("Request access"));
@@ -400,7 +536,7 @@ p = await open("open=details&prefs=savefail");
 await click(p, '[data-n="task-menu"]');
 await click(p, '[data-n-task="on"]');
 await p.waitForTimeout(650);
-check("Details: couldn't save keeps the value and says so", (await text(p, '[data-testid="task-error"]')).includes("Couldn't save. This task is still Same as Otto (on).") && (await text(p, '[data-testid="task-setting"]')).includes("Same as Otto (on)"));
+check("Details: refused keeps the value read back and says so", (await text(p, '[data-testid="task-error"]')).includes("The gateway refused the change.") && (await text(p, '[data-testid="task-setting"]')).includes("Same as Otto (on)"));
 await p.close();
 
 // Part 6: widths, themes, keyboard --------------------------------------------------------------------------
