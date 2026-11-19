@@ -204,6 +204,62 @@ const scenarios: Record<string, (op: OperatorSession) => Promise<void>> = {
     await writeFile(path.join(process.env.PROBE_OUT ?? ".", "secret-probe.json"), JSON.stringify({ NAME, VALUE }));
   },
 
+  // Round 1: can a person's edit reach the tool? A trusted-tier hold; the edit
+  // delivered through the plugin's own method before the answer; then the
+  // ordinary hook, running after the answer, returns the edited params, alone
+  // (edit-plain) or with a second hold (edit-approve).
+  async "edit-plain"(op) {
+    await editScenario(op, "trusted-edit", { second: "none" });
+  },
+  async "edit-approve"(op) {
+    await editScenario(op, "trusted-edit-approve", { second: "allow-once" });
+  },
+  async "edit-deny-second"(op) {
+    await editScenario(op, "trusted-edit-approve", { second: "deny" });
+  },
+  async "edit-deny-first"(op) {
+    await editScenario(op, "trusted-edit-approve", { first: "deny", second: "none" });
+  },
+  async "edit-readonly"(op) {
+    const reader = await openOperator(inst, "Clawtrate drafts probe reader", ["operator.read"], ["tool-events"]);
+    try {
+      out("edit from a read-only connection", await reader.request(`${PLUGIN}.edit`, { toolCallId: "call_x", params: {} }).catch((e: Error) => `refused: ${e.message}`));
+    } finally {
+      await reader.close();
+    }
+    void op;
+  },
+  async "edit-restart"(op) {
+    // Hold, store an edit, restart the gateway in place, then look again.
+    await op.request(`${PLUGIN}.mode`, { mode: "trusted-edit-approve" });
+    const key = await task(op, "pip", "edit restart");
+    const after = op.lastSeq;
+    const runId = await sendTool(op, key, "probe_send_email", email());
+    const req = await waitApproval(op, after);
+    const callId = String(rec(req.request).toolCallId);
+    out("held", { id: req.id, toolCallId: callId });
+    out("edit", await op.request(`${PLUGIN}.edit`, { toolCallId: callId, params: { ...email(), body: "EDITED BEFORE THE RESTART" } }));
+    out("restart", rec(await op.request("gateway.restart.request", { reason: "gateway.restart", skipDeferral: true })).status);
+    await new Promise((r) => setTimeout(r, 25_000));
+    const again = await openOperator(inst, "Clawtrate drafts probe after restart", ALL, CAPS);
+    try {
+      out("approvals listed after the restart", await again.request("plugin.approval.list", {}).catch((e: Error) => e.message));
+      out("the old hold answered after the restart", await again.request("plugin.approval.resolve", { id: req.id, decision: "allow-once" }).catch((e: Error) => `refused: ${e.message}`));
+      out("edit for that call after the restart", await again.request(`${PLUGIN}.edit`, { toolCallId: callId, params: email() }).catch((e: Error) => `refused: ${e.message}`));
+      const hist = JSON.stringify(await again.request("chat.history", { sessionKey: key, limit: 20 }));
+      out("history after the restart: the edited body", hist.includes("EDITED BEFORE THE RESTART"));
+      const m = hist.match(/"text":"[^"]{0,40}(Stand-in|Denied|approval|interrupt|abort)[^"]{0,160}/g);
+      out("history after the restart: tool result texts", m);
+      out("plugin log after the restart", ((rec(await again.request(`${PLUGIN}.log`, {})).log as Rec[]) ?? []).filter((r) => r.toolCallId === callId).map((r) => r.kind));
+      void runId;
+    } finally {
+      await again.close();
+    }
+  },
+  async "edit-file"(op) {
+    await editScenario(op, "trusted-edit-approve", { second: "none", changeFile: true });
+  },
+
   async "secrets-noadmin"(op) {
     // The run is started by a connection holding read, write, approvals and
     // questions (Clawtrate's interactive tier), without admin.
@@ -251,6 +307,64 @@ const scenarios: Record<string, (op: OperatorSession) => Promise<void>> = {
     out("secrets.store.list after (this entry)", (listed.entries as Rec[] | undefined)?.filter((e) => e.name === NAME));
   },
 };
+
+async function editScenario(
+  op: OperatorSession,
+  mode: string,
+  { first = "allow-once", second, changeFile = false }: { first?: string; second: string; changeFile?: boolean },
+) {
+  await op.request(`${PLUGIN}.mode`, { mode });
+  const dir = await workspace("pip");
+  await mkdir(path.join(dir, "outbox"), { recursive: true });
+  const file = path.join(dir, "outbox", "report.txt");
+  await writeFile(file, "Disk report, first version.\n");
+  // The edit goes in from another connection that holds approvals, not admin.
+  const editor = await openOperator(inst, "Clawtrate drafts probe editor", ["operator.read", "operator.write", "operator.approvals", "operator.questions"], CAPS);
+  try {
+    const key = await task(op, "pip", `edit ${mode}`);
+    const after = op.lastSeq;
+    const original = email({ attachments: ["outbox/report.txt"] });
+    const runId = await sendTool(op, key, "probe_send_email", original);
+    const req = await waitApproval(op, after);
+    const callId = String(rec(req.request).toolCallId);
+    out("first hold", { id: req.id, title: rec(req.request).title, toolCallId: callId });
+    out("editor saw the first hold", editor.events.some((e) => e.event === "plugin.approval.requested"));
+    const edited = { ...original, to: ["dana@example.com", "sam@example.net"], subject: "Media box report: disk at 91%", body: "EDITED BY THE PERSON" };
+    const tryEdit = (id: string, p: Rec) => editor.request(`${PLUGIN}.edit`, { toolCallId: id, params: p }).catch((e: Error) => `refused: ${e.message}`);
+    out("edit for another call id", await tryEdit("call_not_held", edited));
+    out("edit for this call", await tryEdit(callId, edited));
+    out("a second edit for this call", await tryEdit(callId, { ...edited, body: "SECOND EDIT" }));
+    if (changeFile) {
+      await writeFile(file, "Disk report, CHANGED while the card waited.\n");
+      out("file changed while waiting", true);
+    }
+    const afterFirst = op.lastSeq;
+    out(`answer the first hold: ${first}`, await op.request("plugin.approval.resolve", { id: req.id, decision: first }));
+    out("edit after the answer", await tryEdit(callId, { ...edited, body: "LATE EDIT" }));
+    let lastHold = afterFirst;
+    if (second !== "none") {
+      const req2 = await waitApproval(op, afterFirst);
+      lastHold = op.lastSeq;
+      out("second hold payload", req2);
+      out(`answer the second hold: ${second}`, await op.request("plugin.approval.resolve", { id: req2.id, decision: second }));
+    }
+    await op.terminal(runId).catch((e: Error) => out("run end", e.message));
+    await op.waitFor("a further hold (none expected)", (e) => e.seq > lastHold && e.event === "plugin.approval.requested", 1500, lastHold).then(
+      (e) => out("an unexpected further hold", rec(e.payload).id),
+      () => out("no further hold after the run", true),
+    );
+    out("tool events", toolEvents(op, runId));
+    out(
+      "plugin log",
+      (await pluginLog(op)).filter((r) => r.toolCallId === callId && r.kind !== "hook").map((r) => ({ ...r, at: undefined })),
+    );
+    const hist = JSON.stringify(await op.request("chat.history", { sessionKey: key, limit: 20 }));
+    out("history has the original body", hist.includes("The disk is 91% full"));
+    out("history has the edited body", hist.includes("EDITED BY THE PERSON"));
+  } finally {
+    await editor.close();
+  }
+}
 
 async function fileScenario(op: OperatorSession, mode: string, change: boolean) {
   await op.request(`${PLUGIN}.mode`, { mode });

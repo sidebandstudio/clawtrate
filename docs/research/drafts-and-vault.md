@@ -22,7 +22,8 @@ Every value submitted was made up (`example-secret-value-<uuid>`, entry names `D
 |---|---|---|---|
 | 1 | Can an approval decision change a call's arguments? | No. A plugin approval offers `allow-once`, `allow-always` and `deny`, and resolving one takes only the decision. The request the client receives carries no arguments. **Live** and **source**. | 1 |
 | 2 | Can a plugin's `before_tool_call` hook replace a call's arguments? | Yes. A hook that returned `params` changed what the tool received, for a plugin's tool and for the gateway's own `write` (the file on disk held the hook's text). The client's tool event and the transcript's tool call still showed the bot's original arguments. **Live.** | 1 |
-| 3 | Can it hold a call, and what does the person's answer send? | Yes, with `requireApproval`. Allow once ran the call with the arguments the hook returned when it asked; Deny ran nothing. The gateway copies those arguments when the hold starts: the plugin changed its own object afterwards and the tool still received the original. So an edit made after the hold cannot reach the tool; an edited draft has to be a new call. **Live.** | 1 |
+| 3 | Can it hold a call, and what does the person's answer send? | Yes, with `requireApproval`. Allow once ran the call with the arguments the hook returned when it asked; Deny ran nothing. The gateway copies those arguments when the hold starts: the plugin changed its own object afterwards and the tool still received the original. So the hook that asked cannot apply a later edit. **Live.** | 1 |
+| 3a | Can a person's edit reach the tool after all? | Yes, with a second hold. A trusted tool policy held the call; the person's edit went to the plugin through its own method (`operator.approvals`), bound to that call id; after the answer the plugin's ordinary hook returned the edited `params` with a second `requireApproval`, and after Allow once on that second hold the tool received the edit. Returning the edited `params` without the second hold was refused: "Tool call parameters changed after trusted approval", and the tool did not run. Deny on either hold, a changed file, or a gateway restart sent nothing. **Live.** | 1a |
 | 4 | Which tools send an email or a Slack message here, and how does a plugin know one? | No email-sending tool is built in; the bundled `imap` plugin only receives mail. Slack is a channel, and the built-in `message` tool sends through configured channels. **Source.** A hook knows a tool only by its name: its event carries `toolName`, `params`, `runId` and `toolCallId`, and its context names the bot and task but not which plugin owns the tool. **Live.** | 2 |
 | 5 | Can a plugin know an attached file changed between the draft and the send? | Only with the trusted tier. A file changed while an ordinary hold waited was sent changed. A trusted tool policy that held the call, followed by the same plugin's ordinary hook rechecking the file after the answer, refused the changed file and nothing ran; an unchanged file was sent. **Live.** | 3 |
 | 6 | What does the bot's `secrets` tool do with a made-up value? | It raises a masked question (`isSecret`, `secretStore {name, kind, allowedHosts, reason}`). The value travels once, in `question.resolve`; the answer the gateway keeps reads `"stored"`. The value was in no event, no transcript, no store listing, no gateway log and no model request, and was in plain text in the instance's state database. A run started without admin could not ask at all. **Live.** | 4 |
@@ -58,6 +59,33 @@ So what a client sees as a call's arguments is the bot's call, not necessarily w
 
 - The gateway evaluated the research plugin's module more than once: with state kept in module variables, a mode set through its method was never seen by its hook, while its tools and methods shared a record. With the state in one object on `globalThis`, all three agreed. A plugin that holds drafts must keep its state where every evaluation finds it.
 - The hook's event had the keys `params`, `runId`, `toolCallId` and `toolName`; its context `abortSignal`, `agentId`, `channelId`, `requester`, `runId`, `sessionId`, `sessionKey`, `toolCallId`, `toolName` and `trace`. Nothing named the plugin that owns the tool (`toolOwnerPluginId` was absent).
+
+## 1a. An edit after a trusted hold (round 1)
+
+The question: section 1 shows the hook that asks for a hold cannot apply a later edit, and section 3 shows that the same plugin's ordinary hook runs after a trusted policy's hold is answered. Can that ordinary hook apply an edit the person gave the plugin before the answer? Run on the same named instance, started again for this, with the research plugin's modes `trusted-edit` and `trusted-edit-approve`, its method `clawtrate-drafts-probe.edit {toolCallId, params}` registered at `operator.approvals`, and the scenarios `edit-plain`, `edit-approve`, `edit-deny-first`, `edit-deny-second`, `edit-file`, `edit-restart` and `edit-readonly`. The run was started by the admin client; the edit was sent by a second client holding read, write, approvals and questions, not admin. The bot's call: `{"to":["dana@example.com"],"cc":["lee@example.org"],"subject":"Media box report","body":"The disk is 91% full. …","attachments":["outbox/report.txt"]}`. The edit: `to` with `sam@example.net` added, `subject: "Media box report: disk at 91%"`, `body: "EDITED BY THE PERSON"`.
+
+Steps and what came back, the same in every scenario up to the answer:
+
+1. The trusted policy held the call: `plugin.approval.requested`, title "Send this draft?", the call id, no arguments. The second client did not receive it (as `controls.md` section 20, row 30).
+2. The second client called `edit` with a call id the plugin wasn't holding: refused. With the held call's id: `{"stored":true}`. A second `edit` for the same call: refused. The client saw each refusal only as `"gateway request failed"`; the plugin's own reason does not reach it.
+3. From a read-only connection (`edit-readonly`), `edit` was refused by the gateway: `"missing scope: operator.approvals"`.
+4. The method's handler receives its caller's connection: `client.connect` with `scopes`, `device`, `caps`, `role` and `auth`, and `client.connId` (key names recorded, values not kept).
+
+After the first answer:
+
+| Scenario | What the ordinary hook returned after the answer | What happened | What the tool received |
+|---|---|---|---|
+| `edit-plain` | The edited `params`, no hold | Refused: `"Tool call parameters changed after trusted approval"` (as `tool-policy.md` lines 253-262 and `agent-tools.before-tool-call` lines 3413-3421 say) | Nothing: it did not run |
+| `edit-approve` | The edited `params` with a second `requireApproval` | A second `plugin.approval.requested`, title "Send the edited draft?", the same call id, **no arguments**. Allow once on it | **The edit**: `to: ["dana@example.com","sam@example.net"]`, `subject: "Media box report: disk at 91%"`, `body: "EDITED BY THE PERSON"`, the attachment unchanged; `after_tool_call` saw the same. No further hold |
+| `edit-deny-second` | As `edit-approve`; Deny on the second hold | "Denied by user. The tool call did not run." | Nothing |
+| `edit-deny-first` | Nothing: Deny on the first hold ends the call before the ordinary hook | "Denied by user. The tool call did not run."; no second hold | Nothing; the stored edit was never used |
+| `edit-file` | `block`: the file recheck runs before the edit, and `report.txt` had changed (28 bytes, then 44) | `status: "blocked"`, "An attached file changed after the draft was shown. Nothing was sent."; no second hold | Nothing |
+
+- **An edit after the answer**: refused by the plugin in every scenario (`entry.answered` set by the trusted hold's `onResolution`).
+- **What the conversation keeps**: the client's tool `start` event and the bot's call in `chat.history` still carried the bot's original arguments; the tool's result (the stand-in's echo) carried the edit. Only the plugin's record says that the bot asked for one thing and the edited version was sent.
+- **A restart in between** (`edit-restart`): hold, edit stored, then `gateway.restart.request`. The trusted hold's `onResolution` received `cancelled`, the call failed with "Plugin approval required (gateway unavailable)", the approval list was empty afterwards, answering the old id was refused ("unknown or expired approval id"), the edit was never applied, and the edited text was in no history. The plugin's state survived this in-process restart because it lives on `globalThis`; a process restart would lose it.
+
+So an edit can reach the tool, at this strength: the person answers twice. The first answer releases the bot's call to the plugin; the plugin swaps in the edit and holds again; the second answer, on a hold whose arguments the gateway froze as the edit, sends it.
 
 ## 2. Which tools send, and what a card can show
 
@@ -129,10 +157,10 @@ Live, `secrets`, run from the probe client (admin and questions) in a task of Pi
 
 ## 9. The instance afterwards
 
-`d8vault` was reset with `pnpm dev-gateway reset --instance d8vault` once the probes and the prototype checks were done, and the research model's process was stopped by its PID. Its state folder held only made-up values: the entries `D8_EXAMPLE_TOKEN_…` and `D8_EXAMPLE_STORE_…` with values `example-secret-value-<uuid>`, the stand-ins' made-up addresses at `example.com` and `example.org`, and the file `outbox/report.txt` with two lines of made-up text.
+`d8vault` was reset with `pnpm dev-gateway reset --instance d8vault` once the probes were done, and the research model's process was stopped by its PID; for section 1a it was started again the same way, set up as above, and reset again afterwards. Its state folder held only made-up values: the entries `D8_EXAMPLE_TOKEN_…` and `D8_EXAMPLE_STORE_…` with values `example-secret-value-<uuid>`, the stand-ins' made-up addresses at `example.com` and `example.org`, and the file `outbox/report.txt` with two lines of made-up text.
 
 ## Files
 
 - [`dev-gateway/drafts-probe-plugin/`](dev-gateway/drafts-probe-plugin/): the research plugin (no dependencies).
-- [`dev-gateway/drafts-probe/probe.ts`](dev-gateway/drafts-probe/probe.ts): the scenarios `rewrite`, `rewrite-write`, `hold-allow`, `hold-deny`, `hold-mutate`, `file-hold`, `file-trusted`, `file-trusted-unchanged`, `secrets`, `secrets-noadmin`, `secrets-delete-by-other` and `store`.
+- [`dev-gateway/drafts-probe/probe.ts`](dev-gateway/drafts-probe/probe.ts): the scenarios `rewrite`, `rewrite-write`, `hold-allow`, `hold-deny`, `hold-mutate`, `file-hold`, `file-trusted`, `file-trusted-unchanged`, `secrets`, `secrets-noadmin`, `secrets-delete-by-other` and `store`; and, for section 1a, `edit-plain`, `edit-approve`, `edit-deny-first`, `edit-deny-second`, `edit-file`, `edit-restart` and `edit-readonly`.
 - [`dev-gateway/fake-openai.mjs`](dev-gateway/fake-openai.mjs): the research scripted model, unchanged.

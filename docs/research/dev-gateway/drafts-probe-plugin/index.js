@@ -17,13 +17,15 @@ import path from "node:path";
 
 const ID = "clawtrate-drafts-probe";
 const SEND_TOOLS = ["probe_send_email", "probe_send_slack_message"];
-const MODES = ["off", "rewrite", "hold", "hold-mutate", "trusted"];
+const MODES = ["off", "rewrite", "hold", "hold-mutate", "trusted", "trusted-edit", "trusted-edit-approve"];
+const TRUSTED_MODES = ["trusted", "trusted-edit", "trusted-edit-approve"];
 const LOG_LIMIT = 50;
 
 // The gateway can evaluate this module more than once (each registry it
 // builds loads the plugin again), so the hook, the tools and the methods may
 // come from different evaluations. Their state lives in one shared object.
-const state = (globalThis[Symbol.for(`${ID}.state`)] ??= { mode: "off", log: [], held: new Map() });
+const state = (globalThis[Symbol.for(`${ID}.state`)] ??= { mode: "off", log: [], held: new Map(), edits: new Map() });
+state.edits ??= new Map(); // toolCallId -> { params, used }
 const log = state.log;
 const held = state.held; // toolCallId -> { returned, hashes }
 
@@ -128,9 +130,9 @@ export default {
       description: "Research: hold a stand-in send, then let the ordinary hook recheck attachments.",
       matcher: SEND_TOOLS,
       async evaluate(event, ctx) {
-        if (state.mode !== "trusted") return undefined;
+        if (!TRUSTED_MODES.includes(state.mode)) return undefined;
         const hashes = await hashAttachments(api, ctx.agentId, event.params?.attachments);
-        held.set(event.toolCallId, { returned: null, hashes });
+        held.set(event.toolCallId, { returned: null, hashes, answered: null });
         record({ kind: "trusted-held", tool: event.toolName, toolCallId: event.toolCallId, hashes });
         return {
           requireApproval: {
@@ -139,6 +141,11 @@ export default {
             timeoutMs: 600000,
             allowedDecisions: ["allow-once", "deny"],
             pluginId: ID,
+            onResolution: (decision) => {
+              const entry = held.get(event.toolCallId);
+              if (entry) entry.answered = decision;
+              record({ kind: "trusted-resolution", toolCallId: event.toolCallId, decision });
+            },
           },
         };
       },
@@ -179,13 +186,29 @@ export default {
             },
           };
         }
-        if (state.mode === "trusted") {
+        if (TRUSTED_MODES.includes(state.mode)) {
           // Runs after the trusted policy's approval was answered.
           const before = held.get(event.toolCallId)?.hashes;
           const now = await hashAttachments(api, ctx?.agentId, event.params?.attachments);
           record({ kind: "recheck", toolCallId: event.toolCallId, before, now });
           if (before && !sameHashes(before, now)) {
             return { block: true, blockReason: "An attached file changed after the draft was shown. Nothing was sent." };
+          }
+          const edit = state.edits.get(event.toolCallId);
+          if (state.mode !== "trusted" && edit && !edit.used) {
+            edit.used = true;
+            record({ kind: "edit-applied", toolCallId: event.toolCallId, mode: state.mode, params: edit.params });
+            if (state.mode === "trusted-edit") return { params: edit.params };
+            return {
+              params: edit.params,
+              requireApproval: {
+                title: "Send the edited draft?",
+                description: `Research: the edited ${event.toolName}`,
+                timeoutMs: 600000,
+                allowedDecisions: ["allow-once", "deny"],
+                onResolution: (decision) => record({ kind: "edit-resolution", toolCallId: event.toolCallId, decision }),
+              },
+            };
           }
         }
         return undefined;
@@ -230,6 +253,26 @@ export default {
         respond(true, { mutated: key });
       },
       { scope: "operator.admin" },
+    );
+
+    // The person's edit, bound to one held call: refused for a call this plugin
+    // isn't holding, after that hold was answered, or a second time.
+    api.registerGatewayMethod(
+      `${ID}.edit`,
+      (handlerArgs) => {
+        const { params, respond } = handlerArgs;
+        record({ kind: "edit-call", argKeys: Object.keys(handlerArgs).sort(), clientKeys: Object.keys(handlerArgs.client ?? {}).sort(), connectKeys: Object.keys(handlerArgs.client?.connect ?? {}).sort() });
+        const id = params?.toolCallId;
+        const entry = held.get(id);
+        if (!entry) return respond(false, { error: "no held call with that id" });
+        if (entry.answered) return respond(false, { error: `that hold was already answered (${entry.answered})` });
+        if (state.edits.has(id)) return respond(false, { error: "that call already has an edit" });
+        if (!params?.params || typeof params.params !== "object") return respond(false, { error: "params required" });
+        state.edits.set(id, { params: JSON.parse(JSON.stringify(params.params)), used: false });
+        record({ kind: "edit-stored", toolCallId: id });
+        respond(true, { stored: true, toolCallId: id });
+      },
+      { scope: "operator.approvals" },
     );
 
     api.registerGatewayMethod(`${ID}.log`, ({ respond }) => respond(true, { mode: state.mode, log }), {
