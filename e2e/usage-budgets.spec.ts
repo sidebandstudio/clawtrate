@@ -322,20 +322,30 @@ test.beforeAll(async ({ browser }) => {
 
 test.afterAll(async () => {
   test.setTimeout(120_000);
-  try {
-    // Put it back: no budget is left for later checks, and the routine goes.
-    for (const budget of await keptBudgets().catch(() => []))
+  // Put it back: no budget is left for later checks, and the routines go. Each step is tried
+  // whatever the others did, and what failed is said once all have run.
+  const failures: unknown[] = [];
+  const attempt = async (step: () => Promise<unknown>) => {
+    try {
+      await step();
+    } catch (error) {
+      failures.push(error);
+    }
+  };
+  await attempt(async () => {
+    for (const budget of await keptBudgets())
       await hostCommand(page, { type: "changeBudget", change: { op: "remove", id: budget.id } });
     expect(await keptBudgets()).toEqual([]);
-    if (routineId) await openclaw(["cron", "rm", routineId]);
-    if (sharedRoutineId) await openclaw(["cron", "rm", sharedRoutineId]);
-  } finally {
-    await gateway?.close();
-    for (const host of hosts.splice(0)) {
+  });
+  if (routineId) await attempt(() => openclaw(["cron", "rm", routineId!]));
+  if (sharedRoutineId) await attempt(() => openclaw(["cron", "rm", sharedRoutineId!]));
+  await attempt(async () => gateway?.close());
+  for (const host of hosts.splice(0))
+    await attempt(async () => {
       await stopChild(host.child);
       rmSync(host.data, { recursive: true, force: true });
-    }
-  }
+    });
+  if (failures.length > 0) throw new AggregateError(failures, "Putting the gateway back failed");
 });
 
 test("F-237: usage by bot and source agrees with the gateway for the selected period", async () => {
