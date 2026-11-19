@@ -27,7 +27,7 @@ export function isLocalAddress(url: string | null | undefined): boolean {
       (a === 169 && b === 254)
     );
   }
-  // IPv6 unique local (fc00::/7) and link-local (fe80::/10).
+  // IPv6 unique local (the fc00 /7 prefix) and link-local (the fe80 /10 prefix).
   return /^f[cd][0-9a-f]{2}:/.test(host) || /^fe[89ab][0-9a-f]:/.test(host);
 }
 
