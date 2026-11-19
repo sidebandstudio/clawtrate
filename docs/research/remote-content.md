@@ -94,7 +94,7 @@ Versions from the `package.json` files: Electron 45.3.2 and React 19.3.1 (`apps/
 
 ### 3.2 Node, for fetches the host process makes
 
-`net` and `http` connection options take a `lookup` function (`@types/node` `net.d.ts` line 60, `http.d.ts` line 223) (**docs**). A check made there sees the address the connection actually uses; a `dns.lookup` before `fetch`, as `link-preview.ts` does, sees an address the later connection may not use.
+`net` and `http` connection options take a `lookup` function (`@types/node` `net.d.ts` line 60, `http.d.ts` line 223) (**docs**). A check made there sees the address the connection actually uses; a `dns.lookup` before `fetch`, as `link-preview.ts` did at the pinned commit, sees an address the later connection may not use. A `lookup` does nothing for an address written as an IP literal, which is never resolved, nor for a request sent through a proxy, which resolves the name itself: a literal is checked before the request, and the connection is made directly.
 
 ### 3.3 The web preview
 
@@ -126,6 +126,8 @@ http://0x7f.1/ -> 127.0.0.1 private: true
 ```
 
 The parser rewrites `::ffff:127.0.0.1` to `::ffff:7f00:1`; the check looks for the dotted form only (lines 36-37), finds none, and calls the address public. A bot's link to an IPv4-mapped loopback, private or link-local address is fetched from the person's machine. The NAT64 prefix `64:ff9b::/96` is not refused either. Separately, `publicTarget` resolves a name with `dns.lookup` (lines 63-70) and `fetch` then resolves it again (lines 104-113); a name that answers a public address to the first and a private one to the second passes (**source**; not tried, since it needs a name server).
+
+The branch has since moved on (`04553e4b`): it decodes an IPv4 address inside an IPv6 one, refuses the NAT64 prefix, resolves a name once and connects to the address it checked. It still allows `http`, follows a redirect to any host, and fetches the page's `og:image` from wherever the page names, so a preview can reach hosts other than the one on the card (**source**).
 
 ### 4.2 Electron's request filter and a picture's redirect
 
