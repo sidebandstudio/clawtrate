@@ -75,6 +75,7 @@ describe("status says only what the plugin itself knows", () => {
         hook: { registered: true, lastCallAt: null },
         matches: { tools: [], fallback: [], exempt: ["ask_user"] },
         cardDetails: { mode: "full", because: "no-forwarding" },
+        decisions: { state: "kept" },
       },
     });
     await h.save("otto", [{ action: "ask", tools: ["write", "edit"] }], true);
@@ -524,6 +525,10 @@ describe("the decision record", () => {
     const h = host();
     expect((await h.call("decisions.list", { limit: 501 })).error?.code).toBe("INVALID_REQUEST");
     expect((await h.call("decisions.list", { runId: 5 })).error?.code).toBe("INVALID_REQUEST");
+    expect((await h.call("decisions.list", { runId: "r".repeat(513) })).error?.code).toBe(
+      "INVALID_REQUEST",
+    );
+    expect((await h.call("status")).payload!.decisions).toEqual({ state: "kept" });
     expect((await h.call("decisions.list", {})).payload).toMatchObject({
       records: [],
       hasMore: false,

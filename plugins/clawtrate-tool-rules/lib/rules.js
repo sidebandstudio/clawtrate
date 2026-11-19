@@ -47,6 +47,8 @@ const TOOL_NAME = /^[a-z0-9][a-z0-9._-]*$/;
 // A server's tools: `<server>__<pattern>`, `*` only after the separator.
 const SERVER_TOOL = /^[a-z0-9][a-z0-9._-]*?__[a-z0-9._*-]*$/;
 const RULE_ID = /^[0-9a-f]{12}$/;
+/** Who saved a rule: a SHA-256 of the saving device's id, or nothing. */
+const SET_BY = /^sha256:[0-9a-f]{64}$/;
 /** The gateway's own aliases for tool names (OpenClaw 2026.10.6, tool-policy-shared). */
 const TOOL_ALIASES = new Map([
   ["bash", "exec"],
@@ -239,6 +241,12 @@ export function nextScope(scopeId, stored, request, { now, setBy, newId }) {
   }
   // Counted before each rule is read, so a scope past a limit is refused as that.
   checkLimits(scopeId, request.rules);
+  // A revision never repeats, so it never wraps either.
+  if ((stored?.version ?? 0) >= Number.MAX_SAFE_INTEGER) {
+    throw new RuleError("limit", "this scope's revision cannot go higher", {
+      limit: Number.MAX_SAFE_INTEGER,
+    });
+  }
   const old = new Map((stored?.rules ?? []).map((rule) => [rule.id, rule]));
   const seen = new Set();
   const rules = request.rules.map((raw, index) => {
@@ -261,6 +269,11 @@ export function nextScope(scopeId, stored, request, { now, setBy, newId }) {
       );
     }
     if (content(before) === content(checked)) return before;
+    if (before.version >= Number.MAX_SAFE_INTEGER) {
+      throw new RuleError("limit", `rule ${index + 1}'s version cannot go higher`, {
+        limit: Number.MAX_SAFE_INTEGER,
+      });
+    }
     return {
       id: checked.id,
       version: before.version + 1,
@@ -307,7 +320,7 @@ export function checkStoredScope(scopeId, scope) {
         !Number.isSafeInteger(version) ||
         version < 1 ||
         !Number.isSafeInteger(setAt) ||
-        !(setBy === null || typeof setBy === "string")
+        !(setBy === null || (typeof setBy === "string" && SET_BY.test(setBy)))
       ) {
         throw new RuleError("bad_store", `rule ${index + 1} of ${scopeId} is not a stored rule`);
       }

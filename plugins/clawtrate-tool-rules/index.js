@@ -63,6 +63,8 @@ export const CHANGED_EVENT = "changed";
 /** How often expired decision records are removed and the rules file looked at. */
 export const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const LIST_LIMIT = { default: 100, max: 500 };
+/** The longest filter `decisions.list` takes. */
+const FILTER_MAX = 512;
 const ANSWERS = new Set(["allow-once", "allow-always", "deny", "timeout", "cancelled"]);
 
 const isPlainObject = (value) =>
@@ -391,6 +393,8 @@ export function createToolRules(api, options = {}) {
       },
       matches: view.enforced ? matchesOf(view.enforced) : null,
       cardDetails: cardDetails(cardSetting, currentConfig()),
+      // Whether the decision record is being kept on disk.
+      decisions: log.problem ? { state: "failing", reason: log.problem } : { state: "kept" },
     };
   });
 
@@ -410,8 +414,13 @@ export function createToolRules(api, options = {}) {
 
   method("decisions.list", "operator.read", (params) => {
     for (const key of ["agentId", "sessionKey", "runId"]) {
-      if (params[key] !== undefined && text(params[key]) === null) {
-        throw new RequestError("INVALID_REQUEST", "bad_request", `${key} must be text`);
+      const value = params[key];
+      if (value !== undefined && (text(value) === null || value.length > FILTER_MAX)) {
+        throw new RequestError(
+          "INVALID_REQUEST",
+          "bad_request",
+          `${key} must be text of at most ${FILTER_MAX} characters`,
+        );
       }
     }
     if (params.before !== undefined && !Number.isSafeInteger(params.before)) {

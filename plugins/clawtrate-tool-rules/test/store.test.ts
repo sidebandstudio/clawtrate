@@ -188,3 +188,38 @@ describe("the decision record", () => {
     expect(new DecisionLog(dir, { now: () => 1 }).list({ limit: 5 }).records).toHaveLength(1);
   });
 });
+
+describe("the decision record's own bounds", () => {
+  const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+
+  it("sets aside a file past its byte cap instead of reading it", () => {
+    const dir = folder();
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "decisions.jsonl"), Buffer.alloc(64 * 1024 * 1024 + 1, 10));
+    const log = new DecisionLog(dir, { now: () => 1 });
+    expect(log.problem).toMatch(/set aside as decisions\.jsonl\.oversize/);
+    expect(log.list({ limit: 5 }).records).toEqual([]);
+    expect(readdirSync(dir).sort()).toEqual(["decisions.jsonl.oversize"]);
+  });
+
+  it("past its cap, does not rewrite the whole file for each new record", () => {
+    const dir = folder();
+    let now = 0;
+    const log = new DecisionLog(dir, { now: () => ++now, max: 100 });
+    for (let i = 0; i < 100; i += 1) log.add(fields);
+    const inode = statSync(join(dir, "decisions.jsonl")).ino;
+    let rewrites = 0;
+    let last = inode;
+    for (let i = 0; i < 100; i += 1) {
+      log.add(fields);
+      const current = statSync(join(dir, "decisions.jsonl")).ino;
+      if (current !== last) rewrites += 1;
+      last = current;
+    }
+    expect(rewrites).toBeLessThanOrEqual(5);
+    expect(log.list({ limit: 500 }).records).toHaveLength(100);
+    expect(
+      readFileSync(join(dir, "decisions.jsonl"), "utf8").trim().split("\n").length,
+    ).toBeLessThanOrEqual(121);
+  });
+});

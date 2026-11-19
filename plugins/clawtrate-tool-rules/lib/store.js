@@ -44,6 +44,8 @@ export const MAX_RULES_BYTES = 8 * 1024 * 1024;
 /** Kept this long, and at most this many, newest first. */
 export const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 export const MAX_DECISIONS = 50_000;
+/** The largest decision record read at start; 50,000 records are well under it. */
+export const MAX_DECISIONS_BYTES = 64 * 1024 * 1024;
 
 /** A call id as the gateway's audit log writes it, so the two can be joined. */
 export const hashCallId = (toolCallId) =>
@@ -352,6 +354,12 @@ export class DecisionLog {
   #load() {
     let text;
     try {
+      // A file past the cap is not read into memory: it is set aside, and a new one started.
+      if (statSync(this.path).size > MAX_DECISIONS_BYTES) {
+        renameSync(this.path, `${this.path}.oversize`);
+        this.problem = `the decision record was larger than ${MAX_DECISIONS_BYTES} bytes; it was set aside as ${DECISIONS_FILE}.oversize and a new one started`;
+        return;
+      }
       text = readFileSync(this.path, "utf8");
     } catch (error) {
       if (error?.code !== "ENOENT") {
@@ -375,6 +383,7 @@ export class DecisionLog {
         this.byId.set(record.id, record);
       }
     }
+    this.prune();
     this.#maintain();
   }
 
@@ -392,8 +401,10 @@ export class DecisionLog {
       this.records = this.records.slice(drop);
       this.extraLines += drop;
     }
+    // Rewritten only when asked (expiry) or when the file holds a fifth more
+    // lines than records kept, never once per append.
     const bloated = this.extraLines > 0 && this.extraLines >= this.records.length / 5;
-    if (drop === 0 && !bloated && !force) return;
+    if (!bloated && !force) return;
     try {
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
       const lines = this.records.map((record) => JSON.stringify(record));

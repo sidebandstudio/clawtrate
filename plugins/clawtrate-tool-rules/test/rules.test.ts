@@ -12,10 +12,11 @@ import {
   ruleLabel,
 } from "../lib/rules.js";
 
+const DEV = `sha256:${"d".repeat(64)}`;
 let ids = 0;
 const opts = () => ({
   now: 1000,
-  setBy: "sha256:dev",
+  setBy: DEV,
   newId: () => (++ids).toString(16).padStart(12, "0"),
 });
 const rules = (action: string, n: number, extra: Record<string, unknown> = {}) =>
@@ -182,7 +183,7 @@ describe("versions", () => {
     expect(first.version).toBe(1);
     expect(first.fallback).toBe(true);
     const [a] = first.rules;
-    expect(a).toMatchObject({ version: 1, setAt: 1000, setBy: "sha256:dev" });
+    expect(a).toMatchObject({ version: 1, setAt: 1000, setBy: DEV });
     const same = save("otto", first, [{ id: a!.id, action: "ask", tools: ["write"] }]);
     expect(same.version).toBe(2);
     expect(same.rules[0]).toBe(a);
@@ -227,5 +228,26 @@ describe("a stored scope", () => {
       )?.reason,
     ).toBe("bad_store");
     expect(refusal(() => checkStoredScope("Otto!", saved))?.reason).toBe("bad_store");
+  });
+});
+
+describe("bounds on what is stored", () => {
+  it("refuses a stored setBy that is not a device hash", () => {
+    const saved = save("otto", undefined, [{ action: "ask", tools: ["write"] }]);
+    const stored = JSON.parse(JSON.stringify(saved));
+    stored.rules[0].setBy = "someone@example.com";
+    expect(refusal(() => checkStoredScope("otto", stored))?.reason).toBe("bad_store");
+  });
+
+  it("refuses a save past the largest revision instead of wrapping", () => {
+    const saved = save("otto", undefined, [{ action: "ask", tools: ["write"] }]);
+    const top = { ...saved, version: Number.MAX_SAFE_INTEGER };
+    expect(refusal(() => save("otto", top, []))?.reason).toBe("limit");
+    const rule = { ...saved.rules[0]!, version: Number.MAX_SAFE_INTEGER };
+    const atTop = { ...saved, rules: [rule] };
+    expect(
+      refusal(() => save("otto", atTop, [{ id: rule.id, action: "never", tools: ["write"] }]))
+        ?.reason,
+    ).toBe("limit");
   });
 });
