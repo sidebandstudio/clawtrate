@@ -436,15 +436,18 @@ describe("the hook", () => {
   it("keeps the card's text in bounds whatever the rule and target", async () => {
     const h = host();
     const long = `${"x".repeat(990)}*`;
-    await h.save("otto", [{ action: "ask", tools: [`coder__${"y".repeat(100)}`, "exec"] }]);
-    await h.save("*", [
+    const own = await h.save("otto", [{ action: "ask", tools: [`coder__${"y".repeat(100)}`] }]);
+    const every = await h.save("*", [
       { action: "ask", tools: ["exec"], target: { kind: "command", pattern: long } },
     ]);
-    for (const [tool, params] of [
-      [`coder__${"y".repeat(100)}`, {}],
-      ["exec", { command: "x".repeat(3000) }],
+    const idOf = (saved: typeof own) => (saved.payload!.rules as { id: string }[])[0]!.id;
+    for (const [tool, params, ruleId] of [
+      [`coder__${"y".repeat(100)}`, {}, idOf(own)],
+      ["exec", { command: "x".repeat(3000) }, idOf(every)],
     ] as const) {
       const approval = h.before("otto", tool, params)!.requireApproval!;
+      // The card is the one the rule it names asked for, the long one included.
+      expect(approval.description).toContain(`(rule ${ruleId})`);
       expect(approval.title.length).toBeLessThanOrEqual(TITLE_MAX);
       expect(approval.description.length).toBeLessThanOrEqual(DESCRIPTION_MAX);
     }
