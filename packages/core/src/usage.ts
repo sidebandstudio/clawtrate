@@ -437,7 +437,7 @@ export const MAX_ROUTINES = 64;
  * with everything else in it, so its use can't be told apart: it is left out,
  * as is a job whose target is not given.
  */
-const OWN_TASK_TARGETS = new Set(["isolated", "current"]);
+const ownTask = (target: unknown) => target === "isolated" || target === "current";
 
 /** The routines in a `cron.list` answer that run in tasks of their own, so their usage can be counted apart. */
 export function routinesOf(result: unknown): Routine[] {
@@ -446,7 +446,7 @@ export function routinesOf(result: unknown): Routine[] {
   for (const each of Array.isArray(jobs) ? jobs : []) {
     const job = asRecord(each);
     if (!job || typeof job.id !== "string" || !PLAIN_ID.test(job.id)) continue;
-    if (typeof job.sessionTarget !== "string" || !OWN_TASK_TARGETS.has(job.sessionTarget)) continue;
+    if (!ownTask(job.sessionTarget)) continue;
     if (asRecord(job.payload)?.kind === "heartbeat") continue;
     const botId = [job.agentId, job.effectiveAgentId].find(
       (value): value is string => typeof value === "string" && PLAIN_ID.test(value),
