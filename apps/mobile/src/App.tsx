@@ -7,6 +7,7 @@ import { markSeen, type SeenMap } from "@clawtrate/ui/unread";
 import { useCallback, useEffect, useState } from "react";
 import { StatusBar, useColorScheme } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { PrivacyCover } from "./components/PrivacyCover.tsx";
 import { BotTasks } from "./screens/BotTasks.tsx";
 import { Chat } from "./screens/Chat.tsx";
 import { Address, Pairing, Protocol, Setup, Welcome } from "./screens/Connect.tsx";
@@ -158,6 +159,7 @@ export function App() {
         <SafeAreaProvider>
           <StatusBar barStyle={theme.scheme === "dark" ? "light-content" : "dark-content"} />
           <Screens />
+          <PrivacyCover />
         </SafeAreaProvider>
       </ThemeContext.Provider>
     </RuntimeContext.Provider>

@@ -23,6 +23,7 @@ import { useState, type ReactNode } from "react";
 import { Modal, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BackIcon, CloseIcon } from "../components/icons.tsx";
+import { PrivacyCover } from "../components/PrivacyCover.tsx";
 import { FONT_LICENSES } from "../font-licenses.ts";
 import { Cleartext } from "./Connect.tsx";
 import { Button, Dot, RoundButton, Txt } from "../components/ui.tsx";
@@ -255,6 +256,7 @@ export function Settings({
           </ScrollView>
         )}
       </SafeAreaView>
+      <PrivacyCover />
     </Modal>
   );
 }

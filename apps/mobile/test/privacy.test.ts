@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { covered } from "../src/privacy.ts";
 import { createSecrets, learningStore, REDACTED } from "../src/host/secrets.ts";
 
 /** A plain in-memory store, as the Keychain store behaves. */
@@ -49,5 +50,13 @@ describe("credentials never leave in a string the app shows or logs", () => {
     secrets.learn("connection", JSON.stringify({ token: "short" }));
     secrets.learn("connection", "not json");
     expect(secrets.redact("notasecretbutlong short")).toBe("notasecretbutlong short");
+  });
+});
+
+describe("the app switcher's snapshot", () => {
+  it("is covered whenever the app is not active, which is when iOS takes it", () => {
+    expect(covered("active")).toBe(false);
+    for (const state of ["inactive", "background", "unknown", null, undefined])
+      expect(covered(state)).toBe(true);
   });
 });
