@@ -18,7 +18,13 @@ describe("the bot's markdown on iOS", () => {
           { t: "text", text: " words with " },
           { t: "code", text: "du -sh" },
           { t: "text", text: " and " },
-          { t: "link", url: "https://docs.example/a", children: [{ t: "text", text: "a link" }] },
+          {
+            t: "link",
+            url: "https://docs.example/a",
+            host: "docs.example",
+            plain: false,
+            children: [{ t: "text", text: "a link" }],
+          },
           { t: "text", text: "." },
         ],
       },
@@ -68,14 +74,56 @@ describe("the bot's markdown on iOS", () => {
     });
   });
 
-  it("opens only web and mail links, and shows raw HTML as text", () => {
-    expect(openableUrl("https://a.example")).toBe("https://a.example");
-    expect(openableUrl("mailto:someone@example.com")).toBe("mailto:someone@example.com");
-    expect(openableUrl("javascript:alert(1)")).toBeNull();
-    expect(openableUrl("file:///etc/hosts")).toBeNull();
+  it("opens only http and https addresses that parse, and keeps any other as its text", () => {
+    expect(openableUrl("https://a.example")?.href).toBe("https://a.example/");
+    expect(openableUrl("http://127.0.0.1:9/x")?.host).toBe("127.0.0.1:9");
+    for (const url of [
+      "mailto:someone@example.com",
+      "javascript:alert(1)",
+      "file:///etc/hosts",
+      "http://",
+      "https://[oops",
+      "tel:123",
+    ])
+      expect(openableUrl(url), url).toBeNull();
     expect(parseMarkdown("[run](javascript:alert(1))")).toEqual([
       { t: "p", children: [{ t: "text", text: "run" }] },
     ]);
+    expect(parseMarkdown("Write [me](mailto:someone@example.com).")).toEqual([
+      {
+        t: "p",
+        children: [
+          { t: "text", text: "Write " },
+          { t: "text", text: "me" },
+          { t: "text", text: "." },
+        ],
+      },
+    ]);
+  });
+
+  it("marks a link whose text is not its address, so the screen shows the host and asks first", () => {
+    const [hidden] = parseMarkdown("[the notes](https://elsewhere.example/n)");
+    expect(hidden).toMatchObject({
+      children: [{ t: "link", host: "elsewhere.example", plain: false }],
+    });
+    const [shown] = parseMarkdown(
+      "[https://docs.example/a](https://docs.example/a) and https://b.example",
+    );
+    expect(shown).toMatchObject({
+      children: [
+        { t: "link", plain: true },
+        { t: "text" },
+        { t: "link", plain: true, host: "b.example" },
+      ],
+    });
+    // Text that names another address is not its address.
+    const [lying] = parseMarkdown("[https://bank.example](https://elsewhere.example)");
+    expect(lying).toMatchObject({
+      children: [{ t: "link", plain: false, host: "elsewhere.example" }],
+    });
+  });
+
+  it("shows raw HTML as text", () => {
     const html = parseMarkdown("<b>bold</b>")[0]!;
     expect(
       html.t === "p" && html.children.map((c) => (c.t === "text" ? c.text : c.t)).join(""),
@@ -84,7 +132,7 @@ describe("the bot's markdown on iOS", () => {
     expect(parseMarkdown("see https://b.example")[0]).toMatchObject({
       children: [
         { t: "text", text: "see " },
-        { t: "link", url: "https://b.example" },
+        { t: "link", url: "https://b.example/", plain: true },
       ],
     });
   });

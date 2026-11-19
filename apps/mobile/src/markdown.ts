@@ -1,8 +1,10 @@
 // The bot's markdown, read by the same parser family the desktop's renderer
 // uses (micromark and mdast, with GitHub's extensions: tables, strikethrough,
 // autolinks), and reduced to the few blocks and inlines the iOS bubble draws.
-// Raw HTML is shown as text and never interpreted; a link opens in the system
-// browser only when it is http, https or mailto. Pure, so the unit tests cover it.
+// Raw HTML is shown as text and never interpreted. A link opens in the system
+// browser, and only when it is an http or https address that parses; any other
+// is its text. A link whose visible text is not its own address shows the
+// address's host and asks before leaving the app. Pure, so the unit tests cover it.
 
 import type { Nodes, PhrasingContent, RootContent } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
@@ -15,7 +17,15 @@ export type Inline =
   | { t: "em"; children: Inline[] }
   | { t: "del"; children: Inline[] }
   | { t: "code"; text: string }
-  | { t: "link"; url: string; children: Inline[] }
+  | {
+      t: "link";
+      url: string;
+      /** The destination's host, which the screen shows and VoiceOver names. */
+      host: string;
+      /** The visible text is the address itself: it opens without asking. */
+      plain: boolean;
+      children: Inline[];
+    }
   | { t: "break" };
 
 export type Block =
@@ -27,11 +37,40 @@ export type Block =
   | { t: "rule" }
   | { t: "table"; header: Inline[][]; rows: Inline[][][] };
 
-/** The schemes a link may open. */
-const OPENABLE = /^(https?:|mailto:)/i;
+/** A link's address when it may open: http or https, and it parses with a host. */
+export function openableUrl(url: string): URL | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return null;
+  }
+  return (parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.host !== ""
+    ? parsed
+    : null;
+}
 
-export function openableUrl(url: string): string | null {
-  return OPENABLE.test(url.trim()) ? url.trim() : null;
+/** Whether a link's visible text is its own address (an autolink, or the address written out). */
+function shownAddress(text: string, url: string): boolean {
+  const trim = (value: string) => value.trim().replace(/\/$/, "").toLowerCase();
+  return (
+    trim(text) === trim(url) ||
+    trim(`https://${text}`) === trim(url) ||
+    trim(`http://${text}`) === trim(url)
+  );
+}
+
+/** The plain text of inlines. */
+export function inlineText(nodes: Inline[]): string {
+  return nodes
+    .map((node) =>
+      node.t === "text" || node.t === "code"
+        ? node.text
+        : node.t === "break"
+          ? " "
+          : inlineText(node.children),
+    )
+    .join("");
 }
 
 function textOf(node: Nodes): string {
@@ -58,7 +97,16 @@ function inlines(nodes: PhrasingContent[]): Inline[] {
       case "link": {
         const url = openableUrl(node.url);
         const children = inlines(node.children);
-        return url ? [{ t: "link", url, children }] : children;
+        if (!url) return children;
+        return [
+          {
+            t: "link",
+            url: url.href,
+            host: url.host,
+            plain: shownAddress(inlineText(children), node.url),
+            children,
+          },
+        ];
       }
       case "image":
         return node.alt ? [{ t: "text", text: node.alt }] : [];
@@ -111,3 +159,12 @@ export function parseMarkdown(text: string): Block[] {
   const tree = fromMarkdown(text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] });
   return blocks(tree.children);
 }
+
+/** What the app asks before it leaves for a link whose text is not its address. */
+export const LINK_WORDS = {
+  ask: "Open this link in your browser?",
+  open: "Open",
+  cancel: "Cancel",
+  /** VoiceOver's name for a link: its text, then where it goes. */
+  spoken: (text: string, host: string) => `${text}, link to ${host}`,
+} as const;

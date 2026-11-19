@@ -4,10 +4,23 @@
 // links in the accent that open in the system browser.
 
 import { Fragment, useMemo } from "react";
-import { Linking, ScrollView, View } from "react-native";
-import { parseMarkdown, type Block, type Inline } from "../markdown.ts";
+import { Alert, Linking, ScrollView, View } from "react-native";
+import { inlineText, LINK_WORDS, parseMarkdown, type Block, type Inline } from "../markdown.ts";
 import { FONTS, S, TOUCH, useTheme } from "../theme/index.ts";
 import { Txt } from "./ui.tsx";
+
+/**
+ * Leave the app for a link. One whose visible text is its address opens; any
+ * other asks first, showing the address it goes to.
+ */
+function openLink(url: string, plain: boolean) {
+  const open = () => void Linking.openURL(url).catch(() => {});
+  if (plain) return open();
+  Alert.alert(LINK_WORDS.ask, url, [
+    { text: LINK_WORDS.cancel, style: "cancel" },
+    { text: LINK_WORDS.open, onPress: open },
+  ]);
+}
 
 function Inlines({ nodes }: { nodes: Inline[] }) {
   const { c } = useTheme();
@@ -49,16 +62,21 @@ function Inlines({ nodes }: { nodes: Inline[] }) {
             );
           case "link":
             return (
-              <Txt
-                key={index}
-                size={TOUCH.bodyText}
-                color="accent"
-                accessibilityRole="link"
-                style={{ textDecorationLine: "underline" }}
-                onPress={() => void Linking.openURL(node.url)}
-              >
-                <Inlines nodes={node.children} />
-              </Txt>
+              <Fragment key={index}>
+                <Txt
+                  size={TOUCH.bodyText}
+                  color="accent"
+                  accessibilityRole="link"
+                  accessibilityLabel={LINK_WORDS.spoken(inlineText(node.children), node.host)}
+                  style={{ textDecorationLine: "underline" }}
+                  onPress={() => openLink(node.url, node.plain)}
+                >
+                  <Inlines nodes={node.children} />
+                </Txt>
+                {!node.plain && (
+                  <Txt size={TOUCH.bodyText} color="text-muted">{` (${node.host})`}</Txt>
+                )}
+              </Fragment>
             );
         }
       })}
