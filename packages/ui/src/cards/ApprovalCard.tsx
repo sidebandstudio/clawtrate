@@ -8,7 +8,15 @@ import {
   type ApprovalCard as Approval,
   type ApprovalDecision,
 } from "@clawtrate/core";
-import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import { useView, viewKeys } from "../actions/view-state.ts";
 import { useCardEnv, useMinuteClock } from "./context.tsx";
 import {
   allowLabel,
@@ -182,7 +190,16 @@ export function ApprovalCardView({ card, domId }: { card: Approval; domId: strin
   const resolvedLine = useRef<HTMLElement>(null);
   const focusInside = useRef(false);
   const wasPending = useRef(card.status === "pending");
-  const raw = useRawDisclosure();
+  // What the reader opened is the viewer's, kept across the card being drawn again (a run's end
+  // moving its cards to the record, a switch of task and back), as an action card's is.
+  const [opened, setOpened] = useView<boolean>(env.taskKey, viewKeys.approval(card.id), false);
+  const [rawOpened, setRawOpened] = useView<boolean>(
+    env.taskKey,
+    viewKeys.approvalRaw(card.id),
+    false,
+  );
+  const raw = useRawDisclosure(undefined, rawOpened);
+  useEffect(() => setRawOpened(raw.open), [raw.open, setRawOpened]);
 
   // When the card resolves while focus is inside it, focus moves to the resolved card's line.
   useLayoutEffect(() => {
@@ -212,6 +229,8 @@ export function ApprovalCardView({ card, domId }: { card: Approval; domId: strin
         data-resolved=""
         id={domId}
         data-testid="approval-card"
+        open={opened}
+        onToggle={(event) => setOpened((event.currentTarget as HTMLDetailsElement).open)}
         {...track}
       >
         <summary ref={resolvedLine}>

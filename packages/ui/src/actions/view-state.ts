@@ -74,4 +74,8 @@ export const viewKeys = {
   thought: (id: string, revision: number) => `thought:${id}@${revision}`,
   /** The run line. */
   run: (id: string) => `run:${id}`,
+  /** An approval card that has resolved, by its approval id. */
+  approval: (id: string) => `approval:${id}`,
+  /** That card's Raw view. */
+  approvalRaw: (id: string) => `approval-raw:${id}`,
 };

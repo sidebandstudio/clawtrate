@@ -50,6 +50,25 @@ const approvalCard = (page: Page) => page.getByTestId("approval-card");
 const questionCard = (page: Page) => page.getByTestId("question-card");
 
 test.describe("approval cards", () => {
+  test("F-163: a resolved card the reader opened, with its Raw, stays open when it is drawn again", async ({
+    page,
+  }) => {
+    // A run's end draws its cards again from the record; so does a switch of task and back.
+    await openFixture(page, "scene=approval-allowed-once", "light");
+    const card = page.getByTestId("approval-card");
+    await card.locator("summary").first().click();
+    await card.getByRole("button", { name: "Raw" }).click();
+    await expect(card.getByRole("region", { name: "What the gateway sent" })).toBeVisible();
+    const tasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
+    await tasks.filter({ hasText: "Disk almost full on the media box" }).first().click();
+    await expect(page.locator(".title-pill")).toContainText("Disk almost full");
+    await expect(card).toHaveCount(0);
+    await tasks.filter({ hasText: "Tidy the transcode cache" }).first().click();
+    await expect(page.locator(".title-pill")).toContainText("Tidy the transcode cache");
+    await expect(card).toHaveAttribute("open", "");
+    await expect(card.getByRole("region", { name: "What the gateway sent" })).toBeVisible();
+  });
+
   test.use(contextFor(WIDE, "light"));
 
   test("F-163 F-171 F-329 F-155: a pending approval names the bot, says what runs where, shows its warnings, and offers only the request's decisions, its refusal labelled Deny", async ({
