@@ -30,6 +30,11 @@
 //   relay      Marlow messages Pip from a group task: where it lands
 //   archive    archiving and deleting a member's task
 //   create     sessions.create for the members: a shared label, an unknown bot
+//   stopdevices  two devices, each Stop on the other's run and its own
+//   queuedstop   a later input from another device, then a task-wide Stop; a run-specific Stop
+//   cards        a question and an approval from device A, as B and a read-only device see them
+//   order        two replies: the order their runs end against their saved timestamps
+//   guard        a send to a task deleted after the check, unguarded and guarded
 //   delbot     a member bot deleted (admin): what is left of its task
 
 import { randomUUID } from "node:crypto";
@@ -403,6 +408,156 @@ const experiments: Record<string, () => Promise<void>> = {
     out("create a task for an agent that does not exist", await call(op, "sessions.create", { agentId: "nobody", label: `${label} x` }));
     const r = rec(rec((await call(op, "sessions.list", { agentId: "otto", limit: 5 })).result).sessions);
     out("sessions.list row keys", Object.keys(rec((r as unknown as unknown[])[0])).sort());
+  },
+
+  async stopdevices() {
+    const a = await device("a");
+    const b = await device("b");
+    const stamp = Date.now();
+    const j = await newTask(a, "main", `Group stopdev J ${stamp}`);
+    const o = await newTask(a, "otto", `Group stopdev O ${stamp}`);
+    for (const k of [j, o]) {
+      await subscribe(a, k);
+      await subscribe(b, k);
+    }
+    const ra = rec((await call(a, "chat.send", { sessionKey: j, message: "#slow 8", idempotencyKey: randomUUID() })).result);
+    const rb = rec((await call(b, "chat.send", { sessionKey: o, message: "#slow 8", idempotencyKey: randomUUID() })).result);
+    out("A started Juniper's run, B started Otto's", { a: ra.runId, b: rb.runId });
+    await sleep(1500);
+    out("A stops Otto's task (B's run)", await call(a, "chat.abort", { sessionKey: o }));
+    out("B stops Juniper's task (A's run)", await call(b, "chat.abort", { sessionKey: j }));
+    out("A stops Juniper's task (its own run)", await call(a, "chat.abort", { sessionKey: j }));
+    out("ends", await ends(a, [String(ra.runId), String(rb.runId)], 60_000));
+  },
+
+  async queuedstop() {
+    const a = await device("a");
+    const b = await device("b");
+    const stamp = Date.now();
+    const k = await newTask(a, "main", `Group queued ${stamp}`);
+    await subscribe(a, k);
+    await subscribe(b, k);
+    const first = rec((await call(a, "chat.send", { sessionKey: k, message: "#slow 6", idempotencyKey: randomUUID() })).result);
+    await sleep(1500);
+    const later = rec((await call(b, "chat.send", { sessionKey: k, message: "#text", idempotencyKey: randomUUID() })).result);
+    out("A's run, then B's input into the same task", { first, later });
+    const pending = rec(rec(await a.request("chat.history", { sessionKey: k, limit: 50 })).pendingInputs);
+    out("pendingInputs while A's run is active", { total: pending.total, items: (pending.items as unknown[] | undefined)?.map((i) => Object.keys(rec(i)).sort()) });
+    await sleep(500);
+    out("A stops the task", await call(a, "chat.abort", { sessionKey: k }));
+    out("ends", await ends(a, [String(first.runId), String(later.runId)], 60_000));
+    out("history", (await history(a, k)).map((r) => ({ role: r.role, idempotencyKey: r.idempotencyKey, text: r.text.slice(0, 40) })));
+    const raw = rec(await a.request("chat.history", { sessionKey: k, limit: 50 }));
+    out("steerTargetRunId on user rows", (raw.messages as unknown[]).filter((m) => rec(m).role === "user").map((m) => rec(rec(m).__openclaw).steerTargetRunId ?? null));
+    // Same device: a run-specific stop, then a later input.
+    const k2 = await newTask(a, "main", `Group queued2 ${stamp}`);
+    await subscribe(a, k2);
+    const f2 = rec((await call(a, "chat.send", { sessionKey: k2, message: "#slow 6", idempotencyKey: randomUUID() })).result);
+    await sleep(1500);
+    const l2 = rec((await call(a, "chat.send", { sessionKey: k2, message: "#text", idempotencyKey: randomUUID() })).result);
+    out("same device, later input", l2);
+    out("A stops only the first run by id", await call(a, "chat.abort", { sessionKey: k2, runId: f2.runId }));
+    out("ends", await ends(a, [String(f2.runId), String(l2.runId)], 60_000));
+  },
+
+  async cards() {
+    const a = await device("a");
+    const b = await device("b");
+    const r = await device("r", READ, ["tool-events"]);
+    const stamp = Date.now();
+    const o = await newTask(a, "otto", `Group cards O ${stamp}`);
+    const j = await newTask(a, "main", `Group cards J ${stamp}`);
+    for (const k of [o, j]) {
+      await subscribe(a, k, true);
+      await subscribe(b, k, true);
+      await subscribe(r, k);
+    }
+    const seq = { a: a.lastSeq, b: b.lastSeq, r: r.lastSeq };
+    await call(a, "chat.send", { sessionKey: o, message: "#approve", idempotencyKey: randomUUID() });
+    await call(a, "chat.send", { sessionKey: j, message: "#ask", idempotencyKey: randomUUID() });
+    const ask = rec((await a.waitFor("question", (e) => e.event === "question.requested", 60_000, seq.a)).payload);
+    const appr = rec((await a.waitFor("approval", (e) => e.event === "exec.approval.requested", 60_000, seq.a)).payload);
+    out("question", { id: ask.id, runId: ask.runId ?? rec(ask.request).runId, sessionKey: ask.sessionKey ?? rec(ask.request).sessionKey });
+    out("approval", { id: appr.id, runId: rec(appr.request).runId, sessionKey: rec(appr.request).sessionKey });
+    await sleep(800);
+    const seen = (op: OperatorSession, after: number) => ({
+      question: op.events.filter((e) => e.seq > after && e.event === "question.requested").length,
+      approval: op.events.filter((e) => e.seq > after && e.event === "exec.approval.requested").length,
+    });
+    out("events seen", { a: seen(a, seq.a), b: seen(b, seq.b), r: seen(r, seq.r) });
+    out("b: question.list", await call(b, "question.list", {}));
+    out("b: exec.approval.list", await call(b, "exec.approval.list", {}));
+    out("r: question.list", await call(r, "question.list", {}));
+    out("b dismisses A's question", await call(b, "question.resolve", { id: ask.id, cancel: true }));
+    out("b answers A's approval", await call(b, "exec.approval.resolve", { id: appr.id, decision: "deny" }));
+    out("a denies its approval", await call(a, "exec.approval.resolve", { id: appr.id, decision: "deny" }));
+  },
+
+  async order() {
+    const a = await device("a");
+    const stamp = Date.now();
+    const j = await newTask(a, "main", `Group order J ${stamp}`);
+    const o = await newTask(a, "otto", `Group order O ${stamp}`);
+    for (const k of [j, o]) await subscribe(a, k);
+    const ro = rec((await call(a, "chat.send", { sessionKey: o, message: "#stream 6", idempotencyKey: randomUUID() })).result);
+    await sleep(300);
+    const rj = rec((await call(a, "chat.send", { sessionKey: j, message: "#text", idempotencyKey: randomUUID() })).result);
+    out("ends, in the order they arrived", (await ends(a, [String(ro.runId), String(rj.runId)], 60_000)).order.map((e) => ({ at: e.at, key: String(e.sessionKey).split(":")[1] })));
+    for (const [name, k] of [["Juniper", j], ["Otto", o]] as const) {
+      const raw = rec(await a.request("chat.history", { sessionKey: k, limit: 50 }));
+      out(`${name} assistant rows`, (raw.messages as unknown[]).filter((m) => rec(m).role === "assistant").map((m) => ({ timestamp: rec(m).timestamp, agentId: rec(m).agentId ?? null })));
+    }
+  },
+
+  async guard() {
+    const a = await device("a");
+    const b = await device("b");
+    const stamp = Date.now();
+    const describe = async (k: string) => rec(rec((await call(a, "sessions.describe", { key: k })).result).session);
+    const remove = async (k: string) => {
+      const sid = (await describe(k)).sessionId;
+      await call(b, "sessions.patch", { key: k, expectedSessionId: sid, archived: true });
+      return call(b, "sessions.delete", { key: k, archivedOnly: true });
+    };
+    // A task with history: is the guard accepted on it, and does it refuse after deletion?
+    const k = await newTask(a, "main", `Group guard ${stamp}`);
+    await subscribe(a, k);
+    const r0 = rec((await call(a, "chat.send", { sessionKey: k, message: "#text", idempotencyKey: randomUUID() })).result);
+    await a.terminal(String(r0.runId));
+    const sid = String((await describe(k)).sessionId);
+    const ok = await call(a, "chat.send", { sessionKey: k, message: "#text", idempotencyKey: randomUUID(), sessionId: sid, expectedLeafEntryId: null });
+    out("guarded send to a task with history (sessionId, expectedLeafEntryId null)", ok);
+    if (ok.ok) await a.terminal(String(rec(ok.result).runId));
+    out("deleted between check and send", await remove(k));
+    out("unguarded send to the deleted key", await call(a, "chat.send", { sessionKey: k, message: "#text", idempotencyKey: randomUUID() }));
+    await sleep(2500);
+    out("session id now at the key (was " + sid + ")", (await describe(k)).sessionId ?? null);
+    const k2 = await newTask(a, "main", `Group guard2 ${stamp}`);
+    const sid2 = String((await describe(k2)).sessionId);
+    await remove(k2);
+    out("sessionId alone, after deletion", await call(a, "chat.send", { sessionKey: k2, message: "#text", idempotencyKey: randomUUID(), sessionId: sid2 }));
+    await sleep(2500);
+    out("session id now (was " + sid2 + ")", (await describe(k2)).sessionId ?? null);
+    const k3 = await newTask(a, "main", `Group guard3 ${stamp}`);
+    const sid3 = String((await describe(k3)).sessionId);
+    await remove(k3);
+    out("sessionId and expectedLeafEntryId null, after deletion", await call(a, "chat.send", { sessionKey: k3, message: "#text", idempotencyKey: randomUUID(), sessionId: sid3, expectedLeafEntryId: null }));
+    out("session at the key after the refused send", (await describe(k3)).sessionId ?? null);
+    const k4 = await newTask(a, "main", `Group guard4 ${stamp}`);
+    const sid4 = String((await describe(k4)).sessionId);
+    await remove(k4);
+    out("the same with queueMode steer, after deletion", await call(a, "chat.send", { sessionKey: k4, message: "#text", idempotencyKey: randomUUID(), sessionId: sid4, expectedLeafEntryId: null, queueMode: "steer" }));
+    await sleep(2500);
+    out("session id now (was " + sid4 + ")", (await describe(k4)).sessionId ?? null);
+    // A running task: does the guarded send (no queueMode) still join it?
+    const k5 = await newTask(a, "main", `Group guard5 ${stamp}`);
+    await subscribe(a, k5);
+    const sid5 = String((await describe(k5)).sessionId);
+    const busy = rec((await call(a, "chat.send", { sessionKey: k5, message: "#slow 5", idempotencyKey: randomUUID() })).result);
+    await sleep(1500);
+    const g5 = await call(a, "chat.send", { sessionKey: k5, message: "#text", idempotencyKey: randomUUID(), sessionId: sid5, expectedLeafEntryId: null });
+    out("guarded send while the task runs", g5);
+    out("ends", await ends(a, [String(busy.runId), ...(g5.ok ? [String(rec(g5.result).runId)] : [])], 60_000));
   },
 
   async delbot() {
