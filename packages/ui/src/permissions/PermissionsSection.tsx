@@ -436,7 +436,16 @@ function SavedPart({
   const [busy, setBusy] = useState<string | null>(null);
   /** What the gateway answered, and the read after it, per grant or entry. */
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const [confirm, setConfirm] = useState<AllowlistEntry | null>(null);
+  /**
+   * The entry the person is asked about, with the file's revision it was shown
+   * from: Remove acts on that revision only. `changed` says the file changed
+   * since, so the person is asked again with what it lists now.
+   */
+  const [confirm, setConfirm] = useState<{
+    entry: AllowlistEntry;
+    hash: string;
+    changed: boolean;
+  } | null>(null);
   const [now] = useState(() => Date.now());
   const { canApprove, canAdmin, connectedAt } = connection;
   const connected = connection.status === "connected";
@@ -487,27 +496,50 @@ function SavedPart({
     }
   };
 
-  const remove = async (entry: AllowlistEntry) => {
+  const remove = async (entry: AllowlistEntry, shownHash: string) => {
     if (!entry.entryId) return;
-    const id = `entry:${entry.agentId}:${entry.entryId}`;
+    const entryId = entry.entryId;
+    const id = `entry:${entry.agentId}:${entryId}`;
     setConfirm(null);
     setBusy(id);
     try {
       const result = await bridge.invoke({
         type: "removeAllowlistEntry",
         agentId: entry.agentId,
-        entryId: entry.entryId,
+        entryId,
+        shownHash,
       });
       set({ allowlist: result.allowlist });
-      const what = `${entry.pattern} for ${botName(entry.agentId)}`;
+      const bot = botName(entry.agentId);
+      const now =
+        result.allowlist.status === "ready"
+          ? result.allowlist.items.find(
+              (each) => each.agentId === entry.agentId && each.entryId === entryId,
+            )
+          : undefined;
+      if (result.outcome === "changed") {
+        // Nothing was written: the person is asked again, about the entry as it is now.
+        if (now && result.allowlist.status === "ready" && result.allowlist.hash) {
+          setConfirm({ entry: now, hash: result.allowlist.hash, changed: true });
+          setNotes((all) => ({ ...all, [id]: "" }));
+        } else
+          setNotes((all) => ({
+            ...all,
+            [id]: `The gateway's file changed since it was shown, and no longer lists this entry for ${bot}. Nothing was removed.`,
+          }));
+        announce("Nothing removed");
+        return;
+      }
       const note =
         result.outcome === "removed"
-          ? `Removed ${what}. Read back at ${clockTime(Date.now())}: the gateway's file no longer lists it.`
-          : result.outcome === "not-listed"
-            ? `The gateway's file no longer lists ${what}; nothing was written.`
-            : result.outcome === "still-listed"
-              ? `Couldn't remove ${what}.${result.error ? ` ${result.error}` : ""} The gateway's file still lists it.`
-              : `Couldn't read the gateway's file back.${result.error ? ` ${result.error}` : ""}`;
+          ? `Removed ${result.removed?.pattern ?? entry.pattern} for ${bot}. Read back at ${clockTime(Date.now())}: the gateway's file no longer lists it.`
+          : result.outcome === "ambiguous"
+            ? `Nothing was removed: the gateway's file has more than one entry for ${bot} with this id, so Clawtrate can't tell which one you confirmed.`
+            : result.outcome === "not-listed"
+              ? `The gateway's file no longer lists ${entry.pattern} for ${bot}; nothing was written.`
+              : result.outcome === "still-listed"
+                ? `Couldn't remove ${entry.pattern} for ${bot}.${result.error ? ` ${result.error}` : ""} The gateway's file still lists it.`
+                : `Couldn't read the gateway's file back.${result.error ? ` ${result.error}` : ""}`;
       setNotes((all) => ({ ...all, [id]: note }));
       announce(result.outcome === "removed" ? "Removed" : "Couldn't remove");
     } catch (error) {
@@ -668,14 +700,18 @@ function SavedPart({
                         </small>
                       )}
                     </span>
-                    {entry.entryId && (
+                    {entry.entryId && allowlist.status === "ready" && allowlist.hash && (
                       <button
                         type="button"
                         className="button"
                         data-variant="quiet"
                         data-size="sm"
                         disabled={busy !== null || info.readOnly}
-                        onClick={() => setConfirm(entry)}
+                        onClick={() =>
+                          allowlist.status === "ready" &&
+                          allowlist.hash &&
+                          setConfirm({ entry, hash: allowlist.hash, changed: false })
+                        }
                       >
                         {busy === id ? "Removing…" : "Remove…"}
                       </button>
@@ -708,13 +744,26 @@ function SavedPart({
           title="Remove this allowlist entry?"
           text={
             <>
-              <code>{confirm.pattern}</code> for {botName(confirm.agentId)}, on the gateway's
-              machine. Clawtrate writes the gateway's approvals file again without it, then reads it
-              back.
+              {confirm.changed && (
+                <>
+                  The gateway's file changed since it was shown, and nothing was removed. It now
+                  lists this entry as:{" "}
+                </>
+              )}
+              <code>{confirm.entry.pattern}</code>
+              {confirm.entry.argPattern && (
+                <>
+                  {" "}
+                  with argument pattern <code>{confirm.entry.argPattern}</code>
+                </>
+              )}{" "}
+              for {botName(confirm.entry.agentId)}, on the gateway's machine. Clawtrate writes the
+              gateway's approvals file again without it, only if the file is still as shown here,
+              then reads it back.
             </>
           }
           action="Remove"
-          onAction={() => void remove(confirm)}
+          onAction={() => void remove(confirm.entry, confirm.hash)}
           onCancel={() => setConfirm(null)}
         />
       )}

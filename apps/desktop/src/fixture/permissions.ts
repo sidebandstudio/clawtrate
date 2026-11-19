@@ -8,6 +8,7 @@
 //   rules=running|absent|stopped|old|unchecked   the rules plugin (default running)
 //   saved=empty|error|loading|more               saved approvals (default: two grants and two entries)
 //   revoke=refused|gone                          how Revoke goes: the gateway refuses, or lists no such grant
+//   remove=changed                               Remove finds the entry edited in place after the confirmation opened
 //   audit=empty|off|error|loading|end            activity (default: a page with older ones after it)
 
 import {
@@ -27,6 +28,7 @@ export type PermissionParams = {
   rules: string | null;
   saved: string | null;
   revoke: string | null;
+  remove: string | null;
   audit: string | null;
 };
 
@@ -34,6 +36,7 @@ export const NO_PERMISSION_PARAMS: PermissionParams = {
   rules: null,
   saved: null,
   revoke: null,
+  remove: null,
   audit: null,
 };
 
@@ -42,6 +45,7 @@ export function permissionParams(params: URLSearchParams): PermissionParams {
     rules: params.get("rules"),
     saved: params.get("saved"),
     revoke: params.get("revoke"),
+    remove: params.get("remove"),
     audit: params.get("audit"),
   };
 }
@@ -315,13 +319,22 @@ export function permissionCommand(
     ),
     more: params.saved === "more",
   });
+  // With `remove=changed`, another admin edits the first entry in place, under the same id,
+  // once the person has confirmed its removal: the file is then another revision.
+  const edited = () => removed.has("edited");
   const allowlist = (): SavedApprovals["allowlist"] =>
     connection().canAdmin
       ? {
           status: "ready",
-          items: entries(now, params).filter((each) => !removed.has(each.entryId ?? "")),
+          items: entries(now, params)
+            .filter((each) => !removed.has(each.entryId ?? ""))
+            .map((each, index) =>
+              edited() && index === 0
+                ? { ...each, pattern: "/usr/bin/true", argPattern: null }
+                : each,
+            ),
           omitted: 0,
-          hash: "fixture-hash",
+          hash: edited() ? "fixture-hash-2" : "fixture-hash",
         }
       : { status: "needs-admin" };
   switch (command.type) {
@@ -372,9 +385,38 @@ export function permissionCommand(
         grants: list,
       });
     }
-    case "removeAllowlistEntry":
+    case "removeAllowlistEntry": {
+      if (params.remove === "changed" && !removed.has("edited")) {
+        removed.add("edited");
+        return Promise.resolve({
+          outcome: "changed",
+          removed: null,
+          error: null,
+          allowlist: allowlist(),
+        });
+      }
+      const shown = allowlist();
+      const entry =
+        shown.status === "ready"
+          ? shown.items.find(
+              (each) => each.agentId === command.agentId && each.entryId === command.entryId,
+            )
+          : undefined;
+      if (shown.status !== "ready" || shown.hash !== command.shownHash)
+        return Promise.resolve({
+          outcome: "changed",
+          removed: null,
+          error: null,
+          allowlist: shown,
+        });
       removed.add(command.entryId);
-      return Promise.resolve({ outcome: "removed", error: null, allowlist: allowlist() });
+      return Promise.resolve({
+        outcome: "removed",
+        removed: entry ? { agentId: entry.agentId, pattern: entry.pattern } : null,
+        error: null,
+        allowlist: allowlist(),
+      });
+    }
     case "readActivity": {
       if (params.audit === "loading") return never();
       if (params.audit === "error")

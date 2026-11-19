@@ -314,50 +314,133 @@ describe("F-178: Revoke and Remove say only what the read back shows", () => {
     });
   });
 
-  it("remove writes the file without exactly that entry, with the hash it read, and reads it back", async () => {
-    let file = approvalsFile([LS_ENTRY, NODE_ENTRY]);
+  /** A gateway whose approvals file changes only by `set` with its current hash, as the gateway's does. */
+  const approvalsGateway = (start: ReturnType<typeof approvalsFile>) => {
+    let file = start;
+    let revision = 0;
     const gateway = fake({
       "exec.approvals.get": () => file,
       "exec.approvals.set": (params) => {
         if (params.baseHash !== file.hash)
-          throw new Error("exec approvals changed since last load");
-        const written = params.file as typeof file.file;
-        file = { ...file, file: written, hash: `hash-${written.agents.otto.allowlist.length}` };
+          throw new Error(
+            "exec approvals changed since last load; re-run exec.approvals.get and retry",
+          );
+        revision += 1;
+        file = { ...file, file: params.file as typeof file.file, hash: `written-${revision}` };
         return file;
       },
     });
-    const result = await removeAllowlistEntry(gateway.ctx, "otto", LS_ENTRY.id);
-    expect(result.outcome).toBe("removed");
+    return {
+      ...gateway,
+      file: () => file,
+      /** Another administrator's write, between the page's read and the person's Remove. */
+      edit: (allowlist: unknown[]) => {
+        revision += 1;
+        file = { ...approvalsFile(allowlist), hash: `edited-${revision}` };
+      },
+    };
+  };
+
+  it("remove writes the shown revision without exactly that entry, and names it from the file", async () => {
+    const gateway = approvalsGateway(approvalsFile([LS_ENTRY, NODE_ENTRY]));
+    const result = await removeAllowlistEntry(gateway.ctx, {
+      agentId: "otto",
+      entryId: LS_ENTRY.id,
+      shownHash: "hash-2",
+    });
+    expect(result).toMatchObject({
+      outcome: "removed",
+      removed: { agentId: "otto", pattern: "/bin/ls" },
+    });
     expect(gateway.methods()).toEqual([
       "exec.approvals.get",
       "exec.approvals.set",
       "exec.approvals.get",
     ]);
     expect(gateway.calls[1]!.params.baseHash).toBe("hash-2");
-    expect(file.file.agents.otto.allowlist).toEqual([NODE_ENTRY]);
-    // Asked again: the file no longer has it, so nothing is written.
-    const again = await removeAllowlistEntry(gateway.ctx, "otto", LS_ENTRY.id);
-    expect(again.outcome).toBe("not-listed");
-    expect(gateway.methods().filter((each) => each === "exec.approvals.set")).toHaveLength(1);
+    expect(gateway.file().file.agents.otto.allowlist).toEqual([NODE_ENTRY]);
   });
 
-  it("a refused write is reported as still listed, from the read afterwards", async () => {
-    const result = await removeAllowlistEntry(
-      fake({
-        "exec.approvals.get": () => approvalsFile([LS_ENTRY]),
-        "exec.approvals.set": () => {
-          throw new Error(
-            "exec approvals changed since last load; re-run exec.approvals.get and retry",
-          );
-        },
-      }).ctx,
-      "otto",
-      LS_ENTRY.id,
+  it("an entry edited in place under the same id after the confirmation opened is not removed", async () => {
+    const gateway = approvalsGateway(approvalsFile([LS_ENTRY, NODE_ENTRY]));
+    // The page showed revision hash-2; then another admin replaced /bin/ls under the same id.
+    gateway.edit([{ ...LS_ENTRY, pattern: "/usr/bin/true", argPattern: undefined }, NODE_ENTRY]);
+    const result = await removeAllowlistEntry(gateway.ctx, {
+      agentId: "otto",
+      entryId: LS_ENTRY.id,
+      shownHash: "hash-2",
+    });
+    expect(result.outcome).toBe("changed");
+    expect(result.removed).toBeNull();
+    expect(gateway.methods()).toEqual(["exec.approvals.get"]);
+    expect(gateway.file().file.agents.otto.allowlist).toHaveLength(2);
+    // The file as it is now, to ask the person again from.
+    expect(result.allowlist).toMatchObject({ status: "ready", hash: "edited-1" });
+    if (result.allowlist.status !== "ready") throw new Error("not ready");
+    expect(result.allowlist.items[0]).toMatchObject({
+      entryId: LS_ENTRY.id,
+      pattern: "/usr/bin/true",
+    });
+  });
+
+  it("an id that two entries share is refused, and nothing is written", async () => {
+    const gateway = approvalsGateway(
+      approvalsFile([
+        { ...LS_ENTRY, pattern: "/usr/bin/true" },
+        { ...LS_ENTRY, pattern: "/usr/bin/false" },
+      ]),
     );
+    const result = await removeAllowlistEntry(gateway.ctx, {
+      agentId: "otto",
+      entryId: LS_ENTRY.id,
+      shownHash: "hash-2",
+    });
+    expect(result.outcome).toBe("ambiguous");
+    expect(gateway.methods()).toEqual(["exec.approvals.get"]);
+    expect(gateway.file().file.agents.otto.allowlist).toHaveLength(2);
+  });
+
+  it("a removal is confirmed against the whole file: an entry past the display limit is still listed", async () => {
+    const filler = Array.from({ length: MAX_ALLOWLIST_LISTED }, (_, index) => ({
+      pattern: `/opt/tool-${index}`,
+      id: `filler-${index}`,
+    }));
+    const gateway = fake({
+      // The first read is the shown revision; the write is refused, and the read
+      // afterwards has the entry moved past the 60 entries kept for display.
+      "exec.approvals.get": () =>
+        gateway.methods().includes("exec.approvals.set")
+          ? { ...approvalsFile([...filler, LS_ENTRY]), hash: "moved" }
+          : approvalsFile([LS_ENTRY]),
+      "exec.approvals.set": () => {
+        throw new Error(
+          "exec approvals changed since last load; re-run exec.approvals.get and retry",
+        );
+      },
+    });
+    const result = await removeAllowlistEntry(gateway.ctx, {
+      agentId: "otto",
+      entryId: LS_ENTRY.id,
+      shownHash: "hash-1",
+    });
+    if (result.allowlist.status !== "ready") throw new Error("not ready");
+    expect(result.allowlist.items.some((each) => each.entryId === LS_ENTRY.id)).toBe(false);
     expect(result).toMatchObject({
       outcome: "still-listed",
+      removed: null,
       error: expect.stringContaining("changed since last load"),
     });
+  });
+
+  it("an entry the shown revision does not have is not written", async () => {
+    const gateway = approvalsGateway(approvalsFile([NODE_ENTRY]));
+    const result = await removeAllowlistEntry(gateway.ctx, {
+      agentId: "otto",
+      entryId: LS_ENTRY.id,
+      shownHash: "hash-1",
+    });
+    expect(result.outcome).toBe("not-listed");
+    expect(gateway.methods()).toEqual(["exec.approvals.get"]);
   });
 });
 
@@ -697,12 +780,21 @@ describe("F-178 F-324: the bridge's Permissions commands", () => {
       /invalid grant id/,
     );
     expect(
-      parseBridgeCommand({ type: "removeAllowlistEntry", agentId: "otto", entryId: "e1" }),
+      parseBridgeCommand({
+        type: "removeAllowlistEntry",
+        agentId: "otto",
+        entryId: "e1",
+        shownHash: "h1",
+      }),
     ).toEqual({
       type: "removeAllowlistEntry",
       agentId: "otto",
       entryId: "e1",
+      shownHash: "h1",
     });
+    expect(() =>
+      parseBridgeCommand({ type: "removeAllowlistEntry", agentId: "otto", entryId: "e1" }),
+    ).toThrow(/invalid file revision/);
     expect(parseBridgeCommand({ type: "requestAccess", tier: "approvals" })).toEqual({
       type: "requestAccess",
       tier: "approvals",

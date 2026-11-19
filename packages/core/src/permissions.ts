@@ -271,18 +271,22 @@ export function allowlistOf(file: unknown): { items: AllowlistEntry[]; omitted: 
   return { items, omitted };
 }
 
+/** The approvals file's answer as Saved approvals shows it: its entries, bounded, and its revision. */
+function allowlistFrom(answer: Record<string, unknown> | null): SavedApprovals["allowlist"] {
+  return {
+    status: "ready",
+    ...allowlistOf(answer?.file),
+    hash: wholeId(answer?.hash, 128),
+  };
+}
+
 export async function readAllowlist(
   ctx: PermissionsContext,
   canAdmin: boolean,
 ): Promise<SavedApprovals["allowlist"]> {
   if (!canAdmin) return { status: "needs-admin" };
   try {
-    const answer = asRecord(await ctx.request("exec.approvals.get", {}));
-    return {
-      status: "ready",
-      ...allowlistOf(answer?.file),
-      hash: typeof answer?.hash === "string" ? answer.hash.slice(0, 128) : null,
-    };
+    return allowlistFrom(asRecord(await ctx.request("exec.approvals.get", {})));
   } catch (error) {
     if (missingScope(error)) return { status: "needs-admin" };
     return { status: "failed", message: errorText(error) };
@@ -345,52 +349,98 @@ export async function revokeGrant(
 }
 
 /**
- * Remove one entry from the gateway's machine's allowlist: read the approvals
- * file, take out exactly that entry by its id, write the file with the hash it
- * was read with, and read it again. `outcome` comes from the read afterwards:
- * `removed` when it no longer lists the entry, `still-listed` when it does,
- * `not-listed` when the file had no such entry before anything was written.
+ * Remove one entry from the gateway's machine's allowlist, the entry the person
+ * confirmed: the file is written without it only while it is still the revision
+ * the page showed (`shownHash`), and the write names that revision, so the
+ * gateway refuses it if the file changed in between. `outcome`:
+ *
+ * - `changed`: the file is not the revision shown; nothing was written, and
+ *   `allowlist` is the file as it is now, to confirm again from.
+ * - `ambiguous`: the bot's list has more than one entry with that id; nothing was written.
+ * - `not-listed`: the shown revision has no such entry; nothing was written.
+ * - `removed` / `still-listed`: from the whole file read after the write, never
+ *   from the entries kept for display. `removed` names the entry as the file
+ *   held it when it was written without it.
+ * - `unknown`: the file could not be read afterwards.
  */
 export type AllowlistRemoveResult = {
-  outcome: "removed" | "still-listed" | "not-listed" | "unknown";
+  outcome: "removed" | "still-listed" | "not-listed" | "changed" | "ambiguous" | "unknown";
+  /** The entry the write took out, as the shown revision held it. */
+  removed: { agentId: string; pattern: string } | null;
   error: string | null;
   allowlist: SavedApprovals["allowlist"];
 };
 
+/** The entries of one bot's allowlist with this id, in the whole file. */
+function entriesWithId(file: unknown, agentId: string, entryId: string): Record<string, unknown>[] {
+  const agent = asRecord(asRecord(asRecord(file)?.agents)?.[agentId]);
+  const list = Array.isArray(agent?.allowlist) ? agent.allowlist : [];
+  return list
+    .map((each) => asRecord(each))
+    .filter((each): each is Record<string, unknown> => each?.id === entryId);
+}
+
 export async function removeAllowlistEntry(
   ctx: PermissionsContext,
-  agentId: string,
-  entryId: string,
+  target: { agentId: string; entryId: string; shownHash: string },
 ): Promise<AllowlistRemoveResult> {
-  const listed = (allowlist: SavedApprovals["allowlist"]) =>
-    allowlist.status === "ready"
-      ? allowlist.items.some((each) => each.agentId === agentId && each.entryId === entryId)
-      : null;
+  const { agentId, entryId, shownHash } = target;
+  let removed: AllowlistRemoveResult["removed"] = null;
   let error: string | null = null;
   try {
     const before = asRecord(await ctx.request("exec.approvals.get", {}));
     const file = asRecord(before?.file);
     const agents = asRecord(file?.agents);
     const agent = asRecord(agents?.[agentId]);
-    const entries = Array.isArray(agent?.allowlist) ? agent.allowlist : [];
-    const kept = entries.filter((each) => asRecord(each)?.id !== entryId);
-    if (!file || !agents || !agent || kept.length === entries.length) {
-      const allowlist = await readAllowlist(ctx, true);
-      return { outcome: listed(allowlist) ? "still-listed" : "not-listed", error: null, allowlist };
-    }
+    if (before?.hash !== shownHash)
+      return { outcome: "changed", removed: null, error: null, allowlist: allowlistFrom(before) };
+    const matching = entriesWithId(file, agentId, entryId);
+    if (!file || !agents || !agent || matching.length === 0)
+      return {
+        outcome: "not-listed",
+        removed: null,
+        error: null,
+        allowlist: allowlistFrom(before),
+      };
+    if (matching.length > 1)
+      return { outcome: "ambiguous", removed: null, error: null, allowlist: allowlistFrom(before) };
+    const entries = agent.allowlist as unknown[];
+    removed = { agentId, pattern: cut(matching[0]!.pattern) ?? "(no pattern)" };
     await ctx.request("exec.approvals.set", {
-      file: { ...file, agents: { ...agents, [agentId]: { ...agent, allowlist: kept } } },
-      ...(typeof before?.hash === "string" ? { baseHash: before.hash } : {}),
+      file: {
+        ...file,
+        agents: {
+          ...agents,
+          [agentId]: {
+            ...agent,
+            allowlist: entries.filter((each) => asRecord(each)?.id !== entryId),
+          },
+        },
+      },
+      baseHash: shownHash,
     });
   } catch (caught) {
     error = errorText(caught);
   }
-  const allowlist = await readAllowlist(ctx, true);
-  const still = listed(allowlist);
+  // Whether it is gone is read from the whole file, not from the entries kept to show.
+  let after: Record<string, unknown> | null;
+  try {
+    after = asRecord(await ctx.request("exec.approvals.get", {}));
+  } catch (caught) {
+    const message = errorText(caught);
+    return {
+      outcome: "unknown",
+      removed: null,
+      error: error ?? message,
+      allowlist: missingScope(caught) ? { status: "needs-admin" } : { status: "failed", message },
+    };
+  }
+  const still = entriesWithId(after?.file, agentId, entryId).length > 0;
   return {
-    outcome: still === null ? "unknown" : still ? "still-listed" : "removed",
+    outcome: still ? "still-listed" : "removed",
+    removed: still ? null : removed,
     error,
-    allowlist,
+    allowlist: allowlistFrom(after),
   };
 }
 

@@ -215,8 +215,11 @@ export type BridgeCommand =
   | { type: "readSavedApprovals" }
   /** Revoke a routine's grant, then read the grants back. */
   | { type: "revokeGrant"; grantId: string }
-  /** Remove one allowlist entry of the gateway's machine by its id, then read the file back. */
-  | { type: "removeAllowlistEntry"; agentId: string; entryId: string }
+  /**
+   * Remove one allowlist entry of the gateway's machine by its id, only from the
+   * file's revision the page showed (`shownHash`), then read the whole file back.
+   */
+  | { type: "removeAllowlistEntry"; agentId: string; entryId: string; shownHash: string }
   /** One page of the audit log's tool actions, newest first; `cursor` from the page before. */
   | {
       type: "readActivity";
@@ -648,6 +651,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "removeAllowlistEntry",
         agentId: botId(command.agentId),
         entryId: id(command.entryId, "entry id"),
+        shownHash: id(command.shownHash, "file revision"),
       };
     case "readActivity": {
       const status = (command.status ?? null) as AuditStatus | null;
@@ -1154,7 +1158,11 @@ class ViewerSession implements BridgeSession {
       case "revokeGrant":
         return client.revokeGrant(command.grantId);
       case "removeAllowlistEntry":
-        return client.removeAllowlistEntry(command.agentId, command.entryId);
+        return client.removeAllowlistEntry({
+          agentId: command.agentId,
+          entryId: command.entryId,
+          shownHash: command.shownHash,
+        });
       case "readActivity":
         return client.readActivity({
           cursor: command.cursor,

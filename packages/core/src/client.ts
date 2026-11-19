@@ -5406,12 +5406,16 @@ export class ClawtrateClient {
   }
 
   /** Remove one entry of the gateway machine's allowlist, then read the file back (`operator.admin`). */
-  async removeAllowlistEntry(agentId: string, entryId: string): Promise<AllowlistRemoveResult> {
+  async removeAllowlistEntry(target: {
+    agentId: string;
+    entryId: string;
+    shownHash: string;
+  }): Promise<AllowlistRemoveResult> {
     if (this.options.readOnly)
       throw new Error("This host only reads; it does not change settings.");
     if (!this.state.connection.canAdmin)
       throw new Error("Removing an allowlist entry needs admin access.");
-    return removeAllowlistEntry(this.permissionsContext(), agentId, entryId);
+    return removeAllowlistEntry(this.permissionsContext(), target);
   }
 
   /** One page of the audit log's tool actions with their recorded causes (`operator.read`). */

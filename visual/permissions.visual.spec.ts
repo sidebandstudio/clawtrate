@@ -286,6 +286,34 @@ test.describe("behaviour", () => {
     ).toHaveCount(0);
   });
 
+  test("F-178: an entry edited in place after the confirmation opened is not removed; the person is asked again about it as it is now", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&remove=changed`, "light");
+    await permissions("Saved approvals", grants)(page);
+    const entry = page.getByTestId("allowlist-entry").filter({ hasText: "/bin/ls" });
+    await entry.getByRole("button", { name: "Remove…" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Remove" }).click();
+    // Nothing removed: asked again, with the entry the file lists under that id now.
+    const again = page.getByRole("alertdialog");
+    await expect(again).toContainText(
+      "The gateway's file changed since it was shown, and nothing was removed. It now lists this entry as: /usr/bin/true for Otto",
+    );
+    await expect(again.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await expect(announced(page)).toHaveText("Nothing removed");
+    await expect(page.getByText(/^Removed /)).toHaveCount(0);
+    const removes = (await sent(page)).filter((each) => each.type === "removeAllowlistEntry");
+    expect(removes).toEqual([expect.objectContaining({ shownHash: "fixture-hash" })]);
+    // Confirmed again, it is written against the revision now shown, and names that entry.
+    await again.getByRole("button", { name: "Remove" }).click();
+    await expect(
+      page.getByText(/^Removed \/usr\/bin\/true for Otto\. Read back at /),
+    ).toBeVisible();
+    expect(
+      (await sent(page)).filter((each) => each.type === "removeAllowlistEntry").at(-1),
+    ).toMatchObject({ shownHash: "fixture-hash-2" });
+  });
+
   test("F-178: below approvals the page reads nothing and asks for approvals access alone", async ({
     page,
   }) => {
