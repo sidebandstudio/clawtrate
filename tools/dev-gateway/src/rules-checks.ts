@@ -15,7 +15,7 @@
 
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { OperatorSession } from "./operator.ts";
+import type { GatewayEvent, OperatorSession } from "./operator.ts";
 import { drainSessions } from "./scenario-check.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -138,7 +138,14 @@ async function clearRules(ctx: RulesContext): Promise<void> {
   for (const scope of Object.keys(await scopes(ctx))) await save(ctx, scope, []);
 }
 
-type ToolCall = { name: string; isError: boolean; text: string; details: JsonRecord };
+/** A tool call of a run; `result` says whether its result arrived at all. */
+type ToolCall = {
+  name: string;
+  result: boolean;
+  isError: boolean;
+  text: string;
+  details: JsonRecord;
+};
 type BotRun = { runId: string; state: string; calls: ToolCall[] };
 
 type World = { stamp: string; keys: Set<string>; counter: number };
@@ -171,25 +178,34 @@ async function finish(ctx: RulesContext, runId: string, timeoutMs = 120_000): Pr
   const op = ctx.clients.interactive;
   const end = await op.terminal(runId, timeoutMs);
   await sleep(300);
+  return { runId, state: String(end.state), calls: toolCallsOf(op.runEvents(runId)) };
+}
+
+/** A run's tool calls from its events: a start, then the result if it arrived. */
+export function toolCallsOf(events: GatewayEvent[]): ToolCall[] {
   const calls: ToolCall[] = [];
-  for (const event of op.runEvents(runId)) {
+  for (const event of events) {
     const payload = rec(event.payload);
     if (event.event !== "agent" || payload.stream !== "tool") continue;
     const data = rec(payload.data);
     if (data.phase === "start") {
-      calls.push({ name: String(data.name), isError: false, text: "", details: {} });
+      calls.push({ name: String(data.name), result: false, isError: false, text: "", details: {} });
     } else if (data.phase === "result") {
       const last = calls.at(-1);
       if (!last) continue;
       const result = rec(data.result);
       const blocks = Array.isArray(result.content) ? (result.content as JsonRecord[]) : [];
+      last.result = true;
       last.isError = data.isError === true;
       last.text = blocks.map((block) => String(block.text ?? "")).join("\n");
       last.details = rec(result.details);
     }
   }
-  return { runId, state: String(end.state), calls };
+  return calls;
 }
+
+/** Whether a call ran: its result arrived, and it is not an error. A start alone is not. */
+export const ranOk = (call: ToolCall | undefined) => call?.result === true && !call.isError;
 
 type Card = { id: string; request: JsonRecord; createdAtMs: number; expiresAtMs: number };
 
@@ -522,7 +538,7 @@ export const RULES_CHECKS: RulesCheck[] = [
       const first = await finish(ctx, runId);
       same(first.state, "final", "the first run's end");
       expect(
-        first.calls.length === 1 && first.calls[0]!.name === "write" && !first.calls[0]!.isError,
+        first.calls.length === 1 && first.calls[0]!.name === "write" && ranOk(first.calls[0]),
         `Allow once did not run the write: ${show(first.calls)}`,
       );
       const again = marks(ctx);
@@ -628,7 +644,7 @@ export const RULES_CHECKS: RulesCheck[] = [
       const readRun = await start(ctx, key, "#read");
       const read = await finish(ctx, readRun);
       expect(
-        read.calls[0]?.name === "read" && !read.calls[0].isError,
+        read.calls[0]?.name === "read" && ranOk(read.calls[0]),
         `the allowed read: ${show(read.calls)}`,
       );
       same(cardsSeen(ctx, free, readRun), [], "who received a card for the allowed read");
@@ -828,7 +844,7 @@ export const RULES_CHECKS: RulesCheck[] = [
       const free = marks(ctx);
       const freeRun = await start(ctx, key, "#write");
       const ran = await finish(ctx, freeRun);
-      expect(ran.calls[0] && !ran.calls[0].isError, `the exact Allow: ${show(ran.calls)}`);
+      expect(ranOk(ran.calls[0]), `the exact Allow: ${show(ran.calls)}`);
       same(cardsSeen(ctx, free, freeRun), [], "who received a card for the exact Allow");
     },
   },
@@ -967,7 +983,7 @@ export const RULES_CHECKS: RulesCheck[] = [
         const run = await finish(ctx, runId);
         const write = run.calls[0];
         if (change === "rules") {
-          expect(write && !write.isError, `after a rules change: ${show(run.calls)}`);
+          expect(ranOk(write), `after a rules change: ${show(run.calls)}`);
         } else {
           expect(
             write?.isError && write.text.includes(GATEWAY_UNAVAILABLE),
@@ -1009,10 +1025,10 @@ export const RULES_CHECKS: RulesCheck[] = [
         await resolve(ctx, card.id, "allow-once");
         const during = await finish(ctx, runId);
         same(
-          during.calls.map((c) => [c.name, c.isError]),
+          during.calls.map((c) => [c.name, ranOk(c)]),
           [
-            ["coder__slow_task", false],
-            ["write", false],
+            ["coder__slow_task", true],
+            ["write", true],
           ],
           "the run the plugin was turned off in",
         );
@@ -1022,7 +1038,7 @@ export const RULES_CHECKS: RulesCheck[] = [
         const freshRun = await start(ctx, fresh, "#write");
         const run = await finish(ctx, freshRun);
         expect(
-          run.calls[0]?.name === "write" && !run.calls[0].isError,
+          run.calls[0]?.name === "write" && ranOk(run.calls[0]),
           `the write with the plugin off: ${show(run.calls)}`,
         );
         same(cardsSeen(ctx, after), [], "who received a card with the plugin off");

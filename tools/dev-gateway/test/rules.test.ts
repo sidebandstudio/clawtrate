@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { devConfig, DENIED_TOOLS, loadPlugins, PLUGIN_RULE, sandboxProblems } from "../src/cli.ts";
 import { loadDevPlugin, pluginCopy } from "../src/dev-plugins.ts";
 import { CHECKOUT_DIR } from "../src/env.ts";
-import { RULES_CHECKS, eventually, logSaysAfter } from "../src/rules-checks.ts";
+import { RULES_CHECKS, eventually, logSaysAfter, ranOk, toolCallsOf } from "../src/rules-checks.ts";
 import { SCENARIOS } from "../src/scenarios.ts";
 
 const PORTS = { gatewayPort: 19400, providerPort: 19410 };
@@ -115,5 +115,25 @@ describe("the rules checks' bounded wait", () => {
     await expect(eventually("Pip's record", async () => undefined, 50, 10)).rejects.toThrow(
       /Pip's record did not appear within 50 ms/,
     );
+  });
+});
+
+describe("the rules checks' tool calls", () => {
+  const tool = (phase: string, extra: Record<string, unknown> = {}) => ({
+    at: 0,
+    seq: 0,
+    event: "agent",
+    payload: { stream: "tool", data: { phase, name: "write", ...extra } },
+  });
+
+  it("count a call as having run only once its result arrived without an error", () => {
+    const [started] = toolCallsOf([tool("start")]);
+    expect(started).toMatchObject({ name: "write", result: false });
+    expect(ranOk(started)).toBe(false);
+    const [done] = toolCallsOf([tool("start"), tool("result", { isError: false, result: {} })]);
+    expect(ranOk(done)).toBe(true);
+    const [failed] = toolCallsOf([tool("start"), tool("result", { isError: true, result: {} })]);
+    expect(ranOk(failed)).toBe(false);
+    expect(ranOk(undefined)).toBe(false);
   });
 });
