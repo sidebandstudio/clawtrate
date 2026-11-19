@@ -69,7 +69,7 @@ vi.mock("../src/host/runtime.ts", () => ({
   readDevConnection: () => null,
   selectInstance: () => undefined,
   startHostRuntime: async () => ({
-    client: { state: {}, store: { subscribe: () => () => {} }, stop() {} },
+    client: { state: {}, store: { subscribe: () => () => {} }, stop() {}, setSetup() {} },
     info: {},
     policy: {},
   }),

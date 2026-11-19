@@ -33,6 +33,17 @@ import {
   startHostRuntime,
   type HostRuntime,
 } from "../host/runtime.ts";
+import { SetupController } from "../setup/controller.ts";
+import { ProgramRunner } from "../setup/programs.ts";
+import {
+  automatedRun,
+  productionWorld,
+  readSandbox,
+  realHome,
+  sandboxWorld,
+  SetupRefusedError,
+  type LookWorld,
+} from "../setup/world.ts";
 
 app.setName("Clawtrate");
 // On Windows, the taskbar button belongs to the installer's shortcuts from the first window.
@@ -76,6 +87,61 @@ function openExternally(raw: string): void {
 
 let runtime: HostRuntime | null = null;
 let window: BrowserWindow | null = null;
+/** The programs setup started, ended by PID when the app quits. */
+const programs = new ProgramRunner();
+
+/** Whether a command-line switch was given, to Chromium or to the app. */
+function hasSwitch(name: string): boolean {
+  return (
+    app.commandLine?.hasSwitch(name) === true ||
+    process.argv.some((arg) => arg === `--${name}` || arg.startsWith(`--${name}=`))
+  );
+}
+
+/**
+ * The look's world (docs/development/setup.md): the sandbox an automated run
+ * or a developer names with `--clawtrate-setup-sandbox=<file>` or
+ * CLAWTRATE_SETUP_SANDBOX, otherwise the real computer.
+ */
+function setupWorld(): LookWorld | SetupRefusedError {
+  const path =
+    app.commandLine?.getSwitchValue("clawtrate-setup-sandbox") ||
+    process.env.CLAWTRATE_SETUP_SANDBOX ||
+    "";
+  try {
+    if (path) return sandboxWorld(readSandbox(path), process.platform);
+  } catch (error) {
+    return error instanceof SetupRefusedError ? error : new SetupRefusedError(String(error));
+  }
+  return productionWorld({
+    home: realHome(),
+    appData: app.getPath("userData"),
+    platform: process.platform,
+    lang: process.env.LANG,
+  });
+}
+
+/** The host's own confirmation (docs/design/setup.md §2): a native dialog, never the page. */
+async function confirmNatively(confirmation: {
+  message: string;
+  detail: string;
+  confirm: string;
+}): Promise<boolean> {
+  const options = {
+    type: "question" as const,
+    message: confirmation.message,
+    detail: confirmation.detail,
+    buttons: [confirmation.confirm, "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  };
+  const owner = window && !window.isDestroyed() ? window : null;
+  const answer = owner
+    ? await dialog.showMessageBox(owner, options)
+    : await dialog.showMessageBox(options);
+  return answer.response === 0;
+}
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -236,6 +302,19 @@ async function main(): Promise<void> {
     autoConnectDev: process.env.CLAWTRATE_AUTOCONNECT_DEV === "1",
   });
   const { client, info, policy } = runtime;
+  // Setup on this computer. A development build and every automated run look only in a sandbox.
+  const setup = new SetupController({
+    client,
+    world: setupWorld(),
+    sandboxed: !app.isPackaged || automatedRun(process.env, hasSwitch),
+    realHome: realHome(),
+    run: programs.run,
+    stopPrograms: () => programs.stopAll(),
+    confirm: confirmNatively,
+    log: (line) => console.log(line),
+  });
+  policy.setup = setup;
+  info.setup = { look: true, pair: true, platform: process.platform };
 
   ipcMain.handle("clawtrate:hello", (): { info: HostInfo; state: ClawtrateState } => ({
     info,
@@ -320,7 +399,10 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin" || process.env.CLAWTRATE_SCREENSHOT) app.quit();
 });
 
-app.on("before-quit", () => runtime?.client.stop());
+app.on("before-quit", () => {
+  programs.stopAll();
+  runtime?.client.stop();
+});
 
 // One app per data folder: a second launch focuses the running window and exits.
 if (app.requestSingleInstanceLock()) {

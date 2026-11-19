@@ -1,5 +1,6 @@
 // pnpm preview:web [--dev-gateway] [--no-access-token] [--instance <name>]
 //                  [--port 5310] [--host 0.0.0.0] [--data-dir <dir>] [--read-only]
+//                  [--setup-look --setup-sandbox <file>]
 //
 // Serves the Clawtrate renderer to a browser on another machine. The gateway
 // connection, the device key and pairing all stay in this process.
@@ -7,6 +8,10 @@
 // whose gateway the development-only modes accept; the default instance otherwise.
 // `--read-only` pins the connection to the read tier: the interface shows the
 // read-only conversation and never offers to ask for more access.
+// `--setup-look` shows the first screen of setup and lets "This computer" look
+// on the computer running this host, which is not the viewer's: it is off by
+// default, runs only in the sandbox `--setup-sandbox` names, and never pairs,
+// since this host has no dialog of its own to ask first (docs/decisions.md).
 
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces } from "node:os";
@@ -15,6 +20,9 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { readDevConnection, selectInstance, startHostRuntime } from "../host/runtime.ts";
 import { createAccessToken, startWebHost } from "./server.ts";
+import { SetupController } from "../setup/controller.ts";
+import { ProgramRunner } from "../setup/programs.ts";
+import { readSandbox, realHome, sandboxWorld, SetupRefusedError } from "../setup/world.ts";
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = join(APP_ROOT, "../..");
@@ -29,6 +37,8 @@ const { values } = parseArgs({
     "no-access-token": { type: "boolean", default: false },
     instance: { type: "string" },
     "read-only": { type: "boolean", default: false },
+    "setup-look": { type: "boolean", default: false },
+    "setup-sandbox": { type: "string" },
   },
   allowPositionals: false,
 });
@@ -69,6 +79,30 @@ async function main(): Promise<void> {
     recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance }),
     readOnly: values["read-only"],
   });
+  const programs = new ProgramRunner();
+  if (values["setup-look"]) {
+    const sandbox = values["setup-sandbox"];
+    let world;
+    try {
+      world = sandbox
+        ? sandboxWorld(readSandbox(sandbox), process.platform)
+        : new SetupRefusedError("the web preview looks only in a sandbox (--setup-sandbox)");
+    } catch (error) {
+      world = error instanceof SetupRefusedError ? error : new SetupRefusedError(String(error));
+    }
+    runtime.policy.setup = new SetupController({
+      client: runtime.client,
+      world,
+      // A development and review host: it looks only in a sandbox.
+      sandboxed: true,
+      realHome: realHome(),
+      run: programs.run,
+      stopPrograms: () => programs.stopAll(),
+      confirm: null,
+      log: (line) => console.log(line),
+    });
+    runtime.info.setup = { look: true, pair: false, platform: process.platform };
+  }
   const accessToken = tokenDisabled ? null : createAccessToken();
   const host = startWebHost({
     runtime,
@@ -99,6 +133,7 @@ async function main(): Promise<void> {
   });
 
   const shutdown = () => {
+    programs.stopAll();
     runtime.client.stop();
     void host.close().then(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();
