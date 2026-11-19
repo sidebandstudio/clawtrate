@@ -226,7 +226,9 @@
     if (S.click === "gone") {
       S.sel = { bot: ev.bot, task: null };
       S.view = "detail";
-      S.goneTask = ev.task;
+      // The task list no longer has it: the rail drops it, as the reload does.
+      const owner = bot(ev.bot);
+      owner.tasks = owner.tasks.filter((x) => x.id !== ev.task);
       setStrip({ tone: "warn", text: "That task is no longer on the gateway." });
       renderLayer();
       render();

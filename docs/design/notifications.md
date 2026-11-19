@@ -280,7 +280,7 @@ Under them a note, neutral, in the words for the system:
 **The page**, inside the tab with a quiet round Back and the title "Notifications":
 
 - A switch row: "Notify me about Otto", line "When Otto finishes or waits for you." It is the same switch as Otto's row in Settings.
-- A group word "Tasks with their own setting", then one row per such task, its title and its setting ("On" or "Off"), as a `.b-select` that opens section 9's menu. With none: "No task has its own setting. Choose one in the task's Details."
+- A group word "Tasks with their own setting", then one row per such task, its title and its setting ("On" or "Off") as a fact row; the setting is changed in that task's Details (section 9). With none: "No task has its own setting. Choose one in the task's Details."
 - Notes, when they apply: "Notifications are off on this computer." with "Settings" (opens Settings, Notifications); "Quiet until 07:00." while quiet hours are on.
 
 The page's states are section 7's for its controls: reading, couldn't read, read-only with the access bar, saving, couldn't save, changed elsewhere. A task in the list that is no longer on the gateway is not shown, and its setting is removed with the next write.

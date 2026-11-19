@@ -182,6 +182,7 @@ await p.close();
 p = await open("event=finished&click=gone");
 await click(p, "[data-n-open]");
 check("a task that is gone: no composer and no task is selected", await p.evaluate(() => !document.querySelector(".composer-input") && !document.querySelector('.task[aria-current="true"]')));
+check("a task that is gone: the rail no longer lists it", !(await text(p, ".bot-list")).includes("Weekly backup check"));
 await p.close();
 
 p = await open("event=finished");
