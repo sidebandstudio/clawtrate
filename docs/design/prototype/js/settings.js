@@ -961,6 +961,8 @@
     renderMenu();
     renderRequired();
     diskNote();
+    // The iPhone has no System and no Updates: an address that asks for one gets Appearance.
+    if (phone() && ["system", "updates"].includes(D.B.settings.section)) D.B.settings.section = "appearance";
     if (settingsDialog.open) rs(true);
     if (p("add") === "1") openAdd(true);
     if (p("remove") && gw(p("remove"))) openRemove(p("remove"));

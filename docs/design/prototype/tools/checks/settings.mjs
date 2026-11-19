@@ -75,6 +75,11 @@ process.on("uncaughtException", (e) => {
   check("phone: Your gateways has no sideways scroll", !sideways);
   await p.close();
 }
+{
+  const p = await open("open=settings&section=system", { width: 390, height: 844 });
+  check("phone: an address asking for System gets Appearance", (await text(p, "#b-section-title")) === "Appearance");
+  await p.close();
+}
 await stateWords("Gateway pane: Other gateways and Remove this gateway…, not Use another gateway", "open=settings&section=gateway", settings, ["Address", "gateway.local", "Granted scopes", "Other gateways", "Remove this gateway…"]);
 {
   const p = await open("open=settings&section=gateway");
