@@ -62,5 +62,5 @@ Reset the instance when you are done: `pnpm dev-gateway reset --instance look`.
 - `apps/desktop/test/setup-look.test.ts` runs the look on recorded outputs of OpenClaw 2026.10.6 and proves the guard's refusals.
 - `apps/desktop/test/setup-connect.test.ts` runs Connect with a fake `openclaw` and the core's fake gateway: the dialog first, the code's one use, and every place the code must never reach.
 - `packages/core/test/setup-token-gate.test.ts` proves the first token is written only for exactly read.
-- `e2e/setup.spec.ts` drives the development build of the desktop app against `e2e-<run>-setup`, an instance `pnpm e2e` starts with `--default-local-pairing`, through sandboxes of the run's own. It needs Electron's binary, and skips without it.
+- `e2e/setup.spec.ts` drives the development build of the desktop app against `e2e-<run>-setup`, an instance `pnpm e2e` starts with `--default-local-pairing`, through sandboxes of the run's own. It needs Electron's binary and a display.
 - `pnpm check:packaged` gives the packaged app a sandbox for the run's instance (`--clawtrate-setup-sandbox`) and checks that the look sees that instance only.
