@@ -20,7 +20,9 @@ import { targetMatches, toolMatches } from "./targets.js";
 /**
  * Whether a rule covers a call. A rule about what a tool acts on covers a
  * call whose target cannot be read (`value: null`) as if it acted on
- * everything: a Never or an Ask does, an Allow does not.
+ * everything: a Never or an Ask does, an Allow does not. A Never or an Ask
+ * about a path matches any spelling of the path that reaches the same file;
+ * an Allow only the path as given.
  */
 export function ruleMatches(rule, call) {
   if (!rule.tools.some((entry) => toolMatches(entry, call.tool))) return false;
@@ -29,7 +31,13 @@ export function ruleMatches(rule, call) {
   if (!target || target.kind !== rule.target.kind || target.value === null) {
     return rule.action !== "allow";
   }
-  return targetMatches(rule.target.kind, rule.target.pattern, target.value);
+  // A Never or an Ask catches every spelling that reaches the same file; an Allow, the one given.
+  return targetMatches(
+    rule.target.kind,
+    rule.target.pattern,
+    target.value,
+    rule.action !== "allow",
+  );
 }
 
 const sourceOf = (scopeId, rule) => ({

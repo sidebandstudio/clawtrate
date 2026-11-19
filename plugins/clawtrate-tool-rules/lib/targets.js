@@ -206,9 +206,34 @@ export const commandMatches = (pattern, command) => wildcard(pattern, command);
 export const toolMatches = (entry, tool) =>
   entry.includes("*") ? wildcard(entry, tool) : entry === tool;
 
-/** Whether a pattern of a kind matches a read value. */
-export function targetMatches(kind, pattern, value) {
-  if (kind === "path") return pathMatches(pattern, value);
+/** The spaces the gateway's file tools read as an ASCII space (OpenClaw 2026.10.6, path-utils). */
+const UNICODE_SPACES = /[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g;
+const QUOTES = /[\u2018\u2019]/g;
+
+/**
+ * A path folded to one spelling for every name that can reach the same
+ * file: the spellings the gateway's file tools try when the exact name is
+ * missing (Unicode spaces and the narrow space before AM or PM as a plain
+ * space, curly quotes as straight ones, composed and decomposed accents),
+ * and those a case-insensitive filesystem treats as one (case).
+ */
+export const foldPath = (path) =>
+  path
+    .normalize("NFC")
+    .replace(UNICODE_SPACES, " ")
+    .replace(QUOTES, "'")
+    .toLowerCase()
+    .normalize("NFC");
+
+/**
+ * Whether a pattern of a kind matches a read value. `loose` (for a Never
+ * and an Ask) matches a path when any spelling of it that reaches the same
+ * file matches; otherwise (an Allow) only the spelling as given.
+ */
+export function targetMatches(kind, pattern, value, loose = false) {
+  if (kind === "path") {
+    return loose ? pathMatches(foldPath(pattern), foldPath(value)) : pathMatches(pattern, value);
+  }
   if (kind === "command") return commandMatches(pattern, value);
   return false;
 }

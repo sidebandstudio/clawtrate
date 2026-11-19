@@ -258,3 +258,47 @@ describe("tool servers", () => {
     expect(decision(t, call("coder__run_checks"))).toEqual(["none", null]);
   });
 });
+
+describe("file rules and the names a file can go by", () => {
+  const NBSP = " ";
+  const NARROW = " ";
+  const spellings: [string, string, string][] = [
+    ["case", "secrets/**", "Secrets/Key.txt"],
+    ["case in the pattern", "Secrets/**", "secrets/key.txt"],
+    ["a no-break space", "notes/disk report.md", `notes/disk${NBSP}report.md`],
+    [
+      "the narrow space before PM",
+      "shots/Screenshot 1.00.00 PM.png",
+      `shots/Screenshot 1.00.00${NARROW}PM.png`,
+    ],
+    ["a curly quote", "notes/otto's plan.md", "notes/otto’s plan.md"],
+    ["a straight quote for a curly one", "notes/otto’s plan.md", "notes/otto's plan.md"],
+    ["decomposed accents", "notes/café.md", "notes/café.md"],
+    ["composed accents", "notes/café.md", "notes/café.md"],
+  ];
+  for (const [what, pattern, path] of spellings) {
+    it(`a Never and an Ask catch ${what}; an Allow covers only the spelling given`, () => {
+      const never = rule("never", ["write"], pattern);
+      expect(decision(scopes({ otto: { rules: [never] } }), call("write", { path }))).toEqual([
+        "block",
+        never.id,
+      ]);
+      const ask = rule("ask", ["read"], pattern);
+      expect(decision(scopes({ otto: { rules: [ask] } }), call("read", { path }))).toEqual([
+        "ask",
+        ask.id,
+      ]);
+      const allow = rule("allow", ["read"], pattern);
+      const fallback = scopes({ otto: { fallback: true, rules: [allow] } });
+      expect(decision(fallback, call("read", { path }))).toEqual(["ask", "fallback"]);
+      expect(decision(fallback, call("read", { path: pattern }))).toEqual(["allow", allow.id]);
+    });
+  }
+
+  it("a Never caught by another spelling outranks an Allow of the spelling given", () => {
+    const allow = rule("allow", ["write"], "Secrets/a.txt");
+    const never = rule("never", ["write"], "secrets/**");
+    const s = scopes({ otto: { fallback: true, rules: [allow, never] } });
+    expect(decision(s, call("write", { path: "Secrets/a.txt" }))).toEqual(["block", never.id]);
+  });
+});
