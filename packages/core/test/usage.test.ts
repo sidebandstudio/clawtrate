@@ -8,6 +8,7 @@ import {
   COUNT_AFTER_RUN_MS,
   COUNT_COUNTING_MS,
   COUNT_EVERY_MS,
+  LIMITS_EVERY_MS,
   MAX_USAGE_REPORTS,
   UsageEngine,
   type UsageContext,
@@ -1079,6 +1080,41 @@ describe("the usage engine", () => {
       engine.readReport({ botId: "otto", period: "today", timeZone: NY, detail: false, bots: [] }),
     ).resolves.toMatchObject({ botId: "otto" });
     engine.onClose();
+  });
+
+  it("F-235: refreshes of the providers' limits that overlap are one read, with one timer, and none outlives the connection", async () => {
+    vi.useFakeTimers();
+    const gateway = fakeGateway();
+    const { engine } = engineOn(gateway, () => Date.now());
+    const read = () => gateway.calls.filter((c) => c.method === "usage.status").length;
+    for (let pair = 0; pair < 12; pair += 1)
+      await Promise.all([engine.refreshLimits(), engine.refreshLimits()]);
+    expect(read()).toBe(12);
+    expect(vi.getTimerCount()).toBe(1);
+    // The timer reads again, and leaves one timer.
+    await vi.advanceTimersByTimeAsync(LIMITS_EVERY_MS + 10);
+    expect(read()).toBe(13);
+    expect(vi.getTimerCount()).toBe(1);
+    // A refresh joins a read under way on the same connection; one after a close starts its own.
+    const held: Array<() => void> = [];
+    const { engine: other } = engineOn(
+      {
+        ...gateway,
+        request: async (method, raw) => {
+          await new Promise<void>((resolve) => held.push(resolve));
+          return gateway.request(method, raw);
+        },
+      },
+      () => Date.now(),
+    );
+    const first = other.refreshLimits();
+    const joined = other.refreshLimits();
+    expect(held).toHaveLength(1);
+    other.onClose();
+    held.shift()!();
+    await Promise.all([first, joined]);
+    engine.onClose();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("F-235: reads the providers' limits at a hello", async () => {

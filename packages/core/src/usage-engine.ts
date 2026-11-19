@@ -144,7 +144,10 @@ export class UsageEngine {
   private generation = 0;
   private countTimer: ReturnType<typeof setTimeout> | null = null;
   private countAt = 0;
+  /** The one timer that reads the providers' limits again; only a finished read sets it. */
   private limitsTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The read of the limits under way, which a refresh meanwhile joins, and its connection. */
+  private limitsRead: { generation: number; done: Promise<void> } | null = null;
   private counting: Promise<void> | null = null;
   private countAgain = false;
   private reports = 0;
@@ -168,6 +171,7 @@ export class UsageEngine {
     if (this.limitsTimer) clearTimeout(this.limitsTimer);
     this.countTimer = null;
     this.limitsTimer = null;
+    this.limitsRead = null;
     this.countAt = 0;
   }
 
@@ -388,24 +392,42 @@ export class UsageEngine {
 
   // Provider limits ------------------------------------------------------------------------------
 
-  private async readLimits(generation: number): Promise<void> {
-    try {
-      const limits = parseLimits(await this.ctx.request("usage.status", {}));
-      if (generation !== this.generation) return;
-      this.ctx.update((usage) => ({ ...usage, limits }));
-    } catch (error) {
-      if (generation !== this.generation) return;
-      this.ctx.log(`usage.status: ${errorText(error)}`);
-      this.ctx.update((usage) => ({ ...usage, limits: { ...usage.limits, status: "error" } }));
-    }
-    if (generation !== this.generation) return;
-    this.limitsTimer = setTimeout(() => void this.readLimits(generation), LIMITS_EVERY_MS);
-  }
-
-  /** Read the providers' limits again now. */
-  refreshLimits(): Promise<void> {
+  /**
+   * Read the providers' limits, then again in `LIMITS_EVERY_MS`. One read at a
+   * time: a read asked for while one is under way on the same connection
+   * joins it. The read that finishes sets the one timer; nothing of it
+   * outlives its connection.
+   */
+  private readLimits(generation: number): Promise<void> {
+    if (this.limitsRead?.generation === generation) return this.limitsRead.done;
     if (this.limitsTimer) clearTimeout(this.limitsTimer);
     this.limitsTimer = null;
+    const read = { generation, done: Promise.resolve() };
+    read.done = (async () => {
+      try {
+        const limits = parseLimits(await this.ctx.request("usage.status", {}));
+        if (generation !== this.generation) return;
+        this.ctx.update((usage) => ({ ...usage, limits }));
+      } catch (error) {
+        if (generation !== this.generation) return;
+        this.ctx.log(`usage.status: ${errorText(error)}`);
+        this.ctx.update((usage) => ({ ...usage, limits: { ...usage.limits, status: "error" } }));
+      } finally {
+        if (this.limitsRead === read) this.limitsRead = null;
+      }
+      if (generation !== this.generation) return;
+      if (this.limitsTimer) clearTimeout(this.limitsTimer);
+      this.limitsTimer = setTimeout(() => {
+        this.limitsTimer = null;
+        void this.readLimits(generation);
+      }, LIMITS_EVERY_MS);
+    })();
+    this.limitsRead = read;
+    return read.done;
+  }
+
+  /** Read the providers' limits again now, or join the read under way. */
+  refreshLimits(): Promise<void> {
     return this.readLimits(this.generation);
   }
 
