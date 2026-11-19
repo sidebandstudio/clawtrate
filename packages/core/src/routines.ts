@@ -75,6 +75,8 @@ export type Routine = {
   text: string;
   /** `text` was cut: the editor must not write it back. */
   textCut: boolean;
+  /** The creation form can reproduce the job's payload, conditions and delivery. */
+  canRecreate?: boolean;
   /** `isolated`: a conversation of its own each run; `main`: the bot's main conversation. */
   target: "isolated" | "main" | "other";
   /** The bound conversation of a current or named target, as the gateway recorded it. */
@@ -202,7 +204,11 @@ export function parseRoutine(value: unknown): Routine | null {
   const mode = str(delivery?.mode);
   const last = str(state.lastRunStatus) ?? str(state.lastStatus);
   const target = str(job.sessionTarget);
-  const fullText = str(payload.message) ?? str(payload.text) ?? str(payload.command) ?? "";
+  const fullText =
+    str(payload.message) ?? str(payload.text) ?? str(payload.script) ?? str(payload.command) ?? "";
+  const schedule = parseSchedule(job.schedule);
+  const gated = asRecord(job.trigger) !== null || asRecord(job.pacing) !== null;
+  const toolsAllow = arr(payload.toolsAllow);
   const text = cutText(fullText, MAX_ROUTINE_TEXT_CHARS);
   const sharedSessionKey =
     target === "current"
@@ -215,10 +221,25 @@ export function parseRoutine(value: unknown): Routine | null {
     botId: str(job.agentId) ?? str(job.effectiveAgentId) ?? "main",
     name: str(job.name) ?? "Routine",
     enabled: job.enabled !== false,
-    schedule: parseSchedule(job.schedule),
+    schedule,
     payload: payloadKind === "agentTurn" || payloadKind === "systemEvent" ? payloadKind : "other",
     text,
     textCut: text.length < fullText.length,
+    canRecreate:
+      payloadKind === "agentTurn" &&
+      text.length === fullText.length &&
+      target === "isolated" &&
+      !gated &&
+      wireSchedule(schedule) !== null &&
+      Object.keys(payload).every(
+        (key) => key === "kind" || key === "message" || key === "toolsAllow",
+      ) &&
+      // The gateway supplies this default when the form leaves toolsAllow out.
+      (payload.toolsAllow === undefined || (toolsAllow.length === 1 && toolsAllow[0] === "*")) &&
+      (mode === null || mode === "none" || mode === "announce") &&
+      Object.keys(delivery ?? {}).every((key) => key === "mode") &&
+      job.sessionKey == null &&
+      job.failureAlert == null,
     target: target === "isolated" || target === "main" ? target : "other",
     ...(sharedSessionKey ? { sharedSessionKey } : {}),
     // A job without delivery announces: the gateway's default (`mode: "announce"`, observed).
@@ -239,7 +260,7 @@ export function parseRoutine(value: unknown): Routine | null {
     lastError: cut(str(state.lastError), MAX_ROUTINE_RUN_TEXT_CHARS),
     runningAt: num(state.runningAtMs),
     deleteAfterRun: job.deleteAfterRun === true,
-    gated: asRecord(job.trigger) !== null || asRecord(job.pacing) !== null,
+    gated,
     updatedAt: num(job.updatedAtMs),
   };
 }
@@ -476,8 +497,6 @@ export function patchOf(
       patch.payload = { kind: "systemEvent", text: edit.text };
     const schedule = key === "schedule" ? wireSchedule(edit.schedule) : null;
     if (schedule) patch.schedule = schedule;
-    if (key === "target" && (edit.target === "isolated" || edit.target === "main"))
-      patch.sessionTarget = edit.target;
     if (key === "delivery" && (edit.delivery === "none" || edit.delivery === "announce"))
       patch.delivery = { mode: edit.delivery };
   }
@@ -761,6 +780,8 @@ export class RoutinesEngine {
   async create(input: NewRoutine, key: string): Promise<RoutineWrite> {
     const blocked = this.blocked();
     if (blocked) return { status: "not-sent", reason: blocked };
+    if (input.target !== "isolated")
+      return { status: "refused", error: "New routines run in an isolated conversation." };
     const schedule = wireSchedule(input.schedule);
     if (!schedule) return { status: "refused", error: "Clawtrate can't write this schedule." };
     const epoch = this.epoch;
@@ -770,7 +791,7 @@ export class RoutinesEngine {
           name: input.name,
           agentId: input.botId,
           schedule,
-          sessionTarget: input.target === "main" ? "main" : "isolated",
+          sessionTarget: "isolated",
           wakeMode: "now",
           payload: { kind: "agentTurn", message: input.text },
           delivery: { mode: input.delivery === "announce" ? "announce" : "none" },
@@ -848,7 +869,12 @@ export class RoutinesEngine {
         changedFields(expected, fieldsOf(current)).length > 0
       )
         return { status: "conflict", current };
-      const patch = patchOf(original, edit, current.payload);
+      const fields = {
+        ...edit,
+        target: original.target,
+        text: current.textCut ? original.text : edit.text,
+      };
+      const patch = patchOf(original, fields, current.payload);
       if (Object.keys(patch).length === 0) return { status: "saved", routine: current };
       blocked = this.blocked();
       if (blocked) return { status: "not-sent", reason: blocked };
@@ -856,8 +882,11 @@ export class RoutinesEngine {
       try {
         const routine = answeredJob(await this.ctx.request("cron.update", { id, patch }));
         if (pending.removed) return { status: "deleted" };
-        const wanted = changedFields(original, edit);
-        if (!routine || changedFields(edit, fieldsOf(routine)).some((key) => wanted.includes(key)))
+        const wanted = changedFields(original, fields);
+        if (
+          !routine ||
+          changedFields(fields, fieldsOf(routine)).some((key) => wanted.includes(key))
+        )
           return { status: "unknown", error: "The gateway answered, but doesn't show the change." };
         this.keep(routine, epoch);
         return { status: "saved", routine };

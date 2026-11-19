@@ -887,7 +887,7 @@ export function RoutinesView({
       actions,
       {
         page: () => onNav({ ...nav, routine: routine.id, run: null }),
-        edit: () => edit({ mode: "edit", id: routine.id }),
+        edit: () => edit({ mode: "edit", routine }),
         remove: () => remove(routine),
       },
       () => setMenu(null),
@@ -957,7 +957,7 @@ export function RoutinesView({
             routine={live}
             actions={actions}
             narrow={narrow}
-            onEdit={() => edit({ mode: "edit", id: live.id })}
+            onEdit={() => edit({ mode: "edit", routine: live })}
             onDelete={() => remove(live)}
           />
         )}

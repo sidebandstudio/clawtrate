@@ -6,6 +6,7 @@
 // only from the screen. Each check names its routines with this run's stamp,
 // and they are removed afterwards.
 import { expect, test, type Page } from "@playwright/test";
+import { MAX_ROUTINE_TEXT_CHARS, type ClawtrateState } from "../packages/core/src/index.ts";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,7 +43,7 @@ const made = new Set<string>();
 const call = <T>(method: string, params: unknown) => admin.request(method, params) as Promise<T>;
 const gatewayCall = (method: string, params: unknown) => admin.request(method, params);
 
-async function add(routine: ReturnType<typeof scriptedRoutine>): Promise<Job> {
+async function add(routine: unknown): Promise<Job> {
   const job = await call<Job>("cron.add", routine);
   made.add(job.id);
   return job;
@@ -106,6 +107,7 @@ async function bridgeCommand(command: Record<string, unknown>): Promise<unknown>
 
 // Hold one reply while gateway events still reach the page.
 type Reply = (value?: unknown, error?: string) => void;
+let omitFromCache: string | null = null;
 let heldCommand: { type: string; forward: boolean; ready: (reply: Reply) => void } | null = null;
 const unanswered = { status: "unknown", error: "The gateway didn't answer." };
 
@@ -168,7 +170,15 @@ test.beforeAll(async ({ browser }) => {
         type: string;
         id?: string;
         value?: unknown;
+        state?: ClawtrateState;
       };
+      if (response.state && omitFromCache) {
+        const { routines } = response.state;
+        routines.routines = routines.routines.filter((routine) => routine.name !== omitFromCache);
+        routines.omitted = 1;
+        ws.send(JSON.stringify(response));
+        return;
+      }
       if (hold && response.type === "result" && response.id === hold.id) {
         hold.ready((value = response.value) => ws.send(JSON.stringify({ ...response, value })));
         hold = null;
@@ -239,6 +249,10 @@ test("F-189 F-354: a routine made in the form is on the gateway as written, and 
   await withScheduler(gatewayCall, async () => {
     await openRoutines();
     await view().getByTestId("new-routine").click();
+    await editor().getByLabel("Bot").selectOption({ label: "Juniper" });
+    await editor().getByText("More", { exact: true }).click();
+    await expect(editor().getByText("A new conversation each time")).toBeVisible();
+    await expect(editor().getByRole("combobox", { name: "Runs in" })).toHaveCount(0);
     await editor().getByLabel("Bot").selectOption({ label: "Marlow" });
     await editor().getByLabel("Name").fill(name);
     await editor().getByLabel("Instruction").fill("#text");
@@ -251,6 +265,7 @@ test("F-189 F-354: a routine made in the form is on the gateway as written, and 
     expect(job).toMatchObject({
       agentId: "marlow",
       schedule: { kind: "every", everyMs: 300_000 },
+      sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "#text" },
       delivery: { mode: "none" },
     });
@@ -408,17 +423,107 @@ test("F-189: a reminder in the main conversation keeps its text: renaming it nev
     ...scriptedRoutine(`Reminder ${STAMP}`, "main"),
     sessionTarget: "main",
     payload: { kind: "systemEvent", text: "Stand up and stretch." },
-  } as unknown as ReturnType<typeof scriptedRoutine>);
+  });
   await openPage(job.name);
   await view().getByRole("button", { name: "Edit", exact: true }).click();
   await expect(editor()).toContainText("This reminder's text was set on the gateway.");
+  await editor().getByText("More", { exact: true }).click();
+  await expect(editor().getByText(/'s main conversation/)).toBeVisible();
+  await expect(editor().getByRole("combobox", { name: "Runs in" })).toHaveCount(0);
   await editor().getByLabel("Name").fill(`Reminder renamed ${STAMP}`);
   await save().click();
   await expect(editor()).toHaveCount(0, { timeout: 15_000 });
   expect(await get(job.id)).toMatchObject({
     name: `Reminder renamed ${STAMP}`,
+    sessionTarget: "main",
     payload: { kind: "systemEvent", text: "Stand up and stretch." },
   });
+});
+
+test("F-189: accepting a clipped instruction locks it and a rename preserves the full text", async () => {
+  const job = await add(scriptedRoutine(`Clipped instruction ${STAMP}`));
+  await openPage(job.name);
+  await view().getByRole("button", { name: "Edit", exact: true }).click();
+  const full = "x".repeat(MAX_ROUTINE_TEXT_CHARS + 100);
+  await call("cron.update", {
+    id: job.id,
+    patch: { payload: { kind: "agentTurn", message: full } },
+  });
+  await editor().getByRole("button", { name: "Show the new version" }).click();
+  await expect(editor()).toContainText("This instruction is too long to change here.");
+  await expect(editor().getByRole("textbox", { name: "Instruction" })).toHaveCount(0);
+  const name = `Renamed clipped instruction ${STAMP}`;
+  await editor().getByLabel("Name").fill(name);
+  await save().click();
+  await expect(editor()).toHaveCount(0);
+  expect(await get(job.id)).toMatchObject({ name, payload: { message: full } });
+});
+
+test("F-189: an editor opened from a per-bot read checks a global cache miss with cron.get", async () => {
+  await openRoutines();
+  const name = `Outside the global cache ${STAMP}`;
+  omitFromCache = name;
+  try {
+    const job = await add(scriptedRoutine(name));
+    await expect(view().getByTestId("routines-omitted")).toBeVisible();
+    await expect(row(name)).toHaveCount(0);
+    await view().getByRole("combobox", { name: "Bots" }).selectOption({ label: "Marlow" });
+    await row(name).locator(".r-row-main").click();
+    const held = holdCommand("readRoutine", true);
+    await view().getByRole("button", { name: "Edit", exact: true }).click();
+    await expect(editor().getByLabel("Name")).toHaveValue(name);
+    await expect(editor().getByTestId("editor-deleted")).toHaveCount(0);
+    (await held)();
+    const renamed = `Renamed outside the global cache ${STAMP}`;
+    await editor().getByLabel("Name").fill(renamed);
+    await save().click();
+    await expect(editor()).toHaveCount(0);
+    expect((await get(job.id)).name).toBe(renamed);
+  } finally {
+    omitFromCache = null;
+  }
+});
+
+test("F-189: a script opens as locked text and renames without changing its payload", async () => {
+  const { hash } = await call<{ hash: string }>("config.get", {});
+  await call("config.patch", { raw: '{"cron":{"triggers":{"enabled":true}}}', baseHash: hash });
+  const script = 'json({ message: "Ready" });';
+  let job: Job;
+  await expect(async () => {
+    job = await add({
+      ...scriptedRoutine(`Script ${STAMP}`),
+      payload: { kind: "script", script },
+    });
+  }).toPass({ timeout: 15_000 });
+  await openPage(job!.name);
+  await view().getByRole("button", { name: "Edit", exact: true }).click();
+  await expect(editor()).toContainText(script);
+  const name = `Renamed script ${STAMP}`;
+  await editor().getByLabel("Name").fill(name);
+  await save().click();
+  await expect(editor()).toHaveCount(0);
+  expect(await get(job!.id)).toMatchObject({ name, payload: { kind: "script", script } });
+});
+
+test("F-189: deleting a conditional, custom-payload or routed routine keeps the draft without offering an incomplete copy", async () => {
+  const variants = [
+    { trigger: { script: "json({ fire: false });" } },
+    { payload: { kind: "agentTurn", message: "#text", timeoutSeconds: 30 } },
+    { delivery: { mode: "none", failureDestination: { mode: "announce", channel: "last" } } },
+  ];
+  for (const [index, variant] of variants.entries()) {
+    const job = await add({ ...scriptedRoutine(`Recovery ${index} ${STAMP}`), ...variant });
+    await openPage(job.name);
+    await view().getByRole("button", { name: "Edit", exact: true }).click();
+    const name = `Draft ${index} ${STAMP}`;
+    await editor().getByLabel("Name").fill(name);
+    await call("cron.remove", { id: job.id });
+    await expect(editor().getByTestId("editor-deleted")).toBeVisible();
+    await expect(editor().getByLabel("Name")).toHaveValue(name);
+    await expect(editor().getByRole("button", { name: "Save as a new routine" })).toHaveCount(0);
+    await editor().getByTestId("editor-deleted").getByRole("button", { name: "Close" }).click();
+    expect(await byName(name)).toBeUndefined();
+  }
 });
 
 test("F-350: the switch pauses and resumes it on the gateway, and the list says Paused", async () => {

@@ -40,9 +40,11 @@ import {
   type Problems,
   type WhenKind,
 } from "./draft.ts";
+import { useKeyedRead } from "./read.ts";
 import { scheduleWords, viewerZone, zoneCity } from "./schedule.ts";
 
-export type EditorTarget = { mode: "new"; botId: string | null } | { mode: "edit"; id: string };
+export type EditorTarget =
+  { mode: "new"; botId: string | null } | { mode: "edit"; routine: Routine };
 
 /** How long Save waits before saying the answer hasn't come; a later answer still counts. */
 const ANSWER_MS = 30_000;
@@ -175,16 +177,26 @@ export function Editor({
   const admin = connection.status === "connected" && connection.canAdmin && !info.readOnly;
   const [now] = useState(() => Date.now());
   const [mode, setMode] = useState(target);
-  const live =
-    mode.mode === "edit" ? store.routines.find((each) => each.id === mode.id) : undefined;
+  const id = mode.mode === "edit" ? mode.routine.id : null;
+  const cached = store.routines.find((each) => each.id === id);
+  const removed = id !== null && store.removed?.id === id;
+  // The global list is capped; only a gateway read or removal event can confirm deletion.
+  const [read] = useKeyedRead(
+    id && !cached && !removed && connection.status === "connected"
+      ? `${connection.gatewayId}:${id}`
+      : null,
+    () => bridge.invoke({ type: "readRoutine", id: id! }),
+  );
+  const live = cached ?? (read.status === "ready" ? (read.value ?? undefined) : undefined);
+  const initial = mode.mode === "edit" ? mode.routine : undefined;
   // What the editor opened with: a save writes only what differs from it.
   const [original, setOriginal] = useState<RoutineFields | null>(() =>
-    live ? fieldsOf(live) : null,
+    initial ? fieldsOf(initial) : null,
   );
-  const [accepted, setAccepted] = useState(live);
+  const [accepted, setAccepted] = useState(initial);
   const [draft, setDraft] = useState<Draft>(() =>
-    live
-      ? draftOf(live, now)
+    initial
+      ? draftOf(initial, now)
       : newDraft(
           (target.mode === "new" && target.botId) ||
             (bots.find((each) => each.isDefault) ?? bots[0])?.id ||
@@ -203,8 +215,8 @@ export function Editor({
   const [gateway] = useState(connection.gatewayId);
   const attempt = useRef(0);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const [payload] = useState(live?.payload ?? "agentTurn");
-  const [textLocked] = useState(live ? live.payload !== "agentTurn" || live.textCut : false);
+  const payload = accepted?.payload ?? "agentTurn";
+  const textLocked = payload !== "agentTurn" || accepted?.textCut === true;
 
   // A save still out when the editor closes is no longer this editor's to report.
   useEffect(
@@ -220,10 +232,10 @@ export function Editor({
       onClose();
   }, [gateway, connection.gatewayId, onClose]);
 
-  const errors: Problems = tried ? problems(draft, now) : {};
+  const errors: Problems = tried ? problems(draft, now, textLocked) : {};
   const bot = bots.find((each) => each.id === draft.botId);
   const botName = bot?.name ?? draft.botId;
-  const deleted = mode.mode === "edit" && (gone || (store.status === "loaded" && !live));
+  const deleted = id !== null && (gone || removed || (read.status === "ready" && !read.value));
   const saving = !deleted && save.status === "saving";
   const busy = saving || (!deleted && save.status === "unknown");
   useLayoutEffect(() => {
@@ -235,7 +247,12 @@ export function Editor({
       ? live && (live.updatedAt ?? 0) > (save.current.updatedAt ?? 0)
         ? live
         : save.current
-      : live && accepted && changedFields(fieldsOf(accepted), fieldsOf(live)).length > 0 && !busy
+      : live &&
+          accepted &&
+          !busy &&
+          (accepted.textCut !== live.textCut ||
+            accepted.payload !== live.payload ||
+            changedFields(fieldsOf(accepted), fieldsOf(live)).length > 0)
         ? live
         : null;
   const set = (change: Partial<Draft>) => setDraft((each) => ({ ...each, ...change }));
@@ -253,13 +270,16 @@ export function Editor({
   };
 
   const submit = (against = accepted, asNew = mode.mode === "new") => {
+    if (asNew && mode.mode === "edit" && !accepted?.canRecreate) return;
     setTried(true);
-    const found = problems(draft, Date.now());
+    const found = problems(draft, Date.now(), textLocked);
     if (Object.keys(found).length > 0) {
       focusError(found);
       return;
     }
     const fields = fieldsOfDraft(draft);
+    if (original && against && (against.payload !== "agentTurn" || against.textCut))
+      fields.text = original.text;
     setAccepted(against);
     if (asNew && mode.mode === "edit") {
       setMode({ mode: "new", botId: draft.botId });
@@ -305,7 +325,7 @@ export function Editor({
       !asNew && mode.mode === "edit" && original && against
         ? bridge.invoke({
             type: "updateRoutine",
-            id: mode.id,
+            id: mode.routine.id,
             original,
             edit: fields,
             expected: { ...fieldsOf(against), updatedAt: against.updatedAt },
@@ -333,13 +353,13 @@ export function Editor({
         if (!found) return at({ status: "missing" });
         if (changedFields(sent, fieldsOf(found)).length === 0) return onSaved(found, true);
         // It landed, then changed: the editor now edits it.
-        setMode({ mode: "edit", id: found.id });
+        setMode({ mode: "edit", routine: found });
         setOriginal(fieldsOf(found));
         attempt.current += 1;
         setSave({ status: "conflict", current: found });
         return;
       }
-      const fresh = await bridge.invoke({ type: "readRoutine", id: mode.id });
+      const fresh = await bridge.invoke({ type: "readRoutine", id: mode.routine.id });
       if (id !== attempt.current) return;
       if (!fresh) {
         setSave({ status: "idle" });
@@ -482,7 +502,7 @@ export function Editor({
           <strong>This routine was deleted</strong> while you were editing.
         </p>
         <div className="b-actions">
-          {admin && (
+          {admin && accepted?.canRecreate && (
             <button
               type="button"
               className="button"
@@ -711,7 +731,6 @@ export function Editor({
     );
   }
 
-  const isDefault = bot?.isDefault === true;
   const more = (
     <details className="b-disclosure r-more" open={draft.cron.trim() !== "" || undefined}>
       <summary>
@@ -734,21 +753,16 @@ export function Editor({
             />
           </Field>
         )}
-        {(draft.target === "isolated" || draft.target === "main") &&
-          (isDefault || draft.target === "main") &&
-          payload === "agentTurn" && (
-            <Field id="e-runs" label="Runs in" error={undefined}>
-              <select
-                className="b-select"
-                id="e-runs"
-                value={draft.target}
-                onChange={(event) => set({ target: event.target.value as Draft["target"] })}
-              >
-                <option value="isolated">A new conversation each time</option>
-                <option value="main">{botName}&apos;s main conversation</option>
-              </select>
-            </Field>
-          )}
+        <div className="r-field">
+          <span className="r-label">Runs in</span>
+          <p className="r-locked">
+            {draft.target === "isolated"
+              ? "A new conversation each time"
+              : draft.target === "main"
+                ? `${botName}'s main conversation`
+                : "The conversation it was made in"}
+          </p>
+        </div>
         {(draft.delivery === "none" || draft.delivery === "announce") && (
           <Field id="e-results" label="Results" error={undefined}>
             <select
@@ -772,7 +786,8 @@ export function Editor({
     if (noteKeys) bodyRef.current?.scrollTo({ top: 0 });
   }, [noteKeys]);
 
-  const textLabel = payload === "systemEvent" ? "Reminder" : "Instruction";
+  const textLabel =
+    payload === "systemEvent" ? "Reminder" : payload === "other" ? "Command" : "Instruction";
   // While a save is in flight its dialog stays: Cancel, Close and Escape wait for the answer.
   const close = () => {
     if (!saving) onClose();
@@ -801,7 +816,6 @@ export function Editor({
                     set({
                       botId: event.target.value,
                       tz: usualZone(store.routines, event.target.value) ?? draft.tz,
-                      target: "isolated",
                     })
                   }
                 >
@@ -835,9 +849,7 @@ export function Editor({
               <div className="r-field">
                 <span className="r-label">{textLabel}</span>
                 <div className="r-locked">
-                  {payload === "agentTurn" ? null : (
-                    <p className="r-instruction">{live?.text ?? draft.text}</p>
-                  )}
+                  {payload === "agentTurn" ? null : <p className="r-instruction">{draft.text}</p>}
                   {payload === "systemEvent"
                     ? "This reminder's text was set on the gateway. You can rename the routine and change when it runs here; change its text on the gateway."
                     : payload === "other"
@@ -847,11 +859,6 @@ export function Editor({
               </div>
             ) : (
               <Field id="e-text" label={textLabel} error={errors.text}>
-                {payload === "systemEvent" && (
-                  <p className="r-hint">
-                    Posted as a reminder in {botName}&apos;s main conversation.
-                  </p>
-                )}
                 <textarea
                   className="input"
                   id="e-text"
@@ -882,7 +889,14 @@ export function Editor({
                   type="button"
                   className="button"
                   data-size="sm"
-                  onClick={() => setDraft({ ...mine, from: draft.from })}
+                  onClick={() =>
+                    setDraft({
+                      ...mine,
+                      from: draft.from,
+                      target: draft.target,
+                      text: textLocked ? draft.text : mine.text,
+                    })
+                  }
                 >
                   Use my version
                 </button>

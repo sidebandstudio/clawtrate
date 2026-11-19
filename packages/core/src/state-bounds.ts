@@ -885,6 +885,7 @@ const routine = object<Routine>()({
   payload: ENUM,
   text: text(MAX_ROUTINE_TEXT_CHARS),
   textCut: FLAG,
+  canRecreate: FLAG,
   target: ENUM,
   sharedSessionKey: ID,
   delivery: ENUM,

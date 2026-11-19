@@ -282,12 +282,12 @@ export type Problems = Partial<Record<"name" | "text" | "when" | "cron", string>
 const FLOOR = "Routines run at least 5 minutes apart.";
 
 /** What stops a save, before any request is made (section 9). */
-export function problems(draft: Draft, now: number): Problems {
+export function problems(draft: Draft, now: number, textLocked = false): Problems {
   const out: Problems = {};
   if (!draft.name.trim()) out.name = "Give it a name.";
   else if (draft.name.trim().length > MAX_NAME_CHARS)
     out.name = `Keep the name to ${MAX_NAME_CHARS} characters.`;
-  if (!draft.text.trim()) out.text = "Say what it should do.";
+  if (!textLocked && !draft.text.trim()) out.text = "Say what it should do.";
   if (draft.locked) return out;
   if (draft.cron.trim()) {
     try {
