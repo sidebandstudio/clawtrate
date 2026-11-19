@@ -298,6 +298,7 @@ describe("per-instance folders, markers and the spawn boundary", () => {
     expect(sandboxProblems(devConfig("t", ports), ports)).toEqual([]);
     expect(sandboxProblems(devConfig("t"), ports)).toEqual([
       "gateway.port must be 19240, found 19001",
+      'proxy.proxyUrl must be "http://127.0.0.1:19250", found "http://127.0.0.1:19091"',
       'models.providers.scripted.baseUrl must be "http://127.0.0.1:19250/v1", found "http://127.0.0.1:19091/v1"',
       'plugins.entries.ollama.config.webSearch.baseUrl must be "http://127.0.0.1:19250", found "http://127.0.0.1:19091"',
     ]);
