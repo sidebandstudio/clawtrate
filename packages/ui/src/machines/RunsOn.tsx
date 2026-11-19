@@ -1,7 +1,8 @@
 // Where a bot runs (controls.md section 14): the Runs on row of a bot's
-// Settings tab and its page. Three places kept apart, each a setting of its
-// own and marked as configured: where its commands run, the folder of its
-// file tools, its browser. Then what its settings name, as inventory.
+// Settings tab and its page. Three settings kept apart, each shown as the
+// gateway's settings store it or as the gateway reports it: the machine named
+// for its commands, its workspace, what its settings say about the browser.
+// Then what its settings name, as inventory. Nothing is inferred from them.
 // Nothing is kept: the page reads the gateway when it opens and after a save.
 
 import type { BotPlacement, ConnectionState, HostInfo } from "@clawtrate/core";
@@ -9,9 +10,9 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useBridge } from "../bridge.tsx";
 import { CopyValue } from "../AccessBar.tsx";
 import { clockTime } from "../format.ts";
-import { BackIcon, ChevronIcon, EyeIcon, LockIcon, ShieldIcon, WarnIcon } from "../icons.tsx";
+import { BackIcon, ChevronIcon, EyeIcon, LockIcon, WarnIcon } from "../icons.tsx";
 import { AdminBar, GrantedBar, Note, Select, useGranted } from "../bots/parts.tsx";
-import { lastSeen, names, nodeState, runsOnValue } from "./words.ts";
+import { credentialWords, hostWords, lastSeen, listWords, names, runsOnValue } from "./words.ts";
 import "./machines.css";
 
 type Read =
@@ -61,13 +62,11 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
 }
 
 /** A mark of section 2: an icon and its words, never colour alone. */
-export function Mark({ kind }: { kind: "gateway" | "set" | "shown" }) {
+export function Mark({ kind }: { kind: "set" | "shown" }) {
   const [icon, words] =
-    kind === "gateway"
-      ? [<ShieldIcon key="i" />, "The gateway enforces this"]
-      : kind === "set"
-        ? [<LockIcon key="i" />, "Set on the gateway"]
-        : [<EyeIcon key="i" />, "Shown only"];
+    kind === "set"
+      ? [<LockIcon key="i" />, "Set on the gateway"]
+      : [<EyeIcon key="i" />, "Shown only"];
   return (
     <span className="m-mark">
       {icon}
@@ -242,72 +241,84 @@ export function RunsOnPage({
   }
 
   const { placement } = read;
-  const { commands, browser, inventory, sharedWith } = placement;
+  const { commands, browser, inventory, sameSetting } = placement;
   const node = commands.node;
   const onNode = commands.host === "node";
-  const machineName = node?.name ?? commands.nodeSelector ?? "a paired machine";
+  const machineName = hostWords(commands);
 
   const save = async (value: string) => {
     setSaving(true);
     setError(null);
     try {
-      const place = await bridge.invoke({
+      const saved = await bridge.invoke({
         type: "setCommandMachine",
         botId,
         host: value === "gateway" ? "gateway" : "node",
         nodeId: value === "gateway" ? null : value,
+        baseHash: placement.configHash,
       });
-      announce(`Saved. ${botName}'s commands: ${place.node?.name ?? "the gateway's machine"}`);
-      reload();
+      const where = `${botName}'s commands: ${hostWords(saved.place)}`;
+      if (saved.active === "applied") announce(`Saved and applied. ${where}`);
+      else if (saved.active === "pending")
+        announce(`Saved. The gateway doesn't report it applied yet. ${where}`);
+      else {
+        setError(`Saved, but not applied. The gateway answered: ${saved.message ?? ""}`);
+        announce("Saved, not applied");
+      }
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
       announce("Couldn't save");
     } finally {
       setSaving(false);
+      // Whatever the outcome, the page shows the gateway as it is now.
+      reload();
     }
   };
 
-  const current = onNode ? (node?.id ?? `?${commands.nodeSelector ?? ""}`) : "gateway";
+  const listed = onNode && node !== null;
+  const current = commands.host === "gateway" ? "gateway" : listed ? node.id : "stored";
+  const storedLabel =
+    commands.host === null
+      ? "Not set"
+      : commands.hostSupported === false
+        ? `“${commands.host}” · Not supported here`
+        : onNode
+          ? commands.nodeSelector
+            ? `${commands.nodeSelector} · Not listed`
+            : "node · No machine stored"
+          : commands.host;
   const choices = [
     { value: "gateway", label: "The gateway's machine" },
     ...placement.nodes.map((each) => ({
       value: each.id,
       label: `${each.name} · ${each.connected ? "Connected" : "Not connected"}`,
     })),
-    ...(onNode && !node
-      ? [{ value: current, label: `${machineName} · Not listed`, disabled: true }]
-      : []),
+    ...(current === "stored" ? [{ value: "stored", label: storedLabel, disabled: true }] : []),
   ];
 
-  const shareNotes: string[] = [];
-  if (sharedWith.workspace.length > 0)
-    shareNotes.push(
-      `${botName} shares its workspace folder with ${names(sharedWith.workspace.map(nameOf))}. Files one bot writes, the other can change.`,
+  const sameNotes: string[] = [];
+  if (sameSetting.machine.length > 0)
+    sameNotes.push(
+      `${botName} and ${names(sameSetting.machine.map(nameOf))} have the same command machine setting: ${machineName}.`,
     );
-  if (sharedWith.machine.length > 0)
-    shareNotes.push(
-      `${botName}'s commands are set to run on ${machineName}, as ${names(sharedWith.machine.map(nameOf))}'s are.`,
-    );
-  if (sharedWith.browser.length > 0)
-    shareNotes.push(
-      `${botName} shares the gateway's browser with ${names(sharedWith.browser.map(nameOf))}.`,
+  if (sameSetting.workspace.length > 0)
+    sameNotes.push(
+      `${botName} and ${names(sameSetting.workspace.map(nameOf))} have the same workspace setting.`,
     );
 
-  const hostLine =
-    commands.host === "auto"
-      ? commands.sandbox
-        ? "Not set: with a sandbox configured, the gateway runs commands in it."
-        : "Not set: the gateway runs commands on its own machine when no sandbox runs."
-      : commands.host === "sandbox"
-        ? "Configured to run in a sandbox."
-        : null;
+  const origin =
+    commands.host === null
+      ? `Not set in the gateway's settings for ${botName} or for every bot.`
+      : commands.inherited
+        ? "From the gateway's setting for every bot."
+        : `Set in ${botName}'s own settings.`;
 
   return (
     <div className="b-tab m-page" data-testid="runs-on-page">
       {head}
-      {shareNotes.length > 0 && (
+      {sameNotes.length > 0 && (
         <Note tone="warn" testId="runs-on-shared">
-          {shareNotes.map((line) => (
+          {sameNotes.map((line) => (
             <p key={line}>{line}</p>
           ))}
         </Note>
@@ -315,10 +326,10 @@ export function RunsOnPage({
 
       <h4 className="b-group">Commands</h4>
       <p className="b-hint m-label" id="m-machine-label">
-        Configured to run {botName}'s commands on:
+        The machine {botName}'s settings name for its commands:
       </p>
       <Select
-        label={`Where ${botName}'s commands run`}
+        label={`${botName}'s command machine`}
         value={current}
         choices={choices}
         disabled={!admin || saving}
@@ -333,38 +344,46 @@ export function RunsOnPage({
         </p>
       )}
       <p className="m-sentence">
-        A configured setting for {botName}
-        {commands.inherited && commands.host !== "auto"
-          ? ", inherited from the gateway's settings for every bot"
-          : ""}
-        . A task can be sent to another machine; where a command ran is in its own result.{" "}
-        <Mark kind="gateway" />
+        {origin}
+        {onNode && commands.nodeInherited
+          ? " The machine is from the gateway's setting for every bot."
+          : ""}{" "}
+        <Mark kind="set" />
       </p>
-      {hostLine && <p className="b-hint">{hostLine}</p>}
-      {onNode && node && !node.connected && (
+      {placement.configActive === false && (
+        <p className="b-hint" data-testid="runs-on-not-applied">
+          The gateway reports saved settings it hasn't applied yet.
+        </p>
+      )}
+      {commands.hostSupported === false && (
+        <p className="b-hint" data-testid="runs-on-unsupported">
+          Stored as “{commands.host}”, a value this app doesn't support. It is shown as stored.
+        </p>
+      )}
+      {listed && !node.connected && (
         <p className="b-hint" data-testid="runs-on-offline">
           {node.name} isn't connected: {lastSeen(node, now)}.
         </p>
       )}
-      {onNode && node && !node.runsCommands && (
+      {listed && !node.listsRun && (
         <p className="b-hint" data-testid="runs-on-no-run">
-          {node.name} doesn't offer to run commands: it doesn't declare system.run, so the gateway
-          refuses {botName}'s commands there.
+          {node.name} doesn't list system.run among its commands.
         </p>
       )}
-      {onNode && !node && (
-        <p className="b-hint">
-          The gateway lists no machine named {commands.nodeSelector}: it refuses {botName}'s
-          commands until one connects.
+      {onNode && !listed && (
+        <p className="b-hint" data-testid="runs-on-unlisted">
+          {commands.nodeSelector
+            ? `No listed machine has the id “${commands.nodeSelector}”. The setting is shown as stored.`
+            : "No machine is stored with this setting."}
         </p>
       )}
 
       <h4 className="b-group">Workspace</h4>
       <dl className="facts m-facts">
-        <Fact label="Configured folder" testId="runs-on-workspace">
+        <Fact label="Folder" testId="runs-on-workspace">
           {placement.workspace ? (
             <>
-              <span className="mono m-path">{placement.workspace}</span>, on the gateway's machine{" "}
+              <span className="mono m-path">{placement.workspace}</span>{" "}
               <CopyValue value={placement.workspace} label="Copy folder" />
             </>
           ) : (
@@ -372,16 +391,11 @@ export function RunsOnPage({
           )}
         </Fact>
       </dl>
-      <p className="b-hint">
-        Configured as the folder for {botName}'s file tools.
-        {onNode
-          ? ` On ${machineName}, commands run in ${machineName}'s own folder unless a task names one.`
-          : ""}
-      </p>
+      <p className="b-hint">{botName}'s workspace, as the gateway reports it.</p>
       {onNode && (
         <p className="b-hint" data-testid="runs-on-node-folder">
-          A folder on {machineName}: Not supported on this machine. The gateway sets a workspace on
-          its own machine only.
+          A folder on {machineName}: Not supported on this machine. Change… sets {botName}'s
+          workspace in the gateway's settings.
         </p>
       )}
       {admin && editing === null && (
@@ -395,9 +409,7 @@ export function RunsOnPage({
           >
             Change…
           </button>
-          <span className="b-hint">
-            Takes a path on the gateway's machine; the gateway creates it if it doesn't exist.
-          </span>
+          <span className="b-hint">The gateway checks the path you enter.</span>
         </div>
       )}
       {admin && editing !== null && (
@@ -405,38 +417,44 @@ export function RunsOnPage({
           botId={botId}
           botName={botName}
           initial={editing}
+          current={placement.workspace}
           onDone={(saved) => {
             setEditing(null);
             if (saved) {
-              announce(`Saved. ${botName}'s workspace: ${saved}`);
+              announce(
+                saved.asTyped
+                  ? `Saved. ${botName}'s workspace: ${saved.workspace}`
+                  : `The gateway answered that it saved it. It reports ${botName}'s workspace as ${saved.workspace ?? "none"}.`,
+              );
               reload();
             }
           }}
+          onFailed={reload}
         />
       )}
 
       <h4 className="b-group">Browser</h4>
       <dl className="facts m-facts">
-        <Fact label="Browser" testId="runs-on-browser">
-          {browser.kind === "own"
-            ? `${botName}'s own browser, on the gateway's machine (Clawtrate's computer plugin, profile ${browser.profile})${browser.pluginEnabled ? "" : "; the plugin is turned off"}`
-            : browser.kind === "shared"
-              ? "The gateway's shared browser, on the gateway's machine. Every bot that uses the browser shares it."
-              : browser.by === "bot"
-                ? `None: ${botName}'s settings deny the browser.`
-                : "None: the gateway's settings deny the browser to every bot."}
+        <Fact label={`${botName}'s tool lists`} testId="runs-on-browser">
+          Allow: {listWords(browser.own.allow)} · Deny: {listWords(browser.own.deny)}
+        </Fact>
+        <Fact label="Every bot's tool lists">
+          Allow: {listWords(browser.everyBot.allow)} · Deny: {listWords(browser.everyBot.deny)}
+        </Fact>
+        <Fact label="Clawtrate's computer plugin" testId="runs-on-browser-profile">
+          {!browser.plugin.present
+            ? "No entry in the gateway's settings"
+            : browser.plugin.profile
+              ? `Names the profile ${browser.plugin.profile} for ${botName}`
+              : `Names no profile for ${botName}`}
+          {browser.plugin.enabled === false ? "; turned off in the gateway's settings" : ""}
         </Fact>
       </dl>
-      <p className="b-hint">
-        {onNode
-          ? `Commands running on ${machineName} don't change where the browser is.`
-          : "Where commands run doesn't change where the browser is."}{" "}
-        {browser.kind === "own" ? <Mark kind="shown" /> : <Mark kind="gateway" />}
-      </p>
       <p className="b-hint" data-testid="runs-on-browser-choice">
+        As stored in the gateway's settings. <Mark kind="shown" />{" "}
         {onNode
           ? `A browser profile on ${machineName}: Not supported on this machine.`
-          : "Choosing or creating a browser profile isn't offered here: a profile of a bot's own is set in the gateway's settings with Clawtrate's computer plugin."}
+          : "Choosing or creating a browser profile isn't offered here."}
       </p>
 
       <h4 className="b-group">What {botName}'s settings name</h4>
@@ -462,15 +480,13 @@ export function RunsOnPage({
                 .map(
                   (server) =>
                     `${server.name} (${
-                      server.denied === "bot"
-                        ? `denied for ${botName}`
-                        : server.denied === "every-bot"
-                          ? "denied for every bot"
-                          : server.offered === true
-                            ? "offered in the latest task"
-                            : server.offered === false
-                              ? "not offered in the latest task"
-                              : "configured"
+                      server.deniedBy
+                        ? `${server.deniedBy.list === "bot" ? `${botName}'s` : "every bot's"} deny list: ${server.deniedBy.entry}`
+                        : server.offered === true
+                          ? "offered in the latest task"
+                          : server.offered === false
+                            ? "not offered in the latest task"
+                            : "configured"
                     })`,
                 )
                 .join("; ")}
@@ -486,27 +502,35 @@ export function RunsOnPage({
             <span className="b-faint">{unavailableWords(inventory.secrets.status)}</span>
           )}
         </Fact>
-        <Fact label="Plugin sign-ins" testId="inventory-signins">
-          {Array.isArray(inventory.pluginSignIns) ? (
-            inventory.pluginSignIns.length === 0 ? (
-              "None"
+        <Fact label="Plugin credentials" testId="inventory-signins">
+          {Array.isArray(inventory.pluginCredentials) ? (
+            inventory.pluginCredentials.length === 0 ? (
+              "No plugin is turned on in the gateway's settings"
             ) : (
-              inventory.pluginSignIns
-                .map((each) => `${each.plugin}: ${each.names.join(", ")}`)
-                .join("; ")
+              inventory.pluginCredentials
+                .map(
+                  (each) =>
+                    `${each.plugin}: ${
+                      "status" in each.fields
+                        ? `Unavailable (${unavailableWords(each.fields.status, each.fields.status === "failed" ? each.fields.message : undefined)})`
+                        : each.fields.length === 0
+                          ? "declares no credentials"
+                          : each.fields
+                              .map((field) => `${field.label}, ${credentialWords(field)}`)
+                              .join("; ")
+                    }`,
+                )
+                .join(" · ") +
+              (inventory.pluginsOmitted > 0 ? ` · ${inventory.pluginsOmitted} more not read` : "")
             )
           ) : (
-            <span className="b-faint">{unavailableWords(inventory.pluginSignIns.status)}</span>
+            <span className="b-faint">{unavailableWords(inventory.pluginCredentials.status)}</span>
           )}
         </Fact>
-        <Fact label="Folders">
-          Its workspace.{" "}
-          {inventory.workspaceOnly === true
-            ? "File tools stay inside it (the gateway's file-tool confinement is on)"
-            : inventory.workspaceOnly === false
-              ? "File tools may reach outside it (the gateway's file-tool confinement is off)"
-              : "File tools stay inside a task's folder in the guarded modes"}
-          ; commands reach whatever the machine's user can.
+        <Fact label="Workspace-only file tools" testId="inventory-folders">
+          {inventory.workspaceOnly === null
+            ? "Not set"
+            : `${inventory.workspaceOnly.value ? "On" : "Off"}, in ${inventory.workspaceOnly.set === "bot" ? `${botName}'s settings` : "the gateway's settings for every bot"}`}
         </Fact>
       </dl>
       <p className="b-hint" data-testid="runs-on-read-at">
@@ -518,11 +542,6 @@ export function RunsOnPage({
           ? ` ${placement.nodesOmitted} more machines aren't listed.`
           : ""}
       </p>
-      {onNode && node && (
-        <p className="b-hint">
-          {node.name}: {nodeState(node, now)}.
-        </p>
-      )}
       {foot}
     </div>
   );
@@ -532,37 +551,38 @@ function WorkspaceForm({
   botId,
   botName,
   initial,
+  current,
   onDone,
+  onFailed,
 }: {
   botId: string;
   botName: string;
   initial: string;
-  onDone: (saved: string | null) => void;
+  /** The bot's workspace now, as the example beside the field. */
+  current: string | null;
+  onDone: (saved: { workspace: string | null; asTyped: boolean } | null) => void;
+  onFailed: () => void;
 }) {
   const bridge = useBridge();
   const [value, setValue] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const field = useRef<HTMLInputElement>(null);
-  const problem = !value.startsWith("/")
-    ? "Enter a full path on the gateway's machine, starting with /."
-    : value.split("/").includes("..")
-      ? "Enter a path without '..'."
-      : null;
   const submit = async () => {
-    if (problem) {
-      setError(problem);
+    // The gateway judges the path; only an empty one, which would change nothing, isn't sent.
+    if (value === "") {
+      setError("Enter a path.");
       field.current?.focus();
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const { workspace } = await bridge.invoke({ type: "setBotWorkspace", botId, path: value });
-      onDone(workspace);
+      onDone(await bridge.invoke({ type: "setBotWorkspace", botId, path: value }));
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
       field.current?.focus();
+      onFailed();
     } finally {
       setBusy(false);
     }
@@ -582,7 +602,13 @@ function WorkspaceForm({
       }}
     >
       <label className="b-hint m-label" htmlFor="m-workspace">
-        {botName}'s folder on the gateway's machine. A full path, starting with /.
+        {botName}'s folder, as a path on the gateway's machine.
+        {current ? (
+          <>
+            {" "}
+            Now: <span className="mono m-path">{current}</span>
+          </>
+        ) : null}
       </label>
       <input
         ref={field}

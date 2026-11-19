@@ -20,7 +20,7 @@ import {
   MachinesEngine,
   type ApprovalsFile,
   type BotPlacement,
-  type CommandPlace,
+  type ConfigSave,
   type DefaultsChoice,
   type MachinesView,
 } from "./machines.ts";
@@ -3606,11 +3606,15 @@ export class ClawtrateClient {
   setCommandMachine(
     botId: string,
     target: { host: "gateway" } | { host: "node"; nodeId: string },
-  ): Promise<CommandPlace> {
-    return this.machines.setCommandMachine(botId, target);
+    baseHash: string | null,
+  ): Promise<ConfigSave> {
+    return this.machines.setCommandMachine(botId, target, baseHash);
   }
 
-  async setBotWorkspace(botId: string, path: string): Promise<string> {
+  async setBotWorkspace(
+    botId: string,
+    path: string,
+  ): Promise<{ workspace: string | null; asTyped: boolean }> {
     const read = await this.machines.setWorkspace(botId, path);
     await this.refreshBots().catch(() => {});
     return read;

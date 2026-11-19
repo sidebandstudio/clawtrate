@@ -26,7 +26,7 @@ import {
   MAX_PATH_CHARS,
   type ApprovalsFile,
   type BotPlacement,
-  type CommandPlace,
+  type ConfigSave,
   type DefaultsChoice,
   type MachinesView,
 } from "./machines.ts";
@@ -192,7 +192,14 @@ export type BridgeCommand =
   // writes are read back before they answer, and need admin (or pairing for names and removals).
   | { type: "readPlacement"; botId: string }
   | { type: "readMachines" }
-  | { type: "setCommandMachine"; botId: string; host: "gateway" | "node"; nodeId: string | null }
+  | {
+      type: "setCommandMachine";
+      botId: string;
+      host: "gateway" | "node";
+      nodeId: string | null;
+      /** The configuration revision the page showed (`BotPlacement.configHash`). */
+      baseHash: string | null;
+    }
   | { type: "setBotWorkspace"; botId: string; path: string }
   | {
       type: "setMachineDefaults";
@@ -251,9 +258,9 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                           : C extends { type: "readMachines" }
                                             ? MachinesView
                                             : C extends { type: "setCommandMachine" }
-                                              ? CommandPlace
+                                              ? ConfigSave
                                               : C extends { type: "setBotWorkspace" }
-                                                ? { workspace: string }
+                                                ? { workspace: string | null; asTyped: boolean }
                                                 : C extends { type: "setMachineDefaults" }
                                                   ? ApprovalsFile
                                                   : void;
@@ -818,6 +825,10 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         botId: botId(command.botId),
         host: command.host,
         nodeId: command.host === "node" ? id(command.nodeId, "machine") : null,
+        baseHash:
+          command.baseHash === null || command.baseHash === undefined
+            ? null
+            : id(command.baseHash, "hash"),
       };
     }
     case "setBotWorkspace":
@@ -1176,11 +1187,10 @@ class ViewerSession implements BridgeSession {
           command.host === "node" && command.nodeId
             ? { host: "node", nodeId: command.nodeId }
             : { host: "gateway" },
+          command.baseHash,
         );
       case "setBotWorkspace":
-        return client
-          .setBotWorkspace(command.botId, command.path)
-          .then((workspace) => ({ workspace }));
+        return client.setBotWorkspace(command.botId, command.path);
       case "setMachineDefaults":
         return client.setMachineDefaults(command.machineId, command.choice, command.expectedHash);
       case "renameMachine":

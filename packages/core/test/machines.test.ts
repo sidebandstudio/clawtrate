@@ -4,16 +4,12 @@
 import { describe, expect, it } from "vitest";
 import {
   choiceOf,
-  combinePosture,
   MachinesEngine,
-  readBrowserPlace,
+  MAX_NODES,
+  readBrowserSettings,
   readCommandPlace,
   readDevices,
-  readExecPolicy,
   readNodes,
-  readApprovalsFile,
-  fileLevelsFor,
-  workspaceProblem,
   type MachinesContext,
 } from "../src/machines.ts";
 
@@ -53,6 +49,9 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
     mcp: { servers: { coder: {}, t3code: {} } },
   };
   let configHash = 1;
+  /** The revision the gateway reports active; it follows each save unless `pending` holds it back. */
+  let applied = 1;
+  const plugins: Record<string, Json[]> = {};
   const files: Record<string, { file: Json; hash: number }> = {
     gateway: { file: { version: 1, defaults: {}, agents: {} }, hash: 1 },
     [NODE]: { file: { version: 1, defaults: {}, agents: {} }, hash: 1 },
@@ -94,15 +93,21 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
     ...(withResolved ? { resolvedDefaults: { security: "full", ask: "off" } } : {}),
   });
   const handlers: Record<string, (params: Json) => unknown> = {
-    "config.get": () => ({ config, hash: `c${configHash}` }),
+    "config.get": () => ({
+      config,
+      hash: `c${configHash}`,
+      configRevisionHash: `r${configHash}`,
+      appliedConfigHash: `r${applied}`,
+    }),
     "config.patch": (params) => {
       if (params.baseHash !== `c${configHash}`)
         throw new Error("config changed since last load; re-run config.get and retry");
       if (!ignore.has("config.patch")) {
         config = merge(config, JSON.parse(params.raw as string) as Json);
         configHash += 1;
+        if (!ignore.has("apply")) applied = configHash;
       }
-      return { ok: true };
+      return { ok: true, hash: `c${configHash}` };
     },
     "agents.list": () => ({ agents: agents() }),
     "agents.update": (params) => {
@@ -120,7 +125,19 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
       ],
     }),
     "secrets.store.list": () => ({ entries: [{ name: "router-admin" }, { name: "nas-backup" }] }),
-    "plugins.credentials.inspect": () => ({ credentials: [] }),
+    "plugins.inspect": (params) => ({
+      ok: true,
+      credentials: plugins[params.pluginId as string] ?? [],
+    }),
+    "plugins.credentials.inspect": (params) => {
+      if (params.baseHash !== `c${configHash}`)
+        throw new Error("Configuration changed. Reload Settings before inspecting this reference.");
+      const field = (plugins[params.pluginId as string] ?? []).find(
+        (each) => JSON.stringify(each.path) === JSON.stringify(params.path),
+      );
+      if (!field) throw new Error("This installed plugin does not declare that credential field.");
+      return { baseHash: params.baseHash, credential: { kind: field.status } };
+    },
     "exec.approvals.get": () => snapshot("gateway", true),
     "exec.approvals.set": (params) => {
       if (params.baseHash !== `h${files.gateway!.hash}`)
@@ -181,7 +198,18 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
     if (!handler) throw new Error(`unknown method ${method}`);
     return handler(params as Json);
   };
-  return { request, calls, refuse, ignore, files, nodes, devices, config: () => config };
+  return {
+    request,
+    calls,
+    refuse,
+    ignore,
+    files,
+    nodes,
+    devices,
+    plugins,
+    handlers,
+    config: () => config,
+  };
 }
 
 function engine(
@@ -207,56 +235,151 @@ function engine(
 }
 
 describe("where a bot runs: the engine", () => {
-  it("F-046: a bot's command machine is its own setting or the one it inherits, matched to a listed node", () => {
+  it("F-046: a bot's command machine is the stored host and node, read as the gateway reads them", () => {
     const { nodes } = readNodes({
       nodes: [nodeRow(), nodeRow({ nodeId: OTHER, paired: false, connected: false })],
     });
     expect(nodes.map((n) => n.name)).toEqual(["media-box"]);
     const config = {
-      tools: { exec: { host: "node", node: "media-box" } },
+      tools: { exec: { host: "node", node: NODE } },
       agents: { entries: { otto: { tools: { exec: { host: "gateway" } } }, pip: {} } },
     };
     const otto = readCommandPlace(config, "otto", nodes);
-    expect(otto).toMatchObject({ host: "gateway", inherited: false, node: null });
+    expect(otto).toMatchObject({ host: "gateway", inherited: false, hostSupported: true });
     const pip = readCommandPlace(config, "pip", nodes);
-    expect(pip).toMatchObject({ host: "node", inherited: true, nodeSelector: "media-box" });
+    expect(pip).toMatchObject({ host: "node", inherited: true, nodeSelector: NODE });
     expect(pip.node?.id).toBe(NODE);
-    expect(readCommandPlace({}, "pip", nodes)).toMatchObject({ host: "auto", inherited: true });
+    expect(readCommandPlace({}, "pip", nodes)).toMatchObject({
+      host: null,
+      hostSupported: null,
+      inherited: false,
+    });
   });
 
-  it("F-046: admin sets Otto's commands to media-box with the config's hash, and only a read-back that agrees is answered", async () => {
+  it("F-046: a host the app doesn't know is kept as stored and marked unsupported, never read as another", () => {
+    const place = readCommandPlace(
+      { agents: { entries: { otto: { tools: { exec: { host: "cluster" } } } } } },
+      "otto",
+      [],
+    );
+    expect(place).toMatchObject({ host: "cluster", ownHost: "cluster", hostSupported: false });
+  });
+
+  it("F-046: a node inherited from every bot's setting counts when the bot sets only its host, and only an exact id names a listed machine", () => {
+    const { nodes } = readNodes({ nodes: [nodeRow()] });
+    const inherited = readCommandPlace(
+      {
+        tools: { exec: { node: NODE } },
+        agents: { entries: { otto: { tools: { exec: { host: "node" } } } } },
+      },
+      "otto",
+      nodes,
+    );
+    expect(inherited).toMatchObject({ nodeSelector: NODE, nodeInherited: true, inherited: false });
+    expect(inherited.node?.id).toBe(NODE);
+    // The gateway also matches names, addresses and id prefixes in its own way: the app doesn't.
+    const byName = readCommandPlace(
+      { agents: { entries: { otto: { tools: { exec: { host: "node", node: "Media Box" } } } } } },
+      "otto",
+      nodes,
+    );
+    expect(byName).toMatchObject({ nodeSelector: "Media Box", node: null });
+  });
+
+  it("F-046: a save sends the revision the page showed, never one read at the click", async () => {
     const gw = gateway();
-    const place = await engine(gw, { admin: true }).setCommandMachine("otto", {
-      host: "node",
-      nodeId: NODE,
-    });
+    const shown = await engine(gw).readPlacement("otto");
+    expect(shown.configHash).toBe("c1");
+    // Another writer changes the config after the page read it.
+    await engine(gw, { admin: true }).setCommandMachine("pip", { host: "gateway" }, "c1");
+    await expect(
+      engine(gw, { admin: true }).setCommandMachine(
+        "otto",
+        { host: "node", nodeId: NODE },
+        shown.configHash,
+      ),
+    ).rejects.toThrow("The gateway answered: config changed since last load");
+    expect(gw.calls.filter(([m]) => m === "config.patch").map(([, p]) => p.baseHash)).toEqual([
+      "c1",
+      "c1",
+    ]);
+  });
+
+  it("F-046: a save is said saved from the stored setting, and applied only when the gateway reports the saved revision active", async () => {
+    const gw = gateway();
+    const save = await engine(gw, { admin: true }).setCommandMachine(
+      "otto",
+      { host: "node", nodeId: NODE },
+      "c1",
+    );
     const patch = gw.calls.find(([method]) => method === "config.patch")![1];
-    expect(patch.baseHash).toBe("c1");
     expect(JSON.parse(patch.raw as string)).toEqual({
       agents: { entries: { otto: { tools: { exec: { host: "node", node: NODE } } } } },
     });
-    expect(place).toMatchObject({ ownHost: "node", ownNode: NODE });
-    expect(place.node?.name).toBe("media-box");
-    // Back to the gateway's machine removes the node it named.
-    const back = await engine(gw, { admin: true }).setCommandMachine("otto", { host: "gateway" });
-    expect(back).toMatchObject({ ownHost: "gateway", ownNode: null });
+    expect(save).toMatchObject({ active: "applied", message: null });
+    expect(save.place).toMatchObject({ ownHost: "node", ownNode: NODE });
+    gw.ignore.add("apply");
+    const pending = await engine(gw, { admin: true }).setCommandMachine(
+      "otto",
+      { host: "gateway" },
+      "c2",
+    );
+    expect(pending).toMatchObject({
+      active: "pending",
+      place: { ownHost: "gateway", ownNode: null },
+    });
+    expect((await engine(gw).readPlacement("otto")).configActive).toBe(false);
+  });
+
+  it("F-046: a change the gateway persisted but didn't apply is said as that, in its words", async () => {
+    const gw = gateway();
+    const patch = gw.handlers["config.patch"]!;
+    gw.handlers["config.patch"] = (params) => {
+      patch(params);
+      const error = new Error(
+        "config.patch persisted but was not applied to the active Gateway (failed)",
+      ) as Error & { details?: unknown };
+      error.details = { persistedConfig: { hash: "c2" } };
+      throw error;
+    };
+    const save = await engine(gw, { admin: true }).setCommandMachine(
+      "otto",
+      { host: "node", nodeId: NODE },
+      "c1",
+    );
+    expect(save.active).toBe("failed");
+    expect(save.message).toMatch(/persisted but was not applied/);
+  });
+
+  it("F-046: a saved node the list doesn't have is the stored id, not the gateway's machine", async () => {
+    const gw = gateway({ nodes: [] });
+    const save = await engine(gw, { admin: true }).setCommandMachine(
+      "otto",
+      { host: "node", nodeId: NODE },
+      "c1",
+    );
+    expect(save.place).toMatchObject({ host: "node", nodeSelector: NODE, node: null });
   });
 
   it("F-046: a save the read-back does not show is refused, not announced", async () => {
     const gw = gateway();
     gw.ignore.add("config.patch");
     await expect(
-      engine(gw, { admin: true }).setCommandMachine("otto", { host: "node", nodeId: NODE }),
+      engine(gw, { admin: true }).setCommandMachine("otto", { host: "node", nodeId: NODE }, "c1"),
     ).rejects.toThrow(/Nothing is shown as saved/);
   });
 
   it("F-046: below admin, or on a host that only reads, nothing is sent", async () => {
     const gw = gateway();
     await expect(
-      engine(gw).setCommandMachine("otto", { host: "node", nodeId: NODE }),
+      engine(gw).setCommandMachine("otto", { host: "node", nodeId: NODE }, "c1"),
     ).rejects.toThrow("Changing where a bot runs needs admin access.");
     await expect(
-      engine(gw, { admin: true, readOnly: true }).setCommandMachine("otto", { host: "gateway" }),
+      engine(gw, { admin: true, readOnly: true }).setCommandMachine(
+        "otto",
+        { host: "gateway" },
+        "c1",
+      ),
     ).rejects.toThrow(/only reads/);
     expect(gw.calls).toEqual([]);
   });
@@ -265,7 +388,7 @@ describe("where a bot runs: the engine", () => {
     const gw = gateway();
     gw.refuse.set("config.patch", "invalid config: agents.entries.otto.tools.exec.host");
     await expect(
-      engine(gw, { admin: true }).setCommandMachine("otto", { host: "gateway" }),
+      engine(gw, { admin: true }).setCommandMachine("otto", { host: "gateway" }, "c1"),
     ).rejects.toThrow("Couldn't save where its commands run. The gateway answered: invalid config");
   });
 
@@ -287,12 +410,12 @@ describe("where a bot runs: the engine", () => {
       { id: "acme:home", label: null, bound: false },
     ]);
     expect(read.inventory.toolServers).toEqual([
-      { name: "coder", denied: null, offered: null },
-      { name: "t3code", denied: "bot", offered: null },
+      { name: "coder", deniedBy: null, offered: null },
+      { name: "t3code", deniedBy: { list: "bot", entry: "t3code__*" }, offered: null },
     ]);
     expect(read.inventory.secrets).toEqual({ status: "needs-admin" });
-    expect(read.inventory.pluginSignIns).toEqual({ status: "needs-admin" });
-    expect(read.inventory.workspaceOnly).toBe(true);
+    expect(read.inventory.pluginCredentials).toEqual({ status: "needs-admin" });
+    expect(read.inventory.workspaceOnly).toEqual({ value: true, set: "every-bot" });
     expect(gw.calls.map(([method]) => method)).not.toContain("secrets.store.list");
     const admin = await engine(gw, { admin: true }).readPlacement("otto");
     expect(admin.inventory.secrets).toEqual(["router-admin", "nas-backup"]);
@@ -305,18 +428,58 @@ describe("where a bot runs: the engine", () => {
     expect(read.inventory.secrets).toEqual({ status: "needs-admin" });
   });
 
-  it("F-272: bots set to the same machine or the same folder are named as sharing it", async () => {
-    const gw = gateway();
-    await engine(gw, { admin: true }).setCommandMachine("otto", { host: "node", nodeId: NODE });
-    await engine(gw, { admin: true }).setCommandMachine("pip", { host: "node", nodeId: NODE });
-    const pip = await engine(gw).readPlacement("pip");
-    expect(pip.sharedWith.machine).toEqual(["otto"]);
-    expect(pip.sharedWith.workspace).toEqual(["marlow"]);
-    const otto = await engine(gw).readPlacement("otto");
-    expect(otto.sharedWith.workspace).toEqual([]);
+  it("F-047: a plugin's credentials are read field by field with the descriptor's path and the revision, and a failed read is unavailable, never none", async () => {
+    const gw = gateway({
+      config: {
+        agents: { entries: { otto: {} } },
+        plugins: { entries: { weather: { enabled: true }, mailer: {}, off: { enabled: false } } },
+      },
+    });
+    const path = ["plugins", "entries", "weather", "config", "apiKey"];
+    gw.plugins.weather = [{ path, label: "API key", envVars: [], status: "configured" }];
+    const inspect = gw.handlers["plugins.inspect"]!;
+    gw.handlers["plugins.inspect"] = (params) => {
+      if (params.pluginId === "mailer") throw new Error('Plugin "mailer" not found.');
+      return inspect(params);
+    };
+    const read = await engine(gw, { admin: true }).readPlacement("otto");
+    expect(read.inventory.pluginCredentials).toEqual([
+      {
+        plugin: "weather",
+        fields: [{ label: "API key", kind: "configured", unresolved: false }],
+        fieldsOmitted: 0,
+      },
+      {
+        plugin: "mailer",
+        fields: { status: "failed", message: 'Plugin "mailer" not found.' },
+        fieldsOmitted: 0,
+      },
+    ]);
+    expect(gw.calls.filter(([m]) => m === "plugins.credentials.inspect")).toEqual([
+      ["plugins.credentials.inspect", { pluginId: "weather", path, baseHash: "c1" }],
+    ]);
   });
 
-  it("F-273: the browser is a bot's own only with the computer plugin's entry; a denied browser says so", () => {
+  it("F-272: bots with the same stored node or the same reported path are named as having the same setting", async () => {
+    const gw = gateway();
+    await engine(gw, { admin: true }).setCommandMachine(
+      "otto",
+      { host: "node", nodeId: NODE },
+      "c1",
+    );
+    await engine(gw, { admin: true }).setCommandMachine(
+      "pip",
+      { host: "node", nodeId: NODE },
+      "c2",
+    );
+    const pip = await engine(gw).readPlacement("pip");
+    expect(pip.sameSetting.machine).toEqual(["otto"]);
+    expect(pip.sameSetting.workspace).toEqual(["marlow"]);
+    const otto = await engine(gw).readPlacement("otto");
+    expect(otto.sameSetting.workspace).toEqual([]);
+  });
+
+  it("F-273: the browser is the stored tool lists and the computer plugin's profile, and nothing more", () => {
     const config = {
       tools: { deny: [] },
       agents: { entries: { otto: { tools: { deny: ["browser"] } } } },
@@ -329,33 +492,58 @@ describe("where a bot runs: the engine", () => {
         },
       },
     };
-    expect(readBrowserPlace(config, "pip")).toEqual({
-      kind: "own",
-      profile: "bot-pip",
-      pluginEnabled: true,
+    expect(readBrowserSettings(config, "pip")).toEqual({
+      own: { allow: null, deny: null },
+      everyBot: { allow: null, deny: [] },
+      plugin: { present: true, enabled: true, profile: "bot-pip" },
     });
-    expect(readBrowserPlace(config, "marlow")).toEqual({ kind: "shared" });
-    expect(readBrowserPlace(config, "otto")).toEqual({ kind: "denied", by: "bot" });
-    expect(readBrowserPlace({ tools: { deny: ["browser"] } }, "pip")).toEqual({
-      kind: "denied",
-      by: "every-bot",
+    expect(readBrowserSettings(config, "otto")).toMatchObject({
+      own: { allow: null, deny: ["browser"] },
+      plugin: { profile: null },
+    });
+    expect(readBrowserSettings({}, "pip").plugin).toEqual({
+      present: false,
+      enabled: null,
+      profile: null,
     });
   });
 
-  it("F-274: a workspace is changed with agents.update and answered only as read back", async () => {
+  it("F-274: a workspace is changed with agents.update, and what the gateway reports after is answered", async () => {
     const gw = gateway();
-    expect(workspaceProblem("workspaces/otto")).toMatch(/starting with \//);
-    expect(workspaceProblem("/srv/../etc")).toMatch(/'\.\.'/);
-    await expect(engine(gw, { admin: true }).setWorkspace("otto", "relative")).rejects.toThrow(
-      /starting with/,
+    await expect(engine(gw, { admin: true }).setWorkspace("otto", "")).rejects.toThrow(
+      "Enter a path.",
     );
     expect(gw.calls).toEqual([]);
-    const read = await engine(gw, { admin: true }).setWorkspace("otto", "/srv/claw/otto-2");
-    expect(read).toBe("/srv/claw/otto-2");
+    expect(await engine(gw, { admin: true }).setWorkspace("otto", "/srv/claw/otto-2")).toEqual({
+      workspace: "/srv/claw/otto-2",
+      asTyped: true,
+    });
     gw.ignore.add("agents.update");
-    await expect(
-      engine(gw, { admin: true }).setWorkspace("otto", "/srv/claw/otto-3"),
-    ).rejects.toThrow(/reads the folder back as \/srv\/claw\/otto-2/);
+    expect(await engine(gw, { admin: true }).setWorkspace("otto", "/srv/claw/otto-3")).toEqual({
+      workspace: "/srv/claw/otto-2",
+      asTyped: false,
+    });
+  });
+
+  it("F-274: a path in another system's form reaches the gateway as typed; the app doesn't judge it", async () => {
+    const gw = gateway();
+    for (const path of ["C:\\Workspaces\\Otto", "workspaces/otto", "~/otto", "/srv/../otto"])
+      await engine(gw, { admin: true }).setWorkspace("otto", path);
+    expect(gw.calls.filter(([m]) => m === "agents.update").map(([, p]) => p.workspace)).toEqual([
+      "C:\\Workspaces\\Otto",
+      "workspaces/otto",
+      "~/otto",
+      "/srv/../otto",
+    ]);
+  });
+
+  it("F-274: a refused workspace change is an unclear outcome with a fresh read, never a rollback", async () => {
+    const gw = gateway();
+    gw.refuse.set("agents.update", "workspace path is not absolute");
+    await expect(engine(gw, { admin: true }).setWorkspace("otto", "relative")).rejects.toThrow(
+      "The gateway answered: workspace path is not absolute. It may have created the folder or files before answering. It now reports the workspace as /srv/claw/workspaces/otto.",
+    );
+    expect(gw.calls.map(([m]) => m)).toEqual(["agents.update", "agents.list"]);
   });
 });
 
@@ -391,14 +579,51 @@ describe("Settings, Machines: the engine", () => {
     ]);
   });
 
-  it("F-157: with device access, a machine and a device are renamed and removed, each read back", async () => {
+  it("F-157: a machine's bots are those whose stored host names it; nothing is counted for an unset host", async () => {
+    const gw = gateway({
+      config: {
+        agents: {
+          entries: {
+            otto: { tools: { exec: { host: "node", node: NODE } } },
+            pip: { tools: { exec: { host: "gateway" } } },
+            marlow: {},
+          },
+        },
+      },
+    });
+    const view = await engine(gw).readMachines();
+    expect(view.machines.map((m) => [m.id, m.named])).toEqual([
+      ["gateway", ["pip"]],
+      [NODE, ["otto"]],
+    ]);
+  });
+
+  it("F-157: with device access alone only this device's own name changes; another record's name or removal needs admin", async () => {
     const gw = gateway();
-    await expect(engine(gw).renameMachine(NODE, "x")).rejects.toThrow("needs device access");
-    const e = engine(gw, { pairing: true });
+    const pairing = engine(gw, { pairing: true });
+    await expect(pairing.renameMachine(NODE, "x")).rejects.toThrow(
+      "Renaming a machine needs admin access.",
+    );
+    await expect(pairing.removeMachine(NODE)).rejects.toThrow(
+      "Removing a machine needs admin access.",
+    );
+    await expect(pairing.renameDevice("dev-phone", "Phone")).rejects.toThrow(
+      "Renaming a device needs admin access.",
+    );
+    await expect(pairing.removeDevice("dev-phone")).rejects.toThrow(
+      "Removing a device needs admin access.",
+    );
+    expect(gw.calls).toEqual([]);
+    await pairing.renameDevice("dev-self", "My desk");
+    expect(gw.devices[0]!.operatorLabel).toBe("My desk");
+  });
+
+  it("F-157: with admin, a machine and a device are renamed and removed, connected or not, each read back", async () => {
+    const gw = gateway();
+    const e = engine(gw, { admin: true, pairing: true });
     await e.renameMachine(NODE, "studio-mac");
     expect(gw.nodes[0]!.displayName).toBe("studio-mac");
-    await expect(e.removeMachine(NODE)).rejects.toThrow(/connected/);
-    gw.nodes[0]!.connected = false;
+    // The gateway doesn't keep a connected machine from being removed, so neither does the app.
     await e.removeMachine(NODE);
     expect(gw.nodes).toEqual([]);
     await e.renameDevice("dev-phone", "Phone");
@@ -410,6 +635,18 @@ describe("Settings, Machines: the engine", () => {
     await expect(e.removeDevice("dev-self")).rejects.toThrow(/itself/);
     await e.removeDevice("dev-phone");
     expect(gw.devices.map((d) => d.deviceId)).not.toContain("dev-phone");
+  });
+
+  it("F-157: a removal is done only when the whole listing read back lacks the id, not the first page", async () => {
+    const many = Array.from({ length: MAX_NODES + 4 }, (_, i) =>
+      nodeRow({ nodeId: `node-${i}`, displayName: `m-${i}` }),
+    );
+    const gw = gateway({ nodes: many });
+    // A gateway that answers the removal but keeps the record, listed past the first page.
+    gw.handlers["node.pair.remove"] = () => ({ ok: true });
+    await expect(
+      engine(gw, { admin: true }).removeMachine(`node-${MAX_NODES + 2}`),
+    ).rejects.toThrow("The gateway still lists this machine.");
   });
 
   it("F-156: a node's approvals file needs admin to read; an offline node's is not connected", async () => {
@@ -473,51 +710,12 @@ describe("Settings, Machines: the engine", () => {
     expect(gw.calls.some(([m]) => m === "exec.approvals.set")).toBe(true);
   });
 
-  it("F-156: the effective result is the gateway's combination: the stricter, the more asking, the reviewer only when no file asks more", () => {
-    const auto = readExecPolicy(
-      { agents: { entries: { otto: { tools: { exec: { mode: "auto" } } } } } },
-      "otto",
-    );
-    expect(auto).toMatchObject({
-      mode: "auto",
-      security: "allowlist",
-      ask: "on-miss",
-      autoReview: true,
-      own: true,
-    });
-    const miss = fileLevelsFor(
-      readApprovalsFile({ file: { defaults: { security: "allowlist", ask: "on-miss" } } }),
-      "otto",
-    );
-    expect(combinePosture(auto, [miss])).toEqual({
-      security: "allowlist",
-      ask: "on-miss",
-      autoReview: true,
-      raisedBy: null,
-      narrowedBy: null,
-    });
-    const always = fileLevelsFor(
-      readApprovalsFile({ file: { defaults: {}, agents: { otto: { ask: "always" } } } }),
-      "otto",
-    );
-    expect(combinePosture(auto, [miss, always])).toEqual({
-      security: "allowlist",
-      ask: "always",
-      autoReview: false,
-      raisedBy: 1,
-      narrowedBy: null,
-    });
-    const empty = fileLevelsFor(readApprovalsFile({ file: {} }), "otto");
-    expect(empty).toEqual({ security: "full", ask: "off" });
-    const full = readExecPolicy({ tools: { exec: { mode: "full" } } }, "pip");
-    expect(combinePosture(full, [{ security: "deny", ask: "off" }])).toMatchObject({
-      security: "deny",
-      narrowedBy: 0,
-    });
-    expect(readExecPolicy({}, "pip")).toMatchObject({ none: true, security: "full", ask: "off" });
-    expect(
-      readExecPolicy({ tools: { exec: { security: "allowlist", ask: "on-miss" } } }, "pip"),
-    ).toMatchObject({ legacy: true, mode: null });
+  it("F-156: a file's defaults are one of the four choices only when they are exactly that pair", () => {
+    expect(choiceOf({ security: "allowlist", ask: "always" })).toBe("always");
+    expect(choiceOf({ security: "deny", ask: "off" })).toBe("never");
+    expect(choiceOf({ security: "deny", ask: "always" })).toBeNull();
+    expect(choiceOf({ security: "full", ask: "always" })).toBeNull();
+    expect(choiceOf({ security: "allowlist", ask: null })).toBeNull();
   });
 });
 

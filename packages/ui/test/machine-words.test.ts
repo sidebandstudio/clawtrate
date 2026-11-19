@@ -1,9 +1,9 @@
 // The words of "Where a bot runs" and Settings, Machines (controls.md sections
-// 14 and 15): the row's value, a machine's state as last seen, and the
-// effective result as the gateway combines a bot's policy with each file.
+// 14 and 15): the row's value as the stored setting by itself, a machine's
+// state as last seen, and an approvals file's levels as stored.
 import { describe, expect, it } from "vitest";
-import type { ApprovalsFile, BotPlacement, ExecPolicy, NodeFacts } from "@clawtrate/core";
-import { effectiveWords, nodeState, runsOnValue } from "../src/machines/words.ts";
+import type { BotPlacement, CommandPlace, NodeFacts } from "@clawtrate/core";
+import { hostWords, levelsWords, nodeState, runsOnValue } from "../src/machines/words.ts";
 
 const node: NodeFacts = {
   id: "node-media-box",
@@ -14,43 +14,51 @@ const node: NodeFacts = {
   lastSeenReason: "connect",
   approved: true,
   approvalsCommands: true,
-  runsCommands: true,
+  listsRun: false,
 };
 
-const file = (over: Partial<ApprovalsFile> = {}): ApprovalsFile => ({
-  hash: "h",
-  exists: true,
-  defaults: { security: "allowlist", ask: "on-miss" },
-  resolved: null,
-  entries: [],
-  entriesOmitted: 0,
+const place = (over: Partial<CommandPlace>): CommandPlace => ({
+  ownHost: null,
+  ownNode: null,
+  defaultHost: null,
+  defaultNode: null,
+  host: null,
+  hostSupported: null,
+  inherited: false,
+  nodeSelector: null,
+  nodeInherited: false,
+  node: null,
   ...over,
 });
 
-const review: ExecPolicy = {
-  mode: "auto",
-  security: "allowlist",
-  ask: "on-miss",
-  autoReview: true,
-  own: true,
-  legacy: false,
-  none: false,
-};
-
 describe("the machines' words", () => {
-  it("F-046 F-272: the row names the command machine and the bots sharing it or the folder", () => {
+  it("F-046 F-272: the row names the stored command machine and the bots with the same setting", () => {
     const placement = {
-      commands: { host: "node", node, nodeSelector: node.id, sandbox: false },
-      sharedWith: { machine: ["pip"], workspace: ["pip", "marlow"], browser: ["juniper"] },
+      commands: place({ host: "node", hostSupported: true, node, nodeSelector: node.id }),
+      sameSetting: { machine: ["pip"], workspace: ["pip", "marlow"] },
     } as unknown as BotPlacement;
     expect(runsOnValue(placement, (id) => id[0]!.toUpperCase() + id.slice(1))).toBe(
-      "Commands on media-box · Shared with Pip and Marlow",
+      "Commands: media-box · Same setting as Pip and Marlow",
     );
-    const home = {
-      commands: { host: "auto", node: null, nodeSelector: null, sandbox: false },
-      sharedWith: { machine: [], workspace: [], browser: [] },
+    const unset = {
+      commands: place({}),
+      sameSetting: { machine: [], workspace: [] },
     } as unknown as BotPlacement;
-    expect(runsOnValue(home, (id) => id)).toBe("Commands on the gateway's machine");
+    expect(runsOnValue(unset, (id) => id)).toBe("Commands: not set");
+  });
+
+  it("F-046: a stored value is shown as stored: an unknown host marked, a node the list lacks by its id, auto as auto", () => {
+    expect(hostWords(place({ host: "cluster", hostSupported: false }))).toBe(
+      "“cluster” (not supported here)",
+    );
+    expect(hostWords(place({ host: "node", hostSupported: true, nodeSelector: "garage-pi" }))).toBe(
+      "garage-pi",
+    );
+    expect(hostWords(place({ host: "auto", hostSupported: true }))).toBe("auto");
+    expect(hostWords(place({ host: "sandbox", hostSupported: true }))).toBe("sandbox");
+    expect(hostWords(place({ host: "gateway", hostSupported: true }))).toBe(
+      "the gateway's machine",
+    );
   });
 
   it("F-157: a machine not connected says when it was last seen, with the gateway's reason", () => {
@@ -60,24 +68,11 @@ describe("the machines' words", () => {
     expect(nodeState({ ...node, connected: true }, 0)).toBe("Connected");
   });
 
-  it("F-156: the effective result says which file asks more, and that the reviewer is then skipped", () => {
-    expect(effectiveWords("Otto", "otto", review, [{ name: "media-box", file: file() }])).toBe(
-      "Review first: commands on the allowlist run, and the reviewer decides the rest, from Otto's policy (Review first); this file asks no more.",
-    );
-    const always = file({
-      entries: [{ botId: "otto", levels: { security: null, ask: "always" }, allowlist: 0 }],
-    });
-    expect(effectiveWords("Otto", "otto", review, [{ name: "media-box", file: always }])).toBe(
-      "Every command asks: its entry in media-box's file asks more than Otto's policy (Review first), so the gateway skips Otto's reviewer.",
-    );
-    const never = file({ defaults: { security: "deny", ask: null } });
-    expect(
-      effectiveWords("Otto", "otto", review, [
-        { name: "the gateway's machine", file: file({ defaults: { security: null, ask: null } }) },
-        { name: "media-box", file: never },
-      ]),
-    ).toBe(
-      "Never: every command is refused: media-box's file is stricter than Otto's policy (Review first).",
-    );
+  it("F-156: a file's levels are a choice by name only when exactly that pair, and otherwise the pair as stored", () => {
+    expect(levelsWords({ security: "allowlist", ask: "always" })).toBe("Ask every time");
+    expect(levelsWords({ security: "full", ask: "always" })).toBe("security full, ask always");
+    expect(levelsWords({ security: "deny", ask: "always" })).toBe("security deny, ask always");
+    expect(levelsWords({ security: null, ask: "always" })).toBe("security not set, ask always");
+    expect(levelsWords({ security: null, ask: null })).toBe("No levels set");
   });
 });

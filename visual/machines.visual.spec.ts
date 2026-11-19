@@ -34,7 +34,7 @@ const MAIN: Scene[] = [
     query: `${PANE}&access=admin&machine=shared`,
     ready: (page) =>
       expect(page.getByTestId("runs-on-value")).toHaveText(
-        "Commands on media-box · Shared with Pip",
+        "Commands: media-box · Same setting as Pip",
       ),
   },
   {
@@ -95,6 +95,26 @@ const MORE: Scene[] = [
     ready: runsOnReady,
   },
   {
+    name: "runs-on-unsupported",
+    rows: "F-046",
+    query: `${PANE}&access=admin&machine=unsupported`,
+    ready: async (page) => {
+      await runsOnReady(page);
+      await expect(page.getByTestId("runs-on-unsupported")).toBeVisible();
+    },
+  },
+  {
+    name: "runs-on-not-applied",
+    rows: "F-046",
+    query: `${PANE}&access=admin&mwrite=pending`,
+    ready: async (page) => {
+      await runsOnReady(page);
+      await page.getByTestId("runs-on-machine").click();
+      await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+      await expect(page.getByTestId("runs-on-not-applied")).toBeVisible();
+    },
+  },
+  {
     name: "runs-on-loading",
     rows: "F-046",
     query: `${PANE}&access=admin&machine=loading`,
@@ -115,13 +135,15 @@ const MORE: Scene[] = [
   {
     name: "runs-on-workspace-form",
     rows: "F-274",
-    query: `${PANE}&access=admin&machine=gatewayhost`,
+    query: `${PANE}&access=admin&machine=gatewayhost&mwrite=refused`,
     ready: async (page) => {
       await runsOnReady(page);
       await page.getByRole("button", { name: "Change…" }).click();
-      await page.getByRole("textbox", { name: /folder on the gateway/ }).fill("workspaces/otto");
+      await page
+        .getByRole("textbox", { name: /path on the gateway's machine/ })
+        .fill("workspaces/otto");
       await page.getByRole("button", { name: "Save folder" }).click();
-      await expect(page.locator("#m-workspace-error")).toHaveText(/starting with \//);
+      await expect(page.locator("#m-workspace-error")).toBeVisible();
     },
   },
   {

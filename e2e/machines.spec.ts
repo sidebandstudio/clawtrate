@@ -37,6 +37,8 @@ let ottoTools: Json;
 let ottoWorkspace: string;
 /** Otto's name as the interface shows it: "otto" on an instance that was not seeded. */
 let OTTO = "Otto";
+/** Otto's stored command host before the checks, as the picker names it. */
+let ottoHost = "Not set";
 
 async function config(): Promise<Json> {
   return ((await admin.request<{ config: Json }>("config.get", {})).config ?? {}) as Json;
@@ -133,6 +135,11 @@ test.beforeAll(async ({ browser }) => {
   const cfg = await config();
   ottoTools = (entry(cfg, "otto").tools ?? {}) as Json;
   ottoWorkspace = entry(cfg, "otto").workspace as string;
+  const stored =
+    ((ottoTools.exec as Json | undefined)?.host as string | undefined) ??
+    (((cfg.tools as Json | undefined)?.exec as Json | undefined)?.host as string | undefined);
+  ottoHost =
+    stored === undefined ? "Not set" : stored === "gateway" ? "The gateway's machine" : stored;
   // Otto's first task, so its Work pane has a task to show beside it.
   await admin
     .request("sessions.create", { key: "agent:otto:main", agentId: "otto", label: "Main" })
@@ -187,9 +194,10 @@ test("F-046 F-047: below admin every place shows, nothing can change, and the ba
   await runsOn(page);
   await expect(page.getByTestId("runs-on-machine")).toBeDisabled();
   await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
-    `Where ${OTTO}'s commands run: The gateway's machine`,
+    `${OTTO}'s command machine: ${ottoHost}`,
   );
   await expect(page.getByTestId("runs-on-workspace")).toContainText(ottoWorkspace);
+  await expect(page.getByTestId("runs-on-page")).not.toContainText("enforces");
   await expect(page.getByTestId("inventory-secrets")).toHaveText("Needs admin access");
   await expect(page.getByTestId("admin-bar")).toContainText(
     `Changing where ${OTTO} runs needs admin access.`,
@@ -210,27 +218,40 @@ test("F-046: admin asked for explicitly sets Otto's commands to media-box; it is
   await expect(page.getByTestId("runs-on-machine")).toBeEnabled({ timeout: 30_000 });
   await page.getByTestId("runs-on-machine").click();
   await page.getByRole("menuitemradio", { name: "media-box · Connected" }).click();
-  await expect(page.getByTestId("work-announcer")).toHaveText(
-    `Saved. ${OTTO}'s commands: media-box`,
-    {
-      timeout: 30_000,
-    },
+  const announcer = page.getByTestId("work-announcer");
+  await expect(announcer).toHaveText(
+    new RegExp(
+      `^Saved(?: and applied|\\. The gateway doesn't report it applied yet)\\. ${OTTO}'s commands: media-box$`,
+    ),
+    { timeout: 30_000 },
   );
-  // On the gateway: Otto's own entry names the machine by its id.
-  const exec = (entry(await config(), "otto").tools as Json).exec as Json;
-  expect(exec).toMatchObject({ host: "node", node: nodeId });
-  // media-box declares no system.run: the page says the gateway refuses commands there.
-  await expect(page.getByTestId("runs-on-no-run")).toContainText("doesn't declare system.run");
+  // On the gateway: Otto's own entry names the machine by its id, and "applied" is said
+  // only when the gateway reports the saved revision active.
+  const read = await admin.request<{
+    config: Json;
+    configRevisionHash: string;
+    appliedConfigHash: string;
+  }>("config.get", {});
+  expect((entry(read.config, "otto").tools as Json).exec).toMatchObject({
+    host: "node",
+    node: nodeId,
+  });
+  if ((await announcer.textContent())!.startsWith("Saved and applied"))
+    expect(read.appliedConfigHash).toBe(read.configRevisionHash);
+  // media-box declares no system.run: the page says so, and nothing about what follows.
+  await expect(page.getByTestId("runs-on-no-run")).toHaveText(
+    "media-box doesn't list system.run among its commands.",
+  );
   await shots(page, "runs-on-media-box");
   // A second connection, pinned to reading, reads the same.
   await runsOn(reader.page);
   await expect(reader.page.getByTestId("runs-on-machine")).toHaveAccessibleName(
-    `Where ${OTTO}'s commands run: media-box · Connected`,
+    `${OTTO}'s command machine: media-box · Connected`,
   );
   await expect(reader.page.getByTestId("runs-on-machine")).toBeDisabled();
   await expect(reader.page.getByTestId("admin-bar")).toContainText("This connection only reads.");
   await reader.page.getByRole("button", { name: "Back to settings" }).click();
-  await expect(reader.page.getByTestId("runs-on-value")).toHaveText("Commands on media-box");
+  await expect(reader.page.getByTestId("runs-on-value")).toHaveText("Commands: media-box");
   await shots(reader.page, "runs-on-read-only");
 });
 
@@ -252,6 +273,7 @@ test("F-046: a host pinned to reading refuses a change sent anyway, and the gate
                   botId: "otto",
                   host: "gateway",
                   nodeId: null,
+                  baseHash: null,
                 },
               }),
             );
@@ -277,9 +299,10 @@ test("F-047: with coder denied to Otto, a read-only connection sees coder denied
   });
   const page = reader.page;
   await runsOn(page);
-  await expect(page.getByTestId("inventory-servers")).toContainText(`coder (denied for ${OTTO})`, {
-    timeout: 20_000,
-  });
+  await expect(page.getByTestId("inventory-servers")).toContainText(
+    `coder (${OTTO}'s deny list: coder__*)`,
+    { timeout: 20_000 },
+  );
   await expect(page.getByTestId("inventory-secrets")).toHaveText("Needs admin access");
   await expect(page.getByTestId("inventory-signins")).toHaveText("Needs admin access");
   await expect(
@@ -297,7 +320,9 @@ test("F-274: admin chooses a new workspace folder for Otto; the gateway creates 
   const moved = join(openInstance(INSTANCE).stateDir, "workspaces", `otto-moved-${Date.now()}`);
   expect(existsSync(moved)).toBe(false);
   await page.getByRole("button", { name: "Change…" }).click();
-  const field = page.getByRole("textbox", { name: /folder on the gateway's machine/ });
+  const field = page.getByRole("textbox", { name: /path on the gateway's machine/ });
+  // Beside the field, Otto's folder as it is now, not a fixed example.
+  await expect(page.locator('label[for="m-workspace"]')).toContainText(`Now: ${ottoWorkspace}`);
   await field.fill(moved);
   await page.getByRole("button", { name: "Save folder" }).click();
   await expect(page.getByTestId("work-announcer")).toHaveText(
@@ -312,7 +337,7 @@ test("F-274: admin chooses a new workspace folder for Otto; the gateway creates 
   await expect(page.getByTestId("runs-on-workspace")).toContainText(moved);
 });
 
-test("F-156: admin sets media-box's defaults to Ask every time; the file reads back with a new hash, and Otto's effective result shows it", async () => {
+test("F-156: admin sets media-box's defaults to Ask every time; the file reads back with a new hash, shown as the file's setting", async () => {
   test.setTimeout(120_000);
   const before = await admin.request<{ hash: string; file: Json }>("exec.approvals.node.get", {
     nodeId,
@@ -320,7 +345,7 @@ test("F-156: admin sets media-box's defaults to Ask every time; the file reads b
   const page = writer.page;
   const settings = await machines(page);
   await expect(page.locator('[data-machine="media-box"]').first()).toContainText(
-    `Connected · Doesn't offer to run commands · Bots configured to run commands here: ${OTTO}`,
+    `Connected · Lists no system.run command · Named for commands in the settings of ${OTTO}`,
   );
   const file = settings.locator('[data-testid="approvals-file"][data-machine="media-box"]');
   await file.getByRole("radio", { name: "Ask every time" }).click();
@@ -338,7 +363,8 @@ test("F-156: admin sets media-box's defaults to Ask every time; the file reads b
   await expect(file.getByRole("radio", { checked: true })).toHaveAccessibleName("Ask every time", {
     timeout: 20_000,
   });
-  await expect(file.getByTestId("approvals-effective")).toContainText("Every command asks");
+  // The file's setting, and no outcome of a command worked out from it.
+  await expect(page.getByTestId("machines")).not.toContainText("Effective");
   await shots(page, "machines-ask-every-time");
 
   // A file changed on the gateway after the page read it: the save is refused, nothing changes.
@@ -364,7 +390,7 @@ test("F-156: admin sets media-box's defaults to Ask every time; the file reads b
   await page.keyboard.press("Escape");
 });
 
-test("F-157: machines and paired devices as last seen; with device access, a machine and a device are renamed and an offline device removed, each read back", async () => {
+test("F-157: machines and paired devices as last seen; with admin, a machine and a device are renamed and an offline device removed, each read back from the whole listing", async () => {
   test.setTimeout(120_000);
   // A device that pairs and goes away: offline, to be removed.
   const gone = await openOperator(
@@ -412,8 +438,10 @@ test("F-157: machines and paired devices as last seen; with device access, a mac
     .getByRole("button", { name: "Remove" })
     .click();
   const confirm = page.getByRole("alertdialog");
+  await expect(confirm).toContainText("Asks the gateway to remove Old laptop's pairing.");
   await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
   await confirm.getByRole("button", { name: "Remove" }).click();
+  await expect(settings.getByTestId("b-announcer")).toHaveText("Removed", { timeout: 20_000 });
   await expect(list).not.toContainText("Old laptop", { timeout: 20_000 });
   const after = await admin.request<{ paired: Json[] }>("device.pair.list", {});
   expect(after.paired.some((d) => d.deviceId === gone.deviceId)).toBe(false);

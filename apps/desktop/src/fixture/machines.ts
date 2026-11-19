@@ -5,14 +5,17 @@
 // device, folder, account and secret name is made up.
 //
 // Address parameters:
-//   machine=shared|offline|gatewayhost|ownbrowser|unlisted|none|loading|error
-//            shared: Otto and Pip are set to media-box and share a folder; offline: media-box
-//            isn't connected; gatewayhost: Otto's commands on the gateway's machine; ownbrowser:
-//            Otto has a browser of its own; unlisted: Otto names a machine the gateway doesn't
-//            list; none: no paired machine; loading, error: the read never answers, or fails
+//   machine=shared|offline|gatewayhost|ownbrowser|unlisted|unsupported|none|loading|error
+//            shared: Otto and Pip are set to media-box and have the same folder; offline:
+//            media-box isn't connected; gatewayhost: Otto's commands set to the gateway's
+//            machine; ownbrowser: the computer plugin names a profile for Otto; unlisted: Otto
+//            names a machine the gateway doesn't list; unsupported: Otto's stored host is a
+//            value the app doesn't know; none: no paired machine; loading, error: the read
+//            never answers, or fails
 //   devices=noscope   no device access
 //   override=1        media-box's file has an entry for Otto that asks every time
-//   mwrite=refused|conflict|unconfirmed   how a change goes
+//   mwrite=refused|conflict|unconfirmed|pending|notapplied   how a change goes
+//   mslow=<bot>       that bot's placement read never answers
 //   pairing=grant     a request for device access is approved after a moment
 
 import {
@@ -21,9 +24,9 @@ import {
   type BridgeCommand,
   type ClawtrateState,
   type CommandPlace,
+  type ConfigSave,
   type DefaultsChoice,
   type DeviceRow,
-  type ExecPolicy,
   type MachinesView,
   type NodeFacts,
 } from "@clawtrate/core";
@@ -33,6 +36,7 @@ export type MachineParams = {
   devices: string | null;
   override: boolean;
   write: string | null;
+  slow: string | null;
   pairing: string | null;
 };
 
@@ -42,6 +46,7 @@ export function machineParams(params: URLSearchParams): MachineParams {
     devices: params.get("devices"),
     override: params.get("override") === "1",
     write: params.get("mwrite"),
+    slow: params.get("mslow"),
     pairing: params.get("pairing"),
   };
 }
@@ -51,6 +56,7 @@ export const NO_MACHINE_PARAMS: MachineParams = {
   devices: null,
   override: false,
   write: null,
+  slow: null,
   pairing: null,
 };
 
@@ -67,45 +73,6 @@ const choiceLevels: Record<
   never: { security: "deny", ask: "off" },
 };
 
-const POLICIES: Record<string, ExecPolicy> = {
-  otto: {
-    mode: "auto",
-    security: "allowlist",
-    ask: "on-miss",
-    autoReview: true,
-    own: true,
-    legacy: false,
-    none: false,
-  },
-  juniper: {
-    mode: "deny",
-    security: "deny",
-    ask: "off",
-    autoReview: false,
-    own: false,
-    legacy: false,
-    none: false,
-  },
-  marlow: {
-    mode: "deny",
-    security: "deny",
-    ask: "off",
-    autoReview: false,
-    own: false,
-    legacy: false,
-    none: false,
-  },
-  pip: {
-    mode: "ask",
-    security: "allowlist",
-    ask: "on-miss",
-    autoReview: false,
-    own: true,
-    legacy: false,
-    none: false,
-  },
-};
-
 /** The fixture gateway's machines and settings, changed by the commands as the gateway would. */
 function world(now: number, params: MachineParams) {
   const nodes: NodeFacts[] =
@@ -120,7 +87,7 @@ function world(now: number, params: MachineParams) {
             lastSeenReason: "connect",
             approved: true,
             approvalsCommands: true,
-            runsCommands: true,
+            listsRun: true,
           },
           {
             id: STUDIO,
@@ -130,10 +97,10 @@ function world(now: number, params: MachineParams) {
             lastSeenReason: "connect",
             approved: true,
             approvalsCommands: true,
-            runsCommands: true,
+            listsRun: true,
           },
         ];
-  const exec: Record<string, { host: "gateway" | "node" | null; node: string | null }> = {
+  const exec: Record<string, { host: string | null; node: string | null }> = {
     juniper: { host: null, node: null },
     marlow: { host: null, node: null },
     otto:
@@ -141,7 +108,9 @@ function world(now: number, params: MachineParams) {
         ? { host: null, node: null }
         : params.machine === "unlisted"
           ? { host: "node", node: "garage-pi" }
-          : { host: "node", node: MEDIA },
+          : params.machine === "unsupported"
+            ? { host: "cluster", node: null }
+            : { host: "node", node: MEDIA },
     pip: params.machine === "shared" ? { host: "node", node: MEDIA } : { host: null, node: null },
   };
   const workspaces: Record<string, string> = {
@@ -221,25 +190,25 @@ const later = <T>(ms: number, value: () => T) =>
 export function machineCommands(now: number, params: MachineParams) {
   const w = world(now, params);
   const admin = (state: ClawtrateState) => state.connection.canAdmin;
+  /** The fixture's configuration revision: a save moves it on. */
+  let revision = 1;
   const pairing = (state: ClawtrateState) =>
     state.connection.scopes.includes("operator.pairing") ||
     (params.devices !== "noscope" && state.connection.canAdmin);
   const place = (botId: string): CommandPlace => {
     const own = w.exec[botId] ?? { host: null, node: null };
-    const host = own.host ?? "auto";
     return {
       ownHost: own.host,
       ownNode: own.node,
       defaultHost: null,
       defaultNode: null,
-      host,
-      inherited: own.host === null,
-      nodeSelector: host === "node" ? own.node : null,
-      node:
-        host === "node"
-          ? (w.nodes.find((n) => n.id === own.node || n.name === own.node) ?? null)
-          : null,
-      sandbox: false,
+      host: own.host,
+      hostSupported:
+        own.host === null ? null : ["auto", "sandbox", "gateway", "node"].includes(own.host),
+      inherited: false,
+      nodeSelector: own.node,
+      nodeInherited: false,
+      node: own.node === null ? null : (w.nodes.find((n) => n.id === own.node) ?? null),
     };
   };
   const bots = (state: ClawtrateState) => state.bots.map((bot) => bot.id);
@@ -262,31 +231,32 @@ export function machineCommands(now: number, params: MachineParams) {
     const commands = place(botId);
     const others = bots(state).filter((id) => id !== botId);
     const ownBrowser = params.machine === "ownbrowser" && botId === "otto";
-    const browserFor = (id: string) =>
-      id === "pip" || id === "marlow"
-        ? "shared"
-        : id === "otto" && !ownBrowser
-          ? "denied"
-          : ownBrowser && id === "otto"
-            ? "own"
-            : "denied";
+    const same = (id: string) => {
+      const other = place(id);
+      return (
+        commands.host === "node" &&
+        commands.nodeSelector !== null &&
+        other.host === "node" &&
+        other.nodeSelector === commands.nodeSelector
+      );
+    };
     return {
       botId,
       readAt: now,
+      configHash: `c${revision}`,
+      configActive: params.write !== "pending" || revision === 1,
       commands,
       workspace: w.workspaces[botId] ?? null,
-      browser: ownBrowser
-        ? { kind: "own", profile: "bot-otto", pluginEnabled: true }
-        : browserFor(botId) === "shared"
-          ? { kind: "shared" }
-          : { kind: "denied", by: "bot" },
-      sharedWith: {
-        machine: commands.node
-          ? others.filter((id) => place(id).node?.id === commands.node!.id)
-          : [],
+      browser: {
+        own: { allow: null, deny: botId === "otto" || botId === "juniper" ? ["browser"] : null },
+        everyBot: { allow: null, deny: [] },
+        plugin: ownBrowser
+          ? { present: true, enabled: true, profile: "bot-otto" }
+          : { present: false, enabled: null, profile: null },
+      },
+      sameSetting: {
+        machine: others.filter(same),
         workspace: others.filter((id) => w.workspaces[id] === w.workspaces[botId]),
-        browser:
-          browserFor(botId) === "shared" ? others.filter((id) => browserFor(id) === "shared") : [],
       },
       inventory: {
         accounts:
@@ -297,10 +267,10 @@ export function machineCommands(now: number, params: MachineParams) {
               ]
             : [{ id: "openai:work", label: "Work", bound: false }],
         toolServers: [
-          { name: "coder", denied: null, offered: true },
+          { name: "coder", deniedBy: null, offered: true },
           {
             name: "t3code",
-            denied: botId === "otto" ? "bot" : null,
+            deniedBy: botId === "otto" ? { list: "bot", entry: "t3code__*" } : null,
             offered: botId === "otto" ? false : true,
           },
         ],
@@ -308,8 +278,17 @@ export function machineCommands(now: number, params: MachineParams) {
         secrets: admin(state)
           ? ["router-admin", "nas-backup", "camera-feed"]
           : { status: "needs-admin" },
-        pluginSignIns: admin(state) ? [] : { status: "needs-admin" },
-        workspaceOnly: true,
+        pluginCredentials: admin(state)
+          ? [
+              {
+                plugin: "clawtrate-computer",
+                fields: { status: "failed", message: "Credential metadata is unavailable." },
+                fieldsOmitted: 0,
+              },
+            ]
+          : { status: "needs-admin" },
+        pluginsOmitted: 0,
+        workspaceOnly: { value: true, set: "every-bot" },
       },
       nodes: w.nodes,
       nodesOmitted: 0,
@@ -327,7 +306,7 @@ export function machineCommands(now: number, params: MachineParams) {
           kind: "gateway",
           name: "The gateway's machine",
           node: null,
-          botsHere: here((p) => p.host !== "node"),
+          named: here((p) => p.host === "gateway"),
           approvals: admin(state) ? w.files.gateway! : { status: "needs-admin" },
         },
         ...w.nodes.map((node) => ({
@@ -335,7 +314,7 @@ export function machineCommands(now: number, params: MachineParams) {
           kind: "node" as const,
           name: node.name,
           node,
-          botsHere: here((p) => p.node?.id === node.id),
+          named: here((p) => p.host === "node" && p.nodeSelector === node.id),
           approvals: !admin(state)
             ? ({ status: "needs-admin" } as const)
             : !node.connected
@@ -346,7 +325,6 @@ export function machineCommands(now: number, params: MachineParams) {
       nodesOmitted: 0,
       devices: pairing(state) ? w.devices : { status: "needs-pairing" },
       devicesOmitted: 0,
-      policies: ids.map((botId) => ({ botId, policy: POLICIES[botId] ?? POLICIES.juniper! })),
     };
   }
 
@@ -358,7 +336,8 @@ export function machineCommands(now: number, params: MachineParams) {
     const state = get();
     switch (command.type) {
       case "readPlacement":
-        if (params.machine === "loading") return new Promise(() => {});
+        if (params.machine === "loading" || params.slow === command.botId)
+          return new Promise(() => {});
         if (params.machine === "error")
           return later(300, () => {
             throw new Error("The gateway did not answer.");
@@ -372,20 +351,41 @@ export function machineCommands(now: number, params: MachineParams) {
           });
         return later(0, () => machines(get()));
       case "setCommandMachine":
-        return later(300, () => {
+        return later(300, (): ConfigSave => {
           if (!admin(state)) throw new Error("Changing where a bot runs needs admin access.");
           refuse();
+          if (command.baseHash !== `c${revision}`)
+            throw new Error(
+              "Couldn't save where its commands run. The gateway answered: config changed since last load; re-run config.get and retry",
+            );
+          revision += 1;
           w.exec[command.botId] =
             command.host === "node"
               ? { host: "node", node: command.nodeId }
               : { host: "gateway", node: null };
-          return place(command.botId);
+          return {
+            place: place(command.botId),
+            active:
+              params.write === "pending"
+                ? "pending"
+                : params.write === "notapplied"
+                  ? "failed"
+                  : "applied",
+            message:
+              params.write === "notapplied"
+                ? "config.patch persisted but was not applied to the active Gateway (failed)"
+                : null,
+          };
         });
       case "setBotWorkspace":
         return later(300, () => {
+          if (params.write === "refused")
+            throw new Error(
+              `The gateway answered: workspace path is not usable. It may have created the folder or files before answering. It now reports the workspace as ${w.workspaces[command.botId] ?? "none"}.`,
+            );
           refuse();
           w.workspaces[command.botId] = command.path;
-          return { workspace: command.path };
+          return { workspace: command.path, asTyped: true };
         });
       case "setMachineDefaults":
         return later(300, () => {
@@ -407,11 +407,13 @@ export function machineCommands(now: number, params: MachineParams) {
         });
       case "renameMachine":
         return later(200, () => {
+          if (!admin(state)) throw new Error("Renaming a machine needs admin access.");
           const node = w.nodes.find((each) => each.id === command.nodeId);
           if (node) node.name = command.name;
         });
       case "removeMachine":
         return later(200, () => {
+          if (!admin(state)) throw new Error("Removing a machine needs admin access.");
           w.nodes = w.nodes.filter((each) => each.id !== command.nodeId);
         });
       case "renameDevice":
@@ -421,6 +423,7 @@ export function machineCommands(now: number, params: MachineParams) {
         });
       case "removeDevice":
         return later(200, () => {
+          if (!admin(state)) throw new Error("Removing a device needs admin access.");
           w.devices = w.devices.filter((each) => each.id !== command.deviceId);
         });
       case "requestAccess": {

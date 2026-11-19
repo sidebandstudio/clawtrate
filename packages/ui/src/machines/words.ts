@@ -1,19 +1,14 @@
 // The words of "Where a bot runs" and Settings, Machines (controls.md sections
 // 14 and 15), from the engine's facts. Nothing here decides a verdict: each
-// sentence says what the gateway's settings or its last report say.
+// sentence says what the gateway's settings store or what the gateway reported.
 
 import {
   choiceOf,
-  combinePosture,
-  fileLevelsFor,
   type ApprovalLevels,
-  type ApprovalsFile,
-  type Ask,
   type BotPlacement,
+  type CommandPlace,
+  type CredentialField,
   type DefaultsChoice,
-  type ExecPolicy,
-  type NodeFacts,
-  type Security,
 } from "@clawtrate/core";
 import { stampTime } from "../format.ts";
 
@@ -24,30 +19,45 @@ export function names(list: readonly string[]): string {
 }
 
 /** "Last seen 5:12 PM (connect)", with the gateway's reason as given. */
-export function lastSeen(node: NodeFacts, now: number): string {
-  if (node.lastSeenAt === null) return "Last seen: not reported";
-  const reason = node.lastSeenReason ? ` (${node.lastSeenReason})` : "";
-  return `Last seen ${stampTime(node.lastSeenAt, now)}${reason}`;
+export function lastSeen(
+  seen: { lastSeenAt: number | null; lastSeenReason: string | null },
+  now: number,
+): string {
+  if (seen.lastSeenAt === null) return "Last seen: not reported";
+  const reason = seen.lastSeenReason ? ` (${seen.lastSeenReason})` : "";
+  return `Last seen ${stampTime(seen.lastSeenAt, now)}${reason}`;
 }
 
 /** A machine's state: "Connected" or "Not connected · Last seen …". */
-export function nodeState(node: NodeFacts, now: number): string {
+export function nodeState(
+  node: { connected: boolean; lastSeenAt: number | null; lastSeenReason: string | null },
+  now: number,
+): string {
   return node.connected ? "Connected" : `Not connected · ${lastSeen(node, now)}`;
 }
 
-/** The value of the "Where Otto runs" row: "Commands on media-box · Shared with Pip". */
+/**
+ * The stored command host by itself, mid-sentence: "the gateway's machine",
+ * a listed machine's name, the stored node as it is, "auto", "not set", or a
+ * value this app doesn't know, quoted and marked.
+ */
+export function hostWords(commands: CommandPlace): string {
+  const { host } = commands;
+  if (host === null) return "not set";
+  if (commands.hostSupported === false) return `“${host}” (not supported here)`;
+  if (host === "gateway") return "the gateway's machine";
+  if (host === "node")
+    return commands.node?.name ?? commands.nodeSelector ?? "node, with no machine";
+  return host;
+}
+
+/** The value of the "Where Otto runs" row: "Commands: media-box · Same setting as Pip". */
 export function runsOnValue(placement: BotPlacement, nameOf: (id: string) => string): string {
-  const { commands } = placement;
-  const where =
-    commands.host === "node"
-      ? `Commands on ${commands.node?.name ?? commands.nodeSelector ?? "a paired machine"}`
-      : commands.host === "sandbox" || (commands.host === "auto" && commands.sandbox)
-        ? "Commands in a sandbox"
-        : "Commands on the gateway's machine";
-  const shared = [
-    ...new Set([...placement.sharedWith.machine, ...placement.sharedWith.workspace]),
+  const where = `Commands: ${hostWords(placement.commands)}`;
+  const same = [
+    ...new Set([...placement.sameSetting.machine, ...placement.sameSetting.workspace]),
   ].map(nameOf);
-  return shared.length > 0 ? `${where} · Shared with ${names(shared)}` : where;
+  return same.length > 0 ? `${where} · Same setting as ${names(same)}` : where;
 }
 
 export const CHOICE_WORDS: Record<DefaultsChoice, string> = {
@@ -57,81 +67,34 @@ export const CHOICE_WORDS: Record<DefaultsChoice, string> = {
   never: "Never allow",
 };
 
-/** A file's levels for a bot in words: "Ask on every command", "the defaults". */
+/** A file's levels as stored: one of the four choices by name, or the pair as it is. */
 export function levelsWords(levels: ApprovalLevels): string {
   const choice = choiceOf(levels);
-  if (choice === "always") return "Ask on every command";
   if (choice) return CHOICE_WORDS[choice];
-  const parts = [
-    levels.security ? `security ${levels.security}` : null,
-    levels.ask ? `ask ${levels.ask}` : null,
-  ].filter(Boolean);
-  return parts.length > 0
-    ? `Its own entry: ${parts.join(", ")}`
-    : "Its own entry, with no levels set";
+  if (levels.security === null && levels.ask === null) return "No levels set";
+  return `security ${levels.security ?? "not set"}, ask ${levels.ask ?? "not set"}`;
 }
 
-/** A bot's command policy, as its Run commands line names it (section 5). */
-export function policyWords(policy: ExecPolicy): string {
-  if (policy.none) return "No command policy: the gateway runs commands without asking";
-  if (policy.legacy) return `Legacy setting: security ${policy.security}, ask ${policy.ask}`;
-  switch (policy.mode) {
-    case "auto":
-      return "Review first";
-    case "ask":
-      return "Ask";
-    case "full":
-      return "Allow all";
-    case "deny":
-      return "Never";
-    case "allowlist":
-      return "Only listed commands";
+/** A plugin credential's kind as the gateway described it; never its value. */
+export function credentialWords(field: CredentialField): string {
+  switch (field.kind) {
+    case "missing":
+      return "not set";
+    case "literal":
+      return "set in the settings";
+    case "environment":
+      return "from an environment variable";
+    case "reference":
+      return field.unresolved ? "a reference the gateway couldn't resolve" : "a reference";
+    case "invalid":
+      return "invalid";
     default:
-      return `security ${policy.security}, ask ${policy.ask}`;
+      return field.kind;
   }
 }
 
-function postureWords(security: Security, ask: Ask, autoReview: boolean): string {
-  if (security === "deny") return "Never: every command is refused";
-  if (ask === "always") return "Every command asks";
-  if (security === "full" && ask === "off") return "Every command runs without asking";
-  if (security === "full") return `Runs commands; asks as the gateway's ask "${ask}" says`;
-  if (ask === "off") return "Only commands on the allowlist run; the rest are refused";
-  return autoReview
-    ? "Review first: commands on the allowlist run, and the reviewer decides the rest"
-    : "Commands on the allowlist run; the rest ask you";
+/** A stored tool list: "not set", "empty", or its entries. */
+export function listWords(entries: readonly string[] | null): string {
+  if (entries === null) return "not set";
+  return entries.length === 0 ? "empty" : entries.join(", ");
 }
-
-/**
- * The effective result for a bot set to a machine, as the gateway combines
- * them: the bot's policy, the gateway machine's file and, for a node, the
- * node's own file. Null when a file it needs is not read.
- */
-export function effectiveWords(
-  botName: string,
-  botId: string,
-  policy: ExecPolicy,
-  files: ReadonlyArray<{ name: string; file: ApprovalsFile }>,
-): string {
-  const levels = files.map(({ file }) => fileLevelsFor(file, botId));
-  const result = combinePosture(policy, levels);
-  const head = postureWords(result.security, result.ask, result.autoReview);
-  const policyName = policyWords(policy);
-  const whose = (index: number) => {
-    const by = files[index]!;
-    return by.file.entries.some((each) => each.botId === botId)
-      ? `its entry in ${by.name}'s file`
-      : `${by.name}'s file`;
-  };
-  if (result.narrowedBy !== null && (result.security === "deny" || result.raisedBy === null))
-    return `${head}: ${whose(result.narrowedBy)} is stricter than ${botName}'s policy (${policyName}).`;
-  if (result.raisedBy !== null) {
-    const reviewer = policy.autoReview ? `, so the gateway skips ${botName}'s reviewer` : "";
-    return `${head}: ${whose(result.raisedBy)} asks more than ${botName}'s policy (${policyName})${reviewer}.`;
-  }
-  return `${head}, from ${botName}'s policy (${policyName}); ${files.length > 1 ? "these files ask" : "this file asks"} no more.`;
-}
-
-/** The line under a machine's effective results (section 15). */
-export const COMBINE_LINE =
-  "The gateway takes the stricter of a bot's policy and this file, and the more asking of the two; it uses a bot's reviewer only when this file doesn't ask more. “Allow every command” still meets each bot's own policy.";

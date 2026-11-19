@@ -5,11 +5,12 @@
 // OpenClaw 2026.10.6 returned on a development instance is in
 // `docs/decisions.md` ("Where a bot runs and Machines").
 //
-// Four facts stay apart: what a bot is configured to use (its own setting, or
-// the gateway's for every bot, which it inherits), what a machine reported when
-// last seen, what the gateway combines, and what is unavailable at this tier.
-// A command's machine, a bot's workspace and its browser are three settings;
-// none is inferred from another.
+// Everything here is what the gateway's settings say or what the gateway
+// reported, and nothing is inferred from it: a configured host is not where a
+// command ran, a stored path or node equal to another bot's is the same
+// setting and no more, and an approvals file's settings are not what a command
+// will do. A command's machine, a bot's workspace and its browser settings are
+// read apart; none is inferred from another.
 
 import { parseModelRef } from "./accounts.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
@@ -18,11 +19,14 @@ import { asRecord, type RawRecord } from "./mapping.ts";
 export const MAX_NODES = 16;
 /** Paired devices kept in one answer. */
 export const MAX_DEVICES = 32;
-/** Names of the gateway's secret store, of tool servers, of accounts, of plugin sign-ins. */
+/** Names of the gateway's secret store, of tool servers, of accounts, of list entries. */
 export const MAX_INVENTORY = 32;
+/** Plugins whose credential fields are read, and fields read per plugin. */
+export const MAX_PLUGINS = 8;
+export const MAX_PLUGIN_FIELDS = 8;
 /** Per-bot entries of an approvals file shown: only those of listed bots, at most the bot count. */
 export const MAX_APPROVAL_ENTRIES = 32;
-/** A name, a label, an id. */
+/** A name, a label, an id, a stored setting's value. */
 export const MAX_MACHINE_NAME_CHARS = 128;
 /** A last-seen reason (`connect`, …). */
 export const MAX_SEEN_REASON_CHARS = 64;
@@ -34,7 +38,9 @@ export const MAX_REASON_CHARS = 512;
 /** The commands a node declares that let Clawtrate read and set its approvals file. */
 export const NODE_APPROVALS_COMMANDS = ["system.execApprovals.get", "system.execApprovals.set"];
 
-export type ExecHost = "auto" | "sandbox" | "gateway" | "node";
+/** The `tools.exec.host` values OpenClaw 2026.10.6 accepts. Any other stored value is shown as it is. */
+export const KNOWN_HOSTS = ["auto", "sandbox", "gateway", "node"];
+
 export type Security = "deny" | "allowlist" | "full";
 export type Ask = "off" | "on-miss" | "always";
 
@@ -58,57 +64,78 @@ export type NodeFacts = {
   approved: boolean;
   /** It declares both approvals commands, so its file can be read with admin. */
   approvalsCommands: boolean;
-  /** It declares `system.run`: a command can run there. */
-  runsCommands: boolean;
+  /** `system.run` is among the commands it declares. */
+  listsRun: boolean;
 };
 
-/** A bot's command placement, as configured. Where a command ran is only in its own result. */
+/**
+ * A bot's command machine as its settings store it (`tools.exec.host` and
+ * `.node`, the bot's own over the gateway's for every bot). A session can
+ * name another, and where a command ran is only in its own result.
+ */
 export type CommandPlace = {
-  /** The bot's own `tools.exec.host` and `.node`, or null when it sets none. */
-  ownHost: ExecHost | null;
+  /** The bot's own stored values, or null when it stores none. */
+  ownHost: string | null;
   ownNode: string | null;
-  /** The gateway's `tools.exec.host` and `.node` for every bot. */
-  defaultHost: ExecHost | null;
+  /** The gateway's stored values for every bot. */
+  defaultHost: string | null;
   defaultNode: string | null;
-  /** The configured host: the bot's own, else the default, else the gateway's `auto`. */
-  host: ExecHost;
-  /** True when the bot sets no host of its own and inherits it. */
+  /** The stored host: the bot's own, else every bot's; null when neither is set. */
+  host: string | null;
+  /** The stored host is one OpenClaw 2026.10.6 accepts (`KNOWN_HOSTS`); null when none is stored. */
+  hostSupported: boolean | null;
+  /** The host comes from the gateway's setting for every bot. */
   inherited: boolean;
-  /** The node it names (id, name or address), when the host is `node`. */
+  /** The stored node: the bot's own, else every bot's (the gateway reads them so, whichever set the host). */
   nodeSelector: string | null;
-  /** That node as `node.list` names it; null when none matches or none is named. */
+  /** The node comes from the gateway's setting for every bot. */
+  nodeInherited: boolean;
+  /** The listed machine whose id is exactly the stored node, or null. No name is matched. */
   node: NodeFacts | null;
-  /** A sandbox is configured for this bot (`auto` then resolves to it). */
-  sandbox: boolean;
 };
 
-export type BrowserPlace =
-  /** Clawtrate's computer plugin gives the bot a profile of its own on the gateway's machine. */
-  | { kind: "own"; profile: string; pluginEnabled: boolean }
-  /** The gateway's default browser, shared by every bot that uses the browser. */
-  | { kind: "shared" }
-  /** The gateway's settings deny the browser to this bot or to every bot. */
-  | { kind: "denied"; by: "bot" | "every-bot" };
+/** A tool list as stored: allow or deny, the bot's own or every bot's. */
+export type ToolLists = { allow: string[] | null; deny: string[] | null };
+
+/** What a bot's settings store about the browser. Nothing here says which browser it uses. */
+export type BrowserSettings = {
+  /** The bot's own `tools.allow` and `tools.deny`, and the gateway's for every bot, as stored. */
+  own: ToolLists;
+  everyBot: ToolLists;
+  /** Clawtrate's computer plugin's entry: the profile named for this bot, and its `enabled` flag. */
+  plugin: { present: boolean; enabled: boolean | null; profile: string | null };
+};
 
 export type InventoryAccount = { id: string; label: string | null; bound: boolean };
 export type ToolServer = {
   name: string;
-  /** Denied by the bot's own deny list or the gateway's for every bot; null when neither names it. */
-  denied: "bot" | "every-bot" | null;
+  /** A deny-list entry naming the server, as stored (`<server>__*`, its name, or `*`). */
+  deniedBy: { list: "bot" | "every-bot"; entry: string } | null;
   /** Offered in the bot's latest task's listing; null when there is no listing to read. */
   offered: boolean | null;
+};
+/** A plugin's credential field as `plugins.credentials.inspect` described it; never its value. */
+export type CredentialField = { label: string; kind: string; unresolved: boolean };
+export type PluginCredentials = {
+  plugin: string;
+  fields: CredentialField[] | Unavailable;
+  fieldsOmitted: number;
 };
 
 /** Where a bot runs (section 14). */
 export type BotPlacement = {
   botId: string;
   readAt: number;
+  /** `config.get` `hash`, the revision this answer was read from; a save sends it back. */
+  configHash: string | null;
+  /** The gateway reports its active revision equal to its saved one; null when it doesn't report both. */
+  configActive: boolean | null;
   commands: CommandPlace;
-  /** `agents.list` `workspace`: the configured folder of its file tools, on the gateway's machine. */
+  /** `agents.list` `workspace`, as the gateway reports it. */
   workspace: string | null;
-  browser: BrowserPlace;
-  /** Other bots set to the same paired machine, the same workspace folder, or the shared browser. */
-  sharedWith: { machine: string[]; workspace: string[]; browser: string[] };
+  browser: BrowserSettings;
+  /** Other bots whose stored node or reported workspace path is the same as this bot's. */
+  sameSetting: { machine: string[]; workspace: string[] };
   /** Inventory: what its settings name. Not whether it can use each. */
   inventory: {
     accounts: InventoryAccount[] | Unavailable;
@@ -116,28 +143,15 @@ export type BotPlacement = {
     /** The task whose listing `offered` comes from, and when it was read. */
     listing: { key: string; readAt: number } | null;
     secrets: string[] | Unavailable;
-    pluginSignIns: Array<{ plugin: string; names: string[] }> | Unavailable;
-    /** `tools.fs.workspaceOnly`, for the bot or every bot. */
-    workspaceOnly: boolean | null;
+    /** Enabled plugins' credential fields; empty when the settings enable no plugin. */
+    pluginCredentials: PluginCredentials[] | Unavailable;
+    pluginsOmitted: number;
+    /** `tools.fs.workspaceOnly` as stored, the bot's own or every bot's. */
+    workspaceOnly: { value: boolean; set: "bot" | "every-bot" } | null;
   };
   /** The paired machines, for the choice of where its commands run. */
   nodes: NodeFacts[];
   nodesOmitted: number;
-};
-
-/** A bot's command policy as the gateway resolves it from its settings (`tools.exec`). */
-export type ExecPolicy = {
-  /** The mode named, or null for a legacy `security`/`ask` pair or no policy at all. */
-  mode: string | null;
-  security: Security;
-  ask: Ask;
-  autoReview: boolean;
-  /** Set by the bot's own entry rather than inherited. */
-  own: boolean;
-  /** Set with the legacy `security`/`ask` pair. */
-  legacy: boolean;
-  /** No policy anywhere: the gateway runs commands without asking. */
-  none: boolean;
 };
 
 export type ApprovalLevels = { security: Security | null; ask: Ask | null };
@@ -147,7 +161,7 @@ export type ApprovalsFile = {
   hash: string | null;
   exists: boolean;
   defaults: ApprovalLevels;
-  /** The gateway's own resolution of the defaults, where it reports one (the gateway's machine). */
+  /** The defaults the gateway reports it resolved, where it reports them (the gateway's machine). */
   resolved: ApprovalLevels | null;
   entries: Array<{ botId: string; levels: ApprovalLevels; allowlist: number }>;
   entriesOmitted: number;
@@ -159,8 +173,8 @@ export type MachineRow = {
   kind: "gateway" | "node";
   name: string;
   node: NodeFacts | null;
-  /** Bots configured to run commands here. */
-  botsHere: string[];
+  /** Bots whose stored host names this machine: `gateway`, or `node` with exactly this id. */
+  named: string[];
   approvals: ApprovalsFile | Unavailable;
 };
 
@@ -182,8 +196,6 @@ export type MachinesView = {
   nodesOmitted: number;
   devices: DeviceRow[] | Unavailable;
   devicesOmitted: number;
-  /** Each bot's command policy, for the effective result on each machine. */
-  policies: Array<{ botId: string; policy: ExecPolicy }>;
 };
 
 /** A machine's defaults, as the four choices of section 15. */
@@ -197,15 +209,26 @@ export const CHOICE_LEVELS: Record<DefaultsChoice, { security: Security; ask: As
   never: { security: "deny", ask: "off" },
 };
 
-/** The choice a file's levels are, or null when they are none of the four (or unset). */
+/** The choice a file's levels are exactly, or null when they are none of the four (or unset). */
 export function choiceOf(levels: ApprovalLevels): DefaultsChoice | null {
   for (const choice of DEFAULTS_CHOICES) {
     const want = CHOICE_LEVELS[choice];
     if (levels.security === want.security && levels.ask === want.ask) return choice;
   }
-  if (levels.security === "deny") return "never";
   return null;
 }
+
+/** A write the gateway answered. `active` is what `config.get` reported after it. */
+export type ConfigSave = {
+  place: CommandPlace;
+  /**
+   * `applied`: the gateway reports its active revision equal to the saved one.
+   * `pending`: saved, and the gateway reports another active revision.
+   * `failed`: the gateway answered that it saved the change but didn't apply it (`message`).
+   */
+  active: "applied" | "pending" | "failed";
+  message: string | null;
+};
 
 // Reading ---------------------------------------------------------------------------------
 
@@ -217,9 +240,6 @@ const num = (value: unknown): number | null =>
 const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 const rec = (value: unknown): RawRecord => asRecord(value) ?? {};
 
-const HOSTS: readonly ExecHost[] = ["auto", "sandbox", "gateway", "node"];
-const host = (value: unknown): ExecHost | null =>
-  HOSTS.includes(value as ExecHost) ? (value as ExecHost) : null;
 const security = (value: unknown): Security | null =>
   value === "deny" || value === "allowlist" || value === "full" ? value : null;
 const ask = (value: unknown): Ask | null =>
@@ -238,7 +258,7 @@ export function readNode(value: unknown): NodeFacts | null {
     lastSeenReason: str(row.lastSeenReason, MAX_SEEN_REASON_CHARS),
     approved: row.approvalState === "approved",
     approvalsCommands: NODE_APPROVALS_COMMANDS.every((c) => commands.includes(c)),
-    runsCommands: commands.includes("system.run"),
+    listsRun: commands.includes("system.run"),
   };
 }
 
@@ -251,21 +271,11 @@ export function readNodes(value: unknown): { nodes: NodeFacts[]; omitted: number
   return { nodes: all.slice(0, MAX_NODES), omitted: Math.max(0, all.length - MAX_NODES) };
 }
 
-/** The node an `exec.node` selector names: by id, then by name (the gateway also takes an address). */
-export function matchNode(nodes: readonly NodeFacts[], selector: string | null): NodeFacts | null {
-  if (!selector) return null;
-  return (
-    nodes.find((node) => node.id === selector) ??
-    nodes.find((node) => node.name === selector) ??
-    null
-  );
-}
-
 const entriesOf = (config: RawRecord) => rec(rec(config.agents).entries);
 const entryOf = (config: RawRecord, botId: string) => rec(entriesOf(config)[botId]);
 const toolsOf = (config: RawRecord) => rec(config.tools);
 
-/** The configured command place of a bot (`tools.exec.host`, `.node`). */
+/** The stored command place of a bot (`tools.exec.host`, `.node`), read as the gateway reads them. */
 export function readCommandPlace(
   config: RawRecord,
   botId: string,
@@ -273,54 +283,58 @@ export function readCommandPlace(
 ): CommandPlace {
   const own = rec(rec(entryOf(config, botId).tools).exec);
   const all = rec(toolsOf(config).exec);
-  const ownHost = host(own.host);
-  const defaultHost = host(all.host);
+  const ownHost = str(own.host);
+  const defaultHost = str(all.host);
   const ownNode = str(own.node);
   const defaultNode = str(all.node);
-  const configured = ownHost ?? defaultHost ?? "auto";
-  const nodeSelector = configured === "node" ? (ownHost ? ownNode : defaultNode) : null;
-  const sandboxMode =
-    str(rec(entryOf(config, botId).sandbox).mode) ??
-    str(rec(rec(rec(config.agents).defaults).sandbox).mode);
+  const host = ownHost ?? defaultHost;
+  const nodeSelector = ownNode ?? defaultNode;
   return {
     ownHost,
     ownNode,
     defaultHost,
     defaultNode,
-    host: configured,
-    inherited: ownHost === null,
+    host,
+    hostSupported: host === null ? null : KNOWN_HOSTS.includes(host),
+    inherited: ownHost === null && defaultHost !== null,
     nodeSelector,
-    node: configured === "node" ? matchNode(nodes, nodeSelector) : null,
-    sandbox: sandboxMode !== null && sandboxMode !== "off",
+    nodeInherited: ownNode === null && defaultNode !== null,
+    node: nodeSelector === null ? null : (nodes.find((node) => node.id === nodeSelector) ?? null),
   };
 }
 
-const denies = (tools: RawRecord, name: string) =>
-  list(tools.deny).some((entry) => entry === name || entry === "*");
-const allowListExcludes = (tools: RawRecord, name: string) => {
-  const allow = list(tools.allow);
-  return allow.length > 0 && !allow.some((entry) => entry === name || entry === "*");
-};
+const storedList = (value: unknown): string[] | null =>
+  Array.isArray(value)
+    ? value
+        .map((entry) => str(entry))
+        .filter((entry): entry is string => entry !== null)
+        .slice(0, MAX_INVENTORY)
+    : null;
+const toolLists = (tools: RawRecord): ToolLists => ({
+  allow: storedList(tools.allow),
+  deny: storedList(tools.deny),
+});
 
-/** The browser a bot's settings give it. */
-export function readBrowserPlace(config: RawRecord, botId: string): BrowserPlace {
-  const botTools = rec(entryOf(config, botId).tools);
-  const allTools = toolsOf(config);
-  if (denies(allTools, "browser") || allowListExcludes(allTools, "browser"))
-    return { kind: "denied", by: "every-bot" };
-  if (denies(botTools, "browser") || allowListExcludes(botTools, "browser"))
-    return { kind: "denied", by: "bot" };
-  const plugin = rec(rec(rec(config.plugins).entries)["clawtrate-computer"]);
-  const profile = str(rec(rec(rec(plugin.config).bots)[botId]).profile);
-  if (profile) return { kind: "own", profile, pluginEnabled: plugin.enabled !== false };
-  return { kind: "shared" };
+/** What a bot's settings store about the browser: the tool lists and the computer plugin's entry. */
+export function readBrowserSettings(config: RawRecord, botId: string): BrowserSettings {
+  const plugin = asRecord(rec(rec(config.plugins).entries)["clawtrate-computer"]);
+  return {
+    own: toolLists(rec(entryOf(config, botId).tools)),
+    everyBot: toolLists(toolsOf(config)),
+    plugin: {
+      present: plugin !== null,
+      enabled: typeof plugin?.enabled === "boolean" ? plugin.enabled : null,
+      profile: str(rec(rec(rec(plugin?.config).bots)[botId]).profile),
+    },
+  };
 }
 
-/** A tool server is denied by name or by its `<server>__*` pattern. */
-function serverDenied(tools: RawRecord, server: string): boolean {
-  return list(tools.deny).some(
-    (entry) => entry === `${server}__*` || entry === server || entry === "*",
+/** A deny-list entry that names a tool server: `<server>__*`, its name, or `*`. */
+function serverEntry(tools: RawRecord, server: string): string | null {
+  const entry = list(tools.deny).find(
+    (each) => each === `${server}__*` || each === server || each === "*",
   );
+  return typeof entry === "string" ? cap(entry, MAX_MACHINE_NAME_CHARS) : null;
 }
 
 export function readToolServers(
@@ -336,15 +350,19 @@ export function readToolServers(
       if (id) offered.add(id);
     }
   const botTools = rec(entryOf(config, botId).tools);
-  return names.map((name) => ({
-    name: cap(name, MAX_MACHINE_NAME_CHARS),
-    denied: serverDenied(toolsOf(config), name)
-      ? "every-bot"
-      : serverDenied(botTools, name)
-        ? "bot"
-        : null,
-    offered: listing === null ? null : [...offered].some((id) => id.startsWith(`${name}__`)),
-  }));
+  return names.map((name) => {
+    const own = serverEntry(botTools, name);
+    const every = serverEntry(toolsOf(config), name);
+    return {
+      name: cap(name, MAX_MACHINE_NAME_CHARS),
+      deniedBy: own
+        ? { list: "bot", entry: own }
+        : every
+          ? { list: "every-bot", entry: every }
+          : null,
+      offered: listing === null ? null : [...offered].some((id) => id.startsWith(`${name}__`)),
+    };
+  });
 }
 
 /** `models.authStatus {agentId}`: the accounts the bot's view lists, and the one its model names. */
@@ -377,54 +395,6 @@ export function modelRefOf(config: RawRecord, botId: string): string | null {
   return typeof model === "string" ? model : str(rec(model).primary);
 }
 
-/** A bot's command policy, layered as the gateway layers it (`applyExecPolicyLayer`). */
-export function readExecPolicy(config: RawRecord, botId: string): ExecPolicy {
-  const all = rec(toolsOf(config).exec);
-  const own = rec(rec(entryOf(config, botId).tools).exec);
-  const layers = [all, own];
-  let mode: string | null = null;
-  let sec: Security | null = null;
-  let asked: Ask | null = null;
-  let ownSet = false;
-  let legacy = false;
-  for (const [index, layer] of layers.entries()) {
-    const named = str(layer.mode);
-    if (named) {
-      mode = named;
-      sec = null;
-      asked = null;
-      legacy = false;
-      if (index === 1) ownSet = true;
-    } else if (layer.security !== undefined || layer.ask !== undefined) {
-      mode = null;
-      sec = security(layer.security) ?? sec;
-      asked = ask(layer.ask) ?? asked;
-      legacy = true;
-      if (index === 1) ownSet = true;
-    }
-  }
-  const byMode = MODE_POLICIES[mode ?? ""];
-  if (byMode) return { mode, ...byMode, own: ownSet, legacy: false, none: false };
-  return {
-    mode: null,
-    security: sec ?? "full",
-    ask: asked ?? "off",
-    autoReview: false,
-    own: ownSet,
-    legacy,
-    none: !legacy,
-  };
-}
-
-/** `resolveExecPolicyForMode` in OpenClaw 2026.10.6. */
-const MODE_POLICIES: Record<string, { security: Security; ask: Ask; autoReview: boolean }> = {
-  deny: { security: "deny", ask: "off", autoReview: false },
-  allowlist: { security: "allowlist", ask: "off", autoReview: false },
-  ask: { security: "allowlist", ask: "on-miss", autoReview: false },
-  auto: { security: "allowlist", ask: "on-miss", autoReview: true },
-  full: { security: "full", ask: "off", autoReview: false },
-};
-
 /**
  * `exec.approvals.get` or `exec.approvals.node.get`. The path and socket are
  * not kept; entries only for the bots named (all when none are), the rest counted.
@@ -456,65 +426,6 @@ export function readApprovalsFile(
   };
 }
 
-/** A file's levels for one bot: its entry over the defaults, over full and off (`resolveExecApprovalsFromFile`). */
-export function fileLevelsFor(
-  file: ApprovalsFile,
-  botId: string,
-): { security: Security; ask: Ask } {
-  const entry = file.entries.find((each) => each.botId === botId)?.levels;
-  return {
-    security: entry?.security ?? file.defaults.security ?? "full",
-    ask: entry?.ask ?? file.defaults.ask ?? "off",
-  };
-}
-
-const SECURITY_ORDER: Security[] = ["deny", "allowlist", "full"];
-const ASK_ORDER: Ask[] = ["off", "on-miss", "always"];
-const stricter = (a: Security, b: Security) =>
-  SECURITY_ORDER[Math.min(SECURITY_ORDER.indexOf(a), SECURITY_ORDER.indexOf(b))]!;
-const moreAsking = (a: Ask, b: Ask) =>
-  ASK_ORDER[Math.max(ASK_ORDER.indexOf(a), ASK_ORDER.indexOf(b))]!;
-
-/**
- * The gateway's combination for a bot's next command (OpenClaw 2026.10.6,
- * `bash-tools` exec): the stricter security and the more asking ask of the
- * bot's policy and each approvals file that applies, and the reviewer only
- * when no file raised the ask. A command sent to a node meets the gateway
- * machine's file there and the node's own file when the node runs it.
- */
-export function combinePosture(
-  policy: ExecPolicy,
-  files: ReadonlyArray<{ security: Security; ask: Ask }>,
-): {
-  security: Security;
-  ask: Ask;
-  autoReview: boolean;
-  /** The file that raised the ask, or null when none asks more than the policy. */
-  raisedBy: number | null;
-  /** The file that made the security stricter, or null when none is stricter. */
-  narrowedBy: number | null;
-} {
-  let sec = policy.security;
-  let asked = policy.ask;
-  let raisedBy: number | null = null;
-  let narrowedBy: number | null = null;
-  files.forEach((file, index) => {
-    const tighter = stricter(sec, file.security);
-    if (tighter !== sec) narrowedBy = index;
-    sec = tighter;
-    const next = moreAsking(asked, file.ask);
-    if (next !== asked) raisedBy = index;
-    asked = next;
-  });
-  return {
-    security: sec,
-    ask: asked,
-    autoReview: policy.autoReview && asked === policy.ask,
-    raisedBy,
-    narrowedBy,
-  };
-}
-
 /** `device.pair.list`'s paired devices. */
 export function readDevices(
   value: unknown,
@@ -542,7 +453,7 @@ export function readDevices(
   return { devices: all.slice(0, MAX_DEVICES), omitted: Math.max(0, all.length - MAX_DEVICES) };
 }
 
-/** `agents.list`: each bot's configured workspace folder. */
+/** `agents.list`: each bot's workspace folder as the gateway reports it. */
 export function readWorkspaces(value: unknown): Map<string, string> {
   const out = new Map<string, string>();
   for (const agent of list(rec(value).agents)) {
@@ -553,17 +464,9 @@ export function readWorkspaces(value: unknown): Map<string, string> {
   return out;
 }
 
-/** Why a typed workspace path is not accepted, or null. */
-export function workspaceProblem(path: string): string | null {
-  if (path.trim() !== path || path === "")
-    return "Enter a full path, with no spaces at either end.";
-  if (!path.startsWith("/")) return "Enter a full path on the gateway's machine, starting with /.";
-  if (path.length > MAX_PATH_CHARS) return `Enter a path of at most ${MAX_PATH_CHARS} characters.`;
-  if ([...path].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f))
-    return "A path can't hold control characters.";
-  if (path.split("/").includes("..")) return "Enter a path without '..'.";
-  return null;
-}
+/** Whether a whole listing (`node.list` `nodes`, `device.pair.list` `paired`) holds an id, unbounded. */
+const listsId = (rows: unknown, key: "nodeId" | "deviceId", id: string) =>
+  list(rows).some((row) => rec(row)[key] === id);
 
 // The engine ------------------------------------------------------------------------------
 
@@ -623,7 +526,7 @@ export class MachinesEngine {
 
   private async config(): Promise<{ config: RawRecord; hash: string | null; raw: RawRecord }> {
     const raw = rec(await this.ctx.request("config.get", {}));
-    return { config: rec(raw.config), hash: str(raw.hash), raw };
+    return { config: rec(raw.config), hash: str(raw.hash, MAX_REASON_CHARS), raw };
   }
 
   /** Section 14, for one bot. Admin reads are asked only of an admin connection. */
@@ -632,59 +535,61 @@ export class MachinesEngine {
     const { ctx } = this;
     const admin = ctx.admin();
     const latest = ctx.latestTask(botId);
-    const [{ config }, workspaces, nodeList, status, listing, secrets] = await Promise.all([
-      this.config(),
-      ctx.request("agents.list", {}).then(readWorkspaces),
-      ctx.request("node.list", {}).then(readNodes),
-      settle(() => ctx.request("models.authStatus", { agentId: botId })),
-      latest
-        ? ctx.request("tools.effective", { sessionKey: latest }).then(
-            (value) => ({ key: latest, value, readAt: ctx.now() }),
-            () => null,
-          )
-        : Promise.resolve(null),
-      admin
-        ? settle(() => ctx.request("secrets.store.list", {}).then(readSecretNames))
-        : Promise.resolve<Unavailable>({ status: "needs-admin" }),
-    ]);
-    const pluginSignIns = admin
-      ? await settle(() => this.readPluginSignIns(config))
-      : ({ status: "needs-admin" } as const);
+    const [{ config, hash, raw }, workspaces, nodeList, status, listing, secrets] =
+      await Promise.all([
+        this.config(),
+        ctx.request("agents.list", {}).then(readWorkspaces),
+        ctx.request("node.list", {}).then(readNodes),
+        settle(() => ctx.request("models.authStatus", { agentId: botId })),
+        latest
+          ? ctx.request("tools.effective", { sessionKey: latest }).then(
+              (value) => ({ key: latest, value, readAt: ctx.now() }),
+              () => null,
+            )
+          : Promise.resolve(null),
+        admin
+          ? settle(() => ctx.request("secrets.store.list", {}).then(readSecretNames))
+          : Promise.resolve<Unavailable>({ status: "needs-admin" }),
+      ]);
+    const plugins = admin
+      ? await this.readPluginCredentials(config, hash)
+      : { credentials: { status: "needs-admin" } as const, omitted: 0 };
     const { nodes, omitted } = nodeList;
     const bots = ctx.bots().map((bot) => ({ ...bot, workspace: workspaces.get(bot.id) ?? null }));
     const commands = readCommandPlace(config, botId, nodes);
-    const browser = readBrowserPlace(config, botId);
     const workspace = bots.find((bot) => bot.id === botId)?.workspace ?? null;
     const others = bots.filter((bot) => bot.id !== botId);
-    const sharedWith = {
+    const sameSetting = {
       machine:
-        commands.node === null
-          ? []
-          : others
-              .filter(
-                (bot) => readCommandPlace(config, bot.id, nodes).node?.id === commands.node!.id,
-              )
-              .map((bot) => bot.id),
+        commands.host === "node" && commands.nodeSelector !== null
+          ? others
+              .filter((bot) => {
+                const place = readCommandPlace(config, bot.id, nodes);
+                return place.host === "node" && place.nodeSelector === commands.nodeSelector;
+              })
+              .map((bot) => bot.id)
+          : [],
       workspace:
         workspace === null
           ? []
           : others.filter((bot) => bot.workspace === workspace).map((bot) => bot.id),
-      browser:
-        browser.kind !== "shared"
-          ? []
-          : others
-              .filter((bot) => readBrowserPlace(config, bot.id).kind === "shared")
-              .map((bot) => bot.id),
     };
-    const fs = (tools: RawRecord) => rec(tools.fs).workspaceOnly;
-    const workspaceOnly = fs(rec(entryOf(config, botId).tools)) ?? fs(toolsOf(config));
+    const fsOnly = (tools: RawRecord) => rec(tools.fs).workspaceOnly;
+    const ownOnly = fsOnly(rec(entryOf(config, botId).tools));
+    const allOnly = fsOnly(toolsOf(config));
+    const active =
+      typeof raw.appliedConfigHash === "string" && typeof raw.configRevisionHash === "string"
+        ? raw.appliedConfigHash === raw.configRevisionHash
+        : null;
     return {
       botId,
       readAt: ctx.now(),
+      configHash: hash,
+      configActive: active,
       commands,
       workspace: workspace === null ? null : cap(workspace, MAX_PATH_CHARS),
-      browser,
-      sharedWith,
+      browser: readBrowserSettings(config, botId),
+      sameSetting,
       inventory: {
         accounts: isUnavailable(status)
           ? status
@@ -692,36 +597,73 @@ export class MachinesEngine {
         toolServers: readToolServers(config, botId, listing?.value ?? null),
         listing: listing ? { key: listing.key, readAt: listing.readAt } : null,
         secrets,
-        pluginSignIns,
-        workspaceOnly: typeof workspaceOnly === "boolean" ? workspaceOnly : null,
+        pluginCredentials: plugins.credentials,
+        pluginsOmitted: plugins.omitted,
+        workspaceOnly:
+          typeof ownOnly === "boolean"
+            ? { value: ownOnly, set: "bot" }
+            : typeof allOnly === "boolean"
+              ? { value: allOnly, set: "every-bot" }
+              : null,
       },
       nodes,
       nodesOmitted: omitted,
     };
   }
 
-  /** Each enabled plugin's sign-ins by name (`plugins.credentials.inspect {pluginId}`, admin). */
-  private async readPluginSignIns(
+  /**
+   * Each enabled plugin's credential fields (admin): the fields it declares from
+   * `plugins.inspect {pluginId}`, then each one's kind from
+   * `plugins.credentials.inspect {pluginId, path, baseHash}`, which answers one
+   * `credential`. A plugin whose read fails is unavailable, never empty.
+   */
+  private async readPluginCredentials(
     config: RawRecord,
-  ): Promise<Array<{ plugin: string; names: string[] }>> {
+    baseHash: string | null,
+  ): Promise<{ credentials: PluginCredentials[]; omitted: number }> {
     const ids = Object.entries(rec(rec(config.plugins).entries))
       .filter(([, entry]) => rec(entry).enabled !== false)
-      .map(([id]) => id)
-      .slice(0, MAX_INVENTORY);
-    const out: Array<{ plugin: string; names: string[] }> = [];
-    for (const plugin of ids) {
-      const answer = await this.ctx
-        .request("plugins.credentials.inspect", { pluginId: plugin })
-        .catch(() => null);
-      const names = list(rec(answer).credentials ?? rec(answer).entries)
-        .map((entry) =>
-          typeof entry === "string" ? str(entry) : (str(rec(entry).name) ?? str(rec(entry).id)),
-        )
-        .filter((name): name is string => name !== null)
-        .slice(0, MAX_INVENTORY);
-      if (names.length > 0) out.push({ plugin: cap(plugin, MAX_MACHINE_NAME_CHARS), names });
+      .map(([id]) => id);
+    const out: PluginCredentials[] = [];
+    for (const plugin of ids.slice(0, MAX_PLUGINS)) {
+      const name = cap(plugin, MAX_MACHINE_NAME_CHARS);
+      try {
+        if (!baseHash) throw new Error("The gateway reported no configuration hash.");
+        const declared = list(
+          rec(await this.ctx.request("plugins.inspect", { pluginId: plugin })).credentials,
+        ).filter((field) => Array.isArray(rec(field).path));
+        const fields: CredentialField[] = [];
+        for (const field of declared.slice(0, MAX_PLUGIN_FIELDS)) {
+          const answer = rec(
+            await this.ctx.request("plugins.credentials.inspect", {
+              pluginId: plugin,
+              path: rec(field).path,
+              baseHash,
+            }),
+          );
+          const credential = rec(answer.credential);
+          const kind = str(credential.kind, MAX_SEEN_REASON_CHARS);
+          if (!kind) throw new Error("The gateway's answer named no credential.");
+          fields.push({
+            label: str(rec(field).label) ?? "A field",
+            kind,
+            unresolved: credential.unresolved === true,
+          });
+        }
+        out.push({
+          plugin: name,
+          fields,
+          fieldsOmitted: Math.max(0, declared.length - MAX_PLUGIN_FIELDS),
+        });
+      } catch (error) {
+        out.push({
+          plugin: name,
+          fields: { status: "failed", message: errorText(error) },
+          fieldsOmitted: 0,
+        });
+      }
     }
-    return out;
+    return { credentials: out, omitted: Math.max(0, ids.length - MAX_PLUGINS) };
   }
 
   /** Section 15. Approvals files with admin; paired devices with the pairing scope. */
@@ -736,7 +678,7 @@ export class MachinesEngine {
     const bots = ctx.bots();
     const botIds = bots.map((bot) => bot.id);
     const places = new Map(bots.map((bot) => [bot.id, readCommandPlace(config, bot.id, nodes)]));
-    const here = (match: (place: CommandPlace) => boolean) =>
+    const named = (match: (place: CommandPlace) => boolean) =>
       bots.filter((bot) => match(places.get(bot.id)!)).map((bot) => bot.id);
     const needsAdmin = { status: "needs-admin" } as const;
     const gatewayFile = admin
@@ -750,9 +692,7 @@ export class MachinesEngine {
         kind: "gateway",
         name: "The gateway's machine",
         node: null,
-        botsHere: here(
-          (place) => place.host === "gateway" || (place.host === "auto" && !place.sandbox),
-        ),
+        named: named((place) => place.host === "gateway"),
         approvals: gatewayFile,
       },
     ];
@@ -773,7 +713,7 @@ export class MachinesEngine {
         kind: "node",
         name: node.name,
         node,
-        botsHere: here((place) => place.host === "node" && place.node?.id === node.id),
+        named: named((place) => place.host === "node" && place.nodeSelector === node.id),
         approvals,
       });
     }
@@ -789,7 +729,6 @@ export class MachinesEngine {
       nodesOmitted: omitted,
       devices: "status" in deviceList ? deviceList : deviceList.devices,
       devicesOmitted: "status" in deviceList ? 0 : deviceList.omitted,
-      policies: bots.map((bot) => ({ botId: bot.id, policy: readExecPolicy(config, bot.id) })),
     };
   }
 
@@ -813,73 +752,87 @@ export class MachinesEngine {
 
   /**
    * Set where a bot's commands run: `agents.entries.<bot>.tools.exec.host` and
-   * `.node` in one `config.patch` with the config's hash, then read back by
-   * `config.get`. Answers the place read back; throws unless it agrees.
+   * `.node` in one `config.patch` with the revision the page showed
+   * (`baseHash`), then read back by `config.get`. Answers what was stored and
+   * whether the gateway reports it active; throws unless the stored setting agrees.
    */
   async setCommandMachine(
     botId: string,
     target: { host: "gateway" } | { host: "node"; nodeId: string },
-  ): Promise<CommandPlace> {
+    baseHash: string | null,
+  ): Promise<ConfigSave> {
     this.requireWrite("admin", "Changing where a bot runs");
-    const before = await this.config();
     const exec =
       target.host === "node"
         ? { host: "node", node: target.nodeId }
         : { host: "gateway", node: null };
+    let failed: string | null = null;
     try {
       await this.ctx.request("config.patch", {
         raw: JSON.stringify({ agents: { entries: { [botId]: { tools: { exec } } } } }),
-        ...(before.hash ? { baseHash: before.hash } : {}),
+        ...(baseHash ? { baseHash } : {}),
       });
     } catch (error) {
-      throw this.refused("where its commands run", error);
+      // The gateway can persist a change and fail to apply it; it says so with the saved config.
+      if (asRecord(rec(rec(error).details).persistedConfig) === null)
+        throw this.refused("where its commands run", error);
+      failed = errorText(error);
     }
-    const { nodes } = readNodes(await this.ctx.request("node.list", {}));
-    const after = readCommandPlace((await this.waitApplied(before.raw)).config, botId, nodes);
+    const [{ config, raw }, { nodes }] = await Promise.all([
+      this.config(),
+      this.ctx.request("node.list", {}).then(readNodes),
+    ]);
+    const place = readCommandPlace(config, botId, nodes);
     const agrees =
-      after.ownHost === target.host &&
-      (target.host === "node" ? after.ownNode === target.nodeId : after.ownNode === null);
+      place.ownHost === target.host &&
+      (target.host === "node" ? place.ownNode === target.nodeId : place.ownNode === null);
     if (!agrees)
       throw new PlacementWriteError(
-        "The gateway took the change, but reading it back shows another setting. Nothing is shown as saved.",
+        "The gateway answered, but reading it back shows another setting. Nothing is shown as saved.",
       );
-    return after;
+    const active =
+      failed !== null
+        ? "failed"
+        : typeof raw.appliedConfigHash === "string" &&
+            raw.appliedConfigHash === raw.configRevisionHash
+          ? "applied"
+          : "pending";
+    return { place, active, message: failed };
   }
 
-  /** `config.get` until the gateway reports the new revision applied (as the accounts engine waits). */
-  private async waitApplied(before: RawRecord): Promise<{ config: RawRecord }> {
-    const started = this.ctx.now();
-    for (let reads = 0; reads < 100 && this.ctx.now() - started < 20_000; reads += 1) {
-      const now = await this.config();
-      if (before.configRevisionHash === undefined) return now;
-      const revised = now.raw.configRevisionHash !== before.configRevisionHash;
-      if (revised && now.raw.appliedConfigHash === now.raw.configRevisionHash) return now;
-      if (!revised && (this.ctx.now() - started > 3_000 || reads >= 15)) return now;
-      await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
-    }
-    return this.config();
-  }
-
-  /** `agents.update {agentId, workspace}` (admin), then `agents.list` reads it back. */
-  async setWorkspace(botId: string, path: string): Promise<string> {
+  /**
+   * `agents.update {agentId, workspace}` (admin) with the path as typed: the
+   * gateway resolves it on its own machine and refuses what it can't use. Then
+   * `agents.list` reads what it now reports. The method has no base revision,
+   * and the gateway may create the folder and its files before it answers, so a
+   * refusal is reported as an unclear outcome with what the gateway reports now.
+   */
+  async setWorkspace(
+    botId: string,
+    path: string,
+  ): Promise<{ workspace: string | null; asTyped: boolean }> {
     this.requireWrite("admin", "Changing a bot's workspace");
-    const problem = workspaceProblem(path);
-    if (problem) throw new PlacementWriteError(problem);
+    if (path === "") throw new PlacementWriteError("Enter a path.");
+    const reported = async () =>
+      str(
+        rec(
+          list(rec(await this.ctx.request("agents.list", {})).agents).find(
+            (agent) => rec(agent).id === botId,
+          ),
+        ).workspace,
+        MAX_PATH_CHARS,
+      );
     try {
       await this.ctx.request("agents.update", { agentId: botId, workspace: path });
     } catch (error) {
-      throw this.refused("the workspace", error);
-    }
-    const agents = list(rec(await this.ctx.request("agents.list", {})).agents);
-    const read = str(
-      rec(agents.find((agent) => rec(agent).id === botId)).workspace,
-      MAX_PATH_CHARS,
-    );
-    if (read !== path)
+      const now = await reported().catch(() => null);
       throw new PlacementWriteError(
-        `The gateway took the change, but reads the folder back as ${read ?? "none"}. Nothing is shown as saved.`,
+        `The gateway answered: ${errorText(error).replace(/\.$/, "")}. It may have created the folder or files before answering. ` +
+          `It now reports ${now === null ? "no workspace" : `the workspace as ${now}`}.`,
       );
-    return read;
+    }
+    const workspace = await reported();
+    return { workspace, asTyped: workspace === path };
   }
 
   /**
@@ -924,9 +877,13 @@ export class MachinesEngine {
     return after;
   }
 
-  /** `node.rename` (pairing), read back from `node.list`. */
+  // Names and removals. The gateway lets a connection that signs in with its device token
+  // manage another device's record, a node's included, only with admin; with device access
+  // alone, only its own device's record (OpenClaw 2026.10.6, device-management-authz).
+
+  /** `node.rename` (admin: a node is another device), read back from `node.list`. */
   async renameMachine(nodeId: string, name: string): Promise<void> {
-    this.requireWrite("pairing", "Renaming a machine");
+    this.requireWrite("admin", "Renaming a machine");
     const label = name.trim();
     if (label === "" || label.length > MAX_MACHINE_NAME_CHARS)
       throw new PlacementWriteError("Enter a name.");
@@ -942,28 +899,23 @@ export class MachinesEngine {
       );
   }
 
-  /** `node.pair.remove` (pairing), only for a machine not connected; read back from `node.list`. */
+  /** `node.pair.remove` (admin), done when the whole `node.list` read back no longer has the id. */
   async removeMachine(nodeId: string): Promise<void> {
-    this.requireWrite("pairing", "Removing a machine");
-    const { nodes } = readNodes(await this.ctx.request("node.list", {}));
-    const node = nodes.find((each) => each.id === nodeId);
-    if (node?.connected)
-      throw new PlacementWriteError(
-        "This machine is connected. Only a machine not connected is removed.",
-      );
+    this.requireWrite("admin", "Removing a machine");
     try {
       await this.ctx.request("node.pair.remove", { nodeId });
     } catch (error) {
       throw this.refused("the removal", error);
     }
-    const again = readNodes(await this.ctx.request("node.list", {})).nodes;
-    if (again.some((each) => each.id === nodeId))
+    const again = rec(await this.ctx.request("node.list", {}));
+    if (listsId(again.nodes, "nodeId", nodeId))
       throw new PlacementWriteError("The gateway still lists this machine.");
   }
 
-  /** `device.pair.rename` (pairing), read back from `device.pair.list`. */
+  /** `device.pair.rename`: this device's own name with device access, another's with admin. */
   async renameDevice(deviceId: string, name: string): Promise<void> {
-    this.requireWrite("pairing", "Renaming a device");
+    const own = deviceId === this.ctx.deviceId();
+    this.requireWrite(own ? "pairing" : "admin", "Renaming a device");
     const label = name.trim();
     if (label === "" || label.length > MAX_MACHINE_NAME_CHARS)
       throw new PlacementWriteError("Enter a name.");
@@ -972,25 +924,26 @@ export class MachinesEngine {
     } catch (error) {
       throw this.refused("the name", error);
     }
-    const { devices } = readDevices(await this.ctx.request("device.pair.list", {}), null);
-    if (devices.find((device) => device.id === deviceId)?.name !== label)
+    const paired = list(rec(await this.ctx.request("device.pair.list", {})).paired);
+    const row = rec(paired.find((each) => rec(each).deviceId === deviceId));
+    if ((str(row.operatorLabel) ?? str(row.displayName)) !== label)
       throw new PlacementWriteError(
         "The gateway reads back another name. Nothing is shown as saved.",
       );
   }
 
-  /** `device.pair.remove` (pairing), never this device; read back from `device.pair.list`. */
+  /** `device.pair.remove` (admin), never this device; done when the whole listing lacks the id. */
   async removeDevice(deviceId: string): Promise<void> {
-    this.requireWrite("pairing", "Removing a device");
     if (deviceId === this.ctx.deviceId())
       throw new PlacementWriteError("This device can't remove itself here.");
+    this.requireWrite("admin", "Removing a device");
     try {
       await this.ctx.request("device.pair.remove", { deviceId });
     } catch (error) {
       throw this.refused("the removal", error);
     }
-    const { devices } = readDevices(await this.ctx.request("device.pair.list", {}), null);
-    if (devices.some((device) => device.id === deviceId))
+    const again = rec(await this.ctx.request("device.pair.list", {}));
+    if (listsId(again.paired, "deviceId", deviceId))
       throw new PlacementWriteError("The gateway still lists this device.");
   }
 }

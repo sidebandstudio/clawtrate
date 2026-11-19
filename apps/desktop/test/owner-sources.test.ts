@@ -58,9 +58,7 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/machines.ts:NODE_APPROVALS_COMMANDS": "static, two command names",
   "packages/core/src/machines.ts:DEFAULTS_CHOICES":
     "static, the four choices of a machine's defaults",
-  "packages/core/src/machines.ts:HOSTS": "static, the four exec hosts",
-  "packages/core/src/machines.ts:SECURITY_ORDER": "static, three security levels",
-  "packages/core/src/machines.ts:ASK_ORDER": "static, three ask levels",
+  "packages/core/src/machines.ts:KNOWN_HOSTS": "static, the four exec hosts",
   "packages/core/src/machines.ts:readMachines>places":
     "one read's command place per listed bot, at most `MAX_BOTS`, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>missing":

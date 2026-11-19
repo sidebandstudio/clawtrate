@@ -1,9 +1,10 @@
 // Settings, Machines (controls.md section 15): the gateway's machine and each
-// paired machine, as last seen, with the bots configured to run commands
-// there; each machine's approvals file (admin), its defaults as a radio group
-// written with the file's hash and announced only once read back, and the
-// effective result per bot as the gateway combines them; rename and remove
-// (device access); paired devices (device access).
+// paired machine, as last seen, with the bots whose settings name it for
+// commands; each machine's approvals file (admin) as its settings, its
+// defaults as a radio group written with the file's hash and announced only
+// once read back; paired devices (device access). Renaming or removing another
+// machine's or device's record is offered with admin only: the gateway refuses
+// it to a connection signed in with its device token below admin.
 
 import {
   choiceOf,
@@ -20,19 +21,12 @@ import {
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge, useCommand } from "../bridge.tsx";
 import { CopyValue } from "../AccessBar.tsx";
-import { clockTime, stampTime } from "../format.ts";
+import { clockTime } from "../format.ts";
 import { CheckIcon, EyeIcon, WarnIcon } from "../icons.tsx";
 import { AdminBar, CommandBlock, GrantedBar, useGranted } from "../bots/parts.tsx";
 import { Confirm } from "../bots/Dialog.tsx";
 import { Mark } from "./RunsOn.tsx";
-import {
-  CHOICE_WORDS,
-  COMBINE_LINE,
-  effectiveWords,
-  levelsWords,
-  names,
-  nodeState,
-} from "./words.ts";
+import { CHOICE_WORDS, lastSeen, levelsWords, names, nodeState } from "./words.ts";
 import "./machines.css";
 
 type Read =
@@ -62,7 +56,7 @@ function DeviceBar({ connection, info }: { connection: ConnectionState; info: Ho
   if (info.readOnly)
     body = (
       <>
-        <b>Read-only.</b> Managing paired devices needs device access. This connection only reads.
+        <b>Read-only.</b> This connection only reads.
       </>
     );
   else if (status === "requesting") body = "Asking the gateway…";
@@ -99,11 +93,7 @@ function DeviceBar({ connection, info }: { connection: ConnectionState; info: Ho
       </button>
     );
   } else {
-    body = (
-      <>
-        <b>Device access needed.</b> Managing paired devices needs device access.
-      </>
-    );
+    body = <b>Device access needed.</b>;
     action = (
       <button type="button" className="button" data-variant="primary" data-size="sm" onClick={ask}>
         Request access
@@ -354,7 +344,7 @@ export function useMachinesSection({
     <AdminBar
       connection={connection}
       info={info}
-      need="Setting a machine's approvals needs admin access."
+      need="Setting approvals, and renaming or removing another machine or device, needs admin access."
     />
   ) : null;
 
@@ -383,7 +373,6 @@ export function useMachinesSection({
   }
 
   const { view } = read;
-  const gatewayFile = view.machines.find((m) => m.kind === "gateway")?.approvals;
   const setDefaults = async (machine: MachineRow, file: ApprovalsFile, choice: DefaultsChoice) => {
     setErrors((all) => ({ ...all, [machine.id]: "" }));
     try {
@@ -424,16 +413,7 @@ export function useMachinesSection({
       );
     } else {
       const checked = choiceOf(file.defaults);
-      const fallback = checked === null && file.resolved ? choiceOf(file.resolved) : null;
-      const files =
-        machine.kind === "gateway"
-          ? [{ name: "the gateway's machine", file }]
-          : gatewayFile && !("status" in gatewayFile)
-            ? [
-                { name: "the gateway's machine", file: gatewayFile },
-                { name: machine.name, file },
-              ]
-            : null;
+      const unset = file.defaults.security === null && file.defaults.ask === null;
       inner = (
         <>
           <p className="m-subgroup" id={titleId}>
@@ -447,9 +427,11 @@ export function useMachinesSection({
           />
           {checked === null && (
             <p className="b-hint" data-testid="approvals-unset">
-              {fallback
-                ? `Not set in this file. The gateway reports what it uses instead: ${CHOICE_WORDS[fallback]}.`
-                : "Not set in this file, and the machine doesn't report what it uses instead."}
+              {!unset
+                ? `Set in this file to none of these: ${levelsWords(file.defaults)}.`
+                : file.resolved
+                  ? `Not set in this file. The gateway reports the defaults it resolved: ${levelsWords(file.resolved)}.`
+                  : "Not set in this file, and the machine doesn't report the defaults it resolved."}
             </p>
           )}
           {errors[machine.id] ? (
@@ -465,7 +447,7 @@ export function useMachinesSection({
                 <div key={bot.id}>
                   <dt>{bot.name}</dt>
                   <dd className="m-value">
-                    {entry ? levelsWords(entry.levels) : "No entry: the defaults"}
+                    {entry ? levelsWords(entry.levels) : "No entry of its own"}
                     {entry && entry.allowlist > 0 ? ` · ${entry.allowlist} on its allowlist` : ""}
                   </dd>
                 </div>
@@ -477,35 +459,8 @@ export function useMachinesSection({
               {file.entriesOmitted} more entries name agents the gateway doesn't list.
             </p>
           )}
-          {machine.botsHere.length > 0 && (
-            <>
-              <p className="m-subgroup">
-                Effective, for the bots configured for{" "}
-                {machine.kind === "gateway" ? "this machine" : machine.name}
-              </p>
-              <dl className="facts m-facts" data-testid="approvals-effective">
-                {machine.botsHere.map((botId) => {
-                  const policy = view.policies.find((each) => each.botId === botId)?.policy;
-                  return (
-                    <div key={botId}>
-                      <dt>{nameOf(botId)}</dt>
-                      <dd className="m-value">
-                        {policy && files
-                          ? effectiveWords(nameOf(botId), botId, policy, files)
-                          : "Needs the gateway machine's file too, which isn't read."}
-                      </dd>
-                    </div>
-                  );
-                })}
-              </dl>
-            </>
-          )}
           <p className="b-hint">
-            {COMBINE_LINE}
-            {machine.kind === "node"
-              ? ` A command sent to ${machine.name} meets the gateway machine's file at the gateway and ${machine.name}'s own when it runs there.`
-              : ""}{" "}
-            <Mark kind="set" />
+            The file's settings, as stored. <Mark kind="set" />
           </p>
         </>
       );
@@ -525,15 +480,21 @@ export function useMachinesSection({
     );
   };
 
+  const failed = (failure: unknown) => {
+    // Whatever the outcome, the page shows the gateway as it is now.
+    reload();
+    throw failure;
+  };
+
   const nodeActions = (machine: MachineRow) =>
-    machine.kind === "node" && machine.node && pairing ? (
+    machine.kind === "node" && machine.node && admin ? (
       renaming === machine.id ? (
         <Rename
           initial={machine.name}
           label={`New name for ${machine.name}`}
           onCancel={() => setRenaming(null)}
           onSave={async (name) => {
-            await bridge.invoke({ type: "renameMachine", nodeId: machine.id, name });
+            await bridge.invoke({ type: "renameMachine", nodeId: machine.id, name }).catch(failed);
             setRenaming(null);
             announce("Renamed");
             reload();
@@ -549,24 +510,22 @@ export function useMachinesSection({
           >
             Rename
           </button>
-          {!machine.node.connected && (
-            <button
-              type="button"
-              className="button"
-              data-size="sm"
-              data-variant="quiet"
-              onClick={() =>
-                setRemoving({
-                  kind: "machine",
-                  id: machine.id,
-                  name: machine.name,
-                  bots: machine.botsHere,
-                })
-              }
-            >
-              Remove {machine.name}…
-            </button>
-          )}
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            data-variant="quiet"
+            onClick={() =>
+              setRemoving({
+                kind: "machine",
+                id: machine.id,
+                name: machine.name,
+                bots: machine.named,
+              })
+            }
+          >
+            Remove {machine.name}…
+          </button>
         </div>
       )
     ) : null;
@@ -577,25 +536,24 @@ export function useMachinesSection({
       <dt>{device.thisDevice ? "This device" : device.name}</dt>
       <dd className="m-value">
         {device.thisDevice ? `${device.name} · ` : ""}
-        {device.connected
-          ? "Connected"
-          : device.lastSeenAt
-            ? `Last seen ${stampTime(device.lastSeenAt, now)}`
-            : "Last seen: not reported"}
+        {device.connected ? "Connected" : lastSeen(device, now)}
         {renaming === device.id ? (
           <Rename
             initial={device.name}
             label={`New name for ${device.name}`}
             onCancel={() => setRenaming(null)}
             onSave={async (name) => {
-              await bridge.invoke({ type: "renameDevice", deviceId: device.id, name });
+              await bridge
+                .invoke({ type: "renameDevice", deviceId: device.id, name })
+                .catch(failed);
               setRenaming(null);
               announce("Renamed");
               reload();
             }}
           />
         ) : (
-          pairing && (
+          // This device's own name needs device access; another's record needs admin.
+          (device.thisDevice ? pairing : admin) && (
             <span className="b-actions m-row-actions">
               <button
                 type="button"
@@ -635,11 +593,11 @@ export function useMachinesSection({
             <dt>{machine.name}</dt>
             <dd className="m-value">
               {machine.node ? nodeState(machine.node, now) : "Connected"}
-              {machine.node && !machine.node.runsCommands ? " · Doesn't offer to run commands" : ""}
+              {machine.node && !machine.node.listsRun ? " · Lists no system.run command" : ""}
               {" · "}
-              {machine.botsHere.length > 0
-                ? `Bots configured to run commands here: ${names(machine.botsHere.map(nameOf))}`
-                : "No bots configured to run commands here"}
+              {machine.named.length > 0
+                ? `Named for commands in the settings of ${names(machine.named.map(nameOf))}`
+                : "Named for commands in no bot's settings"}
               {nodeActions(machine)}
             </dd>
           </div>
@@ -684,13 +642,11 @@ export function useMachinesSection({
       {removing && (
         <Confirm
           title={`Remove ${removing.name}?`}
-          text={
-            removing.kind === "machine"
-              ? removing.bots.length > 0
-                ? `${names(removing.bots.map(nameOf))} ${removing.bots.length === 1 ? "is" : "are"} set to run commands on ${removing.name}. The gateway refuses those commands until another machine is chosen.`
-                : `${removing.name} is unpaired from the gateway. It pairs again only with its owner's approval.`
-              : `${removing.name} loses its pairing and connects again only with the owner's approval.`
-          }
+          text={`Asks the gateway to remove ${removing.name}'s pairing.${
+            removing.bots.length > 0
+              ? ` It is named for commands in the settings of ${names(removing.bots.map(nameOf))}.`
+              : ""
+          }`}
           action="Remove"
           busy={busy}
           onCancel={() => setRemoving(null)}
@@ -714,6 +670,7 @@ export function useMachinesSection({
                   ...all,
                   remove: failure instanceof Error ? failure.message : String(failure),
                 }));
+                reload();
               },
             );
           }}
