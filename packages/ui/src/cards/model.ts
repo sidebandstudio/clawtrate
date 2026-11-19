@@ -378,7 +378,14 @@ export function resolvedView(
         winner,
       };
     case "denied":
-      return { tag: "Denied", tone: null, sentence: `Denied${by}${when}.`, then, saved: null, winner };
+      return {
+        tag: "Denied",
+        tone: null,
+        sentence: `Denied${by}${when}.`,
+        then,
+        saved: null,
+        winner,
+      };
     case "expired":
       if (card.inferred) {
         const deadline = card.expiresAt ?? at;

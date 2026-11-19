@@ -26,6 +26,7 @@ describe("F-057 F-295: task names and the bot's failure line", () => {
     // Opened since: the line goes.
     expect(failureWords([failing], { a: 30 }, null)).toBeNull();
     // A task with no count of its own gets no invented one.
-    expect(failureWords([{ ...failing, failedActions: undefined }], {}, null)).toBeNull();
+    const { failedActions: _, ...uncounted } = failing;
+    expect(failureWords([uncounted], {}, null)).toBeNull();
   });
 });
