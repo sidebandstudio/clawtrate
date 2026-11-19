@@ -546,6 +546,11 @@ function RunView({
               <ClockIcon /> Scheduled message, as the gateway recorded it
             </div>
             <p>{read.value.message}</p>
+            {read.value.messageCut && (
+              <p className="r-hint" data-testid="scheduled-message-cut">
+                The rest of this message is longer than Clawtrate shows.
+              </p>
+            )}
           </div>
           {read.value.items.map((item) =>
             item.blocks.map((block, index) =>

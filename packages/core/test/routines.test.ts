@@ -10,6 +10,7 @@ import {
   MAX_CALENDAR_RUNS,
   MAX_ROUTINE_RUNS,
   MAX_ROUTINES,
+  MAX_RUN_MESSAGE_CHARS,
   parseRoutine,
   RETRY_MS,
   RoutinesEngine,
@@ -613,6 +614,24 @@ describe("F-193: a run's conversation", () => {
     expect(conversation.status === "kept" && conversation.items[0]!.blocks).toEqual([
       { kind: "text", text: "Three notes from yesterday." },
     ]);
+  });
+
+  it("returns a long recorded instruction with the gateway's footer whole, and says when one is cut", async () => {
+    const footer =
+      "\n\nThis is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have.";
+    const long = `${"a".repeat(4_096)}${footer}`;
+    const { routines } = engine({ "cron.history": () => recorded(long) });
+    expect(await routines.conversation(JOB, RUN)).toMatchObject({
+      status: "kept",
+      message: long,
+      messageCut: false,
+    });
+    const huge = engine({
+      "cron.history": () => recorded("b".repeat(MAX_RUN_MESSAGE_CHARS + 10)),
+    });
+    const cut = await huge.routines.conversation(JOB, RUN);
+    expect(cut).toMatchObject({ status: "kept", messageCut: true });
+    expect(cut.status === "kept" && cut.message.length).toBeLessThanOrEqual(MAX_RUN_MESSAGE_CHARS);
   });
 
   it("is not kept without positive evidence: another run's session, no scheduler row, or a refusal", async () => {

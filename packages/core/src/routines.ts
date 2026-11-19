@@ -19,6 +19,12 @@ export const MAX_ROUTINE_TEXT_CHARS = 4_096;
 export const MAX_ROUTINE_RUNS = 20;
 /** Past runs across routines read for the calendar's dates; past it the read says it is partial. */
 export const MAX_CALENDAR_RUNS = 1_000;
+/**
+ * The scheduler's message recorded with a run, as sent to a viewer: the
+ * instruction (up to `MAX_ROUTINE_TEXT_CHARS`) plus the gateway's own footer,
+ * with room to spare. Past it the message is cut and the run says so.
+ */
+export const MAX_RUN_MESSAGE_CHARS = 16_384;
 /** A run's conversation sent to a viewer, in JSON characters; later items are counted, not sent. */
 export const MAX_RUN_CONVERSATION_CHARS = 160_000;
 /** A run's summary or error as shown. */
@@ -129,8 +135,10 @@ export type RoutineRun = {
 export type RunConversation =
   | {
       status: "kept";
-      /** The scheduler's message as recorded with this run, whole: never the routine's current instruction. */
+      /** The scheduler's message as recorded with this run, never the routine's current instruction. */
       message: string;
+      /** The message was longer than `MAX_RUN_MESSAGE_CHARS` and is cut. */
+      messageCut: boolean;
       items: TranscriptItem[];
       omitted: number;
     }
@@ -281,7 +289,13 @@ export function parseRunConversation(
       size += each;
     }
   }
-  return { status: "kept", message: cutText(content, MAX_ROUTINE_TEXT_CHARS), items, omitted };
+  return {
+    status: "kept",
+    message: cutText(content, MAX_RUN_MESSAGE_CHARS),
+    messageCut: content.length > MAX_RUN_MESSAGE_CHARS,
+    items,
+    omitted,
+  };
 }
 
 /**
