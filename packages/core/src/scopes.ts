@@ -6,6 +6,8 @@ export const WRITE_SCOPE = "operator.write";
 export const APPROVALS_SCOPE = "operator.approvals";
 export const QUESTIONS_SCOPE = "operator.questions";
 export const ADMIN_SCOPE = "operator.admin";
+/** Paired devices and machines: listing, renaming, removing (`device.pair.*`, `node.rename`, `node.pair.remove`). */
+export const PAIRING_SCOPE = "operator.pairing";
 
 /** Tier one: a read-only connection. Every connect asks for this until the user acts. */
 export const READ_SCOPES: readonly string[] = [READ_SCOPE];
@@ -37,10 +39,11 @@ export const ADMIN_SCOPES: readonly string[] = [...INTERACTIVE_SCOPES, ADMIN_SCO
  */
 export const APPROVALS_TIER_SCOPES: readonly string[] = [READ_SCOPE, APPROVALS_SCOPE];
 
-/** What one access request asks for. */
-export type AccessTier = "approvals" | "interactive" | "admin";
-/** Each tier includes the ones below it, so a request is never narrowed by a later one. */
-export const ACCESS_RANK: Record<AccessTier, number> = { approvals: 1, interactive: 2, admin: 3 };
+/**
+ * What one access request asks for: the interactive tier, admin with it, or
+ * device access or approvals by name, added to what the connection holds.
+ */
+export type AccessTier = "interactive" | "admin" | "pairing" | "approvals";
 
 const IMPLIED_BY_WRITE = new Set([
   READ_SCOPE,

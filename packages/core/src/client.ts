@@ -17,6 +17,14 @@ import { isRefusedDecision } from "./approval-refusals.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
 import {
+  MachinesEngine,
+  type ApprovalsFile,
+  type BotPlacement,
+  type ConfigSave,
+  type DefaultsChoice,
+  type MachinesView,
+} from "./machines.ts";
+import {
   admitApproval,
   applyApprovalRequested,
   applyApprovalResolved,
@@ -163,10 +171,9 @@ import {
   APPROVALS_SCOPE,
   ADMIN_SCOPE,
   ADMIN_SCOPES,
+  PAIRING_SCOPE,
   heldFromGrant,
   INTERACTIVE_SCOPES,
-  ACCESS_RANK,
-  APPROVALS_TIER_SCOPES,
   type AccessTier,
   normalizeHeldScopes,
   QUESTIONS_SCOPE,
@@ -225,6 +232,13 @@ import {
   type SidebarPrefs,
   type SidebarState,
 } from "./sidebar.ts";
+import {
+  UsageEngine,
+  type UsageBusy,
+  type UsageReport,
+  type UsageReportRequest,
+} from "./usage-engine.ts";
+import { initialUsage, type BudgetChange, type Routine } from "./usage.ts";
 import {
   archiveTask,
   deleteTask,
@@ -483,6 +497,8 @@ type StoredDeviceToken = {
   heldScopes: string[];
   /** This client asked for admin itself and the gateway granted it: connect asks for it again. */
   adminHeld?: boolean;
+  /** The same for device access (`operator.pairing`), asked for by name. */
+  pairingHeld?: boolean;
 };
 
 type Waiter = {
@@ -749,8 +765,17 @@ export class ClawtrateClient {
   private quietReconnect = false;
   /** The user asked for write access and it is not settled yet. */
   private upgradeWanted = false;
-  /** What the request under way asks for: approvals alone, the interactive tier, or admin with it. */
-  private upgradeTier: AccessTier = "interactive";
+  /**
+   * What the request under way asks for: the interactive tier, admin with it, or
+   * (`held`) the scopes the connection held when device access was asked for.
+   */
+  private upgradeTier: "interactive" | "admin" | "held" = "interactive";
+  /** The scopes a `held` request keeps, as the connection held them when it was made. */
+  private heldBase: readonly string[] = [];
+  /** The access request under way also asks for device access (`operator.pairing`). */
+  private pairingWanted = false;
+  /** The access request under way also asks for approvals (`operator.approvals`) by name. */
+  private approvalsWanted = false;
   private scopeUpgrade: GatewayScopeUpgrade | null = null;
   private accessWaiters: Waiter[] = [];
   /** The frame and image ceilings from `hello-ok.policy`; nothing else of it is kept. */
@@ -837,6 +862,39 @@ export class ClawtrateClient {
     now: () => this.now(),
     randomId: () => this.randomId(),
     log: (message) => this.log("warn", message),
+  });
+  /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
+  private readonly usage = new UsageEngine({
+    request: (method, params) => this.request(method, params),
+    get: () => this.state.usage ?? initialUsage,
+    update: (change) =>
+      this.store.update((state) => ({ ...state, usage: change(state.usage ?? initialUsage) })),
+    connected: () => this.state.connection.status === "connected",
+    now: () => this.now(),
+    log: (message) => this.log("warn", message),
+  });
+  /**
+   * Where a bot runs and the gateway's machines (`machines.ts`): read when a page
+   * asks and answered, never kept; writes read back before they answer.
+   */
+  private readonly machines = new MachinesEngine({
+    request: (method, params) => this.request(method, params),
+    connected: () => this.state.connection.status === "connected",
+    admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
+    pairing: () => this.holds(PAIRING_SCOPE),
+    readOnly: () => this.options.readOnly === true,
+    bots: () => this.state.bots.map((bot) => ({ id: bot.id, name: bot.name })),
+    latestTask: (botId) => {
+      const tasks = this.state.tasksByBot[botId] ?? [];
+      let latest: { key: string; at: number } | null = null;
+      for (const task of tasks) {
+        const at = task.updatedAt ?? 0;
+        if (!latest || at > latest.at) latest = { key: task.key, at };
+      }
+      return latest?.key ?? null;
+    },
+    deviceId: () => this.state.connection.deviceId,
+    now: () => this.now(),
   });
   /**
    * Task lists being read, each its rows so far, already bounded: at most two,
@@ -1082,30 +1140,65 @@ export class ClawtrateClient {
   async requestAccess(tier: AccessTier = "interactive"): Promise<void> {
     if (this.options.readOnly)
       throw new Error("This host only reads; it does not ask for more access.");
-    // A request is never narrowed by a later one for less: admin includes the
-    // interactive tier, which includes approvals.
+    // A request for admin is never narrowed by a later one for less. Device access
+    // (`operator.pairing`) and approvals (`operator.approvals`) are asked for only by name,
+    // added to the scopes the connection holds and nothing else: from a read connection
+    // neither asks for the power to send or answer.
+    const pairing = tier === "pairing" || (this.upgradeWanted && this.pairingWanted);
+    const approvals = tier === "approvals" || (this.upgradeWanted && this.approvalsWanted);
+    const waiting = this.upgradeWanted ? this.upgradeTier : null;
     const wanted =
-      this.upgradeWanted && ACCESS_RANK[this.upgradeTier] > ACCESS_RANK[tier]
-        ? this.upgradeTier
-        : tier;
-    if (this.tierScopes(wanted).every((scope) => this.holds(scope))) return;
+      tier === "admin" || waiting === "admin"
+        ? "admin"
+        : tier === "interactive" || waiting === "interactive"
+          ? "interactive"
+          : "held";
+    if (wanted === "held" && waiting !== "held")
+      this.heldBase = ADMIN_SCOPES.filter((scope) => this.state.connection.scopes.includes(scope));
+    const target = this.targetOf(wanted, approvals, pairing);
+    if (target.every((scope) => this.holdsExactly(scope))) return;
     if (!this.settings) throw new Error("Connect to a gateway first.");
-    if (this.scopeUpgrade && this.upgradeTier !== wanted) {
-      // A request for less is waiting; ask again, for this with it.
+    if (
+      this.scopeUpgrade &&
+      (wanted !== this.upgradeTier ||
+        (pairing && !this.pairingWanted) ||
+        (approvals && !this.approvalsWanted))
+    ) {
+      // A narrower request is waiting; ask again, for this with it.
       this.scopeUpgrade.cancelScopeUpgrade();
       this.scopeUpgrade = null;
     }
     this.upgradeTier = wanted;
+    this.pairingWanted = pairing;
+    this.approvalsWanted = approvals;
     this.upgradeWanted = true;
     if (this.state.connection.status === "connected") this.startUpgrade();
   }
 
-  private tierScopes(tier: AccessTier): readonly string[] {
-    return tier === "admin"
-      ? ADMIN_SCOPES
-      : tier === "approvals"
-        ? APPROVALS_TIER_SCOPES
-        : INTERACTIVE_SCOPES;
+  private tierScopes(tier: "interactive" | "admin" | "held"): readonly string[] {
+    return tier === "admin" ? ADMIN_SCOPES : tier === "held" ? this.heldBase : INTERACTIVE_SCOPES;
+  }
+
+  /** A tier's scopes, with approvals and device access when asked for by name. */
+  private targetOf(tier: "interactive" | "admin" | "held", approvals: boolean, pairing: boolean) {
+    const scopes = [...this.tierScopes(tier)];
+    if (approvals && !scopes.includes(APPROVALS_SCOPE)) scopes.push(APPROVALS_SCOPE);
+    if (pairing) scopes.push(PAIRING_SCOPE);
+    return scopes;
+  }
+
+  /** What an access request asks for: its tier, approvals and device access when asked for or held. */
+  private upgradeTarget(): string[] {
+    const keepPairing = this.pairingWanted || this.state.connection.scopes.includes(PAIRING_SCOPE);
+    return this.targetOf(this.upgradeTier, this.approvalsWanted, keepPairing);
+  }
+
+  /** Device access counts only when granted by name: admin implies it, but was not asked for it. */
+  private holdsExactly(scope: string): boolean {
+    return scope === PAIRING_SCOPE
+      ? this.state.connection.status === "connected" &&
+          this.state.connection.scopes.includes(PAIRING_SCOPE)
+      : this.holds(scope);
   }
 
   private holds(scope: string): boolean {
@@ -1128,7 +1221,9 @@ export class ClawtrateClient {
     if (this.scopeUpgrade || !protocol || !identity || !url || !auth || auth.url !== url) return;
     const generation = this.generation;
     const tier = this.upgradeTier;
-    const target = [...this.tierScopes(tier)];
+    const target = this.upgradeTarget();
+    const askedPairing = target.includes(PAIRING_SCOPE);
+    const askedApprovals = target.includes(APPROVALS_SCOPE);
     const upgrade = new GatewayScopeUpgrade({
       request: (method, params, options) => protocol.request(method, params, options),
       tokenStore: {
@@ -1137,15 +1232,25 @@ export class ClawtrateClient {
         // The rotated token carries the new grant; from now on connect asks for exactly what it covers.
         // It belongs to this gateway and this connection only.
         store: async ({ deviceId, role, token, scopes }) => {
-          if (generation !== this.generation || this.settings?.url !== url) {
+          if (
+            generation !== this.generation ||
+            this.settings?.url !== url ||
+            this.scopeUpgrade !== upgrade
+          ) {
             throw new Error("The gateway changed while access was being approved.");
           }
-          const admin = tier === "admin" && scopeSatisfied(scopes, ADMIN_SCOPE);
+          const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(scopes, ADMIN_SCOPE);
+          const pairing = askedPairing && scopes.includes(PAIRING_SCOPE);
           await this.writeToken(url, deviceId, role, {
             token,
             grantedScopes: scopes,
-            heldScopes: [...heldFromGrant(scopes), ...(admin ? [ADMIN_SCOPE] : [])],
+            heldScopes: [
+              ...heldFromGrant(scopes),
+              ...(admin ? [ADMIN_SCOPE] : []),
+              ...(pairing ? [PAIRING_SCOPE] : []),
+            ],
             ...(admin ? { adminHeld: true } : {}),
+            ...(pairing ? { pairingHeld: true } : {}),
           });
         },
       },
@@ -1180,11 +1285,15 @@ export class ClawtrateClient {
       })
       .then(
         (outcome) => {
-          if (this.scopeUpgrade === upgrade) this.scopeUpgrade = null;
+          if (this.scopeUpgrade !== upgrade) return;
+          this.scopeUpgrade = null;
           if (outcome.status === "approved") {
-            const needed =
-              tier === "admin" ? ADMIN_SCOPE : tier === "approvals" ? APPROVALS_SCOPE : WRITE_SCOPE;
-            if (!scopeSatisfied(outcome.scopes, needed)) {
+            if (
+              (tier !== "held" &&
+                !scopeSatisfied(outcome.scopes, tier === "admin" ? ADMIN_SCOPE : WRITE_SCOPE)) ||
+              (askedApprovals && !scopeSatisfied(outcome.scopes, APPROVALS_SCOPE)) ||
+              (askedPairing && !outcome.scopes.includes(PAIRING_SCOPE))
+            ) {
               this.failAccess(
                 new AccessRequestError(
                   "error",
@@ -1195,13 +1304,16 @@ export class ClawtrateClient {
             }
             // Settled. The reconnect is under way; its hello settles the waiters.
             this.upgradeWanted = false;
+            this.pairingWanted = false;
+            this.approvalsWanted = false;
             this.setUpgrade({ status: "approved", error: null });
             return;
           }
           this.failAccess(new AccessRequestError(outcome.status));
         },
         (error: unknown) => {
-          if (this.scopeUpgrade === upgrade) this.scopeUpgrade = null;
+          if (this.scopeUpgrade !== upgrade) return;
+          this.scopeUpgrade = null;
           if (!this.upgradeWanted) return;
           if (!(error instanceof GatewayProtocolRequestError) && !this.protocol?.connected) {
             // The connection dropped while waiting. Ask again after the next hello.
@@ -1214,6 +1326,8 @@ export class ClawtrateClient {
 
   private failAccess(error: AccessRequestError): void {
     this.upgradeWanted = false;
+    this.pairingWanted = false;
+    this.approvalsWanted = false;
     this.setUpgrade({ status: error.status, error: error.message });
     const waiters = this.accessWaiters;
     this.accessWaiters = [];
@@ -1224,6 +1338,8 @@ export class ClawtrateClient {
     this.scopeUpgrade?.cancelScopeUpgrade();
     this.scopeUpgrade = null;
     this.upgradeWanted = false;
+    this.pairingWanted = false;
+    this.approvalsWanted = false;
     const waiters = this.accessWaiters;
     this.accessWaiters = [];
     for (const waiter of waiters) waiter.reject(new Error(reason));
@@ -3537,6 +3653,62 @@ export class ClawtrateClient {
     return this.accounts.removeFallbacks(botId);
   }
 
+  // Where a bot runs and Machines (`machines.ts`; controls.md sections 14 and 15) ----------
+
+  /** A bot's command machine, workspace, browser and inventory, read now. */
+  readPlacement(botId: string): Promise<BotPlacement> {
+    return this.machines.readPlacement(botId);
+  }
+
+  /** The gateway's machines, their approvals files (admin) and paired devices (pairing), read now. */
+  readMachines(): Promise<MachinesView> {
+    return this.machines.readMachines();
+  }
+
+  setCommandMachine(
+    botId: string,
+    target: { host: "gateway" } | { host: "node"; nodeId: string },
+    baseHash: string | null,
+  ): Promise<ConfigSave> {
+    return this.machines.setCommandMachine(botId, target, baseHash);
+  }
+
+  async setBotWorkspace(
+    botId: string,
+    path: string,
+  ): Promise<{ workspace: string | null; asTyped: boolean }> {
+    // The bot list carries no workspace: nothing else is read, so no late list can replace a newer one.
+    return this.machines.setWorkspace(botId, path);
+  }
+
+  /** `owner` names the viewer that asked: once it is withdrawn, the write read first is not sent. */
+  setMachineDefaults(
+    machineId: string,
+    choice: DefaultsChoice,
+    expectedHash: string | null,
+    options: { owner?: object } = {},
+  ): Promise<ApprovalsFile> {
+    return this.machines.setMachineDefaults(machineId, choice, expectedHash, () =>
+      this.checkNotWithdrawn(options.owner),
+    );
+  }
+
+  renameMachine(nodeId: string, name: string): Promise<void> {
+    return this.machines.renameMachine(nodeId, name);
+  }
+
+  removeMachine(nodeId: string): Promise<void> {
+    return this.machines.removeMachine(nodeId);
+  }
+
+  renameDevice(deviceId: string, name: string, options: { owner?: object } = {}): Promise<void> {
+    return this.machines.renameDevice(deviceId, name, () => this.checkNotWithdrawn(options.owner));
+  }
+
+  removeDevice(deviceId: string): Promise<void> {
+    return this.machines.removeDevice(deviceId);
+  }
+
   /** Read the bot list again, after a bot was created. */
   private async refreshBots(): Promise<void> {
     const generation = this.generation;
@@ -4130,6 +4302,7 @@ export class ClawtrateClient {
         if (generation !== this.generation) return;
         this.streams.clear();
         this.accounts.onClose();
+        this.usage.onClose();
         const status = this.state.connection.status;
         if (status !== "pairing" && status !== "error") {
           // Once this gateway has answered, every later drop is a reconnect, not a first connect.
@@ -4194,6 +4367,7 @@ export class ClawtrateClient {
   /** What one gateway reported that must never be read against another. */
   private forgetGatewayState(): void {
     this.accounts.reset();
+    this.store.update((state) => ({ ...state, usage: initialUsage }));
     // A creation belongs to the gateway it was asked of; it is never asked of another.
     for (const timer of this.creationTimers.values()) clearTimeout(timer);
     this.creationTimers.clear();
@@ -4220,6 +4394,7 @@ export class ClawtrateClient {
   private close(): void {
     this.generation += 1;
     this.accounts.onClose();
+    this.usage.onClose();
     this.protocol?.stop();
     this.protocol = null;
     this.streams.clear();
@@ -4364,9 +4539,18 @@ export class ClawtrateClient {
       connectedAt: this.now(),
       paired: true,
     });
-    if (this.tierScopes(this.upgradeTier).every((scope) => scopeSatisfied(scopes, scope))) {
+    // Device access asked for before this hello asks with what this connection holds, and no more.
+    if (this.upgradeWanted && this.upgradeTier === "held" && !this.scopeUpgrade)
+      this.heldBase = ADMIN_SCOPES.filter((scope) => scopes.includes(scope));
+    if (
+      this.tierScopes(this.upgradeTier).every((scope) => scopeSatisfied(scopes, scope)) &&
+      (!this.pairingWanted || scopes.includes(PAIRING_SCOPE)) &&
+      (!this.approvalsWanted || scopeSatisfied(scopes, APPROVALS_SCOPE))
+    ) {
       this.upgradeWanted = false;
       this.upgradeTier = "interactive";
+      this.pairingWanted = false;
+      this.approvalsWanted = false;
     } else if (this.upgradeWanted) {
       this.startUpgrade();
     }
@@ -4378,7 +4562,10 @@ export class ClawtrateClient {
     this.pendingResync = null;
     this.quietReconnect = false;
     void this.bootstrap(generation, reason).then(() => {
-      if (generation === this.generation) this.accounts.onHello();
+      if (generation === this.generation) {
+        this.accounts.onHello();
+        this.usage.onHello();
+      }
     });
   }
 
@@ -4884,6 +5071,10 @@ export class ClawtrateClient {
     const runId = typeof payload?.runId === "string" ? payload.runId : null;
     if (!payload || !key || !runId) return;
     this.noteSpawnedBy(payload);
+    if (payload.state === "final" || payload.state === "error" || payload.state === "aborted") {
+      const botId = botIdFromSessionKey(key);
+      if (botId) this.usage.onRunEnded(botId);
+    }
     if (!this.tracked(key)) {
       this.updateForeign(key, (activity, ctx) => applyChatEvent(activity, payload, null, ctx));
       return;
@@ -4964,6 +5155,7 @@ export class ClawtrateClient {
         const keys = asRecord(event.payload)?.keys;
         if (Array.isArray(keys) && keys.includes(SIDEBAR_PREF_KEY))
           void this.loadSidebar(this.generation);
+        this.usage.onPrefsChanged(keys);
         return;
       }
       case "question.requested": {
@@ -5265,6 +5457,41 @@ export class ClawtrateClient {
     if (generation === this.generation) this.setSidebar(next, issued);
   }
 
+  // Usage and warning budgets (`usage.ts`, `usage-engine.ts`; controls.md sections 16, 17) ------
+
+  /** A page's usage figures, read now and not kept; `busy` while the host reads as many as it reads at once. */
+  readUsage(request: Omit<UsageReportRequest, "bots">): Promise<UsageReport | UsageBusy> {
+    if (this.state.connection.status !== "connected")
+      return Promise.reject(new Error("Not connected to the gateway."));
+    return this.usage.readReport({ ...request, bots: this.state.bots.map((bot) => bot.id) });
+  }
+
+  /** Set or remove a warning budget, kept with the gateway as this person's preference. */
+  async changeBudget(change: BudgetChange, options: { owner?: object } = {}): Promise<void> {
+    if (this.options.readOnly) throw new Error("This host only reads; it does not change budgets.");
+    const owner = options.owner ?? null;
+    const url = this.settings?.url;
+    await this.actionContext(owner).ensureWrite();
+    // A grant of write access reconnects to the same gateway, so the write is bound to the
+    // connection that holds it now. A switch to another gateway is never written to.
+    if (this.settings?.url !== url) throw new Error("Switched to another gateway.");
+    // Every request of the write is the viewer's: none is sent once that viewer has gone.
+    await this.usage.changeBudget(change, this.actionContext(owner).request);
+  }
+
+  /** The routines a budget can be set for, read now and not kept. */
+  listRoutines(): Promise<Routine[]> {
+    if (this.state.connection.status !== "connected")
+      return Promise.reject(new Error("Not connected to the gateway."));
+    return this.usage.listRoutines();
+  }
+
+  /** Count every budget, and read the providers' limits, again now. */
+  async refreshUsage(): Promise<void> {
+    if (this.state.connection.status !== "connected") return;
+    await Promise.all([this.usage.countBudgets(), this.usage.refreshLimits()]);
+  }
+
   /**
    * Show an arrangement unless a newer one is shown: answers are ordered by the revision the
    * gateway holds with the arrangement (`SidebarPrefs.rev`), never by when they arrive, so a
@@ -5374,8 +5601,10 @@ export class ClawtrateClient {
       heldScopes: [
         ...normalizeHeldScopes(parsed.heldScopes),
         ...(parsed.adminHeld === true ? [ADMIN_SCOPE] : []),
+        ...(parsed.pairingHeld === true ? [PAIRING_SCOPE] : []),
       ],
       ...(parsed.adminHeld === true ? { adminHeld: true } : {}),
+      ...(parsed.pairingHeld === true ? { pairingHeld: true } : {}),
     };
   }
 
@@ -5424,6 +5653,7 @@ export class ClawtrateClient {
           grantedScopes: scopes,
           heldScopes: existing?.heldScopes ?? [...READ_SCOPES],
           ...(existing?.adminHeld ? { adminHeld: true } : {}),
+          ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
         });
       },
       clear: async ({ deviceId, role }) => {

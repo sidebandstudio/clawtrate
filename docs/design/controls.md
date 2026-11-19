@@ -599,11 +599,11 @@ Usage is the gateway's own numbers with their source and age, every time a figur
 **A bot's Usage page**, top to bottom:
 
 1. **The budget**, first, when there is one: its meter, its period ("today" for Daily, "this week" for Weekly), its mark, "Shown only", and its state (section 17). Without one, "Set a budget".
-2. **Period**: Today, This week, 30 days. A week starts Monday 00:00 in this person's time zone. The budget and the figures below use the same records and the same period, so the week's total and the budget's count are the same number.
+2. **Period**: Today, This week, 30 days. A week starts Monday 00:00 in this person's time zone. The report names its selected days and device time zone. The budget names its own days and saved time zone.
 3. **Tokens**: Input, Output, Cache read, Cache write, Total, each in full; "From the gateway's usage records for Otto, as of 5:41 PM."
 4. **Cost**: "About $3.29", and under it "The gateway's estimate from its configured prices, in US dollars, as of 5:41 PM.". "Partial: 2 runs have no price configured." when some are missing. A balance a provider reports is shown as that provider's own figure with its time. Clawtrate never computes a cost.
 5. **By source** (F-131, F-237): "Your messages", "Routines" (runs whose task is a routine's), "Messages from other bots" (runs a send's result names), "Not attributed". A recipient task's whole total is never charged to one message.
-6. **By task**, and **Context** for the open task ("41,200 of 128,000 tokens"; "What fills it isn't reported: the gateway counts input, output and cache, not history, memory or tools apart." F-233).
+6. **By task**, and **Context** for the open task. "41,200 tokens in the latest prompt, of the model's 128,000." The gateway uses the reported prompt token count. Its fallbacks are input plus cache tokens, or total tokens less the reply's output. "Breakdown unavailable" (F-233).
 
 **Settings, Usage**: provider limits as the gateway reports them, each with its time ("OpenAI · Weekly · 62% used · resets Nov 20 · as of 5:40 PM"; "No limits reported" for one that reports none) (F-235); usage by bot, and by source; budgets.
 
@@ -811,7 +811,7 @@ The other rows of this design's packages are unchanged, and each is checked by t
 - The rules plugin's last read on this device, with its time and version, for the not-enforced note; the hold's one `config.patch` when admin chooses it, the entries it added and the hash it produced, and its exact reversal (section 2).
 - Activity's joins by run id and hashed call id, labelled Recorded or Inferred; nothing else is joined.
 - Memory files with their hashes; sizes against the budgets read from `config.get`; searchability only from a returned revision.
-- Usage per period from one source, so the budget and the totals agree.
+- Usage and budget counts, each with its own days and time zone.
 
 ### Order
 

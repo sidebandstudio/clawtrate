@@ -17,6 +17,7 @@ import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
+import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
 import "./bots/bots.css";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
@@ -129,6 +130,15 @@ export function Shell({
     setWorkTabState(next);
     writePreference("workTab", next);
   }, []);
+  // "Raise budget" above the composer opens the bot's Usage page in the Settings tab.
+  useEffect(
+    () =>
+      setUsageOpener(() => {
+        setPanel(true);
+        setWorkTab("settings");
+      }),
+    [setPanel, setWorkTab],
+  );
   // "Open file" on a step, the file the reader shows, and the way back after "Show in chat".
   const [fileRequest, setFileRequest] = useState<FileRequest | null>(null);
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
