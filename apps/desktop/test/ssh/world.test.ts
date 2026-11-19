@@ -155,9 +155,13 @@ describe("the guard", () => {
       LD_PRELOAD: "/srv/x.so",
       PATH: "/srv/bin",
     };
-    expect(childEnv({ ...world, agent: { socket: "/srv/agent.sock" }, env: busy })).toEqual({
-      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-    });
+    // macOS and Linux, whatever system runs the test; Windows below.
+    for (const platform of ["linux", "darwin"] as const) {
+      expect(
+        childEnv({ ...world, platform, agent: { socket: "/srv/agent.sock" }, env: busy }),
+        platform,
+      ).toEqual({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin" });
+    }
     expect(
       childEnv({
         ...world,
