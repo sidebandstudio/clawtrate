@@ -65,6 +65,14 @@ export function BudgetForm({
   useEffect(() => {
     field.current?.focus();
   }, []);
+  // A form another one has replaced while it saved closes nothing when its save ends.
+  const shown = useRef(true);
+  useEffect(() => {
+    shown.current = true;
+    return () => {
+      shown.current = false;
+    };
+  }, []);
   const tokens = budgetTokens(value);
   const zone = existing?.timeZone ?? deviceTimeZone();
   const invalid = typeof tokens === "string";
@@ -79,8 +87,9 @@ export function BudgetForm({
         change: { op: "set", budget: budgetInput(target, existing, period, tokens) },
       });
       announce("Budget saved");
-      onDone(true);
+      if (shown.current) onDone(true);
     } catch (error) {
+      if (!shown.current) return;
       const said = budgetFailure("set", error instanceof Error ? error.message : String(error));
       setFailure(said);
       announce(said.startsWith(BUDGET_UNCONFIRMED) ? "Couldn't confirm" : "Couldn't save");
@@ -93,8 +102,9 @@ export function BudgetForm({
     try {
       await bridge.invoke({ type: "changeBudget", change: { op: "remove", id: existing.id } });
       announce("Budget removed");
-      onDone(true);
+      if (shown.current) onDone(true);
     } catch (error) {
+      if (!shown.current) return;
       const said = budgetFailure("remove", error instanceof Error ? error.message : String(error));
       setFailure(said);
       announce(said.startsWith(BUDGET_UNCONFIRMED) ? "Couldn't confirm" : "Couldn't remove");

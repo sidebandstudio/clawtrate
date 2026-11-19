@@ -368,6 +368,39 @@ test("F-234: a failed read of the routines is said and can be tried again, never
   await expect(settings.getByTestId("routines-error")).toHaveCount(0);
 });
 
+test("S17 a save that ends after another budget's form was opened leaves that form open (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write`, "light");
+  const settings = await settingsUsage(page);
+  // The host answers budget changes only when the test says.
+  await page.evaluate(() => {
+    const bridge = (
+      window as unknown as {
+        clawtrateFixture: { invoke(command: { type: string }): Promise<unknown> };
+        releaseSave?: () => void;
+      }
+    ).clawtrateFixture;
+    const original = bridge.invoke.bind(bridge);
+    bridge.invoke = (command) =>
+      command.type !== "changeBudget"
+        ? original(command)
+        : new Promise((resolve) => {
+            (window as unknown as { releaseSave: () => void }).releaseSave = () =>
+              resolve(original(command));
+          });
+  });
+  await settings.locator('[data-budget="bot:otto"] button').click();
+  await settings.getByTestId("budget-edit-form").getByTestId("budget-tokens").fill("3,000,000");
+  await settings.getByTestId("budget-edit-form").getByTestId("budget-save").click();
+  // Meanwhile, the routine's budget is opened.
+  await settings.locator('[data-budget="routine:weekly-cleanup"] button').click();
+  await expect(settings.getByTestId("budget-edit-form")).toContainText("routine Weekly cleanup");
+  await page.evaluate(() => (window as unknown as { releaseSave: () => void }).releaseSave());
+  await expect(settings.locator('[data-budget="bot:otto"]')).toContainText("3,000,000 tokens");
+  await expect(settings.getByTestId("budget-edit-form")).toContainText("routine Weekly cleanup");
+});
+
 test("F-235: provider limits carry their window, reset, the gateway's time and no account (fixture)", async ({
   page,
 }) => {
