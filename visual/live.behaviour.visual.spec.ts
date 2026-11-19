@@ -906,6 +906,18 @@ test.describe("steering, queueing and holding", () => {
     await expect(note.locator(".glyph")).toHaveAttribute("data-state", "stopped");
   });
 
+  test("F-296: when some of the run's actions are no longer kept, the Stop note says other bots' work may continue", async ({
+    page,
+  }) => {
+    await open(page, "run-stopped-with");
+    const note = page.getByTestId("stop-note");
+    await expect(note).not.toContainText("Some actions are no longer shown.");
+    await setRun(page, { omittedTools: 3 });
+    await expect(note).toContainText(
+      "Some actions are no longer shown. Other bots' work may continue.",
+    );
+  });
+
   test("F-298 F-296: after a Stop the note lists what stopped with the run, named, and what may not have been delivered", async ({
     page,
   }) => {

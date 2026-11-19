@@ -281,6 +281,9 @@ export function RunEnding({
               (message) =>
                 message.runId === run.id && message.mode === "steer" && message.leftAt !== null,
             ) && <p>The gateway may still run messages it already accepted.</p>}
+          {(run.omittedTools ?? 0) > 0 && (
+            <p>Some actions are no longer shown. Other bots' work may continue.</p>
+          )}
           {also.length > 0 && (
             <ul className="turn-note-list" data-testid="stopped-with">
               {also.map((line) => (

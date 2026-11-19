@@ -202,3 +202,35 @@ describe("Stop that this client did not get confirmed (F-296, F-101)", () => {
     client.stop();
   });
 });
+
+describe("Stop with results no longer kept (F-296)", () => {
+  it("F-296: an omitted recipient result does not make a complete companion-stop claim", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["chat.abort"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== KEY)
+        return { ok: true, aborted: true, runIds: ["run-r"] };
+      setTimeout(() => gateway.emit("agent", ended(9_000)), 0);
+      return { ok: true, aborted: true, runIds: ["run-s"] };
+    };
+    // The child is named by the parent's first result; many later calls push it out of the record.
+    messaged(gateway, [[PEER, "run-r"]]);
+    for (let n = 0; n < 140; n += 1)
+      gateway.emit(
+        "agent",
+        agentEvent("run-s", 100 + n, "tool", {
+          phase: "result",
+          name: "read",
+          toolCallId: `r${n}`,
+          isError: false,
+          result: { content: [{ type: "text", text: "ok" }] },
+        }),
+      );
+    await until(() => (transcript().runs[0]?.omittedTools ?? 0) > 0);
+    await client.stopRun(KEY, "run-s");
+    await until(() => transcript().runs[0]?.stoppedWith?.recipientsAsked === true);
+    // Nothing claims the child was stopped; the record says actions are missing instead.
+    expect(transcript().runs[0]!.stoppedWith!.bots).toEqual([]);
+    expect(transcript().runs[0]!.omittedTools).toBeGreaterThan(0);
+    client.stop();
+  });
+});
