@@ -176,7 +176,7 @@ The rules are in `<state folder>/clawtrate-tool-rules/rules.json`, the plugin's 
 - **Bounded** by the limits above, checked again whenever the file is read.
 - **Written whole or not at all**: every byte is written and flushed before the rename; a write that falls short fails before it, and the old file and the rules in memory stay as they were.
 - **Never larger than it reads**: a save is checked against the 8 MiB the plugin reads before anything changes on disk or in memory.
-- **Read again whenever it changes on disk** (by its size, times and inode), and checked as strictly as a `set`, envelope included (exactly `format`, `schema` and `scopes`, with `scopes` an object).
+- The plugin checks the file's size, times and inode before reading it. Use `set` to change a running gateway's policy. To repair the file, stop the gateway, replace it with a complete valid store, and restart. Concurrent external edits are outside the store's consistency guarantee.
 - **In one of three states**, which the plugin never confuses:
   - **No rules file**: nothing was ever saved. Nothing is decided.
   - **Rules read**: enforced.
