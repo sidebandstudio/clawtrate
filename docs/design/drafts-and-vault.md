@@ -47,10 +47,10 @@ Settings keeps `bots.md` section 7's two-pane frame; Drafts and Vault follow Mac
 
 ### What holds a draft
 
-| Held by | What it covers | Holds when Clawtrate and its plugins are gone | How the gateway shows it |
-|---|---|---|---|
+| Held by                       | What it covers                                                                                                                                     | Holds when Clawtrate and its plugins are gone                                                                              | How the gateway shows it                                                                                                                        |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Clawtrate's drafts plugin** | Holding a send for the person; pinning what is sent to what the card shows; checking attached files again after the answer; which bots' sends wait | **No.** With the plugin gone the bot's send runs, or is refused or asked about, as its rules say (`controls.md` section 3) | A plugin approval (`plugin.approval.requested`) whose `request.pluginId` is the drafts plugin, and a refused call whose reason the plugin wrote |
-| **The gateway** | The shared secret store, its admin scope, its write-only protected values, the masked question | Yes | `secrets.store.*`, `question.requested` with `isSecret` |
+| **The gateway**               | The shared secret store, its admin scope, its write-only protected values, the masked question                                                     | Yes                                                                                                                        | `secrets.store.*`, `question.requested` with `isSecret`                                                                                         |
 
 **The plugin's state** is shown where a draft can be: in Settings, Drafts, and on the card's foot. It comes from the plugin's own status method (section 12), never from the method list alone (`controls.md` section 20, row 34). The states and their words are the rules plugin's (`controls.md` section 2), with its name: "Drafts plugin answered at 5:46 PM.", "Drafts methods unavailable on this gateway.", "Clawtrate's drafts plugin isn't answering.", "Clawtrate's drafts plugin is version 0.9; drafts need 1.0 or newer.", "Checking Clawtrate's drafts plugin…". The mark is `controls.md`'s plug mark, "Only while Clawtrate's drafts plugin runs", and while it is not running, "Not held now: the drafts plugin isn't running" in `--danger`.
 
@@ -60,40 +60,40 @@ When the drafts plugin is not running, no draft card can appear. The page says s
 
 A connection is judged by the scopes the gateway granted it (`controls.md` section 2). Every scope is asked for on its own, by the access bar's explicit request (`bots.md` section 2, `conversation.md` section 3); nothing is upgraded silently, and the page stays as it was when a request is denied.
 
-| What | Read | Interactive tier (write, approvals, questions) | Admin |
-|---|---|---|---|
-| A draft card | Reads it; "Answering needs approvals access." | Sends, discards, edits (section 4) | The same, and "Disable drafts for Otto" |
-| The masked secret card | Reads it; "Answering needs questions access." | Saves, skips | The same |
-| A bot asking for a secret at all | — | **The bot cannot ask** in a run this connection started (section 7) | It can |
-| Settings, Drafts | Sees | Sees | Changes which bots' sends wait |
-| Settings, Vault | "Seeing the Vault needs admin access." | The same | Sees, adds, replaces, removes |
+| What                             | Read                                          | Interactive tier (write, approvals, questions)                      | Admin                                   |
+| -------------------------------- | --------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------- |
+| A draft card                     | Reads it; "Answering needs approvals access." | Sends, discards, edits (section 4)                                  | The same, and "Disable drafts for Otto" |
+| The masked secret card           | Reads it; "Answering needs questions access." | Saves, skips                                                        | The same                                |
+| A bot asking for a secret at all | —                                             | **The bot cannot ask** in a run this connection started (section 7) | It can                                  |
+| Settings, Drafts                 | Sees                                          | Sees                                                                | Changes which bots' sends wait          |
+| Settings, Vault                  | "Seeing the Vault needs admin access."        | The same                                                            | Sees, adds, replaces, removes           |
 
 The bar's words: "Answering needs approvals access.", "Answering needs questions access.", "Changing drafts needs admin access.", "Seeing the Vault needs admin access. The gateway shows its secret store to admin connections only."
 
 ### Components used
 
-| Component | From | Used for |
-|---|---|---|
-| Card frame, tag, summary, full request, buttons along the foot, Raw, the three answers to a decision | `conversation.md` §12 | The draft card, the masked secret card |
-| The question card's resolved forms | `conversation.md` §13 | The masked secret card after an answer |
-| Pending cards, the shelf row, the status line | `conversation.md` §14 | Both cards wait like an approval |
-| Settings frame, fact block, `.b-open` rows, note, switch, dialog, confirmation (`role="alertdialog"`) | `bots.md` §2, §7, §8 | Settings, Drafts and Vault |
-| The access bar and its request | `bots.md` §2, `conversation.md` §3 | Every place below the scope it needs |
-| The plug mark, the plugin's state line | `controls.md` §2 | Draft cards, Settings, Drafts |
-| Copy button and its two outcomes | `conversation.md` §9 | A secret's name and its reference |
+| Component                                                                                             | From                               | Used for                               |
+| ----------------------------------------------------------------------------------------------------- | ---------------------------------- | -------------------------------------- |
+| Card frame, tag, summary, full request, buttons along the foot, Raw, the three answers to a decision  | `conversation.md` §12              | The draft card, the masked secret card |
+| The question card's resolved forms                                                                    | `conversation.md` §13              | The masked secret card after an answer |
+| Pending cards, the shelf row, the status line                                                         | `conversation.md` §14              | Both cards wait like an approval       |
+| Settings frame, fact block, `.b-open` rows, note, switch, dialog, confirmation (`role="alertdialog"`) | `bots.md` §2, §7, §8               | Settings, Drafts and Vault             |
+| The access bar and its request                                                                        | `bots.md` §2, `conversation.md` §3 | Every place below the scope it needs   |
+| The plug mark, the plugin's state line                                                                | `controls.md` §2                   | Draft cards, Settings, Drafts          |
+| Copy button and its two outcomes                                                                      | `conversation.md` §9               | A secret's name and its reference      |
 
 ### New components
 
 Each is defined once, in `prototype/css/drafts.css`, from existing tokens. No colour token is added.
 
-| Component | What it is | Tokens |
-|---|---|---|
-| Draft rows (`.d-rows`) | An inset of label and value rows (From, To, Cc, Subject; Workspace, To, Thread), labels 13 px faint in a fixed column, values 15 px, a recipient list wrapping, never cut | `--bg-inset`, `--text-faint` |
-| Draft body (`.d-body`) | The message text in 15 px, pre-wrapped, folded at eight lines with "Show more" and "Show less" | `--text` |
-| Attachment row (`.d-file`) | A file's name, its size, and under it the check line ("Checked when Otto asked, 5:42 PM") | `--bg-inset`, `--text-faint` |
+| Component                  | What it is                                                                                                                                                                           | Tokens                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------- |
+| Draft rows (`.d-rows`)     | An inset of label and value rows (From, To, Cc, Subject; Workspace, To, Thread), labels 13 px faint in a fixed column, values 15 px, a recipient list wrapping, never cut            | `--bg-inset`, `--text-faint`    |
+| Draft body (`.d-body`)     | The message text in 15 px, pre-wrapped, folded at eight lines with "Show more" and "Show less"                                                                                       | `--text`                        |
+| Attachment row (`.d-file`) | A file's name, its size, and under it the check line ("Checked when Otto asked, 5:42 PM")                                                                                            | `--bg-inset`, `--text-faint`    |
 | Secure field (`.d-secure`) | The Secure Form's field: a pill input of type `password`, no autocomplete, no spelling, no capitalisation, with "Show" that reveals the typed value until the next keystroke or blur | `--bg-inset`, `--border-strong` |
-| Hosts list (`.d-hosts`) | Allowed hosts as removable chips and a field to add one; "No hosts: this secret can't be sent anywhere by the egress proxy." when empty | `--bg-selected` |
-| Vault row (`.d-vrow`) | A `.b-open` row: the name in mono, its kind word, its hosts, "Updated Nov 19" | `--bg-bubble` |
+| Hosts list (`.d-hosts`)    | Allowed hosts as removable chips and a field to add one; "No hosts: this secret can't be sent anywhere by the egress proxy." when empty                                              | `--bg-selected`                 |
+| Vault row (`.d-vrow`)      | A `.b-open` row: the name in mono, its kind word, its hosts, "Updated Nov 19"                                                                                                        | `--bg-bubble`                   |
 
 ### Input
 
@@ -118,7 +118,7 @@ A draft is a send the bot made that Clawtrate's drafts plugin is holding for the
 **The email draft** (F-181):
 
 - **Title** (17 px, semibold): "New email". The tag at the top right: "Ready to send" on `--warn-soft` with a dot.
-- **Line under the title** (13 px, muted): "Otto wants to send this from its email tool, probe_send_email." The tool's name is the one in the request (`request.toolName`).
+- **Line under the title** (13 px, muted): "Otto wants to send this from its email tool, mail_send." The tool's name is the one in the request (`request.toolName`); `mail_send` stands for a connector's tool (issue #85).
 - **Rows** (`.d-rows`): From, To, Cc and Subject, each only when the tool's mapping (section 12) names that argument and the call carries it. A recipient list wraps. "From" is what the call says; when the tool's mapping has no sender argument the row reads "From: the account Otto's email tool is set up with. The tool doesn't say which." (F-181's rows, issue #85.)
 - **Body** (`.d-body`), folded at eight lines with "Show more"; open, "Show less".
 - **Attachments** (`.d-file`), one row each: name, size, and "Checked when Otto asked, 5:42 PM. Checked again before it's sent." (section 3, "A file that changed").
@@ -132,13 +132,14 @@ A draft is a send the bot made that Clawtrate's drafts plugin is holding for the
 
 **After Send.** Allowing is not sending. The card reads what happened from the call's own result, never from the decision:
 
-| What the gateway reports | Tag | The sentence |
-|---|---|---|
-| The tool's result reports what it sent (the stand-in's `details.received`, research §2) | "Answered" | "Sent from otto@example.com to dana@example.com, cc lee@example.org, with report.txt (28 bytes), at 5:43 PM. Read back from the email tool's result." |
-| The tool succeeded but reports nothing of what it sent | "Answered" | "The email tool reported it sent this at 5:43 PM. It doesn't say what it sent; this is what you approved." |
-| The tool failed | "Not sent" (`--danger`) | "The email tool failed: " and its message. "Nothing in its result says it was sent." |
-| The plugin refused it: a file changed | "Not sent" (`--danger`) | Below |
-| No result yet | "Sending…" | "Sending. Otto's email tool hasn't reported back." |
+| What the gateway reports                                                                | Tag                     | The sentence                                                                                                                                          |
+| --------------------------------------------------------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The tool's result reports what it sent (the stand-in's `details.received`, research §2) | "Answered"              | "Sent from otto@example.com to dana@example.com, cc lee@example.org, with report.txt (28 bytes), at 5:43 PM. Read back from the email tool's result." |
+| The same, for the Slack draft                                                           | "Answered"              | "Posted to #ops in Example Co, in the thread Disk alerts, at 5:43 PM. Read back from the message tool's result."                                      |
+| The tool succeeded but reports nothing of what it sent                                  | "Answered"              | "The email tool reported it sent this at 5:43 PM. It doesn't say what it sent; this is what you approved."                                            |
+| The tool failed                                                                         | "Not sent" (`--danger`) | "The email tool failed: " and its message. "Nothing in its result says it was sent."                                                                  |
+| The plugin refused it: a file changed                                                   | "Not sent" (`--danger`) | Below                                                                                                                                                 |
+| No result yet                                                                           | "Sending…"              | "Sending. Otto's email tool hasn't reported back."                                                                                                    |
 
 The resolved card folds to one line, 40 px: the tag, "New email to dana@example.com", the time, and a chevron; opened, it shows the rows, the body and the sentence as of that moment. It is the record of that send; nothing later changes it. (F-181's "Answered", F-342.)
 
@@ -177,7 +178,7 @@ An answer cannot carry new text, and a change after the hold does not reach the 
 "Disable drafts for Otto" (F-182) opens a confirmation (`role="alertdialog"`):
 
 - Title: "Send Otto's emails and messages without drafts?"
-- Text: "Otto's sends through probe_send_email and the message tool won't wait for you. They'll run as Otto's rules allow: what Otto may do (open). This is a setting of Clawtrate's drafts plugin; it holds only while the plugin runs."
+- Text: "Otto's sends through mail_send and the message tool won't wait for you. They'll run as Otto's rules allow: what Otto may do (open). This is a setting of Clawtrate's drafts plugin; it holds only while the plugin runs."
 - Buttons: "Send without drafts" (primary), "Cancel".
 
 It saves one change to the drafts plugin's settings (section 12) and is announced only when the plugin's read-back agrees: "Drafts off for Otto." A refused or unanswered save keeps the card and says "Couldn't save. Drafts are still on for Otto." The card that offered it stays pending: turning drafts off changes later sends, not this one ("This draft is still waiting for you."). Below admin, the link is absent. Drafts are turned back on in Settings, Drafts.
@@ -200,7 +201,7 @@ When a bot calls its Secrets tool to ask for a credential, the gateway raises a 
 **Pending**, in the card frame with no outline, as a question:
 
 - **Title** (17 px): "Otto asks for a secret". Tag: "Secret" on `--bg-selected`.
-- **Rows**: Name (the entry's name in mono, with copy), Why (the bot's reason, as given, in quotation marks), and "It will be saved to your gateway's shared secret store." When an entry of that name exists: "This replaces the value saved as STRIPE_API_KEY on Nov 12."
+- **Rows**: Name (the entry's name in mono, with copy), Why (the bot's reason, as given, in quotation marks), and "It will be saved to your gateway's shared secret store." When an entry of that name exists: "This replaces the value saved as STORE_API_KEY on Nov 19."
 - **Allowed hosts** (`.d-hosts`): the hosts the bot proposed, as chips the person can remove, and a field to add one. "The egress proxy sends this secret only to these hosts." Empty: "No hosts: the egress proxy won't send this secret anywhere. Settings that refer to it can still use it." The list sent is the one shown (`secretStoreAllowedHosts`).
 - **The Secure Form's field** (`.d-secure`, section 9), labelled "Secret value", placeholder "Paste or type the value".
 - **Buttons**: "Save securely" (primary, enabled once the field has a value) and "Skip" (quiet). The foot: "Never shown to Otto, and not kept by Clawtrate. Bots on this gateway see its name and hosts, not its value."
@@ -208,13 +209,13 @@ When a bot calls its Secrets tool to ask for a credential, the gateway raises a 
 
 **After Save securely** (`question.resolve` with the value and the hosts):
 
-| The gateway's answer | The card |
-|---|---|
-| None yet | "Saving…"; the field is disabled |
-| `answered` | Tag "Saved", "Saved securely to your gateway as STRIPE_API_KEY at 5:44 PM. Otto can't read it back." Then, when the bot's tool result arrives, its hosts as read back: "Allowed hosts now: api.example.com." (`currentPolicy`). The value's field is gone |
-| Refused, with a reason | On `--danger-soft`: "The gateway didn't save it." and the reason. "Type it again to retry." The field is empty |
-| Already resolved | "Already answered on another device." or "This request was skipped." Nothing is sent |
-| No answer | On `--warn-soft`: "No answer from the gateway. The secret may or may not have been saved." with "Check", which reads the question's state (`question.get`): answered shows Saved; pending returns to the empty field |
+| The gateway's answer   | The card                                                                                                                                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| None yet               | "Saving…"; the field is disabled                                                                                                                                                                                                                             |
+| `answered`             | Tag "Saved", "Saved securely to your gateway as PRICE_TRACKER_KEY at 5:44 PM. Otto can't read it back." Then, when the bot's tool result arrives, its hosts as read back: "Allowed hosts now: api.example.com." (`currentPolicy`). The value's field is gone |
+| Refused, with a reason | On `--danger-soft`: "The gateway didn't save it." and the reason. "Type it again to retry." The field is empty                                                                                                                                               |
+| Already resolved       | "Already answered on another device." or "This request was skipped." Nothing is sent                                                                                                                                                                         |
+| No answer              | On `--warn-soft`: "No answer from the gateway. The secret may or may not have been saved." with "Check", which reads the question's state (`question.get`): answered shows Saved; pending returns to the empty field                                         |
 
 The field is emptied on every one of these (section 2).
 
@@ -236,21 +237,21 @@ The gateway's shared secret store, shown as it is (F-261). Admin only: below adm
 
 **An item's page** (a Settings page with a quiet round Back):
 
-- Facts: Name (with copy), Kind, Allowed hosts, Updated, and "Reference: store · default · STRIPE_API_KEY" (with copy), the SecretRef settings use.
+- Facts: Name (with copy), Kind, Allowed hosts, Updated, and "Reference: store · default · STORE_API_KEY" (with copy), the SecretRef settings use.
 - **Who can use it**, as a note, true of every item: "Any bot on this gateway can use this through settings that refer to it, and, when the egress proxy is on, in commands on the gateway's machine sent to its hosts. Any bot offered the Secrets tool sees its name and hosts and can remove it. The gateway doesn't limit an item to chosen bots." Below it, the bots offered the Secrets tool, by name, from what each was last offered (`tools.effective`), labelled with its date.
 - A protected value is never shown, and there is no Reveal. A "Readable by bots" item says so: "Bots can read this value: it is listed to them and given to their commands."
 - Buttons: "Replace…" (default) and "Remove…" (quiet, `--danger`).
 
-**New item and Replace…** open a dialog, the Secure Form (section 9): Name (uppercase letters, digits and underscores; "Use letters, digits and _" when invalid), the value's field, Kind ("Protected" by default, "Readable by bots"), and Allowed hosts. Replace fills Name and hosts and asks for the value again, because the gateway changes an entry only by setting its value (research §5). An existing name: "STRIPE_API_KEY exists. Saving replaces its value and hosts." Buttons "Save" (primary), "Cancel".
+**New item and Replace…** open a dialog, the Secure Form (section 9): Name (uppercase letters, digits and underscores; "Use letters, digits and _" when invalid), the value's field, Kind ("Protected" by default, "Readable by bots"), and Allowed hosts. Replace fills Name and hosts and asks for the value again, because the gateway changes an entry only by setting its value (research §5). An existing name: "STORE_API_KEY exists. Saving replaces its value and hosts." Buttons "Save" (primary), "Cancel".
 
 - **Saving**: one `secrets.store.set`, then `secrets.store.list`. "Saved." only when the listing shows the name with that kind and those hosts; the dialog closes on the new row. If the set answered but the listing disagrees or fails: "The gateway accepted it, but the Vault couldn't confirm it. Check the list." and the list is read again. Refused: "Couldn't save." and the reason; the field is emptied.
 
 **Remove…** opens a confirmation (`role="alertdialog"`) that names what happens:
 
-- Title: "Remove STRIPE_API_KEY?"
-- Text: "Every bot on this gateway loses it: Otto, Pip, Marlow and Juniper. Settings that refer to it stop working: models.providers.openai.apiKey. The gateway keeps the removed value for 30 days, then deletes it." The settings named are those in the gateway's settings that refer to the name, from `config.get`; with none, "No setting refers to it."
+- Title: "Remove STORE_API_KEY?"
+- Text: "Every bot on this gateway loses it: Otto, Pip, Marlow and Juniper. Settings that refer to it stop working: plugins.entries.price-tracker.config.apiKey. The gateway keeps the removed value for 30 days, then deletes it." The settings named are those in the gateway's settings that refer to the name, from `config.get`; with none, "No setting refers to it."
 - Buttons: "Remove" (primary, `--danger`), "Cancel".
-- **Removing**: one `secrets.store.delete`, then the listing. The gateway answers `ok` even for a name that isn't there (research §5), so "Removed. Otto, Pip, Marlow and Juniper can no longer use STRIPE_API_KEY." appears only when the listing no longer has it. Still listed: "The gateway answered, but STRIPE_API_KEY is still listed." with "Try again". Listing unreadable: "Removed? The gateway answered, but the Vault couldn't be read to confirm." with "Check".
+- **Removing**: one `secrets.store.delete`, then the listing. The gateway answers `ok` even for a name that isn't there (research §5), so "Removed. Otto, Pip, Marlow and Juniper can no longer use STORE_API_KEY." appears only when the listing no longer has it. Still listed: "The gateway answered, but STORE_API_KEY is still listed." with "Try again". Listing unreadable: "Removed? The gateway answered, but the Vault couldn't be read to confirm." with "Check".
 
 **Logins, cards and contact details** are not kinds the store has: an entry is a name and a value. The Vault offers none of them.
 
@@ -277,30 +278,30 @@ It is not a form that fills a website's sign-in. Nothing proven puts a typed val
 - **390 px, one pane**: both cards fill the column; the draft rows stack label over value; buttons stack at full width, 48 px, in the order Send, Edit, Discard, with Discard last in every state (`conversation.md` section 12). The hosts chips wrap. Settings sections open as pages with Back (`bots.md` section 19).
 - **1100 and 800**: the cards keep their 640 px maximum; Settings keeps its two panes at 1100 and becomes one pane with Back at 800.
 - **Themes**: light and dark from the tokens alone; the tags use `--warn-soft`, `--accent-soft`, `--danger-soft` and `--bg-selected` with their text tokens.
-- **Screen reader**: a draft card is a `region` named "New email to dana@example.com. Ready to send."; the masked secret card "Otto asks for a secret: STRIPE_API_KEY."; the field's label is "Secret value", its description the foot line. The rows are a description list. The "Changed" marks after an edit are words, never colour alone.
+- **Screen reader**: a draft card is a `region` named "New email to dana@example.com. Ready to send."; the masked secret card "Otto asks for a secret: PRICE_TRACKER_KEY."; the field's label is "Secret value", its description the foot line. The rows are a description list. The "Changed" marks after an edit are words, never colour alone.
 
 ## 11. What the gateway's facts drive
 
-| # | Fact | Drives | Source |
-|---|---|---|---|
-| 1 | A plugin approval's answer is `allow-once`, `allow-always` or `deny`, and its request carries title, description, tool, call id, bot, task and expiry, no arguments | Send and Discard only; the card is filled from the plugin's pinned arguments, not the request | Research §1, live (`hold-allow`) |
-| 2 | A hook's returned `params` replace what the tool receives; the client's tool event still shows the bot's call | The card shows the pinned arguments; the bot's call only in Raw | Research §1, live (`rewrite`, `rewrite-write`) |
-| 3 | The gateway copies the held arguments when the hold starts; a later change didn't reach the tool | Editing is a new call (section 4) | Research §1, live (`hold-mutate`); `agent-tools.before-tool-call` line 1010 |
-| 4 | Deny: "Denied by user. The tool call did not run." | Discarded's sentence | Research §1, live (`hold-deny`) |
-| 5 | A hold needs a connected client claiming `plugin-approvals`, or it fails at once, "no approval route" | Clawtrate claims it with the approvals scope (`packages/core` `capsFor`) | Research §1, live |
-| 6 | No built-in email tool; Slack through the `message` tool's channels | The plugin's list of sending tools (section 12); F-181's rows come from a connector (#85) | Research §2, source |
-| 7 | A hook knows a tool by name only | A list of tool names with an argument mapping each | Research §1, §2, live |
-| 8 | A send tool's result says what it sent only if it chooses to | "Read back from the tool's result", or "doesn't say what it sent" | Research §2, live (stand-ins) |
-| 9 | An ordinary hold can't see a file change after the answer; a trusted policy's hold, then the plugin's ordinary hook, refused a changed file and ran nothing | The two checks; "Not sent: report.txt changed" | Research §3, live (`file-hold`, `file-trusted`, `file-trusted-unchanged`) |
-| 10 | The masked question: `isSecret`, `secretStore`, 15 minutes; the value in `question.resolve`; the record keeps `"stored"`; the tool's result has `currentPolicy` | The masked secret card and its read-back | Research §4, live (`secrets`) |
-| 11 | The value was in no event, transcript, store listing, gateway log or model request; it is in plain text in the gateway's state database | "Never shown to Otto, and not kept by Clawtrate"; nothing claims the gateway encrypts it | Research §4, live |
-| 12 | A run started without admin can't raise the masked question: "missing scope: operator.questions" | Section 7's inferred line | Research §4, live (`secrets-noadmin`) |
-| 13 | `secrets.store.list`, `set`, `delete` are admin; set needs the value; entries are team-scoped and name no bot | The Vault is admin only; Replace asks for the value; no per-bot limit | Research §5, live (`store`), source |
-| 14 | Another bot lists and deletes any entry through its Secrets tool | "Any bot offered the Secrets tool … can remove it" | Research §5, live (`secrets`, `secrets-delete-by-other`) |
-| 15 | Delete answers `ok` for an absent name; a removed value is kept 30 days | Removed only from the read-back; the 30 days in the confirmation | Research §5, live, source |
-| 16 | The 1Password plugin's values are model-visible; Electron documents no fill for an app's field | Section 9's help line and sources note | Research §6, source |
-| 17 | No order among the store, a password manager and asking | "Nothing on the gateway makes a bot try these in an order" | Research §6 |
-| 18 | The plugin's module may be evaluated more than once | Section 12 | Research §1, live |
+| #   | Fact                                                                                                                                                                | Drives                                                                                        | Source                                                                      |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 1   | A plugin approval's answer is `allow-once`, `allow-always` or `deny`, and its request carries title, description, tool, call id, bot, task and expiry, no arguments | Send and Discard only; the card is filled from the plugin's pinned arguments, not the request | Research §1, live (`hold-allow`)                                            |
+| 2   | A hook's returned `params` replace what the tool receives; the client's tool event still shows the bot's call                                                       | The card shows the pinned arguments; the bot's call only in Raw                               | Research §1, live (`rewrite`, `rewrite-write`)                              |
+| 3   | The gateway copies the held arguments when the hold starts; a later change didn't reach the tool                                                                    | Editing is a new call (section 4)                                                             | Research §1, live (`hold-mutate`); `agent-tools.before-tool-call` line 1010 |
+| 4   | Deny: "Denied by user. The tool call did not run."                                                                                                                  | Discarded's sentence                                                                          | Research §1, live (`hold-deny`)                                             |
+| 5   | A hold needs a connected client claiming `plugin-approvals`, or it fails at once, "no approval route"                                                               | Clawtrate claims it with the approvals scope (`packages/core` `capsFor`)                      | Research §1, live                                                           |
+| 6   | No built-in email tool; Slack through the `message` tool's channels                                                                                                 | The plugin's list of sending tools (section 12); F-181's rows come from a connector (#85)     | Research §2, source                                                         |
+| 7   | A hook knows a tool by name only                                                                                                                                    | A list of tool names with an argument mapping each                                            | Research §1, §2, live                                                       |
+| 8   | A send tool's result says what it sent only if it chooses to                                                                                                        | "Read back from the tool's result", or "doesn't say what it sent"                             | Research §2, live (stand-ins)                                               |
+| 9   | An ordinary hold can't see a file change after the answer; a trusted policy's hold, then the plugin's ordinary hook, refused a changed file and ran nothing         | The two checks; "Not sent: report.txt changed"                                                | Research §3, live (`file-hold`, `file-trusted`, `file-trusted-unchanged`)   |
+| 10  | The masked question: `isSecret`, `secretStore`, 15 minutes; the value in `question.resolve`; the record keeps `"stored"`; the tool's result has `currentPolicy`     | The masked secret card and its read-back                                                      | Research §4, live (`secrets`)                                               |
+| 11  | The value was in no event, transcript, store listing, gateway log or model request; it is in plain text in the gateway's state database                             | "Never shown to Otto, and not kept by Clawtrate"; nothing claims the gateway encrypts it      | Research §4, live                                                           |
+| 12  | A run started without admin can't raise the masked question: "missing scope: operator.questions"                                                                    | Section 7's inferred line                                                                     | Research §4, live (`secrets-noadmin`)                                       |
+| 13  | `secrets.store.list`, `set`, `delete` are admin; set needs the value; entries are team-scoped and name no bot                                                       | The Vault is admin only; Replace asks for the value; no per-bot limit                         | Research §5, live (`store`), source                                         |
+| 14  | Another bot lists and deletes any entry through its Secrets tool                                                                                                    | "Any bot offered the Secrets tool … can remove it"                                            | Research §5, live (`secrets`, `secrets-delete-by-other`)                    |
+| 15  | Delete answers `ok` for an absent name; a removed value is kept 30 days                                                                                             | Removed only from the read-back; the 30 days in the confirmation                              | Research §5, live, source                                                   |
+| 16  | The 1Password plugin's values are model-visible; Electron documents no fill for an app's field                                                                      | Section 9's help line and sources note                                                        | Research §6, source                                                         |
+| 17  | No order among the store, a password manager and asking                                                                                                             | "Nothing on the gateway makes a bot try these in an order"                                    | Research §6                                                                 |
+| 18  | The plugin's module may be evaluated more than once                                                                                                                 | Section 12                                                                                    | Research §1, live                                                           |
 
 ## 12. Clawtrate's drafts plugin (#89)
 
@@ -324,21 +325,21 @@ Written from this list, each item checked by a test or a review, with its own se
 
 Every target stands as written. Only dependency cells are reworded, to what the research found; statuses stay `todo`.
 
-| Row | The dependency cell becomes |
-|---|---|
-| F-181 | plugin: the drafts plugin of #89 (not built) holds the send with a trusted tool policy's `requireApproval` (**live** with a research plugin and a stand-in tool), shown from `plugin.approval.requested` and answered with `plugin.approval.resolve` (`operator.approvals`); the request carries no arguments, so the rows come from the plugin's pinned arguments (`clawtrate-drafts.get`). No email tool is built in; it must come from a connector (#85). A hold needs a client claiming `plugin-approvals`. |
-| F-182 | plugin: a per-bot setting of the drafts plugin (#89, not built; `clawtrate-drafts.settings.set`, `operator.admin`), holding only while it runs. The gateway's automatic review covers commands only, so a send without drafts follows the bot's rules (`controls.md`). |
-| F-183 | none: no proven way fills a website's sign-in without the bot being able to read it afterwards; typing during a takeover (`work-pane.md` §18) leaves the value on the page. The secret store's egress proxy substitutes values only in HTTPS requests from commands. |
+| Row   | The dependency cell becomes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-181 | plugin: the drafts plugin of #89 (not built) holds the send with a trusted tool policy's `requireApproval` (**live** with a research plugin and a stand-in tool), shown from `plugin.approval.requested` and answered with `plugin.approval.resolve` (`operator.approvals`); the request carries no arguments, so the rows come from the plugin's pinned arguments (`clawtrate-drafts.get`). No email tool is built in; it must come from a connector (#85). A hold needs a client claiming `plugin-approvals`.                                                                                       |
+| F-182 | plugin: a per-bot setting of the drafts plugin (#89, not built; `clawtrate-drafts.settings.set`, `operator.admin`), holding only while it runs. The gateway's automatic review covers commands only, so a send without drafts follows the bot's rules (`controls.md`).                                                                                                                                                                                                                                                                                                                                |
+| F-183 | none: no proven way fills a website's sign-in without the bot being able to read it afterwards; typing during a takeover (`work-pane.md` §18) leaves the value on the page. The secret store's egress proxy substitutes values only in HTTPS requests from commands.                                                                                                                                                                                                                                                                                                                                  |
 | F-184 | available: the bot's `secrets` tool `request` raises `question.requested` with `isSecret` and `secretStore {name, kind, allowedHosts, reason}`, only in a run started from a connection with `operator.admin` (otherwise the tool fails, "missing scope: operator.questions"); answered with `question.resolve {answers, secretStoreAllowedHosts}` (`operator.questions`); the record keeps "stored". **Live**: the value was in no event, transcript, store listing, gateway log or model request, and was stored in plain text in the gateway's state database; protected entries are never listed. |
-| F-261 | partial: the shared secret store (`secrets.store.list`, `set`, `delete`, `operator.admin`) holds team-scoped named values (`secret` or `env`) with allowed hosts; no logins, cards or contact types, and no per-bot limit: any bot offered the `secrets` tool lists every entry and can delete it (**live**). A bot's deny list or a plugin hook can stop a bot's `secrets` calls, not its use of a value through settings or the egress proxy. |
-| F-338 | none: nothing on the gateway orders the store, a password manager and asking the person; each bot chooses its tool. The store can't be limited to chosen bots (F-261), the bundled 1Password plugin's values are model-visible, and no Secure Form fills a site (F-183). |
-| F-341 | plugin: the drafts plugin of #89 hashes attached files when it holds (trusted tool policy) and again in its ordinary `before_tool_call` hook after the answer, and blocks a changed file; **live** with a research plugin: a changed file was refused and the tool never ran; an ordinary hold alone sent the changed file. |
-| F-342 | plugin: Allow once (`plugin.approval.resolve`, `operator.approvals`) runs the call once with the arguments the drafts plugin pinned when it held (**live**); what was sent is read back from the tool's result only where the tool reports it. No email tool is built in (#85). |
-| F-343 | plugin: Deny (`plugin.approval.resolve`, `operator.approvals`) refuses the held call, "Denied by user. The tool call did not run." (**live**, for an email and a Slack stand-in). No email tool is built in (#85); Slack goes through the `message` tool's channels. |
-| F-344 | plugin: an answer can't carry arguments, and the gateway copies the held arguments when the hold starts (**live**: a change after the hold didn't reach the tool), so an edited draft is a new call: the held one is denied and the edit is sent to the bot as a message; the bot's new call is held and compared with the edit. |
-| F-345 | plugin: as F-181, for a Slack tool (the gateway's `message` tool through a configured Slack channel, or a connector of #85). |
-| F-346 | none: the masked question always saves to the shared store ("requests are protected-secret only"); there is no request that uses a value once without saving it, and no Secure Form fills a site (F-183). |
-| F-453 | plugin: sending once as F-342; the edited text reaches the tool only through a new call (F-344), held and compared field by field before it is sent. |
+| F-261 | partial: the shared secret store (`secrets.store.list`, `set`, `delete`, `operator.admin`) holds team-scoped named values (`secret` or `env`) with allowed hosts; no logins, cards or contact types, and no per-bot limit: any bot offered the `secrets` tool lists every entry and can delete it (**live**). A bot's deny list or a plugin hook can stop a bot's `secrets` calls, not its use of a value through settings or the egress proxy.                                                                                                                                                       |
+| F-338 | none: nothing on the gateway orders the store, a password manager and asking the person; each bot chooses its tool. The store can't be limited to chosen bots (F-261), the bundled 1Password plugin's values are model-visible, and no Secure Form fills a site (F-183).                                                                                                                                                                                                                                                                                                                              |
+| F-341 | plugin: the drafts plugin of #89 hashes attached files when it holds (trusted tool policy) and again in its ordinary `before_tool_call` hook after the answer, and blocks a changed file; **live** with a research plugin: a changed file was refused and the tool never ran; an ordinary hold alone sent the changed file.                                                                                                                                                                                                                                                                           |
+| F-342 | plugin: Allow once (`plugin.approval.resolve`, `operator.approvals`) runs the call once with the arguments the drafts plugin pinned when it held (**live**); what was sent is read back from the tool's result only where the tool reports it. No email tool is built in (#85).                                                                                                                                                                                                                                                                                                                       |
+| F-343 | plugin: Deny (`plugin.approval.resolve`, `operator.approvals`) refuses the held call, "Denied by user. The tool call did not run." (**live**, for an email and a Slack stand-in). No email tool is built in (#85); Slack goes through the `message` tool's channels.                                                                                                                                                                                                                                                                                                                                  |
+| F-344 | plugin: an answer can't carry arguments, and the gateway copies the held arguments when the hold starts (**live**: a change after the hold didn't reach the tool), so an edited draft is a new call: the held one is denied and the edit is sent to the bot as a message; the bot's new call is held and compared with the edit.                                                                                                                                                                                                                                                                      |
+| F-345 | plugin: as F-181, for a Slack tool (the gateway's `message` tool through a configured Slack channel, or a connector of #85).                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| F-346 | none: the masked question always saves to the shared store ("requests are protected-secret only"); there is no request that uses a value once without saving it, and no Secure Form fills a site (F-183).                                                                                                                                                                                                                                                                                                                                                                                             |
+| F-453 | plugin: sending once as F-342; the edited text reaches the tool only through a new call (F-344), held and compared field by field before it is sent.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 **Rows for a decision**, where the design must differ from the target. Each row is left as it is:
 
@@ -354,13 +355,13 @@ Every target stands as written. Only dependency cells are reworded, to what the 
 
 ### What each part uses
 
-| Part | Existing components | New |
-|---|---|---|
-| The draft card | Card frame, tag, full request, buttons, Raw, the three answers, plug mark | `.d-rows`, `.d-body`, `.d-file` |
-| Editing | `.input`, text area, note | — |
-| The masked secret card | Card frame, the question card's resolved forms, copy | `.d-secure`, `.d-hosts` |
-| Settings, Drafts | Settings frame, switch, note, plugin state line | — |
-| Settings, Vault | Settings frame, fact block, `.b-open`, dialog, confirmation, access bar, skeleton | `.d-vrow`, `.d-secure`, `.d-hosts` |
+| Part                   | Existing components                                                               | New                                |
+| ---------------------- | --------------------------------------------------------------------------------- | ---------------------------------- |
+| The draft card         | Card frame, tag, full request, buttons, Raw, the three answers, plug mark         | `.d-rows`, `.d-body`, `.d-file`    |
+| Editing                | `.input`, text area, note                                                         | —                                  |
+| The masked secret card | Card frame, the question card's resolved forms, copy                              | `.d-secure`, `.d-hosts`            |
+| Settings, Drafts       | Settings frame, switch, note, plugin state line                                   | —                                  |
+| Settings, Vault        | Settings frame, fact block, `.b-open`, dialog, confirmation, access bar, skeleton | `.d-vrow`, `.d-secure`, `.d-hosts` |
 
 ### What the engine supplies
 
@@ -381,18 +382,18 @@ Every target stands as written. Only dependency cells are reworded, to what the 
 
 `prototype/drafts.html` takes `theme`, `width`, `motion` and `chrome` like every page, and:
 
-| Parameter | Values |
-|---|---|
-| `view` | `draft` (the default), `secret`, `vault`, `drafts` |
-| `kind` | `email` (the default), `slack`: which draft (with `view=draft`) |
-| `d` | The draft card's state: `pending` (the default), `full` (full request open), `sending`, `sent`, `sentnoreport`, `failed`, `discarded`, `refused`, `noanswer`, `already`, `expired`, `closed`, `cancelled`, `filechanged`, `unchecked`, `edit`, `editsent`, `editheld`, `match`, `differs`, `disable`, `disabled` |
-| `s` | The masked secret card: `pending` (the default), `typed`, `hosts`, `saving`, `saved`, `refused`, `noanswer`, `already`, `skipped`, `expired`, `cannotask` |
-| `v` | Settings, Vault: `list` (the default), `empty`, `loading`, `error`, `item`, `new`, `replace`, `saved`, `unconfirmed`, `failed`, `remove`, `removed`, `stilllisted`, `removeunknown` |
-| `p` | Settings, Drafts and the card's foot: `running` (the default), `stopped`, `absent` |
-| `access` | `admin` (the default), `interactive`, `read` |
-| `req` | The access request: `requested`, `denied` |
+| Parameter | Values                                                                                                                                                                                                                                                                                                                              |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `view`    | `draft` (the default), `secret`, `vault`, `drafts`                                                                                                                                                                                                                                                                                  |
+| `kind`    | `email` (the default), `slack`: which draft (with `view=draft`)                                                                                                                                                                                                                                                                     |
+| `d`       | The draft card's state: `pending` (the default), `full` (full request open), `sending`, `sent`, `sentnoreport`, `failed`, `discarded`, `refused`, `noanswer`, `already`, `expired`, `closed`, `cancelled`, `filechanged`, `unchecked`, `edit`, `editsent`, `editfailed`, `match`, `differs`, `disable`, `disabled`, `disablefailed` |
+| `s`       | The masked secret card: `pending` (the default), `typed`, `hosts`, `exists` (the name is in the Vault already), `saving`, `saved`, `refused`, `noanswer`, `already`, `skipped`, `expired`, `cannotask`                                                                                                                              |
+| `v`       | Settings, Vault: `list` (the default), `empty`, `loading`, `error`, `item`, `new`, `replace`, `saved`, `unconfirmed`, `failed`, `remove`, `removed`, `stilllisted`, `removeunknown`                                                                                                                                                 |
+| `p`       | Settings, Drafts and the card's foot: `running` (the default), `stopped`, `absent`                                                                                                                                                                                                                                                  |
+| `access`  | `admin` (the default), `interactive`, `read`                                                                                                                                                                                                                                                                                        |
+| `req`     | The access request: `requested`, `denied`                                                                                                                                                                                                                                                                                           |
 
-Every path is walked by clicking: Send to Sent, Discard to Discarded, Edit to the new draft that matches or differs, a changed file to Not sent, Disable to Drafts off; Save securely to Saved, Skip to Skipped, No answer to Check to Saved; New item to Saved, Remove to Removed. The prototype bar's "Gateway answers" control picks which answer the next decision gets: applied (the default), refused, already answered, no answer; and for the Vault, confirmed, unconfirmed, refused.
+Every path is walked by clicking: Send to Sent, Discard to Discarded, Edit to the new draft that matches or differs, a changed file to Not sent, Disable to Drafts off; Save securely to Saved, Skip to Skipped, No answer to Check to Saved; New item to Saved, Remove to Removed. The prototype bar picks what the gateway does next: "Gateway answers" (applied, the default; refused; already answered; no answer) for a decision, a secret or a drafts switch; "Vault" (confirmed, unconfirmed, unreadable or refused) for a Vault write; "Tool result" (reports what it sent, says nothing, fails); and "Otto's new call" (matches or differs from an edit). Its buttons "Change report.txt", "Expire", "Run ends" and "Stop" are the events a waiting card reacts to.
 
 `gallery.html` has a section, "Drafts and the Vault", with a link to every state above.
 
