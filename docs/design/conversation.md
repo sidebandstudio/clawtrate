@@ -1107,7 +1107,7 @@ Quiet until something needs you; then it says so in five places at once, in the 
 | The task row    | The waiting mark                                                                                                                                                       |
 | The bot row     | The waiting avatar, and "Waiting for you: approve a command" or "Waiting for you: a question" in `--warn` (F-021)                                                      |
 
-The Jump control reads "Needs you" when the card is out of view (section 18).
+The Jump control reads "Needs you" when the card is out of view (section 18). When the window is not in front, a desktop notification can say so too, as `notifications.md` describes.
 
 **What typing does.** A message sent while an approval is pending joins the run and leaves the approval pending; the shelf row does not change. A message sent while a question is pending is held, and as soon as there is text the shelf row reads "Otto asked a question. A message sent now is held until you answer."
 
