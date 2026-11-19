@@ -20,7 +20,12 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
-import { CHECKIN_EVERY, MAX_CHECKIN_PROMPT_CHARS } from "./check-ins.ts";
+import {
+  CHECKIN_EVERY,
+  MAX_CHECKIN_KEPT,
+  MAX_CHECKIN_PROMPT_CHARS,
+  type CheckInDraft,
+} from "./check-ins.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -160,8 +165,8 @@ export type BridgeCommand =
   | { type: "removeBotFallbacks"; botId: string }
   // Check-ins (`check-ins.ts`). Saving needs admin.
   | { type: "refreshCheckIns" }
-  /** `prompt`: "" for the gateway's own, null to leave it as it is. The outcome is `checkIns.save`. */
-  | { type: "saveCheckIn"; saveId: string; botId: string; every: string; prompt: string | null }
+  /** The draft as `CheckInDraft` says. The outcome is `checkIns.save`. */
+  | ({ type: "saveCheckIn"; saveId: string; botId: string } & CheckInDraft)
   | { type: "dismissCheckInSave"; saveId: string }
   /**
    * The rail's task actions (`task-actions.ts`). They act on any task the rail
@@ -498,17 +503,26 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "refreshCheckIns":
       return { type: command.type };
     case "saveCheckIn": {
-      if (typeof command.every !== "string" || !CHECKIN_EVERY.test(command.every))
+      const every = (value: unknown) => (value === null ? null : shortText(value, 64, "cadence"));
+      const prompt = (value: unknown) =>
+        value === null ? null : shortText(value, MAX_CHECKIN_PROMPT_CHARS, "prompt");
+      if (command.every !== null && !CHECKIN_EVERY.test(String(command.every)))
         throw new Error("invalid check-in cadence");
+      const was = command.was as Record<string, unknown> | null;
+      if (!was || typeof was !== "object") throw new Error("invalid draft");
+      if (!Array.isArray(command.kept) || command.kept.length > MAX_CHECKIN_KEPT)
+        throw new Error("invalid draft");
       return {
         type: "saveCheckIn",
         saveId: id(command.saveId, "save"),
         botId: botId(command.botId),
-        every: command.every,
-        prompt:
-          command.prompt === null
-            ? null
-            : shortText(command.prompt, MAX_CHECKIN_PROMPT_CHARS, "prompt"),
+        every: every(command.every),
+        prompt: prompt(command.prompt),
+        was: { every: every(was.every), prompt: prompt(was.prompt) },
+        kept: command.kept.map((each: Record<string, unknown>) => ({
+          botId: botId(each?.botId),
+          every: shortText(each?.every, 64, "cadence"),
+        })),
       };
     }
     case "dismissCheckInSave":
@@ -979,6 +993,8 @@ class ViewerSession implements BridgeSession {
         return client.saveCheckIn(command.saveId, command.botId, {
           every: command.every,
           prompt: command.prompt,
+          was: command.was,
+          kept: command.kept,
         });
       case "dismissCheckInSave":
         return client.dismissCheckInSave(command.saveId);

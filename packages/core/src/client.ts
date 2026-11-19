@@ -802,6 +802,8 @@ export class ClawtrateClient {
   private readonly fileTransfers = new FileTransfers(() => this.now());
   /** File lists and reads in flight (`MAX_FILE_READS`). */
   private fileReads = 0;
+  /** Changes with every hello and every close, so work started on one connection never runs on the next. */
+  private epoch = 0;
   /** Provider accounts per bot (`accounts-engine.ts`); its state is `accounts`. */
   private readonly accounts = new AccountsEngine({
     request: (method, params, options) => {
@@ -3525,12 +3527,26 @@ export class ClawtrateClient {
 
   private checkInsContext(): CheckInsContext {
     return {
-      request: (method, params) => this.request(method, params),
+      link: () => {
+        const protocol = this.protocol;
+        const epoch = this.epoch;
+        const alive = () =>
+          protocol !== null &&
+          this.protocol === protocol &&
+          this.epoch === epoch &&
+          this.state.connection.status === "connected";
+        return {
+          alive,
+          request: (method, params) =>
+            protocol && alive()
+              ? protocol.request(method, params)
+              : Promise.reject(new NotSentError()),
+        };
+      },
       get: () => this.state.checkIns,
       set: (checkIns) => this.store.update((state) => ({ ...state, checkIns })),
       botIds: () => this.state.bots.map((bot) => bot.id),
       admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
-      generation: () => this.generation,
       now: () => this.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     };
@@ -4112,6 +4128,7 @@ export class ClawtrateClient {
       },
       onHello: (hello) => {
         if (generation !== this.generation) return;
+        this.epoch += 1;
         this.attemptGreeted = true;
         if (hello.protocol !== PROTOCOL_VERSION) {
           // Outside this client's range: nothing else is asked of this gateway.
@@ -4144,6 +4161,7 @@ export class ClawtrateClient {
       }),
       onClose: () => {
         if (generation !== this.generation) return;
+        this.epoch += 1;
         this.streams.clear();
         this.accounts.onClose();
         const status = this.state.connection.status;

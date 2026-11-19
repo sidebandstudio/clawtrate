@@ -87,7 +87,9 @@ import {
 } from "./sidebar.ts";
 import type { Digest } from "./bounds.ts";
 import {
+  MAX_CHECKIN_KEPT,
   MAX_CHECKIN_PROMPT_CHARS,
+  type CheckInDefaults,
   type CheckInJob,
   type CheckInSave,
   type CheckInSetting,
@@ -866,7 +868,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   write: accountWrite,
 });
 
-// Check-ins (check-ins.ts): one job and one setting per bot, and the one save under way.
+// Check-ins (check-ins.ts): one job and one setting per bot, the default and the one save under way.
 const checkInJob = object<CheckInJob>()({
   botId: ID,
   enabled: FLAG,
@@ -879,10 +881,16 @@ const checkInSetting = object<CheckInSetting>()({
   prompt: text(MAX_CHECKIN_PROMPT_CHARS),
   promptCut: FLAG,
 });
+const checkInDefaults = object<CheckInDefaults>()({
+  inherited: list(MAX_CHECKIN_KEPT, ID),
+  inheritedCut: FLAG,
+  every: NAME,
+  prompt: text(MAX_CHECKIN_PROMPT_CHARS),
+  promptCut: FLAG,
+});
 const checkInSave = object<CheckInSave>()({
   id: ID,
   botId: ID,
-  every: NAME,
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
 });
@@ -892,6 +900,7 @@ export const CHECK_INS: Bound = object<CheckInsState>()({
   scheduler: FLAG,
   jobs: list(MAX_BOTS, checkInJob),
   settings: list(MAX_BOTS, checkInSetting),
+  defaults: checkInDefaults,
   save: checkInSave,
 });
 
