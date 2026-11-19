@@ -13,12 +13,16 @@ import { ENSEMBLE } from "@clawtrate/ui/character";
 import { CONVERSATION_WORDS } from "@clawtrate/ui/conversation-words";
 import { stampTime } from "@clawtrate/ui/format";
 import { addressWords, forgetWords } from "@clawtrate/ui/gateway-state";
+import { WebSocket, WebSocketServer } from "ws";
+import { REDACTED } from "../src/host/secrets.ts";
 import { LINK_WORDS } from "../src/markdown.ts";
 import { LIGHT } from "../src/theme/tokens.ts";
 import {
   activate,
   appLog,
   boundsOf,
+  closeWithin,
+  containerHits,
   deadPort,
   devGateway,
   devices,
@@ -42,6 +46,7 @@ import {
   running,
   rgb,
   screen,
+  screenText,
   scrollTo,
   see,
   shoot,
@@ -980,7 +985,108 @@ describe("the iOS app", () => {
     expect(listed.paired.find((d) => d.deviceId === deviceId)?.scopes).toEqual(["operator.read"]);
     expect(listed.pending.filter((r) => r.deviceId === deviceId)).toEqual([]);
   });
+  it("on iPhone, a paired gateway that repeats both of this device's tokens in its bots, tasks and version shows neither on any screen, in any accessible name, in the app's log or in its files", async () => {
+    const since = Date.now();
+    const tokens = [env.token, ""];
+    let echoing = false;
+    const upstream = new Set<WebSocket>();
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await new Promise((resolve) => server.once("listening", resolve));
+    const url = `ws://127.0.0.1:${(server.address() as { port: number }).port}`;
+    // A loopback relay to the checks' gateway that, once asked, writes both tokens into
+    // the server's version, Otto's name and label, and the title of Otto's disk task.
+    server.on("connection", (phone) => {
+      const gateway = new WebSocket(env.gateway);
+      upstream.add(gateway);
+      gateway.on("close", () => {
+        upstream.delete(gateway);
+        phone.close();
+      });
+      gateway.on("error", () => phone.close());
+      phone.on("close", () => gateway.terminate());
+      phone.on("error", () => gateway.terminate());
+      phone.on("message", (data) => {
+        if (gateway.readyState === WebSocket.OPEN) gateway.send(String(data));
+        else gateway.once("open", () => gateway.send(String(data)));
+      });
+      gateway.on("message", (data) => {
+        const reply = JSON.parse(String(data)) as EchoFrame;
+        const issued = reply.payload?.auth?.deviceToken;
+        if (issued) tokens[1] = issued;
+        if (echoing && reply.ok) {
+          const both = `${tokens[0]} ${tokens[1]}`;
+          if (reply.payload?.server) reply.payload.server.version += ` ${both}`;
+          const otto = reply.payload?.agents?.find((agent) => agent.id === "otto");
+          if (otto?.identity) {
+            otto.identity.name = `Otto ${tokens[0]}`;
+            otto.identity.theme = `Echo ${tokens[1]}`;
+          }
+          const rows = reply.payload?.list?.sessions ?? reply.payload?.sessions;
+          const row = rows?.find((item) => item.key === "agent:otto:disk-space");
+          if (row) row.label = `Disk ${both}`;
+        }
+        if (phone.readyState === WebSocket.OPEN) phone.send(JSON.stringify(reply));
+      });
+    });
+    const scan = async () => {
+      const text = await screenText();
+      return tokens.map((token) => text.includes(token));
+    };
+    try {
+      launch({ fresh: true, devGateway: url });
+      await steps("echo-connect", [
+        waitFor({ id: "welcome" }),
+        tap({ id: "connect-a-gateway" }),
+        ...typeAddress(url, env.token),
+        waitFor({ id: "pairing" }, 90_000),
+      ]);
+      devGateway("approve");
+      await steps("echo-paired", [waitFor({ id: "bot-otto" }, 120_000)]);
+      expect(tokens.every((token) => token !== "")).toBe(true);
+      // The gateway starts repeating them; the app reconnects in the same process and reads them.
+      echoing = true;
+      for (const phone of server.clients) phone.terminate();
+      await steps("echo-home", [
+        waitFor({ id: "bot-otto", text: `Otto ${lit(REDACTED)}.*` }, 120_000),
+      ]);
+      expect(await scan()).toEqual([false, false]);
+      await steps("echo-settings", [tap({ id: "settings-button" }), waitFor({ id: "settings" })]);
+      expect(await scan()).toEqual([false, false]);
+      await steps("echo-tasks", [
+        tap({ id: "settings-close" }),
+        waitFor({ id: "bot-otto" }),
+        tap({ id: "bot-otto" }),
+        waitFor({ id: "bot-tasks-otto" }),
+        waitFor({ id: `task-${lit("agent:otto:disk-space")}` }),
+      ]);
+      expect(await scan()).toEqual([false, false]);
+      await steps("echo-chat", [
+        tap({ id: `task-${lit("agent:otto:disk-space")}` }),
+        waitFor({ id: "task-line", text: `Disk ${lit(REDACTED)}.*` }, 60_000),
+      ]);
+      expect(await scan()).toEqual([false, false]);
+      const log = appLog(Math.ceil((Date.now() - since) / 1000) + 30);
+      expect(tokens.map((token) => log.includes(token))).toEqual([false, false]);
+      expect(containerHits(tokens)).toEqual([0, 0]);
+    } finally {
+      for (const phone of server.clients) phone.terminate();
+      for (const socket of upstream) socket.terminate();
+      await closeWithin(new Promise<void>((resolve) => server.close(() => resolve())));
+    }
+  });
 });
+
+/** A gateway frame, as far as the echoing relay reads and changes it. */
+type EchoFrame = {
+  ok?: boolean;
+  payload?: {
+    auth?: { deviceToken?: string };
+    server?: { version: string };
+    agents?: Array<{ id: string; identity?: { name?: string; theme?: string } }>;
+    sessions?: Array<{ key: string; label?: string }>;
+    list?: { sessions?: Array<{ key: string; label?: string }> };
+  };
+};
 
 /** From a failure on the address screen, or a step list, back to an empty form. */
 function anotherGateway(): Step[] {

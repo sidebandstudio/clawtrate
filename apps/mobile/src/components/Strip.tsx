@@ -47,7 +47,7 @@ const TONE: Record<"warn" | "danger" | "ok" | "off", DotTone> = {
 };
 
 export function StatusStrip({ state, taskKey }: { state: ClawtrateState; taskKey: string | null }) {
-  const { send } = useRuntime();
+  const { send, redact } = useRuntime();
   const { c } = useTheme();
   const phase = useSyncPhase(state, taskKey);
   const strip = stripFor(state, phase, taskKey);
@@ -62,7 +62,8 @@ export function StatusStrip({ state, taskKey }: { state: ClawtrateState; taskKey
   const retryAt = state.connection.retryAt;
   const seconds =
     strip.countdown && retryAt !== null ? Math.max(0, Math.ceil((retryAt - now) / 1000)) : null;
-  const text = strip.short ?? stripText(strip, seconds);
+  const text = redact(strip.short ?? stripText(strip, seconds));
+  const detail = strip.more === null ? null : redact(strip.more);
   const onAction = () => {
     if (strip.action === "reload" && taskKey) {
       void send({ type: "closeSession", key: taskKey }).then(() =>
@@ -74,7 +75,7 @@ export function StatusStrip({ state, taskKey }: { state: ClawtrateState; taskKey
     <View
       testID="status-strip"
       accessibilityRole="summary"
-      accessibilityLabel={strip.more ? `${text} · ${strip.more}` : text}
+      accessibilityLabel={detail ? `${text} · ${detail}` : text}
       style={{
         flexDirection: "row",
         alignItems: "center",
@@ -99,7 +100,7 @@ export function StatusStrip({ state, taskKey }: { state: ClawtrateState; taskKey
         style={{ flexShrink: 1 }}
       >
         {text}
-        {strip.more ? <Txt size={S["text-sm"]} color="text-muted">{` · ${strip.more}`}</Txt> : null}
+        {detail ? <Txt size={S["text-sm"]} color="text-muted">{` · ${detail}`}</Txt> : null}
       </Txt>
       {strip.action && (
         <Pressable

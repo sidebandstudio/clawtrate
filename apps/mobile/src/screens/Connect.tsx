@@ -228,7 +228,7 @@ function errorFor(error: ConnectionError, url: string | null, redact: (text: str
   return {
     title: failureTitle(error.code),
     message: redact([error.message, error.hint, local].filter(Boolean).join(" ")),
-    code: error.code,
+    code: redact(error.code),
   };
 }
 
@@ -239,7 +239,7 @@ export function Welcome({
   onConnect: () => void;
   connection: ConnectionState;
 }) {
-  const { send } = useRuntime();
+  const { send, redact } = useRuntime();
   // A gateway kept from an earlier install, or after Disconnect, is a choice, never a default.
   const saved = connection.status === "disconnected" ? connection.gatewayUrl : null;
   return (
@@ -254,7 +254,7 @@ export function Welcome({
       />
       {saved && (
         <Button
-          label={W.reconnectTo(gatewayLabel(saved))}
+          label={redact(W.reconnectTo(gatewayLabel(saved)))}
           large
           onPress={() => void send({ type: "retry" })}
           testID="reconnect-saved"
@@ -465,6 +465,7 @@ function Steps({
   loadingBots: boolean;
   pairingText?: string;
 }) {
+  const { redact } = useRuntime();
   return (
     <View accessibilityLabel={W.setupLabel} testID="setup-steps" style={{ gap: S["space-3"] }}>
       {setupSteps(connection, loadingBots).map((step, index) => (
@@ -472,13 +473,13 @@ function Steps({
           key={index}
           testID={`setup-step-${index}`}
           accessible
-          accessibilityLabel={step.label ?? pairingText ?? W.waitingStep}
+          accessibilityLabel={redact(step.label ?? pairingText ?? W.waitingStep)}
           accessibilityState={{ selected: step.state === "current" }}
           style={{ flexDirection: "row", alignItems: "center", gap: S["space-3"] }}
         >
           {step.waiting ? <Dot tone="connecting" size={10} /> : <StepGlyph state={step.state} />}
           <Txt size={S["text-md"]} color={step.state === "pending" ? "text-faint" : "text"}>
-            {step.label ?? pairingText ?? W.waitingStep}
+            {redact(step.label ?? pairingText ?? W.waitingStep)}
           </Txt>
         </View>
       ))}
@@ -524,6 +525,11 @@ export function Pairing({
   const { send, redact } = useRuntime();
   const { c } = useTheme();
   const pairing = connection.pairing!;
+  // A command that carries a known token is neither shown nor offered to copy.
+  const command =
+    pairing.approveCommand && redact(pairing.approveCommand) === pairing.approveCommand
+      ? pairing.approveCommand
+      : null;
   const scopes = pairingScopes(connection);
   const now = useNow();
   const [copied, setCopied] = useState(false);
@@ -555,14 +561,14 @@ export function Pairing({
         {W.approveTitle}
       </Txt>
       <Txt size={S["text-base"]} color="text-muted" style={{ textAlign: "center" }}>
-        {pairingLede(connection.gatewayUrl)}
+        {redact(pairingLede(connection.gatewayUrl))}
       </Txt>
       {pairing.approveNote && (
         <Txt size={S["text-sm"]} color="text-muted" testID="approve-note">
           {redact(pairing.approveNote)}
         </Txt>
       )}
-      {pairing.approveCommand && (
+      {command && (
         <View style={{ gap: S["space-2"] }}>
           <View
             style={{
@@ -577,12 +583,12 @@ export function Pairing({
               size={S["text-sm"]}
               style={{ fontFamily: FONTS.mono }}
             >
-              {pairing.approveCommand}
+              {command}
             </Txt>
           </View>
           <Button
             label={copied ? W.copied : W.copyApprove}
-            onPress={() => void copy(pairing.approveCommand!)}
+            onPress={() => void copy(command)}
             testID="copy-command"
           />
           <Txt
@@ -628,7 +634,7 @@ export function Pairing({
       </View>
       {scopes.echoed && (
         <Txt testID="scopes-differ" size={S["text-sm"]} color="warn">
-          {scopesDifferWords(scopes.echoed)}
+          {redact(scopesDifferWords(scopes.echoed))}
         </Txt>
       )}
       <Button
@@ -639,7 +645,7 @@ export function Pairing({
         testID="check-now"
       />
       <Button label={W.useAnother} variant="quiet" large onPress={onAnother} testID="use-another" />
-      <Foot>{footWords("pairing", connection, HOST)}</Foot>
+      <Foot>{redact(footWords("pairing", connection, HOST))}</Foot>
     </Column>
   );
 }
@@ -653,7 +659,7 @@ export function Protocol({
   error: ConnectionError;
   onAnother: () => void;
 }) {
-  const { send } = useRuntime();
+  const { send, redact } = useRuntime();
   const retrying = connection.status === "connecting" || connection.status === "reconnecting";
   return (
     <Column testID="protocol-notice">
@@ -667,7 +673,7 @@ export function Protocol({
         color="text-muted"
         style={{ textAlign: "center" }}
       >
-        {protocolLede(connection.gatewayUrl, error.protocol)}
+        {redact(protocolLede(connection.gatewayUrl, error.protocol))}
       </Txt>
       <Button
         label={retrying ? W.retrying : W.retry}
@@ -685,7 +691,7 @@ export function Protocol({
         onPress={onAnother}
         testID="choose-another"
       />
-      <Foot>{footWords("protocol", connection, HOST)}</Foot>
+      <Foot>{redact(footWords("protocol", connection, HOST))}</Foot>
     </Column>
   );
 }

@@ -20,17 +20,18 @@ import { S, stacked, TOUCH, useTheme } from "../theme/index.ts";
 
 function Row({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
   const { c } = useTheme();
+  const { redact } = useRuntime();
   const { fontScale } = useWindowDimensions();
   const stack = stacked(fontScale);
   const name = (
     <Txt
-      testID={`bot-name-${row.bot.id}`}
+      testID={`bot-name-${redact(row.bot.id)}`}
       size={TOUCH.bodyText}
       weight="medium"
       numberOfLines={stack ? undefined : 1}
       style={{ flexShrink: 1 }}
     >
-      {row.name}
+      {redact(row.name)}
     </Txt>
   );
   const label = row.label && (
@@ -45,18 +46,18 @@ function Row({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
       }}
     >
       <Txt
-        testID={`bot-label-${row.bot.id}`}
+        testID={`bot-label-${redact(row.bot.id)}`}
         size={S["text-xs"]}
         color="text-faint"
         numberOfLines={1}
       >
-        {row.label}
+        {redact(row.label)}
       </Txt>
     </View>
   );
   const time = (
     <Txt
-      testID={`bot-time-${row.bot.id}`}
+      testID={`bot-time-${redact(row.bot.id)}`}
       size={S["text-xs"]}
       color="text-faint"
       style={[{ fontVariant: ["tabular-nums"] }, stack ? null : { marginLeft: "auto" }]}
@@ -66,20 +67,20 @@ function Row({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
   );
   const preview = (
     <Txt
-      testID={`bot-preview-${row.bot.id}`}
+      testID={`bot-preview-${redact(row.bot.id)}`}
       size={S["text-md"]}
       color={row.waiting ? "warn" : "text-muted"}
       numberOfLines={stack ? 2 : 1}
       style={{ flex: 1 }}
     >
-      {row.preview}
+      {redact(row.preview)}
     </Txt>
   );
   return (
     <Pressable
-      testID={`bot-${row.bot.id}`}
+      testID={`bot-${redact(row.bot.id)}`}
       accessibilityRole="button"
-      accessibilityLabel={row.spoken}
+      accessibilityLabel={redact(row.spoken)}
       onPress={onOpen}
       style={({ pressed }) => ({
         minHeight: TOUCH.row,
@@ -131,11 +132,12 @@ function Row({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
 
 function Tile({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
   const { c } = useTheme();
+  const { redact } = useRuntime();
   return (
     <Pressable
-      testID={`pin-${row.bot.id}`}
+      testID={`pin-${redact(row.bot.id)}`}
       accessibilityRole="button"
-      accessibilityLabel={row.spoken}
+      accessibilityLabel={redact(row.spoken)}
       onPress={onOpen}
       style={({ pressed }) => ({
         width: "33.333%",
@@ -165,7 +167,7 @@ function Tile({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
       </View>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 4, maxWidth: "90%" }}>
         <Txt size={S["text-sm"]} numberOfLines={1}>
-          {row.name}
+          {redact(row.name)}
         </Txt>
         {row.unread && <UnreadDot />}
       </View>
@@ -236,7 +238,7 @@ export function Home({
               color="text-faint"
               style={{ marginTop: 14, marginBottom: 6, paddingHorizontal: 10 }}
             >
-              {section.name}
+              {redact(section.name)}
             </Txt>
             {section.rows.map((row) => (
               <Row key={row.bot.id} row={row} onOpen={() => onOpenBot(row.bot.id)} />

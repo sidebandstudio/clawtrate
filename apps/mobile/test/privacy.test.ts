@@ -44,12 +44,11 @@ describe("credentials never leave in a string the app shows or logs", () => {
     expect(secrets.redact("kept-from-before-1")).toBe(REDACTED);
   });
 
-  it("ignores values that are not credentials, and tokens too short to tell from words", async () => {
+  it("ignores values that are not credentials", async () => {
     const secrets = createSecrets();
     secrets.learn("roster:gateway:x", JSON.stringify({ token: "notasecretbutlong" }));
-    secrets.learn("connection", JSON.stringify({ token: "short" }));
     secrets.learn("connection", "not json");
-    expect(secrets.redact("notasecretbutlong short")).toBe("notasecretbutlong short");
+    expect(secrets.redact("notasecretbutlong")).toBe("notasecretbutlong");
   });
 });
 

@@ -9,6 +9,7 @@ import {
 } from "../src/host/keychain.ts";
 import { createKeychainSigner, DEVICE_KEY_ITEM } from "../src/host/signer.ts";
 import { createSocketFactory, type WebSocketConstructor } from "../src/host/socket.ts";
+import { createSecrets, REDACTED } from "../src/host/secrets.ts";
 import { createKeychainStore } from "../src/host/store.ts";
 
 /** A Keychain of generic-password items, keyed by service and name, as expo-secure-store keeps them. */
@@ -201,5 +202,23 @@ describe("the iOS host's socket factory", () => {
     ])
       expect(() => factory(url)).toThrow(/ws: or wss:/);
     expect(Socket).not.toHaveBeenCalled();
+  });
+});
+
+describe("the iOS host's credential scrubbing", () => {
+  it("scrubs a short token the connect form accepted", () => {
+    const secrets = createSecrets();
+    secrets.learn("connection", JSON.stringify({ token: "Rv7q" }));
+    expect(secrets.redact("Gateway refused Rv7q")).toBe(`Gateway refused ${REDACTED}`);
+  });
+
+  it("scrubs a longer token whole when a shorter known token is its prefix", () => {
+    const secrets = createSecrets();
+    const bootstrap = "check-prefix";
+    const device = `${bootstrap}-sentinel-tail`;
+    secrets.learn("connection", JSON.stringify({ token: bootstrap }));
+    secrets.learn("deviceToken:sample", JSON.stringify({ token: device }));
+    expect(secrets.redact(device)).toBe(REDACTED);
+    expect(secrets.redact(`${bootstrap} and ${device}`)).toBe(`${REDACTED} and ${REDACTED}`);
   });
 });

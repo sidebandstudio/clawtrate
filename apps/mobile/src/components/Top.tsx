@@ -9,6 +9,7 @@ import { View } from "react-native";
 import { S, TOUCH, useTheme } from "../theme/index.ts";
 import { Avatar } from "./Avatar.tsx";
 import { BackIcon, SettingsIcon } from "./icons.tsx";
+import { useRuntime } from "../runtime.ts";
 import { StatusStrip } from "./Strip.tsx";
 import { Dot, RoundButton, Txt } from "./ui.tsx";
 
@@ -118,11 +119,12 @@ export function BackButton({ label, onPress }: { label: string; onPress: () => v
 /** The title pill: the bot's avatar and name, centred between the floating controls. */
 function TitlePill({ bot }: { bot: Bot }) {
   const { c, scheme } = useTheme();
+  const { redact } = useRuntime();
   return (
     <View
       testID="title-pill"
       accessible
-      accessibilityLabel={bot.name}
+      accessibilityLabel={redact(bot.name)}
       style={{
         flexDirection: "row",
         alignItems: "center",
@@ -142,7 +144,7 @@ function TitlePill({ bot }: { bot: Bot }) {
     >
       <Avatar bot={bot} size={S["avatar-pill"]} />
       <Txt size={S["text-md"]} weight="medium" numberOfLines={1}>
-        {bot.name}
+        {redact(bot.name)}
       </Txt>
     </View>
   );

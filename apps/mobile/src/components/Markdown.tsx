@@ -13,6 +13,8 @@ import {
   type Block,
   type Inline,
 } from "../markdown.ts";
+import { REDACTED } from "../host/secrets.ts";
+import { useRuntime } from "../runtime.ts";
 import { FONTS, S, TOUCH, useTheme } from "../theme/index.ts";
 import { Txt } from "./ui.tsx";
 
@@ -29,8 +31,18 @@ function openLink(url: string, plain: boolean) {
   ]);
 }
 
+/** The address as written and decoded where it decodes: a scrubbed credential shows in either. */
+function decoded(url: string): string {
+  try {
+    return decodeURI(url);
+  } catch {
+    return url;
+  }
+}
+
 function Inlines({ nodes }: { nodes: Inline[] }) {
   const { c } = useTheme();
+  const { redact } = useRuntime();
   return (
     <>
       {nodes.map((node, index) => {
@@ -67,7 +79,17 @@ function Inlines({ nodes }: { nodes: Inline[] }) {
                 {node.text}
               </Txt>
             );
-          case "link":
+          case "link": {
+            // An address that carries a known credential, or one already scrubbed, is
+            // never handed to the system: the link is its text.
+            const shown = decoded(node.url);
+            if (
+              redact(node.url) !== node.url ||
+              redact(shown) !== shown ||
+              node.url.includes(REDACTED) ||
+              shown.includes(REDACTED)
+            )
+              return <Inlines key={index} nodes={node.children} />;
             return (
               <Fragment key={index}>
                 <Txt
@@ -85,6 +107,7 @@ function Inlines({ nodes }: { nodes: Inline[] }) {
                 )}
               </Fragment>
             );
+          }
         }
       })}
     </>

@@ -627,6 +627,38 @@ export async function echoingGateway(): Promise<{ url: string; close: () => Prom
   };
 }
 
+/** Maestro's whole view of the screen as text: every label and value the app exposes. */
+export async function screenText(): Promise<string> {
+  return hierarchy();
+}
+
+/** How many of the app's own data files hold each needle, as UTF-8 or UTF-16. */
+export function containerHits(needles: string[]): number[] {
+  const root = simctl("get_app_container", env.device, env.bundle, "data").trim();
+  const hits = needles.map(() => 0);
+  const visit = (dir: string) => {
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else if (entry.isFile()) {
+        const bytes = readFileSync(path);
+        needles.forEach((needle, i) => {
+          if (bytes.includes(Buffer.from(needle)) || bytes.includes(Buffer.from(needle, "utf16le")))
+            hits[i]! += 1;
+        });
+      }
+    }
+  };
+  visit(root);
+  return hits;
+}
+
 /** The app's own log lines since a time, from the device's unified log. */
 export function appLog(sinceSeconds: number): string {
   const result = spawnSync(

@@ -13,6 +13,7 @@ import { StateMark } from "../components/StateMark.tsx";
 import { BackButton, Top } from "../components/Top.tsx";
 import { Txt, UnreadDot } from "../components/ui.tsx";
 import { taskRows } from "../lists.ts";
+import { useRuntime } from "../runtime.ts";
 import { S, stacked, TOUCH, useTheme } from "../theme/index.ts";
 
 export function BotTasks({
@@ -31,6 +32,7 @@ export function BotTasks({
   onOpenTask: (key: string) => void;
 }) {
   const { c } = useTheme();
+  const { redact } = useRuntime();
   const tasks = state.tasksByBot[bot.id];
   const rows = taskRows(tasks ?? [], seen, now);
   const stack = stacked(useWindowDimensions().fontScale);
@@ -42,27 +44,27 @@ export function BotTasks({
         left={<BackButton label={TASK_WORDS.back} onPress={onBack} />}
       />
       <ScrollView
-        testID={`bot-tasks-${bot.id}`}
-        accessibilityLabel={`${bot.name}'s tasks`}
+        testID={`bot-tasks-${redact(bot.id)}`}
+        accessibilityLabel={redact(`${bot.name}'s tasks`)}
         contentContainerStyle={{ paddingHorizontal: S["space-2"], paddingBottom: S["space-8"] }}
       >
         <View style={{ alignItems: "center", gap: S["space-2"], paddingVertical: S["space-4"] }}>
           <Avatar bot={bot} size={S["avatar-hero"]} primary={bot.isDefault} />
           <Txt testID="bot-name" size={TOUCH.bodyText} weight="medium" accessibilityRole="header">
-            {bot.name}
+            {redact(bot.name)}
           </Txt>
           {bot.theme && (
             <Txt size={S["text-sm"]} color="text-faint">
-              {bot.theme}
+              {redact(bot.theme)}
             </Txt>
           )}
         </View>
         {rows.map((row) => (
           <Pressable
             key={row.task.key}
-            testID={`task-${row.task.key}`}
+            testID={`task-${redact(row.task.key)}`}
             accessibilityRole="button"
-            accessibilityLabel={row.spoken}
+            accessibilityLabel={redact(row.spoken)}
             onPress={() => onOpenTask(row.task.key)}
             style={({ pressed }) => ({
               minHeight: TOUCH.taskRow,
@@ -77,16 +79,16 @@ export function BotTasks({
           >
             <View style={{ flex: 1, gap: 2 }}>
               <Txt
-                testID={`task-title-${row.task.key}`}
+                testID={`task-title-${redact(row.task.key)}`}
                 size={S["text-base"]}
                 color={row.unread || row.state === "working" ? "text" : "text-muted"}
                 numberOfLines={stack ? undefined : 1}
               >
-                {row.title}
+                {redact(row.title)}
               </Txt>
               {stack && row.time !== "" && (
                 <Txt
-                  testID={`task-time-${row.task.key}`}
+                  testID={`task-time-${redact(row.task.key)}`}
                   size={S["text-xs"]}
                   color="text-faint"
                   style={{ fontVariant: ["tabular-nums"] }}
@@ -97,7 +99,7 @@ export function BotTasks({
             </View>
             {!stack && row.time !== "" && (
               <Txt
-                testID={`task-time-${row.task.key}`}
+                testID={`task-time-${redact(row.task.key)}`}
                 size={S["text-xs"]}
                 color="text-faint"
                 style={{ fontVariant: ["tabular-nums"] }}
@@ -119,7 +121,7 @@ export function BotTasks({
           <View style={{ padding: S["space-3"], gap: S["space-1"] }}>
             <Txt weight="medium">{TASK_WORDS.none}</Txt>
             <Txt size={S["text-sm"]} color="text-faint">
-              {noTasksBody(bot.name)}
+              {redact(noTasksBody(bot.name))}
             </Txt>
           </View>
         )}

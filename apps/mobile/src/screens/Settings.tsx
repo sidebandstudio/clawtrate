@@ -149,7 +149,7 @@ export function Settings({
             >
               <Fact label={W.address}>
                 <Txt testID="gateway-address" selectable style={{ flexShrink: 1 }}>
-                  {addressWords(connection.gatewayUrl)}
+                  {redact(addressWords(connection.gatewayUrl))}
                 </Txt>
               </Fact>
               {isCleartext(connection.gatewayUrl) && (
@@ -168,7 +168,7 @@ export function Settings({
                 </Txt>
               </Fact>
               <Fact label={W.scopes}>
-                <Txt testID="granted-scopes">{grantedWords(connection)}</Txt>
+                <Txt testID="granted-scopes">{redact(grantedWords(connection))}</Txt>
               </Fact>
               {connection.status === "connected" &&
                 connection.scopes.map((scope) => (
@@ -178,12 +178,12 @@ export function Settings({
                     color="text-muted"
                     style={{ paddingHorizontal: S["space-4"], paddingTop: 6 }}
                   >
-                    {scopeWords(scope)}
+                    {redact(scopeWords(scope))}
                   </Txt>
                 ))}
               {server && (
                 <Fact label={W.server}>
-                  <Txt>{server}</Txt>
+                  <Txt>{redact(server)}</Txt>
                 </Fact>
               )}
             </View>
@@ -235,16 +235,18 @@ export function Settings({
               )}
               {actions.forget && (
                 <Txt testID="forget-keeps" size={S["text-sm"]} color="text-faint">
-                  {forgetWords(gatewayLabel(connection.gatewayUrl))}
+                  {redact(forgetWords(gatewayLabel(connection.gatewayUrl)))}
                 </Txt>
               )}
             </View>
             {connection.gatewayUrl && (
               <Txt size={S["text-sm"]} color="text-faint">
-                {pairingNote(gatewayLabel(connection.gatewayUrl), {
-                  holdsAll: false,
-                  readOnly: true,
-                })}
+                {redact(
+                  pairingNote(gatewayLabel(connection.gatewayUrl), {
+                    holdsAll: false,
+                    readOnly: true,
+                  }),
+                )}
               </Txt>
             )}
             <Button

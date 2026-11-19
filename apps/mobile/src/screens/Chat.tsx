@@ -142,6 +142,7 @@ function RowView({ row }: { row: ChatRow }) {
 
 /** The task's name, the first line of every transcript. */
 function TaskLine({ task }: { task: Task }) {
+  const { redact } = useRuntime();
   return (
     <Txt
       testID="task-line"
@@ -150,7 +151,7 @@ function TaskLine({ task }: { task: Task }) {
       weight="medium"
       style={{ textAlign: "center", marginBottom: S["space-2"] }}
     >
-      {task.title}
+      {redact(task.title)}
     </Txt>
   );
 }
@@ -185,12 +186,13 @@ function Empty({
 /** The read-only explanation, in the composer's place at the foot (visual-language.md, section 8). */
 function ReadOnly({ botName }: { botName: string }) {
   const { c } = useTheme();
+  const { redact } = useRuntime();
   const words = readOnlyWords(botName);
   return (
     <View
       testID="read-only"
       accessible
-      accessibilityLabel={`${words.lead}${words.rest}`}
+      accessibilityLabel={redact(`${words.lead}${words.rest}`)}
       style={{
         flexDirection: "row",
         alignItems: "center",
@@ -206,9 +208,9 @@ function ReadOnly({ botName }: { botName: string }) {
       <EyeIcon color={c["text-muted"]} />
       <Txt size={S["text-sm"]} color="text-muted" style={{ flex: 1 }}>
         <Txt size={S["text-sm"]} weight="medium">
-          {words.lead}
+          {redact(words.lead)}
         </Txt>
-        {words.rest}
+        {redact(words.rest)}
       </Txt>
     </View>
   );
@@ -315,7 +317,7 @@ export function Chat({
     body = (
       <View>
         <Empty title={W.waitingTitle} body={W.waitingBody} />
-        {last && <RowView row={{ kind: "running", id: "running", ...last }} />}
+        {last && <RowView row={redactRow({ kind: "running", id: "running", ...last }, redact)} />}
       </View>
     );
   } else if (!transcript || (transcript.status === "loading" && items === 0)) {
@@ -362,7 +364,7 @@ export function Chat({
       </Empty>
     );
   } else if (rows.length === 0) {
-    body = <Empty title={W.emptyTitle} body={emptyBody(bot.name)} />;
+    body = <Empty title={W.emptyTitle} body={redact(emptyBody(bot.name))} />;
   } else {
     body = (
       <View style={{ gap: 4 }}>
@@ -444,7 +446,7 @@ export function Chat({
           state={state}
           taskKey={task.key}
           bot={bot}
-          left={<BackButton label={`Back to ${bot.name}'s tasks`} onPress={onBack} />}
+          left={<BackButton label={redact(`Back to ${bot.name}'s tasks`)} onPress={onBack} />}
         />
       </View>
       <ReadOnly botName={bot.name} />

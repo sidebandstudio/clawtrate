@@ -8,9 +8,6 @@ import type { KeyValueStore } from "@clawtrate/core";
 
 export const REDACTED = "•••";
 
-/** Values shorter than this are not treated as secrets: they would match ordinary words. */
-const MIN_SECRET_CHARS = 8;
-
 export type Secrets = {
   /** Learn the credentials inside a value core stores under `key`. */
   learn(key: string, value: string | null): void;
@@ -39,12 +36,12 @@ export function createSecrets(): Secrets {
   return {
     learn(key, value) {
       if (value === null) return;
-      for (const token of tokensIn(key, value))
-        if (token.length >= MIN_SECRET_CHARS) known.add(token);
+      for (const token of tokensIn(key, value)) if (token !== "") known.add(token);
     },
     redact(text) {
       let out = text;
-      for (const secret of known) if (out.includes(secret)) out = out.split(secret).join(REDACTED);
+      for (const secret of [...known].sort((a, b) => b.length - a.length))
+        if (out.includes(secret)) out = out.split(secret).join(REDACTED);
       return out;
     },
   };
