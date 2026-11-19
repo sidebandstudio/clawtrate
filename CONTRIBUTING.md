@@ -1,5 +1,22 @@
 # Contributing
 
+Clawtrate is young and moves fast. A small team builds most of it, a lot of it with coding agents, against a plan that is public down to the last issue. Help is welcome. This page explains how to take part without building something twice or colliding with work that is already under way.
+
+## Where things stand
+
+- There is no release yet. The desktop app runs against a development gateway, and the iOS app is not on `main` yet.
+- The plan is [docs/roadmap.md](docs/roadmap.md). It splits the work into milestones, and each piece is an issue.
+- The definition of done is [docs/parity.md](docs/parity.md). Each row is one behavior with a stable id such as `F-012`, and a row is done when an automated check whose title starts with that id passes.
+- The maintainers merge their own work once its checks pass. Review time for outside pull requests is limited for now, so talk on the issue before you start anything large.
+
+## Picking something to work on
+
+Issues marked `help wanted` are written so that someone new can start from the issue text alone. The first line of every plan issue gives its state. "In progress, maintainers" means someone is on it, so leave it alone. "Waiting" names what it waits on. "Open" means you can take it.
+
+Comment on the issue before you start, with a short plan, and a maintainer assigns it to you. [Taking a segment](docs/roadmap.md#taking-a-segment) in the roadmap lists which files a piece of work owns and which ones it shares, so that two streams of work do not collide.
+
+For a bug, open a bug report. For something new, open an idea first. A pull request for a feature that has no agreed issue may be closed.
+
 ## Setup
 
 You need Node.js 26, pnpm 11 and, for anything that talks to a gateway, the OpenClaw CLI (`openclaw`, version 2026.10.6) on your `PATH`.
@@ -7,9 +24,22 @@ You need Node.js 26, pnpm 11 and, for anything that talks to a gateway, the Open
 ```bash
 pnpm install
 pnpm exec playwright install chromium   # once, for the end-to-end and visual tests
+pnpm dev-gateway start
+pnpm preview:web
 ```
 
-The [README](README.md) explains the development gateway, the web preview and the desktop app. [`docs/decisions.md`](docs/decisions.md) records versions and why things are the way they are; add to it when you make a choice a later contributor needs to know about. [`docs/parity.md`](docs/parity.md) is the definition of done.
+[docs/development](docs/development/README.md) covers the web preview, the desktop app, the development gateway, the tests and packaging. On Windows, clone with `git clone -c core.autocrlf=false` so that Prettier sees the LF line endings it checks for.
+
+## The development gateway
+
+Develop only against development gateway instances started by `pnpm dev-gateway`. Never run `openclaw` without `--dev` or `--profile clawtrate-dev-<name>`, never against your default profile, and never read or write `~/.openclaw`. If another checkout may be running the default instance on port 19001, use a named instance of your own:
+
+```bash
+pnpm dev-gateway start --instance <name>
+pnpm dev-gateway reset --instance <name>   # when you are done
+```
+
+`pnpm e2e` and `pnpm check:packaged` always create, and remove, their own instances. Never copy credentials from another OpenClaw profile. The development gateway uses a scripted model. Stop only processes you started, by PID.
 
 ## Checks
 
@@ -20,77 +50,39 @@ pnpm lint        # ESLint and Prettier
 pnpm typecheck
 pnpm test        # unit tests
 pnpm e2e         # end-to-end tests against a development gateway of their own
-pnpm visual      # screenshots and behaviour of the fixture mode; the baselines are macOS ones
+pnpm visual      # screenshots and behavior of the fixture mode; the baselines are macOS ones
 ```
 
-CI runs lint, typecheck and the unit tests on Linux, `pnpm e2e` on Linux with OpenClaw 2026.10.6 from npm, and `pnpm visual` and an unsigned `pnpm package:mac` on macOS 15.
+Run `pnpm scenarios` too when you change the development gateway or its scenarios. The visual baselines are only valid on macOS. If you are on another system, say so in the pull request, and CI's macOS job is the check. [Testing](docs/development/testing.md) explains what each check covers and what CI runs.
 
-## The development gateway
+## Pull requests
 
-Develop only against development gateway instances started by `pnpm dev-gateway`. Never run `openclaw` without `--dev` or `--profile clawtrate-dev-<name>`, never against your default profile, and never read or write `~/.openclaw`. If another checkout may be running the default instance (port 19001), use a named instance of your own:
+One issue, one pull request. Start the body with `Closes #123`, or `Part of #123` when the issue needs more than one pull request. Smaller pull requests merge sooner. Every pull request gets a `size:` label, from XS to XXL, so you can see how big yours is.
 
-```bash
-pnpm dev-gateway start --instance <name>
-pnpm dev-gateway reset --instance <name>   # when you are done
-```
+`main` gets one squashed commit per pull request. Its title becomes the commit's subject and its body the commit's message, so write both for someone reading the history a year from now.
 
-`pnpm e2e` and `pnpm check:packaged` always create, and remove, their own instances. Never copy credentials from another OpenClaw profile; the development gateway uses a scripted model. Stop only processes you started, by PID.
+The title says what changes for the person using Clawtrate, in plain words and under 72 characters, after a type: `feat`, `fix`, `docs`, `test`, `ci`, `refactor` or `chore`.
+
+| Good                                                      | Not like this                                                                                       |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `feat: watch a bot's browser and take control`            | `fix(core): guard the lease generation in releaseControl`                                           |
+| `fix: a stopped run no longer restarts after a reconnect` | `Merge the engine follow-up: Stop on every path, checks that wait on the gateway's own state, and…` |
+| `docs: explain how to add a scenario`                     | `Update files`                                                                                      |
+
+The body says what changes in one to three sentences, why, and how it was checked. Use short, plain sentences, and delete the template's comments. Interface changes need before and after screenshots at desktop and phone width.
+
+Coding agents are welcome here, since most of Clawtrate is written with them. You are still responsible for every line you submit. Read the diff before you open the pull request, and leave co-author trailers, "generated with" lines and any other tool or agent attribution out of commits and pull requests.
+
+Keep your branch mergeable. When `main` moves under it and it conflicts, merge `main` into it and run the checks again.
 
 ## Publication
 
-The repository is public, so every commit is published. Commit no secrets or tokens, no private hostnames or IP addresses, no usernames or home-directory paths, no email addresses, no personal data, and no third-party images or copied assets. Commits are small and describe the change, with no co-author trailers, no "generated with" lines and no tool or agent attribution.
+The repository is public, so every commit, pull request and issue is published. Commit no secrets or tokens, no private hostnames or IP addresses, no usernames or home-directory paths, no email addresses, no personal data, and no third-party images or copied assets. The same goes for pull request titles and bodies. Commits on your branch are small and describe the change.
 
-## Packaging the desktop app
+## Security
 
-```bash
-pnpm package:mac      # on macOS: Clawtrate.app, a .dmg and a .zip for Apple silicon and Intel
-pnpm package:win      # on Windows: an NSIS installer for x64
-pnpm check:packaged   # launches the app the command above built; on macOS it also pairs it with a development gateway
-```
+Report security problems privately, as [SECURITY.md](SECURITY.md) describes, and never in a public issue.
 
-The output goes to `apps/desktop/dist`, which git ignores. Each command packages only on its own operating system. The icons come from `assets/brand/logo.png` through `pnpm brand:icons`; packaging refuses icons older than the logo. Nothing is published or uploaded: releasing belongs to the project's owner.
+## License
 
-`pnpm check:packaged` runs the app from `apps/desktop/dist`, not from source, with a temporary data folder (`--user-data-dir`), so it never touches the data of a Clawtrate you use. It checks the window, its title and the connect screen, that its renderer runs in the operating system's sandbox, that the page has no Node and stays on its own content, then pairs with a new development gateway instance, shows the seeded bots and a transcript, checks the data folder is private, and quits the app. It then removes its instances and temporary folder, and puts back the one file a launch changes outside that folder: the bundle id's preferences in `~/Library/Preferences`, restored to its earlier bytes or removed if the run created it. Apple's Python, which the command line tools install, must be present: the check uses it to ask the kernel whether the renderer is sandboxed.
-
-### On Windows
-
-Building the installer needs Node.js 26, pnpm 11 and git on x64 Windows; it needs neither the OpenClaw CLI nor administrator rights. Clone with LF line endings, because Prettier checks for them and Git for Windows converts to CRLF by default:
-
-```bash
-git clone -c core.autocrlf=false <repository URL>
-pnpm install
-pnpm package:win
-```
-
-`pnpm package:win` writes `apps/desktop/dist/Clawtrate-<version>-win-x64.exe`, the installer, and `apps/desktop/dist/win-unpacked`, the app it installs, which runs as it is. electron-builder downloads Electron into `%LOCALAPPDATA%\electron\Cache` and its NSIS and 7-Zip tools into `%LOCALAPPDATA%\electron-builder\Cache` (or `ELECTRON_BUILDER_CACHE`), about 175 MB together.
-
-`pnpm check:packaged` then starts `win-unpacked\Clawtrate.exe` with a temporary data folder. Run it from a terminal in your own desktop session, since it opens the app's window; Playwright needs no browser download for it. On Windows it checks that the window is titled Clawtrate, the page comes from the app's archive and shows the connect screen, the page has no Node and stays on its own content, the bridge and the content security policy, that the renderers run at untrusted integrity (the sandbox), that a count sent through `setBadge` puts an overlay on its taskbar button and zero clears it, that a second launch hands over to the running app, and that the app closes when asked and leaves nothing running. The tests that need a development gateway are reported as skipped: no development gateway runs on Windows. The first run can spend half a minute in the sandbox test while PowerShell compiles the small helper that reads the processes' integrity levels.
-
-### Signing and notarizing
-
-Without signing variables the macOS app is signed ad hoc (no certificate, no keychain) and not notarized, and the Windows installer is not signed. To sign, set these in the environment of `pnpm package:mac` or `pnpm package:win`; no code changes.
-
-macOS, signing with a Developer ID Application certificate, one of:
-
-- `CSC_LINK` (the `.p12` file's path, or its base64) and `CSC_KEY_PASSWORD`;
-- `CSC_NAME`, the name of an identity already in the keychain, without the `Developer ID Application:` prefix.
-
-macOS, notarizing, which runs only when signing is on, one of:
-
-- `APPLE_API_KEY` (path to the App Store Connect `.p8` key), `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`;
-- `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`;
-- `APPLE_KEYCHAIN_PROFILE` (a `notarytool store-credentials` profile), optionally with `APPLE_KEYCHAIN`.
-
-Signing turns on the hardened runtime with electron-builder's default entitlements.
-
-Windows: `WIN_CSC_LINK` (a `.pfx` file's path, or its base64) and `WIN_CSC_KEY_PASSWORD`. `CSC_LINK` and `CSC_KEY_PASSWORD` also work when the build runs on Windows.
-
-### Opening an unsigned build
-
-An app you built yourself opens normally. One downloaded from elsewhere is quarantined, and macOS says it cannot verify it. Either open it once, then choose **Open Anyway** in System Settings → Privacy & Security, or remove the quarantine flag:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/Clawtrate.app
-```
-
-On Windows, SmartScreen warns about an unsigned installer; choose **More info**, then **Run anyway**.
+Clawtrate is MIT licensed, and so is everything you contribute to it.
