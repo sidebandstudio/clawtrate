@@ -17,3 +17,14 @@ export const ThemeContext = createContext<Theme>(themeFor("light"));
 export function useTheme(): Theme {
   return useContext(ThemeContext);
 }
+
+/**
+ * From the first accessibility text size (iOS scales text about 1.35 times and
+ * more) a row puts its name or title on lines of its own, whole, and the time on
+ * a line under it, instead of cutting the name to make room for the time.
+ */
+export const STACK_FROM_SCALE = 1.35;
+
+export function stacked(fontScale: number): boolean {
+  return fontScale >= STACK_FROM_SCALE;
+}

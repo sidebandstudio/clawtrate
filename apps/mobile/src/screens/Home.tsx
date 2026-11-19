@@ -8,7 +8,7 @@ import type { ClawtrateState } from "@clawtrate/core";
 import { LIST_WORDS } from "@clawtrate/ui/summary";
 import type { SeenMap } from "@clawtrate/ui/unread";
 import { useState } from "react";
-import { Pressable, RefreshControl, ScrollView, View } from "react-native";
+import { Pressable, RefreshControl, ScrollView, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Avatar } from "../components/Avatar.tsx";
 import { SettingsButton, Top } from "../components/Top.tsx";
@@ -16,10 +16,65 @@ import { Txt, UnreadDot } from "../components/ui.tsx";
 import { StateMark } from "../components/StateMark.tsx";
 import { homeModel, type BotRow } from "../lists.ts";
 import { useRuntime } from "../runtime.ts";
-import { S, TOUCH, useTheme } from "../theme/index.ts";
+import { S, stacked, TOUCH, useTheme } from "../theme/index.ts";
 
 function Row({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
   const { c } = useTheme();
+  const { fontScale } = useWindowDimensions();
+  const stack = stacked(fontScale);
+  const name = (
+    <Txt
+      testID={`bot-name-${row.bot.id}`}
+      size={TOUCH.bodyText}
+      weight="medium"
+      numberOfLines={stack ? undefined : 1}
+      style={{ flexShrink: 1 }}
+    >
+      {row.name}
+    </Txt>
+  );
+  const label = row.label && (
+    <View
+      style={{
+        backgroundColor: c["bg-bubble"],
+        borderRadius: 999,
+        paddingHorizontal: 8,
+        paddingVertical: 1,
+        flexShrink: 2,
+        alignSelf: "flex-start",
+      }}
+    >
+      <Txt
+        testID={`bot-label-${row.bot.id}`}
+        size={S["text-xs"]}
+        color="text-faint"
+        numberOfLines={1}
+      >
+        {row.label}
+      </Txt>
+    </View>
+  );
+  const time = (
+    <Txt
+      testID={`bot-time-${row.bot.id}`}
+      size={S["text-xs"]}
+      color="text-faint"
+      style={[{ fontVariant: ["tabular-nums"] }, stack ? null : { marginLeft: "auto" }]}
+    >
+      {row.time}
+    </Txt>
+  );
+  const preview = (
+    <Txt
+      testID={`bot-preview-${row.bot.id}`}
+      size={S["text-md"]}
+      color={row.waiting ? "warn" : "text-muted"}
+      numberOfLines={stack ? 2 : 1}
+      style={{ flex: 1 }}
+    >
+      {row.preview}
+    </Txt>
+  );
   return (
     <Pressable
       testID={`bot-${row.bot.id}`}
@@ -29,9 +84,10 @@ function Row({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
       style={({ pressed }) => ({
         minHeight: TOUCH.row,
         flexDirection: "row",
-        alignItems: "center",
+        alignItems: stack ? "flex-start" : "center",
         gap: S["space-3"],
         paddingHorizontal: 10,
+        paddingVertical: stack ? S["space-2"] : 0,
         borderRadius: S["radius-lg"],
         backgroundColor: pressed ? c["bg-hover"] : "transparent",
       })}
@@ -42,54 +98,33 @@ function Row({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
         primary={row.primary}
         state={row.state === "working" ? "working" : "idle"}
       />
-      <View style={{ flex: 1, gap: 2 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: S["space-2"] }}>
-          <Txt size={TOUCH.bodyText} weight="medium" numberOfLines={1} style={{ flexShrink: 1 }}>
-            {row.name}
-          </Txt>
-          {row.label && (
-            <View
-              style={{
-                backgroundColor: c["bg-bubble"],
-                borderRadius: 999,
-                paddingHorizontal: 8,
-                paddingVertical: 1,
-                flexShrink: 2,
-              }}
-            >
-              <Txt
-                testID={`bot-label-${row.bot.id}`}
-                size={S["text-xs"]}
-                color="text-faint"
-                numberOfLines={1}
-              >
-                {row.label}
-              </Txt>
-            </View>
-          )}
-          <Txt
-            testID={`bot-time-${row.bot.id}`}
-            size={S["text-xs"]}
-            color="text-faint"
-            style={{ marginLeft: "auto", fontVariant: ["tabular-nums"] }}
-          >
-            {row.time}
-          </Txt>
+      {stack ? (
+        <View style={{ flex: 1, gap: 4 }}>
+          {name}
+          {label}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: S["space-2"] }}>
+            {row.state && <StateMark state={row.state} />}
+            {preview}
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: S["space-2"] }}>
+            {time}
+            {row.unread && <UnreadDot />}
+          </View>
         </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: S["space-2"] }}>
-          {row.state && <StateMark state={row.state} />}
-          <Txt
-            testID={`bot-preview-${row.bot.id}`}
-            size={S["text-md"]}
-            color={row.waiting ? "warn" : "text-muted"}
-            numberOfLines={1}
-            style={{ flex: 1 }}
-          >
-            {row.preview}
-          </Txt>
-          {row.unread && <UnreadDot />}
+      ) : (
+        <View style={{ flex: 1, gap: 2 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: S["space-2"] }}>
+            {name}
+            {label}
+            {time}
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: S["space-2"] }}>
+            {row.state && <StateMark state={row.state} />}
+            {preview}
+            {row.unread && <UnreadDot />}
+          </View>
         </View>
-      </View>
+      )}
     </Pressable>
   );
 }
