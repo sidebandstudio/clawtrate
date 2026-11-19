@@ -202,8 +202,8 @@
     return (
       (CT.botsSettingsLead ? CT.botsSettingsLead(id) : "") +
       `<h3 class="b-tabgroup">About</h3><dl class="facts">` +
-      row("Description", `<span class="b-faint">None</span>`) +
-      row("Instructions", "From AGENTS.md, 42 lines") +
+      // lifecycle.html fills the About rows (docs/design/bots-lifecycle.md, section 6).
+      (CT.botsAboutRows ? CT.botsAboutRows(id, row) : row("Description", `<span class="b-faint">None</span>`) + row("Instructions", "From AGENTS.md, 42 lines")) +
       `</dl>` +
       `<h3 class="b-tabgroup">Model</h3><dl class="facts">` +
       row("Account", `<span>${a ? esc(acctName(a)) : b.removed ? "" : esc(providerName(provider || D.DEFAULT_MODEL.provider))}</span>${lockWord(id)}`, `data-bs="account" aria-label="Account: ${a ? esc(acctName(a)) + ", " + lockState(id) : b.removed ? "no account" : "the gateway chooses"}. Open."`) +
@@ -231,7 +231,8 @@
           : "") +
       (CT.botsT3Row ? CT.botsT3Row(id) : "") +
       (CT.botsExtraGroups ? CT.botsExtraGroups(id) : "") +
-      `<h3 class="b-tabgroup">Runs on</h3><dl class="facts">${CT.botsRunsOn ? CT.botsRunsOn(id) : row("Machine", "Gateway host")}</dl>`
+      `<h3 class="b-tabgroup">Runs on</h3><dl class="facts">${CT.botsRunsOn ? CT.botsRunsOn(id) : row("Machine", "Gateway host")}</dl>` +
+      (CT.botsSettingsTail ? CT.botsSettingsTail(id) : "")
     );
   }
 

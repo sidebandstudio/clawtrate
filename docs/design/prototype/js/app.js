@@ -271,7 +271,7 @@
             return (
               `<li><button type="button" class="pin" data-bot="${b.id}" data-key="b:${b.id}" aria-current="${b.id === model.selectedBot}"` +
               `${b.tasks.length > 1 ? ` aria-expanded="${isOpen(b)}"` : ""} aria-label="${esc(spokenBot(b, s))}" data-testid="bot">` +
-              `<span class="pin-avatar"><span class="avatar" data-bot="${b.id}"></span>${stateMark(s.state)}</span>` +
+              `<span class="pin-avatar"><span class="avatar" data-bot="${b.id}"></span>${stateMark(s.state)}${CT.railStar ? CT.railStar(b) : ""}</span>` +
               `<span class="pin-name"><span>${b.name}</span>${s.unread ? '<span class="unread-dot" aria-hidden="true"></span>' : ""}</span></button></li>`
             );
           })
@@ -296,7 +296,7 @@
           `<li class="bot-group"${open ? ' data-open="true"' : ""}>` +
           `<button type="button" class="bot" data-bot="${b.id}" data-key="b:${b.id}" aria-current="${selected && !open}"` +
           `${several ? ` aria-expanded="${open}"` : ""} aria-label="${esc(spokenBot(b, s))}" data-testid="bot">` +
-          `<span class="avatar" data-bot="${b.id}"></span>` +
+          `<span class="avatar" data-bot="${b.id}"></span>${CT.railStar ? CT.railStar(b) : ""}` +
           `<span class="bot-text"><span class="bot-line"><span class="bot-name">${b.name}</span><time class="bot-time">${s.when}</time></span>` +
           `<span class="bot-line">${stateMark(s.state)}<span class="bot-preview"${s.notice ? ` data-tone="${s.notice.tone}"` : ""}>${esc(s.notice ? s.notice.text : s.preview)}</span>${s.unread ? '<span class="unread-dot"></span>' : ""}</span></span></button>` +
           (several
@@ -705,7 +705,9 @@
         ? (b && canWrite() ? item(`New task for ${b.name}`, `data-new="${b.id}"`, "⌘T") : "") + item("New bot", 'data-action="new-bot"', "⌘N")
         : (canWrite() ? item("New task", `data-new="${b.id}"`) : "") +
           (b.tasks.length > 1 ? item(isOpen(b) ? "Hide tasks" : "Show tasks", `data-toggle="${b.id}"`) : "") +
-          item(isPinned(b) ? "Unpin" : "Pin", `data-pin="${b.id}"`);
+          item(isPinned(b) ? "Unpin" : "Pin", `data-pin="${b.id}"`) +
+          // A page built on this one (lifecycle.html) may add items for the bot.
+          (CT.railMenuExtra ? CT.railMenuExtra(b, item) : "");
     railMenu.setAttribute("aria-label", kind === "new" ? "New" : `${b.name}`);
     railMenu.hidden = false;
     railMenu.style.left = `${Math.max(8, Math.min(x, innerWidth - 244))}px`;
