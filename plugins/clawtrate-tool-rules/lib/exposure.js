@@ -37,10 +37,13 @@ const rec = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
 const list = (value) => (Array.isArray(value) ? value.filter((v) => typeof v === "string") : null);
 
+/** The tools of a group this check knows, by its own names only (never `constructor`). */
+const groupOf = (name) => (Object.hasOwn(GROUPS, name) ? GROUPS[name] : undefined);
+
 function covers(entry, tool) {
   const name = ALIASES.get(entry.trim().toLowerCase()) ?? entry.trim().toLowerCase();
   if (name === "*" || name === tool) return true;
-  if (GROUPS[name]?.includes(tool)) return true;
+  if (groupOf(name)?.includes(tool)) return true;
   if (name.includes("*")) {
     const pattern = new RegExp(
       `^${name
@@ -79,7 +82,7 @@ export function surelyDenied(config, agent, tool) {
     // An empty allow list restricts nothing, as the gateway reads it.
     if (!allow || allow.length === 0) continue;
     // A group this check does not know may hold the tool; `write` brings apply_patch.
-    const unknownGroup = (entry) => entry.startsWith("group:") && !GROUPS[entry];
+    const unknownGroup = (entry) => entry.startsWith("group:") && !groupOf(entry);
     const brings = (entry) => tool === "apply_patch" && covers(entry, "write");
     if (!allow.some((entry) => covers(entry, tool) || unknownGroup(entry) || brings(entry))) {
       return true;

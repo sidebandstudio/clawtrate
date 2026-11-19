@@ -108,3 +108,16 @@ describe("the gateway's implicit default bot", () => {
     expect(exposures({ agents: { entries: {} } })).toEqual([]);
   });
 });
+
+describe("policy entries named like inherited properties", () => {
+  it("are read as unknown names, and the scan goes on", () => {
+    for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      const config = withAgent({
+        ...SAFE,
+        tools: { ...SAFE.tools, deny: [...SAFE.tools.deny, name] },
+      });
+      expect(exposures(config), name).toEqual([]);
+      expect(surelyDenied({ tools: { allow: [name] } }, {}, "gateway"), name).toBe(true);
+    }
+  });
+});
