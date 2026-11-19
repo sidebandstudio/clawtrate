@@ -1,8 +1,9 @@
 // What a bot handed over, for the conversation's cards, the Files tab's "Sent
 // in chat" and the media viewer (work-pane.md, sections 11 to 14). One list
 // per open task from the one query the design uses, read again whenever the
-// task's history is read again: the gateway adds an item to the history a few
-// seconds after the run that sent it ends. Previews and content are fetched by
+// task's history is read again or its row changes: the gateway adds an item to
+// the message in place, a few seconds after the run that sent it ends, and then
+// says only that the session changed (`sessions.changed`, a newer `updatedAt`). Previews and content are fetched by
 // the host from the gateway only, never from an address a bot wrote, and only
 // a few are held at once.
 
@@ -165,6 +166,7 @@ export function ArtifactsProvider({
   taskKey,
   bot,
   transcript,
+  changedAt,
   online,
   onOpenInPane,
   onShowInChat,
@@ -174,6 +176,8 @@ export function ArtifactsProvider({
   taskKey: string;
   bot: string;
   transcript: Transcript | undefined;
+  /** When the gateway last said the task's session changed (its row's `updatedAt`). */
+  changedAt: number | null;
   online: boolean;
   onOpenInPane: (artifact: Artifact) => void;
   /** Close the drawer, if it is one, then call `reveal`. */
@@ -212,7 +216,7 @@ export function ArtifactsProvider({
       );
     }, 200);
     return () => clearTimeout(timer);
-  }, [bridge, taskKey, online, ready, loadedAt, nonce]);
+  }, [bridge, taskKey, online, ready, loadedAt, changedAt, nonce]);
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
   const items = transcript?.items;

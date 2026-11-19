@@ -483,6 +483,7 @@ export function Shell({
           taskKey={taskKey ?? ""}
           bot={bot?.name ?? "The bot"}
           transcript={taskKey ? transcript : undefined}
+          changedAt={task?.updatedAt ?? null}
           online={state.connection.status === "connected"}
           onOpenInPane={openArtifact}
           onShowInChat={showArtifactInChat}
