@@ -404,6 +404,19 @@ export function readInventoryAccounts(
   return out.slice(0, MAX_INVENTORY);
 }
 
+/** A `models.authStatus` reply that says its status is unavailable: not an empty list. */
+export function accountsUnavailable(status: unknown): Unavailable | null {
+  const unavailable = asRecord(rec(status).unavailable);
+  if (!unavailable) return null;
+  return {
+    status: "failed",
+    message:
+      str(unavailable.message, MAX_REASON_CHARS) ??
+      str(unavailable.code, MAX_REASON_CHARS) ??
+      "The gateway reports the accounts unavailable.",
+  };
+}
+
 /** `secrets.store.list`: names only, never values. */
 export function readSecretNames(value: unknown): string[] {
   return list(rec(value).entries)
@@ -647,7 +660,8 @@ export class MachinesEngine {
       inventory: {
         accounts: isUnavailable(status)
           ? status
-          : readInventoryAccounts(status, modelRefOf(config, botId)),
+          : (accountsUnavailable(status) ??
+            readInventoryAccounts(status, modelRefOf(config, botId))),
         toolServers: readToolServers(config, botId, listing?.value ?? null),
         listing: listing ? { key: listing.key, readAt: listing.readAt } : null,
         secrets,

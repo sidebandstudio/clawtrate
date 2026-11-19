@@ -511,7 +511,10 @@ export function RunsOnPage({
       <dl className="facts m-facts" data-testid="runs-on-inventory">
         <Fact label="Accounts" testId="inventory-accounts">
           {"status" in inventory.accounts
-            ? unavailableWords(inventory.accounts.status)
+            ? unavailableWords(
+                inventory.accounts.status,
+                inventory.accounts.status === "failed" ? inventory.accounts.message : undefined,
+              )
             : inventory.accounts.length === 0
               ? "None listed"
               : inventory.accounts

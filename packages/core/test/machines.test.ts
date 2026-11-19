@@ -486,6 +486,24 @@ describe("where a bot runs: the engine", () => {
     expect(accounts.every((each) => each.id.length === MAX_MACHINE_NAME_CHARS)).toBe(true);
   });
 
+  it("F-047: accounts the gateway reports unavailable are unavailable, never none; an empty list stays empty", async () => {
+    const gw = gateway();
+    // OpenClaw 2026.10.6's answer before its model catalog is prepared.
+    const message =
+      "Model authentication status is unavailable. Refresh Models after setup finishes; restart the Gateway if it persists.";
+    gw.handlers["models.authStatus"] = () => ({
+      ts: 1,
+      providers: [],
+      unavailable: { code: "PREPARED_MODEL_AUTH_UNAVAILABLE", message },
+    });
+    expect((await engine(gw).readPlacement("otto")).inventory.accounts).toEqual({
+      status: "failed",
+      message,
+    });
+    gw.handlers["models.authStatus"] = () => ({ ts: 1, providers: [] });
+    expect((await engine(gw).readPlacement("otto")).inventory.accounts).toEqual([]);
+  });
+
   it("F-047: a refused read at the tier says which access it needs, not that there is nothing", async () => {
     const gw = gateway();
     gw.refuse.set("secrets.store.list", "missing scope: operator.admin");
