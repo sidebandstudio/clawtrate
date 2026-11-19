@@ -265,17 +265,35 @@ export class UpdateEngine {
           done(null, chunk);
         },
       });
+      // Which side failed first: the response, or the file's own write. The
+      // other side is then destroyed with the same error, so the error alone
+      // does not say; these listeners run before the pipeline's own.
+      let sourceStopped = false;
+      const stopSource = () => {
+        sourceStopped = true;
+      };
+      response.once("error", stopSource);
+      response.once("close", () => {
+        if (!response.complete) stopSource();
+      });
       let opened = false;
+      let writeError: unknown;
       const out = createWriteStream(partial, { flags: "wx", mode: 0o600 });
       out.on("open", () => {
         opened = true;
+      });
+      out.once("error", (error) => {
+        if (!sourceStopped) writeError = error;
       });
       try {
         await pipeline(response, counter, out, { signal: transfer.signal });
       } catch (error) {
         if (error instanceof DownloadFailed) throw error;
         if (transfer.signal.aborted) throw new FetchRefused(transfer.cause());
-        if (!opened) throw new DownloadFailed("write-failed");
+        // A write that failed is a write failure, whatever the network was doing.
+        if (!opened || (writeError !== undefined && error === writeError)) {
+          throw new DownloadFailed("write-failed");
+        }
         if (!response.complete) throw new FetchRefused("unreachable");
         throw new DownloadFailed("write-failed");
       }
