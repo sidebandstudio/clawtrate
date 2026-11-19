@@ -1348,6 +1348,26 @@
         },
       ],
     },
+    {
+      id: "drafts",
+      title: "Drafts and the Vault",
+      note: "What docs/design/drafts-and-vault.md adds: a draft card that shows exactly what will be sent and is sent or discarded, never edited in place; the masked secret card; and Settings, Drafts and Vault. Each link opens drafts.html in that state, as section 14 lists them.",
+      specimens: [
+        ...[
+          ["Email drafts", (d) => `view=draft&d=${d}`, ["pending", "full", "sending", "sent", "sentnoreport", "failed", "discarded", "refused", "noanswer", "already", "expired", "closed", "cancelled", "filechanged", "unchecked", "edit", "editsent", "editfailed", "match", "differs", "disable", "disabled", "disablefailed"]],
+          ["Slack drafts", (d) => `view=draft&kind=slack&d=${d}`, ["pending", "sent", "discarded", "edit", "match"]],
+          ["Drafts on other connections and with the plugin stopped", (q) => q, ["view=draft&access=read", "view=draft&access=read&req=requested", "view=draft&access=interactive", "view=draft&p=stopped"]],
+          ["The masked secret card", (s) => `view=secret&s=${s}`, ["pending", "typed", "hosts", "exists", "saving", "saved", "refused", "noanswer", "already", "skipped", "expired", "cannotask"]],
+          ["The secret card on a read-only connection", (q) => q, ["view=secret&access=read"]],
+          ["Settings, Vault", (v) => `view=vault&v=${v}`, ["list", "empty", "loading", "error", "item", "new", "replace", "saved", "unconfirmed", "failed", "remove", "removed", "stilllisted", "removeunknown"]],
+          ["The Vault below admin", (q) => q, ["view=vault&access=interactive", "view=vault&access=read&req=denied"]],
+          ["Settings, Drafts", (q) => q, ["view=drafts", "view=drafts&p=stopped", "view=drafts&p=absent", "view=drafts&access=interactive"]],
+        ].map(([name, query, list]) => ({
+          name,
+          html: `<ul class="c-state-links">${list.map((x) => `<li><a href="drafts.html?${query(x)}">${x}</a></li>`).join("")}</ul>`,
+        })),
+      ],
+    },
   ];
 
   const only = CT.params.get("section");
