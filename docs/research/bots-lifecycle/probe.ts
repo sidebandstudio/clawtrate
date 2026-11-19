@@ -24,11 +24,14 @@
 //   delete   delete with and without files, a shared workspace, a routine and a
 //            task, a refusal, a partial failure and its retry
 //   claws    the gateway's own package format: export, then a dry-run add
-//   file     a bot written to Clawtrate's own file and read back into a new bot,
-//            compared field by field by the gateway's reads
+//   file     a bot written to Clawtrate's own file (name, label, a picture that
+//            decodes, model by name, effort, the two instruction files) and read
+//            back into a new bot, compared field by field by the gateway's reads;
+//            and the refusals that come before anything is used
 //   limits   an instruction file at, and one byte over, the gateway's bound
 
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
@@ -411,18 +414,69 @@ async function claws() {
 }
 
 // Clawtrate's own bot file (docs/design/bots-lifecycle.md, section 9): what
-// Duplicate reads, written to a file; what Duplicate writes, read from one.
-const FILE_LIMITS = { file: 5 * 1024 * 1024, text: 256, picture: 32_768, instruction: 2_097_152, settings: 65_536, skills: 256 };
+// Duplicate reads, written to a file; what Duplicate writes, read from one. It
+// carries the name, label, picture, model by name and effort, and the two
+// instruction files when chosen; nothing else, and no unknown field.
+const FILE_LIMITS = { file: 5 * 1024 * 1024, text: 256, picture: 32_768, instruction: 2_097_152 };
 type BotFile = {
   format: "clawtrate.bot";
   formatVersion: 1;
   writtenBy: string;
-  bot: { name: string; label: string | null; picture: string | null; model: string | null; effort: string | null; instructions: { "AGENTS.md": string; "SOUL.md": string }; tools: Record<string, unknown> | null; skills: string[] | null };
+  bot: { name: string; label: string | null; picture: string | null; model: string | null; effort: string | null; instructions: { "AGENTS.md"?: string; "SOUL.md"?: string } };
 };
-async function readBot(o: Op, id: string): Promise<BotFile> {
+/** A real 2 × 2 PNG, so that the picture is one that decodes. */
+function realPng(): string {
+  const crc = (buf: Buffer) => {
+    let c = ~0;
+    for (const b of buf) {
+      c ^= b;
+      for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+    }
+    return ~c >>> 0;
+  };
+  const chunk = (type: string, data: Buffer) => {
+    const head = Buffer.alloc(4);
+    head.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const tail = Buffer.alloc(4);
+    tail.writeUInt32BE(crc(body));
+    return Buffer.concat([head, body, tail]);
+  };
+  const ihdr = Buffer.from([0, 0, 0, 2, 0, 0, 0, 2, 8, 2, 0, 0, 0]);
+  const rows = Buffer.from([0, 88, 194, 111, 91, 141, 255, 0, 255, 133, 82, 169, 139, 255]);
+  const { deflateSync } = createRequire(import.meta.url)("node:zlib") as typeof import("node:zlib");
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", ihdr), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
+  return `data:image/png;base64,${png.toString("base64")}`;
+}
+/** Whether a data: picture is a PNG whose header and image data are sound (the test a client runs by decoding). */
+function decodesAsPng(url: string): boolean {
+  const m = /^data:image\/png;base64,(.+)$/.exec(url);
+  if (!m) return false;
+  const b = Buffer.from(m[1]!, "base64");
+  if (b.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") return false;
+  const { inflateSync } = createRequire(import.meta.url)("node:zlib") as typeof import("node:zlib");
+  let at = 8;
+  const idat: Buffer[] = [];
+  while (at < b.length) {
+    const len = b.readUInt32BE(at);
+    const type = b.subarray(at + 4, at + 8).toString();
+    if (type === "IDAT") idat.push(b.subarray(at + 8, at + 8 + len));
+    at += 12 + len;
+  }
+  try {
+    return inflateSync(Buffer.concat(idat)).length > 0;
+  } catch {
+    return false;
+  }
+}
+async function readBot(o: Op, id: string, files: ("AGENTS.md" | "SOUL.md")[]): Promise<BotFile> {
   const a = (await agent(o, id))!;
   const entry = (await configOf(o)).config.agents?.entries?.[id] ?? {};
-  const file = async (name: string) => ((await must(o, "agents.files.get", { agentId: id, name })).file as { content?: string }).content ?? "";
+  const instructions: BotFile["bot"]["instructions"] = {};
+  for (const name of files) {
+    const f = (await must(o, "agents.files.get", { agentId: id, name })).file as { missing?: boolean; content?: string };
+    if (!f.missing) instructions[name] = f.content ?? ""; // a missing file is left out, never written as empty
+  }
   const model = (a.model as { primary?: string } | undefined)?.primary ?? null;
   return {
     format: "clawtrate.bot",
@@ -431,37 +485,42 @@ async function readBot(o: Op, id: string): Promise<BotFile> {
     bot: {
       name: String(a.name ?? id),
       label: (a.identity?.theme as string | undefined) ?? null,
-      picture: (a.identity?.avatarUrl as string | undefined) || null,
+      picture: (a.identity?.avatarUrl as string | undefined)?.startsWith("data:") ? (a.identity!.avatarUrl as string) : null,
       model: model ? model.replace(/@.*$/, "") : null, // by name: never the account
       effort: entry.thinkingDefault ?? null,
-      instructions: { "AGENTS.md": await file("AGENTS.md"), "SOUL.md": await file("SOUL.md") },
-      tools: entry.tools ?? null,
-      skills: entry.skills ?? null,
+      instructions,
     },
   };
 }
+const ALLOWED = { top: ["format", "formatVersion", "writtenBy", "bot"], bot: ["name", "label", "picture", "model", "effort", "instructions"], instructions: ["AGENTS.md", "SOUL.md"] };
 /** Refuses with a reason before anything is read as a bot. */
 function parseBotFile(raw: Buffer): BotFile {
   if (raw.length > FILE_LIMITS.file) throw new Error(`the file is ${raw.length} bytes; at most ${FILE_LIMITS.file}`);
   const v = JSON.parse(raw.toString("utf8")) as Record<string, any>;
   if (v.format !== "clawtrate.bot") throw new Error("not a Clawtrate bot file");
   if (v.formatVersion !== 1) throw new Error(`format version ${v.formatVersion} is not one this version reads`);
+  const unknown = [
+    ...Object.keys(v).filter((k) => !ALLOWED.top.includes(k)),
+    ...Object.keys(v.bot ?? {}).filter((k) => !ALLOWED.bot.includes(k)).map((k) => `bot.${k}`),
+    ...Object.keys(v.bot?.instructions ?? {}).filter((k) => !ALLOWED.instructions.includes(k)).map((k) => `bot.instructions.${k}`),
+  ];
+  if (unknown.length) throw new Error(`it has a field the format doesn't define: ${unknown[0]}`);
   const b = v.bot ?? {};
   const str = (x: unknown, max: number, what: string, nullable = true) => {
     if (x === null && nullable) return;
     if (typeof x !== "string" || x.length > max) throw new Error(`${what} is not text of at most ${max} characters`);
   };
+  str(v.writtenBy, FILE_LIMITS.text, "writtenBy", false);
   str(b.name, FILE_LIMITS.text, "name", false);
   str(b.label, FILE_LIMITS.text, "label");
   str(b.model, FILE_LIMITS.text, "model");
+  if (typeof b.model === "string" && b.model.includes("@")) throw new Error(`model names an account: ${b.model}`);
   str(b.effort, FILE_LIMITS.text, "effort");
   str(b.picture, FILE_LIMITS.picture, "picture");
-  if (b.picture && !/^data:image\/(png|jpeg|webp|gif);base64,/.test(b.picture)) throw new Error("picture is not an image");
-  for (const f of ["AGENTS.md", "SOUL.md"]) {
-    if (typeof b.instructions?.[f] !== "string" || Buffer.byteLength(b.instructions[f]) > FILE_LIMITS.instruction) throw new Error(`${f} is not text of at most ${FILE_LIMITS.instruction} bytes`);
+  if (b.picture && !decodesAsPng(b.picture)) throw new Error("picture is not an image that decodes");
+  for (const [f, text] of Object.entries(b.instructions ?? {})) {
+    if (typeof text !== "string" || Buffer.byteLength(text) > FILE_LIMITS.instruction) throw new Error(`${f} is not text of at most ${FILE_LIMITS.instruction} bytes`);
   }
-  if (b.tools !== null && (typeof b.tools !== "object" || Array.isArray(b.tools) || JSON.stringify(b.tools).length > FILE_LIMITS.settings)) throw new Error("tools is not a settings object");
-  if (b.skills !== null && (!Array.isArray(b.skills) || b.skills.length > FILE_LIMITS.skills || b.skills.some((x: unknown) => typeof x !== "string" || x.length > FILE_LIMITS.text))) throw new Error("skills is not a list of names");
   return v as BotFile;
 }
 const hash = (t: string) => createHash("sha256").update(t).digest("hex").slice(0, 12);
@@ -472,53 +531,46 @@ async function file() {
   const made: (string | null)[] = [];
   try {
     // A source bot with every field the file carries set to a known value.
-    const picture = pngDataUrl(12_000);
+    const picture = realPng();
+    say("the source picture decodes:", decodesAsPng(picture), "characters:", picture.length);
     const src = await create(o, "Probe Source", { avatar: picture });
     made.push(src);
     if (!src) return;
-    const skillsRead = await must(o, "skills.status", { agentId: src });
-    const skillNames = ((skillsRead.skills as { name?: string; skillKey?: string }[] | undefined) ?? []).map((x) => x.name ?? x.skillKey).filter(Boolean) as string[];
-    say("skills.status lists:", skillNames.length, "skills, first:", skillNames.slice(0, 3));
     const fresh = async (id: string, name: string) => ((await must(o, "agents.files.get", { agentId: id, name })).file as { hash: string }).hash;
     await must(o, "agents.files.set", { agentId: src, name: "AGENTS.md", content: "# Probe Source\n\nPlan the week.\nKeep Thursday clear — always.\n", expectedHash: await fresh(src, "AGENTS.md") });
     await must(o, "agents.files.set", { agentId: src, name: "SOUL.md", content: "Calm, brief, kind.\n", expectedHash: await fresh(src, "SOUL.md") });
-    const tools = { deny: ["browser"] };
-    const set = await patch(o, { agents: { entries: { [src]: { identity: { theme: "Planning" }, thinkingDefault: "high", tools, skills: skillNames.slice(0, 2) } } } });
+    const set = await patch(o, { agents: { entries: { [src]: { identity: { theme: "Planning" }, thinkingDefault: "high" } } } });
     say("source settings written:", set.ok ? "ok" : set.error);
 
     // Export: read, then write the file.
-    const out = await readBot(o, src);
+    const out = await readBot(o, src, ["AGENTS.md", "SOUL.md"]);
     const path = join(dir, "probe-source.clawtrate-bot.json");
     writeFileSync(path, JSON.stringify(out, null, 2));
-    say("file written:", { bytes: statSync(path).size, keys: Object.keys(out.bot), model: out.bot.model, effort: out.bot.effort, label: out.bot.label, pictureChars: out.bot.picture?.length, skills: out.bot.skills, tools: out.bot.tools });
+    say("file written:", { bytes: statSync(path).size, keys: Object.keys(out.bot), files: Object.keys(out.bot.instructions), model: out.bot.model, effort: out.bot.effort, label: out.bot.label, pictureChars: out.bot.picture?.length });
 
-    // Import: read and check the file, check what this gateway offers, then Duplicate's writing half.
+    // Import: read and check the file, check the model is offered, then Duplicate's writing half, one row per write.
     const back = parseBotFile(readFileSync(path));
     const models = ((await must(o, "models.list", {})).models as { provider: string; id: string }[]).map((m) => `${m.provider}/${m.id}`);
-    const catalog = JSON.stringify(await must(o, "tools.catalog", { agentId: src }));
-    say("offered here:", { model: models.includes(back.bot.model!), deniedToolsKnown: (back.bot.tools?.deny as string[]).map((t) => [t, catalog.includes(`"id":"${t}"`)]), skills: back.bot.skills!.map((x) => [x, skillNames.includes(x)]) });
+    say("the file's model is offered here:", models.includes(back.bot.model!));
     say("a name already taken, agents.create {name: \"Probe Source\"}:", (await call(o, "agents.create", { name: back.bot.name })).ok ? "made" : "refused");
     const id = await create(o, "Probe Imported", { model: back.bot.model, avatar: back.bot.picture });
     made.push(id);
     if (!id) return;
     for (const f of ["AGENTS.md", "SOUL.md"] as const)
-      say(`agents.files.set ${f}:`, (await call(o, "agents.files.set", { agentId: id, name: f, content: back.bot.instructions[f], expectedHash: await fresh(id, f) })).ok);
-    const wrote = await patch(o, { agents: { entries: { [id]: { identity: { theme: back.bot.label }, thinkingDefault: back.bot.effort, tools: back.bot.tools, skills: back.bot.skills } } } });
-    say("settings written:", wrote.ok ? "ok" : wrote.error);
+      if (back.bot.instructions[f] !== undefined) say(`agents.files.set ${f}:`, (await call(o, "agents.files.set", { agentId: id, name: f, content: back.bot.instructions[f], expectedHash: await fresh(id, f) })).ok);
+    const wrote = await patch(o, { agents: { entries: { [id]: { identity: { theme: back.bot.label }, thinkingDefault: back.bot.effort, model: { primary: back.bot.model, fallbacks: [] } } } } });
+    say("settings written (label, effort, model with an empty fallback list):", wrote.ok ? "ok" : wrote.error);
 
     // Read both bots again and compare what the file carries.
-    const a = await readBot(o, src);
-    const b = await readBot(o, id);
-    const same = (x: unknown, y: unknown) => JSON.stringify(x) === JSON.stringify(y);
+    const a = await readBot(o, src, ["AGENTS.md", "SOUL.md"]);
+    const b = await readBot(o, id, ["AGENTS.md", "SOUL.md"]);
     say("by the reads, the new bot's fields equal the source's:", {
-      "AGENTS.md": [hash(a.bot.instructions["AGENTS.md"]), hash(b.bot.instructions["AGENTS.md"]), a.bot.instructions["AGENTS.md"] === b.bot.instructions["AGENTS.md"]],
-      "SOUL.md": [hash(a.bot.instructions["SOUL.md"]), hash(b.bot.instructions["SOUL.md"]), a.bot.instructions["SOUL.md"] === b.bot.instructions["SOUL.md"]],
+      "AGENTS.md": [hash(a.bot.instructions["AGENTS.md"]!), hash(b.bot.instructions["AGENTS.md"]!), a.bot.instructions["AGENTS.md"] === b.bot.instructions["AGENTS.md"]],
+      "SOUL.md": [hash(a.bot.instructions["SOUL.md"]!), hash(b.bot.instructions["SOUL.md"]!), a.bot.instructions["SOUL.md"] === b.bot.instructions["SOUL.md"]],
       label: [a.bot.label, b.bot.label],
-      picture: [a.bot.picture?.length, b.bot.picture?.length, a.bot.picture === b.bot.picture],
+      picture: [a.bot.picture?.length, b.bot.picture?.length, a.bot.picture === b.bot.picture, decodesAsPng(b.bot.picture ?? "")],
       model: [a.bot.model, b.bot.model],
       effort: [a.bot.effort, b.bot.effort],
-      tools: same(a.bot.tools, b.bot.tools),
-      skills: same(a.bot.skills, b.bot.skills),
     });
 
     // Refusals before anything is read as a bot.
@@ -532,6 +584,9 @@ async function file() {
     };
     tryParse("format version 2", Buffer.from(JSON.stringify({ ...out, formatVersion: 2 })));
     tryParse("a label that is a number", Buffer.from(JSON.stringify({ ...out, bot: { ...out.bot, label: 7 } })));
+    tryParse("a tools field", Buffer.from(JSON.stringify({ ...out, bot: { ...out.bot, tools: { deny: ["exec"] } } })));
+    tryParse("a model that names an account", Buffer.from(JSON.stringify({ ...out, bot: { ...out.bot, model: "scripted/dev-1@work" } })));
+    tryParse("a picture that is a PNG signature and filler", Buffer.from(JSON.stringify({ ...out, bot: { ...out.bot, picture: pngDataUrl(2_000) } })));
     tryParse("a file over 5 MiB", Buffer.alloc(FILE_LIMITS.file + 1, 32));
   } finally {
     for (const x of made) await removeQuietly(o, x);

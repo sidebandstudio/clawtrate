@@ -54,6 +54,9 @@
     dialog: null,
     opener: null,
   };
+  // Bots whose picture is at an outside address (agents.list identity.avatarUrl).
+  const OUTSIDE = {};
+  L.outsidePicture = (id) => OUTSIDE[id] || null;
   const primaryId = () => (L.primary && botOf(L.primary) ? L.primary : botOf(GATEWAY_DEFAULT) ? GATEWAY_DEFAULT : app.bots[0]?.id);
   // What a delete or a copy reads at that moment: each bot's workspace folder,
   // its tasks, its routines, its channel routes, its memory files.
@@ -520,8 +523,12 @@
   };
 
   // The Instructions page (section 6).
-  const I = { mode: p("instr") === "conflict" ? "conflict" : null, draft: null, status: null, savedAt: null };
-  if (I.mode === "conflict") I.draft = { agents: instr("juniper").agents.replace("Keep answers under 300 words.", "Keep answers under 200 words."), soul: instr("juniper").soul };
+  // Each changed file is written on its own, with the hash it was read with, and
+  // read back on its own: one row per file.
+  const I = { draft: null, status: null, rows: null, savedAt: null };
+  if (p("instr") === "conflict") I.draft = { agents: instr("juniper").agents.replace("Keep answers under 300 words.", "Keep answers under 200 words."), soul: "Curious, careful, brief.\n" };
+  const FILES = { agents: "AGENTS.md", soul: "SOUL.md" };
+  const theirsSoul = "Curious, careful, plain-spoken. Never guess.\n";
   CT.botsPageViews = Object.assign(CT.botsPageViews || {}, {
     instructions: (id) => {
       const i = instr(id);
@@ -529,29 +536,34 @@
       const admin = isAdmin();
       const draft = I.draft || i;
       const changed = I.draft && (I.draft.agents !== i.agents || I.draft.soul !== i.soul);
-      const theirs = I.mode === "conflict" ? i.agents.replace("Cite every source you use.", "Cite every source you use, with its date.") : null;
-      const field = (key, title, file, help) =>
-        `<h4 class="b-group"><label for="lc-${key}">${title}</label> <span class="b-faint">· ${file}</span></h4>` +
-        (admin
-          ? `<textarea class="input lc-text" id="lc-${key}" data-lc-instr="${key}" rows="${key === "agents" ? 9 : 3}" spellcheck="true">${esc(draft[key])}</textarea>`
-          : `<pre class="lc-text lc-text-read" id="lc-${key}" tabindex="0">${esc(i[key])}</pre>`) +
-        `<p class="b-hint">${help}</p>`;
+      const field = (key, title, file, help) => {
+        const word = I.rows?.[key];
+        return (
+          `<h4 class="b-group"><label for="lc-${key}">${title}</label> <span class="b-faint">· ${file}</span></h4>` +
+          (admin
+            ? `<textarea class="input lc-text" id="lc-${key}" data-lc-instr="${key}" rows="${key === "agents" ? 9 : 3}" spellcheck="true">${esc(draft[key])}</textarea>`
+            : `<pre class="lc-text lc-text-read" id="lc-${key}" tabindex="0">${esc(i[key])}</pre>`) +
+          (word ? `<p class="lc-file-row" data-state="${word === "Written" ? "done" : "failed"}" data-lc-file-row="${key}" role="status">${glyph(word === "Written" ? "done" : "failed")}${file}: ${word}${word === "Written" ? `, read back at ${I.savedAt}` : ""}</p>` : "") +
+          (word === "Changed on the gateway"
+            ? note(
+                `<p><b>${file} changed on the gateway while you were editing.</b> Your text is kept here. The gateway now has:</p><pre class="lc-theirs">${esc(theirsSoul)}</pre>` +
+                  `<div class="b-actions">${button("Save mine over it", `data-lc="instr-mine" data-lc-file="${key}" data-size="sm"`)}${button("Use the gateway's", `data-lc="instr-theirs" data-lc-file="${key}" data-size="sm"`, "quiet")}</div>`,
+                "warn",
+              )
+            : "") +
+          (word === "Couldn't check" ? `<p class="b-hint">Clawtrate couldn't read ${file} back: the gateway didn't answer. Your text is kept here, and Save writes it again after reading what the gateway has.</p>` : "") +
+          `<p class="b-hint">${help}</p>`
+        );
+      };
       return (
         `<div class="b-subhead"><button type="button" class="icon-button" data-variant="quiet" data-bs="main" aria-label="Back to settings">${icon("back")}</button><h3 tabindex="-1" data-bs-focus>Instructions</h3></div>` +
         `<p class="b-hint lc-first">${name} reads these two files at the start of each new task. A task already open keeps the copy it started with. Changed ${esc(i.at)}.</p>` +
-        (I.mode === "conflict"
-          ? note(
-              `<p><b>${name}'s instructions changed on the gateway while you were editing.</b> Your text is kept here. The gateway now has:</p><pre class="lc-theirs">${esc(theirs)}</pre>` +
-                `<div class="b-actions">${button("Save mine over it", 'data-lc="instr-mine" data-size="sm"')}${button("Use the gateway's", 'data-lc="instr-theirs" data-size="sm"', "quiet")}</div>`,
-              "warn",
-            )
-          : "") +
         field("agents", "Instructions", "AGENTS.md", "How it works: rules, priorities, what to do and not do.") +
         field("soul", "Personality", "SOUL.md", "Its tone and manner.") +
         `<p class="b-hint">Past 20,000 characters the gateway loads the start and the end of a file and leaves out the middle. Memory is separate: what ${name} remembers is under Memory, and these files don't change it.</p>` +
         (admin
-          ? `<div class="b-actions lc-instr-actions">${I.status === "saved" ? `<span class="b-hint lc-saved" role="status">${icon("check")}Saved ${I.savedAt}. The gateway has this text now.</span>` : ""}${I.status === "failed" ? `<span class="b-hint" data-tone="danger" role="alert">Couldn't save: the gateway didn't answer. Your text is kept here.</span>` : ""}<span class="spacer"></span>` +
-            button(I.status === "saving" ? "Saving…" : "Save", `data-lc="instr-save" data-size="sm"${changed && I.status !== "saving" && I.mode !== "conflict" ? "" : " disabled"}${I.status === "saving" ? ' aria-busy="true"' : ""}`, "primary") +
+          ? `<div class="b-actions lc-instr-actions"><span class="spacer"></span>` +
+            button(I.status === "saving" ? "Saving…" : "Save", `data-lc="instr-save" data-size="sm"${changed && I.status !== "saving" ? "" : " disabled"}${I.status === "saving" ? ' aria-busy="true"' : ""}`, "primary") +
             `</div>`
           : "")
       );
@@ -559,25 +571,31 @@
   });
   CT.botsPageNeeds = Object.assign(CT.botsPageNeeds || {}, { instructions: (name) => `Changing ${name}'s instructions needs admin access.` });
 
-  function saveInstructions(over) {
+  function saveInstructions(only) {
     const id = app.model.selectedBot;
+    const i = instr(id);
+    const keys = only ? [only] : Object.keys(FILES).filter((k) => I.draft && I.draft[k] !== i[k]);
     I.status = "saving";
-    I.mode = null;
     CT.botsRender();
     setTimeout(() => {
-      if (p("instrfail") && !I.retried) {
-        I.retried = true;
-        I.status = "failed";
-        CT.botsRender();
-        return;
-      }
-      // agents.files.set with the hash read, then agents.files.get: "Saved" only when the hashes match.
-      Object.assign(instr(id), I.draft, { at: "Nov 19, 5:44 PM" });
-      I.draft = null;
-      I.status = "saved";
+      // agents.files.set per file with the hash it was read with, then agents.files.get per file.
+      I.rows = { ...(I.rows || {}) };
       I.savedAt = "5:44 PM";
+      for (const k of keys) {
+        let word = "Written";
+        if (!only && p("instr") === "conflict" && k === "soul") word = "Changed on the gateway";
+        if (!only && p("instrfail") && k === "agents" && !I.retried) word = "Couldn't check";
+        I.rows[k] = word;
+        if (word === "Written") i[k] = I.draft[k];
+      }
+      if (p("instrfail")) I.retried = true;
+      i.at = "Nov 19, 5:44 PM";
+      const open = Object.keys(FILES).some((k) => I.draft[k] !== i[k]);
+      if (!open) I.draft = null;
+      I.status = null;
       CT.botsRender();
-      announce(over ? "Saved over the gateway's copy" : "Instructions saved");
+      const bad = keys.filter((k) => I.rows[k] !== "Written");
+      announce(bad.length ? `${bad.map((k) => FILES[k]).join(" and ")}: not saved` : only ? `${FILES[only]} saved over the gateway's copy` : "Instructions saved");
     }, 450);
   }
   document.addEventListener("input", (e) => {
@@ -586,10 +604,9 @@
       const id = app.model.selectedBot;
       I.draft = I.draft || { ...instr(id) };
       I.draft[area.dataset.lcInstr] = area.value;
-      if (I.status === "saved" || I.status === "failed") I.status = null;
       const save = $('[data-lc="instr-save"]');
       const i = instr(id);
-      if (save) save.disabled = I.mode === "conflict" || (I.draft.agents === i.agents && I.draft.soul === i.soul);
+      if (save) save.disabled = I.draft.agents === i.agents && I.draft.soul === i.soul;
     }
     if (e.target.id === "lc-search") {
       L.dialog.query = e.target.value;
@@ -653,6 +670,70 @@
 
   // Duplicate (section 8) ---------------------------------------------------------------------------
 
+  // The writes of a copy or an import, each with its own read-back row. Every row
+  // says what the gateway returned when read: Written, Still has <value>,
+  // Changed on the gateway, Couldn't check, or, for a file the source lacks,
+  // No source file.
+  function writeRows(d) {
+    const b = D.binding[d.bot] || {};
+    const src = d.kind === "import" ? WREN() : null;
+    const rows = [];
+    const add = (key, label, wanted) => rows.push({ key, label, wanted });
+    if (d.copy.look) add("picture", "Picture"), add("label", "Label");
+    if (d.copy.model) {
+      add("model", d.kind === "import" ? "Model" : "Model and account");
+      add("fallbacks", "Fallback list: none");
+      add("effort", "Effort");
+    }
+    if (d.copy.instr) add("agents", "AGENTS.md"), add("soul", "SOUL.md");
+    if (d.kind !== "import" && d.copy.tools) add("tools", "Tool permissions"), add("skills", "Skills");
+    void b, src;
+    return rows;
+  }
+  // What each row read back, as the fixtures have it.
+  function outcome(d, key) {
+    const want = d.kind === "import" ? p("impresult") : p("dup");
+    if (d.done?.[key]) return "Written";
+    if (want === "nosource" && key === "soul") return "No source file. Left the new bot's starting file";
+    if (want === "partial" && !d.retried) {
+      if (key === "effort") return "Still has the gateway's default, Medium";
+      if (key === "soul") return "Couldn't check";
+      if (key === "agents" && d.kind === "import") return "Changed on the gateway";
+    }
+    return "Written";
+  }
+  const settled = (word) => word === "Written" || word.startsWith("No source file");
+  function stepsView(d) {
+    const rows = writeRows(d);
+    const at = d.at ?? 0;
+    const made = `<li data-state="${at > 0 || d.status !== "working" ? "done" : "running"}">${glyph(at > 0 || d.status !== "working" ? "done" : "sending")}<span>Made ${esc(d.name)}</span><span class="lc-step-word">${at > 0 || d.status !== "working" ? "Listed" : "Writing"}</span></li>`;
+    const row = (r, i) => {
+      if (d.status === "working" && i + 1 >= at) return `<li data-state="${i + 1 === at ? "running" : "queued"}">${glyph(i + 1 === at ? "sending" : "queued")}<span>${r.label}</span><span class="lc-step-word">${i + 1 === at ? "Writing" : "Waiting"}</span></li>`;
+      const word = outcome(d, r.key);
+      const ok = settled(word);
+      return `<li data-state="${ok ? "done" : "failed"}" data-lc-row-key="${r.key}">${glyph(ok ? "done" : "failed")}<span>${r.label}</span><span class="lc-step-word">${esc(word)}</span></li>`;
+    };
+    const list = `<p class="b-hint lc-first">Each row is what the gateway returned when Clawtrate read it back.</p><ol class="lc-steps" aria-label="What was written">${made}${rows.map(row).join("")}</ol>`;
+    const from = d.kind === "import" ? null : esc(nameOf(d.bot));
+    if (d.status === "working") return sheet(d.kind === "import" ? `Adding ${esc(d.name)}` : `Duplicating ${from}`, list, "");
+    const missing = rows.filter((r) => !settled(outcome(d, r.key)));
+    if (!missing.length)
+      return sheet(
+        "New bot with the selected settings",
+        `<p class="b-lead">${esc(d.name)} is listed, with each setting below read back.</p>` +
+          list +
+          `<p class="b-hint">What its tools, skills and models do can still differ from ${d.kind === "import" ? "the bot the file came from" : from}: the gateway decides, with its own defaults.</p>`,
+        button(`Open ${esc(d.name)}`, 'data-lc="dup-open" data-size="lg" data-lc-focus', "primary"),
+      );
+    return sheet(
+      "Some settings still need attention",
+      `<p class="b-lead">${esc(d.name)} is listed. ${missing.length === 1 ? "One setting doesn't" : `${missing.length} settings don't`} read back as chosen.</p>` +
+        list +
+        `<p class="b-hint">Try again writes only these again, each after reading what the gateway has now, so a newer change on the gateway isn't overwritten. Leave it as it is keeps ${esc(d.name)} as the rows say.</p>`,
+      button("Try again", 'data-lc="dup-retry" data-size="lg" data-lc-focus', "primary") + button("Leave it as it is", 'data-lc="dup-open" data-size="lg"', "quiet"),
+    );
+  }
+
   VIEWS.duplicate = (d) => {
     const id = d.bot;
     const name = esc(nameOf(id));
@@ -660,10 +741,11 @@
     const own = p("dupacct") === "own";
     const b = D.binding[id] || {};
     const a = D.acct(own ? "anthropic:pip" : b.account);
-    if (d.status === "working" || d.status === "done" || d.status === "partial") return stepsView(d);
+    if (d.status === "working" || d.status === "done") return stepsView(d);
     const item = (key, title, sub, disabled) =>
       `<label class="b-check lc-item"><input type="checkbox" data-lc-copy="${key}"${d.copy[key] ? " checked" : ""}${disabled ? " disabled" : ""} /><span class="lc-item-text"><span>${title}</span><span class="b-hint">${sub}</span></span></label>`;
-    const shared = D.shared().filter((x) => x.provider !== "anthropic" || true);
+    const shared = D.shared();
+    const choices = [...shared.map((x) => [x.id, D.acctTitle(x)]), [D.GATEWAY, "Let the gateway choose"]];
     return sheet(
       `Duplicate ${name}`,
       `<label class="b-label" for="lc-dup-name">Name of the copy</label><input class="input lc-dup-name" id="lc-dup-name" value="${esc(d.name)}" data-lc-dupname data-lc-focus maxlength="40" />` +
@@ -673,19 +755,20 @@
         item(
           "model",
           own ? "Model and effort, on an account you choose" : "Model, account and effort",
-          own ? `${esc(a.label)} is kept by ${name} alone, so the copy can't use it.` : `${esc(D.acctName(a))}, ${esc(b.model || "")}, effort ${esc(b.effort || "")}.`,
+          own ? `${esc(a.label)} is kept by ${name} alone, so the copy can't use it.` : `${esc(D.acctName(a))}, ${esc(b.model || "")}, effort ${esc(b.effort || "")}. Written as New bot writes it: the model with its account, then an empty fallback list.`,
         ) +
         (own && d.copy.model
-          ? `<div class="b-choices lc-accounts" role="radiogroup" aria-label="Account for the copy">${shared
-              .map((x) => `<button type="button" class="b-choice" role="radio" aria-checked="${d.acct === x.id}" tabindex="${d.acct === x.id || (!d.acct && x === shared[0]) ? 0 : -1}" data-lc-acct="${x.id}"><span class="b-choice-text"><span class="b-choice-title">${esc(D.acctTitle(x))}</span></span>${icon("check", "icon b-tick")}</button>`)
+          ? `<div class="b-choices lc-accounts" role="radiogroup" aria-label="Account for the copy">${choices
+              .map(([cid, title], i) => `<button type="button" class="b-choice" role="radio" aria-checked="${d.acct === cid}" tabindex="${d.acct === cid || (!d.acct && i === 0) ? 0 : -1}" data-lc-acct="${cid}"><span class="b-choice-text"><span class="b-choice-title">${esc(title)}</span>${cid === D.GATEWAY ? `<span class="b-choice-sub">The copy gets ${esc(b.model || "the model")} with no account: the gateway picks one of the provider's accounts for each run.</span>` : ""}</span>${icon("check", "icon b-tick")}</button>`)
               .join("")}</div>`
           : "") +
-        item("instr", "Instructions and personality", "AGENTS.md and SOUL.md, as they are now.") +
+        (!d.copy.model ? `<p class="b-hint lc-indent">Without it the copy uses the gateway's default model, openai/gpt-5.5, and its default effort.</p>` : "") +
+        item("instr", "Instructions and personality", "AGENTS.md and SOUL.md, as they are now. A file the source doesn't have leaves the copy's starting file.") +
         item("tools", "Tool permissions and skills", "What it may do with its tools, and which skills it has.") +
         `<h4 class="b-group">Not copied</h4><ul class="lc-list">` +
         `<li>Its memory: ${esc(f.memory)}, and About you (USER.md)</li>` +
-        `<li>Its ${f.tasks} tasks and their history</li>` +
-        (f.routines.length ? `<li>Its ${f.routines.length === 1 ? "routine" : `${f.routines.length} routines`}: ${esc(f.routines.join(", "))}. A copy would run ${f.routines.length === 1 ? "it" : "them"} twice.</li>` : "") +
+        `<li>Its tasks and their history</li>` +
+        (f.routines.length ? `<li>Its routines: ${esc(f.routines.join(", "))}. A copy would run them twice.</li>` : "") +
         `<li>The other files in its workspace folder</li>` +
         (f.routes ? `<li>Its channel route: messages keep going to ${name}</li>` : "") +
         (f.own.length || own ? `<li>Its own sign-ins (${esc((f.own.length ? f.own : ["Pip's key"]).join(", "))}), which only ${name} can use</li>` : "") +
@@ -703,114 +786,117 @@
     if (!retry && refuse && !d.refusedOnce) {
       d.refusedOnce = true;
       d.refused = `${d.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-      d.status = "sending";
       paint();
       setTimeout(() => {
-        d.status = null;
         paint(true);
         announce(d.kind === "import" ? "The gateway didn't make the bot" : "The gateway didn't make the copy");
       }, 300);
       return;
     }
     d.refused = null;
+    const rows = writeRows(d);
+    if (retry) {
+      // Only the writes still missing, each after a fresh read of what the gateway has.
+      d.done = Object.fromEntries(rows.map((r) => [r.key, true]));
+      d.retried = true;
+      d.status = "done";
+      paint(true);
+      announce(`${d.name.trim()}: every setting read back as chosen`);
+      return;
+    }
     d.status = "working";
     d.busy = true;
-    const total = 2 + ["look", "model", "instr", "tools"].filter((k) => d.copy[k]).length;
-    d.at = retry ? total - 1 : 0;
+    d.at = 0;
     paint(true);
     const tick = () => {
       d.at += 1;
-      if (d.at >= total) {
+      if (d.at > rows.length) {
         d.busy = false;
-        d.status = (d.kind === "import" ? p("impresult") : p("dup")) === "partial" && !retry && d.copy.instr ? "partial" : "done";
-        if (!retry) {
-          let nid = d.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "copy";
-          while (botOf(nid)) nid += "-2";
-          d.newId = nid;
-          CT.botArt[nid] = d.kind === "import" ? CT.botArt.__wren : d.copy.look ? CT.botArt[d.bot] || { body: "drop", color: "#ff6f9c", tilt: 0, look: [0.6, 0] } : { body: "pebble", color: "#9aa0a6", tilt: 0, look: [0.6, 0] };
-          D.binding[nid] = d.kind === "import" ? { account: null, mode: "gateway", model: "gpt-5.5", effort: "Medium", locked: false } : { ...(D.binding[d.bot] || {}), ...(d.acct ? { account: d.acct } : {}), locked: false };
-          FACTS[nid] = { folder: `workspace-${nid}`, files: 4, memory: "no memory yet", tasks: 0, routines: [], routes: 0, own: [] };
-          app.bots.push({ id: nid, name: d.name.trim(), label: d.kind === "import" ? "Garden" : d.copy.look ? botOf(d.bot).label : "", tasks: [{ id: `${nid}-1`, title: "Main", at: 3000, when: "now", preview: "No messages yet.", unread: false, status: "idle", html: "", fresh: true }] });
-          refreshRail();
-        }
+        d.status = "done";
+        let nid = d.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "copy";
+        while (botOf(nid)) nid += "-2";
+        d.newId = nid;
+        CT.botArt[nid] = d.kind === "import" ? CT.botArt.__wren : d.copy.look ? CT.botArt[d.bot] || { body: "drop", color: "#ff6f9c", tilt: 0, look: [0.6, 0] } : { body: "pebble", color: "#9aa0a6", tilt: 0, look: [0.6, 0] };
+        D.binding[nid] = d.kind === "import" || !d.copy.model ? { account: null, mode: "gateway", model: "gpt-5.5", effort: "Medium", locked: false } : { ...(D.binding[d.bot] || {}), ...(d.acct && d.acct !== D.GATEWAY ? { account: d.acct } : d.acct === D.GATEWAY ? { account: null, mode: "gateway" } : {}), locked: false };
+        FACTS[nid] = { folder: `workspace-${nid}`, files: 4, memory: "no memory yet", tasks: 0, routines: [], routes: 0, own: [] };
+        app.bots.push({ id: nid, name: d.name.trim(), label: d.kind === "import" ? WREN().label : d.copy.look ? botOf(d.bot).label : "", tasks: [{ id: `${nid}-1`, title: "Main", at: 3000, when: "now", preview: "No messages yet.", unread: false, status: "idle", html: "", fresh: true }] });
+        if (d.kind === "import") INSTR[nid] = { agents: WREN().agents, soul: WREN().soul, at: "Nov 19, 5:46 PM" };
+        refreshRail();
         paint(true);
-        announce(d.status === "done" ? `${d.name.trim()} is ready` : `${d.name.trim()} was made, without its instructions`);
-        if (d.kind === "import" && d.status === "done") INSTR[d.newId] = { agents: WREN().agents, soul: WREN().soul, at: "Nov 19, 5:46 PM" };
+        const missing = rows.filter((r) => !settled(outcome(d, r.key)));
+        announce(missing.length ? "Some settings still need attention" : "New bot with the selected settings");
         return;
       }
       paint();
-      setTimeout(tick, 220);
+      setTimeout(tick, 160);
     };
-    setTimeout(tick, 220);
+    setTimeout(tick, 160);
   }
 
-  // Export and import (section 9) ---------------------------------------------------------------------
+  // Export and import: a Clawtrate file (section 9) -----------------------------------------------------
 
-  const cmdBlock = (text, what) => `<div class="command-line lc-command"><code>${CT.botsCmd(text)}</code>${copy(what, text)}</div>`;
-  // How the gateway's list says each bot was made (agents.list createdVia): from a
-  // package ("claw"), by the create method ("operator"), or no record.
-  const VIA = { marlow: "claw", pip: "operator" };
   const NEVER = [
+    "Tool permissions and skills",
     "Memory and About you (MEMORY.md, notes, USER.md)",
     "Tasks and their transcripts",
     "Routines",
-    "Any account, sign-in or secret",
     "Approvals and rules",
     "Channel routes",
     "Other files in the workspace folder",
   ];
   const neverList = () => `<ul class="lc-list">${NEVER.map((x) => `<li>${x}</li>`).join("")}</ul>`;
-  const wayTabs = (d, words) =>
-    `<div class="tabs lc-tabs" role="tablist" aria-label="Which way">${words
-      .map(([t, label]) => `<button type="button" class="tab" role="tab" aria-selected="${t === d.way}" tabindex="${t === d.way ? 0 : -1}" data-lc-way="${t}">${label}</button>`)
-      .join("")}</div>`;
   const fileName = (name) => `${name.replace(/[^A-Za-z0-9 _-]+/g, "").trim() || "bot"}.clawtrate-bot.json`;
+  const EXPORT_WORDS = {
+    saved: (f) => [`Saved ${f}, 4 KB`, "The app saved it where you chose. Nothing was sent anywhere."],
+    web: () => ["Download requested", "Your browser decides where the file goes and whether it keeps it. Nothing was sent anywhere else."],
+    cancelled: () => ["Not saved", "You closed the save dialog. Nothing was written."],
+    unchanged: (f) => ["Couldn't save", `The disk is full. The file that was there before, ${f}, still holds what it held.`],
+    absent: () => ["Couldn't save", "The disk is full. No file was written."],
+    "saved-anyway": (f) => [`Saved ${f}, 4 KB`, "The save reported an error, “the disk is full”, but reading the file back shows it holds the export."],
+    unknown: () => ["Couldn't save", "The disk is full. Clawtrate couldn't tell what the file holds now."],
+    readfail: () => ["Couldn't read Pip's instructions", "The gateway didn't answer. Nothing was saved."],
+  };
 
   VIEWS.export = (d) => {
     const id = d.bot;
     const name = esc(nameOf(id));
-    const tabs = wayTabs(d, [
-      ["file", "Clawtrate file"],
-      ["package", "Gateway package"],
-    ]);
-    if (d.way === "file") {
-      const f = fileName(nameOf(id));
-      const what =
-        `<h3 class="lc-way-title">A Clawtrate file</h3>` +
-        `<p class="b-hint lc-first">Clawtrate's own format: a JSON file this app writes and reads. The gateway doesn't know it, and other apps may not.</p>` +
-        `<h4 class="b-group">It holds</h4><ul class="lc-list"><li>${name}'s picture and label</li><li>Its model and effort, by name</li><li>Its instructions and personality, AGENTS.md and SOUL.md, in full</li><li>Its tool permissions and skills</li></ul>` +
-        `<h4 class="b-group">It never holds</h4>${neverList()}` +
-        note(`<p><b>The file holds ${name}'s instructions in full</b>, and they may hold private text. Share it only with people who may read them.</p>`, "warn");
-      if (d.exp === "saving") return sheet(`Export ${name}`, tabs + `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Reading ${name} from the gateway…</p>`, "");
-      if (d.exp === "saved")
-        return sheet(
-          `Export ${name}`,
-          tabs + `<div class="b-result"><span class="empty-mark">${icon("check")}</span><h3 tabindex="-1" data-lc-focus>Saved ${esc(f)}</h3><p>In Downloads on this computer, 16 KB. Nothing was sent anywhere.</p></div>`,
-          button("Done", 'data-lc="close" data-size="lg"'),
-        );
-      if (d.exp === "readfail")
-        return sheet(`Export ${name}`, tabs + what + note(`<p><b>Couldn't read ${name}'s instructions.</b> The gateway didn't answer. Nothing was saved.</p>`, "danger"), button("Try again", 'data-lc="export-file" data-size="lg" data-lc-focus', "primary"));
-      if (d.exp === "toolarge")
-        return sheet(`Export ${name}`, tabs + what + note(`<p><b>${name}'s file would be 5.4 MB.</b> A Clawtrate bot file holds at most 5 MB, so it wasn't saved. Its instructions are the large part.</p>`, "danger"), button("Close", 'data-lc="close" data-size="lg"'));
-      return sheet(`Export ${name}`, tabs + what + `<p class="b-hint">You choose where to save it on this computer; it's named ${esc(f)}. Nothing is sent anywhere.</p>`, button("Export file…", 'data-lc="export-file" data-size="lg" data-lc-focus', "primary"));
+    const f = fileName(nameOf(id));
+    const b = D.binding[id] || {};
+    const a = D.acct(b.account);
+    const i = instr(id);
+    if (d.exp === "saving") return sheet(`Export ${name}`, `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>${d.saveStage === "save" ? "Waiting for the save dialog…" : `Reading ${name} from the gateway…`}</p>`, "");
+    if (d.exp && EXPORT_WORDS[d.exp]) {
+      const [title, text] = EXPORT_WORDS[d.exp](f);
+      const ok = d.exp === "saved" || d.exp === "web" || d.exp === "saved-anyway";
+      return sheet(
+        `Export ${name}`,
+        `<div class="b-result"><span class="empty-mark"${ok ? "" : ' data-tone="warn"'}>${icon(ok ? "check" : "warning")}</span><h3 tabindex="-1" data-lc-focus>${title}</h3><p>${text}</p></div>`,
+        ok ? button("Done", 'data-lc="close" data-size="lg"') : button("Try again", 'data-lc="export-file" data-size="lg"', "primary") + button("Close", 'data-lc="close" data-size="lg"', "quiet"),
+      );
     }
-    const via = VIA[id];
-    const exp = `OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws export ${id} --out ./${id}-claw`;
-    const check = `OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws migrate ${id} --dry-run`;
-    const body =
-      `<h3 class="lc-way-title">The gateway's package</h3>` +
-      (via === "claw"
-        ? `<p class="b-lead">${name} was installed from a package, so the gateway can export it again with its own command line. Clawtrate can't make a package itself. On the gateway's machine:</p>` +
-          cmdBlock(exp, "export command") +
-          `<h4 class="b-group">The package holds</h4><ul class="lc-list"><li>${name}'s name, and the settings and files its package manages</li></ul>` +
-          `<h4 class="b-group">It doesn't hold</h4><ul class="lc-list"><li>Its memory, its tasks and their transcripts</li><li>Sign-ins and keys</li><li>Its channel routes</li></ul>`
-        : via === "operator"
-          ? `<div class="b-result"><span class="empty-mark">${icon("warning")}</span><h3>The gateway can't export ${name}</h3><p>The gateway exports only bots installed from a package. ${name} was made with the gateway's create method, which gives it settings a package can't hold. A Clawtrate file can hold it.</p></div>`
-          : `<div class="b-result"><span class="empty-mark">${icon("warning")}</span><h3>${name} isn't in a package</h3><p>The gateway exports only bots installed from a package. The gateway's owner can check whether the gateway would put ${name} in one, without changing anything:</p></div>` +
-            cmdBlock(check, "check command") +
-            `<p class="b-hint">If it can, the same command without <code>--dry-run</code> asks before it does; then the export command works.</p>`) +
-      `<p class="b-hint">Packages are an experimental part of the gateway, switched on by the first word of each command; their format may change.</p>`;
-    return sheet(`Export ${name}`, tabs + body, button("Done", 'data-lc="close" data-size="lg"'));
+    const outside = L.outsidePicture(id);
+    const val = (label, value) => `<div><dt>${label}</dt><dd>${value}</dd></div>`;
+    const fileRow = (key, file, text) =>
+      `<label class="b-check lc-item"><input type="checkbox" data-lc-expfile="${key}"${d.files?.[key] ? " checked" : ""} /><span class="lc-item-text"><span>${file} <span class="b-faint">· ${lines(text)} ${lines(text) === 1 ? "line" : "lines"}</span></span></span></label>` +
+      (d.files?.[key] ? `<pre class="lc-theirs lc-exp-text">${esc(text)}</pre>` : "");
+    return sheet(
+      `Export ${name}`,
+      `<p class="b-hint lc-first">A Clawtrate file: this app's own JSON format, for another Clawtrate to read. The gateway doesn't know it.</p>` +
+        `<h4 class="b-group">The file will hold exactly this</h4>` +
+        `<dl class="facts lc-exp-values">` +
+        val("Name", name) +
+        val("Label", esc(botOf(id)?.label || "None")) +
+        val("Picture", outside ? `<span class="b-faint">Left out: it's an outside address</span>` : L.photo[id] ? "A JPEG, 128 by 128" : "A PNG of its character, 128 by 128") +
+        val("Model", `${esc(a ? a.provider : "openai")}/${esc(b.model || "gpt-5.5")} <span class="b-faint">· its account, ${esc(a ? D.acctName(a) : "none")}, left out</span>`) +
+        val("Effort", esc(b.effort || "Medium")) +
+        `</dl>` +
+        `<h4 class="b-group">Instructions, if you choose them</h4>` +
+        fileRow("agents", "AGENTS.md", i.agents) +
+        fileRow("soul", "SOUL.md", i.soul) +
+        note(`<p>The file leaves out account bindings and sign-in stores. The fields you export can contain private text, credentials or paths. Review them before saving.</p>`, "warn") +
+        `<h4 class="b-group">Never in a Clawtrate file</h4>${neverList()}`,
+      button("Export file…", 'data-lc="export-file" data-size="lg" data-lc-focus', "primary"),
+    );
   };
 
   // The file a person chose, as the fixtures have it: Wren, from another gateway.
@@ -819,6 +905,7 @@
     return {
       name: "Wren",
       label: "Garden",
+      writtenBy: "Clawtrate 0.4.0",
       model: odd ? "globex/atlas-2" : "openai/gpt-5.5",
       effort: "Medium",
       agents: "# Wren\n\nYou keep the garden calendar.\nAsk before ordering seeds.\nNever water on a rain day.\n",
@@ -826,44 +913,28 @@
       settings: [
         ["Model", odd ? "globex/atlas-2" : "openai/gpt-5.5", !odd],
         ["Effort", "Medium", odd ? "with-model" : true],
-        ["Tools never allowed", "Run commands (exec)", true],
-        ...(odd ? [["Tools also allowed", "Use the browser (browser)", false]] : []),
-        ["Skills", "weather", true],
-        ...(odd ? [["Skills", "trail-maps", false]] : []),
       ],
     };
   };
   CT.botArt.__wren = { body: "bloom", color: "#a5d955", tilt: 0, look: [0.6, 0] };
+  const REFUSALS = {
+    version: "Its format version is 3, and this version of Clawtrate reads version 1.",
+    size: "It is 6.2 MB, and a Clawtrate bot file holds at most 5 MB.",
+    type: "Its label is a number, not text.",
+    field: "It has a field Clawtrate doesn't read: “tools”.",
+    account: "Its model names an account, “openai/gpt-5.5@work”. A Clawtrate file names models without accounts.",
+    picture: "Its picture isn't a PNG, JPEG, WebP or GIF image that decodes.",
+  };
 
   VIEWS.import = (d) => {
-    const tabs = wayTabs(d, [
-      ["file", "Clawtrate file"],
-      ["package", "Gateway package"],
-    ]);
-    if (d.way === "package") {
-      const look = "OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws add ./pip-claw --dry-run";
-      const add = "OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws add ./pip-claw --yes --plan-integrity <digest>";
+    if (d.status === "working" || d.status === "done") return stepsView(d);
+    if (d.stage === "reading") return sheet("Import a bot", `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Reading wren.clawtrate-bot.json…</p>`, "");
+    if (d.stage === "refused")
       return sheet(
         "Import a bot",
-        tabs +
-          `<h3 class="lc-way-title">The gateway's package</h3>` +
-          `<p class="b-lead">The gateway adds a bot from a package with its own command line. Clawtrate can't read a package or add one itself. On the gateway's machine:</p>` +
-          `<ol class="b-steps lc-steps-cmd"><li><div><p>See what the package would create, without changing anything. The gateway lists the bot, its folder, every action and what it would need:</p>${cmdBlock(look, "review command")}</div></li>` +
-          `<li><div><p>Add it, with the digest the first command printed. The gateway refuses if anything changed since:</p>${cmdBlock(add, "add command")}</div></li></ol>` +
-          `<p class="b-hint">The new bot appears in your list when the gateway lists it. Packages are an experimental part of the gateway; their format may change.</p>`,
-        button("Done", 'data-lc="close" data-size="lg"'),
+        note(`<p><b>Clawtrate can't read this file.</b> ${REFUSALS[p("imp")]} Nothing in it was used.</p>`, "danger"),
+        button("Choose another file…", 'data-lc="import-choose" data-size="lg" data-lc-focus', "primary"),
       );
-    }
-    if (d.status === "working" || d.status === "done" || d.status === "partial") return stepsView(d);
-    if (d.stage === "reading") return sheet("Import a bot", tabs + `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Reading wren.clawtrate-bot.json…</p>`, "");
-    if (d.stage === "refused") {
-      const why = {
-        version: "<b>Clawtrate can't read this file.</b> Its format version is 3, and this version of Clawtrate reads version 1. Nothing was read as a bot.",
-        size: "<b>Clawtrate can't read this file.</b> It is 6.2 MB, and a Clawtrate bot file holds at most 5 MB. Nothing was read as a bot.",
-        type: "<b>Clawtrate can't read this file.</b> Its label is a number, not text. Nothing was read as a bot.",
-      }[p("imp")];
-      return sheet("Import a bot", tabs + note(`<p>${why}</p>`, "danger"), button("Choose another file…", 'data-lc="import-choose" data-size="lg" data-lc-focus', "primary"));
-    }
     if (d.stage === "review") {
       const w = WREN();
       const left = w.settings.filter(([, , ok]) => ok === false);
@@ -872,66 +943,27 @@
       const row = ([k, v, ok]) => `<li data-state="${ok === true ? "write" : "left"}"><span>${k}: ${esc(v)}</span><span class="lc-step-word">${word(ok)}</span></li>`;
       return sheet(
         "Add Wren?",
-        tabs +
-          `<span class="b-preview" role="img" aria-label="Wren's picture">${CT.character("__wren")}</span>` +
+        `<span class="b-preview" role="img" aria-label="The file's picture">${CT.character("__wren")}</span>` +
           `<label class="b-label" for="lc-imp-name">Name</label><input class="input lc-dup-name" id="lc-imp-name" value="${esc(d.name)}" data-lc-impname maxlength="40" />` +
           (d.refused ? note(`<p><b>The gateway didn't make the bot:</b> “agent "${esc(d.refused)}" already exists”. Nothing was made.</p>`, "danger") : "") +
-          `<p class="b-hint lc-center">Label: ${esc(w.label)} · from wren.clawtrate-bot.json, written by Clawtrate 0.4.0</p>` +
-          note(`<p>This file is someone's text. Clawtrate shows it here and doesn't run it; nothing is created until Add Bot.</p>`) +
+          `<p class="b-hint lc-center">Label: ${esc(w.label)} · wren.clawtrate-bot.json. The file says it was written by ${esc(w.writtenBy)}.</p>` +
+          note(`<p>These files will become instructions the new bot may follow when it runs. Read them first: Clawtrate shows them and doesn't run them, and nothing is created until Add Bot.</p>`) +
           `<details class="lc-review" data-lc-row="agents"><summary>Instructions · AGENTS.md <span class="b-faint">· ${lines(w.agents)} lines, in full</span></summary><pre class="lc-theirs">${esc(w.agents)}</pre></details>` +
           `<details class="lc-review" data-lc-row="soul"><summary>Personality · SOUL.md <span class="b-faint">· ${lines(w.soul)} line, in full</span></summary><pre class="lc-theirs">${esc(w.soul)}</pre></details>` +
-          `<details class="lc-review" data-lc-row="settings"><summary>Settings <span class="b-faint">· ${writes.length} to write${left.length ? `, ${left.length} not available here` : ""}</span></summary><ul class="lc-result lc-settings">${w.settings.map(row).join("")}</ul>` +
-          (left.some(([k]) => k === "Model") ? `<p class="b-hint">With its model left out, Wren uses the gateway's default model until you choose one, and its effort is left out with it.</p>` : "") +
+          `<details class="lc-review" data-lc-row="settings"><summary>Settings <span class="b-faint">· ${writes.length ? `${writes.length + 1} to write` : "nothing to write"}${left.length ? `, ${left.length} not available here` : ""}</span></summary><ul class="lc-result lc-settings">${w.settings.map(row).join("")}${left.length ? "" : `<li data-state="write"><span>Fallback list: none</span><span class="lc-step-word">Will be written</span></li>`}</ul>` +
+          (left.length ? `<p class="b-hint">With its model left out, Wren uses the gateway's default model, openai/gpt-5.5, until you choose one, and its effort is left out with it.</p>` : "") +
           `</details>` +
-          `<details class="lc-review" data-lc-row="never"><summary>Not created <span class="b-faint">· a Clawtrate file never carries these</span></summary>${neverList()}</details>`,
-        isAdmin() ? button("Add Bot", `data-lc="import-add" data-size="lg"${d.name.trim() ? "" : " disabled"}`, "primary") : adminBar("Adding a bot needs admin access."),
+          `<details class="lc-review" data-lc-row="never"><summary>Not created <span class="b-faint">· a Clawtrate file never carries these</span></summary>${neverList()}<p class="b-hint">Nor any account binding or sign-in store: the new bot gets its account the way New bot gives one.</p></details>`,
+        isAdmin() ? button("Add Bot", `data-lc="import-add" data-size="lg"${d.name.trim() ? "" : " disabled"}`, "primary") : adminBar("Adding a bot needs admin access. You can read the whole file here first."),
       );
     }
     return sheet(
       "Import a bot",
-      tabs +
-        `<h3 class="lc-way-title">A Clawtrate file</h3>` +
-        `<p class="b-lead">Choose a file another Clawtrate exported. You'll see everything it would create before anything is.</p>` +
-        `<div class="lc-drop" data-lc-drop><span class="empty-mark">${icon("file")}</span><p>Drop a .clawtrate-bot.json file here</p>${button("Choose file…", 'data-lc="import-choose" data-size="sm" data-lc-focus')}<p class="b-hint">At most 5 MB.</p></div>`,
+      `<p class="b-lead">Choose a Clawtrate file. You'll see everything it would create before anything is.</p>` +
+        `<div class="lc-drop" data-lc-drop><span class="empty-mark">${icon("file")}</span><p>Drop a .clawtrate-bot.json file here</p>${button("Choose file…", 'data-lc="import-choose" data-size="sm" data-lc-focus')}<p class="b-hint">At most 5 MB. Reading it changes nothing on the gateway.</p></div>`,
       "",
     );
   };
-
-  // Duplicate's steps, shared with Import: the same writes, each read back.
-  function stepsView(d) {
-    const from = d.kind === "import" ? null : esc(nameOf(d.bot));
-    const steps = [
-      ["made", `Made ${esc(d.name)}`],
-      ["look", "Picture and label"],
-      ["model", d.kind === "import" ? "Model and effort" : "Model, account and effort"],
-      ["instr", "Instructions and personality"],
-      ["tools", "Tool permissions and skills"],
-      ["read", `Read back ${esc(d.name)} from the gateway`],
-    ].filter(([k]) => k === "made" || k === "read" || d.copy[k]);
-    const at = d.at ?? 0;
-    const row = ([k, label], i) => {
-      const failed = d.status === "partial" && k === "instr";
-      const state = failed ? "failed" : i < at || d.status !== "working" ? "done" : i === at ? "running" : "queued";
-      const word = { done: "Done", running: "Working", queued: "Waiting", failed: d.kind === "import" ? "Not written" : "Not copied" }[state];
-      return `<li data-state="${state}">${glyph(state === "done" ? "done" : state === "failed" ? "failed" : state === "running" ? "sending" : "queued")}<span>${label}</span><span class="lc-step-word">${word}</span></li>`;
-    };
-    const list = `<ol class="lc-steps" aria-label="Progress">${steps.map(row).join("")}</ol>`;
-    if (d.status === "working") return sheet(d.kind === "import" ? `Adding ${esc(d.name)}` : `Duplicating ${from}`, list, "");
-    if (d.status === "done")
-      return sheet(
-        `${esc(d.name)} is ready`,
-        list +
-          (d.kind === "import"
-            ? `<p class="b-hint">Read back from the gateway: ${esc(d.name)} is listed with what the review said would be written. It's a new bot with its own workspace folder.</p>`
-            : `<p class="b-hint">Read back from the gateway: ${esc(d.name)} is listed with what's ticked above. It's a new bot with its own workspace folder; nothing links it to ${from}.</p>`),
-        button(`Open ${esc(d.name)}`, 'data-lc="dup-open" data-size="lg" data-lc-focus', "primary"),
-      );
-    return sheet(
-      d.kind === "import" ? `${esc(d.name)} was made, without its instructions` : `${esc(d.name)} was made, without ${from}'s instructions`,
-      list + note(`<p><b>Its instructions weren't ${d.kind === "import" ? "written" : "copied"}:</b> the gateway didn't answer. ${esc(d.name)} has the gateway's starting AGENTS.md and SOUL.md.</p>`, "danger"),
-      button("Try again", 'data-lc="dup-retry" data-size="lg" data-lc-focus', "primary") + button("Leave it as it is", 'data-lc="dup-open" data-size="lg"', "quiet"),
-    );
-  }
 
   // Delete (section 10) ---------------------------------------------------------------------------------
 
@@ -1041,13 +1073,6 @@
       $(`[data-lc-pick="${L.dialog.pick}"]`, dialog)?.focus();
       return;
     }
-    const way = t.closest("[data-lc-way]");
-    if (way) {
-      L.dialog.way = way.dataset.lcWay;
-      paint();
-      $(`[data-lc-way="${L.dialog.way}"]`, dialog).focus();
-      return;
-    }
     const tab = t.closest("[data-lc-tab]");
     if (tab) {
       L.dialog.tab = tab.dataset.lcTab;
@@ -1121,15 +1146,18 @@
       case "rename-rail":
         return setTimeout(() => renameInRail(bot), 0);
       case "instr-save":
-        return saveInstructions(false);
+        return saveInstructions(null);
       case "instr-mine":
-        return saveInstructions(true);
-      case "instr-theirs":
-        I.mode = null;
-        I.draft = null;
-        Object.assign(instr(app.model.selectedBot), { agents: instr(app.model.selectedBot).agents.replace("Cite every source you use.", "Cite every source you use, with its date.") });
+        return saveInstructions(el.dataset.lcFile);
+      case "instr-theirs": {
+        const k = el.dataset.lcFile;
+        instr(app.model.selectedBot)[k] = theirsSoul;
+        if (I.draft) I.draft[k] = theirsSoul;
+        delete I.rows[k];
+        if (I.draft && Object.keys(FILES).every((x) => I.draft[x] === instr(app.model.selectedBot)[x])) I.draft = null;
         CT.botsRender();
         return announce("Showing the gateway's copy");
+      }
       case "open-instructions":
         return CT.botsOpenSettings("juniper", "instructions");
       case "role-keep":
@@ -1157,30 +1185,38 @@
         return app.selectBot(nid);
       }
       case "open-export":
-        return openDialog("export", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot, way: "file", exp: null });
+        return openDialog("export", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot, exp: null, files: {} });
       case "open-import":
-        return openDialog("import", $("#new-button"), { kind: "import", way: "file", stage: null, name: "Wren", copy: { look: true, model: true, instr: true, tools: true } });
+        return openDialog("import", $("#new-button"), { kind: "import", stage: null, name: "Wren", copy: { look: true, model: true, instr: true } });
       case "open-delete":
         return openDialog("delete", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot, files: Boolean(p("files")), read: p("delread") || null });
       case "export-file":
         L.dialog.exp = "saving";
+        L.dialog.saveStage = "read";
         paint();
         return setTimeout(() => {
-          // agents.list, config.get and agents.files.get, then the host's save dialog.
-          L.dialog.exp = p("exp") === "readfail" && !L.dialog.retried ? ((L.dialog.retried = true), "readfail") : p("exp") === "toolarge" ? "toolarge" : "saved";
-          paint(true);
-          announce(L.dialog.exp === "saved" ? `Saved ${fileName(nameOf(L.dialog.bot))}` : L.dialog.exp === "readfail" ? "Nothing was saved" : "Too large to save");
-        }, 450);
+          // agents.list, config.get and the chosen agents.files.get, then the host's save.
+          L.dialog.saveStage = "save";
+          paint();
+          setTimeout(() => {
+            const want = p("exp");
+            L.dialog.exp = want && EXPORT_WORDS[want] && !L.dialog.retried ? ((L.dialog.retried = !["saved", "web", "saved-anyway"].includes(want)), want) : "saved";
+            paint(true);
+            announce(EXPORT_WORDS[L.dialog.exp](fileName(nameOf(L.dialog.bot)))[0]);
+          }, 300);
+        }, 300);
       case "import-choose":
         L.dialog.stage = "reading";
         L.dialog.refused = null;
         paint();
         return setTimeout(() => {
-          L.dialog.stage = ["version", "size", "type"].includes(p("imp")) && !L.dialog.triedOther ? ((L.dialog.triedOther = true), "refused") : "review";
+          L.dialog.stage = Object.keys(REFUSALS).includes(p("imp")) && !L.dialog.triedOther ? ((L.dialog.triedOther = true), "refused") : "review";
           paint(true);
           announce(L.dialog.stage === "review" ? "Showing what the file would create" : "Clawtrate can't read this file");
         }, 400);
       case "import-add":
+        // A model this gateway doesn't offer is left out, and its effort and fallback list with it.
+        L.dialog.copy.model = p("imp") !== "unavailable";
         return runDuplicate(false);
       case "del-reread":
         L.dialog.read = null;
@@ -1197,6 +1233,12 @@
       L.dialog.copy[c.dataset.lcCopy] = c.checked;
       paint();
       $(`[data-lc-copy="${c.dataset.lcCopy}"]`, dialog)?.focus();
+    }
+    const ef = e.target.closest("[data-lc-expfile]");
+    if (ef) {
+      L.dialog.files[ef.dataset.lcExpfile] = ef.checked;
+      paint();
+      $(`[data-lc-expfile="${ef.dataset.lcExpfile}"]`, dialog)?.focus();
     }
     if (e.target.closest("[data-lc-files]")) {
       L.dialog.files = e.target.checked;
@@ -1253,8 +1295,8 @@
   if (start === "choose") openDialog("choose", $("#bot-list .bot"));
   if (start === "picture") openDialog("picture", $(".lc-hero-pic") || hero, { bot: app.model.selectedBot, tab: p("ptab") || "bot", upload: p("upload") || null });
   if (start === "duplicate") openDialog("duplicate", null, { bot: p("delbot") || app.model.selectedBot, name: `${nameOf(p("delbot") || app.model.selectedBot)} copy`, copy: { look: true, model: true, instr: true, tools: true }, acct: null });
-  if (start === "export") openDialog("export", null, { bot: p("delbot") || app.model.selectedBot, way: p("way") || "file", exp: null });
-  if (start === "import") openDialog("import", $("#new-button"), { kind: "import", way: p("way") || "file", stage: p("imp") ? "reading" : null, name: "Wren", copy: { look: true, model: true, instr: true, tools: true } });
-  if (start === "import" && p("imp")) setTimeout(() => { L.dialog.stage = ["version", "size", "type"].includes(p("imp")) ? ((L.dialog.triedOther = true), "refused") : "review"; paint(); }, 0);
+  if (start === "export") openDialog("export", null, { bot: p("delbot") || app.model.selectedBot, exp: null, files: {} });
+  if (start === "import") openDialog("import", $("#new-button"), { kind: "import", stage: p("imp") ? "reading" : null, name: "Wren", copy: { look: true, model: true, instr: true } });
+  if (start === "import" && p("imp")) setTimeout(() => { L.dialog.stage = Object.keys(REFUSALS).includes(p("imp")) ? ((L.dialog.triedOther = true), "refused") : "review"; paint(); }, 0);
   if (start === "delete") openDialog("delete", null, { bot: p("delbot") || app.model.selectedBot, files: Boolean(p("files")), read: p("delread") || null });
 })();
