@@ -761,6 +761,14 @@ export const SCENARIOS: Scenario[] = [
     steps: () => message("#ask", "Which route should we plan for?", 5),
   },
   {
+    name: "message-read",
+    phrase: "message your partner who reads",
+    bots: "Marlow or Pip",
+    summary:
+      "A message to the other bot, which reads its own instructions file before replying: a tool call in a run another bot's message started.",
+    steps: () => message("#read", "Could you check your instructions?", 30),
+  },
+  {
     name: "mcp",
     phrase: "ask the coding agent",
     summary: "A call to the stand-in coding agent over MCP; the result carries a link.",

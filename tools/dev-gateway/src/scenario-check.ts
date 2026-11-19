@@ -46,6 +46,7 @@ import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
 import { OFFERED_TOOLS_PATH, QUIET_TURNS_PATH } from "./fake-provider.ts";
 import { COMPUTER_CHECKS } from "./computer-checks.ts";
 import { IMAGE_CHECKS } from "./image-checks.ts";
+import { RULES_CHECKS } from "./rules-checks.ts";
 
 type JsonRecord = Record<string, unknown>;
 const rec = (value: unknown): JsonRecord =>
@@ -3466,10 +3467,13 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
 
 /** Directives of the scripted model that no scenario check claims to send. */
 export function uncoveredDirectives(): string[] {
-  // The browser and image directives are sent by the computer and image checks,
-  // on an instance of their own.
+  // The browser directives are sent by the computer checks, #message-read by
+  // the rules checks and the image directives by the image checks, each on an
+  // instance of their own.
   const covered = new Set(
-    [...SCENARIO_CHECKS, ...COMPUTER_CHECKS, ...IMAGE_CHECKS].flatMap((check) => check.covers),
+    [...SCENARIO_CHECKS, ...COMPUTER_CHECKS, ...RULES_CHECKS, ...IMAGE_CHECKS].flatMap(
+      (check) => check.covers,
+    ),
   );
   return SCENARIOS.map((s) => `#${s.name}`).filter((directive) => !covered.has(directive));
 }
