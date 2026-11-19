@@ -42,6 +42,7 @@ import { Character } from "../components/Avatar.tsx";
 import { EyeIcon } from "../components/icons.tsx";
 import { Button, Dot, Txt } from "../components/ui.tsx";
 import { APP_VERSION } from "../host/index.ts";
+import { localNetworkHint } from "../local-network.ts";
 import { useRuntime } from "../runtime.ts";
 import { FONTS, S, TOUCH, useTheme } from "../theme/index.ts";
 
@@ -217,11 +218,16 @@ function Failure({
   );
 }
 
-/** A connection error as the screen shows it: the gateway's words with any credential this host holds scrubbed out. */
-function errorFor(error: ConnectionError, redact: (text: string) => string) {
+/**
+ * A connection error as the screen shows it: the gateway's words with any
+ * credential this host holds scrubbed out, and, for a local gateway nobody
+ * answered at, that iOS's Local Network permission may be the cause.
+ */
+function errorFor(error: ConnectionError, url: string | null, redact: (text: string) => string) {
+  const local = localNetworkHint(error.code, url);
   return {
     title: failureTitle(error.code),
-    message: redact(error.hint ? `${error.message} ${error.hint}` : error.message),
+    message: redact([error.message, error.hint, local].filter(Boolean).join(" ")),
     code: error.code,
   };
 }
@@ -339,7 +345,7 @@ export function Address({
   const error = submitError
     ? { ...submitError, code: null }
     : connection.error
-      ? errorFor(connection.error, redact)
+      ? errorFor(connection.error, connection.gatewayUrl, redact)
       : null;
   // Try again repeats what failed: the saved gateway's connection, or this form.
   const tryAgain = () => {
@@ -493,7 +499,10 @@ export function Setup({
       <Brand />
       <Steps connection={connection} loadingBots={loadingBots} />
       {error && !loadingBots && (
-        <Failure {...errorFor(error, redact)} onTryAgain={() => void send({ type: "retry" })} />
+        <Failure
+          {...errorFor(error, connection.gatewayUrl, redact)}
+          onTryAgain={() => void send({ type: "retry" })}
+        />
       )}
       <Button label={W.useAnother} variant="quiet" large onPress={onAnother} testID="use-another" />
       <Foot>{footWords("connect", connection, HOST)}</Foot>

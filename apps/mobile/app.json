@@ -16,7 +16,8 @@
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
-        }
+        },
+        "NSLocalNetworkUsageDescription": "Clawtrate connects to the OpenClaw gateway you choose, which is often a computer on your own network."
       }
     },
     "plugins": [
