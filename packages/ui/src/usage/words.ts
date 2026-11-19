@@ -106,12 +106,17 @@ export function budgetOf(
   return { budget, count, percent: budgetPercent(budget, count?.used ?? null) };
 }
 
-/** "1.64M of 2.5M tokens this week". */
-export function budgetLine(budget: Budget, used: number | null): string {
+/** "1.64M of 2.5M tokens this week", and "partial" when the count may miss some of the use. */
+export function budgetLine(budget: Budget, count: BudgetCount | null): string {
+  const used = count?.used ?? null;
   return used === null
     ? `${short(budget.tokens)} tokens ${periodWord(budget.period)}, not counted yet`
-    : `${short(used)} of ${short(budget.tokens)} tokens ${periodWord(budget.period)}`;
+    : `${short(used)} of ${short(budget.tokens)} tokens ${periodWord(budget.period)}${count?.partial ? ", partial" : ""}`;
 }
+
+/** What a partial count is short of. */
+export const PARTIAL_COUNT =
+  "Partial: the gateway lists only its most recently updated tasks at once, and some of this routine's may not be among them.";
 
 /** The 80 percent line in the bot's task (F-396). */
 export function warnedLine(name: string, budget: Budget, used: number, percent: number): string {

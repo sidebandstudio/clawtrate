@@ -449,6 +449,7 @@ describe("budgets kept with the gateway", () => {
           used: 1_640_000,
           asOf: NOW,
           counting: false,
+          partial: false,
           error: null,
         },
       ],
@@ -717,7 +718,43 @@ describe("the usage engine", () => {
       },
     });
     await engine.countBudgets();
-    expect(usage().counts).toMatchObject([{ budgetId: "routine:job1", used: 200, asOf: 4343 }]);
+    expect(usage().counts).toMatchObject([
+      { budgetId: "routine:job1", used: 200, asOf: 4343, partial: false },
+    ]);
+    engine.onClose();
+  });
+
+  it("F-234: a routine's count read from a list the gateway capped is partial, never a settled figure", async () => {
+    const gateway = fakeGateway();
+    // The gateway lists at most `limit` tasks, the most recently updated first; its totals cover
+    // every task. Here the routine's task is past the cap.
+    const capped: typeof gateway.request = async (method, raw) => {
+      if (method !== "sessions.usage") return gateway.request(method, raw);
+      const params = raw as { limit: number };
+      return {
+        updatedAt: 4343,
+        cacheStatus: fresh,
+        sessions: Array.from({ length: params.limit }, (_, i) => ({
+          key: `agent:otto:task-${i}`,
+          usage: totals(1, 0),
+        })),
+        totals: totals(params.limit + 1200, 0),
+      };
+    };
+    const { engine, usage } = engineOn({ ...gateway, request: capped });
+    await engine.changeBudget({
+      op: "set",
+      budget: {
+        botId: "otto",
+        routineId: "job1",
+        routineName: "Weekly cleanup",
+        period: "daily",
+        tokens: 1_000,
+        timeZone: NY,
+      },
+    });
+    await engine.countBudgets();
+    expect(usage().counts).toMatchObject([{ budgetId: "routine:job1", used: 0, partial: true }]);
     engine.onClose();
   });
 

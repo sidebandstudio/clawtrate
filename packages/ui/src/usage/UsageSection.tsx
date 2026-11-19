@@ -24,7 +24,7 @@ import {
   useNow,
   useUsageReport,
 } from "./parts.tsx";
-import { asOf, budgetLine, costShort, full, kindWord } from "./words.ts";
+import { asOf, budgetLine, costShort, full, kindWord, PARTIAL_COUNT } from "./words.ts";
 import "./usage.css";
 
 const SOURCES: Array<[keyof Omit<UsageSources, "partial">, string]> = [
@@ -165,13 +165,14 @@ function Budgets({
               <div className="b-row" key={budget.id} data-budget={budget.id}>
                 <span className="b-row-main">
                   <span>
-                    {who} · {kindWord(budget.period)} · {budgetLine(budget, count?.used ?? null)}
+                    {who} · {kindWord(budget.period)} · {budgetLine(budget, count)}
                     {percent !== null && percent >= 100
                       ? " · reached"
                       : percent !== null && percent >= 80
                         ? ` · ${percent}%`
                         : ""}
                   </span>
+                  {count?.partial && <small>{PARTIAL_COUNT}</small>}
                   <small>
                     <ShownOnly />
                   </small>

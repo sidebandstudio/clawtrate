@@ -332,6 +332,9 @@ export class UsageEngine {
         const used = tasksOf(result)
           .filter((task) => task.routineId === budget.routineId)
           .reduce((sum, task) => sum + task.total, 0);
+        // The gateway lists at most `limit` tasks (its totals cover them all, but not by
+        // routine): a full list may have left some of the routine's tasks out.
+        const listed = Array.isArray(record.sessions) ? record.sessions.length : 0;
         return {
           budgetId: budget.id,
           range,
@@ -339,6 +342,7 @@ export class UsageEngine {
           asOf: typeof record.updatedAt === "number" ? record.updatedAt : null,
           counting:
             stillCounting(record.cacheStatus) || tasksOf(result).some((task) => task.computing),
+          partial: listed >= SESSIONS_LIMIT,
           error: null,
         };
       }
@@ -351,6 +355,7 @@ export class UsageEngine {
         used: figure.tokens.total,
         asOf: figure.asOf,
         counting: figure.counting,
+        partial: false,
         error: null,
       };
     } catch (error) {
@@ -363,6 +368,7 @@ export class UsageEngine {
         used: kept?.used ?? null,
         asOf: kept?.asOf ?? null,
         counting: false,
+        partial: kept?.partial ?? false,
         error: errorText(error),
       };
     }

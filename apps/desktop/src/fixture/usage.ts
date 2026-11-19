@@ -137,6 +137,7 @@ export function fixtureUsage(now: number, params: UsageParams): UsageState {
       : figure("otto", budget.period === "daily" ? "today" : "week", params, at).tokens.total,
     asOf: at,
     counting: params.usage === "computing",
+    partial: false,
     error: null,
   }));
   const windows = params.plimit
@@ -298,6 +299,7 @@ export function usageCommand(
               used,
               asOf: now - 60_000,
               counting: false,
+              partial: false,
               error: null,
             },
           ],

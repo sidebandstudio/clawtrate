@@ -261,7 +261,7 @@ export function BudgetPart({
         <Meter
           used={used}
           limit={budget.tokens}
-          words={budgetLine(budget, used)}
+          words={budgetLine(budget, count)}
           label={`${name}'s ${kindWord(budget.period)} budget: ${full(used)} of ${full(budget.tokens)} tokens ${periodWord(budget.period)}`}
           testId="budget-meter"
         />

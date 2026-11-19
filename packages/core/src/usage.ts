@@ -554,6 +554,12 @@ export type BudgetCount = {
   used: number | null;
   asOf: number | null;
   counting: boolean;
+  /**
+   * Part of the figure only: a routine's count read from a task list the
+   * gateway capped (`sessions.usage` returns at most `limit` tasks, while its
+   * totals cover every task), so some of the routine's tasks may be missing.
+   */
+  partial: boolean;
   /** Why it could not be counted, or null. */
   error: string | null;
 };

@@ -666,6 +666,7 @@ const budgetCount = object<BudgetCount>()({
   used: NUMBER,
   asOf: NUMBER,
   counting: FLAG,
+  partial: FLAG,
   error: text(MAX_MESSAGE_LINE_CHARS),
 });
 const limitText = text(MAX_LIMIT_TEXT_CHARS * 6 + 2);

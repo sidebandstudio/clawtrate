@@ -35,7 +35,7 @@ function UsageRow({ bot, onOpen, visible }: { bot: Bot; onOpen: () => void; visi
       : report.report
         ? `This week: ${short(report.report.figure.tokens.total)} tokens · ${costShort(report.report.figure.cost)}`
         : "Loading…";
-  const value = own ? `Budget ${budgetLine(own.budget, own.count?.used ?? null)} · ${week}` : week;
+  const value = own ? `Budget ${budgetLine(own.budget, own.count)} · ${week}` : week;
   return (
     <>
       <h3 className="b-tabgroup">Usage</h3>
