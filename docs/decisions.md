@@ -52,6 +52,12 @@ The client packages from 2026.11.x also report protocol 4. The gateway research 
 - **Run endings.** A lifecycle `error` ends a run only when the gateway marks it definitive (`executionSettled`, `fallbackExhaustedFailure`, or a classification other than a plain failure); otherwise it is an attempt error kept in `attemptErrors`, and the run goes on to its fallback. Terminal events are classified as the gateway does (completed, cancelled or aborted, timed out, blocked, failed). A run keeps the terminal event's own `stopReason`, `timeoutPhase`, `providerStarted` and `status`, and a `chat` error's `errorKind`; nothing is read from error text. In history, the gateway's injected aborted-partial row (`openclawAbort`) means stopped; only a final reply row establishes completion, and a run history shows ended without one has `outcomeKnown: false`. The gateway's own run timeout pauses while waiting for an approval; Clawtrate's turn limit is wall-clock time from the send.
 - **Tool results.** Both shipped shapes are read: `result: {content, details}`, and the native one with the text in `output` and the details in `result`. Command output is matched by its `toolCallId`, or by exec's `command:<toolCallId>` item. A result marked `replaceable` takes a later `replace` frame for the same call, even after the run ended, and history's copy wins over it on reload; either bumps the step's `correction`, so a view that keeps state across renders starts again from the facts. Errors are capped like other step text.
 - **Timers.** Timers are capped at 2³¹−1 ms, which `setTimeout` cannot exceed, and re-armed when they wake early.
+- **Not done for the conversation.** These are known and left open:
+  - After a reconnect that missed a run's end, the earlier run stays shown as active and Stop is withheld until its end is learned.
+  - The gateway may run a steer it accepted after the run it was meant for was stopped.
+  - An assistant's reply is threaded only when each gateway row carries its own reference.
+  - The phone, light, run-question screenshot check and the approval reconnect unit case are intermittent: the screenshot's follow-to-end failure stays with the open scroll issue, and the reconnect case's earlier timeouts at its wait for a connection are not explained by its passing alone.
+  - In the isolated F-163 approval regression run the settled approval's Raw region once disappeared before the last assertion; this branch changes neither that card nor that check, and why it collapsed is open.
 
 ## Approvals
 
