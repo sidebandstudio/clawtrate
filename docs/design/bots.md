@@ -782,4 +782,5 @@ Then:
 - The tool permissions screen, where the rules for an account's tools are chosen (F-481, FC-02); section 14 places those tools.
 - Choosing a bot's machine (F-046) and the list of what a bot can reach (F-047).
 - Duplicate, export and delete (F-048, F-049, F-050).
+- Connectors and tool servers other than T3 Code, their catalog, sign-in and removal: `connectors.md`.
 - A plugin that writes the one-account order and guards it (research C.4); with it, Lock would become a button, and "What a lock doesn't cover" would shrink.
