@@ -7,7 +7,7 @@ import { createBridgeSession } from "../src/bridge.ts";
 import { SendTooLargeError } from "../src/client.ts";
 import { utf8Length } from "../src/encoding.ts";
 import { sendFrameBytes, sendRefusal } from "../src/send-size.ts";
-import type { ConnectParams } from "../src/types.ts";
+type ConnectParams = { scopes: string[] };
 import { grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { helloOk, until } from "./fake-gateway.ts";
 
