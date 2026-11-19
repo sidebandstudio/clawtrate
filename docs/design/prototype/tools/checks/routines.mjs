@@ -5,7 +5,7 @@
 // Run from the repository root:  node docs/design/prototype/tools/checks/routines.mjs
 import { chromium, pageUrl } from "./browser.mjs";
 // The pinned gateway schema: every request a page sends is checked against it.
-import { validateCronAddParams, validateCronUpdateParams } from "../../../../../packages/core/node_modules/@openclaw/gateway-protocol/dist/index.mjs";
+import { validateCronAddParams, validateCronRemoveParams, validateCronUpdateParams } from "../../../../../packages/core/node_modules/@openclaw/gateway-protocol/dist/index.mjs";
 
 const base = pageUrl("routines.html") + "?chrome=0&theme=light";
 const b = await chromium.launch();
@@ -183,14 +183,22 @@ check("F-351 Run now refused: the reason under the button, Run now offered again
 await p.waitForTimeout(2200);
 check("F-351 Run now refused: no run, then or later, the six runs as they were", (await count(p, '[data-testid="run-row"]')) === 6 && (await text(p, '[data-testid="run-row"] .r-run-when')) === "Today 8:00 AM" && (await p.evaluate(() => window.routines.routine("digest").runs.length)) === 6);
 await p.close();
-p = await open("view=routine&routine=backup&deletefail=1&confirm=delete");
-await p.click('[data-r="confirm-delete"]');
-check("F-352 delete refused: the confirmation stays with the reason, focus on Delete", (await p.evaluate(() => document.querySelector("#confirm-dialog").open)) && (await text(p, "#confirm-error")) === "Couldn't delete Nightly backup check: the gateway didn't answer. It is still there." && (await focused(p)) === "confirm-delete:backup");
-await p.click('[data-r="confirm-cancel"]');
-check("F-352 after a refused delete the routine's page is still there", (await text(p, "#view-title")) === "Nightly backup check" && (await has(p, '[data-r="run-now"]')));
-await p.click('.r-head [data-r="back"]');
-check("F-352 after a refused delete the routine is still listed", (await text(p, '[data-routine="backup"] .r-row-name')) === "Nightly backup check" && (await text(p, '[data-testid="count"]')) === "7 routines");
-await p.close();
+for (const outcome of ["1", "landed"]) {
+  p = await open(`view=routine&routine=backup&deletefail=${outcome}&confirm=delete`);
+  await p.click('[data-r="confirm-delete"]');
+  await p.keyboard.press("Escape");
+  check(`F-352 unanswered delete (${outcome}): outcome unknown, Check now focused, Cancel unavailable`, (await text(p, "#confirm-error")) === "The gateway didn't answer. This routine may have been deleted." && (await focused(p)) === "check-delete:backup" && !(await has(p, '[data-r="confirm-cancel"]')));
+  await p.click('[data-r="check-delete"]');
+  check("F-352 checking sends no second delete", (await p.evaluate(() => window.routines.dispatched.length)) === 1);
+  if (outcome === "landed") {
+    check("F-352 reply lost after deletion: absences are confirmed before returning to the list", (await text(p, "#view-title")) === "Routines" && !(await has(p, '[data-routine="backup"]')) && (await live(p)) === "Deleted Nightly backup check");
+  } else {
+    check("F-352 still listed: report the read and allow Cancel", (await text(p, "#confirm-error")) === "The gateway still lists this routine. The delete may still arrive.");
+    await p.click('[data-r="confirm-cancel"]');
+    check("F-352 confirmed present: Cancel returns to the routine", (await text(p, "#view-title")) === "Nightly backup check" && (await has(p, '[data-r="run-now"]')));
+  }
+  await p.close();
+}
 p = await open("edit=open&routine=digest&editstate=adminlost");
 await p.fill("#e-name", "Morning notes");
 await p.click('[data-r="save"]');
@@ -327,6 +335,9 @@ await p.click('[data-r="run-now"]');
 check("F-351 a second Run now while running: It's already running.", (await text(p, ".r-already")) === "It's already running.");
 await p.waitForTimeout(2000);
 check("F-351 finished: the new run on top, started by hand, the rail calm, announced", (await text(p, '[data-testid="run-row"] .r-run-when')) === "Today 10:12 AM · started by hand" && !(await has(p, '[data-bot-row="marlow"] .glyph[data-state="working"]')) && (await live(p)) === "Morning digest finished");
+await p.click('[data-r="run-now"]');
+await p.waitForTimeout(2450);
+check("F-351 two completed manual starts keep separate run IDs and history rows", (await count(p, '[data-testid="run-row"]')) === 8 && (await p.evaluate(() => new Set(window.routines.routine("digest").runs.map((r) => r.runId)).size)) === 8);
 await p.close();
 
 p = await open("view=routine&routine=cleanup");
@@ -386,6 +397,18 @@ check("no recorded conversation: said plainly, with what the run returned; nothi
 await p.close();
 p = await open("view=run&routine=reminder&run=0&state=ran-once");
 check("a reminder's run is in the main conversation: no transcript of its own, its summary and a way there", (await text(p, ".b-note")).startsWith("This run happened in Marlow's main conversation.") && (await text(p, '[data-testid="returned"]')) === "Posted the reminder in Marlow's main conversation." && (await has(p, '.b-note [data-r="open-bot"]')) && !(await has(p, '[data-testid="scheduled-message"]')));
+await p.close();
+p = await open("view=routine&routine=digest");
+await event(p, { action: "updated", job: { id: "digest", sessionTarget: "current" } });
+await p.click('[data-testid="run-row"]');
+check("a shared run with an unknown destination has no conversation link", (await text(p, ".b-note")).startsWith("This run happened in a shared conversation.") && !(await has(p, '.b-note [data-session]')));
+await p.click('[data-r="back-to-routine"]');
+const sharedKey = "agent:marlow:planning";
+await event(p, { action: "finished", job: { id: "digest", sessionTarget: "current", sessionKey: sharedKey }, runId: "shared-run", runAtMs: Date.UTC(2026, 10, 18, 15, 12), sessionKey: "agent:marlow:cron:digest:run:shared-run", status: "ok", summary: "Planning notes." });
+await p.click('[data-testid="run-row"]');
+check("a shared run names the recorded destination", (await text(p, ".b-note")).includes(sharedKey) && (await text(p, '.b-note [data-session]')) === "Open conversation");
+await p.click('.b-note [data-session]');
+check("Open conversation goes to the recorded shared destination", (await text(p, "#view-title")) === sharedKey);
 await p.close();
 p = await open("view=routine&routine=reminder&state=ran-once");
 check("a one-shot that succeeded and removed itself: its page says so and keeps its run; no actions", (await text(p, ".b-note")).startsWith("This routine ran once, and the gateway removed it. Its run succeeded today 9:00 AM.") && (await count(p, '[data-testid="run-row"]')) === 1 && !(await has(p, '[data-r="run-now"]')));
@@ -461,8 +484,12 @@ for (const lookup of ["found", "none"]) {
   await p.click('[data-r="save"]');
   await p.waitForTimeout(700);
   check(`no answer on a new routine (${lookup}): the dialog stays, typed input kept, focus on Check now`, (await p.evaluate(() => document.querySelector("#edit-dialog").open)) && (await p.inputValue("#e-name")) === "Evening wrap-up" && (await p.evaluate(() => document.activeElement.dataset.r)) === "check-now");
+  await p.fill("#e-name", "Evening follow-up");
+  await p.selectOption("#e-bot", "otto");
   await p.click('[data-r="check-now"]');
   await p.waitForTimeout(500);
+  const attempted = () => p.evaluate(() => window.routines.dispatched.map(({ params }) => [params.name, params.agentId]));
+  check(`Check now (${lookup}) sends no additional write after the original attempt`, JSON.stringify(await attempted()) === JSON.stringify([["Evening wrap-up", "marlow"]]));
   const words = await text(p, "#edit-dialog .b-note");
   if (lookup === "found")
     check("Check now found a routine with that name: says it may be another client's, offers Open it and a separate Save again", words.startsWith("The gateway has a routine for Marlow named Evening wrap-up, created today 10:12 AM. It may be the one you saved, or one made elsewhere.") && (await has(p, '[data-r="open-found"]')) && (await text(p, '#edit-dialog .b-note [data-r="save"]')) === "Save again" && (await text(p, "#edit-dialog .b-note .r-hint")) === "Saving again makes another routine if that one is yours." && (await p.evaluate(() => window.routines.sent.length)) === 1);
@@ -471,7 +498,7 @@ for (const lookup of ["found", "none"]) {
   check(`Save again is its own explicit retry (${lookup})`, (await text(p, '.b-foot [data-r="save"]')) === "Saving…");
   await p.waitForTimeout(700);
   const adds = await p.evaluate(() => window.routines.sent.filter((x) => x.method === "cron.add").map((x) => x.params.name));
-  check(`Save again (${lookup}): sends one more cron.add, which is answered; the routine's page opens`, JSON.stringify(adds) === JSON.stringify(lookup === "found" ? ["Evening wrap-up", "Evening wrap-up"] : ["Evening wrap-up"]) && !(await p.evaluate(() => document.querySelector("#edit-dialog").open)) && (await text(p, "#view-title")) === "Evening wrap-up" && (await live(p)) === "Routine created");
+  check(`Save again (${lookup}): sends one more cron.add, which is answered; the routine's page opens`, JSON.stringify(adds) === JSON.stringify(lookup === "found" ? ["Evening wrap-up", "Evening follow-up"] : ["Evening follow-up"]) && JSON.stringify(await attempted()) === JSON.stringify([["Evening wrap-up", "marlow"], ["Evening follow-up", "otto"]]) && !(await p.evaluate(() => document.querySelector("#edit-dialog").open)) && (await text(p, "#view-title")) === "Evening follow-up" && (await live(p)) === "Routine created");
   await p.close();
 }
 p = await open("edit=open&routine=digest");
@@ -533,9 +560,13 @@ const CRON_TABLE = [
   ["99 * * * *", "error"], ["5/10 * * * *", "error"], ["0 8 * * 5-1", "error"], ["0 24 * * *", "error"], ["0 8 * *", "error"], ["0 0-8-9 * * *", "error"], ["0 8 31 2 *", "never"],
 ];
 // The table itself is checked against croner when the gateway's package is at hand (OPENCLAW_PACKAGE_DIR).
+const springExpr = "30 2 14 3 *";
+const springRun = "2027-03-14T07:30:00.000Z";
 if (process.env.OPENCLAW_PACKAGE_DIR) {
   const { Cron } = await import(new URL("../croner/dist/croner.js", `file://${process.env.OPENCLAW_PACKAGE_DIR.replace(/\/?$/, "/")}`).href);
   const from = new Date(Date.UTC(2026, 10, 18, 15, 12));
+  const spring = new Cron(springExpr, { timezone: "America/New_York", catch: false });
+  check("F-195 pinned Croner shifts 2:30 AM into 3:30 AM", spring.nextRun(from)?.toISOString() === springRun);
   const wrong = CRON_TABLE.filter(([expr, want, next]) => {
     let c;
     try {
@@ -552,6 +583,8 @@ if (process.env.OPENCLAW_PACKAGE_DIR) {
   check("F-195 the cron table is what the gateway's croner does", wrong.length === 0, JSON.stringify(wrong));
 }
 p = await open();
+const spring = await p.evaluate((expr) => window.routines.cron(expr), springExpr);
+check("F-195 cron preview uses the shifted instant without shortening nominal spacing", new Date(spring.next[0]).toISOString() === springRun && spring.gap === Infinity);
 const read = await p.evaluate((rows) => rows.map(([expr]) => window.routines.cron(expr)), CRON_TABLE);
 const misread = CRON_TABLE.filter(([, want, next], i) => {
   const g = read[i];
@@ -560,6 +593,23 @@ const misread = CRON_TABLE.filter(([, want, next], i) => {
 });
 check(`F-195 the page reads all ${CRON_TABLE.length} expressions as croner does: refusal, floor and first firing`, misread.length === 0, JSON.stringify(misread));
 await p.close();
+p = await open("view=week");
+await event(p, { action: "updated", job: { id: "backup", schedule: { kind: "cron", expr: "30 2 * * *", tz: "America/New_York" } } });
+await p.evaluate(() => {
+  for (let i = 0; i < 16; i++) document.querySelector('[data-r="cal-move"][data-v="1"]').click();
+});
+check("F-197 calendar draws the shifted spring occurrence at 3:30 AM", (await label(p, '[data-testid="cal-day"][aria-label="Sun Mar 14"] [data-id="backup"]')).includes("Sun 3:30 AM"));
+await p.close();
+p = await open("view=week");
+await event(p, { action: "updated", job: { id: "backup", schedule: { kind: "cron", expr: "30 3 * * *" }, state: { nextRunAtMs: Date.UTC(2026, 10, 19, 12) } } });
+const unknownZone = '[data-testid="occurrence"][data-id="backup"][data-past="false"]';
+check("F-197 unknown gateway zone draws only the gateway's next run", (await count(p, unknownZone)) === 1 && (await label(p, unknownZone)).includes("Thu 7:00 AM"));
+await event(p, { action: "updated", job: { id: "backup", state: {} } });
+check("F-197 unknown gateway zone with no reported next run draws no future chips", (await count(p, unknownZone)) === 0);
+await p.click('[data-testid="occurrence"][data-id="backup"][data-past="true"]');
+check("F-188 unknown gateway zone with no reported next run states that on the routine page", (await text(p, '[data-fact="next"] dd')) === "The gateway hasn't reported a next run.");
+await p.close();
+
 for (const [expr, want] of CRON_TABLE) {
   p = await open("edit=new");
   await p.fill("#e-name", "Often");
@@ -671,6 +721,22 @@ req = (await p.evaluate(() => window.routines.sent))[0];
 check("edit Results: the patch carries only the mode, and the routine keeps its other delivery fields", JSON.stringify(req.params) === JSON.stringify({ id: "backup", patch: { delivery: { mode: "announce" } } }) && validateCronUpdateParams(req.params) && JSON.stringify(await p.evaluate(() => window.routines.routine("backup").delivery)) === JSON.stringify({ mode: "announce", failureDestination: { mode: "announce", channel: "last" } }) && (await text(p, '[data-fact="results"] dd')) === "Announced to the gateway's channels");
 await p.close();
 
+p = await open("edit=new");
+await p.fill("#e-name", "Distant reminder");
+await p.fill("#e-instr", "Check the date.");
+await p.click('[data-e-kind="once"]');
+await p.fill("#e-date", "2029-01-01");
+await p.click('[data-r="save"]');
+await p.waitForTimeout(700);
+check("F-188 a distant Once shows its stored future instant", (await text(p, '[data-fact="next"] dd')).includes("Jan 1"));
+await p.close();
+p = await open("view=routine&routine=backup");
+await event(p, { action: "updated", job: { id: "backup", schedule: { kind: "cron", expr: "0 0 9 1 1 * 2029", tz: "America/New_York" } } });
+check("F-188 a distant cron uses the eight-year horizon", (await text(p, '[data-fact="next"] dd')).includes("Jan 1"));
+await event(p, { action: "updated", job: { id: "backup", state: { nextRunAtMs: Date.UTC(2026, 10, 19, 12) } } });
+check("F-188 gateway next run takes precedence over a computed fallback", (await text(p, '[data-fact="next"] dd')).endsWith("Nov 19, 7:00 AM"));
+await p.close();
+
 // Once with its date or time cleared: said, never thrown ---------------------------------------------
 p = await open("edit=new");
 await p.fill("#e-name", "Call the venue");
@@ -752,6 +818,7 @@ p = await open("view=routine&routine=digest&editstate=noanswer&lookup=found");
 await p.click('.r-head [data-r="edit"]');
 await p.fill("#e-time", "09:00");
 await p.click('[data-r="save"]');
+await event(p, { action: "updated", job: { id: "digest", schedule: { kind: "cron", expr: "0 9 * * 1-5", tz: "America/New_York" } } });
 await p.waitForTimeout(700);
 check("a schedule edit unanswered: no Save in the foot while the outcome is unknown", !(await footSave(p)) && (await has(p, '[data-r="check-now"]')));
 await p.click('[data-r="check-now"]');
@@ -789,7 +856,27 @@ for (const q of ["edit=new&editstate=saving", "edit=open&routine=digest&editstat
   await p.close();
 }
 
+p = await open("edit=open&routine=digest");
+await p.fill("#e-name", "Keep this draft");
+await p.click('[data-r="save"]');
+await event(p, { action: "removed", jobId: "digest" });
+await p.waitForTimeout(700);
+check("a removal during Save keeps the draft in recovery without applying the edit", (await has(p, '[data-r="save-as-new"]')) && (await p.inputValue("#e-name")) === "Keep this draft" && (await p.evaluate(() => window.routines.sent.length)) === 0);
+await p.click('[data-r="save-as-new"]');
+await p.waitForTimeout(700);
+check("the removed routine's draft can still be saved as new", (await lastSent(p))?.method === "cron.add" && (await text(p, "#view-title")) === "Keep this draft");
+await p.close();
+
 // Changed or deleted elsewhere: the draft is kept, and every retry is the validated save ------------
+p = await open("edit=open&routine=digest");
+await p.fill("#e-name", "My digest");
+await event(p, { action: "updated", job: { id: "digest", updatedAtMs: Date.UTC(2026, 10, 18, 15, 12) } });
+await p.click('[data-r="save"]');
+check("the pre-save read catches a newer revision before writing", (await has(p, '[data-r="conflict-save"]')) && (await p.evaluate(() => window.routines.dispatched.length)) === 0);
+await p.click('[data-r="conflict-save"]');
+await p.waitForTimeout(700);
+check("the explicit override accepts that revision and applies only the draft's change", JSON.stringify((await lastSent(p))?.params.patch) === '{"name":"My digest"}');
+await p.close();
 p = await open("edit=open&routine=digest");
 await p.fill("#e-name", "Mine");
 await p.fill("#e-instr", "My instruction.");
@@ -880,6 +967,25 @@ for (const q of ["view=checkins&bot=juniper&defaultprompt=unreadable", "view=che
   check(`${q}: a prompt Clawtrate can't read: the cadence only`, (await text(p, '[data-testid="checkins-text"]')) === "Every 30 minutes, Juniper checks in. Clawtrate can't read its prompt.");
   await p.close();
 }
+
+for (const defaultPrompt of ["custom", "unreadable"]) {
+  p = await open(`view=checkins&bot=juniper&defaultprompt=${defaultPrompt}`);
+  await p.click('[data-r="checkins"]');
+  await p.click("#checkins-dialog summary");
+  await p.fill("[data-ci-prompt]", "Tell me about my day.");
+  check(`check-in prompt replacement (${defaultPrompt}) makes no claim about the default asking for silence`, (await text(p, '[data-testid="prompt-note"]')) === "This prompt replaces the gateway's default for this bot. Whether Juniper stays quiet depends on what this prompt asks.");
+  await p.close();
+}
+p = await open("view=checkins&bot=otto");
+await p.click('[data-r="zone"]');
+await p.click('[data-r="zone-save"]');
+await event(p, { action: "added", job: { id: "another-backup", bot: "otto", name: "Another backup", schedule: { kind: "cron", expr: "30 4 * * *", tz: "Europe/Paris" }, payload: { kind: "agentTurn", message: "Check the backup." } } });
+await p.waitForTimeout(600);
+check("F-196 newly eligible routines require a new confirmation before any writes", (await text(p, '[data-testid="zone-change"]')).includes("Another backup") && (await has(p, '[data-r="zone-save"]')) && (await p.evaluate(() => window.routines.dispatched.length)) === 0);
+await p.click('[data-r="zone-save"]');
+await p.waitForTimeout(600);
+check("F-196 reconfirming writes the two newly disclosed targets", JSON.stringify(await p.evaluate(() => window.routines.sent.map((r) => r.params.id))) === '["backup","another-backup"]');
+await p.close();
 
 // Try again reads again ------------------------------------------------------------------------------
 p = await open("view=routine&routine=digest&state=runs-error");
@@ -1004,7 +1110,7 @@ p = await open("motion=reduce&view=routine&routine=digest&state=running");
 check("reduced motion: nothing runs", (await p.evaluate(() => document.getAnimations().filter((a) => a.playState === "running").length)) === 0);
 await p.close();
 
-const invalid = requests.filter((r) => !(r.method === "cron.add" ? validateCronAddParams(r.params) : r.method === "cron.update" ? validateCronUpdateParams(r.params) : false));
+const invalid = requests.filter((r) => !(r.method === "cron.add" ? validateCronAddParams(r.params) : r.method === "cron.update" ? validateCronUpdateParams(r.params) : r.method === "cron.remove" ? validateCronRemoveParams(r.params) : false));
 check(`every request the pages sent (${requests.length}) passes the pinned gateway schema`, requests.length > 30 && invalid.length === 0, JSON.stringify(invalid.slice(0, 2)));
 await b.close();
 console.log(out.join("\n"));
