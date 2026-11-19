@@ -309,7 +309,15 @@ export function Composer({
    */
   const sendAs = useCallback(
     async (how: SendMode | "new-task") => {
-      if (!canSend || submitting.current) return;
+      if (!canSend) return;
+      if (submitting.current) {
+        onNotice({
+          title: "This message is still in the composer.",
+          reason:
+            "The composer is still handing off the previous message. Send this draft again when it finishes.",
+        });
+        return;
+      }
       if (how === "new-task" && files.length > 0) {
         // Task creation takes no files yet; nothing is sent, and nothing is lost.
         onNotice({

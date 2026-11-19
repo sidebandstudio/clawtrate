@@ -107,6 +107,51 @@ test.describe("sending", () => {
     await expect(field(page)).toHaveValue("The next thought");
   });
 
+  test("F-106: Enter while the prior send is still being taken leaves the draft with an explicit notice", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+        sentTexts: string[];
+        releaseFirst?: () => void;
+      };
+      const fixture = w.clawtrateFixture;
+      const original = fixture.invoke.bind(fixture);
+      w.sentTexts = [];
+      fixture.invoke = (command: unknown) => {
+        const each = command as { type: string; text?: string };
+        if (each.type !== "sendMessage") return original(command);
+        w.sentTexts.push(each.text ?? "");
+        // The first send's answer is held until the check releases it.
+        if (w.sentTexts.length === 1)
+          return new Promise<void>((resolve) => (w.releaseFirst = resolve)).then(() =>
+            original(command),
+          );
+        return original(command);
+      };
+    });
+    const sent = () =>
+      page.evaluate(() => (window as unknown as { sentTexts: string[] }).sentTexts);
+    await field(page).fill("First words");
+    await page.keyboard.press("Enter");
+    await expect(field(page)).toHaveValue("");
+    await page.keyboard.type("Second words");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".composer-shelf [role=alert]")).toContainText(
+      "This message is still in the composer.",
+    );
+    await expect(field(page)).toHaveValue("Second words");
+    expect(await sent()).toEqual(["First words"]);
+    await page.evaluate(() => (window as unknown as { releaseFirst: () => void }).releaseFirst());
+    await expect(page.getByTestId("outgoing")).toHaveCount(1);
+    await field(page).focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(sent).toEqual(["First words", "Second words"]);
+    await expect(field(page)).toHaveValue("");
+  });
+
   test("F-073: a refused send gives its words and files back, ahead of anything typed since", async ({
     page,
   }) => {
