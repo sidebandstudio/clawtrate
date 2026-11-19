@@ -683,12 +683,19 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       const found = serviceOnPort(look.facts, closedPort);
       if (!found.ok) throw new Error("no service");
       const forward = await openForward(route, found);
+      const states: ForwardState[] = [forward.state];
+      forward.onState((state) => states.push(state));
+      const notAnswering = () =>
+        states.some((s) => s.phase === "waiting" && s.cause.kind === "gateway-not-answering");
       try {
-        await waitFor(() => forward.state.phase === "waiting", 20000, "the forward to wait");
-        expect(forward.state).toMatchObject({
-          phase: "waiting",
-          cause: { kind: "gateway-not-answering" },
-        });
+        // A probe made on the listening cue can beat the bind and see no answer at all; the next try is made in a second.
+        await waitFor(notAnswering, 20000, `the port not answering: ${JSON.stringify(states)}`);
+        expect(
+          states.filter(
+            (s) =>
+              s.phase === "up" || (s.phase === "waiting" && s.cause.kind === "gateway-not-running"),
+          ),
+        ).toEqual([]);
       } finally {
         await forward.close();
       }
