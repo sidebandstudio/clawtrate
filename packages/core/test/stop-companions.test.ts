@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { agentEvent, KEY, openTask } from "./client-harness.ts";
-import { GatewayError, until } from "./fake-gateway.ts";
+import { GatewayError, sleep, until } from "./fake-gateway.ts";
 
 const PEER = "agent:marlow:main";
 
@@ -150,6 +150,55 @@ describe("Stop and what the run started (F-296, F-298)", () => {
       [],
       [],
     ]);
+    client.stop();
+  });
+});
+
+describe("Stop that this client did not get confirmed (F-296, F-101)", () => {
+  it("F-296 F-101: a refused local Stop followed by an external stop does not abort recipients", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["chat.abort"] = () => {
+      throw new GatewayError({ code: "INVALID_REQUEST", message: "not now" });
+    };
+    messaged(gateway, [[PEER, "run-r"]]);
+    await until(() => transcript().runs[0]?.steps.length === 1);
+    await client.stopRun(KEY, "run-s");
+    await until(() => transcript().runs[0]?.stopError != null);
+    // Someone else stops the parent.
+    gateway.emit("agent", ended(9));
+    await until(() => transcript().runs[0]?.state === "stopped");
+    await sleep(50);
+    expect(gateway.calls("chat.abort")).toEqual([{ sessionKey: KEY, runId: "run-s" }]);
+    expect(transcript().runs[0]!.stopRequestedAt).toBeNull();
+    client.stop();
+  });
+
+  it("F-296: a Stop whose answer was lost and whose end history does not show stops no recipient until the parent's own end arrives", async () => {
+    const { client, gateway, transcript } = await openTask();
+    let parentAnswered = false;
+    gateway.handlers["chat.abort"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== KEY)
+        return { ok: true, aborted: true, runIds: ["run-r"] };
+      if (parentAnswered) return { ok: true, aborted: true, runIds: ["run-s"] };
+      parentAnswered = true;
+      gateway.dropAll();
+      return new Promise(() => {});
+    };
+    messaged(gateway, [[PEER, "run-r"]]);
+    await until(() => transcript().runs[0]?.steps.length === 1);
+    void client.stopRun(KEY, "run-s");
+    // After the reconnect history shows neither the parent nor its end.
+    await until(() => gateway.calls("chat.history").length >= 2);
+    await sleep(100);
+    expect(
+      gateway
+        .calls("chat.abort")
+        .filter((each) => (each as { sessionKey: string }).sessionKey === PEER),
+    ).toEqual([]);
+    // The parent's own end, as the gateway says it.
+    gateway.emit("agent", ended(9));
+    await until(() => (transcript().runs[0]!.stoppedWith?.bots.length ?? 0) === 1);
+    expect(gateway.calls("chat.abort")).toContainEqual({ sessionKey: PEER, runId: "run-r" });
     client.stop();
   });
 });

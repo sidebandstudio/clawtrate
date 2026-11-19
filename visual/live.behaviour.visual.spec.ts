@@ -786,7 +786,7 @@ test.describe("Stop", () => {
     );
     await open(page, "run-stopped-elsewhere");
     await expect(page.getByTestId("stop-note")).toContainText(
-      "from another device or session. Completed actions are not undone.",
+      "with no local Stop confirmed. Completed actions are not undone.",
     );
   });
 

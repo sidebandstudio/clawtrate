@@ -1455,6 +1455,7 @@ export function revertStop(activity: TaskActivity, runId: string, error: string)
           state: run.suspendedCards.length > 0 ? "waiting" : "running",
           pendingCards: [...run.suspendedCards, ...run.pendingCards],
           suspendedCards: [],
+          stopRequestedAt: null,
           stopError: error,
         }
       : run,

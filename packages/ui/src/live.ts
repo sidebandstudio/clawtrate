@@ -342,26 +342,19 @@ export type RunEnding =
   | { kind: "failed"; reason: string };
 
 /**
- * How a finished run ended, when the transcript says more than its text. A
- * stop is from elsewhere only when this device neither pressed Stop nor sent
- * a stop command (`/stop`, which the gateway handles without a run) while
- * the run was going.
+ * How a finished run ended, when the transcript says more than its text. A stop is this
+ * client's only when its own Stop of that run stands (`stopRequestedAt`, cleared when the gateway
+ * refused it; a typed `/stop` marks the exact runs its answer names).
  */
-export function endingOf(run: Run, transcript?: Transcript): RunEnding | null {
+export function endingOf(run: Run, _transcript?: Transcript): RunEnding | null {
   if (run.state === "completed" && run.finishedBeforeStop) return { kind: "finished-before-stop" };
   if (run.state === "stopped") {
     if (!run.outcomeKnown) return run.stopRequestedAt !== null ? { kind: "stop-unknown" } : null;
     if (run.turnLimit !== undefined) return { kind: "turn-limit", minutes: run.turnLimit };
-    const commanded = (transcript?.outbox ?? []).some(
-      (message) =>
-        message.status === "handled" &&
-        (run.startedAt === null || message.createdAt >= run.startedAt) &&
-        (run.endedAt === null || message.createdAt <= run.endedAt),
-    );
     return {
       kind: "stopped",
       after: runDuration(run),
-      elsewhere: run.stopRequestedAt === null && !commanded,
+      elsewhere: run.stopRequestedAt === null,
       // 0: the automatic stop failed, so this stop is not the timeouts'.
       timeouts: run.stoppedForTimeouts ? run.stoppedForTimeouts : null,
     };

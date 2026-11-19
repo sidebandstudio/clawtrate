@@ -323,7 +323,8 @@ describe("how a run ends", () => {
       endingOf(run({ state: "stopped", stopRequestedAt: NOW - 1, endedAt: NOW - 2_000 })),
     ).toEqual({ kind: "stopped", after: "40s", elsewhere: false, timeouts: null });
     expect(endingOf(run({ state: "stopped", endedAt: NOW }))).toMatchObject({ elsewhere: true });
-    // A stop command this device sent while the run went is not "from elsewhere".
+    // Only this client's own Stop of the run, which a typed /stop marks on the runs its answer
+    // names, makes it local; a handled /stop near the run's time no longer does by itself.
     const stopped = run({ state: "stopped", endedAt: NOW });
     expect(
       endingOf(
@@ -332,6 +333,9 @@ describe("how a run ends", () => {
           outbox: [message({ status: "handled", text: "/stop", createdAt: NOW - 1_000 })],
         }),
       ),
+    ).toMatchObject({ elsewhere: true });
+    expect(
+      endingOf(run({ state: "stopped", endedAt: NOW, stopRequestedAt: NOW - 1_000 })),
     ).toMatchObject({ elsewhere: false });
     // A run rebuilt from history whose ending is not known is not called stopped.
     expect(endingOf(run({ state: "stopped", outcomeKnown: false }))).toBeNull();

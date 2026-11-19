@@ -4088,6 +4088,7 @@ export class ClawtrateClient {
       // A run this client stopped has ended as stopped: stop what its messages started (F-296).
       if (
         run.state === "stopped" &&
+        run.outcomeKnown &&
         run.stopRequestedAt !== null &&
         !run.stoppedWith?.recipientsAsked &&
         this.state.connection.canWrite &&

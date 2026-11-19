@@ -272,7 +272,7 @@ export function RunEnding({
                 {ending.after ? `Stopped after ${ending.after}` : "Stopped"}
                 {ending.elsewhere ? "," : "."}
               </b>{" "}
-              {ending.elsewhere ? "from another device or session. " : ""}
+              {ending.elsewhere ? "with no local Stop confirmed. " : ""}
               Completed actions are not undone.
             </p>
           )}
