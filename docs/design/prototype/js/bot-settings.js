@@ -200,6 +200,7 @@
     const tools = listed.map(([label, tool]) => row(`<span title="${tool}">${label}</span>`, (b.deny || []).includes(tool) ? "Denied" : "Allowed")).join("");
     const lastTask = bot.tasks.find((t) => !t.fresh);
     return (
+      (CT.botsSettingsLead ? CT.botsSettingsLead(id) : "") +
       `<h3 class="b-tabgroup">About</h3><dl class="facts">` +
       row("Description", `<span class="b-faint">None</span>`) +
       row("Instructions", "From AGENTS.md, 42 lines") +

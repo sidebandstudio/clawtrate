@@ -545,3 +545,199 @@ button.c-mem:hover {
     justify-self: start;
   }
 }
+
+/* Round 2: the glance, the plugin's state, the holds list, wrapped row values. */
+.c-glance {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 10px 0 8px;
+}
+
+.c-glance-block {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  font-size: var(--text-sm);
+}
+
+.c-glance-block h4 {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 0 4px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.c-glance-block[data-kind="unknown"] h4 {
+  color: var(--danger);
+}
+
+.c-glance-n {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.c-glance-block p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.c-glance-block .link-button {
+  display: inline;
+  padding: 0;
+  min-height: 0;
+  color: var(--text);
+  font-size: inherit;
+  text-align: left;
+}
+
+.c-plugin {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.c-plugin[data-tone="danger"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.c-plugin .icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}
+
+.c-mark[data-tone="danger"],
+.c-line-words small[data-tone="danger"],
+.b-row-main small[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.c-holds {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.c-holds li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 4px 0;
+}
+
+.c-holds li .icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}
+
+.c-holds li[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.c-subgroup {
+  margin: 8px 0 4px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.c-effective {
+  margin: 6px 0 10px;
+  font-size: var(--text-md);
+}
+
+/* A row whose value wraps under its label, so a count is never cut. */
+button.c-wraprow {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+button.c-wraprow > span:first-child {
+  flex: 1 0 auto;
+}
+
+.c-wrapvalue {
+  flex: 1 1 100%;
+  order: 3;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  white-space: normal;
+}
+
+button.c-wraprow > .icon {
+  order: 2;
+}
+
+/* Activity's filters: one band that never wraps over the list. */
+.c-filters[role="group"] {
+  flex-wrap: wrap;
+  padding-bottom: 4px;
+}
+
+.c-filters[role="group"] > * {
+  flex: none;
+  white-space: nowrap;
+}
+
+.c-grantonly {
+  font-size: var(--text-sm);
+}
+
+.c-log-open {
+  padding: 0 14px 12px;
+}
+
+button.c-log .c-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.c-outcome {
+  margin: 4px 0 0;
+  font-size: var(--text-sm);
+}
+
+.c-glance-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.c-glance-link:hover {
+  text-decoration-color: currentColor;
+}
+
+@container app (max-width: 599px) {
+  .c-glance {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 599px) {
+  .c-glance {
+    grid-template-columns: 1fr;
+  }
+}
