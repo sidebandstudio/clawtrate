@@ -37,7 +37,13 @@ refused a request beyond loopback: CONNECT clawhub.ai:443               (seeding
 refused a request beyond loopback: CONNECT 192.0.2.10:443               (a tool server at a documentation-range address)
 ```
 
-The first start of `d11conn` in this work came before the fence, so that one start asked `catalog.openclaw.ai` for real, as every instance on `main` does on start. No client call was made on it.
+**The one start before the fence.** The first start of `d11conn` in this work came before the fence, so it reached the network as every instance on `main` does; it left no log of its requests, so this is what the gateway's source and the identical fenced starts show:
+
+- On start, one `GET https://catalog.openclaw.ai/models/v2/catalog.json`, the remote model catalog refresh (`<openclaw>/dist/remote-overlay-Bpv95iW5.mjs` line 288; `remote-refresh-BsfrKP5f.mjs` lines 47-80). Its only header of OpenClaw's own is `Accept: application/json`; `If-None-Match` and `If-Modified-Since` are added only when a catalog was stored before, which a fresh instance has not. No query and no body.
+- During seeding, a few seconds later, HTTPS to `clawhub.ai`. The fenced log shows only the host (`CONNECT clawhub.ai:443`), not the path. By the source, the gateway's requests to that host are its plugin catalog's; the most likely one at that point is the official plugin feed, `GET https://clawhub.ai/v1/feeds/plugins` (`official-external-plugin-catalog-source-8hS3NARf.mjs` line 13), with conditional headers only from a stored snapshot. Which request it was is not established.
+- Neither request carries the instance's name, profile, gateway token, device identity or anything from its state. Each tells the host this machine's network address and the time.
+
+No client call was made on that start.
 
 ## 2. The catalog
 
@@ -162,7 +168,7 @@ Before publishing that step the gateway had read the stand-in's protected-resour
 - Only a server that is HTTP, `auth: "oauth"`, without `oauth.authProfileId`, and shared (not per-requester) can be signed in this way (`mcp-auth-status-lGLhpwWr.mjs` lines 9-15, 56-62).
 - How a sign-in is known to have finished: only the wizard's last answer, on the connection that started it. The web chat connection received no event about it; no other connection was watched.
 
-**What Clawtrate's connection is today.** The desktop app and the web preview host connect as `gateway-client` in `ui` mode with no `Origin` (`packages/core/src/node/index.ts`), so the gateway answers them "Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal." (tried). The web chat connection above shows that a client on the gateway's own machine that connects in `webchat` mode with a loopback origin, on a device approved for admin, can run the whole sign-in; whether the same holds through an SSH forward (where the origin is the forward's local port) was **not tried**. In the web preview, the browser that opens the sign-in page is the viewer's; a return address on the gateway's loopback reaches only a browser on the gateway's own machine (**source**, from the callback origin rule above).
+**What Clawtrate's connection is.** The desktop app and the web preview host connect as `gateway-client` in `ui` mode with no `Origin` (`packages/core/src/node/index.ts`), so the gateway answers them "Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal." (tried). The web chat connection above was a probe of the gateway's rule, not a route for Clawtrate: Clawtrate does not present a connection as a browser to be given a method the gateway withholds from its own kind of connection (`docs/design/connectors.md` §10). In the web preview, the browser that opens a sign-in page is the viewer's; a return address on the gateway's loopback reaches only a browser on the gateway's own machine (**source**, from the callback origin rule above).
 
 **The gateway's own command line (docs, source).** `openclaw mcp login <name>` prints the address, listens for the return on loopback for 5 minutes (`MCP_OAUTH_CALLBACK_TIMEOUT_MS = 3e5`, `mcp-cli-DZoNoIpy.mjs` line 54) and prints "MCP OAuth credentials saved for \"<name>\"." (line 644); `openclaw mcp login <name> --code <code>` finishes it when the browser is elsewhere. `openclaw mcp status --verbose` shows, on the gateway's machine, whether stored tokens need authorization (`<openclaw>/docs/cli/mcp/registry.md` line 79). **Not tried**: the CLI's login would need a real OAuth page.
 
