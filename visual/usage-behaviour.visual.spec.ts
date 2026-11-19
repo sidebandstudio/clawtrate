@@ -76,9 +76,11 @@ test("F-233: the context of the open task is the gateway's figure, and what fill
   await expect(page.getByTestId("usage-context")).toContainText(
     "'Disk almost full on the media box'",
   );
-  await expect(page.getByTestId("usage-context")).toContainText("of 128,000 tokens");
+  await expect(page.getByTestId("usage-context")).toContainText(
+    /tokens in the latest prompt, of the model's 128,000$/,
+  );
   await expect(usage(page)).toContainText(
-    "Breakdown unavailable: what fills it isn't reported. The gateway counts input, output and cache, not history, memory or tools apart.",
+    "The latest prompt the gateway reported for this task, against the model's context window; a reply's output isn't part of it. Breakdown unavailable: what fills it, history, memory or tools, isn't reported.",
   );
 });
 

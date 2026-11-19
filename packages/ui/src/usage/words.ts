@@ -11,6 +11,7 @@ import {
   type BudgetInput,
   type BudgetPeriod,
   type DateRange,
+  type TaskContext,
   type UsageCost,
   type UsageFigure,
   type UsagePeriod,
@@ -227,6 +228,19 @@ export function moreTasks(omitted: number, capped: boolean): string {
   const tasks = `${full(omitted)} more ${omitted === 1 ? "task" : "tasks"}`;
   return capped ? `${tasks} of the ${full(SESSIONS_LIMIT)} listed` : tasks;
 }
+
+/**
+ * The open task's context, as the gateway reports it (`sessions.list`
+ * `totalTokens` of `contextTokens`): the latest prompt it counted, against the
+ * model's window. A reply's output is not part of it.
+ */
+export function contextValue(context: TaskContext): string {
+  return `${context.fresh ? "" : "about "}${full(context.used)} tokens in the latest prompt, of the model's ${full(context.window)}`;
+}
+
+/** Said under the context. */
+export const CONTEXT_HINT =
+  "The latest prompt the gateway reported for this task, against the model's context window; a reply's output isn't part of it. Breakdown unavailable: what fills it, history, memory or tools, isn't reported.";
 
 /** While the host is busy reading other usage: the page waits, it hasn't failed. */
 export const USAGE_WAITING =

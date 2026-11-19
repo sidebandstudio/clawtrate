@@ -15,6 +15,8 @@ import {
   asOf,
   budgetLine,
   budgetOf,
+  CONTEXT_HINT,
+  contextValue,
   costHint,
   costValue,
   figureLine,
@@ -280,17 +282,14 @@ export function BotUsagePage({
           <dt>{context ? `'${context.title}'` : "The open task"}</dt>
           <dd className="b-wrap-value">
             {context?.context
-              ? `${context.context.fresh ? "" : "about "}${full(context.context.used)} of ${full(context.context.window)} tokens`
+              ? contextValue(context.context)
               : context
                 ? "Unavailable"
                 : `No task of ${name}'s is open`}
           </dd>
         </div>
       </dl>
-      <p className="b-hint">
-        Breakdown unavailable: what fills it isn't reported. The gateway counts input, output and
-        cache, not history, memory or tools apart.
-      </p>
+      <p className="b-hint">{CONTEXT_HINT}</p>
     </div>
   );
 }

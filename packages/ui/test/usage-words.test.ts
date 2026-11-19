@@ -9,6 +9,8 @@ import {
   botBars,
   botsLeftOut,
   budgetInput,
+  CONTEXT_HINT,
+  contextValue,
   budgetLine,
   budgetWindow,
   costHint,
@@ -175,5 +177,17 @@ describe("a report kept while another is read", () => {
     expect(reportFits(report, "pip", week)).toBe(false);
     expect(reportFits(report, null, week)).toBe(false);
     expect(reportFits(report, "otto", { ...week, timeZone: "Asia/Tokyo" })).toBe(false);
+  });
+});
+
+describe("the open task's context", () => {
+  it("F-233: is the latest prompt the gateway reported against the model's window, with no output in it", () => {
+    expect(contextValue({ used: 120, window: 128_000, fresh: true })).toBe(
+      "120 tokens in the latest prompt, of the model's 128,000",
+    );
+    expect(contextValue({ used: 120, window: 128_000, fresh: false })).toMatch(/^about 120 /);
+    expect(CONTEXT_HINT).toMatch(/output isn't part of it/);
+    expect(CONTEXT_HINT).not.toMatch(/counts input, output/);
+    expect(CONTEXT_HINT).toMatch(/Breakdown unavailable/);
   });
 });
