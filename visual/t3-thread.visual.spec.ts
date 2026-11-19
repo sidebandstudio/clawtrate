@@ -424,9 +424,8 @@ test.describe("T3 Code thread cards", () => {
     );
     await expect(card.locator('[data-item-call="call_t3s"]')).toContainText("Started a new run");
     await expect(card.locator('[data-item-call="call_t3r"]')).toContainText("Read to the end");
-    await expect(card.locator(".t3-reported")).toHaveText(
-      /^T3 Code reported Completed at \d+:\d\d [AP]M\.$/,
-    );
+    // Several calls reported a status: no thread-wide report; each status is on its own item.
+    await expect(card.locator(".t3-reported")).toHaveCount(0);
     const link = card.getByRole("link", { name: "Open the T3 Code thread in your browser" });
     await expect(link).toHaveAttribute("href", /^https:\/\/t3-code\.example\/threads\/local\//);
     await expect(card.locator(".chips[aria-label=Files]")).toHaveCount(0);
