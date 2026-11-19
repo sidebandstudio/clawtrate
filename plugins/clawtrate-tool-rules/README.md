@@ -55,7 +55,7 @@ A rule of this plugin holds only against a bot that cannot change the gateway or
 Also true, whatever is denied:
 
 - A rule about a file tool is a rule about that tool, not about the file. A command, or another tool, can still reach the file where the bot may use it.
-- Paths are matched by name, before the tool runs, not by the file they reach. A Never or an Ask catches every spelling of a name that the gateway's file tools, or a filesystem that ignores case, treat as the same name (below, "The rules"). A link, a hard link or a mounted folder that reaches the same file by another name is not caught: the plugin does not look at the filesystem.
+- Path rules match workspace names supplied to file tools. Never and Ask also match the spelling forms listed under The rules. Links, hard links and mounts can expose a file under another name, outside those matches.
 - A pattern on a command matches the command's text. It is advice against a bot that wants to get round it (`sudo rm`, `env rm`, a script). Never on the whole tool is the guarantee, and that belongs in the bot's own deny list, which the gateway enforces.
 
 ## The rules
@@ -84,7 +84,7 @@ Rules are kept per **scope**: `*` for every bot, or one bot's id. Each scope hol
 - **Tools** are the gateway's canonical tool names (lower case; `bash` is `exec`, `apply-patch` is `apply_patch`, `cron` is `automations`), or a tool server's tools as `<server>__<pattern>` (`coder__*`, `coder__deploy_*`). `ask_user` can never be named: a question already asks the person.
 - **A target** names what the call acts on, only for tools whose parameter the plugin can read and validate:
   - `path`, for `read`, `write`, `edit`, `ls` and `apply_patch`: a path in the bot's workspace. `*` matches within a name, `**` (a whole name) across names, none included, so `secrets/**` matches `secrets` and everything under it. No `..`, `~`, `\`, `:` or leading `/`.
-  - **Spellings.** A Never or an Ask on a path matches a call whose path matches in any spelling that reaches the same name: in any case (as on a filesystem that ignores case, whatever the filesystem), with Unicode spaces and the narrow space the gateway puts before AM or PM as a plain space, with curly quotes as straight ones, and with accents composed or decomposed. These are the spellings the gateway's file tools try when the exact name is missing (OpenClaw 2026.10.6). An Allow on a path covers only the path as given, character for character; and since a Never or an Ask is decided first, an Allow never lets through a spelling that one of them catches.
+  - **Spellings.** After path parsing, a Never or Ask compares names by lowercasing, folding Unicode spaces including the narrow space before AM or PM, folding straight and curly apostrophes, and comparing composed and decomposed accents. An Allow uses the parsed workspace path without those additional folds. Never and Ask are evaluated first.
   - `command`, for `exec` and `process`: one line; `*` matches the rest of a word or of the line (`rm *`, `git push*`). The command must match whole.
 - **A call whose parameter cannot be read acts on everything**: a Never or an Ask with a target applies to it, an Allow with a target does not cover it. The plugin cannot read:
   - a file tool's path that is missing, not text, given twice (`path` and `file_path`), longer than 4,096 characters, with a control character, a backslash or a colon, starting with `~` or `@`, with `..`, absolute outside the bot's workspace, or with an extension the gateway repairs before the tool runs;
@@ -191,7 +191,7 @@ The rules are in `<state folder>/clawtrate-tool-rules/rules.json`, the plugin's 
 `{id, at, agentId, sessionKey, runId, callId, tool, rules, decision, source, answer, answeredAt}`
 
 - `callId` is the call's id hashed as the gateway's audit log hashes it (`sha256:` and the hex digest of the id), so a record and the audit log's `tool.action.*` records join by `runId` and `toolCallId`.
-- `rules` is the rules' state when the call was decided: `none`, `read`, `kept` (a kept copy) or `lost` (no copy: asked about).
+- `rules` is the rules' state when the call was decided: `none`, `read`, `kept` (a kept copy) or `lost` (no copy: asked about). `ask_user` records `rules: null` because it is exempt before the plugin reads the rules.
 - `decision` is `block`, `ask`, `allow` (an Allow rule kept "Ask when nothing else decides" from asking) or `none`.
 - `source` is `{kind: "rule", scope, ruleId, version, action}` (the rule as it was at that moment), `{kind: "fallback", scope}`, `{kind: "rules-lost"}`, or `null`.
 - `answer` is the decision word the gateway gave the plugin for an ask (`allow-once`, `deny`, `timeout`, `cancelled`), with its time.

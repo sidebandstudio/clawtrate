@@ -613,7 +613,11 @@ export const RULES_CHECKS: RulesCheck[] = [
       await sleep(1000);
       same(cardsSeen(ctx, question, askRun), [], "who received a card for ask_user");
       const [record] = await decisionsOf(ctx, { runId: askRun });
-      same([record?.tool, record?.decision], ["ask_user", "none"], "ask_user's decision record");
+      same(
+        [record?.tool, record?.decision, record?.rules],
+        ["ask_user", "none", null],
+        "ask_user's decision record",
+      );
       await ctx.clients.interactive.request("chat.abort", { sessionKey: key }).catch(() => {});
       await ctx.clients.interactive.terminal(askRun, 60_000);
     },
