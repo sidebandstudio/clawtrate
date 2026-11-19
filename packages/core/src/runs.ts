@@ -912,9 +912,13 @@ export class RawTable {
     return this.perTask.get(capId(sessionKey, MAX_ID_CHARS)) ?? 0;
   }
 
-  /** Drop the payloads of these steps of a task. */
-  dropSteps(sessionKey: string, stepIds: Iterable<string>): void {
-    for (const stepId of stepIds) this.drop(this.key(sessionKey, stepId));
+  /** Keep of a task's payloads only those under these ids: its retained steps and failed runs. */
+  retainTask(sessionKey: string, ids: Iterable<string>): void {
+    const task = capId(sessionKey, MAX_ID_CHARS);
+    const kept = new Set(Array.from(ids, (id) => this.key(sessionKey, id)));
+    for (const [key, entry] of this.entries) {
+      if (entry.task === task && !kept.has(key)) this.drop(key);
+    }
   }
 
   clearTask(sessionKey: string): void {

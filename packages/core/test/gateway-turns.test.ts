@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
-import { MAX_RAW_ENTRY_CHARS, RawTable, runsFromHistory } from "../src/runs.ts";
+import { MAX_RAW_ENTRY_CHARS, RawTable, runErrorRawId, runsFromHistory } from "../src/runs.ts";
 
 const runIds = (runs: { id: string; state: string }[]) => runs.map((run) => [run.id, run.state]);
 
@@ -688,5 +688,29 @@ describe("a failed turn's request and Raw (F-301)", () => {
     const run = activity.find((each) => each.id === "r1")!;
     expect(run.state).toBe("failed");
     expect(run.error).toEqual({ message: "LLM request rejected: no.", kind: null });
+  });
+
+  it("F-301: eviction of the failed run evicts its Raw payload", async () => {
+    const { client, gateway, transcript } = await openTask();
+    const raw = (client as unknown as { raw: RawTable }).raw;
+    for (let n = 0; n < 20; n += 1) {
+      const runId = `fail-${n}`;
+      gateway.emit("agent", agentEvent(runId, 1, "lifecycle", { phase: "start" }));
+      gateway.emit("chat", {
+        runId,
+        sessionKey: KEY,
+        seq: 2,
+        state: "error",
+        errorMessage: `Failure ${n}`,
+      });
+      await until(() =>
+        transcript().runs.some((run) => run.id === runId && run.state === "failed"),
+      );
+    }
+    // The first runs have left the task's window; their Raw left with them.
+    expect(transcript().runs.some((run) => run.id === "fail-0")).toBe(false);
+    expect(raw.get(KEY, runErrorRawId("fail-0"))).toBeNull();
+    expect(client.readRunRaw(KEY, "fail-19")).toMatchObject({ status: "available" });
+    client.stop();
   });
 });

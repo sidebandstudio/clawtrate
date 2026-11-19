@@ -992,14 +992,15 @@ export class ClawtrateClient {
     if (this.state.connection.status === "connected") void this.loadTranscript(key, !kept, null);
   }
 
-  /** Raw payloads of steps retention took out of view go too. */
-  private dropRawOfRemovedSteps(key: string, before: TaskActivity, after: TaskActivity): void {
-    if (before.runs === after.runs) return;
-    const kept = new Set(after.runs.flatMap((run) => run.steps.map((step) => step.id)));
-    const gone = before.runs.flatMap((run) =>
-      run.steps.filter((step) => !kept.has(step.id)).map((step) => step.id),
+  /** Keep only Raw entries that still belong to this task's retained state. */
+  private retainTaskRaw(key: string, after: TaskActivity): void {
+    this.raw.retainTask(
+      key,
+      after.runs.flatMap((run) => [
+        ...run.steps.map((step) => step.id),
+        ...(run.error?.raw ? [runErrorRawId(run.id)] : []),
+      ]),
     );
-    if (gone.length > 0) this.raw.dropSteps(key, gone);
   }
 
   /**
@@ -4046,7 +4047,8 @@ export class ClawtrateClient {
       ),
     );
     if (next === current) return;
-    this.dropRawOfRemovedSteps(key, current, next);
+    // Only a change of runs can take a payload out of what the task retains.
+    if (next.runs !== current.runs) this.retainTaskRaw(key, next);
     this.setTranscript(key, () => withLive({ ...current, ...next }));
     this.afterActivity(key);
     this.refreshLinkersOf(key, current.runs, next.runs);
@@ -5226,7 +5228,7 @@ export class ClawtrateClient {
         caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
         loadedAt: this.now(),
       };
-      this.dropRawOfRemovedSteps(key, current, rebuilt);
+      this.retainTaskRaw(key, rebuilt);
       this.setTranscript(key, () => withLive(rebuilt));
       this.afterActivity(key);
       // A run settled from history may be a recipient another open task's card follows.
