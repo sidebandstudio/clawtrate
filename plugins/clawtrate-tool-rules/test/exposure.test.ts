@@ -194,3 +194,25 @@ describe("a workspace that holds the rules store", () => {
     expect(exposures(withAgent(denied), { storeDir, workspaceOf: () => [state] })).toEqual([]);
   });
 });
+
+describe("a store not created yet under a linked folder", () => {
+  const temps: string[] = [];
+  afterEach(() => temps.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+  const temp = () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-exposure-")));
+    temps.push(dir);
+    return dir;
+  };
+
+  it("is placed where its nearest existing folder resolves, so a workspace holding it is warned about", () => {
+    const state = temp();
+    const alias = join(temp(), "state-link");
+    symlinkSync(state, alias);
+    // Named through the link, and not created yet: the plugin creates it on its first save.
+    const storeDir = join(alias, "clawtrate-tool-rules");
+    const reasonsFor = (workspace: string) =>
+      exposures(withAgent(SAFE), { storeDir, workspaceOf: () => [workspace] })[0]?.reasons ?? [];
+    expect(reasonsFor(state)).toEqual(["store-in-workspace"]);
+    expect(reasonsFor(temp())).toEqual([]);
+  });
+});

@@ -23,7 +23,7 @@
 // warning: it protects nothing.
 
 import { realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /** The groups of OpenClaw 2026.10.6 (tool-catalog) holding the tools checked here. */
 const GROUPS = {
@@ -115,12 +115,23 @@ function elevatedOpen(config, agent) {
 const sandboxedAll = (config, agent) =>
   (rec(agent.sandbox).mode ?? rec(rec(rec(config).agents).defaults?.sandbox).mode) === "all";
 
-/** A path as the filesystem resolves it, or as written when it does not exist yet. */
+/**
+ * A path as the filesystem resolves it. One that does not exist yet (a store
+ * not saved yet) is its nearest existing folder, resolved, with the missing
+ * names after it, so a link above it is followed all the same.
+ */
 function real(path) {
-  try {
-    return realpathSync.native(path);
-  } catch {
-    return resolve(path);
+  const missing = [];
+  let at = resolve(path);
+  for (;;) {
+    try {
+      return join(realpathSync.native(at), ...missing);
+    } catch {
+      const parent = dirname(at);
+      if (parent === at) return resolve(path);
+      missing.unshift(basename(at));
+      at = parent;
+    }
   }
 }
 
