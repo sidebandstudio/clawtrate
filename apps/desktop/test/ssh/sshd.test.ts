@@ -569,6 +569,54 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     }
   });
 
+  it("replaces a trusted key only while it is still the one the person was shown", async () => {
+    const own = ownWorld("replace-twice");
+    try {
+      const server = await own.server("sshd");
+      own.t.writeConfig(
+        `Host devbox\n  HostName 127.0.0.1\n  Port ${server.port}\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n`,
+      );
+      const r = own.prepare("swap", "devbox");
+      const contact = await own.transport.checkHostKey(r);
+      if (!contact.ok || contact.state !== "first-contact")
+        throw new Error("expected first contact");
+      own.transport.trustCapturedKey(r, contact.presented.captureId);
+      const a = contact.presented.fingerprint;
+      const rotate = async (name: string) => {
+        const key = join(own.t.root, "sshd", "sshd", name);
+        keygen(key);
+        await server.stop();
+        await server.start(key);
+        return fingerprintOfFile(`${key}.pub`);
+      };
+      // Two checks, each showing key A as trusted, with B and then C presented.
+      const b = await rotate("host_b");
+      const first = await own.transport.checkHostKey(r);
+      const c = await rotate("host_c");
+      const second = await own.transport.checkHostKey(r);
+      if (!first.ok || first.state !== "changed" || !second.ok || second.state !== "changed")
+        throw new Error("expected two changed keys");
+      expect([first.trusted.fingerprint, second.trusted.fingerprint]).toEqual([a, a]);
+      expect([first.presented.fingerprint, second.presented.fingerprint]).toEqual([b, c]);
+      expect(own.transport.replaceTrustedKey(r, first.presented.captureId)).toMatchObject({
+        ok: true,
+        fingerprint: b,
+      });
+      // The second approval was for replacing A, which is no longer the trusted key.
+      expect(own.transport.replaceTrustedKey(r, second.presented.captureId)).toEqual({
+        ok: false,
+        kind: "pin-changed",
+      });
+      expect(await own.transport.checkHostKey(r)).toMatchObject({
+        state: "changed",
+        trusted: { fingerprint: b },
+        presented: { fingerprint: c },
+      });
+    } finally {
+      await own.close();
+    }
+  });
+
   it("the forward comes up after the LOOK names the gateway, drops, comes back by itself, and closes leaving nothing", async () => {
     const look = await transport.look(route);
     if (!look.ok) throw new Error("look failed");

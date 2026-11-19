@@ -183,7 +183,9 @@ export type HostKeyCheck =
 
 export type PinResult =
   | { ok: true; label: string; fingerprint: string }
-  | { ok: false; kind: "no-such-capture" | "already-pinned" | "nothing-to-replace" };
+  | { ok: false; kind: "no-such-capture" | "already-pinned" | "nothing-to-replace" }
+  /** The trusted key is no longer the one shown beside this capture: check again and confirm again. */
+  | { ok: false; kind: "pin-changed" };
 
 export type LookResult =
   | { ok: true; facts: LookFacts }
@@ -228,6 +230,8 @@ type Capture = {
   endpoint: string;
   at: number;
   replaces: boolean;
+  /** For a replacement: the trusted key shown beside it, which it may replace and no other. */
+  trusted: { type: string; key: string } | null;
 };
 
 export type TransportOptions = {
@@ -471,7 +475,7 @@ export class SshTransport {
         fingerprint: pinned.fingerprint,
       };
     }
-    const captured = await this.capture(route, false);
+    const captured = await this.capture(route, null);
     if (!this.current(route)) return STALE;
     if (!captured.ok) return captured;
     return { ok: true, state: "first-contact", presented: this.shown(captured.capture) };
@@ -492,7 +496,7 @@ export class SshTransport {
     if (failure.kind !== "host-key-changed" && failure.kind !== "host-key-unknown") {
       return this.failed(route, failure);
     }
-    const captured = await this.capture(route, true);
+    const captured = await this.capture(route, pin);
     if (!this.current(route)) return STALE;
     if (!captured.ok) return captured;
     if (captured.capture.key.fingerprint === pin.fingerprint) {
@@ -549,7 +553,7 @@ export class SshTransport {
   /** Connects once, offering nothing, and keeps the key the computer presented on that connection. */
   private async capture(
     route: Route,
-    replaces: boolean,
+    trusted: Pin | null,
   ): Promise<{ ok: true; capture: Capture } | Failed | StaleRoute> {
     const id = randomUUID();
     const file = join(this.world.appDir, `capture-${id}`);
@@ -574,7 +578,8 @@ export class SshTransport {
         key: { type: parsed.type, key: parsed.key, fingerprint: parsed.fingerprint },
         endpoint: this.endpoint(route),
         at: this.now(),
-        replaces,
+        replaces: trusted !== null,
+        trusted: trusted && { type: trusted.type, key: trusted.key },
       };
       this.keepCapture(capture);
       return { ok: true, capture };
@@ -631,10 +636,15 @@ export class SshTransport {
 
   /** After the host's confirmation with its checkbox: replaces a changed key by the one captured. */
   private replaceInner(route: Route, captureId: string): PinResult {
-    if (!this.known.get(route.alias, route.endpoint))
-      return { ok: false, kind: "nothing-to-replace" };
+    const current = this.known.get(route.alias, route.endpoint);
+    if (!current) return { ok: false, kind: "nothing-to-replace" };
     const capture = this.takeCapture(route, captureId, true);
     if (!capture) return { ok: false, kind: "no-such-capture" };
+    // The person approved replacing the key shown to them. If another approval has replaced
+    // it since, nothing is written.
+    if (capture.trusted?.type !== current.type || capture.trusted.key !== current.key) {
+      return { ok: false, kind: "pin-changed" };
+    }
     const pin = this.known.pin(
       route.alias,
       capture.key,
