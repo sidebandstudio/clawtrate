@@ -31,6 +31,7 @@ import {
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
 import { Connect } from "./Connect.tsx";
 import { ModelPair } from "./ModelPair.tsx";
+import { RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
 import {
   accountName,
@@ -54,7 +55,7 @@ import {
 export const WATCH_MS = 4_000;
 export const CHECK_MS = 30_000;
 
-type View = "main" | "account" | "change" | "connect";
+type View = "main" | "account" | "change" | "connect" | "runs";
 
 export function BotSettings({
   bot,
@@ -105,6 +106,13 @@ export function BotSettings({
     : null;
   const word = binding ? accountWord(binding) : null;
   const name = bot.name;
+  // Where the bot runs (controls.md section 14): read while the tab shows its first page or that page.
+  const placement = usePlacement(
+    bot.id,
+    connection,
+    visible && (view === "main" || view === "runs"),
+  );
+  const nameOf = (id: string) => bots.find((each) => each.id === id)?.name ?? id;
 
   // The tab reads the accounts when it is first shown, and again, once, for a bot the
   // last read did not have (one another client made since).
@@ -240,6 +248,25 @@ export function BotSettings({
   const age = { now, connected: !offline, connectedAt: connection.connectedAt };
   const lock = lockClaim(binding, age);
 
+  // --- Where the bot runs (controls.md section 14) ----------------------------------------
+  if (view === "runs") {
+    return (
+      <div ref={rootRef}>
+        <RunsOnPage
+          botId={bot.id}
+          botName={name}
+          read={placement.read}
+          reload={placement.reload}
+          nameOf={nameOf}
+          connection={connection}
+          info={info}
+          announce={announce}
+          onBack={() => go("main", "[data-bs='runs-on']")}
+        />
+      </div>
+    );
+  }
+
   // --- The tab's first page --------------------------------------------------------------
   if (view === "main") {
     const label =
@@ -336,6 +363,7 @@ export function BotSettings({
         {binding.mode === "default-model" && (
           <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
         )}
+        <RunsOnRow botName={name} read={placement.read} nameOf={nameOf} onOpen={() => go("runs")} />
         {foot}
       </div>
     );
