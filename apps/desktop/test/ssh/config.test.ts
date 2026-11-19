@@ -88,7 +88,7 @@ describe("the destination", () => {
 });
 
 describe("the person's SSH configuration", () => {
-  it("takes the six settings from the matching block", () => {
+  it("takes the eight settings from the matching block", () => {
     const target = resolveWith(
       [
         "# my hosts",
@@ -100,6 +100,8 @@ describe("the person's SSH configuration", () => {
         '  IdentityFile "~/.ssh/second key"',
         "  IdentitiesOnly yes",
         "  CertificateFile ~/.ssh/id_ed25519-cert.pub",
+        "  IdentityAgent none",
+        "  PubkeyAuthentication host-bound",
         "",
       ].join("\n"),
     );
@@ -115,6 +117,8 @@ describe("the person's SSH configuration", () => {
         join(world.home, ".ssh", "second key"),
       ],
       certificateFiles: [join(world.home, ".ssh", "id_ed25519-cert.pub")],
+      identityAgent: "none",
+      pubkeyAuthentication: "host-bound",
     });
   });
 

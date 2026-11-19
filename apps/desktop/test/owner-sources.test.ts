@@ -137,7 +137,7 @@ const ALLOWED: Record<string, string> = {
   "apps/desktop/src/main/ssh/forward.ts:BACKOFF_MS": "static, five delays",
   "apps/desktop/src/main/ssh/known-hosts.ts:KEY_TYPES": "static, seven key types",
   "apps/desktop/src/main/ssh/look.ts:PROGRAM_PLACES": "static, five fixed places",
-  "apps/desktop/src/main/ssh/person-config.ts:TAKEN": "static, the six settings taken",
+  "apps/desktop/src/main/ssh/person-config.ts:TAKEN": "static, the eight settings taken",
   "apps/desktop/src/main/ssh/person-config.ts:REFUSED": "static, the settings refused by name",
   "apps/desktop/src/main/ssh/person-config.ts:IGNORED": "static, the settings left out",
   "apps/desktop/src/main/ssh/person-config.ts:DEFAULT_IDENTITIES": "static, five key names",
