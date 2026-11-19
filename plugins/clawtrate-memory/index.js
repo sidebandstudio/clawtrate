@@ -1,4 +1,4 @@
-import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { getAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { canonicalPathFromExistingAncestor, root } from "openclaw/plugin-sdk/file-access-runtime";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
@@ -11,6 +11,7 @@ export default {
   register(api) {
     registerMemory(api, {
       listAgentIds,
+      resolveAgentConfig,
       getAgentWorkspaceAccess,
       root,
       dispatchGatewayMethod,

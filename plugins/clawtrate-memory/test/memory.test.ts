@@ -10,11 +10,12 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { MAX_BYTES, applyCas, read, rootOptions, sha256 } from "../lib/files.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_BYTES, applyCas, read, rootOptions, sha256, writeCas } from "../lib/files.js";
 import { registerMemory } from "../lib/memory.js";
 
 type Params = Record<string, unknown>;
@@ -30,6 +31,7 @@ type Hook = (event: Params, context: Params) => Promise<void>;
 
 let directory: string;
 let fs: Pick<Parameters<typeof registerMemory>[1], "root" | "canonicalPathFromExistingAncestor">;
+let agents: Pick<Parameters<typeof registerMemory>[1], "listAgentIds" | "resolveAgentConfig">;
 
 beforeAll(async () => {
   const packageDir =
@@ -38,30 +40,43 @@ beforeAll(async () => {
   const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
   expect(manifest.version).toBe("2026.10.6");
   fs = await import(pathToFileURL(join(packageDir, "dist/plugin-sdk/file-access-runtime.js")).href);
+  agents = await import(
+    pathToFileURL(join(packageDir, "dist/plugin-sdk/agent-scope-runtime.js")).href
+  );
 });
 
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "clawtrate-memory-"));
 });
-afterEach(() => rmSync(directory, { recursive: true, force: true }));
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  rmSync(directory, { recursive: true, force: true });
+});
 
 function setup({
   visible = ["main", "other"],
   extraPaths,
   bridge,
+  otherPath = "other",
+  entries = { main: {}, other: { bootstrapMaxChars: 160 } },
+  root = (...args: Parameters<typeof fs.root>) => fs.root(...args),
 }: {
   visible?: string[];
   extraPaths?: unknown[];
   bridge?: () => unknown;
+  otherPath?: string;
+  entries?: Record<string, object>;
+  root?: typeof fs.root;
 } = {}) {
   const workspace = join(directory, "workspace");
-  const other = join(directory, "other");
+  const other = join(directory, otherPath);
   const shared = join(directory, "shared");
-  for (const folder of [workspace, other, shared]) mkdirSync(folder);
+  for (const folder of [workspace, other, shared]) mkdirSync(folder, { recursive: true });
   const methods = new Map<string, { handler: Handler; scope: string }>();
   const events: Change[] = [];
-  const config = {
-    agents: { list: [{ id: "main" }, { id: "other", bootstrapMaxChars: 160 }] },
+  let config = {
+    agents: { entries },
     memory: { search: { enabled: true, extraPaths: extraPaths ?? [shared] } },
   };
   let hook: Hook = async () => {};
@@ -112,9 +127,10 @@ function setup({
         }),
     },
     {
-      listAgentIds: () => config.agents.list.map(({ id }) => id),
       getAgentWorkspaceAccess: bridge ?? (() => undefined),
       ...fs,
+      ...agents,
+      root,
       dispatchGatewayMethod: () => ({
         ok: true,
         payload: { agents: visible.map((id) => ({ id })) },
@@ -133,13 +149,27 @@ function setup({
     });
     return response!;
   }
-  return { workspace, other, shared, methods, events, hook, savers, call };
+  return {
+    workspace,
+    other,
+    shared,
+    methods,
+    events,
+    hook,
+    savers,
+    call,
+    reload: () => {
+      config = { ...config };
+    },
+  };
 }
 
 const note = { agentId: "main", path: "memory/nested/note.md" };
 const initial = { ...note, content: "first", expectedHash: null };
 
 describe("memory paths", () => {
+  beforeEach(() => vi.stubEnv("FS_SAFE_NATIVE_MODE", "require"));
+
   it.each([
     "MEMORY.md",
     "USER.md",
@@ -220,9 +250,122 @@ describe("memory paths", () => {
     }
     expect((await call("list", {})).ok).toBe(false);
   });
+
+  it("hides a nested workspace from readers of the parent bot", async () => {
+    const { call, workspace, other } = setup({
+      visible: ["main"],
+      otherPath: "workspace/memory/other",
+    });
+    writeFileSync(join(other, "MEMORY.md"), "private");
+    writeFileSync(join(workspace, "memory/public.md"), "public");
+    expect(await call("list", { agentId: "main" })).toMatchObject({
+      ok: true,
+      payload: { files: [{ path: "memory/public.md" }] },
+    });
+    const nested = { ...note, path: "memory/other/MEMORY.md" };
+    expect((await call("read", nested)).ok).toBe(false);
+    expect(
+      (await call("write", { ...nested, content: "edit", expectedHash: sha256("private") })).ok,
+    ).toBe(false);
+    expect((await call("delete", { ...nested, expectedHash: sha256("private") })).ok).toBe(false);
+  });
+
+  it("uses a keyed bot's per-agent shared memory paths", async () => {
+    const path = join(directory, "shared");
+    const { call } = setup({
+      entries: { main: {}, other: { memory: { search: { extraPaths: [path] } } } },
+      extraPaths: [],
+    });
+    expect(await call("list", {})).toMatchObject({
+      ok: true,
+      payload: { folders: [{ searchConfiguredFor: ["other"] }] },
+    });
+  });
+
+  it("accepts a configured underscore bot and records its tool receipts", async () => {
+    const { call, hook, savers } = setup({ entries: { main: {}, _ops: {} }, visible: ["_ops"] });
+    expect(await call("list", { agentId: "_ops" })).toMatchObject({ ok: true });
+    await hook(
+      {
+        toolName: "write",
+        params: { path: note.path },
+        result: {
+          content: [{ text: `Successfully wrote 5 bytes to ${note.path}` }],
+          details: { changed: true },
+        },
+      },
+      { agentId: "_ops", sessionKey: "agent:_ops:script" },
+    );
+    expect([...savers.values()]).toMatchObject([{ agentId: "_ops" }]);
+  });
+
+  it("streams wide directories before applying the listing budget", async () => {
+    const { call, shared } = setup();
+    const sharedRoot = sha256(await fs.canonicalPathFromExistingAncestor(shared));
+    for (let i = 0; i < 2060; i += 1) writeFileSync(join(shared, `${i}.txt`), "");
+    const streaming = vi.spyOn(fsPromises, "opendir");
+    const buffered = vi.spyOn(fsPromises, "readdir");
+    expect(await call("list", { sharedRoot })).toMatchObject({
+      ok: true,
+      payload: { files: [], truncated: true },
+    });
+    expect(streaming).toHaveBeenCalled();
+    expect(buffered).not.toHaveBeenCalled();
+  });
+});
+
+it.each(["off", "auto"])(
+  "refuses all mutations in SDK mode %s and keeps reads available",
+  async (mode) => {
+    vi.stubEnv("FS_SAFE_NATIVE_MODE", mode);
+    const { call, workspace, shared } = setup();
+    mkdirSync(join(workspace, "memory/nested"), { recursive: true });
+    writeFileSync(join(workspace, note.path), "first");
+    writeFileSync(join(shared, "sample.md"), "source");
+    const sharedRoot = sha256(await fs.canonicalPathFromExistingAncestor(shared));
+    const failure = {
+      message: "Memory changes require FS_SAFE_NATIVE_MODE=require on the gateway",
+    };
+    expect(await call("read", note)).toMatchObject({ ok: true });
+    expect(await call("write", { ...initial, expectedHash: sha256("first") })).toMatchObject({
+      ok: false,
+      error: failure,
+    });
+    expect(await call("delete", { ...note, expectedHash: sha256("first") })).toMatchObject({
+      ok: false,
+      error: failure,
+    });
+    for (const method of ["copy", "uncopy"]) {
+      expect(
+        await call(method, {
+          item: { sharedRoot, path: "sample.md" },
+          agents: ["main"],
+          expectedHashes: { main: null },
+        }),
+      ).toMatchObject({
+        ok: true,
+        payload: { results: [{ refused: true, reason: failure.message }] },
+      });
+    }
+    expect(readFileSync(join(workspace, note.path), "utf8")).toBe("first");
+  },
+);
+
+it("stages complete new notes and root files on the POSIX SDK fallback", async () => {
+  vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+  const { workspace } = setup();
+  const root = await fs.root(workspace, rootOptions);
+  for (const path of [note.path, "MEMORY.md"]) {
+    await expect(
+      writeCas(root, path, { hash: null }, () => {}, "complete", true),
+    ).resolves.toBeUndefined();
+    expect(readFileSync(join(workspace, path), "utf8")).toBe("complete");
+  }
 });
 
 describe("memory changes", () => {
+  beforeEach(() => vi.stubEnv("FS_SAFE_NATIVE_MODE", "require"));
+
   it("writes atomically and reports only a stored revision, plus metadata and an empty event", async () => {
     const { call, workspace, savers, events } = setup();
     expect(await call("write", initial)).toMatchObject({
@@ -299,6 +442,49 @@ describe("memory changes", () => {
     expect(readFileSync(join(workspace, note.path), "utf8")).toBe("outside edit");
   });
 
+  it("does not credit an old saver when an outside edit restores the same bytes", async () => {
+    const { call, workspace } = setup();
+    expect((await call("write", initial)).ok).toBe(true);
+    const target = join(workspace, note.path);
+    expect((await call("read", note)).payload).toHaveProperty("savedBy");
+    writeFileSync(target, "intermediate");
+    writeFileSync(target, initial.content);
+    expect((await call("read", note)).payload).not.toHaveProperty("savedBy");
+    expect((await call("list", { agentId: "main" })).payload).toMatchObject({
+      files: [expect.not.objectContaining({ savedBy: expect.anything() })],
+    });
+  });
+
+  it("reports uncertain note replacement and removal and invalidates the view", async () => {
+    const { call, workspace, events } = setup({
+      root: async (...args: Parameters<typeof fs.root>) => {
+        const root = await fs.root(...args);
+        const write = root.write.bind(root);
+        const remove = root.remove.bind(root);
+        root.write = async (...options: unknown[]) => {
+          await write(...options);
+          throw Object.assign(new Error("verification failed"), { code: "path-mismatch" });
+        };
+        root.remove = async (...options: unknown[]) => {
+          await remove(...options);
+          throw Object.assign(new Error("verification failed"), { code: "path-mismatch" });
+        };
+        return root;
+      },
+    });
+    expect((await call("write", initial)).ok).toBe(true);
+    const uncertain = { ok: false, error: { details: { unknown: true } } };
+    expect(
+      await call("write", { ...initial, content: "second", expectedHash: sha256("first") }),
+    ).toMatchObject(uncertain);
+    expect(readFileSync(join(workspace, note.path), "utf8")).toBe("second");
+    expect(await call("delete", { ...note, expectedHash: sha256("second") })).toMatchObject(
+      uncertain,
+    );
+    expect((await call("read", note)).ok).toBe(false);
+    expect(events).toHaveLength(3);
+  });
+
   it("bounds content, paths, bot batches, the list and saver metadata", async () => {
     const { call, workspace, hook, savers } = setup();
     for (const content of [1, null, "😀".repeat(MAX_BYTES / 4 + 1), "\ud800"]) {
@@ -364,7 +550,7 @@ describe("memory changes", () => {
     expect(events).toHaveLength(1);
   });
 
-  it("copies and uncopies each bot independently, and protects root files from notes methods", async () => {
+  it("copies and uncopies independently using keyed bot budgets", async () => {
     const { call, workspace, other, shared, methods } = setup();
     const { folders } = (await call("list", {})).payload as { folders: { sharedRoot: string }[] };
     const item = { sharedRoot: folders[0]!.sharedRoot, path: "sample.md" };
@@ -405,5 +591,187 @@ describe("memory changes", () => {
       ).toBe(false);
     }
     expect(methods.has("clawtrate-memory.move")).toBe(false);
+  });
+
+  it("uses the exact shared path for pattern checks, source IDs and uncopy after removal", async () => {
+    const shared = join(directory, "shared");
+    const canonical = "Example.md";
+    const alias = "example.md";
+    const { call, workspace } = setup({
+      extraPaths: [{ path: shared, pattern: "[Ee]xample.md" }],
+      root: async (...args: Parameters<typeof fs.root>) => {
+        const root = await fs.root(...args);
+        if (args[0] === (await fs.canonicalPathFromExistingAncestor(shared))) {
+          const read = root.read.bind(root);
+          root.read = (path: string) => read(path === alias ? canonical : path);
+        }
+        return root;
+      },
+    });
+    writeFileSync(join(shared, canonical), "source");
+    const sharedRoot = sha256(await fs.canonicalPathFromExistingAncestor(shared));
+    const item = { sharedRoot, path: canonical };
+    const params = { item, agents: ["main"], expectedHashes: { main: null } };
+    expect((await call("read", { ...item, path: alias })).ok).toBe(false);
+    expect((await call("copy", { ...params, item: { ...item, path: alias } })).ok).toBe(false);
+    const sourceId = sha256(`${sharedRoot}\0${canonical}`);
+    expect(await call("read", item)).toMatchObject({ ok: true, payload: { sourceId } });
+    expect(await call("copy", params)).toMatchObject({
+      ok: true,
+      payload: { sourceId, results: [{ copied: true }] },
+    });
+    rmSync(join(shared, canonical));
+    const hash = sha256(readFileSync(join(workspace, "MEMORY.md")));
+    expect(await call("uncopy", { ...params, expectedHashes: { main: hash } })).toMatchObject({
+      ok: true,
+      payload: { sourceId, results: [{ uncopied: true }] },
+    });
+  });
+
+  it("refuses a differently cased root memory file with rename guidance", async () => {
+    const { call, workspace, shared } = setup({
+      root: async (...args: Parameters<typeof fs.root>) => {
+        const root = await fs.root(...args);
+        const read = root.read.bind(root);
+        root.read = (path: string) => read(path === "MEMORY.md" ? "memory.md" : path);
+        return root;
+      },
+    });
+    writeFileSync(join(workspace, "memory.md"), "legacy");
+    writeFileSync(join(shared, "sample.md"), "source");
+    const sharedRoot = sha256(await fs.canonicalPathFromExistingAncestor(shared));
+    expect(
+      await call("copy", {
+        item: { sharedRoot, path: "sample.md" },
+        agents: ["main"],
+        expectedHashes: { main: sha256("legacy") },
+      }),
+    ).toMatchObject({
+      ok: true,
+      payload: {
+        results: [
+          {
+            refused: true,
+            reason: expect.stringContaining("Rename the root memory file to MEMORY.md"),
+          },
+        ],
+      },
+    });
+    expect(readdirSync(workspace)).toEqual(["memory.md"]);
+    expect(readFileSync(join(workspace, "memory.md"), "utf8")).toBe("legacy");
+  });
+
+  it("reports a root copy as unknown when publication succeeds and verification fails", async () => {
+    const { call, workspace, shared, events } = setup({
+      root: async (...args: Parameters<typeof fs.root>) => {
+        const root = await fs.root(...args);
+        const write = root.write.bind(root);
+        root.write = async (...options: unknown[]) => {
+          await write(...options);
+          throw Object.assign(new Error("verification failed"), { code: "path-mismatch" });
+        };
+        return root;
+      },
+    });
+    writeFileSync(join(workspace, "MEMORY.md"), "existing");
+    writeFileSync(join(shared, "sample.md"), "source");
+    const sharedRoot = sha256(await fs.canonicalPathFromExistingAncestor(shared));
+    expect(
+      await call("copy", {
+        item: { sharedRoot, path: "sample.md" },
+        agents: ["main"],
+        expectedHashes: { main: sha256("existing") },
+      }),
+    ).toMatchObject({ ok: true, payload: { results: [{ agentId: "main", unknown: true }] } });
+    expect(readFileSync(join(workspace, "MEMORY.md"), "utf8")).toContain("source");
+    expect(events).toHaveLength(1);
+  });
+
+  it.each([false, true])(
+    "stops a copy on config reload and releases results only with current access (revoked=%s)",
+    async (revoked) => {
+      let onWrite = () => {};
+      const visible = ["main", "other"];
+      const { call, workspace, other, shared, reload } = setup({
+        visible,
+        entries: { main: {}, other: {} },
+        root: async (...args: Parameters<typeof fs.root>) => {
+          const root = await fs.root(...args);
+          const write = root.write.bind(root);
+          root.write = async (...options: unknown[]) => {
+            await write(...options);
+            onWrite();
+          };
+          return root;
+        },
+      });
+      onWrite = () => {
+        if (revoked) visible.pop();
+        reload();
+      };
+      writeFileSync(join(workspace, "MEMORY.md"), "existing");
+      writeFileSync(join(shared, "sample.md"), "source");
+      const sharedRoot = sha256(await fs.canonicalPathFromExistingAncestor(shared));
+      const result = await call("copy", {
+        item: { sharedRoot, path: "sample.md" },
+        agents: ["main", "other"],
+        expectedHashes: { main: sha256("existing"), other: null },
+      });
+      if (revoked) {
+        expect(result).toMatchObject({ ok: false, error: { details: { unknown: true } } });
+        expect(result.payload).toBeUndefined();
+      } else {
+        expect(result).toMatchObject({
+          ok: true,
+          payload: {
+            results: [
+              { agentId: "main", copied: true },
+              { agentId: "other", refused: true },
+            ],
+          },
+        });
+      }
+      expect(readFileSync(join(workspace, "MEMORY.md"), "utf8")).toContain("source");
+      expect(readdirSync(other)).toEqual([]);
+    },
+  );
+
+  it("admits at most 64 copy batches before they read their sources", async () => {
+    const { promise: blocked, resolve: release } = Promise.withResolvers<void>();
+    const { promise: allReading, resolve: reading } = Promise.withResolvers<void>();
+    const { promise: overflowed, resolve: overflow } = Promise.withResolvers<void>();
+    let reads = 0;
+    const { call, shared } = setup({
+      root: async (...args: Parameters<typeof fs.root>) => {
+        const root = await fs.root(...args);
+        const read = root.read.bind(root);
+        root.read = async (path: string) => {
+          reads += 1;
+          if (reads === 64) reading();
+          if (reads === 65) overflow();
+          await blocked;
+          return read(path);
+        };
+        return root;
+      },
+    });
+    const sharedRoot = sha256(await fs.canonicalPathFromExistingAncestor(shared));
+    const params = {
+      item: { sharedRoot, path: "sample.md" },
+      agents: ["main"],
+      expectedHashes: { main: null },
+    };
+    const batches = Array.from({ length: 64 }, () => call("copy", params));
+    try {
+      await allReading;
+      const last = call("copy", params);
+      await expect(Promise.race([last, overflowed])).resolves.toMatchObject({
+        ok: false,
+        error: { message: "Too many pending memory writes" },
+      });
+    } finally {
+      release();
+      await Promise.all(batches);
+    }
   });
 });

@@ -1,6 +1,6 @@
 import { lstat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { posix, resolve, sep } from "node:path";
+import { basename, posix, relative, resolve, sep } from "node:path";
 import {
   HASH,
   MAX_BYTES,
@@ -13,13 +13,16 @@ import {
   notePath,
   read,
   requireHash,
+  requireNativeMutations,
+  revision,
   rootOptions,
   sha256,
   sharedDirectory,
+  writeCas,
 } from "./files.js";
 
 const ID = "clawtrate-memory";
-const AGENT = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const AGENT = /^[a-z0-9_][a-z0-9_-]{0,63}$/i;
 const MAX_LIST = 256;
 const MAX_ROOTS = 32;
 const MAX_AGENTS = 32;
@@ -55,10 +58,8 @@ function text(value) {
   return value;
 }
 
-function rootBudget(config, agentId) {
-  const limit =
-    config.agents?.list?.find((agent) => agent.id.toLowerCase() === agentId)?.bootstrapMaxChars ??
-    config.agents?.defaults?.bootstrapMaxChars;
+function rootBudget(config, agent) {
+  const limit = agent?.bootstrapMaxChars ?? config.agents?.defaults?.bootstrapMaxChars;
   return limit > 0 ? Math.floor(limit) : 20_000;
 }
 
@@ -102,14 +103,19 @@ export function registerMemory(api, sdk) {
     return savers().register(key, { ...metadata, at: Date.now() });
   }
 
+  async function rememberWrite(fs, path, hash, saver) {
+    const file = await read(fs, path);
+    if (file.hash === hash) {
+      await remember(saverKey(fs, path), { ...saver, hash, revision: revision(file.stat) });
+    }
+  }
+
   function changed() {
     service?.gatewayEvents?.emit("changed", {}, { scope: "operator.read" });
   }
 
   // Canonical folder keys serialize aliases and share the lock with root copies.
   async function exclusive(key, action) {
-    if (pendingWrites >= MAX_PENDING_WRITES) throw new Refusal("Too many pending memory writes");
-    pendingWrites += 1;
     const previous = writes.get(key);
     const running = Promise.resolve(previous)
       .catch(() => {})
@@ -118,7 +124,6 @@ export function registerMemory(api, sdk) {
     try {
       return await running;
     } finally {
-      pendingWrites -= 1;
       if (writes.get(key) === running) writes.delete(key);
     }
   }
@@ -149,8 +154,7 @@ export function registerMemory(api, sdk) {
     const locations = ids.map((id) => api.runtime.agent.resolveAgentWorkspaceDir(config, id));
     const candidates = new Map();
     for (const [index, id] of ids.entries()) {
-      const override = config.agents?.list?.find((entry) => entry.id.toLowerCase() === id)?.memory
-        ?.search;
+      const override = sdk.resolveAgentConfig(config, id)?.memory?.search;
       const defaults = config.memory?.search;
       const paths = [...(defaults?.extraPaths ?? []), ...(override?.extraPaths ?? [])];
       if (paths.length > MAX_ROOTS) throw new Refusal("Too many configured shared folders");
@@ -208,14 +212,26 @@ export function registerMemory(api, sdk) {
       if (fs.rootReal !== folder.path) throw new Refusal("Shared folder changed");
       return { fs, shared: true, sharedRoot: folder.sharedRoot, rules: folder.rules };
     }
-    const local = await workspace(call.config, allowedAgent(params.agentId, call));
-    return { ...local, shared: false };
+    const id = allowedAgent(params.agentId, call);
+    const local = await workspace(call.config, id);
+    const nested = (
+      await Promise.all(
+        sdk
+          .listAgentIds(call.config)
+          .filter((other) => other !== id)
+          .map((other) =>
+            sdk.canonicalPathFromExistingAncestor(
+              api.runtime.agent.resolveAgentWorkspaceDir(call.config, other),
+            ),
+          ),
+      )
+    ).filter((dir) => inside(local.fs.rootReal, dir));
+    return { ...local, shared: false, nested };
   }
 
   function allowedAgent(agentId, call) {
     if (
       typeof agentId !== "string" ||
-      !AGENT.test(agentId) ||
       !call.visible.has(agentId) ||
       !sdk.listAgentIds(call.config).includes(agentId)
     ) {
@@ -225,10 +241,18 @@ export function registerMemory(api, sdk) {
   }
 
   function allowedPath(folder, path) {
-    return (
-      notePath(path, folder.shared) &&
-      (!folder.shared || folder.rules.some((rule) => !rule || posix.matchesGlob(path, rule)))
-    );
+    if (!notePath(path, folder.shared)) return false;
+    if (folder.shared) return folder.rules.some((rule) => !rule || posix.matchesGlob(path, rule));
+    const target = resolve(folder.fs.rootReal, path);
+    return !folder.nested.some((dir) => dir === target || inside(dir, target));
+  }
+
+  function selectedPath(folder, path, realPath) {
+    const canonical = relative(folder.fs.rootReal, realPath).split(sep).join("/");
+    if (!allowedPath(folder, canonical))
+      throw new Refusal("Path is outside the configured memory selection");
+    if (folder.shared && canonical !== path) throw new Refusal("Use the shared item's exact path");
+    return canonical;
   }
 
   function saverKey(fs, path) {
@@ -241,6 +265,7 @@ export function registerMemory(api, sdk) {
       hash: file.hash,
       size: file.stat.size,
       modifiedAt: file.stat.mtimeMs,
+      revision: revision(file.stat),
       ...FACTS,
       ...(folder.shared ? { sourceId: sourceIdFor(folder.sharedRoot, path) } : {}),
     };
@@ -250,11 +275,12 @@ export function registerMemory(api, sdk) {
     const results = await savers()
       .lookupMany(files.map(({ path }) => saverKey(fs, path)))
       .catch(() => []);
-    return files.map((file, index) => {
+    return files.map(({ revision, ...file }, index) => {
       const saved = results[index];
-      return saved?.ok && saved.value?.hash === file.hash
-        ? { ...file, savedBy: saved.value }
-        : file;
+      if (!saved?.ok || saved.value?.hash !== file.hash || saved.value.revision !== revision)
+        return file;
+      const { revision: _revision, ...savedBy } = saved.value;
+      return { ...file, savedBy };
     });
   }
 
@@ -279,15 +305,23 @@ export function registerMemory(api, sdk) {
     }
     const files = [];
     let truncated = false;
+    if (folder.nested?.includes(resolve(folder.fs.rootReal, "memory"))) {
+      return { files, truncated };
+    }
     try {
       if (!folder.shared && !(await lstat(resolve(folder.fs.rootReal, "memory"))).isDirectory()) {
         throw new Refusal("The notes folder must be a real directory");
       }
       for await (const entry of folder.fs.walk(folder.shared ? "." : "memory", {
+        order: "filesystem",
         symlinkPolicy: "skip",
         maxDepth: MAX_DEPTH,
         maxEntries: 2048,
         limitBehavior: "truncate",
+        entryFilter: ({ kind, relativePath }) =>
+          kind === "directory" && folder.nested?.includes(resolve(folder.fs.rootReal, relativePath))
+            ? "skip-subtree"
+            : "include",
       })) {
         if (entry.kind === "truncated") truncated = true;
         if (entry.kind !== "file") continue;
@@ -299,7 +333,9 @@ export function registerMemory(api, sdk) {
         }
         try {
           const file = await read(folder.fs, path);
-          if (file.hash !== null) files.push(stored(folder, path, file));
+          if (file.hash !== null) {
+            files.push(stored(folder, selectedPath(folder, path, file.realPath), file));
+          }
         } catch (error) {
           if (
             !(error instanceof Refusal) &&
@@ -342,39 +378,46 @@ export function registerMemory(api, sdk) {
     if (method === "read") {
       const file = await read(fs, path);
       if (file.hash === null) throw new Refusal("Note does not exist");
-      const [data] = await withSavers(fs, [stored(folder, path, file)]);
+      const [data] = await withSavers(fs, [
+        stored(folder, selectedPath(folder, path, file.realPath), file),
+      ]);
       folder.assertLocal?.();
       return { ...data, content: file.content };
     }
     return exclusive(fs.rootReal, async () => {
       call.assertCurrent();
+      requireNativeMutations();
       const file = await read(fs, path);
+      selectedPath(
+        folder,
+        path,
+        file.realPath ?? (await sdk.canonicalPathFromExistingAncestor(resolve(fs.rootReal, path))),
+      );
       requireHash(file, hash);
       const assertCurrent = () => {
         call.assertCurrent();
         folder.assertLocal?.();
       };
       const key = saverKey(fs, path);
-      if (method === "delete") {
-        if (file.hash === null) throw new Refusal("Note does not exist");
-        await applyCas(fs, path, file, assertCurrent, (guard) =>
-          fs.remove(path, { assertBeforeMutation: guard, force: false }),
-        );
-        await savers()
-          .delete(key)
-          .catch(() => {});
-        changed();
-        return { deleted: true };
+      try {
+        if (method === "delete") {
+          if (file.hash === null) throw new Refusal("Note does not exist");
+          await applyCas(fs, path, file, assertCurrent, (guard) =>
+            fs.remove(path, { assertBeforeMutation: guard, force: false }),
+          );
+          await savers()
+            .delete(key)
+            .catch(() => {});
+          changed();
+          return { deleted: true };
+        }
+        await writeCas(fs, path, file, assertCurrent, content, true);
+      } catch (error) {
+        if (error.details?.unknown) changed();
+        throw error;
       }
-      await applyCas(fs, path, file, assertCurrent, (guard) =>
-        fs.write(path, content, {
-          assertBeforeMutation: guard,
-          mkdir: true,
-          overwrite: file.hash !== null,
-        }),
-      );
       const newHash = sha256(content);
-      await remember(key, { ...call.saver, hash: newHash }).catch(() => {});
+      await rememberWrite(fs, path, newHash, call.saver).catch(() => {});
       changed();
       return { hash: newHash };
     });
@@ -385,11 +428,19 @@ export function registerMemory(api, sdk) {
     const { fs, assertLocal } = await workspace(call.config, agentId);
     return exclusive(fs.rootReal, async () => {
       call.assertCurrent();
+      requireNativeMutations();
+      const name = basename(
+        await sdk.canonicalPathFromExistingAncestor(resolve(fs.rootReal, ROOT_FILE)),
+      );
+      if (name !== ROOT_FILE && name.toLowerCase() === ROOT_FILE.toLowerCase())
+        throw new Refusal("Rename the root memory file to MEMORY.md before copying or uncopying");
       const file = await read(fs, ROOT_FILE);
+      if (file.realPath && basename(file.realPath) !== ROOT_FILE)
+        throw new Refusal("Rename the root memory file to MEMORY.md before copying or uncopying");
       requireHash(file, expectedHash);
       const content = change(file.content ?? "");
       try {
-        await applyCas(
+        await writeCas(
           fs,
           ROOT_FILE,
           file,
@@ -397,18 +448,18 @@ export function registerMemory(api, sdk) {
             call.assertCurrent();
             assertLocal();
           },
-          (guard) =>
-            fs.write(ROOT_FILE, content, {
-              assertBeforeMutation: guard,
-              overwrite: file.hash !== null,
-            }),
+          content,
+          false,
         );
       } catch (error) {
-        if (error.details?.publication) return { unknown: true };
+        if (error.details?.unknown) {
+          changed();
+          return { unknown: true };
+        }
         throw error;
       }
       const hash = sha256(content);
-      await remember(saverKey(fs, ROOT_FILE), { ...call.saver, hash }).catch(() => {});
+      await rememberWrite(fs, ROOT_FILE, hash, call.saver).catch(() => {});
       changed();
       return { hash };
     });
@@ -439,7 +490,13 @@ export function registerMemory(api, sdk) {
     const uncopy = method === "uncopy";
     const item = uncopy ? undefined : await read(folder.fs, path);
     if (item?.hash === null) throw new Refusal("Shared item does not exist");
-    const sourceId = sourceIdFor(sharedRoot, path);
+    const canonical = selectedPath(
+      folder,
+      path,
+      item?.realPath ??
+        (await sdk.canonicalPathFromExistingAncestor(resolve(folder.fs.rootReal, path))),
+    );
+    const sourceId = sourceIdFor(sharedRoot, canonical);
     const results = [];
     for (const agentId of params.agents) {
       try {
@@ -453,7 +510,7 @@ export function registerMemory(api, sdk) {
               sourceId,
               item?.content,
               uncopy,
-              rootBudget(call.config, agentId),
+              rootBudget(call.config, sdk.resolveAgentConfig(call.config, agentId)),
             ),
           call,
         );
@@ -478,6 +535,15 @@ export function registerMemory(api, sdk) {
     return { sourceId, results };
   }
 
+  async function visibleAgents() {
+    const roster = await sdk.dispatchGatewayMethod("agents.list", {});
+    if (!roster.ok || !Array.isArray(roster.payload?.agents))
+      throw new Refusal("Bot access could not be verified");
+    return new Set(
+      roster.payload.agents.filter(({ kind }) => kind !== "system").map(({ id }) => id),
+    );
+  }
+
   for (const method of ["list", "read", "write", "delete", "copy", "uncopy"]) {
     api.registerGatewayMethod(
       `${ID}.${method}`,
@@ -488,37 +554,67 @@ export function registerMemory(api, sdk) {
             throw new Refusal("Memory access needs an operator connection");
           const active = service;
           const config = context.getRuntimeConfig();
-          const assertCurrent = () => {
+          const assertAuthority = () => {
             if (
               service !== active ||
               client.invalidated ||
               client.connectionSignal?.aborted ||
               opts.signal?.aborted ||
-              opts.hasCurrentClientAuthority?.() === false ||
-              context.getRuntimeConfig() !== config
+              opts.hasCurrentClientAuthority?.() === false
             )
               throw new Refusal("Gateway access or configuration changed");
           };
-          const roster = await sdk.dispatchGatewayMethod("agents.list", {});
+          const assertCurrent = () => {
+            assertAuthority();
+            if (context.getRuntimeConfig() !== config)
+              throw new Refusal("Gateway access or configuration changed");
+          };
+          const visible = await visibleAgents();
           assertCurrent();
-          if (!roster.ok || !Array.isArray(roster.payload?.agents))
-            throw new Refusal("Bot access could not be verified");
-          const visible = new Set(
-            roster.payload.agents.filter(({ kind }) => kind !== "system").map(({ id }) => id),
-          );
           const actor = client.authenticatedUserProfile?.profileId ?? client.pairedClientId;
           const saver =
             typeof actor === "string" && actor.length <= 128
               ? { kind: "operator", id: actor }
               : { kind: "operator" };
           const call = { config, visible, state: active.stateDir, saver, assertCurrent };
-          const data =
-            method === "list"
-              ? await list(params, call)
-              : method === "copy" || method === "uncopy"
-                ? await copies(method, params, call)
-                : await note(method, params, call);
-          assertCurrent();
+          const mutation = method !== "list" && method !== "read";
+          const batch = method === "copy" || method === "uncopy";
+          if (mutation && pendingWrites >= MAX_PENDING_WRITES)
+            throw new Refusal("Too many pending memory writes");
+          if (mutation) pendingWrites += 1;
+          let data;
+          try {
+            data =
+              method === "list"
+                ? await list(params, call)
+                : batch
+                  ? await copies(method, params, call)
+                  : await note(method, params, call);
+          } finally {
+            if (mutation) pendingWrites -= 1;
+          }
+          if (batch) {
+            try {
+              assertAuthority();
+              const latest = context.getRuntimeConfig();
+              if (latest !== config) {
+                const access = await visibleAgents();
+                const updated = { ...call, config: latest, visible: access };
+                for (const id of params.agents) allowedAgent(id, updated);
+                const folder = await folderFor({ sharedRoot: params.item.sharedRoot }, updated);
+                if (!allowedPath(folder, params.item.path) || context.getRuntimeConfig() !== latest)
+                  throw new Refusal("Gateway access or configuration changed");
+                assertAuthority();
+              }
+            } catch {
+              throw new Refusal(
+                "Copy results are unavailable. Check the root memory markers once access is restored",
+                { unknown: true },
+              );
+            }
+          } else {
+            assertCurrent();
+          }
           respond(true, data);
         } catch (error) {
           respond(false, undefined, {

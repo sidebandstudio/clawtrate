@@ -9,6 +9,7 @@ export const MAX_DEPTH = 16;
 export const HASH = /^[a-f0-9]{64}$/;
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 export const missing = (error) => ["not-found", "ENOENT"].includes(error?.code);
+export const revision = (stat) => `${stat.dev}:${stat.ino}:${stat.ctimeMs}:${stat.mtimeMs}`;
 
 export class Refusal extends Error {
   constructor(message, details) {
@@ -62,10 +63,10 @@ export async function sharedDirectory(state, configured) {
 
 export async function read(root, path) {
   try {
-    const { buffer, stat } = await root.read(path);
+    const { buffer, realPath, stat } = await root.read(path);
     const content = buffer.toString("utf8");
     if (!Buffer.from(content).equals(buffer)) throw new Refusal("File is not UTF-8");
-    return { content, hash: sha256(buffer), stat };
+    return { content, hash: sha256(buffer), realPath, stat };
   } catch (error) {
     if (missing(error)) return { hash: null };
     throw error;
@@ -78,33 +79,65 @@ export function requireHash(file, expectedHash) {
   }
 }
 
+export function requireNativeMutations() {
+  // The pinned SDK selects native-only removal and publication at process scope.
+  const mode = [process.env.FS_SAFE_NATIVE_MODE, process.env.OPENCLAW_FS_SAFE_NATIVE_MODE]
+    .map((value) => value?.trim().toLowerCase())
+    .find((value) => /^(0|false|off|never|1|true|on|auto|required|require)$/.test(value));
+  if (mode !== "require" && mode !== "required") {
+    throw new Refusal("Memory changes require FS_SAFE_NATIVE_MODE=require on the gateway");
+  }
+}
+
+export function writeCas(root, path, file, assertCurrent, content, mkdir) {
+  return applyCas(root, path, file, assertCurrent, (guard) => {
+    const options = { assertBeforeMutation: guard, mkdir };
+    return file.hash === null
+      ? root.create(path, content, { ...options, atomic: true })
+      : root.write(path, content, options);
+  });
+}
+
 export async function applyCas(root, path, file, assertCurrent, mutate) {
   const target = resolve(root.rootReal, path);
+  let guardPassed = false;
   const guard = () => {
     assertCurrent();
     const stat = lstatSync(target, { throwIfNoEntry: false });
     const before = file.stat;
-    if (!stat && !before) return;
     if (
-      !stat?.isFile() ||
-      stat.nlink !== 1 ||
-      !before ||
-      stat.dev !== before.dev ||
-      stat.ino !== before.ino ||
-      stat.size !== before.size ||
-      stat.ctimeMs !== before.ctimeMs ||
-      stat.mtimeMs !== before.mtimeMs
+      (stat || before) &&
+      (!stat?.isFile() ||
+        stat.nlink !== 1 ||
+        !before ||
+        stat.size !== before.size ||
+        revision(stat) !== revision(before))
     ) {
       throw new Refusal("The file changed during the operation", { retryRead: true });
     }
+    guardPassed = true;
   };
   try {
     await mutate(guard);
   } catch (error) {
+    const status = error.details?.publication?.status;
+    if (error.code === "helper-unavailable" && (!status || status === "not-published")) {
+      throw new Refusal("This filesystem does not support the required native memory mutation");
+    }
     if (error.details?.retryRead || error.code === "already-exists") {
       assertCurrent();
       const current = await read(root, path).catch(() => null);
       if (current) requireHash(current, file.hash);
+    }
+    // Some SDK verification failures carry no receipt even after publication.
+    if (
+      status === "published" ||
+      status === "indeterminate" ||
+      (!status && guardPassed && !(error instanceof Refusal) && error.code !== "already-exists")
+    ) {
+      throw new Refusal("Memory may have changed. Read it again before retrying", {
+        unknown: true,
+      });
     }
     throw error;
   }
