@@ -12,19 +12,21 @@ Where things were run:
 
 - **Development instances** of the gateway, named and started by this checkout with `pnpm dev-gateway start --instance <name> --default-local-pairing`. That option (added for this note, `tools/dev-gateway`) leaves `gateway.nodes.pairing.autoApproveLocal` unset, at the gateway's default; every other instance sets it to `false`. The probes are in `setup-flow/pair-probe.ts` and use this project's own client (`packages/core`) where the desktop app would.
 - **An `sshd` of my own**, run as my own user on a loopback port, with a host key, a user key, a configuration and a home created for it in a temporary folder, reached with `ssh -F <that configuration>`, `IdentitiesOnly`, that key and that known-hosts file. Nothing of the machine's own SSH setup was read or used.
-- **GitHub's hosted runners** (macOS, Ubuntu and Windows), for everything that installs or registers a service, which must never run on a machine with a working gateway. The workflow is `.github/workflows/setup-research.yml` on the branch `su-research`, which is not merged; runs 44415483883 and 44416142360.
+- **GitHub's hosted runners** (macOS, Ubuntu and Windows), for everything that installs or registers a service, which must never run on a machine with a working gateway. The workflows are `.github/workflows/setup-research.yml` (runs 44415483883 and 44416142360) and `.github/workflows/setup-owned-install.yml` (runs 44432670957 and 44433669562) on the branch `su-research`, which is not merged.
+
+Sections 3.1, 6.8, 6.9 and 7.2 were added after an independent review of the first version, together with narrower wording where it had claimed more than the evidence (sections 1, 2, 3 and 6.6).
 
 ## Summary
 
 | # | Question | Answer | Section |
 |---|---|---|---|
-| 1 | Is this client's first pairing approved silently on loopback, and through an SSH forward to a loopback-only gateway, with `autoApproveLocal` at its default? | Yes, both. **Live.** But the shared token it needs cannot be read by a program: OpenClaw refuses to print it outside an interactive terminal. A setup code made on the gateway's computer with `openclaw qr --url ws://127.0.0.1:<port>` replaces it, and is also approved silently there. **Live.** | 1 |
-| 2 | Is a scope upgrade on such a connection approved silently? | No. `device.scopes.requestUpgrade` always files a request that waits, whatever the locality. **Live.** `openclaw devices approve <requestId>` on the gateway's computer approves it. **Live.** The pairing page's "silently approve … scope upgrades" is about a reconnect that presents the shared token, a different path. | 2 |
-| 3 | Setup codes with this client | A code is base64url JSON `{url, bootstrapToken, expiresAtMs}`, never the shared token, valid for 10 minutes, single use. On loopback this client redeems it for `operator.read` alone and is approved silently. **Live.** Away from the gateway's computer, only OpenClaw's own mobile apps connecting as a node are approved by the code; this client's connect waits for `devices approve`. **Source.** | 3 |
+| 1 | Is this client's first pairing approved silently on loopback, and through an SSH forward to a loopback-only gateway, with `autoApproveLocal` at its default? | Yes, both, for this native client (no `Origin` header, local `Host`). **Live.** OpenClaw's commands refuse to show the shared token to a program (the same user could read its configuration file, which the design deliberately does not do). A setup code made on the gateway's computer with `openclaw qr --url ws://127.0.0.1:<port>` replaces it, and is also approved silently there. **Live.** | 1 |
+| 2 | Is a scope upgrade on such a connection approved silently? | Not through the explicit request this client uses: `device.scopes.requestUpgrade` always files a request that waits, whatever the locality. **Live.** `openclaw devices approve <requestId>` on the gateway's computer approves it. **Live.** The pairing page's "silently approve … scope upgrades" is about a reconnect that presents the shared token, a different path. | 2 |
+| 3 | Setup codes with this client | A code is base64url JSON `{url, bootstrapToken, expiresAtMs}`, never the shared token, valid for 10 minutes, single use, and not revocable by any command. It is a bearer credential with a ceiling: on loopback a `--limited` code was redeemed for read and write when both were asked for, and a default code for admin; a `--voice-node` code was redeemed for read and refused write. **Live** (§3.1). Away from the gateway's computer, only OpenClaw's own clients are approved by the code; this client's connect waits for `devices approve`. **Source.** | 3 |
 | 4 | A setup code without a shell? | `device.pair.setupCode` exists, needs `operator.admin`, and is not advertised in `hello-ok`. A read-only connection is refused. **Live.** So a code needs either a shell on the gateway's computer or an admin connection. | 4 |
 | 5 | What identifies a gateway apart from its address? | `gateway.identity.get` (`operator.read`): the gateway's own `{deviceId, publicKey}`, stable across addresses and restarts. It identifies a gateway only after a connection has authenticated; nothing proves the key to a client before a credential is sent. | 5 |
-| 6 | The installer | `install-cli.sh --runtime-only --npm --version <exact> --prefix <dir> --json` installs a pinned OpenClaw and its own Node into one folder, with NDJSON steps, in 20 to 33 s. `openclaw onboard --non-interactive --accept-risk --auth-choice skip --gateway-bind loopback --gateway-auth token --install-daemon --json` makes a loopback, token, no-model gateway with a launchd or systemd user service in 18 to 28 s. `openclaw uninstall --service --state --workspace --yes --non-interactive` removes it. **Live** on macOS and Ubuntu. On Windows `install.ps1 -Tag <exact>` installs globally (304 s), replacing the computer's Node when it is too old, before it checks the version exists; onboarding makes a Scheduled Task (63 s). **Live.** | 6 |
-| 7 | SSH from a shipped app | `BatchMode=yes`, `StrictHostKeyChecking=yes`, `ExitOnForwardFailure=yes`, `ServerAliveInterval`, `ConnectTimeout`. All three failures exit 255 and are told apart by stderr. The host key's fingerprint is on the `-v` line `Server host key:`. A dropped or silent forward exits 255 and the host restarts it. Windows' bundled OpenSSH 9.5 behaves alike, without ControlMaster and without Unix-socket forwards. **Live.** | 7 |
+| 6 | The installer | `install-cli.sh --runtime-only --npm --version <exact> --prefix <dir> --json` installs a pinned OpenClaw and its own Node into one folder, with NDJSON steps, in 20 to 33 s. Given the checked tarball's path and a checked Node already in place, it installs exactly that tarball with that Node; npm still resolves 345 dependency packages the app can't check. A named profile (`--profile clawtrate`) gets its own state and service, and leaves a default OpenClaw untouched through install and removal (§6.8). `openclaw onboard --non-interactive --accept-risk --auth-choice skip --gateway-bind loopback --gateway-auth token --install-daemon --json` makes a loopback, token, no-model gateway with a launchd or systemd user service in 18 to 28 s. `openclaw uninstall --service --state --workspace --yes --non-interactive` removes it. **Live** on macOS and Ubuntu. On Windows `install.ps1 -Tag <exact>` installs globally (304 s), replacing the computer's Node when it is too old, before it checks the version exists; onboarding makes a Scheduled Task (63 s). **Live.** | 6 |
+| 7 | SSH from a shipped app | `BatchMode=yes`, `StrictHostKeyChecking=yes`, `ExitOnForwardFailure=yes`, `ServerAliveInterval`, `ConnectTimeout`. All three failures exit 255 and are told apart by stderr. A first contact's exact key bytes can be captured without signing in (`accept-new` into an empty file, `PreferredAuthentications=none`), and pinned under the route's own alias; an already trusted key is named by file and line (§7.2). A dropped or silent forward exits 255 and the host restarts it. Windows' bundled OpenSSH 9.5 behaves alike, without ControlMaster and without Unix-socket forwards. **Live.** | 7 |
 | 8 | Tailscale | `gateway.tailscale.mode: "serve"` keeps the gateway on loopback and has the gateway itself hold a Serve route to a dedicated listener. It needs the `tailscale` program, signed in, with HTTPS certificates on for the tailnet. A connection through it is not local: a new device waits for approval. **Source.** | 8 |
 
 ## 1. The first pairing on loopback and through an SSH forward
@@ -61,15 +63,15 @@ gateway devices: {… {"displayName":"Clawtrate Desktop","scopes":["operator.rea
 
 Both were approved silently, with `operator.read` and nothing more, and both read the same gateway identity (section 5). On an instance with `autoApproveLocal: false`, which every other development instance has, the same connect waits with `PAIRING_REQUIRED` (`docs/research/gateway-capabilities.md`, section 2; F-002).
 
-### The shared token cannot be read by a program
+### The shared token: what OpenClaw's commands show, and what the design does not do
 
-The first connect needs a credential. The pairing row assumed the host reads the shared token itself. OpenClaw prevents that on purpose:
+The first connect needs a credential. The pairing row assumed the host reads the shared token itself. OpenClaw's own commands refuse to show it to a program, on purpose:
 
 - `openclaw gateway auth-token --show` refuses "outside an interactive terminal", which it judges as stdin and stdout both being terminals (`<openclaw>/dist/gateway-auth-token-ByElYj5T.mjs` line 13; `terminal-interactivity-D92bdO16.mjs` line 2). **Source.**
 - `openclaw config get gateway.auth.token` prints `__OPENCLAW_REDACTED__` (`<openclaw>/docs/install/daytona.md` line 100). **Source.**
 - The token can also be a SecretRef that only the gateway resolves.
 
-Allocating a pseudo-terminal to get past the first, or parsing OpenClaw's config file to get past the second, would defeat a guard OpenClaw put there. The design does neither.
+This is narrower than "a program cannot read it". The same operating-system user can usually read OpenClaw's configuration file, and the bundled pairing page says as much: SSH access already implies that same-user trust (`<openclaw>/docs/gateway/pairing.md` lines 233-236). Allocating a pseudo-terminal to get past the first guard, or parsing the configuration file to get past the second, would go around what OpenClaw put there; the design deliberately does neither.
 
 **What replaces it: a setup code made on the gateway's computer.** `openclaw qr --json --url ws://127.0.0.1:<port> --limited` is non-interactive by design, prints a short-lived single-use bootstrap token inside a setup code, and never prints the shared token (section 3). On loopback, a connect with that bootstrap token is approved silently like one with the shared token: `shouldAllowSilentLocalPairing` does not look at the auth method for a first pairing. **Live**, section 3. So the host makes a code over its own shell (this computer, or SSH), redeems it at once over loopback or the forward, and the shared token never leaves OpenClaw.
 
@@ -141,6 +143,25 @@ Connecting as a mobile node to be approved by the code is not an option for Claw
 
 The waiting is short in practice when the code was made from a desktop that has a shell on the gateway's computer: that desktop can list the pending request (`openclaw devices list --json`) and approve it (`openclaw devices approve <requestId>`) after the person confirms, the same "Approve from here" as section 2.
 
+### 3.1 A code's ceiling, and the narrowest code (live)
+
+The review of the first version found, and this run confirms, that a code is not a read-only credential: on loopback the gateway grants the device what it asks for, up to the code's profile. `pair-probe.ts code --scopes …` on instance `su-r1` (`--default-local-pairing`):
+
+| Code | The device asked for | Outcome |
+|---|---|---|
+| `--limited` | `operator.read` | hello, `["operator.read"]` |
+| `--limited` | `operator.read`, `operator.write` | hello, `["operator.read","operator.write"]` |
+| `--limited` | `operator.read`, `operator.admin` | refused, `AUTH_BOOTSTRAP_TOKEN_INVALID` |
+| default (`full`) | read, write, approvals, questions, admin | hello, all five |
+| `--voice-node` | `operator.read` | hello, `["operator.read"]` |
+| `--voice-node` | `operator.read`, `operator.write` | refused, `AUTH_BOOTSTRAP_TOKEN_INVALID` |
+
+So the host must be the one that asks: it keeps a code it made for its own connection, asks for `operator.read` alone, and checks the grant. `--voice-node` (profile roles `node` and `operator`, scopes `operator.read` and `operator.talk`, `<openclaw>/dist/device-bootstrap-profile-DQKf7Vz1.mjs`) is the narrowest code OpenClaw offers. A holder of such a code can still ask for `operator.talk`, or connect as a node, which exposes that device's commands to the gateway and gains nothing over it; the docs say the voice operator token "cannot send messages, mutate configuration, or invoke general write-scoped Gateway methods" (`<openclaw>/docs/cli/qr.md` line 58). The design uses only `--voice-node` codes.
+
+**Codes can't be withdrawn.** The gateway revokes bootstrap tokens internally (`revokeDeviceBootstrapToken`, `<openclaw>/dist/device-bootstrap-OyKJUibk.mjs` line 134, used by cloud workers), but no command offers it to a person: `openclaw qr` and `openclaw devices` have none. An unused code stays valid in OpenClaw's own state until it expires, 10 minutes after it was made. **Source.**
+
+**Off loopback**, the exceptions that let a code alone approve a device are OpenClaw's own clients only (above): its iOS and Android apps as nodes, its node host, its Control UI, and its voice clients (`isSetupCodeVoiceNodeBootstrapClient`). On an instance with `autoApproveLocal: false`, the review saw this client's read request stay pending with exactly `operator.read` (review evidence, `bootstrap-scope.mjs`).
+
 ### A proxy route made by hand
 
 `pair-probe.ts proxy`: the client connects through a loopback proxy that adds `X-Forwarded-For: 192.0.2.10`, as Tailscale Serve or another reverse proxy pointed at the ordinary listener does:
@@ -183,6 +204,7 @@ So "Connect a phone" (F-506) has two sources, in this order: the host's shell on
 - **Must not change.** A device token is offered only where it was issued. No route is given a token because a gateway claims an identity. A credential never crosses from one gateway to another.
 - **Has to change.** "One gateway URL" becomes "one route". A forwarded `ws://127.0.0.1:<port>` changes port every time the forward is made, so for an SSH route the key is the route's own identity: the host key's fingerprint, the SSH target as resolved, and the gateway's port on that computer. A changed host key is a different route. For a direct route the key stays its URL.
 - **Can be added.** Routes are grouped into one gateway, for the person, by the `deviceId` that `gateway.identity.get` returns over each route once it has authenticated there. Each route pairs once by itself (silently for this computer and SSH, by a setup code otherwise), so the grouping never moves a credential.
+- **Continuity.** A route key alone cannot stop a token being offered to whatever answers there later: another process can take a forwarded or local port, and an address can be reassigned. What the research supports: an SSH route's endpoint is proven by its pinned host key (section 7.2), so two SSH routes with the same pinned key and the same gateway port end at the same gateway and may share a token. Every other route pairs for itself. After every connection the gateway's identity is compared with the one recorded for that route; a different one means a different gateway, and that route's token is dropped. On this computer, a process of the same user taking the gateway's port is inside the trust boundary the gateway itself assumes for local connections (`<openclaw>/docs/gateway/pairing.md` line 248). The existing generation checks stay through every wait.
 
 ## 6. Installing, onboarding and removing OpenClaw
 
@@ -245,7 +267,7 @@ The command reuses a cached CLI device token and never creates a device identity
 
 ### 6.6 Windows
 
-Run 44415483883, `install.ps1` from the website (SHA-256 `E2813A79…7D27C6`, 2,665 lines):
+Both Windows runs executed `install.ps1` from the website (SHA-256 `E2813A79…7D27C6`, 2,665 lines). That is not the script in the pinned tarball (`scripts/install.ps1`, SHA-256 `2b2344ea…ce47bb`, 2,488 lines), which has the same Node-first and global-install behaviour when read but was never run. Run 44415483883:
 
 - `-DryRun -Tag 2026.10.6 -NoOnboard` printed "[OK] Windows detected", "[OK] Dry run", "[OK] Install method: npm", "[OK] Onboard: skipped".
 - **`-Tag 2026.99.99` changed the machine before it failed.** The runner's Node 22.23.4 is unsupported, so the script first installed Node 26.13.1 machine-wide with winget ("Found Node.js (LTS) [OpenJS.NodeJS.LTS] Version 26.13.1 … Successfully installed"), and only then ran npm, which failed with `ETARGET`; exit 1. A missing version is found after the system's Node has been replaced.
@@ -262,6 +284,26 @@ Run 44416142360 went on past the failure (Node 26.13.1 was now installed):
 | `npm uninstall -g openclaw` | exit 0, "removed 493 packages" |
 
 So on Windows: the version pin works; the install changes the machine's Node and global npm prefix; onboarding makes a Scheduled Task; removal can end with exit 1 over an empty, locked folder, which the next install does not trip on (a fresh `~\.openclaw` is created inside it).
+
+### 6.8 An install that owns what it makes, from checked files (live)
+
+Runs 44432670957 and 44433669562 (macOS arm64 and Ubuntu x64), workflow `setup-owned-install.yml`. A decoy `~/.openclaw/keep-me` was made first, standing for a person's own OpenClaw.
+
+1. **Checked before anything ran.** The npm tarball matched its published integrity, and Node.js 24.22.1's tarball for the runner matched its published SHA-256 (from nodejs.org's `SHASUMS256.txt`, written into the workflow). The checked Node.js was extracted to `<prefix>/tools/node-v24.22.1`, and a record `.clawtrate-install.json` was written into the empty prefix.
+2. **Installed exactly that.** `install-cli.sh --json --runtime-only --npm --version <path to the checked tarball> --prefix <prefix>`, with `NPM_CONFIG_USERCONFIG` and `NPM_CONFIG_GLOBALCONFIG` pointing at two empty files and `npm_config_registry=https://registry.npmjs.org/`:
+   - `{"event":"step","name":"node","status":"skip","path":"<prefix>/tools/node-v24.22.1"}`: the installer used the checked Node.js (`linked_node_is_usable`, `<openclaw>/scripts/install-cli.sh` lines 908-912);
+   - `added 345 packages`, then `openclaw ok` and `done OpenClaw 2026.10.6 (fe06181)`; exit 0 in 30 s (Ubuntu) and 38 s (macOS);
+   - the installed `dist/entry.js` had the same SHA-256 as the checked tarball's (`84d9ae45…ce0d08`), and `<prefix>/tools/node` pointed at the checked Node.js.
+3. **What remains unchecked.** OpenClaw has no shrinkwrap: its 66 direct dependencies are pinned exactly in its `package.json`, and npm resolves the rest at install time, 345 packages in all. The app can't verify those. On Alpine and other musl Linux the installer uses the system's `apk` (`install_alpine_node`, line 709), so the app offers no install there.
+4. **A named profile of its own.** `openclaw --profile clawtrate onboard --non-interactive --accept-risk --auth-choice skip --gateway-bind loopback --gateway-auth token --gateway-port <free port> --install-daemon --skip-skills --json`: exit 0 (21 s, 22 s). The service was the profile's own, `openclaw-gateway-clawtrate.service` ("OpenClaw Gateway (profile: clawtrate)") and `ai.openclaw.clawtrate`; the state was `~/.openclaw-clawtrate`. `gateway status --json --profile clawtrate` showed the service running with the prefix's program and the chosen port, and `rpc.ok`. The default profile's service was not loaded, and `~/.openclaw/keep-me` was untouched.
+5. **Removal touched only the profile.** `openclaw --profile clawtrate uninstall --service --state --workspace --yes --non-interactive`: exit 0. It stopped and removed only the profile's service, removed `~/.openclaw-clawtrate` (with the owner file written into it), and nothing listened on the port afterwards. The decoy still read "the person's own". On macOS the LaunchAgent's file was **moved to the Trash** ("Moved LaunchAgent to Trash: ~/.Trash/ai.openclaw.clawtrate.plist"), not deleted. The macOS log file `~/Library/Logs/openclaw/gateway-clawtrate.log` was not checked, and removal must report it if it remains.
+6. **Two traps found.** npm refuses one file as both user and global configuration ("double-loading config … previously loaded as user"). Then the installer's Node check fails, and the installer **deletes the pre-placed folder** and downloads Node.js itself (run 44432670957). An installer whose Node.js step does not report `skip` must therefore be treated as a failure.
+
+### 6.9 What the look can know
+
+- `extraServices` is filled only with `--deep` (`<openclaw>/dist/status.gather-Adzoi3Iz.mjs` line 427). Those entries are services found on the machine; they don't say whether each runs, on which port, or which profile's commands control it. The design names them and does not connect to them.
+- "Not on PATH" is not "not installed": a person's install can be in a place the app doesn't look. The look checks a fixed list of places, and separately whether `~/.openclaw` or a default service exists. A missing program with either present is "set up, program missing", which offers no install.
+- A version from `--version` describes the program; `rpc.ok` with `gateway.version` describes the running gateway. `hello-ok.protocol` describes a handshake that succeeded and cannot explain a refused one; a refusal arrives as the connect's protocol error.
 
 ### 6.7 What each failure looks like, and undoing it
 
@@ -313,6 +355,17 @@ Telling them apart: exit 255 always; then "Host key verification failed" → hos
 
 **The fingerprint.** With `-v`, `ssh` prints `debug1: Server host key: ssh-ed25519 SHA256:<fingerprint>` before it refuses an unknown key. **Live** on all three systems. To trust it, the host fetches the key with `ssh-keyscan -t ed25519 -p <port> <host>`, checks that `ssh-keygen -lf` gives the same fingerprint the refused connection saw, and only then writes that line to Clawtrate's own known-hosts file. **Live** (keyscan's `SHA256:1V4KgC…` matched the `-v` line).
 
+### 7.2 The key, captured and pinned as one act; a constant remote command (live)
+
+Against an `sshd` of my own (as in section 7), with a configuration file written for the test (`ssh -F`, which also drops the system configuration: "If a configuration file is given on the command line, the system-wide configuration file (/etc/ssh/ssh_config) will be ignored", `man ssh`):
+
+- **First contact, without signing in.** `ssh -F <file> -o HostKeyAlias=clawtrate-route-1 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=<empty capture file> -o PreferredAuthentications=none -o NumberOfPasswordPrompts=0 -T devbox true` printed "Warning: Permanently added 'clawtrate-route-1' (ED25519) to the list of known hosts." and "Permission denied (publickey).", exit 255. The capture file held one line, `clawtrate-route-1 ssh-ed25519 AAAAC3…`, whose fingerprint equalled the server's host key. The server logged "Connection closed by authenticating user … [preauth]" and "connections without attempting authentication": no key of the person's was offered. These bytes are the key negotiated on that very connection, whatever the route, so a jump host, a renamed alias or another key type can't make it the wrong key.
+- **Pinned.** The same alias with `StrictHostKeyChecking=yes` and only that file connected and ran its command (exit 0).
+- **Already trusted elsewhere.** With an empty app file and a stand-in for the person's known-hosts file listed second, `-v` printed `Host '[127.0.0.1]:<port>' is known and matches the ED25519 host key.` and `Found key in <file>:2`. The app can copy exactly that line.
+- **Changed.** After `sshd` was restarted with another host key, the pinned connection failed with "REMOTE HOST IDENTIFICATION HAS CHANGED" and the new fingerprint. A fresh capture, as in the first point, gave that new key's fingerprint, matching the new host key. So both keys can be shown side by side, and the new one pinned only by decision.
+- **A constant remote command.** The command string `/bin/sh -s`, with the script on standard input, ran the same under `sh`, `bash`, `zsh`, `dash`, `ksh`, `csh` and `tcsh` as the outer shell (`<shell> -c '/bin/sh -s' < script`), and over `ssh` (fish was not installed). Values reach the script only as assignments the host writes after validation.
+- The review saw `ssh -v`'s debug lines end in CRLF on its system; a parser must accept both.
+
 ### Windows
 
 **Live**, run 44416142360: `C:\Windows\System32\OpenSSH\ssh.exe` is present, `OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2`; the `ssh-agent` service is `Stopped`, start type `Disabled`. The same options work and the same messages come back, except: "Connection refused" reads `banner exchange: Connection to UNKNOWN port -1: Connection refused`; `ControlMaster=auto` fails ("getsockname failed: Not a socket", exit -1); a Unix-socket forward is refused ("Bad local forwarding specification 'D:/a/_temp/fwd.sock:127.0.0.1:18789'"). With the agent disabled, a key that has a passphrase cannot be used without a prompt; the person enables the agent service and adds the key once. Windows also ships `ssh-keyscan.exe` and `ssh-keygen.exe`.
@@ -326,14 +379,17 @@ From `<openclaw>/docs/gateway/tailscale.md` and the ingress source only. **No `t
 - A connection through managed Serve is `tailscale-serve` ingress (`resolveManagedTailscaleIngress`, `ingress-attribution-BQX5Ye8B.mjs` lines 55-93), never `direct-local`: a new device's pairing waits for approval like any remote one. Tailscale identity headers sign in only OpenClaw's own Control UI (lines 110-120).
 - `openclaw qr` advertises the Tailscale address only when OpenClaw owns the route (`<openclaw>/docs/cli/qr.md` line 69), which makes it the setup-code address for a phone away from home.
 - A route someone made by hand to the ordinary listener is generic proxy ingress and needs `gateway.trustedProxies` (lines 122-126); without it the gateway refuses it (section 3, "A proxy route made by hand").
-- Turning it on is `openclaw config set gateway.tailscale.mode serve` and a restart of the gateway (`openclaw gateway restart`); off is `openclaw config set gateway.tailscale.mode off` and a restart. What the three named failures look like is read from `openclaw gateway status --json` and the gateway's log after the restart; their exact words are **unverified**, because the program may not be run here. The design names them from Tailscale's own states: not installed (the program is not found), signed out (`NeedsLogin`), HTTPS not enabled.
+- Turning it on is `openclaw config set gateway.tailscale.mode serve` and a restart of the gateway (`openclaw gateway restart`). Putting it back means restoring the exact earlier value of `gateway.tailscale`, which may be absent, not writing `off`. What the failures look like is read from `tailscale status --json` before the change and the gateway's warning after the restart; their exact words are **unverified**, because the program may not be run here. The design names them from Tailscale's own states, kept apart: not installed (the program is not found), stopped (`BackendState` `Stopped`), signed out (`NeedsLogin`), HTTPS not enabled (no certificate domain), and, on Linux, no operator permission (line 134).
+- `openclaw qr --remote` is not an observation: it can prefer `gateway.remote.url`, and it mints a code (`<openclaw>/docs/cli/qr.md` lines 36, 79-81). Whether the managed route exists is read from `tailscale serve status --json`; whether it answers, from the gateway's unauthenticated `/healthz` through it (`<openclaw>/docs/gateway/health.md`, "HTTP checks").
 
 ## 9. What could not be proven here
 
 | What | Why | What the design does about it |
 |---|---|---|
 | A phone's setup-code connect from another address waits for approval | The development instance listens on loopback only, and a header-adding proxy is refused outright | Treats it as waiting, with "Approve from here" on the desktop (source, section 3) |
-| A clean Windows without a usable Node | The runner had Node 22, which the installer replaced machine-wide | The design says before installing on Windows that the computer's Node may be replaced (section 6.6) |
+| The pinned tarball's own `install.ps1` | Never run; both Windows runs used the website's | The design doesn't install on Windows at all (F-517) |
+| A reboot after install | Runners aren't rebooted | The design describes each service by what it is ("starts when you log in"), not by a promise about boot |
+| Tailscale's rollback, end to end | No `tailscale` program may run here | The design restores the recorded value and checks the original route before saying so, and says when it couldn't |
 | Tailscale's three failures, in OpenClaw's words | No `tailscale` program may run on this machine; the runners are not on a tailnet | Named from Tailscale's own states, worded by Clawtrate |
 | A gateway signing a client's challenge with its identity key | No such method found | Each route pairs by itself; routes are grouped after authentication (section 5) |
 | `install.sh` | Not in the npm package; only served by the website | Not used: `install-cli.sh` from the pinned tarball covers macOS and Linux |
@@ -342,4 +398,4 @@ From `<openclaw>/docs/gateway/tailscale.md` and the ingress source only. **No `t
 
 | File | What it is |
 |---|---|
-| `setup-flow/pair-probe.ts` | The probes for sections 1 to 4: `pair`, `upgrade`, `code`, `method`, `proxy`. Acts only on a named instance started with `--default-local-pairing`, runs `openclaw` only through the development tool's guarded runner, and redacts every token it prints. |
+| `setup-flow/pair-probe.ts` | The probes for sections 1 to 4 and 3.1: `pair`, `upgrade`, `code` (with `--limited`, `--voice` and `--scopes`), `method`, `proxy`. Acts only on a named instance started with `--default-local-pairing`; runs `openclaw` only through the development tool's guarded runner; refuses a `--port` unless its one listener is an `ssh` forwarding exactly that port to the instance; removes the scratch client folder it makes; redacts every token it prints. |

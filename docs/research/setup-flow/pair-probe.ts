@@ -1,14 +1,18 @@
 // Probes behind docs/research/setup-flow.md, points 1 to 4. Research code, not a check.
 //
 //   pnpm dev-gateway start --instance <name> --default-local-pairing --no-seed
-//   node docs/research/setup-flow/pair-probe.ts <experiment> --instance <name> [--port <local port>]
+//   node docs/research/setup-flow/pair-probe.ts <experiment> --instance <name> [--port <local port>] [--scopes read,write]
 //
 // It acts only on a named development instance this checkout started with
 // `--default-local-pairing`, reads that instance's address and token from the
 // tool's own run files, and runs `openclaw` only through the tool's guarded
 // runner (so always with `--profile clawtrate-dev-<name>`). It never prints a
 // token: every line it prints passes through `redact`. `--port` points the
-// client at another local port, such as an SSH forward to the instance.
+// client at another local port, and is refused unless the process listening
+// there is an `ssh` whose command line forwards exactly that port to this
+// instance's port on loopback: the token is never sent to an unproven
+// listener. A scratch client folder it makes is removed when it ends; one
+// given with `--data` is kept, for `upgrade` and `method`.
 //
 // Experiments:
 //   pair      this project's client (packages/core) connects with the shared
@@ -16,9 +20,10 @@
 //   upgrade   the same device asks for the interactive tier
 //             (device.scopes.requestUpgrade); with --approve, the gateway's own
 //             `devices approve <requestId>` approves it on the gateway's computer
-//   code      `openclaw qr --json --url ws://127.0.0.1:<port>` (add --limited),
-//             decoded; then a new device redeems it asking for operator.read
-//             alone, and a second device tries the same code again
+//   code      `openclaw qr --json --url ws://127.0.0.1:<port>` (add --limited or --voice),
+//             decoded; then a new device redeems it asking for the scopes of
+//             --scopes (operator.read alone by default), and a second device
+//             tries the same code again
 //   method    a read-only connection calls device.pair.setupCode
 //   proxy     the client connects through a local proxy that adds
 //             X-Forwarded-For, as a reverse-proxy route made by hand does
@@ -26,6 +31,7 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { createHash, generateKeyPairSync, createPublicKey, createPrivateKey, sign } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
 import { connect as netConnect } from "node:net";
@@ -50,7 +56,9 @@ const { values, positionals } = parseArgs({
     port: { type: "string" },
     approve: { type: "boolean", default: false },
     limited: { type: "boolean", default: false },
+    voice: { type: "boolean", default: false },
     data: { type: "string" },
+    scopes: { type: "string", default: "read" },
   },
   allowPositionals: true,
 });
@@ -64,6 +72,22 @@ const connection = readDevConnection(inst.connectionFile);
 if (!connection || connection.instance !== values.instance) throw new Error("no connection record for this instance");
 const gatewayPort = Number(new URL(connection.url).port);
 const port = values.port ? Number(values.port) : gatewayPort;
+if (values.port) assertOwnForward(port, gatewayPort);
+const SCOPES = values.scopes!.split(",").map((s) => `operator.${s.trim()}`);
+if (!SCOPES.every((s) => /^operator\.(read|write|approvals|questions|admin)$/.test(s))) throw new Error("--scopes takes read, write, approvals, questions, admin");
+
+/** The only listener on `port` must be an ssh forwarding exactly `port` to the instance's own port. */
+function assertOwnForward(local: number, target: number) {
+  if (!Number.isInteger(local) || local < 1024 || local > 65535 || local === target) throw new Error("--port must be another unprivileged port");
+  const pids = spawnSync("lsof", ["-nP", `-iTCP:${local}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8" }).stdout.trim().split("\n").filter(Boolean);
+  if (pids.length !== 1) throw new Error(`expected one listener on ${local}, found ${pids.length}`);
+  const command = spawnSync("ps", ["-o", "command=", "-p", pids[0]!], { encoding: "utf8" }).stdout.trim();
+  const words = command.split(/\s+/);
+  const forward = `127.0.0.1:${local}:127.0.0.1:${target}`;
+  if (!/(^|\/)ssh$/.test(words[0] ?? "") || !words.some((w, i) => w === forward && words[i - 1] === "-L")) {
+    throw new Error(`the listener on ${local} is not an ssh forward to 127.0.0.1:${target}`);
+  }
+}
 const url = `ws://127.0.0.1:${port}`;
 
 const secrets: string[] = [connection.token];
@@ -130,6 +154,7 @@ function summary(client: ClawtrateClient) {
 
 async function pair() {
   const dataDir = values.data ?? mkdtempSync(join(tmpdir(), "su-pair-"));
+  if (!values.data) process.on("exit", () => rmSync(dataDir, { recursive: true, force: true }));
   const client = coreClient(dataDir);
   await client.start();
   say("connect", url, "with the shared token, data", dataDir);
@@ -192,7 +217,7 @@ function redeem(bootstrapToken: string, label: string) {
       clientVersion: "0.0.0-research",
       platform: process.platform,
       role: "operator",
-      scopes: ["operator.read"],
+      scopes: SCOPES,
       caps: ["tool-events"],
       minProtocol: 4,
       maxProtocol: 4,
@@ -222,7 +247,14 @@ function redeem(bootstrapToken: string, label: string) {
 }
 
 async function code() {
-  const args = ["qr", "--json", "--url", `ws://127.0.0.1:${port}`, ...(values.limited ? ["--limited"] : [])];
+  const args = [
+    "qr",
+    "--json",
+    "--url",
+    `ws://127.0.0.1:${port}`,
+    ...(values.limited ? ["--limited"] : []),
+    ...(values.voice ? ["--voice-node"] : []),
+  ];
   const { status, out } = runOpenclaw(args);
   say(`openclaw ${args.join(" ")}: exit ${status}`);
   if (status !== 0) return say(out.slice(0, 600));
@@ -235,7 +267,7 @@ async function code() {
   say("payload keys:", Object.keys(payload), "url:", payload.url, "bootstrapToken length:", payload.bootstrapToken?.length);
   say("shared token in the code:", decoded.includes(connection!.token));
   if (payload.expiresAtMs) say("lives for seconds:", Math.round((payload.expiresAtMs - Date.now()) / 1000));
-  say("first device redeems it for operator.read:", await redeem(payload.bootstrapToken!, "first"));
+  say(`first device redeems it asking for ${SCOPES.join(", ")}:`, await redeem(payload.bootstrapToken!, "first"));
   say("gateway devices:", devices());
   say("second device, same code:", await redeem(payload.bootstrapToken!, "second"));
 }
