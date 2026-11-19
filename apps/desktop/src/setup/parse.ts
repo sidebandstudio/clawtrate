@@ -52,16 +52,40 @@ export type GatewayStatus = {
   /** The profile's config file, kept to tell this gateway from another; never shown or opened. */
   configPath: string;
   port: number;
-  bind: "loopback" | "network";
-  /** The registered service, or none for a gateway started by hand. */
-  service: { kind: "launchagent" | "systemd"; state: "running" | "stopped" | "other" } | null;
+  /** How it listens, when the status names a bind mode the look knows; otherwise not reported. */
+  bind: "loopback" | "network" | null;
+  /**
+   * The service as the status describes it: a registered LaunchAgent or
+   * systemd user unit, `none` when the status says its unit is missing, and
+   * null when it doesn't describe one the look understands.
+   */
+  service:
+    { kind: "launchagent" | "systemd"; state: "running" | "stopped" | "other" } | "none" | null;
+  /** The service's facts as reported, to tell whether it changed; never shown. */
+  serviceKey: string;
   /** Whether something listens on the gateway's port. */
   listening: boolean;
   /** `rpc.ok` with the version the running gateway reported, or null. */
   answered: Version | null;
   /** `rpc.ok` was false. */
   unanswered: boolean;
+  /**
+   * The status probed and its RPC answered on this computer's loopback, plain
+   * `ws`, on the gateway's own port. Anything else and Clawtrate can't
+   * confirm where the gateway answers.
+   */
+  endpointConfirmed: boolean;
 };
+
+/** Bind modes OpenClaw names; the look knows which of them listen beyond this computer. */
+const NETWORK_BINDS = new Set(["lan", "tailnet", "custom", "auto"]);
+
+/** A loopback plain-`ws` address and its port, or null. */
+function loopbackPort(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const match = /^ws:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):([0-9]{4,5})\/?$/.exec(value);
+  return match ? Number(match[1]) : null;
+}
 
 /** `gateway status --json`, or null when any fact the look needs has the wrong shape. */
 export function parseStatus(stdout: string): GatewayStatus | null {
@@ -79,18 +103,28 @@ export function parseStatus(stdout: string): GatewayStatus | null {
   const number = gateway.port;
   if (typeof number !== "number" || !Number.isInteger(number) || number < 1024 || number > 65535)
     return null;
-  if (typeof gateway.bindMode !== "string") return null;
   if (port.status !== "free" && port.status !== "busy") return null;
 
-  let kind: "launchagent" | "systemd" | null;
-  if (typeof service.label !== "string") return null;
-  if (/^launchagent$/i.test(service.label)) kind = "launchagent";
-  else if (/^systemd( user)?$/i.test(service.label)) kind = "systemd";
-  else kind = null;
+  const label = typeof service.label === "string" ? service.label : null;
+  const kind =
+    label === null
+      ? null
+      : /^launchagent$/i.test(label)
+        ? "launchagent"
+        : /^systemd( user)?$/i.test(label)
+          ? "systemd"
+          : null;
   const status = runtime?.status;
   const missing = runtime?.missingUnit === true;
   // A registered service is one launchd or systemd knows of: loaded, or its unit is there.
   const registered = kind !== null && !missing && (service.loaded === true || status === "stopped");
+  let described: GatewayStatus["service"] = null;
+  if (registered)
+    described = {
+      kind: kind!,
+      state: status === "running" ? "running" : status === "stopped" ? "stopped" : "other",
+    };
+  else if (kind !== null && missing) described = "none";
   let answered: Version | null = null;
   if (rpc.ok) {
     answered =
@@ -100,28 +134,34 @@ export function parseStatus(stdout: string): GatewayStatus | null {
     // An answer must carry its version.
     if (!answered) return null;
   }
+  const probed = loopbackPort(gateway.probeUrl);
+  const replied = loopbackPort(rpc.url);
   return {
     configExists: config.exists,
     configPath: config.path,
     port: number,
-    bind: gateway.bindMode === "loopback" ? "loopback" : "network",
-    service: registered
-      ? {
-          kind: kind!,
-          state: status === "running" ? "running" : status === "stopped" ? "stopped" : "other",
-        }
-      : null,
+    bind:
+      gateway.bindMode === "loopback"
+        ? "loopback"
+        : typeof gateway.bindMode === "string" && NETWORK_BINDS.has(gateway.bindMode)
+          ? "network"
+          : null,
+    service: described,
+    serviceKey: JSON.stringify([label, service.loaded ?? null, status ?? null, missing]),
     listening: port.status === "busy",
     answered,
     unanswered: !rpc.ok,
+    endpointConfirmed: probed === number && replied === number,
   };
 }
 
-/** The service as the found card names it. */
-export function serviceFact(status: GatewayStatus): LookService {
-  if (!status.service) return "none";
-  const stopped = status.service.state === "stopped";
-  if (status.service.kind === "launchagent") return stopped ? "launchagent-stopped" : "launchagent";
+/** The service as the found card names it; null when the status didn't describe it. */
+export function serviceFact(status: GatewayStatus): LookService | null {
+  const service = status.service;
+  if (service === null) return null;
+  if (service === "none") return "none";
+  const stopped = service.state === "stopped";
+  if (service.kind === "launchagent") return stopped ? "launchagent-stopped" : "launchagent";
   return stopped ? "systemd-stopped" : "systemd";
 }
 

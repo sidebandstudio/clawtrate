@@ -51,10 +51,30 @@ export type SetupControllerOptions = {
   now?: () => number;
 };
 
-/** The dialog's words for a pairing (§2, "The host's confirmation"). */
-export function pairConfirmation(found: FoundGateway): Confirmation {
+/**
+ * The dialog's words (§2, "The host's confirmation"). Read-only is said only
+ * when it is true: a device already paired with that gateway is told what it
+ * can already do there.
+ */
+export function pairConfirmation(
+  found: FoundGateway,
+  access: "new" | "read" | "more" = "new",
+): Confirmation {
+  const where = `the ${found.profile.name} gateway on this computer`;
+  if (access === "more")
+    return {
+      message: `Connect this device to ${where}?`,
+      detail: "This device is already paired with this gateway and can also send.",
+      confirm: "Connect",
+    };
+  if (access === "read")
+    return {
+      message: `Connect this device read-only to ${where}?`,
+      detail: "This device is already paired with this gateway and can only read.",
+      confirm: "Connect",
+    };
   return {
-    message: `Pair this device read-only with the ${found.profile.name} gateway on this computer?`,
+    message: `Pair this device read-only with ${where}?`,
     detail: "The gateway saves this device.",
     confirm: "Pair",
   };
@@ -98,7 +118,7 @@ export class SetupController implements SetupHost {
     this.publish({
       ...this.state,
       phase: "failed",
-      failure: { exitCode: null, port: null, ...failure },
+      failure: { exitCode: null, port: null, reason: null, ...failure },
     });
   }
 
@@ -110,13 +130,29 @@ export class SetupController implements SetupHost {
       // No sandbox: the real computer is refused, loudly, and the look sees an empty one.
       this.log(
         new SetupRefusedError(
-          "this run is automated or a development build and was given no sandbox, so it looks at an empty computer",
+          "home",
+          "this run must be sandboxed and was given no sandbox, so it looks at an empty computer",
         ).message,
       );
       return emptyWorld(world.platform);
     }
-    guardWorld(world, { sandboxed, realHome });
+    guardWorld(world, { realHome });
     return world;
+  }
+
+  private refused(error: unknown): void {
+    this.log(error instanceof Error ? error.message : String(error));
+    this.publish({
+      ...initialSetupState,
+      look: this.state.look,
+      phase: "failed",
+      failure: {
+        kind: "refused",
+        exitCode: null,
+        port: null,
+        reason: error instanceof SetupRefusedError ? error.reason : "file",
+      },
+    });
   }
 
   async look(): Promise<void> {
@@ -129,12 +165,7 @@ export class SetupController implements SetupHost {
       world = this.world();
     } catch (error) {
       // Loud: in the log, and in the interface as its own failure.
-      this.log(error instanceof Error ? error.message : String(error));
-      this.publish({
-        ...initialSetupState,
-        phase: "failed",
-        failure: { kind: "refused", exitCode: null, port: null },
-      });
+      this.refused(error);
       return;
     }
     this.publish({ ...initialSetupState, phase: "looking" });
@@ -164,13 +195,25 @@ export class SetupController implements SetupHost {
           service: null,
           port: null,
           authMode: null,
+          access: null,
           others: [],
         },
       });
       return;
     }
     this.found = report.found;
-    this.publish({ ...initialSetupState, phase: "found", look: report.look });
+    // What this device can already do on the gateway found, said on its card and in the dialog.
+    const access = report.found
+      ? await this.options.client
+          .deviceAccess(`ws://127.0.0.1:${report.found.port}`)
+          .catch(() => "new" as const)
+      : null;
+    if (attempt !== this.attempt) return;
+    this.publish({
+      ...initialSetupState,
+      phase: "found",
+      look: access ? { ...report.look, access } : report.look,
+    });
   }
 
   cancel(): void {
@@ -184,7 +227,9 @@ export class SetupController implements SetupHost {
     }
     if (phase === "connecting" || phase === "failed") {
       this.stopWatching();
-      void this.letGo();
+      // A connection whose bots couldn't be read is let go too.
+      if (this.state.failure?.kind === "bots") void this.options.client.disconnect();
+      else void this.letGo();
       this.publish(
         this.state.look
           ? { ...initialSetupState, phase: "found", look: this.state.look }
@@ -228,9 +273,10 @@ export class SetupController implements SetupHost {
     // Prepared from the host's own state; the page gave nothing but the request.
     const prepared = { found, at: this.now(), used: false };
     this.publish({ ...this.state, phase: "confirming", failure: null });
+    const access = this.state.look?.access ?? "new";
     let yes: boolean;
     try {
-      yes = await confirm(pairConfirmation(found));
+      yes = await confirm(pairConfirmation(found, access));
     } catch {
       yes = false;
     }
@@ -250,8 +296,7 @@ export class SetupController implements SetupHost {
       world = this.world();
       guardPort(found.port, world, this.options.sandboxed);
     } catch (error) {
-      this.log(error instanceof Error ? error.message : String(error));
-      this.fail({ kind: "refused" });
+      this.refused(error);
       return;
     }
     this.publish({ ...this.state, phase: "connecting", step: 0, failure: null });
@@ -264,18 +309,28 @@ export class SetupController implements SetupHost {
     const url = `ws://127.0.0.1:${found.port}`;
     const client = this.options.client;
     await this.letGo();
-    // Already paired with this gateway: the next Connect reuses the device (§7).
-    if (await client.hasDeviceToken(url)) {
-      if (attempt !== this.attempt) return;
+    // A setup cancelled while the earlier connection was let go starts nothing more.
+    if (attempt !== this.attempt) return;
+    // Already paired with this gateway: the next Connect reuses the device (§7), with the
+    // access the dialog named.
+    const paired = await client.hasDeviceToken(url);
+    if (attempt !== this.attempt) return;
+    if (paired) {
       this.publish({ ...this.state, step: 1 });
       this.watch(attempt, found.port);
       await client.connect({ url, token: null });
+      return;
+    }
+    // The operation's two minutes hold until the code is made, not only until the answer.
+    if (this.now() - prepared.at > OPERATION_LIFETIME_MS) {
+      this.fail({ kind: "changed" });
       return;
     }
     const made = await this.options.run({
       program: found.program,
       args: [...found.profile.args, "qr", "--json", "--voice-node", "--url", url],
       env: { ...world.env, PATH: programPath(found.program), ...found.profile.env },
+      cwd: world.cwd,
       ...QR_LIMIT,
     });
     if (attempt !== this.attempt) return;
@@ -298,22 +353,29 @@ export class SetupController implements SetupHost {
         program: found.program,
         args: [...found.profile.args, "gateway", "status", "--json"],
         env,
+        cwd: world.cwd,
         ...LIMITS.status,
       }),
       this.options.run({
         program: found.program,
         args: [...found.profile.args, "config", "get", "gateway.auth.mode", "--json"],
         env,
+        cwd: world.cwd,
         ...LIMITS.auth,
       }),
     ]);
-    const status = statusRun.exitCode === 0 ? parseStatus(statusRun.stdout) : null;
+    const status =
+      statusRun.exitCode === 0 && !statusRun.timedOut ? parseStatus(statusRun.stdout) : null;
     return (
       status !== null &&
       status.configExists &&
       status.configPath === found.configPath &&
       status.port === found.port &&
+      status.endpointConfirmed &&
+      status.serviceKey === found.serviceKey &&
       status.answered?.text === found.version &&
+      authRun.exitCode === 0 &&
+      !authRun.timedOut &&
       parseAuthMode(authRun.stdout) === "token"
     );
   }
@@ -325,9 +387,13 @@ export class SetupController implements SetupHost {
       if (attempt !== this.attempt) return;
       const { connection, discovery } = state;
       if (connection.status === "connected") {
-        if (discovery.status === "ready" || discovery.status === "error") {
+        if (discovery.status === "ready") {
           this.stopWatching();
           this.publish({ ...this.state, phase: "done", step: 2 });
+        } else if (discovery.status === "error") {
+          // Connected, but the bots weren't read: that is what the screen says. A retry
+          // that reads them still opens the app, so the watch goes on.
+          if (this.state.failure?.kind !== "bots") this.fail({ kind: "bots", port });
         } else if (this.state.step !== 2) this.publish({ ...this.state, step: 2 });
         return;
       }

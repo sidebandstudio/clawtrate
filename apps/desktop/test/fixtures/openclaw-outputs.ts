@@ -16,6 +16,9 @@ type StatusOptions = {
   service?: "none" | "running" | "stopped" | "unknown";
   label?: string;
   extraServices?: Array<{ label: string }>;
+  /** The address the status probed, and the one its RPC answered on. */
+  probeUrl?: string;
+  rpcUrl?: string;
 };
 
 /** `openclaw gateway status --json` (and `--deep`), as recorded, with one fact changed at a time. */
@@ -55,7 +58,7 @@ export function statusJson(options: StatusOptions = {}): string {
       bindHost: "127.0.0.1",
       port,
       portSource: "env/config",
-      probeUrl: `ws://127.0.0.1:${port}`,
+      probeUrl: options.probeUrl ?? `ws://127.0.0.1:${port}`,
       probeNote: "Loopback-only gateway; only local clients can connect.",
       version: answered,
     },
@@ -94,7 +97,7 @@ export function statusJson(options: StatusOptions = {}): string {
             auth: { role: "operator", scopes: [], capability: "connected_no_operator_scope" },
             server: { version: answered, buildId: "2026.10.6-release", connId: "conn-1" },
             version: answered,
-            url: `ws://127.0.0.1:${port}`,
+            url: options.rpcUrl ?? `ws://127.0.0.1:${port}`,
           },
     extraServices: options.extraServices ?? [],
     pluginVersionDrift: { gatewayVersion: answered, drifts: [] },

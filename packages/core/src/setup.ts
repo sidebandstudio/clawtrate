@@ -7,6 +7,12 @@
 export const TESTED_OPENCLAW_VERSION = "2026.10.6";
 
 /**
+ * The oldest version Clawtrate connects to. The pinned protocol schema
+ * describes nothing older than 2026.7 (`since: "<=2026.7"`); Clawtrate's choice.
+ */
+export const OLDEST_OPENCLAW_VERSION = "2026.7.0";
+
+/**
  * What the look found (§4, §6). `running` is a found gateway of the tested
  * version; `untested` and `too-old` are found gateways of another version;
  * `stopped` is a program and its gateway's config with nothing listening.
@@ -19,11 +25,19 @@ export type LookOutcome =
   | "stopped"
   | "program-missing"
   | "cant-tell"
+  /** The program was found but couldn't be started. */
+  | "cant-run"
   | "not-found"
   | "windows";
 
 /** Why the look couldn't tell, each shown in fixed copy. */
-export type CantTellReason = "timeout" | "shape" | "no-answer" | "not-set-up";
+export type CantTellReason =
+  | "timeout"
+  | "shape"
+  | "no-answer"
+  | "not-set-up"
+  /** The status probed, or its RPC answered, somewhere other than this computer's loopback on the gateway's port. */
+  | "endpoint";
 
 /** The gateway's service, as observed. `none` is a gateway started by hand. */
 export type LookService =
@@ -42,6 +56,11 @@ export type SetupLook = {
   port: number | null;
   /** For `not-token`: the gateway's other sign-in. */
   authMode: "password" | "none" | "trusted-proxy" | null;
+  /**
+   * What this device can already do there: `new` when it isn't paired with
+   * that gateway, `read` when it holds read only, `more` when it can also send.
+   */
+  access: "new" | "read" | "more" | null;
   /** Other OpenClaw services and profiles the look saw, named and never used. */
   others: string[];
 };
@@ -60,12 +79,23 @@ export type SetupFailureKind =
   | "changed"
   /** This host can't confirm a pairing (the web preview). */
   | "no-dialog"
-  /** The look refused to run here (`docs/development/setup.md`). */
+  /** The look refused to run here (`docs/development/setup.md`); `reason` says why. */
   | "refused"
+  /** Connected, but the bots couldn't be read. */
+  | "bots"
   /** The connection failed in another way; the connection state says how. */
   | "other";
 
-export type SetupFailure = { kind: SetupFailureKind; exitCode: number | null; port: number | null };
+/** Why a sandbox was refused: its file, its home, its profile, its state, its program, a port. */
+export type SetupRefusal = "file" | "home" | "profile" | "state" | "program" | "port";
+
+export type SetupFailure = {
+  kind: SetupFailureKind;
+  exitCode: number | null;
+  port: number | null;
+  /** For `refused`: what was refused. */
+  reason: SetupRefusal | null;
+};
 
 export type SetupPhase =
   /** Nothing under way: the first screen. */

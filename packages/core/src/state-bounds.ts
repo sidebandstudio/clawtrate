@@ -876,6 +876,7 @@ const setupLook = object<SetupLook>()({
   service: ENUM,
   port: NUMBER,
   authMode: ENUM,
+  access: ENUM,
   others: list(MAX_LOOK_OTHERS, text(MAX_LOOK_OTHER_CHARS)),
 });
 const setup = object<SetupState>()({
@@ -883,7 +884,7 @@ const setup = object<SetupState>()({
   step: NUMBER,
   slow: FLAG,
   look: setupLook,
-  failure: object<SetupFailure>()({ kind: ENUM, exitCode: NUMBER, port: NUMBER }),
+  failure: object<SetupFailure>()({ kind: ENUM, exitCode: NUMBER, port: NUMBER, reason: ENUM }),
 });
 
 /** Every part of the state but the transcripts, and the transcripts as one map. */

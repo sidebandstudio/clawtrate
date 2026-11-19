@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -37,7 +38,13 @@ import {
   type ProgramRequest,
   type ProgramResult,
 } from "../src/setup/programs.ts";
-import { productionWorld, sandboxWorld, type LookWorld } from "../src/setup/world.ts";
+import {
+  productionWorld,
+  sandboxWorld,
+  STAND_IN_MARK,
+  type LookWorld,
+} from "../src/setup/world.ts";
+import { MARKER_FILE } from "../../../tools/dev-gateway/src/state-guard.ts";
 import { authJson, qrJson, statusJson, VERSION_LINE } from "./fixtures/openclaw-outputs.ts";
 
 const PORT = 19940;
@@ -54,9 +61,20 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 function world(): LookWorld {
   const program = join(dir, "bin/openclaw");
   mkdirSync(join(dir, "bin"), { recursive: true });
-  writeFileSync(program, "#!/bin/sh\nexit 1\n");
+  writeFileSync(program, `#!/bin/sh\n# ${STAND_IN_MARK}\nexit 1\n`);
   chmodSync(program, 0o755);
-  mkdirSync(join(dir, "home"));
+  mkdirSync(join(dir, "home"), { recursive: true });
+  // The instance's marker, as `pnpm dev-gateway start` writes it: its port is the only one allowed.
+  const stateDir = join(dir, ".openclaw-clawtrate-dev-su1-test");
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    join(stateDir, MARKER_FILE),
+    JSON.stringify({
+      createdBy: "clawtrate tools/dev-gateway",
+      instance: "su1-test",
+      gatewayPort: PORT,
+    }),
+  );
   return sandboxWorld(
     {
       home: join(dir, "home"),
@@ -511,29 +529,62 @@ describe("Connect on this computer", () => {
 });
 
 describe("the programs setup starts", () => {
-  it("F-494: refuses an argument or a variable that isn't safe before anything starts", () => {
-    const base = { program: "/usr/bin/true", env: {}, timeoutMs: 1000, maxBytes: 1024 };
-    for (const arg of [
-      "two words",
-      "quo'te",
-      "semi;colon",
-      "$(x)",
-      "-x value",
-      "a|b",
-      "back\\slash",
+  const base = {
+    program: "/usr/bin/true",
+    env: {},
+    cwd: "/tmp",
+    timeoutMs: 1000,
+    maxBytes: 1024,
+  };
+  const ok = (args: string[]) => () => checkRequest({ ...base, args });
+
+  it("F-494: starts only the exact commands the look and Connect use", () => {
+    for (const args of [
+      ["--version"],
+      ["gateway", "status", "--json"],
+      ["gateway", "status", "--json", "--deep"],
+      ["config", "get", "gateway.auth.mode", "--json"],
+      ["--profile", "clawtrate", "gateway", "status", "--json"],
+      ["--profile", "clawtrate-dev-su1-test", "qr", "--json", "--voice-node", "--url", URL],
     ]) {
-      expect(() => checkRequest({ ...base, args: [arg] })).toThrow();
+      expect(ok(args), args.join(" ")).not.toThrow();
     }
-    expect(() =>
-      checkRequest({ ...base, args: ["--url", URL, "--profile", "clawtrate"] }),
-    ).not.toThrow();
-    expect(() => checkRequest({ ...base, args: [], env: { TOKEN: "a'b" } })).toThrow();
-    expect(() => checkRequest({ ...base, program: "relative/openclaw", args: [] })).toThrow();
+    for (const args of [
+      ["gateway", "status", "--json", "--no-probe"],
+      ["gateway", "status", "--json", "--url", URL],
+      ["gateway", "start"],
+      ["config", "get", "gateway.auth.token"],
+      ["--profile", "work", "gateway", "status", "--json"],
+      ["--profile", "clawtrate-dev-Bad", "--version"],
+      ["qr", "--json", "--voice-node", "--url", "ws://192.0.2.10:19940"],
+      ["qr", "--json", "--voice-node", "--url", "wss://127.0.0.1:19940"],
+      ["qr", "--json", "--url", URL],
+      ["--version", "--json"],
+      [],
+    ]) {
+      expect(ok(args), args.join(" ")).toThrow();
+    }
   });
 
-  it("F-494: a program gets exactly the environment it is given, and its errors are not kept", async () => {
-    const runner = new ProgramRunner();
+  it("F-494: passes only the look's variables, and needs a working folder of its own", () => {
+    expect(() => checkRequest({ ...base, args: ["--version"], env: { TOKEN: "x" } })).toThrow();
+    expect(() => checkRequest({ ...base, args: ["--version"], env: { HOME: "a'b" } })).toThrow();
+    expect(() => checkRequest({ ...base, args: ["--version"], cwd: "relative" })).toThrow();
+    expect(() =>
+      checkRequest({ ...base, args: ["--version"], program: "relative/openclaw" }),
+    ).toThrow();
+    expect(() =>
+      checkRequest({ ...base, args: ["--version"], env: { HOME: "/tmp", OPENCLAW_PROFILE: "x" } }),
+    ).not.toThrow();
+  });
+
+  /** A runner for real system programs, with the look's own command check set aside. */
+  const loose = () => new ProgramRunner({ check: () => {}, graceMs: 300 });
+
+  it("F-494: a program gets exactly the environment and the working folder it is given, and its errors are not kept", async () => {
+    const runner = loose();
     const result = await runner.run({
+      ...base,
       program: "/usr/bin/env",
       args: [],
       env: { ONLY: "this" },
@@ -542,10 +593,19 @@ describe("the programs setup starts", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("ONLY=this");
+    const where = await runner.run({
+      ...base,
+      program: "/bin/pwd",
+      args: [],
+      cwd: dir,
+      timeoutMs: 5000,
+      maxBytes: 4096,
+    });
+    expect(realpathSync(where.stdout.trim())).toBe(realpathSync(dir));
     const failing = await runner.run({
+      ...base,
       program: "/bin/ls",
       args: ["nonexistent-clawtrate-path"],
-      env: {},
       timeoutMs: 5000,
       maxBytes: 4096,
     });
@@ -553,24 +613,239 @@ describe("the programs setup starts", () => {
     expect(JSON.stringify(failing)).not.toContain("nonexistent");
   });
 
-  it("ends a program at its time limit, and at its output limit", async () => {
-    const runner = new ProgramRunner();
+  it("ends a program at its time limit and its output limit, and kills one that ignores the request to stop", async () => {
+    const runner = loose();
     const slow = await runner.run({
+      ...base,
       program: "/bin/sleep",
       args: ["5"],
-      env: {},
       timeoutMs: 100,
       maxBytes: 4096,
     });
     expect(slow.timedOut).toBe(true);
     const large = await runner.run({
+      ...base,
       program: "/usr/bin/yes",
       args: [],
-      env: {},
       timeoutMs: 5000,
       maxBytes: 1024,
     });
     expect(large).toMatchObject({ tooLarge: true, stdout: "" });
+    const started = Date.now();
+    const stubborn = await runner.run({
+      ...base,
+      program: "/bin/sh",
+      args: ["-c", "trap '' TERM; while :; do sleep 1; done"],
+      timeoutMs: 100,
+      maxBytes: 4096,
+    });
+    expect(stubborn.timedOut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(5000);
     expect(runner.running()).toEqual([]);
+  }, 20_000);
+
+  it("the host's runner refuses anything but the look's commands before it starts", async () => {
+    const runner = new ProgramRunner();
+    expect(() => runner.run({ ...base, program: "/usr/bin/env", args: [] })).toThrow();
+  });
+});
+
+describe("Connect goes only to the gateway that answered, and says what is true", () => {
+  const changedAfterDialog = async (change: Record<string, Reply>) => {
+    let answered = false;
+    const replies: Record<string, Reply> = {};
+    for (const [key, reply] of Object.entries(change)) {
+      const before = {
+        "gateway status --json": { stdout: statusJson({ port: PORT }) },
+        "config get gateway.auth.mode --json": { stdout: authJson() },
+      }[key];
+      replies[key] = () => (answered ? (typeof reply === "function" ? reply() : reply) : before!);
+    }
+    const h = harness({
+      replies,
+      confirm: async () => {
+        answered = true;
+        return true;
+      },
+    });
+    await h.client.start();
+    await h.setup.look();
+    expect(h.setup.current.look?.outcome).toBe("running");
+    await h.setup.connect();
+    return h;
+  };
+
+  for (const [name, change] of [
+    [
+      "the service changed",
+      { "gateway status --json": { stdout: statusJson({ port: PORT, service: "running" }) } },
+    ],
+    [
+      "the status probed elsewhere",
+      {
+        "gateway status --json": {
+          stdout: statusJson({ port: PORT, probeUrl: "ws://127.0.0.1:19960" }),
+        },
+      },
+    ],
+    [
+      "its RPC answered elsewhere",
+      {
+        "gateway status --json": {
+          stdout: statusJson({ port: PORT, rpcUrl: "wss://127.0.0.1:19940" }),
+        },
+      },
+    ],
+    [
+      "the auth command failed",
+      { "config get gateway.auth.mode --json": { exitCode: 1, stdout: authJson() } },
+    ],
+    [
+      "the auth command timed out",
+      {
+        "config get gateway.auth.mode --json": {
+          timedOut: true,
+          exitCode: null,
+          stdout: authJson(),
+        },
+      },
+    ],
+  ] as const) {
+    it(`F-492 F-516: ${name} between the dialog and its answer, and nothing is minted`, async () => {
+      const h = await changedAfterDialog(change as Record<string, Reply>);
+      expect(h.setup.current.failure?.kind).toBe("changed");
+      expect(minted(h.requests)).toEqual([]);
+      expect(h.gateway.connects).toEqual([]);
+      h.client.stop();
+    });
+  }
+
+  it("F-492: a device already paired with more than read is told so, in the dialog and on its card", async () => {
+    const h = harness();
+    await h.storage.set(
+      tokenKey(URL),
+      JSON.stringify({
+        token: "device-token",
+        grantedScopes: ["operator.read", "operator.write"],
+        heldScopes: ["operator.read", "operator.write"],
+      }),
+    );
+    h.gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read", "operator.write"], "device-token"),
+    });
+    await h.client.start();
+    await h.setup.look();
+    expect(h.setup.current.look?.access).toBe("more");
+    await h.setup.connect();
+    expect(h.dialogs[0]).toEqual({
+      message: "Connect this device to the clawtrate-dev-su1-test gateway on this computer?",
+      detail: "This device is already paired with this gateway and can also send.",
+      confirm: "Connect",
+    });
+    expect(JSON.stringify(h.dialogs)).not.toMatch(/read-only/);
+    expect(minted(h.requests)).toEqual([]);
+    h.client.stop();
+  });
+
+  it("F-492: a device already paired to read is told it can only read", async () => {
+    const h = harness();
+    await h.storage.set(
+      tokenKey(URL),
+      JSON.stringify({
+        token: "device-token",
+        grantedScopes: ["operator.read"],
+        heldScopes: ["operator.read"],
+      }),
+    );
+    h.gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    await h.client.start();
+    await h.setup.look();
+    expect(h.setup.current.look?.access).toBe("read");
+    await h.setup.connect();
+    expect(h.dialogs[0]?.detail).toBe(
+      "This device is already paired with this gateway and can only read.",
+    );
+    h.client.stop();
+  });
+
+  it("a setup cancelled while the earlier connection is let go starts nothing more", async () => {
+    const h = harness();
+    await h.client.start();
+    await h.setup.look();
+    // An earlier connection, still trying, that takes its time to be let go.
+    h.gateway.refuseConnections = true;
+    await h.client.connect({ url: "ws://127.0.0.1:19990", token: null });
+    const disconnect = h.client.disconnect.bind(h.client);
+    const holds: Array<() => void> = [];
+    h.client.disconnect = async () => {
+      await new Promise<void>((resolve) => holds.push(resolve));
+      return disconnect();
+    };
+    const connecting = h.setup.connect();
+    await until(() => holds.length > 0);
+    h.setup.cancel();
+    for (const release of holds) release();
+    await connecting;
+    expect(minted(h.requests)).toEqual([]);
+    h.client.stop();
+  });
+
+  it("a setup cancelled while it checks for an earlier pairing starts nothing more", async () => {
+    const h = harness();
+    await h.client.start();
+    await h.setup.look();
+    let release: ((paired: boolean) => void) | undefined;
+    h.client.hasDeviceToken = () => new Promise<boolean>((resolve) => (release = resolve));
+    const connecting = h.setup.connect();
+    await until(() => release !== undefined);
+    h.setup.cancel();
+    release!(false);
+    await connecting;
+    expect(minted(h.requests)).toEqual([]);
+    expect(h.gateway.connects).toEqual([]);
+    h.client.stop();
+  });
+
+  it("the operation's two minutes hold until the code is made, not only until the answer", async () => {
+    let now = 1_000_000;
+    let answered = false;
+    const h = harness({
+      now: () => now,
+      confirm: async () => {
+        answered = true;
+        return true;
+      },
+      replies: {
+        "gateway status --json": () => {
+          // The recheck after the answer takes longer than what is left of the two minutes.
+          if (answered) now += OPERATION_LIFETIME_MS + 1;
+          return { stdout: statusJson({ port: PORT }) };
+        },
+      },
+    });
+    await h.client.start();
+    await h.setup.look();
+    await h.setup.connect();
+    expect(h.setup.current.failure?.kind).toBe("changed");
+    expect(minted(h.requests)).toEqual([]);
+    h.client.stop();
+  });
+
+  it("connected, with bots that couldn't be read, says so and doesn't open the app", async () => {
+    const h = harness();
+    h.gateway.handlers["agents.list"] = () => {
+      throw new Error("agents unavailable");
+    };
+    await h.client.start();
+    await h.setup.look();
+    await h.setup.connect();
+    await until(() => h.setup.current.phase === "failed");
+    expect(h.setup.current.failure?.kind).toBe("bots");
+    expect(h.client.state.connection.status).toBe("connected");
+    h.client.stop();
   });
 });

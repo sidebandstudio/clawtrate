@@ -1,11 +1,14 @@
 // The look on this computer (docs/design/setup.md §4, §6): find the
 // program in its fixed places, ask its version, ask each profile's gateway,
 // and say what was found. Every step is read-only and has its own time
-// limit; every program runs through `RunProgram`, never a shell.
+// limit; every program runs through `RunProgram`, never a shell, in the
+// world's own working folder. A sandboxed world never runs the deep status.
 
-import { readdirSync, statSync } from "node:fs";
+import { lstat, readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
 import {
   MAX_LOOK_OTHERS,
+  OLDEST_OPENCLAW_VERSION,
   TESTED_OPENCLAW_VERSION,
   type CantTellReason,
   type LookOutcome,
@@ -23,15 +26,10 @@ import {
   type GatewayStatus,
   type Version,
 } from "./parse.ts";
-import type { RunProgram } from "./programs.ts";
-import { exists, programPath, type LookProfile, type LookWorld } from "./world.ts";
+import type { ProgramResult, RunProgram } from "./programs.ts";
+import { programPath, type LookProfile, type LookWorld } from "./world.ts";
 
-/**
- * The oldest version Clawtrate connects to: the pinned protocol schema
- * describes nothing older than 2026.7 (`since: "<=2026.7"`), so an older
- * gateway's protocol is unknown to this client. Clawtrate's choice.
- */
-export const OLDEST_VERSION = "2026.7.0";
+export const OLDEST_VERSION = OLDEST_OPENCLAW_VERSION;
 
 export const LIMITS = {
   version: { timeoutMs: 10_000, maxBytes: 4 * 1024 },
@@ -40,10 +38,13 @@ export const LIMITS = {
   auth: { timeoutMs: 10_000, maxBytes: 4 * 1024 },
 } as const;
 
+/** The design's limit on the look's own checks of files (§4). */
+export const FILE_CHECK_MS = 2_000;
+
 /** The steps the person sees: "Finding OpenClaw", "Checking its version", "Asking the gateway". */
 export const LOOK_STEPS = 3;
 
-/** A gateway the look found and Connect may pair with: the facts the host's dialog shows. */
+/** A gateway the look found and Connect may pair with: the facts the host's dialog shows and checks again. */
 export type FoundGateway = {
   program: string;
   profile: LookProfile;
@@ -51,6 +52,8 @@ export type FoundGateway = {
   version: string;
   /** The config file `gateway status` named for this profile. */
   configPath: string;
+  /** The service as the status reported it. */
+  serviceKey: string;
 };
 
 export type LookReport = { look: SetupLook; found: FoundGateway | null };
@@ -63,6 +66,7 @@ const empty: Omit<SetupLook, "outcome"> = {
   service: null,
   port: null,
   authMode: null,
+  access: null,
   others: [],
 };
 
@@ -73,12 +77,33 @@ const cantTell = (reason: CantTellReason, version: string | null = null): SetupL
   version,
 });
 
+class FileCheckTimeout extends Error {}
+
+/** Every file check of one look, together, within `FILE_CHECK_MS`. */
+function withDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
+  const left = Math.max(0, deadline - Date.now());
+  return Promise.race([
+    work,
+    new Promise<T>((_, reject) => {
+      const timer = setTimeout(() => reject(new FileCheckTimeout()), left);
+      timer.unref?.();
+    }),
+  ]);
+}
+
+/** Whether a path exists, followed through links. */
+const exists = (path: string) =>
+  stat(path).then(
+    () => true,
+    () => false,
+  );
+
 /** The first candidate that is a regular executable file. */
-function findProgram(world: LookWorld): string | null {
+async function findProgram(world: LookWorld): Promise<string | null> {
   for (const candidate of world.candidates) {
     try {
-      const stat = statSync(candidate);
-      if (stat.isFile() && (stat.mode & 0o111) !== 0) return candidate;
+      const found = await stat(candidate);
+      if (found.isFile() && (found.mode & 0o111) !== 0) return candidate;
     } catch {
       // not there
     }
@@ -86,21 +111,27 @@ function findProgram(world: LookWorld): string | null {
   return null;
 }
 
-/** Other profiles' state folders in the home folder, by name only: never opened. */
-function otherProfiles(world: LookWorld): string[] {
+/** Other profiles' state folders in the home folder, by name only: folders, never opened. */
+async function otherProfiles(world: LookWorld): Promise<string[]> {
   let entries: string[];
   try {
-    entries = readdirSync(world.home);
+    entries = await readdir(world.home);
   } catch {
     return [];
   }
   const known = new Set(world.profiles.flatMap((profile) => [profile.name, "clawtrate"]));
-  return entries
-    .flatMap((entry) => {
-      const match = /^\.openclaw-([a-z0-9][a-z0-9._-]{0,63})$/.exec(entry);
-      return match && !known.has(match[1]!) ? [`profile ${match[1]}`] : [];
-    })
-    .sort();
+  const names: string[] = [];
+  for (const entry of entries) {
+    const match = /^\.openclaw-([a-z0-9][a-z0-9._-]{0,63})$/.exec(entry);
+    if (!match || known.has(match[1]!)) continue;
+    // A file or a link of that name is not a profile.
+    const folder = await lstat(join(world.home, entry)).then(
+      (found) => found.isDirectory(),
+      () => false,
+    );
+    if (folder) names.push(`profile ${match[1]}`);
+  }
+  return names.sort();
 }
 
 type ProfileLook =
@@ -114,6 +145,10 @@ export type LookOptions = {
   cancelled?: () => boolean;
 };
 
+/** Whether a program couldn't be started at all: spawn failed, or the system said it can't run it. */
+const couldNotRun = (result: ProgramResult) =>
+  result.failed || result.exitCode === 126 || result.exitCode === 127;
+
 export async function lookHere(
   world: LookWorld,
   run: RunProgram,
@@ -123,14 +158,21 @@ export async function lookHere(
   options.onStep?.(0);
   if (world.platform === "win32") return { look: { ...empty, outcome: "windows" }, found: null };
 
-  const program = findProgram(world);
-  if (!program) {
-    const setUp =
-      exists(`${world.home}/.openclaw`) || world.serviceFiles.some((file) => exists(file));
-    return {
-      look: { ...empty, outcome: setUp ? "program-missing" : "not-found" },
-      found: null,
-    };
+  const files = Date.now() + FILE_CHECK_MS;
+  let program: string | null;
+  try {
+    program = await withDeadline(findProgram(world), files);
+    if (!program) {
+      const signs = [join(world.home, ".openclaw"), ...world.serviceFiles];
+      const setUp = (await withDeadline(Promise.all(signs.map(exists)), files)).some(Boolean);
+      return {
+        look: { ...empty, outcome: setUp ? "program-missing" : "not-found" },
+        found: null,
+      };
+    }
+  } catch (error) {
+    if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
+    throw error;
   }
   const env = (profile: LookProfile) => ({
     ...world.env,
@@ -141,22 +183,36 @@ export async function lookHere(
     profile: LookProfile,
     args: string[],
     limit: (typeof LIMITS)[keyof typeof LIMITS],
-  ) => run({ program, args: [...profile.args, ...args], env: env(profile), ...limit });
+  ) =>
+    run({ program, args: [...profile.args, ...args], env: env(profile), cwd: world.cwd, ...limit });
 
   if (cancelled()) return null;
   options.onStep?.(1);
-  const first = world.profiles[0]!;
+  const first = world.profiles[0];
+  if (!first) return { look: { ...empty, outcome: "not-found" }, found: null };
   const versionRun = await runFor(first, ["--version"], LIMITS.version);
   if (cancelled()) return null;
+  if (couldNotRun(versionRun)) return { look: { ...empty, outcome: "cant-run" }, found: null };
   if (versionRun.timedOut) return { look: cantTell("timeout"), found: null };
   const programVersion = versionRun.exitCode === 0 ? parseVersionLine(versionRun.stdout) : null;
   if (!programVersion) return { look: cantTell("shape"), found: null };
 
   options.onStep?.(2);
-  const considered = world.profiles.filter(
-    (profile) => profile.required || exists(profile.stateDir),
-  );
-  const deep = runFor(first, ["gateway", "status", "--json", "--deep"], LIMITS.deep);
+  let considered: LookProfile[];
+  try {
+    const present = await withDeadline(
+      Promise.all(world.profiles.map((profile) => profile.required || exists(profile.stateDir))),
+      Date.now() + FILE_CHECK_MS,
+    );
+    considered = world.profiles.filter((_, index) => present[index]);
+  } catch (error) {
+    if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
+    throw error;
+  }
+  // The deep status scans the system's service folders: never in a sandbox.
+  const deep = world.deep
+    ? runFor(first, ["gateway", "status", "--json", "--deep"], LIMITS.deep)
+    : Promise.resolve(null);
   const looks: ProfileLook[] = await Promise.all(
     considered.map(async (profile): Promise<ProfileLook> => {
       const [statusRun, authRun] = await Promise.all([
@@ -164,7 +220,7 @@ export async function lookHere(
         runFor(profile, ["config", "get", "gateway.auth.mode", "--json"], LIMITS.auth),
       ]);
       if (statusRun.timedOut || authRun.timedOut) return { kind: "fail", reason: "timeout" };
-      const status = parseStatus(statusRun.stdout);
+      const status = statusRun.exitCode === 0 ? parseStatus(statusRun.stdout) : null;
       if (!status) return { kind: "fail", reason: "shape" };
       return {
         kind: "status",
@@ -175,8 +231,15 @@ export async function lookHere(
   );
   const deepRun = await deep;
   if (cancelled()) return null;
-  const services = deepRun.exitCode === 0 ? (parseExtraServices(deepRun.stdout) ?? []) : [];
-  const others = [...services.map((label) => `service ${label}`), ...otherProfiles(world)].slice(
+  const services =
+    deepRun && deepRun.exitCode === 0 ? (parseExtraServices(deepRun.stdout) ?? []) : [];
+  let folders: string[];
+  try {
+    folders = await withDeadline(otherProfiles(world), Date.now() + FILE_CHECK_MS);
+  } catch {
+    folders = [];
+  }
+  const others = [...services.map((label) => `service ${label}`), ...folders].slice(
     0,
     MAX_LOOK_OTHERS,
   );
@@ -191,7 +254,8 @@ export async function lookHere(
       : outcome === "stopped"
         ? 1
         : 2;
-  const chosen = [...results].sort((a, b) => rank(a.look.outcome) - rank(b.look.outcome))[0]!;
+  const chosen = [...results].sort((a, b) => rank(a.look.outcome) - rank(b.look.outcome))[0];
+  if (!chosen) return { look: { ...empty, outcome: "not-found" }, found: null };
   return { look: { ...chosen.look, others }, found: chosen.found };
 }
 
@@ -218,6 +282,8 @@ function classify(
   };
   if (status.answered) {
     const version = status.answered;
+    // The gateway that answered is the one Connect would go to, or it is not offered.
+    if (!status.endpointConfirmed) return { look: cantTell("endpoint", version.text), found: null };
     const look = (outcome: LookOutcome, extra: Partial<SetupLook> = {}): SetupLook => ({
       ...facts,
       outcome,
@@ -229,22 +295,21 @@ function classify(
     if (auth !== "token") return { look: look("not-token", { authMode: auth }), found: null };
     if (compareVersions(version, TESTED) !== 0) return { look: look("untested"), found: null };
     return {
-      look: look("running"),
+      look: look("running", { access: "new" }),
       found: {
         program,
         profile,
         port: status.port,
         version: version.text,
         configPath: status.configPath,
+        serviceKey: status.serviceKey,
       },
     };
   }
   // Nothing answered. Stopped only when nothing listens and no service claims to run.
-  if (
-    !status.listening &&
-    status.service?.state !== "running" &&
-    status.service?.state !== "other"
-  ) {
+  const service = status.service;
+  const running = service !== null && service !== "none" && service.state !== "stopped";
+  if (!status.listening && !running) {
     return { look: { ...facts, outcome: "stopped", version: programVersion.text }, found: null };
   }
   return { look: cantTell("no-answer", programVersion.text), found: null };
