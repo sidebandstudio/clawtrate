@@ -35,38 +35,38 @@ The prototype is `prototype/library.html` (styles in `prototype/css/library.css`
 
 ### Components reused
 
-| Thing | From |
-| --- | --- |
-| The pane's frame, tabs, the empty state (44 px mark, 15/500 title, one sentence) | `visual-language.md` §9 |
-| The freshness line: what was read, when, and an action (`.files-fresh`) | `work-pane.md` §9 |
-| A file row: 48 px (56 on touch), the kind's 32 px tile or a thumbnail, the name cut in the middle, a second line in 13 faint (`.file-row`) | `work-pane.md` §4 |
-| Skeleton rows, still under reduced motion | `work-pane.md` §2 |
-| The page card (`.artifact`, the page icon, "Page") | `work-pane.md` §12 |
-| The item's view in Files, and the media viewer | `work-pane.md` §13 and §14 |
-| The access bar and its states | `conversation.md` §3 |
-| Bubbles, the composer and sending (the outbox, `followup`) | `conversation.md` |
-| The link confirmation: the full address, host first, "Opens in your browser", Cancel and Open | The remote-content rule (`docs/decisions.md`, "Addresses a gateway hands the client") |
-| `.menu`, the round quiet icon button, a line that says something failed with "Try again" | `visual-language.md` §4 and §8 |
+| Thing                                                                                                                                      | From                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| The pane's frame, tabs, the empty state (44 px mark, 15/500 title, one sentence)                                                           | `visual-language.md` §9                                                               |
+| The freshness line: what was read, when, and an action (`.files-fresh`)                                                                    | `work-pane.md` §9                                                                     |
+| A file row: 48 px (56 on touch), the kind's 32 px tile or a thumbnail, the name cut in the middle, a second line in 13 faint (`.file-row`) | `work-pane.md` §4                                                                     |
+| Skeleton rows, still under reduced motion                                                                                                  | `work-pane.md` §2                                                                     |
+| The page card (`.artifact`, the page icon, "Page")                                                                                         | `work-pane.md` §12                                                                    |
+| The item's view in Files, and the media viewer                                                                                             | `work-pane.md` §13 and §14                                                            |
+| The access bar and its states                                                                                                              | `conversation.md` §3                                                                  |
+| Bubbles, the composer and sending (the outbox, `followup`)                                                                                 | `conversation.md`                                                                     |
+| The link confirmation: the full address, host first, "Opens in your browser", Cancel and Open                                              | The remote-content rule (`docs/decisions.md`, "Addresses a gateway hands the client") |
+| `.menu`, the round quiet icon button, a line that says something failed with "Try again"                                                   | `visual-language.md` §4 and §8                                                        |
 
 ### New components
 
-| Component | Class | Section |
-| --- | --- | --- |
-| The filter row: All, Pages, Media, Links, Files, Pinned | `.lib-filters` | 3 |
-| A group: its word and its rows, with Show more | `.lib-group` | 3 |
-| A Library row, with its Pin button | `.lib-row` | 3, 4 |
-| The Page view: its bar, its frame, its note, its chat | `.page-view`, `.page-frame`, `.page-note`, `.page-chat` | 6 |
-| The export dialog | `.export-dialog` | 7 |
+| Component                                               | Class                                                   | Section |
+| ------------------------------------------------------- | ------------------------------------------------------- | ------- |
+| The filter row: All, Pages, Media, Links, Files, Pinned | `.lib-filters`                                          | 3       |
+| A group: its word and its rows, with Show more          | `.lib-group`                                            | 3       |
+| A Library row, with its Pin button                      | `.lib-row`                                              | 3, 4    |
+| The Page view: its bar, its frame, its note, its chat   | `.page-view`, `.page-frame`, `.page-note`, `.page-chat` | 6       |
+| The export dialog                                       | `.export-dialog`                                        | 7       |
 
 No token is added. A pinned row's mark is the pin icon in `--text-muted`; the chosen filter is a `--bg-selected` pill, as the tabs are.
 
 ### What the connection may do
 
-| Tier | The Library and Pages show | They offer |
-| --- | --- | --- |
-| Read | Everything: the Library, pins as the gateway keeps them, Pages, the side chat's conversation | Opening, Show more, looking in more tasks, export. Pin and the side chat's composer give way to the access bar ("Pinning and messaging need permission to change things on the gateway.") with "Request access" |
-| Interactive | The same | Pin and Unpin; sending from the side chat |
-| Admin | The same | Nothing more. Nothing here asks for admin |
+| Tier        | The Library and Pages show                                                                   | They offer                                                                                                                                                                                                      |
+| ----------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Read        | Everything: the Library, pins as the gateway keeps them, Pages, the side chat's conversation | Opening, Show more, looking in more tasks, export. Pin and the side chat's composer give way to the access bar ("Pinning and messaging need permission to change things on the gateway.") with "Request access" |
+| Interactive | The same                                                                                     | Pin and Unpin; sending from the side chat                                                                                                                                                                       |
+| Admin       | The same                                                                                     | Nothing more. Nothing here asks for admin                                                                                                                                                                       |
 
 Every read is `operator.read` (research §1, §2, §8). Pin is `users.prefs.set` and sending is `chat.send`, both `operator.write`, which the interactive tier holds. The request for access is the one `conversation.md` §3 makes, never silent.
 
@@ -134,28 +134,28 @@ Two cards of one Page are two rows, one per occurrence, as `work-pane.md` §11 k
 
 ### Opening an item
 
-| Item | Opens |
-| --- | --- |
-| A Page | The Page view (section 6), for that occurrence's task |
-| A picture or a video | The media viewer at that item (`work-pane.md` §14); its sequence is the items of that message |
+| Item                  | Opens                                                                                                                                           |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| A Page                | The Page view (section 6), for that occurrence's task                                                                                           |
+| A picture or a video  | The media viewer at that item (`work-pane.md` §14); its sequence is the items of that message                                                   |
 | A file or a recording | Its task opens in the conversation, and the pane shows Files with the item's view (`work-pane.md` §13); Back in Files returns to "Sent in chat" |
-| A link | The link confirmation: the full address, host first, "Opens in your browser", Cancel and Open. Nothing is fetched before Open |
+| A link                | The link confirmation: the full address, host first, "Opens in your browser", Cancel and Open. Nothing is fetched before Open                   |
 
 The Library itself fetches no item. What an item's view fetches is `work-pane.md`'s, under the corrected remote-content rule: only what the gateway issued as a download grant is fetched by the app by itself, and a grant's address is never shown, copied, exported or handed to a browser. An address `artifacts.download` passes through from the transcript is not a grant. A row's second line names a type, a size, a task and a time, never an address, except a link's host.
 
 ### States of the tab
 
-| State | It shows |
-| --- | --- |
-| Loading | The filters, the freshness line "Looking in Marlow's tasks…", five skeleton rows, `aria-busy` |
-| Loaded | As above |
-| Some tasks couldn't be read | The rows from the others, and above the groups a line on `--danger-soft`: "Couldn't read 2 of the 10 tasks." with "Try again", which reads those two again |
-| Nothing could be read | The empty mark with a warning, "Couldn't load Marlow's library", the gateway's reason in one sentence, "Try again" |
-| Empty, All | The empty mark, "Nothing found yet", "Pages, pictures, files and links Marlow sends appear here." with the freshness line under it |
-| Empty, a filter | "No pages in these tasks." (or pictures and recordings, links, files), and, while tasks remain, "Look in 10 more tasks" |
-| Pinned, empty | "Nothing pinned", "Pin an item to keep it here. Pins are kept on the gateway for every device you use." (or "on this device", section 4) |
-| The connection is lost | Rows keep their last look; the freshness line reads "Can't reach the gateway · checked 5:41 PM", without Refresh. Opening an item not on the device says "Can't reach the gateway. Try again when it's back." |
-| Read-only | Everything, with the Pin buttons replaced by the access bar at the foot of the tab when the person chooses one (section 4) |
+| State                       | It shows                                                                                                                                                                                                      |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Loading                     | The filters, the freshness line "Looking in Marlow's tasks…", five skeleton rows, `aria-busy`                                                                                                                 |
+| Loaded                      | As above                                                                                                                                                                                                      |
+| Some tasks couldn't be read | The rows from the others, and above the groups a line on `--danger-soft`: "Couldn't read 2 of the 10 tasks." with "Try again", which reads those two again                                                    |
+| Nothing could be read       | The empty mark with a warning, "Couldn't load Marlow's library", the gateway's reason in one sentence, "Try again"                                                                                            |
+| Empty, All                  | The empty mark, "Nothing found yet", "Pages, pictures, files and links Marlow sends appear here." with the freshness line under it                                                                            |
+| Empty, a filter             | "No pages in these tasks." (or pictures and recordings, links, files), and, while tasks remain, "Look in 10 more tasks"                                                                                       |
+| Pinned, empty               | "Nothing pinned", "Pin an item to keep it here. Pins are kept on the gateway for every device you use." (or "on this device", section 4)                                                                      |
+| The connection is lost      | Rows keep their last look; the freshness line reads "Can't reach the gateway · checked 5:41 PM", without Refresh. Opening an item not on the device says "Can't reach the gateway. Try again when it's back." |
+| Read-only                   | Everything, with the Pin buttons replaced by the access bar at the foot of the tab when the person chooses one (section 4)                                                                                    |
 
 ## 4. Pins
 
@@ -169,15 +169,15 @@ In the person's preferences on the gateway, `users.prefs`, under one key per bot
 
 ### Pinning, step by step
 
-| Step | The row shows | What is on the gateway |
-| --- | --- | --- |
-| The person chooses Pin | The button pressed and busy (`aria-busy`), the mark not yet shown | Unchanged |
-| The gateway answers `ok`; the key is read back and holds the pin | The pin mark; "Pinned Trail guide" is announced | The pin |
-| `conflict`: another device changed Marlow's pins | The key is read again and the person's one change applied to it, once. If that is refused again: "Couldn't pin: pins changed on another device. Try again." | The other device's pins, without this one |
-| The value would pass 4,096 bytes | Nothing is sent: "Marlow's pins are full. Unpin one to pin this." | Unchanged |
-| The profile's 128 settings are used | "Couldn't pin: the gateway keeps at most 128 of your settings, and they are used." | Unchanged |
-| No answer, or the connection drops | "Couldn't pin: no answer from the gateway." The key is read on reconnect, and the row follows what it holds | Unknown until read: the row says what the read finds |
-| Read-only | The access bar at the foot of the tab: "Pinning needs permission to change things on the gateway." with "Request access" | Unchanged |
+| Step                                                             | The row shows                                                                                                                                               | What is on the gateway                               |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| The person chooses Pin                                           | The button pressed and busy (`aria-busy`), the mark not yet shown                                                                                           | Unchanged                                            |
+| The gateway answers `ok`; the key is read back and holds the pin | The pin mark; "Pinned Trail guide" is announced                                                                                                             | The pin                                              |
+| `conflict`: another device changed Marlow's pins                 | The key is read again and the person's one change applied to it, once. If that is refused again: "Couldn't pin: pins changed on another device. Try again." | The other device's pins, without this one            |
+| The value would pass 4,096 bytes                                 | Nothing is sent: "Marlow's pins are full. Unpin one to pin this."                                                                                           | Unchanged                                            |
+| The profile's 128 settings are used                              | "Couldn't pin: the gateway keeps at most 128 of your settings, and they are used."                                                                          | Unchanged                                            |
+| No answer, or the connection drops                               | "Couldn't pin: no answer from the gateway." The key is read on reconnect, and the row follows what it holds                                                 | Unknown until read: the row says what the read finds |
+| Read-only                                                        | The access bar at the foot of the tab: "Pinning needs permission to change things on the gateway." with "Request access"                                    | Unchanged                                            |
 
 Unpin is the same with the pin removed. Nothing is shown as pinned or unpinned until the read-back holds it.
 
@@ -252,13 +252,13 @@ One line on `--bg-pane` above the frame, only with what applies:
 
 ### States
 
-| State | The frame shows | The rest |
-| --- | --- | --- |
-| Loading | "Loading Trail guide…" centred, `aria-busy` | The bar and the chat at once |
-| Shown | The Page | The note, when it has something to say |
-| The gateway refused | "The gateway couldn't show this page.", then "The gateway said: Canvas widget unavailable; reload the chat or ask the agent to recreate it.", then "Try again". The gateway answers this one message for every failure, a Page removed among them (it keeps 32 Pages a task), so nothing more is claimed | Export is disabled ("Nothing to export: the page didn't load") |
-| Larger than Clawtrate shows | "Trail guide is larger than Clawtrate shows (5 MB)." | Export is disabled |
-| The connection is lost | The Page stays if it was shown; otherwise "Can't reach the gateway. Try again when it's back." | The composer follows `conversation.md` |
+| State                       | The frame shows                                                                                                                                                                                                                                                                                          | The rest                                                       |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Loading                     | "Loading Trail guide…" centred, `aria-busy`                                                                                                                                                                                                                                                              | The bar and the chat at once                                   |
+| Shown                       | The Page                                                                                                                                                                                                                                                                                                 | The note, when it has something to say                         |
+| The gateway refused         | "The gateway couldn't show this page.", then "The gateway said: Canvas widget unavailable; reload the chat or ask the agent to recreate it.", then "Try again". The gateway answers this one message for every failure, a Page removed among them (it keeps 32 Pages a task), so nothing more is claimed | Export is disabled ("Nothing to export: the page didn't load") |
+| Larger than Clawtrate shows | "Trail guide is larger than Clawtrate shows (5 MB)."                                                                                                                                                                                                                                                     | Export is disabled                                             |
+| The connection is lost      | The Page stays if it was shown; otherwise "Can't reach the gateway. Try again when it's back."                                                                                                                                                                                                           | The composer follows `conversation.md`                         |
 
 ## 7. Exporting a Page
 
@@ -313,11 +313,11 @@ This sheet is what the iPhone shows in a Page's place: the title, the bot and th
 
 ## 9. Widths, themes, keyboard and screen readers
 
-| Width | The Library tab | The Page view |
-| --- | --- | --- |
-| 1440 | In the docked pane, 360 px | Frame and the 360 px chat side by side |
-| 1100 | In the drawer, 360 px | Side by side |
-| 800 | In the drawer, the window less 56 px | The frame takes the width; Chat opens the chat as a 360 px drawer over the frame's right, with its own Close; it starts hidden |
+| Width          | The Library tab                                                                                                                               | The Page view                                                                                                                         |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 1440           | In the docked pane, 360 px                                                                                                                    | Frame and the 360 px chat side by side                                                                                                |
+| 1100           | In the drawer, 360 px                                                                                                                         | Side by side                                                                                                                          |
+| 800            | In the drawer, the window less 56 px                                                                                                          | The frame takes the width; Chat opens the chat as a 360 px drawer over the frame's right, with its own Close; it starts hidden        |
 | 390 (one pane) | The iPhone: the conversation's Library in the info sheet (section 8). A desktop window this narrow: the bot's Library in the full-width sheet | The iPhone: the sheet of section 8. A desktop window this narrow: the frame full width, and Chat opens the chat as a full-width sheet |
 
 - **Themes**: everything uses the token set; the frame's ground stays white, as a Page's own styles expect, with a hairline in dark.
@@ -329,56 +329,56 @@ This sheet is what the iPhone shows in a Page's place: the title, the bot and th
 
 All verified on the development instance unless marked; research sections in brackets.
 
-| Shown | Driven by | Tier |
-| --- | --- | --- |
-| The bot's tasks, newest first; "of 23" | `sessions.list {agentId}` with the rail's filters (§1) | read |
-| Pictures, recordings, videos, files | `artifacts.list {sessionKey, messageRole: "assistant"}` per task: whole transcript in one call, `type` `image`, `audio`, `video`, `file`; `{agentId}` alone refused (§1) | read |
-| Each item's time; Today, This week, Older | The `timestamp` of the `chat.history` row with the entry's `messageSeq`; groups on the device, in its time zone (§1) | read |
-| Earlier history pages | `chat.history {limit, offset}`, `hasMore`, `nextOffset` from the end (§1) | read |
-| Pages; "Shown again below" | `canvas` blocks in the bot's rows, `preview.viewId` and `title`; the same `viewId` in a later row (§2, §5) | read |
-| No Apps filter | MCP App views are `canvas` blocks with `mcpApp`, shown only with scripts (§9, source) | |
-| Links | `http` and `https` addresses in the bot's text (§1) | read |
-| The iPhone's items the person sent | `artifacts.list` without `messageRole`, kept by the row's `role` (§1) | read |
-| The Page | `canvas.document.view {docId}`: `{html, sandboxUrl, sandboxPort}`, the HTML as written; `UNAVAILABLE` with one message on any failure (§2) | read |
-| Never used | `pluginSurfaceUrls.canvas`, `plugin.surface.refresh`, `sandboxUrl`, `sandboxPort`, `sandboxOrigin`, the block's `url`, `canvas.document.preview`, the handshake's `controlUiUrl` and plugin tab paths (§2, §3) | |
-| The frame and the note | Research §4: no script, form, popup, message or request; checkbox, menu and folded section change and reset; links replace the frame unless taken out. The zero-request guarantee is the builder's check (section 6) | |
-| The side chat | `chat.send` to the occurrence's task; refused on the read tier with `missing scope: operator.write` (§6) | interactive |
-| Export | The HTML from `canvas.document.view`, entrypoint only (§7) | read |
-| Pins | `users.prefs.get` (read), `users.prefs.set` with `expectedEntries` (write), `conflict`, `value-too-large` at 4,096 bytes, 128 keys, `users.prefs.changed` to every connection of the profile, read-only ones included (§8) | read, write |
-| Pins on this device | `{status: "no_durable_identity"}` (§8, source) | |
+| Shown                                     | Driven by                                                                                                                                                                                                                  | Tier        |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| The bot's tasks, newest first; "of 23"    | `sessions.list {agentId}` with the rail's filters (§1)                                                                                                                                                                     | read        |
+| Pictures, recordings, videos, files       | `artifacts.list {sessionKey, messageRole: "assistant"}` per task: whole transcript in one call, `type` `image`, `audio`, `video`, `file`; `{agentId}` alone refused (§1)                                                   | read        |
+| Each item's time; Today, This week, Older | The `timestamp` of the `chat.history` row with the entry's `messageSeq`; groups on the device, in its time zone (§1)                                                                                                       | read        |
+| Earlier history pages                     | `chat.history {limit, offset}`, `hasMore`, `nextOffset` from the end (§1)                                                                                                                                                  | read        |
+| Pages; "Shown again below"                | `canvas` blocks in the bot's rows, `preview.viewId` and `title`; the same `viewId` in a later row (§2, §5)                                                                                                                 | read        |
+| No Apps filter                            | MCP App views are `canvas` blocks with `mcpApp`, shown only with scripts (§9, source)                                                                                                                                      |             |
+| Links                                     | `http` and `https` addresses in the bot's text (§1)                                                                                                                                                                        | read        |
+| The iPhone's items the person sent        | `artifacts.list` without `messageRole`, kept by the row's `role` (§1)                                                                                                                                                      | read        |
+| The Page                                  | `canvas.document.view {docId}`: `{html, sandboxUrl, sandboxPort}`, the HTML as written; `UNAVAILABLE` with one message on any failure (§2)                                                                                 | read        |
+| Never used                                | `pluginSurfaceUrls.canvas`, `plugin.surface.refresh`, `sandboxUrl`, `sandboxPort`, `sandboxOrigin`, the block's `url`, `canvas.document.preview`, the handshake's `controlUiUrl` and plugin tab paths (§2, §3)             |             |
+| The frame and the note                    | Research §4: no script, form, popup, message or request; checkbox, menu and folded section change and reset; links replace the frame unless taken out. The zero-request guarantee is the builder's check (section 6)       |             |
+| The side chat                             | `chat.send` to the occurrence's task; refused on the read tier with `missing scope: operator.write` (§6)                                                                                                                   | interactive |
+| Export                                    | The HTML from `canvas.document.view`, entrypoint only (§7)                                                                                                                                                                 | read        |
+| Pins                                      | `users.prefs.get` (read), `users.prefs.set` with `expectedEntries` (write), `conflict`, `value-too-large` at 4,096 bytes, 128 keys, `users.prefs.changed` to every connection of the profile, read-only ones included (§8) | read, write |
+| Pins on this device                       | `{status: "no_durable_identity"}` (§8, source)                                                                                                                                                                             |             |
 
 ## 11. Parity rows to reword, and rows that need a decision
 
 Reworded (statuses unchanged):
 
-| Row | Cell | New wording |
-| --- | --- | --- |
-| F-210 | Clawtrate target | better: share by exporting the Page as an HTML file, either as shown (scripts, link addresses and outside references taken out) or as the Bot made it, and the export screen says what each file is and that scripts run with whatever opens it; nothing is hosted publicly. |
+| Row   | Cell               | New wording                                                                                                                                                                                                                                                                                                                    |
+| ----- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| F-210 | Clawtrate target   | better: share by exporting the Page as an HTML file, either as shown (scripts, link addresses and outside references taken out) or as the Bot made it, and the export screen says what each file is and that scripts run with whatever opens it; nothing is hosted publicly.                                                   |
 | F-371 | gateway dependency | partial: `artifacts.list {sessionKey}` without `messageRole` lists the task's images, audio, video and files, the person's uploads among them, with what tools returned, told apart by the `chat.history` row's role by `messageSeq`; Pages and links come from `chat.history` (`operator.read`) (`docs/research/library.md`). |
-| F-374 | Clawtrate target | same; note: Clawtrate never runs a Page's scripts, so controls that need them do nothing; checkboxes, menus and folded sections change only this view, and reopening the Page shows the Bot's saved content unchanged. |
+| F-374 | Clawtrate target   | same; note: Clawtrate never runs a Page's scripts, so controls that need them do nothing; checkboxes, menus and folded sections change only this view, and reopening the Page shows the Bot's saved content unchanged.                                                                                                         |
 
 F-210's dependency ("available: `canvas.document.view` (`operator.read`); the client writes the export file") and F-374's ("client only") are right as written.
 
 Rows where the design differs from the row, left unchanged in `docs/parity.md` for a decision, with the wording proposed for each:
 
-| Row | Why the design differs | Proposed target | Proposed dependency |
-| --- | --- | --- | --- |
-| F-208 | No Apps filter (section 3; research §9) | same; note: no Apps filter: the gateway marks MCP App views only as canvas blocks that run with scripts, which Clawtrate does not run; the Library says which of the Bot's tasks it looked in. | partial: `sessions.list {agentId}` gives the Bot's tasks; `artifacts.list {sessionKey, messageRole: "assistant"}` for each, not paged and with no time on its entries, and the time, Pages (`canvas` blocks) and links from `chat.history`, aggregated in the client (`operator.read`); pins in `users.prefs` on the person's profile (`users.prefs.get` `operator.read`, `users.prefs.set` `operator.write`, 4,096 bytes a key), kept on the device when the gateway answers `no_durable_identity`. No index across tasks and no count. |
-| F-209 | "Updated below" is not established: the gateway keeps no revision, and a new page is a new id (section 5; research §5) | same; note: an earlier card of the same Page reads "Shown again below"; nothing says a Page was updated, since the gateway keeps no revision. | available: `canvas.document.view {docId}` (`operator.read`) gives the Page's HTML, shown so that it makes no request; the side chat uses `chat.send` (`operator.write`). The hosted `pluginSurfaceUrls.canvas` is a bearer address and is not used. |
-| F-372 | No "Copy Link" or "Open in Web": the only address for a Page is a bearer capability (section 8; research §3) | better: touch and hold a Page row for Open, Share as file and Pin; no link is offered, since the gateway's only address for a Page is a bearer capability that also opens its Control UI. | partial: no link to a Page exists for a client to share; `session.publicShare.set` shares a session, not a Page. Share uses the exported file (`canvas.document.view`, `operator.read`). |
-| F-373 | The iPhone app has no web view, and no rendering path there has a zero-request check (section 8) | better: on iPhone, tapping a Page opens a full-screen sheet with its title, Bot and time saying Pages are shown on the desktop app for now, with "Message about" and "Share as file"; its close control returns to the chat at the same position. The Page itself is drawn there only once an iPhone rendering path passes the zero-request check. | Unchanged: `canvas.document.view` (`operator.read`). |
+| Row   | Why the design differs                                                                                                 | Proposed target                                                                                                                                                                                                                                                                                                                                    | Proposed dependency                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ----- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-208 | No Apps filter (section 3; research §9)                                                                                | same; note: no Apps filter: the gateway marks MCP App views only as canvas blocks that run with scripts, which Clawtrate does not run; the Library says which of the Bot's tasks it looked in.                                                                                                                                                     | partial: `sessions.list {agentId}` gives the Bot's tasks; `artifacts.list {sessionKey, messageRole: "assistant"}` for each, not paged and with no time on its entries, and the time, Pages (`canvas` blocks) and links from `chat.history`, aggregated in the client (`operator.read`); pins in `users.prefs` on the person's profile (`users.prefs.get` `operator.read`, `users.prefs.set` `operator.write`, 4,096 bytes a key), kept on the device when the gateway answers `no_durable_identity`. No index across tasks and no count. |
+| F-209 | "Updated below" is not established: the gateway keeps no revision, and a new page is a new id (section 5; research §5) | same; note: an earlier card of the same Page reads "Shown again below"; nothing says a Page was updated, since the gateway keeps no revision.                                                                                                                                                                                                      | available: `canvas.document.view {docId}` (`operator.read`) gives the Page's HTML, shown so that it makes no request; the side chat uses `chat.send` (`operator.write`). The hosted `pluginSurfaceUrls.canvas` is a bearer address and is not used.                                                                                                                                                                                                                                                                                      |
+| F-372 | No "Copy Link" or "Open in Web": the only address for a Page is a bearer capability (section 8; research §3)           | better: touch and hold a Page row for Open, Share as file and Pin; no link is offered, since the gateway's only address for a Page is a bearer capability that also opens its Control UI.                                                                                                                                                          | partial: no link to a Page exists for a client to share; `session.publicShare.set` shares a session, not a Page. Share uses the exported file (`canvas.document.view`, `operator.read`).                                                                                                                                                                                                                                                                                                                                                 |
+| F-373 | The iPhone app has no web view, and no rendering path there has a zero-request check (section 8)                       | better: on iPhone, tapping a Page opens a full-screen sheet with its title, Bot and time saying Pages are shown on the desktop app for now, with "Message about" and "Share as file"; its close control returns to the chat at the same position. The Page itself is drawn there only once an iPhone rendering path passes the zero-request check. | Unchanged: `canvas.document.view` (`operator.read`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 ## 12. For builders
 
 ### What each part uses
 
-| Part | Uses | New |
-| --- | --- | --- |
-| The Library tab | `.files-fresh`, `.file-row`, the empty state, skeleton rows | `.lib-filters`, `.lib-group`, `.lib-row` |
-| Pins | The access bar | |
-| The page card | `.artifact` (`work-pane.md` §12) | The "Shown again below" line |
-| The Page view | The media viewer's dialog behaviour; the conversation's bubbles and composer; `.menu` for Links | `.page-view`, `.page-frame`, `.page-note`, `.page-chat` |
-| Export | The confirmation card's frame (`bots.md` §19) | `.export-dialog` |
+| Part            | Uses                                                                                            | New                                                     |
+| --------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| The Library tab | `.files-fresh`, `.file-row`, the empty state, skeleton rows                                     | `.lib-filters`, `.lib-group`, `.lib-row`                |
+| Pins            | The access bar                                                                                  |                                                         |
+| The page card   | `.artifact` (`work-pane.md` §12)                                                                | The "Shown again below" line                            |
+| The Page view   | The media viewer's dialog behaviour; the conversation's bubbles and composer; `.menu` for Links | `.page-view`, `.page-frame`, `.page-note`, `.page-chat` |
+| Export          | The confirmation card's frame (`bots.md` §19)                                                   | `.export-dialog`                                        |
 
 ### What the engine supplies
 
@@ -406,20 +406,20 @@ Nothing new. A Page revision, a cross-task index or a count would let the Librar
 
 `prototype/library.html` takes every parameter `work.html` takes, and these. The fixtures are Marlow's tasks, today being Thursday, November 19 (`bot=marlow&task=m2`: Saturday's trail plan, with the Page shown twice). The prototype bar's "Another device pins" and "Owner approves access" stand for what another device and the gateway's owner do.
 
-| Parameter | Values |
-| --- | --- |
-| `panel=open&tab=library` | Marlow's Library in the Work pane |
-| `filter` | `all`, `pages`, `media`, `links`, `files`, `pinned` |
-| `lib` | `loading`, `partial` (two tasks couldn't be read), `error`, `empty`, `offline`, `all` (every task read) |
-| `pins` | `device` (the gateway keeps no preferences), `full`, `none` |
-| `pinfail` | `conflict` (refused twice), `noanswer`, `limit` (the profile's 128 settings used) |
-| `page` | `trail-guide`, `trail-guide-1` (the earlier occurrence), `packing-list` (no scripts, no links): the Page view |
-| `pageload` | `failed`, `large`, `offline` |
-| `chat` | `hidden` |
-| `export` | `open` (with `page`); `exportfail=1`: the system refuses the file |
-| `width=phone` | The iPhone's forms: with `panel=open&tab=library`, the conversation's Library in its info sheet; a Page opens the sheet of section 8. `device=desktop` shows a desktop window that narrow instead |
-| `hold` | An item id: its touch-and-hold menu (phone) |
-| `state=readonly` | The read-only connection |
+| Parameter                | Values                                                                                                                                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `panel=open&tab=library` | Marlow's Library in the Work pane                                                                                                                                                                 |
+| `filter`                 | `all`, `pages`, `media`, `links`, `files`, `pinned`                                                                                                                                               |
+| `lib`                    | `loading`, `partial` (two tasks couldn't be read), `error`, `empty`, `offline`, `all` (every task read)                                                                                           |
+| `pins`                   | `device` (the gateway keeps no preferences), `full`, `none`                                                                                                                                       |
+| `pinfail`                | `conflict` (refused twice), `noanswer`, `limit` (the profile's 128 settings used)                                                                                                                 |
+| `page`                   | `trail-guide`, `trail-guide-1` (the earlier occurrence), `packing-list` (no scripts, no links): the Page view                                                                                     |
+| `pageload`               | `failed`, `large`, `offline`                                                                                                                                                                      |
+| `chat`                   | `hidden`                                                                                                                                                                                          |
+| `export`                 | `open` (with `page`); `exportfail=1`: the system refuses the file                                                                                                                                 |
+| `width=phone`            | The iPhone's forms: with `panel=open&tab=library`, the conversation's Library in its info sheet; a Page opens the sheet of section 8. `device=desktop` shows a desktop window that narrow instead |
+| `hold`                   | An item id: its touch-and-hold menu (phone)                                                                                                                                                       |
+| `state=readonly`         | The read-only connection                                                                                                                                                                          |
 
 ## 13. Not covered here
 
