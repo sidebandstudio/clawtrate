@@ -147,8 +147,12 @@ async function hostTask(
     text,
     label: title,
   });
+  created.push(key);
   return { title, key };
 }
+
+/** Every task this spec made: removed afterwards, so the checks after it find the seed as it was. */
+const created: string[] = [];
 
 /** A paired admin client: only an admin connection sees the host's approvals and its rules. */
 let admin: OperatorSession | null = null;
@@ -206,6 +210,15 @@ test.afterEach(async ({}, testInfo) => {
 });
 
 test.afterAll(async () => {
+  test.setTimeout(240_000);
+  // Left idle by afterEach when a check failed; archived, then deleted with its transcript.
+  const op = await adminClient().catch(() => null);
+  for (const key of created) {
+    await op?.request("sessions.patch", { key, archived: true }).catch(() => undefined);
+    await op
+      ?.request("sessions.delete", { key, archivedOnly: true, deleteTranscript: true })
+      .catch(() => undefined);
+  }
   await admin?.close();
   await asker?.close();
   for (const host of hosts) {
