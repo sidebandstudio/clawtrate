@@ -71,6 +71,24 @@ describe("the guard, as the file system walks a path", () => {
     expect(check(join(world.home, ".ssh", "config"))).not.toThrow();
   });
 
+  it.skipIf(process.platform === "win32")(
+    "refuses a path inside the folder an account's .ssh link leads to",
+    () => {
+      const other = join(root, "other-account");
+      const relocated = join(root, "relocated-ssh");
+      mkdirSync(other);
+      mkdirSync(relocated);
+      // The account's .ssh is a link; the path names where it leads, not the link.
+      symlinkSync(relocated, join(other, ".ssh"), "dir");
+      const check = (path: string) => () =>
+        guardPaths([path], join(other, ".ssh"), process.platform);
+      expect(check(join(relocated, "config"))).toThrow(SshWorldRefused);
+      expect(check(relocated)).toThrow(SshWorldRefused);
+      expect(check(join(other, ".ssh", "config"))).toThrow(SshWorldRefused);
+      expect(check(join(other, "config"))).not.toThrow();
+    },
+  );
+
   it("refuses an Include that leads into the folder, before the file is opened", () => {
     writeFileSync(world.personConfig, `Include ${toNested}/../config\n`);
     const opened: string[] = [];

@@ -9,7 +9,7 @@
 // agent, is refused before anything is read or started.
 
 import { homedir, userInfo } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 import { physicalPath, within } from "./paths.ts";
 import { CONFIG_PATH } from "./route-config.ts";
@@ -100,14 +100,14 @@ export function guardPaths(
   protectedDir: string,
   platform: NodeJS.Platform,
 ): void {
-  // The protected folder's parent through its links, then the folder by name: nothing inside is looked at.
-  const protectedPhysical = join(physicalPath(dirname(protectedDir)), basename(protectedDir));
   for (const path of paths) {
     if (!isAbsolute(path)) throw new SshWorldRefused("A path the SSH world uses is not absolute.");
     if (within(resolve(path), protectedDir, platform)) {
       throw new SshWorldRefused("An automated run must not use the real home's .ssh folder.");
     }
   }
+  // Resolve the directory entry and its target. This reads no SSH file contents.
+  const protectedPhysical = physicalPath(protectedDir);
   for (const path of paths) {
     if (within(physicalPath(path), protectedPhysical, platform)) {
       throw new SshWorldRefused("An automated run must not use the real home's .ssh folder.");
