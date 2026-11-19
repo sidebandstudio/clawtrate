@@ -117,11 +117,17 @@ export function effectiveWords(
   const result = combinePosture(policy, levels);
   const head = postureWords(result.security, result.ask, result.autoReview);
   const policyName = policyWords(policy);
+  const whose = (index: number) => {
+    const by = files[index]!;
+    return by.file.entries.some((each) => each.botId === botId)
+      ? `its entry in ${by.name}'s file`
+      : `${by.name}'s file`;
+  };
+  if (result.narrowedBy !== null && (result.security === "deny" || result.raisedBy === null))
+    return `${head}: ${whose(result.narrowedBy)} is stricter than ${botName}'s policy (${policyName}).`;
   if (result.raisedBy !== null) {
-    const by = files[result.raisedBy]!;
-    const entry = by.file.entries.some((each) => each.botId === botId);
     const reviewer = policy.autoReview ? `, so the gateway skips ${botName}'s reviewer` : "";
-    return `${head}: ${entry ? `its entry in ${by.name}'s file` : `${by.name}'s file`} asks more than ${botName}'s policy (${policyName})${reviewer}.`;
+    return `${head}: ${whose(result.raisedBy)} asks more than ${botName}'s policy (${policyName})${reviewer}.`;
   }
   return `${head}, from ${botName}'s policy (${policyName}); ${files.length > 1 ? "these files ask" : "this file asks"} no more.`;
 }

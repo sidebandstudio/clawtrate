@@ -485,12 +485,23 @@ const moreAsking = (a: Ask, b: Ask) =>
 export function combinePosture(
   policy: ExecPolicy,
   files: ReadonlyArray<{ security: Security; ask: Ask }>,
-): { security: Security; ask: Ask; autoReview: boolean; raisedBy: number | null } {
+): {
+  security: Security;
+  ask: Ask;
+  autoReview: boolean;
+  /** The file that raised the ask, or null when none asks more than the policy. */
+  raisedBy: number | null;
+  /** The file that made the security stricter, or null when none is stricter. */
+  narrowedBy: number | null;
+} {
   let sec = policy.security;
   let asked = policy.ask;
   let raisedBy: number | null = null;
+  let narrowedBy: number | null = null;
   files.forEach((file, index) => {
-    sec = stricter(sec, file.security);
+    const tighter = stricter(sec, file.security);
+    if (tighter !== sec) narrowedBy = index;
+    sec = tighter;
     const next = moreAsking(asked, file.ask);
     if (next !== asked) raisedBy = index;
     asked = next;
@@ -500,6 +511,7 @@ export function combinePosture(
     ask: asked,
     autoReview: policy.autoReview && asked === policy.ask,
     raisedBy,
+    narrowedBy,
   };
 }
 

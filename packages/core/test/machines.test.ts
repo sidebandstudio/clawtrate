@@ -494,6 +494,7 @@ describe("Settings, Machines: the engine", () => {
       ask: "on-miss",
       autoReview: true,
       raisedBy: null,
+      narrowedBy: null,
     });
     const always = fileLevelsFor(
       readApprovalsFile({ file: { defaults: {}, agents: { otto: { ask: "always" } } } }),
@@ -504,11 +505,15 @@ describe("Settings, Machines: the engine", () => {
       ask: "always",
       autoReview: false,
       raisedBy: 1,
+      narrowedBy: null,
     });
     const empty = fileLevelsFor(readApprovalsFile({ file: {} }), "otto");
     expect(empty).toEqual({ security: "full", ask: "off" });
     const full = readExecPolicy({ tools: { exec: { mode: "full" } } }, "pip");
-    expect(combinePosture(full, [{ security: "deny", ask: "off" }]).security).toBe("deny");
+    expect(combinePosture(full, [{ security: "deny", ask: "off" }])).toMatchObject({
+      security: "deny",
+      narrowedBy: 0,
+    });
     expect(readExecPolicy({}, "pip")).toMatchObject({ none: true, security: "full", ask: "off" });
     expect(
       readExecPolicy({ tools: { exec: { security: "allowlist", ask: "on-miss" } } }, "pip"),
