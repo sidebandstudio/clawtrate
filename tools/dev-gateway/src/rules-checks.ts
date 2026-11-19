@@ -1203,6 +1203,12 @@ export async function runRulesChecks(
       leftBusy = `the check before it ("${check.name}") failed`;
     }
   }
-  await settle(ctx, world);
+  // A run that leaves a busy task or rules in place has not passed.
+  if (!(await settle(ctx, world))) {
+    failed += 1;
+    log(
+      "FAIL  the final clean-up: the instance could not be brought back to no rules and no running task",
+    );
+  }
   return { passed, failed };
 }

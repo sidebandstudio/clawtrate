@@ -11,12 +11,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { devConfig, DENIED_TOOLS, loadPlugins, PLUGIN_RULE, sandboxProblems } from "../src/cli.ts";
 import { loadDevPlugin, pluginCopy } from "../src/dev-plugins.ts";
 import { CHECKOUT_DIR } from "../src/env.ts";
+import type { OperatorSession } from "../src/operator.ts";
 import {
   RULES_CHECKS,
   eventually,
   isResultOfCall,
   logSaysAfter,
   ranOk,
+  runRulesChecks,
   toolCallsOf,
   withConfig,
 } from "../src/rules-checks.ts";
@@ -186,4 +188,40 @@ describe("the rules checks' history matching", () => {
     expect(isResultOfCall({ role: "toolResult", toolName: "read" }, callId)).toBe(false);
     expect(isResultOfCall(result("call_this_run"), null)).toBe(false);
   });
+});
+
+describe("the rules checks' final clean-up", () => {
+  it("counts as a failure when it cannot leave the gateway with no rules", async () => {
+    const held = RULES_CHECKS.splice(0);
+    try {
+      const op = (answer: (method: string) => unknown) =>
+        ({
+          request: async (method: string) => answer(method),
+          events: [],
+          lastSeq: 0,
+        }) as unknown as OperatorSession;
+      const admin = op((method) => {
+        if (method === "plugin.approval.list") return [];
+        throw new Error("refused");
+      });
+      // The plugin answers, but its rules cannot be read back to empty them.
+      const reader = op((method) => {
+        if (method === "clawtrate-tool-rules.status") return { hook: { registered: true } };
+        throw new Error("refused");
+      });
+      const lines: string[] = [];
+      const result = await runRulesChecks(
+        {
+          clients: { admin, interactive: admin, approver: admin, writer: admin, reader },
+          gatewayLog: "",
+          stateDir: "",
+        },
+        (line) => lines.push(line),
+      );
+      expect(result).toEqual({ passed: 0, failed: 1 });
+      expect(lines.some((line) => line.startsWith("FAIL  the final clean-up"))).toBe(true);
+    } finally {
+      RULES_CHECKS.push(...held);
+    }
+  }, 30_000);
 });
