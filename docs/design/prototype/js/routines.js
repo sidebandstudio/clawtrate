@@ -288,6 +288,8 @@
   if (S.state === "paused") r0().enabled = false;
   if (S.state === "noruns") r0().runs = [];
   if (S.state === "deleted") S.deleted = true;
+  // runs=25: more runs than the page shows, newest first, every six hours.
+  if (P.has("runs")) r0().runs = Array.from({ length: +P.get("runs") }, (_, k) => ({ ...run(0, 10, 0), at: at(0, 10, 0) - k * 6 * HOUR }));
   // A successful one-shot: the gateway sends finished, then removed, and keeps nothing of it.
   if (S.state === "ran-once") {
     r0().runs = [run(0, 9, 0, { summary: "Posted the reminder in Marlow's main conversation.", dur: 0.4, tokens: 0 })];
@@ -348,7 +350,9 @@
         // An isolated agent routine's latest run of the last 24 hours (Clawtrate's choice).
         const runRow = routines.filter((r) => !r.gone && r.bot === b.id && r.sessionTarget === "isolated" && r.payload.kind === "agentTurn" && r.runs.length && r.runs[0].at > NOW - DAY);
         const busy = running && running.bot === b.id;
-        const line = busy ? `${glyph("working")}<span class="bot-preview">Running ${esc(running.name)}</span>` : `<span class="bot-preview">${esc(b.preview)}</span>`;
+        // checkin=running: a run whose agent events carry isHeartbeat is in progress.
+        const checking = P.get("checkin") === "running" && b.id === "juniper";
+        const line = busy ? `${glyph("working")}<span class="bot-preview">Running ${esc(running.name)}</span>` : checking ? `${glyph("working")}<span class="bot-preview">Checking in</span>` : `<span class="bot-preview">${esc(b.preview)}</span>`;
         const open = runRow.length > 0;
         const tasks = open
           ? `<ul class="task-list" aria-label="${b.name}'s tasks">` +
@@ -362,7 +366,7 @@
             `</ul>`
           : "";
         return (
-          `<li class="bot-group"${open ? ' data-open="true"' : ""}><button type="button" class="bot" data-bot-row="${b.id}" data-r="open-bot" data-id="${b.id}" aria-label="${esc(`${b.name}, ${busy ? `running ${running.name}` : b.preview}`)}" data-testid="bot">` +
+          `<li class="bot-group"${open ? ' data-open="true"' : ""}><button type="button" class="bot" data-bot-row="${b.id}" data-r="open-bot" data-id="${b.id}" aria-label="${esc(`${b.name}, ${busy ? `running ${running.name}` : checking ? "checking in" : b.preview}`)}" data-testid="bot">` +
           `<span class="avatar" data-bot="${b.id}"></span><span class="bot-text"><span class="bot-line"><span class="bot-name">${b.name}</span><time class="bot-time">${b.time}</time></span>` +
           `<span class="bot-line">${line}</span></span></button>${tasks}</li>`
         );
@@ -456,13 +460,13 @@
       `<section class="r-checkins" aria-labelledby="checkins-head" data-testid="checkins"><div class="r-checkins-head"><h3 id="checkins-head">Check-ins</h3>` +
       (isAdmin() ? button("Change", `data-size="sm" data-r="checkins" data-id="${b}"`) : "") + `</div>` +
       `<p data-testid="checkins-text">${esc(text)}</p>${next ? `<p class="r-faint">${esc(next)}</p>` : ""}` +
-      (zones.length ? `<p class="r-faint" data-testid="zone-line">Routines' time zone: ${zones.length > 1 ? `Mixed: ${zones.join(", ")}` : zones[0]}</p>` : "") +
+      (zones.length ? `<div class="r-zone-line"><p class="r-faint" data-testid="zone-line">Routines' time zone: ${zones.length > 1 ? `Mixed: ${zones.join(", ")}` : zones[0]}</p>${isAdmin() ? button("Change…", `data-size="sm" data-r="zone" data-id="${b}"`, "quiet") : ""}</div>` : "") +
       `</section>`
     );
   }
   function awayCard() {
     if (!S.away) return "";
-    const n = routines.filter((r) => r.enabled).length;
+    const n = routines.filter((r) => r.enabled && !r.gone).length;
     return (
       `<section class="r-away" aria-labelledby="away-title" data-testid="away"><p id="away-title"><b>You've been away for a bit.</b> ${n} routines kept running while you were away. Keep them running?</p>` +
       `<div class="b-actions">${button("Keep them running", 'data-r="away-keep"', "primary")}` +
@@ -558,7 +562,7 @@
   function runRow(r, x, i) {
     const o = outcome(x);
     const how = x.running ? "Running…" : o.text;
-    return `<li><button type="button" class="r-run" data-r="open-run" data-id="${r.id}" data-i="${i}" aria-label="${esc(`${when(x.at, VIEWER, true)}${x.manual ? ", started by hand" : ""}, ${how}`)}" data-testid="run-row">` +
+    return `<li><button type="button" class="r-run" data-r="open-run" data-id="${r.id}" data-i="${i}" data-at="${x.at}" aria-label="${esc(`${when(x.at, VIEWER, true)}${x.manual ? ", started by hand" : ""}, ${how}`)}" data-testid="run-row">` +
       `<span class="r-row-mark">${x.running ? glyph("working") : o.mark ? glyph(o.mark) : ""}</span>` +
       `<span class="r-run-text"><span class="r-run-when">${esc(when(x.at, VIEWER, true))}${x.manual ? `<span class="r-faint"> · started by hand</span>` : ""}</span>` +
       `<span class="r-run-how">${o.tone && !x.running ? `<span data-tone="danger">${esc(how)}</span>` : esc(how)}</span></span>${icon("chevron")}</button></li>`;
@@ -568,7 +572,7 @@
     const tz = r.schedule.tz;
     const n = nextRun(r);
     const actions = isAdmin() && !S.deleted
-      ? button(S.starting ? "Starting…" : r.enabled ? "Run now" : "Run once now", `data-size="sm" data-r="run-now" data-id="${r.id}"${S.starting ? " disabled" : ""}`) +
+      ? button(S.starting ? "Starting…" : r.enabled ? "Run now" : "Run once now", `data-size="sm" data-r="run-now" data-id="${r.id}"${S.starting ? ' aria-disabled="true"' : ""}`) +
         `<span data-wide>${button(r.enabled ? "Pause" : "Resume", `data-size="sm" data-r="toggle" data-id="${r.id}"`)}${button("Edit", `data-size="sm" data-r="edit" data-id="${r.id}"`)}</span>` +
         `<button type="button" class="icon-button" data-r="more" data-id="${r.id}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(r.name)}">${icon("more")}</button>`
       : "";
@@ -584,7 +588,8 @@
     let body = S.deleted === "once"
       ? note(`<p><b>This routine ran once, and the gateway removed it.</b> Its run succeeded ${esc(when(lastRun(r).at))}. The gateway keeps nothing more of it, so once you leave this page it isn't shown again.</p><div class="b-actions">${button("Back to routines", 'data-r="back"')}</div>`)
       : S.deleted ? note(`<p><b>This routine was deleted.</b> It won't run again.</p><div class="b-actions">${button("Back to routines", 'data-r="back"')}</div>`, "warn") : "";
-    body += `<p class="r-state" role="status" data-testid="state-line">${state}${S.already ? `<span class="r-already">It's already running.</span>` : ""}</p>`;
+    body += `<p class="r-state" role="status" data-testid="state-line">${state}${S.already ? `<span class="r-already">It's already running.</span>` : ""}</p>` +
+      (S.runError ? `<p class="r-row-error" role="alert" data-testid="run-error-line">Couldn't start a run: ${esc(S.runError)}</p>` : "");
     // Instruction
     let instruction;
     if (r.payload.kind === "systemEvent") instruction = `<p class="r-hint">Posts a reminder in ${botName(r.bot)}'s main conversation:</p><p class="r-instruction">${esc(r.payload.text)}</p>`;
@@ -672,6 +677,7 @@
       `<div class="turn" data-role="assistant" data-testid="from-history"><p class="event-line">${icon("clock")} Juniper wrote this on its own · 6:00 AM</p><div class="msg" data-role="assistant"><div class="bubble">The installer's quote you saved expires on Friday.</div></div></div>` +
       `<div class="turn" data-role="assistant" data-testid="checkin"><p class="event-line">${icon("clock")} Checked in · 9:30 AM</p><div class="msg" data-role="assistant"><div class="bubble">The rebate form is due in three days and still needs the model number.</div></div></div>` +
       `<div class="turn" data-role="assistant" data-testid="created-card"><p class="event-line">${icon("clock")} Created routine <a class="r-link" data-r="open" data-id="digest" tabindex="0" role="link">Morning digest</a></p></div>` +
+      `<div class="turn" data-role="assistant" data-testid="changed-card"><p class="event-line">${icon("clock")} Changed routine <a class="r-link" data-r="open" data-id="backup" tabindex="0" role="link">Nightly backup check</a></p></div>` +
       `</div>`;
     return { head, body, r: "convo" };
   }
@@ -687,7 +693,57 @@
     el.innerHTML = `${out.head}<div class="r-body">${out.body}</div>${v === "convo" || v === "run" ? "" : accessBar()}`;
     CT.hydrate(el);
     renderRail();
-    if (focusSel) $(focusSel)?.focus();
+    const f = focusSel && $(focusSel);
+    if (f) {
+      if (f.id === "view-title") f.tabIndex = -1;
+      f.focus();
+    }
+  }
+  // Where focus is, as a selector that survives a repaint: a live event never moves it.
+  function focusKey() {
+    const a = document.activeElement;
+    if (!a || !$("#root").contains(a) || a.closest("dialog, #r-menu")) return null;
+    if (a.id) return `#${a.id}`;
+    return ["data-r", "data-id", "data-i", "data-v"].filter((k) => a.hasAttribute(k)).map((k) => `[${k}="${a.getAttribute(k)}"]`).join("") || null;
+  }
+  const repaint = () => paint(focusKey());
+
+  // The cron event (section 8), applied to the list as the engine would.
+  const EDITED = ["name", "payload", "schedule", "sessionTarget", "delivery"];
+  function applyEvent(ev) {
+    const r = routines.find((x) => x.id === (ev.job?.id ?? ev.jobId));
+    const onScreen = r && ((["routine", "run"].includes(S.view) && S.routine === r.id) || D?.id === r.id);
+    const inDialog = () => {
+      const a = document.activeElement;
+      return a && editDialog.contains(a) ? (a.id ? `#${a.id}` : `[data-r="${a.dataset.r}"]`) : "#edit-title";
+    };
+    if (ev.action === "added") routines.push({ runs: [], enabled: true, ...ev.job });
+    else if (ev.action === "updated") {
+      const edited = EDITED.some((k) => k in ev.job && JSON.stringify(ev.job[k]) !== JSON.stringify(r[k]));
+      Object.assign(r, ev.job);
+      if (D?.id === r.id && edited && !["saving", "checking"].includes(D.status)) {
+        D.status = "conflict";
+        renderEditor(inDialog());
+      }
+      if (onScreen && edited) announce(`${r.name} was changed elsewhere`);
+    } else if (ev.action === "removed") {
+      r.gone = true;
+      if (S.view === "routine" && S.routine === r.id) S.deleted = true;
+      if (D?.id === r.id) {
+        D.status = "deleted";
+        renderEditor(inDialog());
+      }
+      if (onScreen) announce(`${r.name} was deleted elsewhere`);
+    } else if (ev.action === "started") {
+      r.running = ev.runAtMs;
+      if (onScreen) announce(`Running ${r.name}`);
+    } else if (ev.action === "finished") {
+      r.running = null;
+      r.runs.unshift(ev.run);
+      if (outcome(ev.run).mark === "failed") announce(`${r.name} failed`);
+      else if (onScreen) announce(`${r.name} finished`);
+    }
+    repaint();
   }
   function go(view, extra = {}) {
     Object.assign(S, { view, already: false }, extra);
@@ -744,7 +800,8 @@
     paint(`[data-r="toggle"][data-id="${id}"]`);
   }
   function runNow(id) {
-    if (!isAdmin()) return;
+    // Starting… keeps focus on the button, so it is aria-disabled rather than disabled.
+    if (!isAdmin() || S.starting) return;
     const r = routines.find((x) => x.id === id);
     if (r.running) {
       S.already = true;
@@ -756,17 +813,18 @@
       return;
     }
     S.starting = S.view === "routine";
-    paint(S.view === "routine" ? '[data-r="run-now"]' : null);
+    S.runError = null;
+    repaint();
     setTimeout(() => {
       S.starting = false;
-      r.running = NOW;
-      announce(`Running ${r.name}`);
-      paint(S.view === "routine" ? '[data-r="run-now"]' : null);
+      if (P.get("runfail") === "1") {
+        S.runError = "the gateway didn't answer.";
+        announce("Couldn't start a run");
+        return repaint();
+      }
+      applyEvent({ action: "started", job: { id }, runAtMs: NOW });
       setTimeout(() => {
-        r.running = null;
-        r.runs.unshift(run(0, 10, 12, { manual: true, dur: 2.4, tokens: 204, summary: DIGEST_SUMMARY, history: r.payload.kind === "agentTurn" ? recorded(r.payload.message, DIGEST_SUMMARY) : undefined }));
-        announce(`${r.name} finished`);
-        paint(S.view === "routine" ? '[data-r="run-now"]' : null);
+        applyEvent({ action: "finished", job: { id }, run: run(0, 10, 12, { manual: true, dur: 2.4, tokens: 204, summary: DIGEST_SUMMARY, history: r.payload.kind === "agentTurn" ? recorded(r.payload.message, DIGEST_SUMMARY) : undefined }) });
       }, 1800);
     }, 500);
   }
@@ -942,7 +1000,12 @@
           `This ${d.payload.kind === "systemEvent" ? "reminder's text" : "command"} was set on the gateway. You can rename the routine and change when it runs here; change ${d.payload.kind === "systemEvent" ? "its text" : "it"} on the gateway.</div></div>`
         : field("e-instr", "Instruction", `<textarea class="input" id="e-instr" data-e="instruction" placeholder="What should ${botName(d.bot)} do each time? For example: Summarise yesterday's notes and list anything I need to answer."${err("instruction")}${dis}>${esc(d.instruction)}</textarea>`, d.errors.instruction)) +
       whenField + more + (d.id ? "" : `<p class="r-hint">It runs first at its next time; creating it doesn't run it.</p>`) +
-      `</div><footer class="b-foot"><div class="b-actions">${button("Cancel", `data-r="edit-close"${dis}`, "quiet")}${d.status === "found" ? "" : button(d.status === "saving" ? "Saving…" : "Save", `data-r="save"${dis}`, "primary")}</div></footer>`;
+      `</div><footer class="b-foot">` +
+      (d.status === "adminlost" && !isAdmin()
+        ? `<section class="access-bar" role="region" aria-label="Access" data-testid="editor-access"><div class="access-row">${icon("eye")}<span class="shelf-text"><b>Admin access was lost.</b> Saving needs it again. What you typed is kept.</span>` +
+          (S.req === "requested" ? `${glyph("waiting")}<span class="shelf-text">Waiting for the gateway's owner.</span>${button("Check now", 'data-size="sm" data-r="access-check"')}` : button("Request admin access", 'data-size="sm" data-r="request"', "primary")) + `</div></section>`
+        : `<div class="b-actions">${button("Cancel", `data-r="edit-close"${dis}`, "quiet")}${d.status === "found" ? "" : button(d.status === "saving" ? "Saving…" : "Save", `data-r="save"${dis}`, "primary")}</div>`) +
+      `</footer>`;
     if (!editDialog.open) {
       lastFocus = document.activeElement;
       editDialog.showModal();
@@ -973,6 +1036,15 @@
           announce(`Saved ${d.name.trim()}`);
           paint();
         }
+        return;
+      }
+      if (outcomeOf === "adminlost") {
+        // The gateway refused with "missing scope: operator.admin": the tier dropped.
+        S.access = "write";
+        d.status = "adminlost";
+        paint();
+        renderEditor('[data-r="request"]');
+        announce("Admin access was lost");
         return;
       }
       if (outcomeOf === "refused" || outcomeOf === "conflict" || outcomeOf === "noanswer") {
@@ -1093,6 +1165,69 @@
     renderCheckins();
   }
 
+  // A bot's routines' time zone (F-196): one zone written to each routine that has one, one by one.
+
+  const zoneDialog = $("#zone-dialog");
+  let Z = null;
+  function zonePlan(bot) {
+    const rs = routines.filter((r) => !r.gone && r.bot === bot);
+    const change = rs.filter((r) => r.schedule.kind === "cron" && r.schedule.tz && plainCron(readCron(r.schedule.expr)) && !r.trigger);
+    const why = (r) => (r.schedule.kind === "cron" ? "its schedule was set on the gateway" : "it has no time zone");
+    return { change, keep: rs.filter((r) => !change.includes(r)).map((r) => [r, why(r)]) };
+  }
+  function renderZone(focusSel) {
+    const { change, keep } = zonePlan(Z.bot);
+    const saving = Z.status === "saving";
+    const dis = saving ? " disabled" : "";
+    zoneDialog.innerHTML =
+      `<header class="b-head"><h2 id="zone-title" tabindex="-1">${esc(botName(Z.bot))}'s routines' time zone</h2><button type="button" class="icon-button b-close" data-r="zone-close" aria-label="Close"${dis}>${icon("x")}</button></header>` +
+      `<div class="b-body">${Z.result ? `<div class="b-note" data-tone="warn" role="alert" data-testid="zone-result">${icon("warning")}<div><p>${esc(Z.result)}</p></div></div>` : ""}` +
+      `<div class="r-field"><label for="z-tz">Time zone</label><select class="input" id="z-tz" data-z-tz${dis}><option value="auto"${Z.tz === "auto" ? " selected" : ""}>Auto-detect (New York)</option>` +
+      ZONES.map((z) => `<option value="${z}"${Z.tz === z ? " selected" : ""}>${city(z)} (${z})</option>`).join("") + `</select></div>` +
+      `<p>Changes ${change.length === 1 ? "this routine" : `these ${change.length} routines`}:</p><ul class="r-zone-list" data-testid="zone-change">${change.map((r) => `<li>${esc(r.name)} <span class="r-faint">(now ${esc(city(r.schedule.tz))})</span></li>`).join("")}</ul>` +
+      (keep.length ? `<p class="r-hint">Left alone:</p><ul class="r-zone-list" data-testid="zone-keep">${keep.map(([r, why]) => `<li>${esc(r.name)} <span class="r-faint">(${why})</span></li>`).join("")}</ul>` : "") +
+      `</div><footer class="b-foot"><div class="b-actions">${button(Z.result ? "Close" : "Cancel", `data-r="zone-close"${dis}`, "quiet")}${Z.result ? "" : button(saving ? "Changing…" : "Change", `data-r="zone-save"${dis}`, "primary")}</div></footer>`;
+    if (!zoneDialog.open) {
+      lastFocus = document.activeElement;
+      zoneDialog.showModal();
+    }
+    $(focusSel || "#zone-title", zoneDialog).focus();
+  }
+  function openZone(bot) {
+    if (!isAdmin()) return;
+    Z = { bot, tz: "auto", status: "", result: "" };
+    renderZone();
+  }
+  function saveZone() {
+    const z = Z;
+    z.status = "saving";
+    renderZone('[data-r="zone-save"]');
+    setTimeout(() => {
+      const tz = z.tz === "auto" ? VIEWER : z.tz;
+      const failed = [];
+      const done = [];
+      for (const r of zonePlan(z.bot).change) {
+        if (P.get("tzfail") === r.id) {
+          failed.push(r.name);
+          continue;
+        }
+        const schedule = { ...r.schedule, tz };
+        sent.push({ method: "cron.update", params: { id: r.id, patch: { schedule } } });
+        r.schedule = schedule;
+        done.push(r.name);
+      }
+      z.status = "";
+      if (!failed.length) {
+        zoneDialog.close();
+        announce(`Changed the time zone of ${done.length} routine${done.length === 1 ? "" : "s"}`);
+        return paint('[data-r="zone"]');
+      }
+      z.result = `${done.length ? `Changed ${done.join(", ")}. ` : ""}Couldn't change ${failed.join(", ")}: the gateway didn't answer.`;
+      paint();
+      renderZone('[data-r="zone-close"]');
+    }, 500);
+  }
+
   // Events ---------------------------------------------------------------------------------------------------------------
 
   document.addEventListener("click", (event) => {
@@ -1171,6 +1306,11 @@
         return lastFocus?.focus();
       case "confirm-delete": {
         const r = routines.find((x) => x.id === id);
+        if (P.get("deletefail") === "1") {
+          $("#confirm-error", confirmDialog)?.remove();
+          $(".b-actions", confirmDialog).insertAdjacentHTML("beforebegin", `<p class="r-error" id="confirm-error" role="alert">Couldn't delete ${esc(r.name)}: the gateway didn't answer. It is still there.</p>`);
+          return;
+        }
         routines = routines.filter((x) => x.id !== id);
         confirmDialog.close();
         announce(`Deleted ${r.name}`);
@@ -1202,6 +1342,13 @@
         return commit();
       case "checkins":
         return openCheckins(id);
+      case "zone":
+        return openZone(id);
+      case "zone-save":
+        return saveZone();
+      case "zone-close":
+        zoneDialog.close();
+        return lastFocus?.focus();
       case "ci-close":
         ciDialog.close();
         C = null;
@@ -1229,6 +1376,7 @@
         return setTimeout(() => {
           S.req = "requested";
           paint('[data-r="access-check"]');
+          if (D) renderEditor("#edit-title");
           announce("Access requested");
         }, 600);
       case "access-check":
@@ -1236,6 +1384,10 @@
         S.req = "granted";
         announce("Admin access granted");
         paint('[data-r="access-check"]');
+        if (D?.status === "adminlost") {
+          D.status = "";
+          renderEditor('[data-r="save"]');
+        }
         return setTimeout(() => {
           S.req = "";
           paint();
@@ -1278,6 +1430,7 @@
       }
     }
     if (C && t.matches("[data-ci-every]")) C.every = t.value;
+    if (Z && t.matches("[data-z-tz]")) Z.tz = t.value;
   });
 
   // Radio groups: one tab stop, arrows move and choose.
@@ -1315,15 +1468,16 @@
     openMenu(rowMain, routineMenu(routines.find((x) => x.id === rowMain.dataset.id)), event.clientX, event.clientY);
   });
   // While a save is in flight its dialog stays open: Escape waits for the answer.
-  const busy = () => ["saving", "checking"].includes(D?.status) || C?.status === "saving";
+  const busy = () => ["saving", "checking"].includes(D?.status) || C?.status === "saving" || Z?.status === "saving";
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && busy()) event.preventDefault();
   }, true);
-  for (const dlg of [editDialog, ciDialog]) dlg.addEventListener("cancel", (event) => busy() && event.preventDefault());
-  for (const dlg of [editDialog, ciDialog, confirmDialog])
+  for (const dlg of [editDialog, ciDialog, zoneDialog]) dlg.addEventListener("cancel", (event) => busy() && event.preventDefault());
+  for (const dlg of [editDialog, ciDialog, confirmDialog, zoneDialog])
     dlg.addEventListener("close", () => {
       if (dlg === editDialog) D = null;
       if (dlg === ciDialog) C = null;
+      if (dlg === zoneDialog) Z = null;
     });
 
   // First paint, from the address ------------------------------------------------------------------------------------------
@@ -1348,6 +1502,6 @@
   }
   if (P.get("dialog") === "open") openCheckins(S.bot || "juniper");
   // For the checks: what Save sent, as the gateway would receive it.
-  window.routines = { sent, routine: (id) => routines.find((r) => r.id === id) };
+  window.routines = { sent, routine: (id) => routines.find((r) => r.id === id), event: applyEvent };
   document.addEventListener("ct:settings", () => paint());
 })();

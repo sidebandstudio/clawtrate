@@ -127,6 +127,108 @@ p = await open("access=read&view=checkins&bot=juniper");
 check("read: check-ins show their values and no Change", (await text(p, '[data-testid="checkins-text"]')).startsWith("Every 30 minutes") && !(await has(p, '[data-r="checkins"]')));
 await p.close();
 
+// Live events: the cron event's added, updated and removed, applied as another client's changes.
+const event = (p, ev) => p.evaluate((e) => window.routines.event(e), ev).then(() => p.waitForTimeout(60));
+const focused = (p) => p.evaluate(() => { const a = document.activeElement; return a.id || `${a.dataset.r}:${a.dataset.id || ""}`; });
+const EVENING = { id: "evening", bot: "marlow", name: "Evening wrap-up", schedule: { kind: "cron", expr: "0 18 * * *", tz: "America/New_York" }, payload: { kind: "agentTurn", message: "List what I finished today." }, sessionTarget: "isolated", delivery: "none", updatedAtMs: 0 };
+p = await open();
+await p.focus('[data-routine="digest"] .b-switch');
+await event(p, { action: "added", job: EVENING, nextRunAtMs: 0 });
+check("event added: the row appears in its place, in words", (await text(p, '[data-routine="evening"] .r-row-line')) === "Every day at 6:00 PM, New York · Next today 6:00 PM · No runs yet" && (await text(p, '[data-testid="count"]')) === "8 routines");
+check("event added: focus stays, and another client's routine is not announced", (await focused(p)) === "toggle:digest" && (await live(p)) === "");
+await event(p, { action: "updated", job: { id: "digest", name: "Morning notes", schedule: { kind: "cron", expr: "30 7 * * 1-5", tz: "America/New_York" } } });
+check("event updated: the row shows the new values, focus stays, nothing announced off screen", (await text(p, '[data-routine="digest"] .r-row-name')) === "Morning notes" && (await text(p, '[data-routine="digest"] .r-row-line')).startsWith("Weekdays at 7:30 AM, New York") && (await focused(p)) === "toggle:digest" && (await live(p)) === "");
+await event(p, { action: "removed", jobId: "backup" });
+check("event removed: the row leaves the list and the rail, focus stays", !(await has(p, '[data-routine="backup"]')) && !(await has(p, '[data-testid="run-task"][data-id="backup"]')) && (await text(p, '[data-testid="count"]')) === "7 routines" && (await focused(p)) === "toggle:digest");
+await event(p, { action: "finished", job: { id: "watch" }, run: { at: Date.UTC(2026, 10, 18, 15, 12), status: "error", completion: "failed", error: "The check script exited with 2.", dur: 0.3, tokens: 0, inT: 0, outT: 0 } });
+check("event finished with a failure: announced wherever the person is; the row gets the failed mark", (await live(p)) === "Disk space watch failed" && (await has(p, '[data-routine="watch"] .glyph[data-state="failed"]')));
+await p.close();
+p = await open("view=routine&routine=digest");
+await p.focus('[data-r="run-now"]');
+await event(p, { action: "updated", job: { id: "digest", name: "Morning notes" } });
+check("event updated with the page open: the page shows it, focus stays, announced", (await text(p, "#view-title")) === "Morning notes" && (await focused(p)) === "run-now:digest" && (await live(p)) === "Morning notes was changed elsewhere");
+await event(p, { action: "updated", job: { id: "digest", enabled: false } });
+check("event updated, enabled only: the page reads Paused and the header offers Resume", (await text(p, '[data-testid="state-line"]')) === "Paused. It won't run until resumed." && (await text(p, '.r-head [data-r="toggle"]')) === "Resume");
+await event(p, { action: "removed", jobId: "digest" });
+check("event removed with the page open: the deleted note, no actions, announced", (await text(p, ".b-note")).startsWith("This routine was deleted. It won't run again.") && !(await has(p, '[data-r="run-now"]')) && (await live(p)) === "Morning notes was deleted elsewhere");
+await p.close();
+p = await open("edit=open&routine=digest");
+await p.fill("#e-name", "My digest");
+await event(p, { action: "updated", job: { id: "digest", enabled: false } });
+check("editor open, enabled changed elsewhere: no conflict, nothing lost", !(await has(p, "#edit-dialog .b-note")) && (await p.inputValue("#e-name")) === "My digest");
+await event(p, { action: "updated", job: { id: "digest", name: "Morning notes", updatedAtMs: Date.UTC(2026, 10, 18, 15, 12) } });
+check("editor open, changed elsewhere: the note, typed input kept, focus kept", (await text(p, "#edit-dialog .b-note")).startsWith("This routine was changed elsewhere while you were editing.") && (await p.inputValue("#e-name")) === "My digest" && (await focused(p)) === "e-name");
+await event(p, { action: "removed", jobId: "digest" });
+check("editor open, deleted elsewhere: Save as a new routine, typed input kept", (await text(p, "#edit-dialog .b-note")).startsWith("This routine was deleted while you were editing.") && (await has(p, '[data-r="save-as-new"]')) && (await p.inputValue("#e-name")) === "My digest");
+await p.close();
+
+// Refusals and a lost tier
+p = await open("view=routine&routine=digest&runfail=1");
+await p.click('[data-r="run-now"]');
+await p.waitForTimeout(650);
+check("F-351 Run now refused: the reason under the button, Run now offered again, focus on it, no run", (await text(p, '[data-testid="run-error-line"]')) === "Couldn't start a run: the gateway didn't answer." && (await text(p, '[data-r="run-now"]')) === "Run now" && (await focused(p)) === "run-now:digest" && !(await has(p, '[data-testid="state-line"] .glyph[data-state="working"]')));
+await p.close();
+p = await open("view=routine&routine=backup&deletefail=1&confirm=delete");
+await p.click('[data-r="confirm-delete"]');
+check("F-352 delete refused: the confirmation stays with the reason, focus on Delete", (await p.evaluate(() => document.querySelector("#confirm-dialog").open)) && (await text(p, "#confirm-error")) === "Couldn't delete Nightly backup check: the gateway didn't answer. It is still there." && (await focused(p)) === "confirm-delete:backup");
+await p.click('[data-r="confirm-cancel"]');
+check("F-352 after a refused delete the routine is still there", (await text(p, "#view-title")) === "Nightly backup check");
+await p.close();
+p = await open("edit=open&routine=digest&editstate=adminlost");
+await p.fill("#e-name", "Morning notes");
+await p.click('[data-r="save"]');
+await p.waitForTimeout(700);
+check("admin lost while saving: the access bar takes the foot, typed input kept, focus on the request", (await text(p, '[data-testid="editor-access"]')).startsWith("Admin access was lost. Saving needs it again. What you typed is kept.") && (await p.inputValue("#e-name")) === "Morning notes" && !(await has(p, '#edit-dialog [data-r="save"]')) && (await focused(p)) === "request:" && (await live(p)) === "Admin access was lost");
+await p.click('#edit-dialog [data-r="request"]');
+await p.waitForTimeout(700);
+await p.click('#edit-dialog [data-r="access-check"]');
+check("admin granted again: Save is back, with what was typed", (await has(p, '#edit-dialog [data-r="save"]')) && (await p.inputValue("#e-name")) === "Morning notes");
+await p.close();
+
+// More than 20 runs (F-355)
+p = await open("view=routine&routine=digest&runs=25");
+const ats = await p.evaluate(() => [...document.querySelectorAll('[data-testid="run-row"]')].map((x) => +x.dataset.at));
+check("F-355 with 25 runs the page shows the 20 most recent, newest first", ats.length === 20 && ats.every((t, i) => i === 0 || t < ats[i - 1]) && (await text(p, '[data-testid="run-row"] .r-run-when')) === "Today 10:00 AM");
+await p.close();
+
+// A bot's routines' time zone (F-196)
+p = await open("view=checkins&bot=pip");
+check("F-196 the zone line with Change…", (await text(p, '[data-testid="zone-line"]')) === "Routines' time zone: Mixed: London, New York" && (await has(p, '[data-r="zone"]')));
+await p.click('[data-r="zone"]');
+check("F-196 Change… lists what it will change", (await text(p, "#zone-title")) === "Pip's routines' time zone" && (await text(p, '[data-testid="zone-change"]')) === "Plan the week (now London)Inbox tidy-up (now New York)" && !(await has(p, '[data-testid="zone-keep"]')));
+await p.selectOption("#z-tz", "Europe/Paris");
+await p.click('[data-r="zone-save"]');
+check("F-196 changing: one button, Changing…", (await text(p, '[data-r="zone-save"]')) === "Changing…");
+await p.waitForTimeout(600);
+check("F-196 changed: each routine rewritten with cron.update, announced, focus back on Change…", (await text(p, '[data-testid="zone-line"]')) === "Routines' time zone: Paris" && (await live(p)) === "Changed the time zone of 2 routines" && (await focused(p)) === "zone:pip" && (await p.evaluate(() => window.routines.sent.filter((x) => x.params.patch.schedule?.tz === "Europe/Paris").length)) === 2);
+await p.close();
+p = await open("view=checkins&bot=pip&tzfail=cleanup");
+await p.click('[data-r="zone"]');
+await p.selectOption("#z-tz", "Europe/Paris");
+await p.click('[data-r="zone-save"]');
+await p.waitForTimeout(600);
+check("F-196 a failure is reported by name, the dialog stays, focus on Close", (await text(p, '[data-testid="zone-result"]')) === "Changed Plan the week. Couldn't change Inbox tidy-up: the gateway didn't answer." && (await focused(p)) === "zone-close:");
+await p.click('[data-r="zone-close"]');
+check("F-196 after a partial change the zone line says Mixed", (await text(p, '[data-testid="zone-line"]')) === "Routines' time zone: Mixed: Paris, New York");
+await p.close();
+p = await open("view=checkins&bot=otto");
+await p.click('[data-r="zone"]');
+check("F-196 routines with no zone or a gateway-set schedule are listed and left alone", (await text(p, '[data-testid="zone-change"]')) === "Nightly backup check (now New York)" && (await text(p, '[data-testid="zone-keep"]')) === "Disk space watch (it has no time zone)Certificate renewal (its schedule was set on the gateway)");
+await p.close();
+p = await open("view=checkins&bot=pip&access=read");
+check("F-196 read: the zone line without Change…", (await text(p, '[data-testid="zone-line"]')).startsWith("Routines' time zone") && !(await has(p, '[data-r="zone"]')));
+await p.close();
+
+// The conversation's routine cards and a check-in in progress
+p = await open("transcript=checkin");
+check("F-109 the Changed routine card names the routine", (await text(p, '[data-testid="changed-card"]')).trim() === "Changed routine Nightly backup check");
+await p.click('[data-testid="changed-card"] .r-link');
+check("F-109 its name opens the routine", (await text(p, "#view-title")) === "Nightly backup check");
+await p.close();
+p = await open("checkin=running");
+check("a check-in in progress: Juniper's row has the working mark and Checking in", (await text(p, '[data-bot-row="juniper"] .bot-preview')) === "Checking in" && (await has(p, '[data-bot-row="juniper"] .glyph[data-state="working"]')) && (await label(p, '[data-bot-row="juniper"]')) === "Juniper, checking in");
+await p.close();
+
 // The calendar -----------------------------------------------------------------------------
 p = await open("view=week");
 check("F-197 week: seven days from today, in the viewer's zone", (await count(p, ".r-cal-dayhead")) === 7 && (await text(p, ".r-cal-dayhead")).startsWith("Today") && (await text(p, ".r-zone")) === "Your time, New York");
