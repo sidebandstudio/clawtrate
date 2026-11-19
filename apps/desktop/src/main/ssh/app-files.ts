@@ -1,9 +1,8 @@
-// The app's own SSH files: its folder, its known-hosts file, the route
-// configurations and the captures. Each is made exclusively and never through
-// a link; a file is replaced by writing a new one beside it and moving it over,
-// so a link in its place is replaced, not followed; and the folder and every
-// file are tightened to the owner on every write and every read. On Windows the
-// modes are not what protects them: see docs/decisions.md.
+// The host must place SSH data inside its private, stable app-data directory.
+// These helpers make new leaves exclusively, check regular-file ownership on
+// reads on POSIX, and use a private sibling file to replace a leaf. The checks
+// do not establish ancestor ownership or bind later OpenSSH opens to an inode.
+// Windows relies on the app-data directory's inherited access controls.
 
 import { randomBytes } from "node:crypto";
 import {
