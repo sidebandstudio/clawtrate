@@ -294,6 +294,15 @@ export function markStoppedForTimeouts(
   return updateRun(activity, runId, (run) => ({ ...run, stoppedForTimeouts: count }));
 }
 
+/** The run passed the "Turn time limit" of that many minutes, and is being stopped (F-100). */
+export function markTurnLimit(
+  activity: TaskActivity,
+  runId: string,
+  minutes: number,
+): TaskActivity {
+  return updateRun(activity, runId, (run) => ({ ...run, turnLimit: minutes }));
+}
+
 /**
  * What this client's Stop of a run did to what the run started, each as the gateway said. The
  * recipients come from the run's own record (its `sessions_send` results), however the stop's
@@ -497,6 +506,11 @@ export type Run = {
    * (`TIMEOUTS_IN_A_ROW`; F-101). Absent otherwise.
    */
   stoppedForTimeouts?: number;
+  /**
+   * The run passed the "Turn time limit" (F-100), in minutes, and this client asked the gateway
+   * to stop it, as any Stop: it is `stopping` until the gateway confirms. Absent otherwise.
+   */
+  turnLimit?: number;
   /**
    * The gateway is retrying the model request by itself (`run_status` `retrying`): which attempt
    * of how many, and why (`rate_limit`, …). Absent once the model answers again (F-082).

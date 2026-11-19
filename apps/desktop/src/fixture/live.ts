@@ -636,9 +636,10 @@ export function liveScene(
     case "run-turn-limit":
       return {
         initial: withRun(base, now, {
-          state: "failed",
+          state: "stopped",
+          stopRequestedAt: now - 3 * SECOND,
           endedAt: now - 2 * SECOND,
-          error: { message: "Stopped at the 50-minute turn limit.", kind: "turn-limit" },
+          turnLimit: 50,
         }),
         steps: [],
       };

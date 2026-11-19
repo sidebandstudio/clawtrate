@@ -122,12 +122,12 @@ import {
   timeoutsInARow,
   TIMEOUTS_IN_A_ROW,
   markStopAsked,
+  markTurnLimit,
   noteStoppedWith,
   cancelQueuedRun,
   dropUnboundRun,
   dropUnboundRunUnlessStopping,
   emptyActivity,
-  failRun,
   failRunStart,
   findRun,
   finishRun,
@@ -4088,7 +4088,13 @@ export class ClawtrateClient {
       if (isTerminal(run.state)) {
         if (timer) clearTimeout(timer);
         this.turnTimers.delete(timerKey);
-      } else if (!timer && run.origin === "local" && run.bound && isActive(run.state)) {
+      } else if (
+        !timer &&
+        run.origin === "local" &&
+        run.bound &&
+        run.turnLimit === undefined &&
+        isActive(run.state)
+      ) {
         const limit = this.turnLimitMs;
         const elapsed = this.now() - (run.startedAt ?? this.now());
         this.turnTimers.set(
@@ -4205,18 +4211,12 @@ export class ClawtrateClient {
       this.afterActivity(key);
       return;
     }
+    // Stopped as any Stop is: "Stopping…" until the gateway confirms, put back if it refuses,
+    // and asked again after a reconnect if unanswered. Nothing fails and nothing queued is
+    // released on the limit alone; the limit is reached once per run.
     const minutes = Math.round(this.turnLimitMs / 60_000);
-    this.updateActivity(key, (activity, ctx) =>
-      failRun(
-        activity,
-        runId,
-        { message: `Stopped at the ${minutes}-minute turn limit.`, kind: "turn-limit" },
-        ctx,
-      ),
-    );
-    if (this.state.connection.canWrite) {
-      this.request("chat.abort", { sessionKey: key, runId }).catch(() => {});
-    }
+    this.updateActivity(key, (activity) => markTurnLimit(activity, runId, minutes));
+    if (this.state.connection.canWrite && !this.options.readOnly) void this.stopRun(key, runId);
   }
 
   private clearTurnTimers(key: string): void {

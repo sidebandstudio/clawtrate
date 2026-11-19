@@ -611,11 +611,11 @@ describe("queueing and stopping (F-097, F-419, F-420, F-421)", () => {
     client.stop();
   });
 
-  it("fails a run this client started at the turn limit and aborts it (F-100)", async () => {
+  it("stops a run this client started at the turn limit, aborting it by its id (F-100)", async () => {
     const { client, gateway, transcript } = await openTask({ turnLimitMs: 60 });
     client.sendMessage(KEY, "Take your time");
-    await until(() => transcript().runs[0]?.state === "failed", 2_000);
-    expect(transcript().runs[0]!.error).toMatchObject({ kind: "turn-limit" });
+    await until(() => transcript().runs[0]?.state === "stopping", 2_000);
+    expect(transcript().runs[0]!.turnLimit).toBe(0);
     await until(() => gateway.calls("chat.abort").length === 1);
     expect(gateway.calls("chat.abort")[0]).toEqual({ sessionKey: KEY, runId: "run-1" });
     client.stop();

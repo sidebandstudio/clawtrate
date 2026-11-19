@@ -344,15 +344,23 @@ describe("how a run ends", () => {
     expect(endingOf(run({ state: "completed" }))).toBeNull();
   });
 
-  it("F-100: a run that reached its turn limit ends as failed with a note naming the limit", () => {
+  it("F-100: a run this client stopped at its turn limit, once stopped, names the limit; one the gateway timed out is worded as the gateway's", () => {
+    expect(endingOf(run({ state: "stopped", stopRequestedAt: 1, turnLimit: 50 }))).toEqual({
+      kind: "turn-limit",
+      minutes: 50,
+    });
+    // Still stopping, or put back after a refused abort: no ending at all yet.
+    expect(endingOf(run({ state: "stopping", stopRequestedAt: 1, turnLimit: 50 }))).toBeNull();
+    expect(endingOf(run({ state: "running", turnLimit: 50 }))).toBeNull();
     expect(
       endingOf(
         run({
           state: "failed",
-          error: { message: "Stopped at the 50-minute turn limit.", kind: "turn-limit" },
+          error: { message: "The run timed out.", kind: null },
+          ending: { timeoutPhase: "run" } as Run["ending"],
         }),
       ),
-    ).toMatchObject({ kind: "turn-limit", minutes: 50 });
+    ).toEqual({ kind: "gateway-timeout", reason: "The run timed out." });
   });
 
   it("F-102: a failed run carries the gateway's reason", () => {

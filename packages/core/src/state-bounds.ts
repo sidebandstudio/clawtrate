@@ -351,6 +351,7 @@ export const RUN: Bound = flagged<Run>()({
     recipientsAsked: FLAG,
   }),
   stoppedForTimeouts: NUMBER,
+  turnLimit: NUMBER,
   retry: object<NonNullable<Run["retry"]>>()({ attempt: NUMBER, of: NUMBER, reason: NAME }),
 });
 const attachmentInfo = object<OutgoingAttachmentInfo>()({

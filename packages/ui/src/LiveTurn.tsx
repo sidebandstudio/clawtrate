@@ -316,16 +316,19 @@ export function RunEnding({
   }
   // A send the gateway refused already says so under your message.
   if (run.error?.kind === "not-started") return null;
+  // The app's own limit and the gateway's are worded apart: each says who ended the turn.
   const title =
     ending.kind === "turn-limit"
-      ? ending.minutes
-        ? `${bot.name}'s turn reached its ${ending.minutes} minute limit`
-        : `${bot.name}'s turn reached its time limit`
-      : `${bot.name} couldn't finish this turn`;
+      ? `${bot.name}'s turn reached its ${ending.minutes} minute limit`
+      : ending.kind === "gateway-timeout"
+        ? `${bot.name}'s turn reached the gateway's time limit`
+        : `${bot.name} couldn't finish this turn`;
   const reason =
     ending.kind === "turn-limit"
-      ? "The gateway ended the turn so it would not hang. Send a message to pick up where it left off."
-      : ending.reason;
+      ? "Clawtrate stopped it at the Turn time limit in Settings, and the gateway confirmed. Send a message to pick up where it left off."
+      : ending.kind === "gateway-timeout"
+        ? "The gateway ended the turn so it would not hang. Send a message to pick up where it left off."
+        : ending.reason;
   if (dismissed) {
     return (
       <button

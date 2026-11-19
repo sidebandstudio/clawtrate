@@ -1632,7 +1632,7 @@ test("F-071 F-070: / lists the bot's own skills and the gateway's actions, a cho
   await composer(page).fill("");
 });
 
-test("F-100: with the Turn time limit set to 1 minute, a longer turn ends as failed with its card naming the limit, and the gateway stops it", async ({
+test("F-100: with the Turn time limit set to 1 minute, a longer turn is stopped through the gateway, and once it confirms the card names the limit and who stopped it", async ({
   page,
 }) => {
   test.setTimeout(240_000);
@@ -1656,12 +1656,20 @@ test("F-100: with the Turn time limit set to 1 minute, a longer turn ends as fai
     const { key } = await ownTask(page, "Turn limit");
     await composer(page).fill("Write it out very slowly. #slow 120");
     await page.keyboard.press("Enter");
+    const runId = await inFlightRunId(key);
     await expect(page.getByTestId("status-line")).toBeVisible();
     const card = page.getByTestId("turn-error");
     await expect(card).toContainText("Otto's turn reached its 1 minute limit", {
       timeout: 120_000,
     });
+    await expect(card).toContainText("Clawtrate stopped it at the Turn time limit in Settings");
     await expect(page.getByTestId("status-line")).toHaveCount(0);
+    // The gateway ended that run because it was asked to (`rpc`), not by a limit of its own.
+    const ended = await gatewayCall<{ stopReason?: string }>("agent.wait", {
+      runId,
+      timeoutMs: 10_000,
+    });
+    expect(ended.stopReason).toBe("rpc");
     await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
   } finally {
     await setLimit("50");

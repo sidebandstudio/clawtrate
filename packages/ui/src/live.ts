@@ -320,7 +320,10 @@ export type RunEnding =
       timeouts: number | null;
     }
   | { kind: "finished-before-stop" }
-  | { kind: "turn-limit"; minutes: number | null; reason: string | null }
+  /** This client stopped the run at the person's "Turn time limit" (F-100), once confirmed. */
+  | { kind: "turn-limit"; minutes: number }
+  /** The gateway ended the run at a time limit of its own (its run's `timeoutPhase`). */
+  | { kind: "gateway-timeout"; reason: string | null }
   | { kind: "failed"; reason: string };
 
 /**
@@ -333,6 +336,7 @@ export function endingOf(run: Run, transcript?: Transcript): RunEnding | null {
   if (run.state === "completed" && run.finishedBeforeStop) return { kind: "finished-before-stop" };
   if (run.state === "stopped") {
     if (!run.outcomeKnown) return null;
+    if (run.turnLimit !== undefined) return { kind: "turn-limit", minutes: run.turnLimit };
     const commanded = (transcript?.outbox ?? []).some(
       (message) =>
         message.status === "handled" &&
@@ -347,14 +351,8 @@ export function endingOf(run: Run, transcript?: Transcript): RunEnding | null {
     };
   }
   if (run.state === "failed") {
-    if (run.error?.kind === "turn-limit" || run.ending?.timeoutPhase) {
-      const minutes = /(\d+)-minute/.exec(run.error?.message ?? "")?.[1];
-      return {
-        kind: "turn-limit",
-        minutes: minutes ? Number(minutes) : null,
-        reason: run.error?.message ?? null,
-      };
-    }
+    if (run.ending?.timeoutPhase)
+      return { kind: "gateway-timeout", reason: run.error?.message ?? null };
     return { kind: "failed", reason: run.error?.message ?? "The gateway gave no reason." };
   }
   return null;

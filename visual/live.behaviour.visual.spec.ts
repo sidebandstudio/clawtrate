@@ -869,15 +869,16 @@ test.describe("Stop", () => {
     await expect(page.getByTestId("incomplete")).toHaveCount(0);
   });
 
-  test("F-100: a run that reached its time limit ends with a card naming the limit", async ({
+  test("F-100: a run Clawtrate stopped at its time limit ends with a card naming the limit and who stopped it", async ({
     page,
   }) => {
     await open(page, "run-turn-limit");
     const card = page.getByTestId("turn-error");
     await expect(card).toContainText("Otto's turn reached its 50 minute limit");
     await expect(card).toContainText(
-      "The gateway ended the turn so it would not hang. Send a message to pick up where it left off.",
+      "Clawtrate stopped it at the Turn time limit in Settings, and the gateway confirmed.",
     );
+    await expect(card).not.toContainText("The gateway ended the turn");
   });
 });
 
