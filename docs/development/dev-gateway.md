@@ -63,7 +63,7 @@ pnpm dev-gateway start --instance acct --with-accounts --with-plugin clawtrate-d
 pnpm dev-gateway lock --instance acct --agent <bot> --provider acme acme:home
 ```
 
-A named instance can carry scripted provider accounts: two scripted providers on its own scripted model, labelled accounts of both in the shared store and one kept by Otto alone, a record of which account's credential reached the scripted model for every request, failures scripted per account, and scripted sign-ins (a link and a code, a browser sign-in with the code pasted back, an API key) through the gateway's own `models.authLogin`. `lock` and `unlock` set and clear a bot's one-account order through the gateway's command line. [`tools/dev-gateway/README.md`](../../tools/dev-gateway/README.md) explains all of it, the account checks and what the gateway did.
+A named instance can carry scripted provider accounts: two scripted providers on its own scripted model, labelled accounts of both in the shared store and one kept by Otto alone, a record of which account's credential reached the scripted model for every request, failures scripted per account, and scripted sign-ins (a link and a code, a browser sign-in with the code pasted back, one that finishes on the gateway's machine, one whose callback the gateway takes, an API key) through the gateway's own `models.authLogin`, and a Globex key through the gateway's own key method. `lock` and `unlock` set and clear a bot's one-account order through the gateway's command line. [`tools/dev-gateway/README.md`](../../tools/dev-gateway/README.md) explains all of it, the account checks and what the gateway did.
 
 ## Migrating from an older version
 
