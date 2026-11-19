@@ -115,12 +115,12 @@ export function botLabel(
 }
 
 /** The rows under an unfolded bot: the first six, always including the current task. */
-export function visibleTasks(
-  tasks: Task[],
+export function visibleTasks<T extends { key: string }>(
+  tasks: T[],
   currentKey: string | null,
   showAll: boolean,
   cap: number = TASK_CAP,
-): Task[] {
+): T[] {
   if (showAll || tasks.length <= cap) return tasks;
   const top = tasks.slice(0, cap);
   const current = tasks.find((task) => task.key === currentKey);

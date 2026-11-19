@@ -925,7 +925,9 @@ export function RoutinesView({
                   </strong>{" "}
                   {nav.bot === null
                     ? "Choose a bot to see all of its routines."
-                    : "All of this bot's are shown."}
+                    : botRead.status === "ready" && botRead.value.omitted === 0
+                      ? "All of this bot's are shown."
+                      : null}
                 </p>
               </Note>
             )}

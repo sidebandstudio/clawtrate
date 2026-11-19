@@ -431,10 +431,10 @@ export function routineCommand(
     case "refreshRoutines":
       return Promise.resolve();
     case "readBotRoutines":
-      return Promise.resolve({
+      return answer(command.botId, () => ({
         routines: fixtureRoutineList(now, params).filter((each) => each.botId === command.botId),
         omitted: 0,
-      });
+      }));
     case "readRoutineRuns": {
       const routine = find(command.id);
       return answer(command.id, () =>
