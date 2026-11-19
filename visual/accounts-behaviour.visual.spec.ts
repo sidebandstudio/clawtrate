@@ -944,3 +944,173 @@ for (const size of [WIDE, PHONE]) {
     });
   });
 }
+
+test("F-473: Save draws a grey line in the open task naming the new account, and the run in progress when there is one", async ({
+  page,
+}) => {
+  // Otto has a run in progress in another task.
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await expect(
+    page.getByText("A run in progress finishes on OpenAI · Work. The next run uses OpenAI · Home."),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Save" }).click();
+  const line = page.getByTestId("transcript").getByTestId("client-event-line");
+  await expect(line).toHaveText(
+    "Otto now runs on OpenAI · Home. The run in progress finishes on OpenAI · Work.",
+  );
+  // Centred, grey, after the last message: drawn by Clawtrate from its own change.
+  await expect(line).toHaveAttribute("data-side", "center");
+  await expect(line).toHaveClass(/event-line/);
+  const change = (await sent(page)).find((each) => each.type === "changeBotAccount");
+  expect(change).toMatchObject({
+    botId: "otto",
+    account: "openai:home",
+    taskKey: "agent:otto:disk-space",
+    running: true,
+  });
+  // To no fixed account.
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^Let the gateway choose/ }).click();
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(line.last()).toHaveText(
+    "Otto now has no fixed account. The run in progress finishes on OpenAI · Home.",
+  );
+});
+
+test("F-473: with no run in progress the line says the change applies from the next run, and only in the task that was open", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&bot=pip&task=agent:pip:week&panel=open&tab=settings&access=admin`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+  await expect(page.getByText(/A run in progress finishes on/)).toHaveCount(0);
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("transcript").getByTestId("client-event-line")).toHaveText(
+    "Pip now runs on OpenAI · Work, from the next run.",
+  );
+  expect((await sent(page)).find((each) => each.type === "changeBotAccount")).toMatchObject({
+    taskKey: "agent:pip:week",
+    running: false,
+  });
+});
+
+/** New bot, on the sign-in methods, and one of them started. */
+async function startMethod(page: Page, method: RegExp) {
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Connect another account" }).click();
+  await newBot(page).getByRole("button", { name: method }).click();
+}
+
+test("F-474: a sign-in that finishes on the gateway's machine shows the gateway's words, its forward command to copy, then the page", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await startMethod(page, /^Sign in with ChatGPT/);
+  await expect(
+    page.getByText(
+      "This sign-in finishes on the gateway's machine: OpenAI sends your browser back to an address there. The gateway says:",
+    ),
+  ).toBeVisible();
+  // The gateway's words as given, without the command it gives, which is its own block.
+  await expect(page.getByTestId("gateway-says")).toHaveText([
+    "Authorize eligible Responses API calls using your Codex allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.",
+    "Open the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process.",
+  ]);
+  const steps = newBot(page).locator(".b-steps > li");
+  await expect(steps.nth(0)).toContainText(
+    "On a computer that isn't the gateway, forward its port first:",
+  );
+  await expect(steps.nth(0).getByTestId("command")).toHaveText(
+    "ssh -N -L 8080:127.0.0.1:8080 user@gateway-host",
+  );
+  await expect(steps.nth(1)).toContainText(
+    "Then open the sign-in page in that computer's browser.",
+  );
+  await expect(steps.nth(1).getByTestId("open-page")).toHaveAttribute(
+    "href",
+    "https://sign-in.example/authorize?state=host",
+  );
+  await expect(
+    page.getByText("Waiting for OpenAI to send your browser back to the gateway…"),
+  ).toBeVisible();
+  await expect(page.getByTestId("paste")).toHaveCount(0);
+});
+
+test("F-474: a browser sign-in whose callback the gateway takes itself shows the page and nothing to paste", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=callback`, "light");
+  await startMethod(page, /^ChatGPT in the browser/);
+  await expect(
+    page.getByText(
+      "Open OpenAI's sign-in page and sign in. OpenAI then sends your browser back to the gateway, which finishes the sign-in by itself.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByTestId("open-page")).toHaveAttribute(
+    "href",
+    "https://sign-in.example/authorize?state=callback",
+  );
+  await expect(page.getByText("sign-in.example", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("paste")).toHaveCount(0);
+  await expect(page.getByRole("group", { name: /^Code / })).toHaveCount(0);
+  await expect(page.getByText(/finishes on the gateway's machine/)).toHaveCount(0);
+});
+
+test("F-474: too late to cancel: Cancel reads Saving…, disabled, and Back keeps the sign-in while the gateway saves", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=saving`, "light");
+  await startMethod(page, /^xAI · /);
+  await expect(
+    page.getByText("Too late to cancel: the gateway is saving the sign-in."),
+  ).toBeVisible();
+  const saving = newBot(page).getByRole("button", { name: "Saving…" });
+  await expect(saving).toBeDisabled();
+  await expect(newBot(page).getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Back to sign-in methods" }).click();
+  await expect(page.getByRole("heading", { name: "Sign in to xAI", level: 2 })).toBeVisible();
+});
+
+test("F-475: the key path says a new key replaces the one the gateway has, only where it has one; the key is sent once and kept nowhere on the page", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Connect another account" }).click();
+  await newBot(page).locator("details.b-disclosure summary").click();
+  const provider = page.getByRole("combobox", { name: "Provider" });
+  const replaces = page.getByText(
+    "This replaces the Anthropic key your gateway already has. Bots that use it switch to the new key. To keep both, add the second on the gateway's machine.",
+  );
+  await provider.selectOption("openai");
+  await expect(page.getByText(/This replaces the/)).toHaveCount(0);
+  await provider.selectOption("anthropic");
+  await expect(replaces).toBeVisible();
+  const key = "made-up-key-for-the-fixture-0001";
+  const field = page.getByTestId("api-key");
+  await expect(field).toHaveAttribute("type", "password");
+  await expect(field).toHaveAttribute("autocomplete", "off");
+  await field.fill(key);
+  await page.getByRole("button", { name: "Save key" }).click();
+  await expect(page.getByRole("heading", { name: "Key saved" })).toBeVisible();
+  // The account it replaced keeps its label.
+  await expect(page.getByRole("textbox", { name: "Label" })).toHaveValue("Lab key");
+  const saves = (await sent(page)).filter((each) => each.type === "saveApiKey");
+  expect(saves).toHaveLength(1);
+  expect(saves[0]).toMatchObject({ provider: "anthropic", key });
+  expect(await page.content()).not.toContain(key);
+});

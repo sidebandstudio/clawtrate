@@ -13,7 +13,8 @@
 //                             failed, expired, cancelled, ended, busy, unconfirmed, saving,
 //                             checking (an answer stays checking), unverified (the read after
 //                             it failed), cancel-unknown (the cancel's answer says nothing),
-//                             several (two new accounts appeared while it ran)
+//                             several (two new accounts appeared while it ran), callback (a
+//                             browser sign-in whose callback the gateway takes itself)
 //   keyread=fail              a key saved directly whose read afterwards fails
 //   keyfails=1                xAI's key goes through a sign-in that refuses it
 //   saved=1                   a sign-in that ended uncleanly left an account behind
@@ -794,6 +795,23 @@ export function accountCommand(
             ),
           });
         }
+        // signin=callback: a browser sign-in whose callback the gateway takes itself, as the
+        // gateway's steps show it: a page to open, and no code and no field.
+        if (method.flow === "paste" && stage === "callback")
+          return signIn({
+            stage: "waiting",
+            step: {
+              id: "callback",
+              type: "progress",
+              title: null,
+              message: "Complete sign-in in your browser.",
+              url: "https://sign-in.example/authorize?state=callback",
+              code: null,
+              expiresInMinutes: null,
+              placeholder: null,
+              sensitive: false,
+            },
+          });
         if (method.flow === "paste")
           return signIn({
             stage: "entering",
@@ -825,15 +843,18 @@ export function accountCommand(
               sensitive: false,
             },
           });
+        // A sign-in that finishes on the gateway's machine, in the gateway's own words: a note
+        // with the page, then the wait for the callback.
         if (method.flow === "host")
           return signIn({
             stage: "waiting",
+            saving: stage === "saving",
             step: {
               id: "host",
-              type: "progress",
-              title: null,
+              type: "note",
+              title: "Sign in with ChatGPT (Beta)",
               message:
-                "On a computer that isn't the gateway, forward its port first: ssh -N -L 8080:127.0.0.1:8080 gateway-host. Then open the sign-in page in that computer's browser.",
+                "Authorize eligible Responses API calls using your Codex allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.\n\nOpen the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process. For an SSH host, forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host",
               url: "https://sign-in.example/authorize?state=host",
               code: null,
               expiresInMinutes: null,
@@ -881,6 +902,8 @@ export function accountCommand(
       return Promise.resolve();
     }
     case "cancelSignIn":
+      // signin=saving: the gateway declines the cancel; it is saving.
+      if (accounts().signIn?.saving) return Promise.resolve({ cancelled: false });
       // signin=cancel-unknown: the gateway's answer to the cancel says nothing.
       if (params.signin === "cancel-unknown") {
         signIn({ cancelUnknown: true });
@@ -1079,6 +1102,7 @@ export function accountCommand(
       return Promise.resolve();
     case "changeBotAccount":
     case "setBotModel": {
+      const before = accounts().bindings.find((b) => b.botId === command.botId);
       put((a) => ({
         ...a,
         bindings: a.bindings.map((b) => {
@@ -1104,6 +1128,24 @@ export function accountCommand(
           return { ...next, evidence: { ...b.evidence, status, checkedAt: Date.now() } };
         }),
       }));
+      // The line Clawtrate draws in the open task for its own change of account.
+      if (command.type === "changeBotAccount") {
+        put((a) => ({
+          ...a,
+          changes: [
+            ...a.changes,
+            {
+              botId: command.botId,
+              taskKey: command.taskKey ?? null,
+              at: Date.now(),
+              provider: command.provider,
+              account: command.account,
+              previous: before?.account ?? null,
+              running: (command.running ?? false) && before?.account !== command.account,
+            },
+          ],
+        }));
+      }
       return Promise.resolve();
     }
     case "removeBotFallbacks":

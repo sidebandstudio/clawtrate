@@ -32,6 +32,8 @@ let admin: OperatorSession;
 let providerUrl: string;
 /** Every frame the host sent the page, as text. */
 const frames: string[] = [];
+/** Every frame the page sent the host, as text. */
+const sentFrames: string[] = [];
 
 type Json = Record<string, unknown>;
 
@@ -153,7 +155,10 @@ test.beforeAll(async ({ browser }) => {
   // What the host sends the page, to show that a typed key never comes back.
   await page.routeWebSocket(/\/bridge$/, (ws) => {
     const server = ws.connectToServer();
-    ws.onMessage((message) => server.send(message));
+    ws.onMessage((message) => {
+      sentFrames.push(String(message));
+      server.send(message);
+    });
     server.onMessage((message) => {
       frames.push(String(message));
       ws.send(message);
@@ -489,6 +494,342 @@ test("F-473: changing a locked bot to another account of its provider shows the 
   devGateway(INSTANCE, "unlock", "--agent", "second", "--provider", "acme");
 });
 
+/** Requests of a session the scripted model answered after `seq`. */
+async function requestsSince(session: string, seq: number): Promise<Request[]> {
+  return (await requestsFor(session)).filter((each) => each.seq > seq);
+}
+const lastSeq = async () =>
+  (await scripted<{ requests: Request[] }>("/scripted/requests")).requests.at(-1)?.seq ?? 0;
+
+test("F-473: changing a bot's account draws a grey line in its open task, and the next run uses the new account", async () => {
+  test.setTimeout(180_000);
+  const settings = await accountPage();
+  await expect(settings.getByTestId("bound-note")).toContainText("Second runs on Acme · Work.", {
+    timeout: 20_000,
+  });
+  await settings.getByRole("button", { name: "Change account" }).click();
+  await settings.getByRole("radio", { name: /^Acme · Home/ }).click();
+  // Nothing runs: no note about a run in progress.
+  await expect(settings.getByText(/A run in progress finishes on/)).toHaveCount(0);
+  await settings.getByRole("button", { name: "Save" }).click();
+  await expect(settings.getByTestId("bound-note")).toContainText("Second runs on Acme · Home.", {
+    timeout: 20_000,
+  });
+  // The gateway records no line for it: Clawtrate draws one in the open task.
+  const line = page.getByTestId("client-event-line");
+  await expect(line).toHaveText("Second now runs on Acme · Home, from the next run.");
+  await shots("account-change-line");
+  expect(entry(await config(), "second")!.model).toEqual({
+    primary: "acme/dev-1@acme:home",
+    fallbacks: [],
+  });
+  // The next run reaches the scripted model with the new account's credential only.
+  const since = await lastSeq();
+  const field = page.getByTestId("composer-input");
+  await field.fill("#text");
+  await field.press("Enter");
+  await expect
+    .poll(async () => (await requestsSince("agent:second:main", since)).length, {
+      timeout: 60_000,
+    })
+    .toBeGreaterThan(0);
+  const after = await requestsSince("agent:second:main", since);
+  expect(after.map((each) => each.account)).toEqual(after.map(() => "acme:home"));
+});
+
+test("F-473: a run in progress finishes on the account it started with; the line and the change say so, and the next run uses the new one", async () => {
+  test.setTimeout(240_000);
+  await accountPage();
+  await page.getByRole("button", { name: "Back to settings" }).click();
+  const since = await lastSeq();
+  // A run with a slow tool: one request before the change, one after it, in the same run.
+  const field = page.getByTestId("composer-input");
+  await field.fill("#slow-tool 15");
+  await field.press("Enter");
+  await expect
+    .poll(async () => (await requestsSince("agent:second:main", since)).length, {
+      timeout: 60_000,
+    })
+    .toBeGreaterThan(0);
+  const settings = page.getByTestId("bot-settings");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await settings.getByRole("button", { name: "Change account" }).click();
+  await settings.getByRole("radio", { name: /^Acme · Work/ }).click();
+  await expect(
+    settings.getByText("A run in progress finishes on Acme · Home. The next run uses Acme · Work."),
+  ).toBeVisible({ timeout: 20_000 });
+  await shots("account-change-running");
+  await settings.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("client-event-line").last()).toHaveText(
+    "Second now runs on Acme · Work. The run in progress finishes on Acme · Home.",
+    { timeout: 20_000 },
+  );
+  expect(entry(await config(), "second")!.model).toEqual({
+    primary: "acme/dev-1@acme:work",
+    fallbacks: [],
+  });
+  // The run ends, every request of it on the account it started with.
+  await expect
+    .poll(async () => (await requestsSince("agent:second:main", since)).length, {
+      timeout: 120_000,
+    })
+    .toBeGreaterThan(1);
+  await expect(page.getByTestId("composer-input")).toBeEnabled({ timeout: 120_000 });
+  await expect(page.getByRole("button", { name: /^Stop/ })).toHaveCount(0, { timeout: 120_000 });
+  const during = await requestsSince("agent:second:main", since);
+  expect(during.map((each) => each.account)).toEqual(during.map(() => "acme:home"));
+  // The next run uses the new account.
+  const next = await lastSeq();
+  await field.fill("#text");
+  await field.press("Enter");
+  await expect
+    .poll(async () => (await requestsSince("agent:second:main", next)).length, { timeout: 60_000 })
+    .toBeGreaterThan(0);
+  const after = await requestsSince("agent:second:main", next);
+  expect(after.map((each) => each.account)).toEqual(after.map(() => "acme:work"));
+});
+
+test("F-473: a bot locked to its old account and moved to another of the provider: the gateway puts the new one first and still tries the old one", async () => {
+  test.setTimeout(240_000);
+  // Accounts of its own, so a failure's rest touches no other check.
+  const old = await signInKey("staleold");
+  const fresh = await signInKey("stalenew");
+  const created = await admin.request<{ agentId: string }>("agents.create", {
+    name: "Mover",
+    model: `acme/dev-1@${old}`,
+  });
+  const bot = created.agentId;
+  await patchConfig({
+    agents: { entries: { [bot]: { model: { primary: `acme/dev-1@${old}`, fallbacks: [] } } } },
+  });
+  devGateway(INSTANCE, "lock", "--agent", bot, "--provider", "acme", old);
+  await patchConfig({
+    agents: { entries: { [bot]: { model: { primary: `acme/dev-1@${fresh}`, fallbacks: [] } } } },
+  });
+  // The order still names only the old account: the lock is out of date.
+  expect((await view(bot, "acme"))?.profileOrder).toEqual([old]);
+  // The new account fails: the run goes to it first, then to the old one.
+  await scripted("/scripted/accounts/fail", { account: fresh, status: 401 });
+  try {
+    const session = `agent:${bot}:stale`;
+    const sent = await admin.send(session, "#text");
+    await admin.terminal(String(sent.runId), 180_000);
+    const requests = await requestsFor(session);
+    expect(requests.map((each) => [each.account, each.status])).toEqual([
+      [fresh, 401],
+      [old, 200],
+    ]);
+  } finally {
+    await scripted("/scripted/accounts/clear", { account: fresh });
+    devGateway(INSTANCE, "unlock", "--agent", bot, "--provider", "acme");
+  }
+});
+
+/** Settings → Accounts → Connect an account, and one of the sign-in methods. */
+async function startFromSettings(method: RegExp) {
+  const settings = await connectFromSettings();
+  await settings.getByRole("button", { name: "Connect an account" }).first().click();
+  await settings.getByRole("button", { name: method }).click();
+  return settings;
+}
+const stateOf = (href: string | null) => new URL(href!).searchParams.get("state");
+
+test("F-474: a sign-in that finishes on the gateway's machine shows the gateway's words and the port to forward, and connects when the browser comes back there", async () => {
+  const settings = await startFromSettings(/^Acme \(scripted\) on the gateway's machine/);
+  await expect(settings.getByText(/This sign-in finishes on the gateway's machine/)).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(settings.getByTestId("gateway-says").first()).toContainText(
+    "Sign in on the scripted page.",
+  );
+  const command = settings.getByTestId("command");
+  await expect(command).toContainText(/^ssh -N -L (\d+):127\.0\.0\.1:\1 user@gateway-host$/);
+  await expect(settings.getByTestId("paste")).toHaveCount(0);
+  await shots("signin-host");
+  const href = await settings.getByTestId("open-page").getAttribute("href");
+  expect(href).toMatch(new RegExp(`^${providerUrl}/`));
+  const answered = await scripted<{ redirectUrl: string }>("/scripted/signin/answer", {
+    state: stateOf(href),
+    outcome: "approve",
+    account: "machine",
+  });
+  // The browser is sent back to the gateway's machine, at the port the command forwards.
+  const port = /-L (\d+):/.exec((await command.textContent()) ?? "")![1];
+  expect(new URL(answered.redirectUrl).port).toBe(port);
+  expect((await fetch(answered.redirectUrl)).status).toBe(200);
+  await expect(settings.getByRole("heading", { name: "Connected to Acme" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(settings.getByTestId("landed")).toContainText("Every bot can use it");
+  await settings.getByRole("textbox", { name: "Label" }).fill("Machine");
+  await settings.getByRole("button", { name: "Done" }).click();
+  await expect(settings.getByRole("button", { name: /^Acme · Machine/ })).toBeVisible({
+    timeout: 20_000,
+  });
+  await page.keyboard.press("Escape");
+});
+
+test("F-474: a browser sign-in whose callback the gateway takes itself waits with the page and nothing to paste", async () => {
+  const settings = await startFromSettings(/^Acme \(scripted\), back to the gateway/);
+  await expect(
+    settings.getByText(
+      /sends your browser back to the gateway, which finishes the sign-in by itself/,
+    ),
+  ).toBeVisible({ timeout: 20_000 });
+  await expect(settings.getByTestId("paste")).toHaveCount(0);
+  await expect(settings.locator(".b-code")).toHaveCount(0);
+  await shots("signin-callback");
+  const href = await settings.getByTestId("open-page").getAttribute("href");
+  const answered = await scripted<{ redirectUrl: string }>("/scripted/signin/answer", {
+    state: stateOf(href),
+    outcome: "approve",
+    account: "returned",
+  });
+  await fetch(answered.redirectUrl);
+  await expect(settings.getByRole("heading", { name: "Connected to Acme" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await settings.getByRole("textbox", { name: "Label" }).fill("Returned");
+  await settings.getByRole("button", { name: "Done" }).click();
+  await expect(settings.getByRole("button", { name: /^Acme · Returned/ })).toBeVisible({
+    timeout: 20_000,
+  });
+  await page.keyboard.press("Escape");
+});
+
+test("F-474: on the gateway's machine and back to the gateway, refused, expired and cancelled each say so, and what the gateway now has", async () => {
+  test.setTimeout(180_000);
+  for (const [method, outcome, heading] of [
+    [/^Acme \(scripted\) on the gateway's machine/, "expire", "The sign-in expired"],
+    [/^Acme \(scripted\), back to the gateway/, "refuse", "Couldn't connect"],
+  ] as const) {
+    const settings = await startFromSettings(method);
+    const href = await settings.getByTestId("open-page").getAttribute("href", { timeout: 20_000 });
+    const answered = await scripted<{ redirectUrl: string }>("/scripted/signin/answer", {
+      state: stateOf(href),
+      outcome,
+      account: `no${outcome}`,
+    });
+    await fetch(answered.redirectUrl);
+    await expect(settings.getByRole("heading", { name: heading })).toBeVisible({ timeout: 30_000 });
+    await expect(settings.getByTestId("reread")).toHaveText(
+      "Clawtrate checked the gateway's accounts: no new Acme account.",
+      { timeout: 20_000 },
+    );
+    await page.keyboard.press("Escape");
+  }
+  // Cancelled while it waits for the browser: the gateway confirms it, and closes its listener.
+  const settings = await startFromSettings(/^Acme \(scripted\) on the gateway's machine/);
+  await expect(settings.getByTestId("command")).toBeVisible({ timeout: 20_000 });
+  const port = /-L (\d+):/.exec((await settings.getByTestId("command").textContent()) ?? "")![1];
+  await settings.getByRole("button", { name: "Cancel" }).click();
+  await expect(settings.getByRole("heading", { name: "Sign-in cancelled" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(settings.getByTestId("reread")).toContainText("no new Acme account", {
+    timeout: 20_000,
+  });
+  await expect
+    .poll(
+      () =>
+        fetch(`http://127.0.0.1:${port}/callback`).then(
+          () => "open",
+          () => "closed",
+        ),
+      {
+        timeout: 20_000,
+      },
+    )
+    .toBe("closed");
+  await page.keyboard.press("Escape");
+});
+
+test("F-474: saved, not confirmed: the gateway saved the sign-in and says it could not apply it; Continue names the account it now lists", async () => {
+  const settings = await startFromSettings(/^Acme \(scripted\) · a link and a code/);
+  const code = settings.locator(".b-code code");
+  await expect(code).toBeVisible({ timeout: 20_000 });
+  await scripted("/scripted/signin/answer", {
+    userCode: await code.textContent(),
+    outcome: "unconfirmed",
+    account: "unsure",
+  });
+  await expect(settings.getByRole("heading", { name: "Saved, not confirmed" })).toBeVisible({
+    timeout: 30_000,
+  });
+  // The gateway's own words, as given.
+  await expect(
+    settings.getByText(/^Credentials saved, but provider settings could not be applied/),
+  ).toBeVisible();
+  await shots("signin-unconfirmed");
+  expect((await view("main", "acme"))?.profiles.some((p) => p.profileId === "acme:unsure")).toBe(
+    true,
+  );
+  // Nothing of the setting the gateway refused landed.
+  expect(((await config()).models as Json | undefined)?.providers).toMatchObject({
+    acme: { api: "openai-completions" },
+  });
+  await settings.getByRole("button", { name: "Continue" }).click();
+  await settings.getByRole("textbox", { name: "Label" }).fill("Unsure");
+  await settings.getByRole("button", { name: "Done" }).click();
+  await expect(settings.getByRole("button", { name: /^Acme · Unsure/ })).toBeVisible({
+    timeout: 20_000,
+  });
+  await page.keyboard.press("Escape");
+});
+
+test("F-474: the gateway is busy with another sign-in: the screen says so, and starts again when it ends", async () => {
+  const other = "accounts-e2e-busy";
+  await admin.request("models.authLogin", {
+    sessionId: other,
+    authChoice: SIGNIN_CHOICES.deviceCode,
+    agentId: "main",
+  });
+  try {
+    const settings = await startFromSettings(/^Acme \(scripted\) · a link and a code/);
+    await expect(settings.getByRole("heading", { name: "The gateway is busy" })).toBeVisible({
+      timeout: 20_000,
+    });
+    await admin.request("wizard.cancel", { sessionId: other });
+    await settings.getByRole("button", { name: "Try again" }).click();
+    await expect(settings.locator(".b-code code")).toBeVisible({ timeout: 20_000 });
+    await settings.getByRole("button", { name: "Cancel" }).click();
+    await expect(settings.getByRole("heading", { name: "Sign-in cancelled" })).toBeVisible({
+      timeout: 20_000,
+    });
+  } finally {
+    await admin.request("wizard.cancel", { sessionId: other }).catch(() => undefined);
+    await page.keyboard.press("Escape");
+  }
+});
+
+test("F-474: the connection dropped mid sign-in: it ended with it, the accounts are read again, and an approval afterwards saves nothing", async () => {
+  test.setTimeout(120_000);
+  const settings = await startFromSettings(/^Acme \(scripted\) · a link and a code/);
+  const code = settings.locator(".b-code code");
+  await expect(code).toBeVisible({ timeout: 20_000 });
+  const userCode = await code.textContent();
+  // The host's connection to the gateway goes, and comes back.
+  await hostCommand({ type: "suspend" });
+  await expect(settings.getByRole("heading", { name: "The sign-in ended" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await hostCommand({ type: "retry" });
+  await expect(settings.getByRole("heading", { name: "The sign-in ended" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(settings.getByTestId("reread")).toContainText("no new Acme account", {
+    timeout: 30_000,
+  });
+  await shots("signin-ended");
+  // The gateway ended it too: approving the code now saves no account.
+  await scripted("/scripted/signin/answer", { userCode, outcome: "approve", account: "dropped" });
+  await page.waitForTimeout(3000);
+  expect((await view("main", "acme"))?.profiles.some((p) => p.profileId === "acme:dropped")).toBe(
+    false,
+  );
+  await page.keyboard.press("Escape");
+});
+
 test("F-490: a bot whose model on the gateway lists fallbacks, or lost its account, is reported with the way to correct it", async () => {
   test.setTimeout(120_000);
   // Fallbacks written on the gateway, not by Clawtrate.
@@ -680,4 +1021,82 @@ test("F-476 F-490: a locked bot whose account answers 401, 402 or 429 fails the 
     { timeout: 30_000 },
   );
   devGateway(INSTANCE, "unlock", "--agent", bot, "--provider", "acme");
+});
+
+/** The bot's runs on `session` and the accounts the scripted model saw them come from. */
+async function runOn(session: string, since: number): Promise<string[]> {
+  const sent = await admin.send(session, "#text");
+  await admin.terminal(String(sent.runId), 120_000);
+  return (await requestsSince(session, since)).map((each) => String(each.account));
+}
+
+test("F-475: a key for a provider the gateway already keys says it replaces that key; the gateway keeps the new one, runs use it, and Clawtrate keeps it nowhere", async () => {
+  test.setTimeout(240_000);
+  const first = "clawtrate-dev-key.globex.first";
+  const second = "clawtrate-dev-key.globex.second";
+  const out: string[] = [];
+  host!.child.stdout!.on("data", (chunk: Buffer) => out.push(chunk.toString("utf8")));
+  const keyPath = async () => {
+    const settings = await connectFromSettings();
+    await settings.getByRole("button", { name: "Connect an account" }).first().click();
+    await settings.locator("details.b-disclosure summary").click();
+    await settings.getByRole("combobox", { name: "Provider" }).selectOption("globex");
+    return settings;
+  };
+  // Globex has a token and no key: nothing to replace.
+  let settings = await keyPath();
+  await expect(settings.getByText(/This replaces the Globex key/)).toHaveCount(0);
+  await settings.getByTestId("api-key").fill(first);
+  await settings.getByRole("button", { name: "Save key" }).click();
+  await expect(settings.getByRole("heading", { name: "Key saved" })).toBeVisible({
+    timeout: 30_000,
+  });
+  const keyed = (await view("main", "globex"))?.profiles.filter((p) => p.type === "api_key") ?? [];
+  expect(keyed.map((p) => p.profileId)).toEqual(["globex:manual"]);
+  await settings.getByRole("textbox", { name: "Label" }).fill("Direct");
+  await settings.getByRole("button", { name: "Done" }).click();
+  await expect(settings.getByRole("button", { name: /^Globex · Direct, API key/ })).toBeVisible({
+    timeout: 20_000,
+  });
+  await page.keyboard.press("Escape");
+  // A bot on that account: its run carries the key the gateway keeps.
+  const created = await admin.request<{ agentId: string }>("agents.create", {
+    name: "Keyed",
+    model: "globex/dev-1@globex:manual",
+  });
+  const session = `agent:${created.agentId}:keyed`;
+  expect(await runOn(session, await lastSeq())).toEqual(["globex:first"]);
+
+  // Now the gateway has a Globex key: the form says the new one replaces it.
+  settings = await keyPath();
+  const note = settings.getByText(
+    "This replaces the Globex key your gateway already has. Bots that use it switch to the new key. To keep both, add the second on the gateway's machine.",
+  );
+  await expect(note).toBeVisible();
+  await shots("connect-key-replace");
+  await settings.getByTestId("api-key").fill(second);
+  await settings.getByRole("button", { name: "Save key" }).click();
+  await expect(settings.getByRole("heading", { name: "Key saved" })).toBeVisible({
+    timeout: 30_000,
+  });
+  // Replaced, not added: the same account, and the next run carries the new key.
+  const after = (await view("main", "globex"))?.profiles.filter((p) => p.type === "api_key") ?? [];
+  expect(after.map((p) => p.profileId)).toEqual(["globex:manual"]);
+  expect(await runOn(session, await lastSeq())).toEqual(["globex:second"]);
+  // The account keeps its label: Done writes nothing new.
+  await expect(settings.getByRole("textbox", { name: "Label" })).toHaveValue("Direct");
+  await settings.getByRole("button", { name: "Done" }).click();
+  await expect(settings.getByRole("button", { name: /^Globex · Direct, API key/ })).toBeVisible({
+    timeout: 20_000,
+  });
+  await page.keyboard.press("Escape");
+
+  // Sent once from the page, and never back; in none of the host's files, output or the page.
+  for (const key of [first, second]) {
+    expect(sentFrames.filter((frame) => frame.includes(key))).toHaveLength(1);
+    expect(frames.some((frame) => frame.includes(key))).toBe(false);
+    expect(hostFiles(host!.data).includes(key)).toBe(false);
+    expect(out.join("").includes(key)).toBe(false);
+    expect(await page.content()).not.toContain(key);
+  }
 });

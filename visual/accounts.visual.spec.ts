@@ -212,6 +212,13 @@ const SCENES: Scene[] = [
     ),
   },
   {
+    name: "signin-callback",
+    query: `${ADMIN}&signin=callback`,
+    ready: signIn(/^ChatGPT in the browser/, (page) =>
+      expect(page.getByText(/which finishes the sign-in by itself/)).toBeVisible(),
+    ),
+  },
+  {
     name: "signin-domain",
     query: ADMIN,
     ready: signIn(/^GitHub Copilot Enterprise/, (page) =>
@@ -400,6 +407,33 @@ const SCENES: Scene[] = [
       await expect(
         page.getByText("xAI doesn't offer gpt-5.5. Choose one of its models."),
       ).toBeVisible();
+    },
+  },
+  {
+    name: "bot-change-saved",
+    query: page$("bound"),
+    ready: async (page) => {
+      await accountPage(page);
+      await page.getByRole("button", { name: "Change account" }).click();
+      await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+      await page.getByRole("button", { name: "Save" }).click();
+      await expect(page.getByTestId("bound-note")).toContainText("Otto runs on OpenAI · Home.");
+    },
+  },
+  {
+    name: "bot-change-line",
+    query: page$("bound"),
+    ready: async (page) => {
+      await accountPage(page);
+      await page.getByRole("button", { name: "Change account" }).click();
+      await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+      await page.getByRole("button", { name: "Save" }).click();
+      await expect(page.getByTestId("bound-note")).toContainText("Otto runs on OpenAI · Home.");
+      // The pane closed: the line where the conversation ends.
+      await page.keyboard.press("ControlOrMeta+\\");
+      const line = page.getByTestId("transcript").getByTestId("client-event-line");
+      await expect(line).toBeVisible();
+      await line.scrollIntoViewIfNeeded();
     },
   },
 ];
