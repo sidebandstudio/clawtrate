@@ -41,8 +41,10 @@ function UsageRow({ bot, onOpen, visible }: { bot: Bot; onOpen: () => void; visi
     report.status === "error" && !report.report
       ? "Couldn't load"
       : report.report
-        ? `This week: ${figureLine(report.report.figure)}`
-        : "Loading…";
+        ? `This week: ${figureLine(report.report.figure)}${report.status === "error" ? " · Couldn't read it again" : report.status === "loading" && report.waiting ? " · Waiting to read again" : ""}`
+        : report.status === "loading" && report.waiting
+          ? "Waiting…"
+          : "Loading…";
   const value = own ? `Budget ${budgetLine(own.budget, own.count)} · ${week}` : week;
   return (
     <>
@@ -192,6 +194,11 @@ export function BotUsagePage({
       {head}
       {budget}
       {choice}
+      {report.status === "loading" && report.waiting && (
+        <p className="b-hint" role="status" data-testid="usage-waiting">
+          {USAGE_WAITING}
+        </p>
+      )}
       {report.status === "error" && (
         <p className="b-field-error" role="alert" data-testid="usage-refresh-error">
           {refreshFailed(report.error, r)}{" "}

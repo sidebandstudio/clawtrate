@@ -20,6 +20,23 @@ async function settingsUsageWaiting(page: Page) {
   return settings;
 }
 
+/** From now on, the fixture's host answers every usage report busy, or fails it. */
+const answerReadsWith = (page: Page, answer: "busy" | "fail") =>
+  page.evaluate((answer) => {
+    const bridge = (
+      window as unknown as {
+        clawtrateFixture: { invoke(command: { type: string }): Promise<unknown> };
+      }
+    ).clawtrateFixture;
+    const original = bridge.invoke.bind(bridge);
+    bridge.invoke = (command) =>
+      command.type !== "readUsage"
+        ? original(command)
+        : answer === "busy"
+          ? Promise.resolve({ busy: true })
+          : Promise.reject(new Error("usage.cost timed out after 60 seconds."));
+  }, answer);
+
 async function settingsUsage(page: Page) {
   await page.keyboard.press("ControlOrMeta+,");
   const settings = page.getByRole("dialog", { name: "Settings" });
@@ -48,6 +65,15 @@ test("F-232: cost unavailable is a state, not a zero, on the row and the page (f
   await expect(page.getByTestId("usage-cost")).toHaveText("Unavailable");
   await expect(page.getByTestId("usage-cost-hint")).toHaveText(
     /^Cost unavailable: the gateway has no price configured for what was used, as of /,
+  );
+  // A figure read again for the same period, and the read failed: the row keeps its figure
+  // and says the refresh failed.
+  await openFixture(page, `${PANE}&usage=computing`, "light");
+  await expect(page.getByTestId("usage-row")).toContainText("This week: 1,640,000 tokens so far");
+  await answerReadsWith(page, "fail");
+  await expect(page.getByTestId("usage-row")).toContainText(
+    "This week: 1,640,000 tokens so far · about $3.29 so far, still being counted · Couldn't read it again",
+    { timeout: 15_000 },
   );
 });
 
@@ -357,6 +383,13 @@ test("F-234: while the host is busy reading other usage the page says it waits, 
   const settings = await settingsUsageWaiting(page);
   await expect(settings.getByTestId("usage-waiting")).toBeVisible();
   await expect(settings).not.toContainText("Couldn't load");
+  // A figure shown already, read again for the same period while the host is busy: the
+  // figure stays, and the page says it waits.
+  await openFixture(page, `${PAGE}&usage=computing`, "light");
+  await expect(page.getByTestId("usage-total")).toHaveText("1,640,000 tokens so far");
+  await answerReadsWith(page, "busy");
+  await expect(page.getByTestId("usage-waiting")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("usage-total")).toHaveText("1,640,000 tokens so far");
 });
 
 /** The `readUsage` commands the page has sent the fixture's host so far. */

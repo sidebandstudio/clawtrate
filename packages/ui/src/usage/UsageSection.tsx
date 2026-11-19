@@ -318,7 +318,7 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
     <>
       <h4 className="b-group">By bot</h4>
       <PeriodChoice value={period} onChange={setPeriod} />
-      {!r && report.status === "loading" && report.waiting && (
+      {report.status === "loading" && report.waiting && (
         <p className="b-hint" role="status" data-testid="usage-waiting">
           {USAGE_WAITING}
         </p>
