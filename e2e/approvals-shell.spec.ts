@@ -685,6 +685,25 @@ let pageIsAdmin = false;
 async function slowRun(key: string, seconds: number): Promise<string> {
   const op = await adminClient();
   await op.request("sessions.messages.subscribe", { key });
+  // The task's first run has replied and the gateway holds nothing running in it: a send
+  // into a working task would join that run, and this run would never start of its own.
+  await expect
+    .poll(
+      async () => {
+        const replied = (await historyOf(key)).some((row) => row.role === "assistant");
+        const { session } = await op.request<{ session?: Record<string, unknown> | null }>(
+          "sessions.describe",
+          { key },
+        );
+        const active =
+          session?.hasActiveRun === true ||
+          session?.status === "running" ||
+          session?.status === "queued";
+        return replied && !active;
+      },
+      { timeout: 90_000, intervals: [1000] },
+    )
+    .toBe(true);
   const runId = randomUUID();
   await op.request("chat.send", {
     sessionKey: key,
