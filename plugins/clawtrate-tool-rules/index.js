@@ -60,6 +60,8 @@ export const ALLOWED_DECISIONS = Object.freeze(["allow-once", "deny"]);
 export const TITLE_MAX = 80;
 export const DESCRIPTION_MAX = 512;
 export const CHANGED_EVENT = "changed";
+/** How often expired decision records are removed and the rules file looked at. */
+export const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const LIST_LIMIT = { default: 100, max: 500 };
 const ANSWERS = new Set(["allow-once", "allow-always", "deny", "timeout", "cancelled"]);
 
@@ -491,10 +493,22 @@ export function createToolRules(api, options = {}) {
   // ---- the service ----
 
   // Service ids are global across plugins, so this one carries the plugin's id.
+  const timers = [];
+  const tick = () => {
+    // Expired records leave the disk on an idle gateway too, and a change to
+    // the rules file is noticed (and logged) without waiting for a call.
+    log.prune();
+    store.refresh();
+  };
   if (typeof api.registerService === "function") {
     api.registerService({
       id: `${PLUGIN_ID}-rules`,
       start(ctx) {
+        tick();
+        const timer = setInterval(tick, options.pruneIntervalMs ?? PRUNE_INTERVAL_MS);
+        // The timer never keeps the gateway's process alive.
+        timer.unref?.();
+        timers.push(timer);
         const events = ctx?.gatewayEvents;
         shared.active.set(registration, {
           hook: hookRegistered,
@@ -510,11 +524,12 @@ export function createToolRules(api, options = {}) {
       },
       stop() {
         shared.active.delete(registration);
+        for (const timer of timers.splice(0)) clearInterval(timer);
       },
     });
   }
 
-  return { shared, dir, decide };
+  return { shared, dir, decide, timers };
 }
 
 export default {

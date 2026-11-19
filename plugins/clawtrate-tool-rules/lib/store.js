@@ -382,7 +382,7 @@ export class DecisionLog {
    * Drop records past the retention or the cap, oldest first, and rewrite the
    * file when it holds a fifth more lines than records kept.
    */
-  #maintain() {
+  #maintain(force = false) {
     const cutoff = this.now() - this.retentionMs;
     let drop = 0;
     while (drop < this.records.length && this.records[drop].at < cutoff) drop += 1;
@@ -393,7 +393,7 @@ export class DecisionLog {
       this.extraLines += drop;
     }
     const bloated = this.extraLines > 0 && this.extraLines >= this.records.length / 5;
-    if (drop === 0 && !bloated) return;
+    if (drop === 0 && !bloated && !force) return;
     try {
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
       const lines = this.records.map((record) => JSON.stringify(record));
@@ -412,6 +412,15 @@ export class DecisionLog {
     } catch (error) {
       this.problem = `the decision record cannot be written (${error.code ?? "error"})`;
     }
+  }
+
+  /**
+   * Drop the records past the retention from memory and from the file now,
+   * whether or not any call is being made.
+   */
+  prune() {
+    const cutoff = this.now() - this.retentionMs;
+    if (this.records.length > 0 && this.records[0].at < cutoff) this.#maintain(true);
   }
 
   /** Add a record; returns its id. */

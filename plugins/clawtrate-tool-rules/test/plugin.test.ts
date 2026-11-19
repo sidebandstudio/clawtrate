@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin, {
   ALLOWED_DECISIONS,
   APPROVAL_TIMEOUT_MS,
@@ -700,5 +700,40 @@ describe("who can see a card's text", () => {
     const redacted = await card({ pluginConfig: { cardDetails: "redacted" } });
     expect(redacted.write.description).not.toContain("notes/disk-report.md");
     expect(redacted.cardDetails).toEqual({ mode: "redacted", because: "setting" });
+  });
+});
+
+describe("thirty days means thirty days", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("drops expired records from disk with no tool activity, on a timer that keeps nothing alive", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const day = 86_400_000;
+    const h = host({ now: () => Date.now(), log: { now: () => Date.now() } });
+    h.before("otto", "read", { path: "a" }, { runId: "old-run" });
+    vi.setSystemTime(10 * day);
+    h.before("otto", "read", { path: "a" }, { runId: "newer-run" });
+    const file = join(h.stateDir, "clawtrate-tool-rules", "decisions.jsonl");
+    expect(readFileSync(file, "utf8")).toContain("old-run");
+    // Idle from here: no call, no method.
+    vi.advanceTimersByTime(21 * day);
+    expect(readFileSync(file, "utf8")).not.toContain("old-run");
+    expect(readFileSync(file, "utf8")).toContain("newer-run");
+    vi.advanceTimersByTime(10 * day);
+    expect(readFileSync(file, "utf8")).toBe("");
+    for (const timer of h.handle.timers) expect(timer.hasRef()).toBe(false);
+    h.stop();
+    expect(h.handle.timers).toEqual([]);
+  });
+
+  it("drops them at start", () => {
+    const day = 86_400_000;
+    let now = 0;
+    const h = host({ now: () => now, log: { now: () => now } });
+    h.before("otto", "read", { path: "a" }, { runId: "old-run" });
+    now = 31 * day;
+    load({ stateDir: h.stateDir, now: () => now, log: { now: () => now } });
+    const file = join(h.stateDir, "clawtrate-tool-rules", "decisions.jsonl");
+    expect(readFileSync(file, "utf8")).not.toContain("old-run");
   });
 });
