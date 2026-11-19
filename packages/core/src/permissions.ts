@@ -741,8 +741,10 @@ export type LoadedCall = { key: string; callId: string; runId: string | null };
 
 /**
  * The call in a loaded task that is this row's: in the row's own task, and in
- * its run. A call drawn with no run is taken only when it is the task's one
- * drawing of that call; anything that cannot be told apart gives no link.
+ * its run where the transcript gives it. A task draws a call in its history
+ * (no run named) and, while its run is followed, as that run's step: one call.
+ * The link is withheld whenever the task could hold another call with that id:
+ * a step of another run, or more than one drawing in its history.
  */
 function chatTarget(
   row: Omit<ActivityRow, "cause" | "inChat">,
@@ -750,13 +752,12 @@ function chatTarget(
 ): ActivityRow["inChat"] {
   if (!row.callId || !row.sessionKey) return null;
   const drawn = (loaded.get(row.callId) ?? []).filter((each) => each.key === row.sessionKey);
-  const ofRun = drawn.filter((each) => each.runId === row.runId);
+  const inHistory = drawn.filter((each) => each.runId === null);
+  const steps = drawn.filter((each) => each.runId !== null);
   const pick =
-    ofRun.length > 0 && ofRun.length === drawn.length
-      ? ofRun[0]
-      : drawn.length === 1 && drawn[0]!.runId === null
-        ? drawn[0]
-        : undefined;
+    inHistory.length <= 1 && steps.every((each) => each.runId === row.runId)
+      ? (steps[0] ?? inHistory[0])
+      : undefined;
   return pick && pick.key.length <= MAX_ACTIVITY_ID && pick.callId.length <= MAX_ACTIVITY_ID
     ? { key: pick.key, callId: pick.callId }
     : null;

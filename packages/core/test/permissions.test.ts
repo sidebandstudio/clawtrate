@@ -797,12 +797,19 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
       key: TASK_A,
       callId: "call_1",
     });
-    // Two drawings of that call id in its task, which the run can't tell apart: no link.
+    // Its run's step and its history row are the one call (seen on a development gateway).
+    expect(
+      await read(new Map([[BLOCKED_CALL, [call(TASK_A, "run-a"), call(TASK_A, null)]]])),
+    ).toEqual({ key: TASK_A, callId: "call_1" });
+    // The task could hold another call with that id: two history rows, or another run's step.
     expect(
       await read(new Map([[BLOCKED_CALL, [call(TASK_A, null), call(TASK_A, null)]]])),
     ).toBeNull();
     expect(
-      await read(new Map([[BLOCKED_CALL, [call(TASK_A, "run-a"), call(TASK_A, null)]]])),
+      await read(new Map([[BLOCKED_CALL, [call(TASK_A, "run-b"), call(TASK_A, null)]]])),
+    ).toBeNull();
+    expect(
+      await read(new Map([[BLOCKED_CALL, [call(TASK_A, "run-a"), call(TASK_A, "run-b")]]])),
     ).toBeNull();
   });
 
