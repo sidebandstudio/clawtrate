@@ -75,6 +75,20 @@ test("F-046: choosing where Otto's commands run is announced only once the answe
   );
 });
 
+test("F-046: a save that completes after Back still brings the Runs on row up to date", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  await page.getByTestId("runs-on-machine").click();
+  await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
+  // Back before the fixture answers (300 ms).
+  await page.getByRole("button", { name: "Back to settings" }).click();
+  await expect(page.getByTestId("runs-on-value")).toHaveText(
+    "Command setting: the gateway's machine",
+  );
+});
+
 test("F-046: a save the gateway hasn't applied is said as saved, not applied, and one it couldn't apply in its words", async ({
   page,
 }) => {

@@ -303,11 +303,10 @@ export function RunsOnPage({
       // A refusal and a reply that never came both end here: neither confirms a save.
       announce("Save not confirmed");
     } finally {
-      if (mounted.current) {
-        setSaving(false);
-        // Whatever the outcome, the page shows the gateway as it is now.
-        reload();
-      }
+      if (mounted.current) setSaving(false);
+      // Whatever the outcome, the placement is read again, by its owner (the bot's Settings tab,
+      // keyed by bot and connection), so the Runs on row shows it even after Back.
+      reload();
     }
   };
 
