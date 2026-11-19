@@ -935,6 +935,38 @@ describe("the usage engine", () => {
     expect(sets).toHaveLength(1);
   });
 
+  it("F-234: a budget write asks only through the request it was given, so a viewer that has gone sends nothing", async () => {
+    const gateway = fakeGateway();
+    const { engine } = engineOn(gateway);
+    let withdrawn = false;
+    const viewers = async (method: string, params: unknown) => {
+      if (withdrawn) throw new Error("This viewer has gone.");
+      const answer = await gateway.request(method, params);
+      // The viewer goes while the preference is read.
+      withdrawn = true;
+      return answer;
+    };
+    await expect(
+      engine.changeBudget(
+        {
+          op: "set",
+          budget: {
+            botId: "otto",
+            routineId: null,
+            routineName: null,
+            period: "weekly",
+            tokens: 5_000,
+            timeZone: NY,
+          },
+        },
+        viewers,
+      ),
+    ).rejects.toThrow();
+    expect(gateway.calls.map((c) => c.method)).toEqual(["users.prefs.get"]);
+    expect(gateway.prefs()).toBeUndefined();
+    engine.onClose();
+  });
+
   it("refuses a budget when the gateway keeps no preferences for this connection", async () => {
     const { engine, usage } = engineOn(fakeGateway({ identity: false }));
     await expect(

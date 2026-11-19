@@ -5203,8 +5203,10 @@ export class ClawtrateClient {
   /** Set or remove a warning budget, kept with the gateway as this person's preference. */
   async changeBudget(change: BudgetChange, options: { owner?: object } = {}): Promise<void> {
     if (this.options.readOnly) throw new Error("This host only reads; it does not change budgets.");
-    await this.actionContext(options.owner ?? null).ensureWrite();
-    await this.usage.changeBudget(change);
+    // Every request of the write is the viewer's: none is sent once that viewer has gone.
+    const context = this.actionContext(options.owner ?? null);
+    await context.ensureWrite();
+    await this.usage.changeBudget(change, context.request);
   }
 
   /** The routines a budget can be set for, read now and not kept. */

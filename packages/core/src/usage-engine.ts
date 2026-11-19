@@ -196,10 +196,10 @@ export class UsageEngine {
 
   // Budgets ------------------------------------------------------------------------------------
 
-  private async readRaw(): Promise<{ status: "ok"; raw: unknown } | { status: "unavailable" }> {
-    const result = asRecord(
-      await this.ctx.request("users.prefs.get", { keys: [BUDGETS_PREF_KEY] }),
-    );
+  private async readRaw(
+    request: Ask = this.ctx.request,
+  ): Promise<{ status: "ok"; raw: unknown } | { status: "unavailable" }> {
+    const result = asRecord(await request("users.prefs.get", { keys: [BUDGETS_PREF_KEY] }));
     if (result?.status !== "ok") return { status: "unavailable" };
     const entries = asRecord(result.entries) ?? {};
     return {
@@ -256,7 +256,7 @@ export class UsageEngine {
    * applied again to a newer value on a conflict, up to `BUDGET_WRITE_ATTEMPTS`.
    * The caller has made sure the connection may write.
    */
-  async changeBudget(change: BudgetChange): Promise<void> {
+  async changeBudget(change: BudgetChange, request: Ask = this.ctx.request): Promise<void> {
     const generation = this.generation;
     const assertSameConnection = () => {
       if (generation !== this.generation)
@@ -264,14 +264,14 @@ export class UsageEngine {
     };
     if (change.op === "set" && change.budget.routineId) {
       const { botId, routineId } = change.budget;
-      const job = await this.ctx.request("cron.get", { id: routineId });
+      const job = await request("cron.get", { id: routineId });
       assertSameConnection();
       if (!routinesOf({ jobs: [job] }).some((routine) => routine.botId === botId))
         throw new BudgetError(ROUTINE_NOT_SEPARATE);
     }
     for (let attempt = 0; attempt < BUDGET_WRITE_ATTEMPTS; attempt += 1) {
       assertSameConnection();
-      const read = await this.readRaw();
+      const read = await this.readRaw(request);
       assertSameConnection();
       if (read.status !== "ok")
         throw new BudgetError(
@@ -287,7 +287,7 @@ export class UsageEngine {
       const issued = ++this.issued;
       let answer: unknown;
       try {
-        answer = await this.ctx.request("users.prefs.set", {
+        answer = await request("users.prefs.set", {
           entries: { [BUDGETS_PREF_KEY]: next },
           expectedEntries: { [BUDGETS_PREF_KEY]: read.raw ?? null },
         });
@@ -295,7 +295,7 @@ export class UsageEngine {
         assertSameConnection();
         // The answer was lost: the gateway may have kept the change. What it holds is read,
         // and shown, before anything is said of the change.
-        return this.confirmBudgets(next, errorText(error), change, assertSameConnection);
+        return this.confirmBudgets(next, errorText(error), change, assertSameConnection, request);
       }
       assertSameConnection();
       const result = asRecord(answer);
@@ -321,12 +321,13 @@ export class UsageEngine {
     lost: string,
     change: BudgetChange,
     assertSameConnection: () => void,
+    request: Ask,
   ) {
     const issued = ++this.issued;
     let read: Awaited<ReturnType<UsageEngine["readRaw"]>>;
     assertSameConnection();
     try {
-      read = await this.readRaw();
+      read = await this.readRaw(request);
     } catch (error) {
       throw new BudgetError(
         `${BUDGET_UNCONFIRMED}: ${lost}. Reading the gateway's budgets again failed too: ${errorText(error)}`,
