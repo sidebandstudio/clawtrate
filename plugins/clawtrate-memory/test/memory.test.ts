@@ -792,7 +792,7 @@ describe("memory changes", () => {
         const root = await fs.root(...args);
         if (args[0] === (await fs.canonicalPathFromExistingAncestor(shared))) {
           const read = root.read.bind(root);
-          root.read = (path: string) => read(path === alias ? canonical : path);
+          root.read = (path: string) => read(path === `./${alias}` ? `./${canonical}` : path);
         }
         return root;
       },
