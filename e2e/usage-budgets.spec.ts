@@ -336,7 +336,6 @@ test("F-232 F-237: a bot's Usage page shows the gateway's own totals for each pe
     ),
   );
   expect(parts.reduce((sum, each) => sum + each, 0)).toBe((await gatewayTotal(null, "week")).total);
-  expect(parts[2]).toBeGreaterThan(0);
   // The development gateway reports no provider's limits, and says when.
   await expect(settings.getByTestId("limits-none")).toHaveText(/^No limits reported, as of /);
   await shot(page, "settings-usage");

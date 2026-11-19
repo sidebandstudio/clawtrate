@@ -43,7 +43,7 @@ export const MAX_LIMIT_TEXT_CHARS = 120;
 /** Tasks a report lists by name; the rest are counted. */
 export const MAX_REPORT_TASKS = 8;
 /** Task histories read to attribute one bot's runs; the rest stay Not attributed. */
-export const MAX_SCANNED_TASKS = 12;
+export const MAX_SCANNED_TASKS = 32;
 /** Sending tasks read to confirm which runs a send's result names. */
 export const MAX_SENDER_TASKS = 8;
 /** Rows of each history read for attribution (`chat.history` limit). */
