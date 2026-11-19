@@ -523,22 +523,32 @@ Operations: `sshAccount {destination}` (then the look over SSH), `trustKey`, `re
 | Address in a pasted code | Section 13: `wss://` with a verified certificate; no credentials, query, fragment or path; not loopback; no redirect                                                                           |
 | A remote path            | One of the fixed candidate paths, compared exactly                                                                                                                                             |
 
-**SSH, the host's configuration.** The host writes one file per route, with one validated value per directive, paths resolved and checked to stay under the person's home, and no configuration syntax or expansion characters in any value:
+**SSH, the host's configuration.** The host writes one file per route, with one directive per line and one validated value per directive, paths resolved and checked to stay under the person's home, and no configuration syntax or expansion characters in any value:
 
 ```
 Host clawtrate-route-<id>
   HostName <HostName from the person's block, or the typed host>
-  User <User>           Port <Port>
-  IdentityFile <each>   IdentitiesOnly <value>   CertificateFile <each>
+  User <User>
+  Port <Port>
+  IdentityFile <one line for each>
+  IdentitiesOnly <value>
+  CertificateFile <one line for each>
   HostKeyAlias clawtrate-route-<id>
   UserKnownHostsFile <app data>/known_hosts
   GlobalKnownHostsFile none
-  StrictHostKeyChecking yes        UpdateHostKeys no
-  BatchMode yes                    ConnectTimeout 10
-  ServerAliveInterval 15           ServerAliveCountMax 3
-  ExitOnForwardFailure yes         ClearAllForwardings yes
-  ForwardAgent no                  ForwardX11 no
-  PermitLocalCommand no            ControlMaster no      ControlPath none
+  StrictHostKeyChecking yes
+  UpdateHostKeys no
+  BatchMode yes
+  ConnectTimeout 10
+  ServerAliveInterval 15
+  ServerAliveCountMax 3
+  ExitOnForwardFailure yes
+  ClearAllForwardings yes
+  ForwardAgent no
+  ForwardX11 no
+  PermitLocalCommand no
+  ControlMaster no
+  ControlPath none
   RequestTTY no
 ```
 
