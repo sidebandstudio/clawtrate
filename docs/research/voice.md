@@ -1,0 +1,160 @@
+# Voice: what the gateway, the operating systems and the browser engine allow
+
+What Clawtrate can do for dictation, voice chat, a bot's voice, speed and language, the line a call leaves, voice memos and the microphone, checked against OpenClaw 2026.10.6. It settles the dependency cells of `docs/parity.md` rows F-111, F-253 to F-255, F-392, F-407 to F-413 and F-460 to F-463, and is the evidence behind `docs/design/voice.md`.
+
+How to read the citations, as in `setup-flow.md`:
+
+- `<openclaw>/…` is a path inside the installed `openclaw` 2026.10.6 npm package, the one the `openclaw` wrapper script runs. Chunk names carry a build hash that changes with every release; search by the `//#region <source path>` marker. Line numbers are of the 2026.10.6 chunks. `handlers` below is `<openclaw>/dist/handlers-CjWbukvo.mjs`, `policy` is `<openclaw>/dist/core-method-policy-DkntKRY_.mjs`.
+- **Live** means it was run, and the result is quoted. **Read-only-from-source** means it was read in shipped code or bundled docs only, with the reason it could not be run. **Documented** means a vendor's documentation, linked.
+
+Where things were run: a named development instance of my own, `d15voice`, started with `pnpm dev-gateway start --instance d15voice`. The probe is `voice/probe.ts`; it uses this project's own client (`packages/core`) as the desktop app would. Two devices were paired: one left read-only (`operator.read`) and one given Clawtrate's interactive tier (`operator.read`, `operator.write`, `operator.approvals`, `operator.questions`) through `device.scopes.requestUpgrade` and `devices approve`. A development gateway has no voice provider, and everything it fetches beyond loopback goes to its scripted model, which refuses it. No audio of a person was recorded or sent: the only audio-shaped value sent was ten milliseconds of zeros, to a session id the gateway does not have. The scripted model's log shows two refused requests, both from the gateway's start (its plugin catalog), and none during the probe.
+
+## Summary
+
+| # | Question | Answer | Section |
+|---|---|---|---|
+| 1 | Do the methods exist, at which tier, and what does a gateway with no voice provider answer? | Every `talk.*` method the design uses, `tts.convert` and the events `talk.event`, `talk.mode` and `talk.voice.change` are advertised in `hello-ok`. **Live.** A read-only connection is refused every Talk call with `MISSING_SCOPE operator.talk` and `tts.convert` with `MISSING_SCOPE operator.write`; the interactive tier reaches every handler. `talk.catalog` (read) answers `realtime.ready: false` and `transcription.ready: false`, each provider `configured: false`. `talk.session.create` answers `UNAVAILABLE` "Realtime voice provider "openai" is not configured", or for transcription "No realtime transcription provider registered". **Live.** | 1 |
+| 2 | Where does a call's audio go? | Relayed (`talk.session.create`, realtime, `gateway-relay`): from the device over its own gateway connection, as base64 PCM16 at 24 kHz in `talk.session.appendAudio`, to the gateway, which streams it to the provider `talk.catalog` names as `realtime.activeProvider`; the reply comes back the same way, only to that connection. Client-owned (`talk.client.create`, `webrtc` or `provider-websocket`): the device connects to the provider's own host. **Source.** The design uses the relay only. | 2 |
+| 3 | Where does dictation's audio go? | Gateway route: `talk.session.create {mode: "transcription"}`, G.711 µ-law at 8 kHz to the gateway and on to `transcription.activeProvider`. **Source**; refusal **live**. On the device: Chromium's speech recognition sends audio to a Google service by default and is not used. Apple's Speech framework keeps audio on the Mac only with `requiresOnDeviceRecognition`, when the recognizer supports it. Windows' speech API for dictation uses Microsoft's online recognition and needs package identity; no on-device dictation route was established for Windows. **Documented.** | 3 |
+| 4 | The microphone | The desktop app today grants its renderer no permission but clipboard writing (`apps/desktop/src/main/index.ts`, `lockDownSession`). A packaged macOS build with the hardened runtime needs `NSMicrophoneUsageDescription` and the `com.apple.security.device.audio-input` entitlement. A page over plain `http` from another host has no `navigator.mediaDevices`. **Source and documented.** | 4 |
+| 5 | One call at a time; a dropped connection | The gateway allows two relay sessions per connection and 64 in all, and ends a relay session when its connection closes, and after 30 minutes. A call is not resumed after a drop. One call at a time is the client's rule. **Source.** | 5 |
+| 6 | After a call | The gateway saves each finalized utterance as an ordinary user or assistant message in the bot's task, with `provenance: {kind: "realtime_voice", sourceChannel: "talk"}` and a timestamp. No call record with a duration is readable by a client. **Source.** | 6 |
+| 7 | Voice, speed and language | `talk.voice.set` changes the voice of one active call this connection owns, if the call was created with the `voice-selection` capability and its voice list is not empty; with no call it answers "No active voice call is available". **Live** (no call). Speed has no gateway setting. `language` is accepted only by `talk.session.create` (two lowercase letters); in 2026.10.6 the realtime relay passes it to the provider and the transcription branch drops it. **Live** (validation) and **source**. | 7 |
+| 8 | Voice memos | A bot's voice memo is an audio item in its message: the `tts` tool returns an audio attachment. It is listed and fetched like any item (`artifacts.list`, `artifacts.download`, `operator.read`). No transcript field and no word timings exist. **Source.** | 8 |
+| 9 | Keys | ⌘D and Ctrl+D are free in the app; the shortcuts taken are listed in section 9. **Source.** | 9 |
+
+## 1. The methods, their tiers and the answers with no voice provider
+
+### What is advertised
+
+`probe.ts methods` on both devices printed the same list for `hello-ok.features`:
+
+```
+advertised methods: {"talk.catalog":true,"talk.config":true,"talk.session.create":true,"talk.session.appendAudio":true,"talk.session.cancelOutput":true,"talk.session.close":true,"talk.client.create":true,"talk.client.transcript":true,"talk.client.close":true,"talk.voice.get":true,"talk.voice.set":true,"talk.voice.complete":true,"talk.speak":true,"talk.mode":true,"tts.status":true,"tts.providers":true,"tts.convert":true,"tts.speak":true,"transcripts.list":true,"chat.history":true} events: {"talk.event":true,"talk.mode":true,"talk.voice.change":true}
+```
+
+### Tiers
+
+The policy table (`policy` lines 437-527): `talk.catalog` is `operator.read`; `talk.config` is dynamic; every `talk.session.*`, `talk.client.*`, `talk.speak` and `talk.mode` is `operator.talk`; `talk.voice.get`, `set` and `complete` are `operator.talk` (lines 2892-2904); `tts.convert` and `tts.speak` are `operator.write` (lines 168, 1998). Events (`<openclaw>/dist/server-start-D6vaUNGz.mjs` lines 4294-4296): `talk.event` needs `operator.read`, `talk.mode` and `talk.voice.change` need `operator.talk`. `operator.write` satisfies `operator.talk` (`docs/research/gateway-capabilities.md`, section 17).
+
+**Live**, the read-only device (`["operator.read"]`):
+
+```
+talk.catalog (no params): {"ok":true,"result":{"modes":["realtime","stt-tts","transcription"], … }}
+talk.config (no params): {"ok":true,"result":{"config":{}}}
+talk.config (includeSecrets): {"code":"FORBIDDEN","message":"missing scope: operator.talk.secrets", …}
+talk.session.create (realtime, Juniper's task): {"code":"FORBIDDEN","message":"missing scope: operator.talk","details":{"code":"MISSING_SCOPE","missingScope":"operator.talk","requiredScopes":["operator.talk"]}}
+talk.session.appendAudio, cancelOutput, close; talk.client.create, transcript, close; talk.voice.get, set, complete: the same refusal
+tts.status: {"ok":true, … "providerStates":[{"id":"openai","label":"OpenAI","configured":false},{"id":"xai","label":"xAI","configured":false}]}
+tts.convert (empty text): {"code":"FORBIDDEN","message":"missing scope: operator.write", …}
+transcripts.list: {"ok":true,"result":{"sessions":[],"nextCursor":null}}
+```
+
+The refusal comes before the parameters are looked at: an invalid `language` got the same scope refusal. So a read-only connection can read what voice is set up and play what a bot sent, and cannot dictate through the gateway or call.
+
+**Live**, the interactive device (`["operator.read","operator.write","operator.approvals","operator.questions"]`), with one of Juniper's task keys (agent-prefixed):
+
+```
+talk.session.create (realtime, Juniper's task): {"code":"UNAVAILABLE","message":"Error: Realtime voice provider \"openai\" is not configured","details":{"talkIssue":{"code":"realtime_unavailable","message":"Error: Realtime voice provider \"openai\" is not configured","phase":"request"}}}
+talk.session.create (… language en, ttlMs 60000): the same
+talk.session.create (language english): {"code":"INVALID_REQUEST","message":"invalid talk.session.create params: at /language: must match pattern \"^[a-z]{2}$\""}
+talk.session.create (ttlMs 500): {"code":"INVALID_REQUEST","message":"invalid talk.session.create params: at /ttlMs: must be >= 1000"}
+talk.session.create (transport webrtc): {"code":"INVALID_REQUEST","message":"talk.session.create is Gateway-managed; use talk.client.create for client transport \"webrtc\""}
+talk.session.create (an unknown field): {"code":"INVALID_REQUEST","message":"invalid talk.session.create params: at root: unexpected property 'speed'"}
+talk.session.create (transcription): {"code":"UNAVAILABLE","message":"Error: No realtime transcription provider registered", …}
+talk.session.create (transcription, language en): the same
+talk.client.create (Juniper's task): {"code":"UNAVAILABLE","message":"Error: Realtime voice provider \"openai\" is not configured"}
+talk.client.create (with language): {"code":"INVALID_REQUEST","message":"invalid talk.client.create params: at root: unexpected property 'language'"}
+talk.client.create (with ttlMs): {"code":"INVALID_REQUEST","message":"invalid talk.client.create params: at root: unexpected property 'ttlMs'"}
+talk.session.appendAudio (an unknown session, 10 ms of zeros): {"code":"UNAVAILABLE","message":"Error: Unknown Talk session", …}
+talk.session.cancelOutput, talk.session.close (an unknown session): the same
+talk.client.transcript, talk.client.close (an unknown voice session): {"code":"INVALID_REQUEST","message":"Error: voice session not found"}
+talk.voice.get, talk.voice.set (with or without the task key, no call): {"code":"UNAVAILABLE","message":"Error: No active voice call is available"}
+talk.voice.complete (an unknown change): {"code":"INVALID_REQUEST","message":"invalid talk.voice.complete params: must have required property 'outcome'"}
+tts.convert (empty text): {"code":"INVALID_REQUEST","message":"tts.convert requires text"}
+talk.* events received: []
+```
+
+`tts.convert` was not called with text: with no TTS provider configured, nothing proves the call would stay on loopback, and the result is a path on the gateway's disk, which this client has no use for (section 8).
+
+### "Voice chat isn't set up on this gateway"
+
+`talk.catalog` at the read tier answers, here:
+
+```
+realtime: {"ready": false, "providers": [{"id": "openai", "label": "OpenAI Realtime Voice", "configured": false, "transports": ["webrtc", "gateway-relay"], "inputAudioFormats": [… {"encoding": "pcm16", "sampleRateHz": 24000, "channels": 1}], "voices": [...], "voicesByModel": {...}, …}, {"id": "xai", "label": "xAI Grok Voice", "configured": false, "transports": ["gateway-relay"], …}]}
+transcription: {"ready": false, "providers": [{"id": "openai", "label": "OpenAI Realtime Transcription", "configured": false, …}, {"id": "xai", "label": "xAI Realtime Transcription", "configured": false, …}]}
+```
+
+The group's `ready` is the result of the gateway's own provider selection, and `activeProvider` is set when a provider is selected or configured (`handlers` lines 5331-5343, 5492-5528). So the client can say, before anyone presses anything and on a read-only connection, that voice chat or gateway dictation isn't set up on this gateway, and, when it is, name the provider by its label. The refusal of `talk.session.create` says the same thing at the moment of starting, with `talkIssue.code: "realtime_unavailable"`, for a gateway whose catalog said ready and changed since. Neither answer says how to set a provider up; the owner does that in OpenClaw's own Talk settings (`<openclaw>/docs/nodes/talk.md`, "Config"), which need admin.
+
+`talk.catalog` did not need `talk.agentId` on this instance (it did on the probe behind the capability map, section 17, which had no default bot); the design reads it and treats `AGENT_SELECTION_REQUIRED` as "can't tell whether voice chat is set up", and passes the bot's task key to every create, which selects the bot either way.
+
+## 2. Where a call's audio goes
+
+**Relayed** (`talk.session.create`, `handlers` lines 4832-5091; read-only-from-source past the provider check, since there is no provider):
+
+- The realtime branch requires `transport: "gateway-relay"` and `brain: "agent-consult"` (line 4926) and resolves the provider from the gateway's own configuration (`resolveConfiguredRealtimeVoiceProvider`, line 4953). The answer carries `provider`, `sessionId` and `voiceSessionId` (lines 5045-5055).
+- The device sends its audio with `talk.session.appendAudio {sessionId, audioBase64, timestamp?}` (line 5094) over the same gateway connection; the session refuses any other connection ("Talk session is not owned by this connection", `<openclaw>/dist/session-registry-s7SwCWp5.mjs` line 149). The relay's audio format is PCM16 at 24 kHz (`REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ`, line 4201).
+- The gateway streams it to the provider and sends the provider's output back as `talk.event` frames (`ready`, `audio`, `transcript`, `responseStarted`, `clear`, `error`, `close`, …) to the owning connection only (`broadcastToOwner$1`, lines 1280-1283: `broadcastToConnIds(…, new Set([connId]))`).
+- The bundled docs say the same: "Gateway relay keeps provider credentials and vendor sockets server-side while browser audio moves through authenticated Gateway RPCs" (`<openclaw>/docs/web/control-ui/chat.md` line 476).
+
+So on a relayed call the audio goes **from the device to the person's gateway over the connection Clawtrate already has, and from the gateway to the provider `talk.catalog` names** (OpenAI, xAI or Google in this version's catalog). What the provider does with it is the provider's.
+
+**Client-owned** (`talk.client.create`, `handlers` lines 3084 onward): `webrtc` or `provider-websocket`; the gateway hands the device a short-lived credential and the device connects to the provider's own host (`chat.md` line 476: "Platform GA OpenAI receives an ephemeral Realtime client secret … Google Live receives a one-use constrained Live API auth token for a browser WebSocket session"). Even with `gateway-control-v1`, "media continues directly between the client and OpenAI" (`<openclaw>/docs/nodes/talk/realtime-sessions.md`, section on thin audio clients). That makes the app contact a host other than the gateway by itself, which the project's rule forbids unless the person asked for exactly that host. The design does not use this route; section 5 says what that costs.
+
+## 3. Where dictation's audio goes
+
+### Through the gateway
+
+`talk.session.create {mode: "transcription", transport: "gateway-relay", brain: "none"}` (`handlers` lines 5057-5088): the gateway resolves its transcription provider and creates a session owned by this connection; audio goes in with `talk.session.appendAudio`, as G.711 µ-law at 8 kHz (`RELAY_INPUT_ENCODING`, `RELAY_INPUT_SAMPLE_RATE_HZ`, lines 4559-4560), at most 512 KiB of base64 per call (`MAX_AUDIO_BASE64_BYTES`, line 4555); partial and final text come back as `talk.event` to this connection only (`broadcastToOwner`, line 4579); `talk.session.close` ends it (line 5194). The bundled docs name it for "captions/dictation without an assistant voice response" (`<openclaw>/docs/nodes/talk.md` line 17). The audio goes **to the gateway and on to `transcription.activeProvider`**. The session has no bot: "Transcription-only sessions without a key remain sessionless and do not select a default chat" (`session-ownership.md`, last paragraph), so nothing of it is written to a task. Live, it is refused on this instance (section 1). Not exercised further: no transcription provider.
+
+### On the device
+
+- **Chromium's speech recognition (`webkitSpeechRecognition`).** Its default mode sends audio to a Google web service; on-device mode (`processLocally`) needs a language pack the browser engine downloads first ([MDN: Using the Web Speech API](https://developer.mozilla.org/docs/Web/API/Web_Speech_API/Using_the_Web_Speech_API), [MDN: processLocally](https://developer.mozilla.org/docs/Web/API/SpeechRecognition/processLocally), [MDN: install()](https://developer.mozilla.org/docs/Web/API/SpeechRecognition/install_static)). Electron builds of Chromium are reported to fail the default mode with a `network` error for want of Google's keys ([chromium-dev](https://groups.google.com/a/chromium.org/g/chromium-dev/c/RBZXqc0Zvmc)). Either way audio or a download goes to a Google host the person did not name. **Not used.** The page's policy (`connect-src 'self'`) and the main process's request filter would refuse the download anyway.
+- **macOS: Apple's Speech framework.** `SFSpeechRecognitionRequest.requiresOnDeviceRecognition = true` "prevent[s] an SFSpeechRecognitionRequest from sending audio over the network", and is honored only when the recognizer's `supportsOnDeviceRecognition` is true for its locale ([Apple: requiresOnDeviceRecognition](https://developer.apple.com/documentation/speech/sfspeechrecognitionrequest/requiresondevicerecognition)). Without it Apple Speech "may use network services" (`<openclaw>/docs/nodes/talk.md` line 12; `<openclaw>/docs/platforms/mac/voicewake.md` line 16). It needs native code (a small helper or a native module in the main process), the Speech Recognition permission (`NSSpeechRecognitionUsageDescription`) and the microphone's. So the route exists with a stated destination, **this Mac**, only with on-device required and supported; otherwise it is not offered. Not built or run here.
+- **Windows.** `Windows.Media.SpeechRecognition` dictation needs "Online speech recognition" turned on, which sends voice to Microsoft, and the namespace is available only to apps with package identity, which the NSIS-installed app does not have ([Microsoft: Speech recognition](https://learn.microsoft.com/windows/apps/design/input/speech-recognition), [Microsoft: Speech, voice activation, inking, typing, and privacy](https://support.microsoft.com/windows/privacy/speech-voice-activation-inking-typing-and-privacy)). No on-device dictation route with a stated destination was established. **Cut** for Windows: there, dictation is the gateway route only.
+- **iPhone** (F-409, F-407): the same Speech framework, with the same on-device requirement.
+- **The system's own dictation** (macOS's Dictation key, Windows' Win+H) types into the composer like into any text field. Clawtrate neither starts it nor learns where its audio goes, so the design names it nowhere.
+
+## 4. The microphone on the device
+
+**Source.** The desktop app grants its pages no permission but `clipboard-sanitized-write` (`apps/desktop/src/main/index.ts`, `lockDownSession`), so `getUserMedia` is refused today. Its packaging (`apps/desktop/packaging/config.ts`) sets `hardenedRuntime: true` on macOS and declares no usage description or entitlement.
+
+**Documented.**
+
+- macOS, packaged: the hardened runtime blocks microphone access unless the app carries the `com.apple.security.device.audio-input` entitlement, and the system prompt needs `NSMicrophoneUsageDescription` in `Info.plist` ([Electron: hardened runtime entitlements](https://ayakael.net/mirrors/electron/commit/3cb833821a1763b8ff9a191c8f955f42acc4abfd); [Apple forums](https://developer.apple.com/forums/thread/741303)). Electron's `systemPreferences.getMediaAccessStatus("microphone")` reads the state and `askForMediaAccess("microphone")` shows the system prompt once; a denial is changed only in System Settings › Privacy & Security › Microphone. A development run is the Electron binary's own bundle, so the prompt names Electron, not Clawtrate.
+- Windows: desktop apps are governed by Settings › Privacy & security › Microphone ("Let desktop apps access your microphone"); a first-use prompt for desktop apps is in Insider testing only ([BleepingComputer](https://bleepingcomputer.com/news/microsoft/microsoft-tests-new-privacy-controls-for-windows-11-desktop-apps)). So the app can't count on a prompt there: it opens the device and, when that fails, says where the switch is.
+- The browser preview: `navigator.mediaDevices` exists only in a secure context, `https` or the page's own computer (`localhost`) ([MDN: getUserMedia](https://developer.mozilla.org/docs/Web/API/MediaDevices/getUserMedia)). The web host serves plain `http` and binds `0.0.0.0` by default (`apps/desktop/src/web-host/main.ts`), so from another computer the preview has no microphone at all; from `localhost` the browser asks.
+- Devices: `enumerateDevices()` gives device labels only after permission is granted; `devicechange` fires when one is added or removed, and an open track ends (`ended`) when its device goes away ([MDN: enumerateDevices](https://developer.mozilla.org/docs/Web/API/MediaDevices/enumerateDevices), [MDN: ended](https://developer.mozilla.org/docs/Web/API/MediaStreamTrack/ended_event)).
+
+The capture runs in the renderer (or the viewer's browser); the gateway socket lives in the host (Electron's main process, or the web host's Node process) and never in a page (`docs/decisions.md`, "Pairing"; `apps/desktop/src/web-host/server.ts` header). Audio crosses the bridge to the host, which sends it. The OpenClaw Control UI keeps the chosen device on the device and never sends it to the gateway, and when that device can't be opened asks for another instead of using a different microphone (`<openclaw>/docs/web/control-ui/chat.md` lines 480-484).
+
+## 5. One call at a time, and a dropped connection
+
+**Source.**
+
+- Limits: two relay sessions per connection and 64 in all ("Too many active realtime relay sessions for this connection", `handlers` lines 1141-1142, 1263-1264); the same two and 64 for transcription (lines 4556-4557, 4627-4628). The bundled docs give 8 concurrent sessions per gateway for the GPT-Live route (`talk.md` line 135). Nothing limits calls per bot or per person. So the gateway does not make "one call at a time": another device, which has its own connection, can hold its own call with the same bot at the same moment. It sees none of this call's `talk.event` frames (they go to the owning connection only, section 2), only the saved turns as they land in the task (section 6). One call at a time is this client's rule, kept by the host across all its windows and tabs, since they share one connection.
+- A relay session lives 30 minutes and then closes as `completed` (`RELAY_SESSION_TTL_MS`, line 1140; the timer, lines 4500-4503). `ttlMs` is accepted by the schema and used only by managed-room sessions (line 4897).
+- When the connection closes, the gateway runs its Talk cleanup for that connection (`<openclaw>/dist/ws-connection-Cq7PPwbb.mjs` line 383, `cleanupTalkConnection`), which closes every relay and transcription session it owned (`handlers` lines 2016, 2102-2103, 4612-4613, 4733). A reconnect is a new connection with a new connection id, the closed session is forgotten (`forgetUnifiedTalkSession`), and an id the gateway does not hold answers "Unknown Talk session" (live, section 1). So **a relayed call cannot resume after a drop.** Accepted agent work outlives the call (`realtime-sessions.md`).
+- Resuming by `voiceSessionId` exists only for client-owned calls (`talk.client.create`, `<openclaw>/docs/gateway/protocol/rpc-talk-config-and-agents.md` line 25), which the design does not use (section 2); and for the GPT-Live route even there "automatic reconnection is not supported" (`realtime-sessions.md` line 174). A call that ends with its connection leaves behind the turns already saved in the task, nothing else.
+
+## 6. After a call
+
+**Source.** The relay writes each finalized utterance to the bot's task through a queue (`handlers` lines 1440-1500) as an ordinary message built by `buildPersistedVoiceMessage` (`<openclaw>/dist/client-voice-session-store-CX4ttdMM.mjs` lines 11-38): `{role: "user" | "assistant", content: [{type: "text", text}], timestamp, provenance: {kind: "realtime_voice", sourceChannel: "talk"}}`, the assistant's with `api: "realtime"` and `model: "realtime-voice"`. The bundled docs: "Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history" (`realtime-sessions.md` line 87). The gateway also keeps a record per call (`voiceSessionId`, `createdAt`, `updatedAt`, `status`; same file, lines 100-130) in its own store; no method returns it.
+
+So the transcript is in the task, as text, for every device; `chat.history` carries a row's `provenance` (this project's core already reads `provenance.kind` from history rows, `packages/core/src/cards.ts` and `runs.ts`), which is how a client tells a spoken turn from a typed one. Not exercised: no provider, so no row of this kind was written here. **The call's duration is known only to the device that held the call**, from its own `ready` to its own close. Another device, or this one after a restart, can say how many turns were saved and between which times.
+
+## 7. Voice, speed and language
+
+- **Voice** (`handlers` lines 598-690, 5217-5328). `talk.voice.set {voice, sessionKey?, voiceSessionId?}` selects exactly one active call this connection owns, or answers "No active voice call is available" (live, section 1) or "Select one active voice call". It refuses "This client cannot change voices during a call" unless the call was created with `capabilities: ["voice-selection"]` and its voice list is not empty (line 3936), and "Voice is not in this call's catalog" for a voice the call does not offer. For a relayed call the gateway sends `talk.voice.change` to this connection; the client creates the replacement with `talk.session.create {…, voiceChangeId}` (lines 4846, 4927-4943) and reports with `talk.voice.complete {changeId, outcome, …}` (live: `outcome` is required). The bundled docs: "Setting a voice reconnects that call while preserving its chat and captions" (`realtime-sessions.md`, "Choose a Talk voice from chat"). No per-bot voice setting exists on the gateway (the map, section 21). The voices a call can use are listed per provider and model in `talk.catalog` (`voices`, `voicesByModel`; live above).
+- **Speed** has no gateway setting: neither create method accepts one (`unexpected property 'speed'`, live). It can only be how fast the device plays what it receives.
+- **Language.** `language` must match `^[a-z]{2}$` (live) and is accepted only by `talk.session.create` (`talk.client.create` rejects it, live). In 2026.10.6 the realtime branch passes it to the relay (line 5036) and on to the provider bridge (line 4203); the transcription branch does not pass it (lines 5062-5075). This corrects the capability map's lead that it is used by the transcription branch. Whether a given provider uses it is the provider's and was not established. Nothing changes it during a call. Omitting it leaves the choice to the provider.
+
+## 8. Voice memos
+
+**Source.** "The `tts` tool converts text to speech and returns an audio attachment for reply delivery" (`<openclaw>/docs/tools/tts/api.md` line 11); every channel but four messaging apps "receives an audio attachment" (`<openclaw>/docs/tools/tts.md`). The gateway's artifact listing collects `audio` and `input_audio` blocks of a message as audio items (`docs/design/work-pane.md`, section 20), fetched with `artifacts.download` at `operator.read`; the remote-content rule (#71, branch `e3-remote-content-rule`) fetches such an item by the host only, up to 5 MiB. A memo item has no transcript field. The text a memo was made from is the `text` argument of the run's `tts` call, which reaches the client as that tool call's arguments (`docs/design/conversation.md`, the action card table, row 21: "Made a voice clip", `details.audioPath`); a memo made by automatic TTS from a reply is that reply's text. `tts.convert` returns a path on the gateway's disk (`rpc-talk-config-and-agents.md` line 37), which a client cannot read, so it is no route for a memo. **Word timings do not exist**: a search of the 2026.10.6 sources for `wordTimings`, `word_timestamps` and `wordTimestamps` found nothing, and `talk.event` timing is per event (the map, section 21). Not exercised: the development gateway has no TTS provider, and its tool allowlist does not include `tts`.
+
+## 9. Keys
+
+**Source.** The app's own handlers take ⌘, (Settings), ⌘N, ⌘T (⌥T in a browser), ⌘K, ⌘I, ⌘J, ⌘., ⌘Enter, ⇧⌘Enter, ⌥Enter, ⌘F, ⇧⌘F, ⌘/, ⌘\ and ⌘[ (`packages/ui/src/App.tsx`, `Shell.tsx`, `Conversation.tsx`, `Composer.tsx`, `Rail.tsx`; `docs/design/visual-language.md` line 582, `conversation.md` line 1152), and ⌘C and ⌘S in the media viewer (`work-pane.md` section 14). ⌘D and Ctrl+D are taken by none of them, and Electron's default menu, which the app keeps, has no ⌘D. Browsers use ⌘D and Ctrl+D to bookmark a page.
