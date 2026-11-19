@@ -654,17 +654,19 @@ test("F-237: through a switch of host, Settings drops the old gateway's figures 
       }
     ).clawtrateFixture;
     const original = bridge.invoke.bind(bridge);
-    bridge.invoke = (command) =>
-      command.type !== "readUsage"
-        ? original(command)
-        : new Promise((resolve) => {
-            (window as unknown as { releaseReport: () => void }).releaseReport = () =>
-              void original(command).then((report) => {
-                const answer = report as { figure: { tokens: { total: number } } };
-                answer.figure.tokens.total = 9_999;
-                resolve(answer);
-              });
+    bridge.invoke = (command) => {
+      if (command.type !== "readUsage") return original(command);
+      // Asked of the host now, and answered only when the test says.
+      const asked = original(command);
+      return new Promise((resolve) => {
+        (window as unknown as { releaseReport: () => void }).releaseReport = () =>
+          void asked.then((report) => {
+            const answer = report as { figure: { tokens: { total: number } } };
+            answer.figure.tokens.total = 9_999;
+            resolve(answer);
           });
+      });
+    };
   });
   await setConnection({ status: "connected", connectedAt: Date.now() + 1 });
   await expect.poll(() => usageReads(page)).toBeGreaterThan(before);
