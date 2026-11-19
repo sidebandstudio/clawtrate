@@ -4671,6 +4671,7 @@ export class ClawtrateClient {
     if (isSessionRemoval(payload)) {
       this.cancelAllQueued(key);
       this.retireForeign(key);
+      this.taskModels.drop(key);
       if (this.rows.delete(key)) this.publishTasks();
       return;
     }

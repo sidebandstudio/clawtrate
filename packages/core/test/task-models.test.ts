@@ -258,6 +258,48 @@ describe("a task's model and effort", () => {
     expect(r.engine.hasWork(KEY)).toBe(false);
   });
 
+  it("F-045: a held change whose task is gone is dropped once: no request, and no release after it", async () => {
+    const r = rig({ active: true });
+    await opened(r);
+    await r.engine.choose(KEY, { model: null, effort: "high" });
+    let released = 0;
+    r.ctx.released = (key) => {
+      released += 1;
+      // The client runs its queue again after every release, as afterActivity does.
+      if (released < 50) r.engine.release(key);
+    };
+    r.ctx.task = () => null;
+    r.state.active = false;
+    expect(r.engine.release(KEY)).toBe(false);
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 20));
+    expect(r.view().held).toBeNull();
+    expect(r.patches()).toEqual([]);
+    expect(released).toBe(0);
+    expect(r.engine.hasWork(KEY)).toBe(false);
+  });
+
+  it("F-045: a change whose task disappears between release and save is dropped, not saved again", async () => {
+    const r = rig({ active: true });
+    await opened(r);
+    await r.engine.choose(KEY, { model: null, effort: "high" });
+    let released = 0;
+    r.ctx.released = (key) => {
+      released += 1;
+      if (released < 50) r.engine.release(key);
+    };
+    r.state.active = false;
+    const task = r.ctx.task;
+    // Listed when released, gone by the time the save reads it.
+    let reads = 0;
+    r.ctx.task = (key) => (reads++ === 0 ? task(key) : null);
+    expect(r.engine.release(KEY)).toBe(true);
+    await r.engine.settled(KEY);
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 20));
+    expect(r.view().held).toBeNull();
+    expect(r.patches()).toEqual([]);
+    expect(released).toBe(1);
+  });
+
   it("F-045: Keep lets go of a held change", async () => {
     const r = rig({ active: true });
     await opened(r);

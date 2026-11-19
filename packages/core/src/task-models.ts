@@ -491,9 +491,20 @@ export class TaskModelsEngine {
   release(key: string): boolean {
     if (this.saves.has(key)) return true;
     const held = this.ctx.get()[key]?.held;
-    if (!held || this.ctx.active(key) || !this.ctx.connected()) return false;
+    if (!held) return false;
+    // A task the gateway no longer lists: its held change is dropped, once, and never sent.
+    if (!this.ctx.task(key)) {
+      this.drop(key);
+      return false;
+    }
+    if (this.ctx.active(key) || !this.ctx.connected()) return false;
     void this.save(key, { model: held.model, effort: held.effort }, held.sessionId);
     return true;
+  }
+
+  /** The task is gone: a held change for it is let go, and nothing is said about it. */
+  drop(key: string): void {
+    if (this.ctx.get()[key]?.held) this.keep(key);
   }
 
   /** Wait for a save on its way to this task, if there is one. */
@@ -516,7 +527,11 @@ export class TaskModelsEngine {
     const run = (async () => {
       const task = this.ctx.task(key);
       const view = this.ctx.get()[key];
-      if (!task || !view) return;
+      if (!task || !view) {
+        // Gone since the change was held: dropped here, so nothing releases it again.
+        this.drop(key);
+        return;
+      }
       const change = this.writes(task, view, desired);
       this.patch(key, (current) => ({ ...current, held: null, refused: null }));
       if (!change.model && !change.effort) return;
