@@ -262,7 +262,6 @@ test("F-197: the week calendar shows today's recorded run and the coming schedul
   await openRoutines();
   await view().getByRole("radio", { name: "Week" }).click();
   const calendar = view().getByTestId("calendar");
-  const chips = calendar.getByTestId("occurrence").filter({ hasText: digest.name });
   // Today's forced run, from `cron.runs`, and each weekday morning still to come this week.
   await expect(calendar.locator('.r-occ[data-past="true"]', { hasText: digest.name })).toHaveCount(
     1,
