@@ -9,7 +9,6 @@ import { isCleartext, scopeWords } from "@clawtrate/ui/connect-words";
 import { gatewayLabel } from "@clawtrate/ui/format";
 import {
   addressWords,
-  forgetWords,
   gatewayActions,
   gatewayDot,
   gatewayProblem,
@@ -235,7 +234,9 @@ export function Settings({
               )}
               {actions.forget && (
                 <Txt testID="forget-keeps" size={S["text-sm"]} color="text-faint">
-                  {redact(forgetWords(gatewayLabel(connection.gatewayUrl)))}
+                  {
+                    "This device keeps its identity and any saved device token. Pairings are managed on the gateway."
+                  }
                 </Txt>
               )}
             </View>

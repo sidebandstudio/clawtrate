@@ -26,6 +26,7 @@ import {
   SLOGAN,
 } from "@clawtrate/ui/connect-words";
 import { gatewayLabel } from "@clawtrate/ui/format";
+import { addressWords } from "@clawtrate/ui/gateway-state";
 import * as Clipboard from "expo-clipboard";
 import { useEffect, useState, type ReactNode } from "react";
 import {
@@ -325,7 +326,9 @@ export function Address({
   onBack: () => void;
 }) {
   const { send, redact } = useRuntime();
-  const [url, setUrl] = useState(connection.gatewayUrl ?? "");
+  const [url, setUrl] = useState(() =>
+    connection.gatewayUrl ? addressWords(connection.gatewayUrl) : "",
+  );
   const [token, setToken] = useState("");
   const [submitError, setSubmitError] = useState<{ title: string; message: string } | null>(null);
   const busy = connection.status === "connecting";

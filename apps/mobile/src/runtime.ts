@@ -43,17 +43,18 @@ export function startRuntime(): Runtime {
     client,
     session,
     devGateway,
-    send: (command) => session.apply(command),
+    send: async (command) => {
+      const result = await session.apply(command);
+      if (command.type === "connect" || command.type === "retry") markInstalled();
+      return result;
+    },
     redact: secrets.redact,
   };
-  void client
-    .start()
-    .then(markInstalled)
-    .catch((error: unknown) => {
-      console.error(
-        `[core] could not start: ${secrets.redact(error instanceof Error ? error.message : String(error))}`,
-      );
-    });
+  void client.start().catch((error: unknown) => {
+    console.error(
+      `[core] could not start: ${secrets.redact(error instanceof Error ? error.message : String(error))}`,
+    );
+  });
   return runtime;
 }
 

@@ -16,7 +16,7 @@ import {
   scopesDifferWords,
 } from "../src/connect-words.ts";
 import { readOnlyWords } from "../src/conversation-words.ts";
-import { addressWords, forgetWords, grantedWords } from "../src/gateway-state.ts";
+import { addressWords, grantedWords } from "../src/gateway-state.ts";
 import { statusLineFor } from "../src/live.ts";
 import { listNote } from "../src/summary.ts";
 
@@ -99,10 +99,10 @@ describe("what Settings says of the gateway", () => {
     expect(addressWords(null)).toBe("None yet");
   });
 
-  it("says what stays when the person uses another gateway", () => {
-    expect(forgetWords("127.0.0.1:19201")).toBe(
-      "This device keeps its identity, and 127.0.0.1:19201 keeps this device's pairing until it is removed there.",
-    );
+  it("fills the address form from a retained address with only its scheme, host, port and path", () => {
+    // What the iOS address form starts from when a saved address carries a user, a query or a fragment.
+    const retained = ["ws://person:pass", "127.0.0.1:47000/gw?token=abc#part"].join("@");
+    expect(addressWords(retained)).toBe("ws://127.0.0.1:47000/gw");
   });
 });
 

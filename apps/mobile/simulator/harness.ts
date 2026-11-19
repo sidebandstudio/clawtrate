@@ -457,6 +457,8 @@ export class Proxy {
   private server: Server | null = null;
   private readonly sockets = new Set<Socket>();
   port = 0;
+  /** Every connection the app opened through the proxy, since it started. */
+  connections = 0;
   private readonly target: number;
   constructor(target: number) {
     this.target = target;
@@ -469,6 +471,7 @@ export class Proxy {
 
   private listen(port: number) {
     const server = createServer((client) => {
+      this.connections += 1;
       const upstream = new Socket();
       upstream.connect(this.target, "127.0.0.1");
       for (const socket of [client, upstream]) {

@@ -124,11 +124,6 @@ export function addressWords(url: string | null): string {
   }
 }
 
-/** What stays when the person uses another gateway. */
-export function forgetWords(gateway: string): string {
-  return `This device keeps its identity, and ${gateway} keeps this device's pairing until it is removed there.`;
-}
-
 /** The pane's last line: the pairing is kept, and what this device may do. */
 export function pairingNote(
   gateway: string,

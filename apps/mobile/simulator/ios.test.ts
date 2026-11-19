@@ -12,7 +12,7 @@ import { CLEARTEXT_WORDS, CONNECT_WORDS, PRODUCT_NAME, SLOGAN } from "@clawtrate
 import { ENSEMBLE } from "@clawtrate/ui/character";
 import { CONVERSATION_WORDS } from "@clawtrate/ui/conversation-words";
 import { stampTime } from "@clawtrate/ui/format";
-import { addressWords, forgetWords } from "@clawtrate/ui/gateway-state";
+import { addressWords } from "@clawtrate/ui/gateway-state";
 import { WebSocket, WebSocketServer } from "ws";
 import { REDACTED } from "../src/host/secrets.ts";
 import { LINK_WORDS } from "../src/markdown.ts";
@@ -883,7 +883,12 @@ describe("the iOS app", () => {
       see({ id: "granted-scopes", text: "operator\\.read" }),
       see({ id: "gateway-device", text: lit(`Clawtrate iPhone · ${deviceId.slice(0, 8)}`) }),
       scrollTo({ id: "forget-keeps" }, "DOWN"),
-      see({ id: "forget-keeps", text: lit(forgetWords(hostOf(gateway))) }),
+      see({
+        id: "forget-keeps",
+        text: lit(
+          "This device keeps its identity and any saved device token. Pairings are managed on the gateway.",
+        ),
+      }),
       scrollTo({ id: "gateway-address" }, "UP"),
     ]);
     await shoot("settings");
@@ -960,6 +965,18 @@ describe("the iOS app", () => {
       }),
     ]);
     await shoot("reinstalled");
+    // Opened a second time before any choice, it still offers and does not reconnect.
+    const before = proxy.connections;
+    launch({ devGateway: gateway });
+    await steps("reinstalled-again", [
+      waitFor({ id: "welcome" }, 60_000),
+      notSee({ id: "home" }),
+      see({
+        id: "reconnect-saved",
+        text: lit(CONNECT_WORDS.reconnectTo(hostOf(gateway))),
+      }),
+    ]);
+    expect(proxy.connections - before).toBe(0);
     await steps("reconnect-saved", [
       tap({ id: "reconnect-saved" }),
       waitFor({ id: "home" }, 90_000),
