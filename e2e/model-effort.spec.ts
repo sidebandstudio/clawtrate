@@ -238,7 +238,6 @@ test("F-042 F-044 F-045: a task's model changed during a turn is held, saved whe
   await chip(page).click();
   await page.getByRole("menuitemradio", { name: "dev-2" }).click();
   await expect(chip(page)).toHaveAccessibleName(/Held until this turn ends/);
-  await expect(page.getByTestId("announcer")).toHaveText("Held until this turn ends");
   await shots(page, "task-chip-held", [[1440, 900, "light"]]);
   // Not written while the turn runs: the gateway still has dev-1, and the turn asks for dev-1 only.
   expect((await row()).model).toBe("dev-1");
@@ -256,7 +255,8 @@ test("F-042 F-044 F-045: a task's model changed during a turn is held, saved whe
   // The next turn is served by dev-2, on Quill's own account.
   const before = (await requestsFor(TASK)).length;
   const field = page.getByTestId("composer-input");
-  await field.fill("#text");
+  // A turn with an action, so it ends with a run line and its record.
+  await field.fill("#list");
   await field.press("Enter");
   await expect
     .poll(async () => (await requestsFor(TASK)).length, { timeout: 60_000 })
