@@ -47,6 +47,13 @@
     { id: "postlark", name: "Postlark", summary: "Mail: read, draft and file messages.", author: "postlark", cats: ["mail"], version: "1.0.4", local: "needs-setup", missing: ["Account address"] },
     { id: "docklet", name: "Docklet", summary: "Docs and wikis.", author: "docklet", cats: ["productivity"], version: "0.3.0", local: "unavailable" },
     { id: "linkpeek", name: "Linkpeek", summary: "Previews of links in replies.", bundled: true, cats: ["developer-tools"], version: "2026.10.6", local: "enabled" },
+    { id: "voicewell", name: "Voicewell", summary: "Speech for replies read aloud.", bundled: true, cats: ["developer-tools"], version: "2026.10.6", local: "disabled" },
+    { id: "pathfinder", name: "Pathfinder", summary: "A coarse place from a network address.", bundled: true, cats: ["developer-tools"], version: "2026.10.6", local: "enabled" },
+  ];
+  // The next page of the overview, after "Show more" (the gateway's nextCursor).
+  const MORE = [
+    { id: "mapwhistle", name: "Mapwhistle", summary: "Places, routes and travel times.", author: "mapwhistle", cats: ["productivity"], version: "1.1.0", local: "install" },
+    { id: "tunebarrow", name: "Tunebarrow", summary: "Playlists and listening history.", author: "tunebarrow", cats: ["productivity"], version: "0.9.2", local: "install" },
   ];
   const SKILLS = [
     { name: "Weekly review", text: "Collect the week's notes and tasks into one summary." },
@@ -196,6 +203,7 @@
       rows(APPS.filter((a) => a.featured)) +
       group("All apps") +
       rows(APPS) +
+      (params.get("more") === "1" ? rows(MORE) : `<div class="c-actions">${link("Show more", "browse", { more: "1" })}</div>`) +
       `</div>` +
       accessBar("Adding apps needs admin access.") +
       granted()
@@ -252,6 +260,7 @@
       title: a.name,
       back: go("installed"),
       body:
+        (params.get("busy") === "1" ? note("warn", "The gateway is busy with another change.", "Try again in a moment.", `<div class="c-actions">${link("Try again", "turnoff-confirm", { id: a.id })}</div>`) : "") +
         (said === "on" ? note("", `Turned on ${a.name}.`, `The gateway lists it as added.`) : said === "off" ? note("", `Turned off ${a.name}.`, "The gateway lists it as turned off.") : "") +
         `<div class="c-hero">${initial(a.name, "lg")}<div><p class="c-hero-name">${a.name}</p><p class="c-faint">${a.bundled ? "Comes with OpenClaw" : `by ${a.author}`} · ${a.version}</p></div></div>` +
         `<p class="c-state" data-c="state">${state}</p>` +
@@ -543,9 +552,10 @@
         body:
           search("Search what's on this gateway") +
           group("Turned on") +
-          rows(APPS.filter((a) => ["enabled", "error"].includes(a.local)), "connector") +
+          rows(APPS.filter((a) => !a.bundled && ["enabled", "error"].includes(a.local)), "connector") +
           group("Turned off") +
-          rows(APPS.filter((a) => ["disabled", "needs-setup"].includes(a.local)), "connector") +
+          rows(APPS.filter((a) => !a.bundled && ["disabled", "needs-setup"].includes(a.local)), "connector") +
+          `<details class="c-fold"><summary>Comes with OpenClaw (${APPS.filter((a) => a.bundled).length})</summary>${rows(APPS.filter((a) => a.bundled), "connector")}</details>` +
           group("Tool servers") +
           `<ul class="c-rows">${Object.entries(SERVERS).map(([n, s]) => `<li class="c-row"><a class="c-row-main" href="${go("server", { id: n })}" aria-label="${n}, ${s.kind === "remote" ? "added by address" : "runs a command"}">${initial(n)}<span class="c-row-text"><span class="c-row-name mono">${n}</span><span class="c-row-sub">${s.kind === "remote" ? `Added by address · ${s.url}` : `Runs a command · ${esc(s.command)}`}</span></span></a></li>`).join("")}</ul>` +
           (admin ? `<div class="c-actions">${link("Add a tool server", "add-server")}</div>` : ""),
@@ -553,7 +563,15 @@
     connector: () => windowHtml(connectorPage()),
     "turnoff-confirm": () => {
       const a = app(params.get("id"));
-      return windowHtml(connectorPage()) + confirm(`Turn off ${a.name}?`, `<p>Its tools stop reaching every bot on this gateway. Its settings and its sign-in stay.</p>`, [link("Cancel", "connector", { id: a.id }, { variant: "quiet" }), link("Turn off", "connector", { id: a.id, now: "off", said: "off" }, { variant: "primary" })]);
+      return (
+        windowHtml(connectorPage()) +
+        confirm(
+          `Turn off ${a.name}?`,
+          `<p>Its tools stop reaching every bot on this gateway. Its settings and its sign-in stay.</p>`,
+          [link("Cancel", "connector", { id: a.id }, { variant: "quiet" }), link("Turn off", "connector", params.get("busy") ? { id: a.id, busy: "1" } : { id: a.id, now: "off", said: "off" }, { variant: "primary" })],
+          proto("the gateway is", [link("Busy with another change", "turnoff-confirm", { id: a.id, busy: "1" }, { variant: "quiet" })]),
+        )
+      );
     },
     "remove-confirm": () => {
       const a = app(params.get("id") || "tasktide");
@@ -561,8 +579,9 @@
         windowHtml(connectorPage()) +
         confirm(
           `Remove ${a.name} from the gateway?`,
-          goes([`${a.name}'s files on the gateway's machine`, "its settings on the gateway", "its tools, from every bot that has them: Juniper, Pip"], ["its sign-in, in the gateway's state database", `a note on the gateway that ${a.name} is off, so nothing turns it back on by itself`]),
+          goes([`${a.name}'s files on the gateway's machine`, "its settings on the gateway", params.get("bots") === "none" ? "its tools, from every bot that doesn't deny them" : "its tools, from every bot that has them: Juniper, Pip"], ["its sign-in, in the gateway's state database", `a note on the gateway that ${a.name} is off, so nothing turns it back on by itself`]),
           [link("Cancel", "connector", { id: a.id }, { variant: "quiet" }), link("Remove", "removed", { id: a.id }, { variant: "primary" })],
+          proto("the bots", [link("None has run since it was added", "remove-confirm", { id: a.id, bots: "none" }, { variant: "quiet" })]),
         )
       );
     },
@@ -628,7 +647,7 @@
     picker: () => picker(),
   };
   const ANNOUNCE = {
-    browse: "12 apps",
+    browse: `${APPS.length} apps`,
     "browse-loading": "Loading the catalog",
     "browse-offline": "Showing what's on this gateway",
     "add-progress": `Adding ${A().name}`,
@@ -658,13 +677,13 @@
   document.getElementById("c-live").textContent = ANNOUNCE[screen] || (params.get("said") === "on" ? `Turned on ${app(params.get("id")).name}` : params.get("said") === "off" ? `Turned off ${app(params.get("id")).name}` : req === "granted" ? "Admin access granted" : req === "asking" ? "Asking the gateway" : "");
 
   // Focus: a confirmation's Cancel, else the section's title.
-  const autofocus = root.querySelector(".c-confirm .button[data-variant='quiet']") || root.querySelector("#c-section-title") || root.querySelector("#c-picker-title");
+  const autofocus = root.querySelector(".c-confirm .c-actions .button[data-variant='quiet']") || root.querySelector("#c-section-title") || root.querySelector("#c-picker-title");
   if (autofocus) autofocus.focus({ preventScroll: true });
 
   // Escape closes the top-most surface.
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    const cancel = root.querySelector(".c-confirm .button[data-variant='quiet']");
+    const cancel = root.querySelector(".c-confirm .c-actions .button[data-variant='quiet']");
     if (cancel) location.href = cancel.href;
     else if (root.querySelector(".c-window")) location.href = go("home");
   });

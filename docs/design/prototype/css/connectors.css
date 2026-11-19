@@ -517,6 +517,17 @@
   margin-top: 10px;
 }
 
+.c-fold {
+  margin-top: var(--space-4);
+}
+
+.c-fold > summary {
+  margin: 0 2px 8px;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
 .c-details summary {
   color: var(--text-muted);
   font-size: var(--text-sm);

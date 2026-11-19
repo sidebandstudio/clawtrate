@@ -60,17 +60,17 @@ Which connectors each bot may use is the bot's Settings tab (`controls.md` §4, 
 
 ### Components used
 
-| Component                                                                                                             | From                                           | Used for                                                             |
-| --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------- |
-| Dialog, dialog head, Settings frame (`.b-dialog`, `.b-head`, `.b-settings`, `.b-nav`, `.b-section`)                   | `bots.md` §2, §7                               | The Connect apps window and its panes                                |
-| Choice list (`.b-choices`), note (`.b-note`), result (`.b-result`), numbered steps (`.b-steps`), switch (`.b-switch`) | `bots.md` §2                                   | Rows, notes, how an add or a removal ended, the command-line sign-in |
-| Confirmation (`.b-confirm`, role `alertdialog`)                                                                       | `bots.md` §7                                   | Add, a command server, Remove                                        |
-| Fact block (`.facts`), group word, empty state                                                                        | `visual-language.md` §9                        | A connector's and a server's facts                                   |
-| The access bar and its request                                                                                        | `conversation.md` §3, `bots.md` §2             | Every admin action                                                   |
-| Command block and copy button                                                                                         | `visual-language.md` §10, `conversation.md` §9 | The gateway's own commands                                           |
-| Step list (`.s-steps`)                                                                                                | `setup.md` §2                                  | Adding a connector, stage by stage                                   |
-| Action card                                                                                                           | `conversation.md` §7, §8.3                     | A bot's call that asks for a sign-in                                 |
-| `.input`, primary, default and quiet buttons                                                                          | `visual-language.md` §4                        | Every field and button                                               |
+| Component                                                                                           | From                                           | Used for                                                             |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------- | -------------------------------------------------------------------- |
+| Dialog, dialog head, Settings frame (`.b-dialog`, `.b-head`, `.b-settings`, `.b-nav`, `.b-section`) | `bots.md` §2, §7                               | The Connect apps window and its panes                                |
+| Choice list (`.b-choices`), note (`.b-note`), result (`.b-result`), numbered steps (`.b-steps`)     | `bots.md` §2                                   | Rows, notes, how an add or a removal ended, the command-line sign-in |
+| Confirmation (`.b-confirm`, role `alertdialog`)                                                     | `bots.md` §7                                   | Add, a command server, Remove                                        |
+| Fact block (`.facts`), group word, empty state                                                      | `visual-language.md` §9                        | A connector's and a server's facts                                   |
+| The access bar and its request                                                                      | `conversation.md` §3, `bots.md` §2             | Every admin action                                                   |
+| Command block and copy button                                                                       | `visual-language.md` §10, `conversation.md` §9 | The gateway's own commands                                           |
+| Step list (`.s-steps`)                                                                              | `setup.md` §2                                  | Adding a connector, stage by stage                                   |
+| Action card                                                                                         | `conversation.md` §7, §8.3                     | A bot's call that asks for a sign-in                                 |
+| `.input`, primary, default and quiet buttons                                                        | `visual-language.md` §4                        | Every field and button                                               |
 
 ### New components
 
@@ -103,7 +103,7 @@ A connector is shown by its name and its initial, never by a picture. The catalo
 | Open a sign-in page from a connect card                                           | Any tier that sees the conversation    | The bot asked; opening a page writes nothing to the gateway                                                                                |
 | Tick apps in "What do you use every day?"                                         | Any                                    | Kept on this device                                                                                                                        |
 
-Admin is asked for only when the person chooses an action that needs it, never on opening the window. On the read and interactive tiers the action's place holds the access bar of `bots.md` §2, with the words "**Read-only.** Adding and changing connectors needs admin access." (read) or "**Admin access needed.** Adding and changing connectors needs admin access." (interactive), and "Request admin access". The request, its waiting, denied, expired and granted states are that bar's, unchanged. What the screen held (a typed address, the arguments) is kept through the request. Values are shown at every tier; controls that change them are absent, not disabled, below admin.
+Admin is asked for only when the person chooses an action that needs it, never on opening the window. On the read and interactive tiers the action's place holds the access bar of `bots.md` §2: "**Read-only.**" (read) or "**Admin access needed.**" (interactive), then the screen's words, and "Request admin access". The words: "Adding apps needs admin access." (Browse, a catalog page), "Changing connectors needs admin access." (a connector's page), "Changing tool servers needs admin access." (a server's page), "Adding a tool server needs admin access." (the form). The request, its waiting, denied, expired and granted states are that bar's, unchanged. What the screen held (a typed address, the arguments) is kept through the request. Values are shown at every tier; controls that change them are absent, not disabled, below admin.
 
 ### Writing and reading back
 
@@ -180,8 +180,6 @@ When `browse` comes back with `remoteError`, or `categories` and `featured` fail
 - The search field reads "Search what's on this gateway". A search lists the gateway's own rows that match; the Skills group says "Searching skills needs the catalog."
 - The window does not ask again by itself. "Try again" asks once more; it takes as long as the first time ("Asking the catalog… This can take up to 15 seconds.").
 
-A connection that is itself down shows the status strip (`visual-language.md` §11) and the last list it read, marked "As of 5:12 PM"; nothing can be added.
-
 ## 6. Add
 
 **A catalog page.** Choosing a row opens its page in the section, with Back. It shows the initial at 56 px, the name (20/500), "by <author>", "Official" when `catalog.official`, and the summary; then, from `plugins.catalog.get` (R§2):
@@ -206,26 +204,27 @@ The version is the catalog's `latestVersion`. "Bots that don't deny them" links 
 | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | A capability review (`PLUGIN_CAPABILITY_CONSENT_REQUIRED`) | A second confirmation: "**Quillnote asks for more than the catalog listed.**" and the list the gateway gave (`widened`: tools, hooks, servers, and so on, each by name), "Add anyway" and "Cancel". "Add anyway" sends the same request with the review token. |
 | An install-policy warning                                  | "**The gateway's install check found something.**" with each finding (its severity in words, its message, the file and line when given), "Add anyway" and "Cancel"                                                                                             |
-| A ClawHub trust error                                      | "**Couldn't add Quillnote:**" and the gateway's message. Nothing to acknowledge.                                                                                                                                                                               |
+| A ClawHub trust error                                      | The refusal result below ("Couldn't add Quillnote:" and the gateway's message). Nothing to acknowledge.                                                                                                                                                        |
 
 **While it installs**, a step list from `plugins.install.progress` (R§3), each step started, done or failed: "Finding the release", "Downloading", "Unpacking", "Writing files", "Installing what it needs", "Starting it on the gateway". Cancel is absent: the gateway has no way to stop an install.
 
 **How it ended**, after `plugins.list` is read back:
 
-| The answer                             | The read-back     | The result                                                                                                                 |
-| -------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `ok`, `restartRequired: false`         | listed, `enabled` | "**Added Quillnote.** It's turned on. Its tools reach bots from their next message." and "Open Quillnote" (its page)       |
-| `ok`, `restartRequired: true`          | listed            | "**Added Quillnote.** The gateway says it needs a restart before Quillnote works." Clawtrate does not restart the gateway. |
-| A refusal before anything was written  | not listed        | "**Couldn't add Quillnote:** <message>. The gateway lists nothing new." with "Try again"                                   |
-| A failure with `persistence`           | listed, `error`   | "**Quillnote was installed but didn't start:** <message>." with "Open Quillnote" (its page, where Remove is)               |
-| A failure, read-back disagrees with it | as read           | the read-back wins: the result states what `plugins.list` lists now                                                        |
-| No answer                              | as read           | "Checking what the gateway has…", then one of the above                                                                    |
+| The answer                            | The read-back     | The result                                                                                                                 |
+| ------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `ok`, `restartRequired: false`        | listed, `enabled` | "**Added Quillnote.** It's turned on. Its tools reach bots from their next message." and "Open Quillnote" (its page)       |
+| `ok`, `restartRequired: true`         | listed            | "**Added Quillnote.** The gateway says it needs a restart before Quillnote works." Clawtrate does not restart the gateway. |
+| A refusal before anything was written | not listed        | "**Couldn't add Quillnote:** <message>. The gateway lists nothing new." with "Try again"                                   |
+| A failure with `persistence`          | listed, `error`   | "**Quillnote was installed but didn't start:** <message>." with "Open Quillnote" (its page, where Remove is)               |
+| No answer                             | as read           | "Checking what the gateway has…", then one of the above                                                                    |
+
+Whatever the answer, the read-back wins: when `plugins.list` disagrees with what the answer implied, the result states what it lists now.
 
 ## 7. On this gateway
 
 Every plugin `plugins.list` returns as installed, then every entry of `config.get` `mcp.servers` (R§2, §5). A search field filters both.
 
-- **Plugins**, in two groups, "Turned on" and "Turned off", each row with the initial, the name, its description and its state pill. Plugins that come with OpenClaw carry "Comes with OpenClaw" under their name. There are many of those (seventy on a fresh gateway); the groups are folded after twelve rows, "Show all 58".
+- **Plugins**, in two groups, "Turned on" and "Turned off", each row with the initial, the name, its description and its state pill. Plugins that come with OpenClaw are many (64 on a fresh gateway of this version), so they are folded behind one more group, "Comes with OpenClaw (64)", which opens in place.
 - **Tool servers**, under that word, each row with the server's name in mono, its address or its command, and "Added by address" or "Runs a command". There is no state pill: the gateway reports none (section 9).
 - "Add a tool server" at the foot opens section 12.
 
@@ -409,7 +408,7 @@ Every removal is a confirmation that says exactly what goes and what stays, then
 > Stays: its sign-in, in the gateway's state database; a note on the gateway that Quillnote is off, so nothing turns it back on by itself.
 > [Cancel] [Remove]
 
-The bots named are those whose last tool list had its tools; when none has run since it was added: "from every bot that doesn't deny them". After the removal, `plugins.list` is read: "Removed Quillnote. The gateway no longer lists it." A connector that comes with OpenClaw has no Remove (section 8).
+The bots named are those whose last tool list had its tools; when none has run since it was added, the line reads "its tools, from every bot that doesn't deny them". After the removal, `plugins.list` is read: "Removed Quillnote. The gateway no longer lists it." A connector that comes with OpenClaw has no Remove (section 8).
 
 **A tool server** (`config.patch` with `null`, and `replacePaths` for a command's arguments, R§5):
 
@@ -529,7 +528,7 @@ The rows' targets and statuses stay as they are. The gateway dependency cells ar
 
 ### Prototype states
 
-`connectors.html?screen=<id>`, one per state; the README lists the parameters. The walks the check clicks: Browse to a catalog page to Add, through the review, progress and each ending; the catalog unreachable and Try again; a search with results and with none; On this gateway to a connector's page in every state, Turn off and on, and Remove; a server's page in every state of its last run, "Add another account", and Remove; adding a server by address with each error and each ending; adding a command through its confirmation; a sign-in through each stage, the command-line form and the web preview's note; the connect card, opened and reopened, and its error; the picker, ticked, then Browse with "You picked"; and each admin action on a read-only connection, through the request.
+`connectors.html?screen=<id>`, one per state; the README lists the parameters. The prototype draws the Settings frame and the confirmation again (`.c-window`, `.c-frame`, `.c-confirm`) so that its one-pane layout follows the prototype frame's width; in the app they are `bots.md`'s. The walks the check clicks: Browse to a catalog page to Add, through the review, progress and each ending; the catalog unreachable and Try again; a search with results and with none; On this gateway to a connector's page in every state, Turn off and on, and Remove; a server's page in every state of its last run, "Add another account", and Remove; adding a server by address with each error and each ending; adding a command through its confirmation; a sign-in through each stage, the command-line form and the web preview's note; the connect card, opened and reopened, and its error; the picker, ticked, then Browse with "You picked"; and each admin action on a read-only connection, through the request.
 
 ## 20. Not covered here
 

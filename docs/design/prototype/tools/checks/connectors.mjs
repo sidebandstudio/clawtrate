@@ -17,6 +17,7 @@ const open = async (query, { width = 1440, height = 900, theme = "light" } = {})
   const errors = [];
   p.on("pageerror", (e) => errors.push(String(e)));
   p.setDefaultTimeout(4000);
+  p.setDefaultNavigationTimeout(30000);
   await p.goto(`${base}&theme=${theme}&${query}`);
   await p.waitForTimeout(60);
   p.errors = errors;
@@ -43,6 +44,7 @@ const at = async (p, screen) => {
 };
 const link = (name) => (p) => p.getByRole("link", { name, exact: true }).first().click();
 const row = (name) => (p) => p.locator(`.c-row-main[aria-label^="${name},"]`).first().click();
+const inConfirm = (name) => (p) => p.locator(".c-confirm").getByRole("link", { name, exact: true }).click();
 const typeIn = (sel, value) => (p) => p.fill(sel, value);
 const submit = (p) => p.locator("#c-server-form button[type=submit]").click();
 const tick = (value) => (p) => p.locator(`.c-tile input[value="${value}"]`).check();
@@ -77,7 +79,9 @@ const STATES = [
   ["screen=add-refused&id=quillnote", ["Couldn't add Quillnote:", "The gateway lists nothing new.", "Try again"]],
   ["screen=add-partial&id=quillnote", ["Quillnote was installed but didn't start:"]],
   ["screen=add-checking&id=quillnote", ["Checking what the gateway has…"]],
-  ["screen=installed", ["Turned on", "Turned off", "Tool servers", "notes-work", "Added by address", "search-index", "Runs a command", "Add a tool server", "Comes with OpenClaw"]],
+  ["screen=installed", ["Turned on", "Turned off", "Comes with OpenClaw (3)", "Tool servers", "notes-work", "Added by address", "search-index", "Runs a command", "Add a tool server"]],
+  ["screen=connector&id=tasktide&busy=1", ["The gateway is busy with another change.", "Try again in a moment.", "Try again"]],
+  ["screen=remove-confirm&id=tasktide&bots=none", ["its tools, from every bot that doesn't deny them"]],
   ["screen=connector&id=tasktide", ["Tasktide", "Added", "Apps", "tasktide, a tool server", "Which bots may use these is in each bot's settings.", "Accounts", "Shared by everyone on this gateway", "Signed in.", "The gateway holds this sign-in until Dec 17, 5:12 PM.", "Whether it still works shows when a bot next uses Tasktide.", "Sign in again", "Turn off", "Remove…"]],
   ["screen=connector&id=calendrop", ["Needs sign-in", "Sign in"]],
   ["screen=connector&id=calendrop&auth=requires-authorization", ["Needs sign-in again", "The server asked for more access."]],
@@ -226,13 +230,22 @@ await walk("the gateway refuses the catalog, try again", "screen=browse-loading"
 await walk("search across apps and skills", "screen=browse", [[typeIn("#c-q", "weekly")]], ["Skills", "Weekly review"]);
 await walk("search with no match", "screen=browse", [[typeIn("#c-q", "zzzz")]], ['No apps or skills match "zzzz".']);
 const chip = (name) => (p) => p.getByRole("radio", { name, exact: true }).click();
+await walk("Show more asks the next page", "screen=browse", [[link("Show more"), "browse"]], ["Mapwhistle", "Tunebarrow"]);
 await walk("a category chip", "screen=browse", [[chip("Finance"), "browse-category"], [chip("All"), "browse"]], ["All apps"]);
 await walk("turn a connector on, then off", "screen=installed", [
   [row("Ledgerkin"), "connector"],
   [link("Turn on"), "connector"],
   [link("Turn off"), "turnoff-confirm"],
-  [link("Turn off"), "connector"],
+  [inConfirm("Turn off"), "connector"],
 ], ["Turned off Ledgerkin.", "Turn on"]);
+await walk("turn off while the gateway is busy, then try again", "screen=turnoff-confirm&id=tasktide", [[link("Busy with another change"), "turnoff-confirm"], [inConfirm("Turn off"), "connector"], [link("Try again"), "turnoff-confirm"]]);
+{
+  const p = await open("screen=installed");
+  check("the plugins that come with OpenClaw are folded", !(await p.locator(".c-fold .c-rows").isVisible()));
+  await p.locator(".c-fold > summary").click();
+  check("and open in place", await p.locator('.c-fold .c-row-main[aria-label^="Linkpeek,"]').isVisible());
+  await p.close();
+}
 await walk("remove a connector", "screen=installed", [[row("Tasktide"), "connector"], [link("Remove…"), "remove-confirm"], [link("Remove"), "removed"], [link("Back to the list"), "installed"]]);
 await walk("remove a tool server", "screen=installed", [[row("notes-work"), "server"], [link("Remove…"), "server-remove-confirm"], [link("Remove"), "server-removed"]], ["Removed notes-work."]);
 await walk("a tool server still listed after removal", "screen=server-remove-confirm&id=notes-work", [[link("Still lists it"), "server-remove-failed"], [link("Try again"), "server-remove-confirm"]]);
