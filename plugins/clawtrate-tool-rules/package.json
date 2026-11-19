@@ -1,0 +1,12 @@
+{
+  "name": "clawtrate-tool-rules",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}
