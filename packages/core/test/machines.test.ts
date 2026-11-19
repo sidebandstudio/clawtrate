@@ -851,6 +851,15 @@ describe("Settings, Machines: the engine", () => {
     await engine(gw, { admin: true }).removeMachine(NODE);
   });
 
+  it("F-157: a rename is read back by id from the whole list, past the shown bound", async () => {
+    const many = Array.from({ length: MAX_NODES + 4 }, (_, i) =>
+      nodeRow({ nodeId: `node-${i}`, displayName: `m-${i}` }),
+    );
+    const gw = gateway({ nodes: many });
+    await engine(gw, { admin: true }).renameMachine(`node-${MAX_NODES + 2}`, "far-box");
+    expect(gw.nodes[MAX_NODES + 2]!.displayName).toBe("far-box");
+  });
+
   it("F-157: a removal is done only when the whole listing read back lacks the id, not the first page", async () => {
     const many = Array.from({ length: MAX_NODES + 4 }, (_, i) =>
       nodeRow({ nodeId: `node-${i}`, displayName: `m-${i}` }),

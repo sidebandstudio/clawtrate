@@ -946,8 +946,9 @@ export class MachinesEngine {
     } catch (error) {
       throw this.refused("the name", error);
     }
-    const { nodes } = readNodes(await this.ctx.request("node.list", {}));
-    if (nodes.find((node) => node.id === nodeId)?.name !== label)
+    // Found by id in the whole list: the shown list's bound must not hide it.
+    const rows = list(rec(await this.ctx.request("node.list", {})).nodes);
+    if (readNode(rows.find((row) => rec(row).nodeId === nodeId))?.name !== label)
       throw new PlacementWriteError(
         "The gateway reads back another name. Nothing is shown as saved.",
       );
