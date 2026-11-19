@@ -211,14 +211,17 @@ test.afterEach(async ({}, testInfo) => {
 
 test.afterAll(async () => {
   test.setTimeout(240_000);
-  // Left idle by afterEach when a check failed; archived, then deleted with its transcript.
-  const op = await adminClient().catch(() => null);
+  // Each deleted the way the rail deletes it (stopped, archived, then deleted with its transcript),
+  // through the host's own bridge, which names the session the gateway's guards ask for.
   for (const key of created) {
-    await op?.request("sessions.patch", { key, archived: true }).catch(() => undefined);
-    await op
-      ?.request("sessions.delete", { key, archivedOnly: true, deleteTranscript: true })
-      .catch(() => undefined);
+    await hostCommand(page, { type: "deleteTask", key }).catch(() => undefined);
   }
+  // Nothing of this spec's is left in the gateway's list for the checks after it.
+  const op = await adminClient();
+  const { sessions } = await op.request<{ sessions: Array<{ key: string }> }>("sessions.list", {
+    limit: 500,
+  });
+  expect(sessions.filter((row) => created.includes(row.key)).map((row) => row.key)).toEqual([]);
   await admin?.close();
   await asker?.close();
   for (const host of hosts) {
