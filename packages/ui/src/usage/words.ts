@@ -25,15 +25,6 @@ import { clock } from "../bots/words.ts";
 /** A count in full: 1,640,000. */
 export const full = (n: number): string => n.toLocaleString("en-US");
 
-/** A count in short, for meters and bars: 1.64M, 41k, 1.8k, 900. */
-export function short(n: number): string {
-  const trim = (text: string) => text.replace(/\.?0+$/, "");
-  if (n >= 1e6) return `${trim((n / 1e6).toFixed(2))}M`;
-  if (n >= 1e4) return `${Math.round(n / 1e3)}k`;
-  if (n >= 1e3) return `${trim((n / 1e3).toFixed(1))}k`;
-  return String(Math.round(n));
-}
-
 /** The device's own time zone: the person's, for periods and new budgets. */
 export function deviceTimeZone(): string {
   try {
@@ -276,12 +267,12 @@ export function budgetOf(
   return { budget, count, percent: budgetPercent(budget, count?.used ?? null) };
 }
 
-/** "1.64M of 2.5M tokens this week", and "partial" when the count may miss some of the use. */
+/** "1,640,000 of 2,500,000 tokens this week", and "partial" when the count may miss some of the use. */
 export function budgetLine(budget: Budget, count: BudgetCount | null): string {
   const used = count?.used ?? null;
   return used === null
-    ? `${short(budget.tokens)} tokens ${periodWord(budget.period)}, not counted yet`
-    : `${short(used)} of ${short(budget.tokens)} tokens ${periodWord(budget.period)}${count?.counting ? " so far" : ""}${count?.partial ? ", partial" : ""}`;
+    ? `${full(budget.tokens)} tokens ${periodWord(budget.period)}, not counted yet`
+    : `${full(used)} of ${full(budget.tokens)} tokens ${periodWord(budget.period)}${count?.counting ? " so far" : ""}${count?.partial ? ", partial" : ""}`;
 }
 
 /** What a partial count is short of. */
@@ -295,7 +286,7 @@ export function warnedLine(
   count: BudgetCount & { used: number },
   percent: number,
 ): string {
-  return `${name} has used ${percent}% of its ${kindWord(budget.period)} budget: ${short(count.used)} of ${short(budget.tokens)} tokens${count.counting ? " so far" : ""}.`;
+  return `${name} has used ${percent}% of its ${kindWord(budget.period)} budget: ${full(count.used)} of ${full(budget.tokens)} tokens${count.counting ? " so far" : ""}.`;
 }
 
 /** The note at 100 percent, above the composer and on the Usage page: a warning, said as one. */

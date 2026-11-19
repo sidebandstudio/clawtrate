@@ -101,7 +101,9 @@ test("S16 the budget comes first, and it and the figures each name their own per
   );
   await expect(page.getByTestId("budget-window")).toContainText("this week");
   await usage(page).getByRole("radio", { name: "This week" }).click();
-  await expect(page.getByTestId("budget-meter")).toContainText("1.64M of 2.5M tokens this week");
+  await expect(page.getByTestId("budget-meter")).toContainText(
+    "1,640,000 of 2,500,000 tokens this week",
+  );
   await expect(page.getByTestId("usage-total")).toHaveText("1,640,000 tokens");
   await expect(page.getByTestId("budget-meter").getByRole("meter")).toHaveAccessibleName(
     "Otto's weekly budget: 1,640,000 of 2,500,000 tokens this week",
@@ -127,19 +129,21 @@ test("F-396: at 80 percent the meter warns with its numbers, and the task gets o
 }) => {
   await openFixture(page, `${PAGE}&budget=warn`, "light");
   await expect(page.locator('.c-meter[data-tone="warn"] [role="meter"]')).toHaveCount(1);
-  await expect(page.getByTestId("budget-meter")).toContainText("1.64M of 2M tokens this week");
+  await expect(page.getByTestId("budget-meter")).toContainText(
+    "1,640,000 of 2,000,000 tokens this week",
+  );
   await expect(page.getByTestId("budget-warned")).toHaveText(
     "Otto has used 82% of its weekly budget.",
   );
   await expect(page.getByTestId("budget-line")).toHaveText(
-    "Otto has used 82% of its weekly budget: 1.64M of 2M tokens.",
+    "Otto has used 82% of its weekly budget: 1,640,000 of 2,000,000 tokens.",
   );
   await expect(page.getByTestId("budget-reached-note")).toHaveCount(0);
 });
 
 test("S17 a Daily budget is labelled and counted daily", async ({ page }) => {
   await openFixture(page, `${PAGE}&budget=daily`, "light");
-  await expect(page.getByTestId("budget-meter")).toContainText("295k of 400k tokens today");
+  await expect(page.getByTestId("budget-meter")).toContainText("295,200 of 400,000 tokens today");
   await expect(page.getByTestId("budget")).toContainText("Resets at 00:00, your time.");
   await page.getByTestId("budget-edit").click();
   await expect(
@@ -166,7 +170,9 @@ test("S17 the budget form says what it takes, refuses what it can't keep, and sa
   await expect(field).not.toHaveAttribute("aria-invalid", "true");
   await page.getByTestId("budget-save").click();
   await expect(page.getByTestId("work-announcer")).toHaveText("Budget saved");
-  await expect(page.getByTestId("budget-meter")).toContainText("1.64M of 2M tokens this week");
+  await expect(page.getByTestId("budget-meter")).toContainText(
+    "1,640,000 of 2,000,000 tokens this week",
+  );
   await expect(page.getByTestId("budget-line")).toBeVisible();
 });
 
@@ -207,7 +213,9 @@ test("S17 Raise budget above the composer opens the bot's budget form; Back retu
   await expect(page.getByTestId("budget-tokens")).toBeFocused();
   await page.getByTestId("budget-tokens").fill("3000000");
   await page.getByTestId("budget-save").click();
-  await expect(page.getByTestId("budget-meter")).toContainText("1.64M of 3M tokens this week");
+  await expect(page.getByTestId("budget-meter")).toContainText(
+    "1,640,000 of 3,000,000 tokens this week",
+  );
   await expect(page.getByTestId("budget-reached-note")).toHaveCount(0);
   await usage(page).getByRole("button", { name: "Back to settings" }).click();
   await expect(page.getByTestId("usage-row")).toBeFocused();
@@ -230,7 +238,7 @@ test("a read-only connection sees every figure and budget, and is offered no bud
   await expect(page.getByTestId("raise-from-composer")).toHaveCount(0);
   const settings = await settingsUsage(page);
   await expect(settings.getByTestId("budgets")).toContainText(
-    "Otto · weekly · 1.64M of 1.6M tokens this week",
+    "Otto · weekly · 1,640,000 of 1,600,000 tokens this week",
   );
   await expect(settings.getByTestId("budget-add")).toHaveCount(0);
 });
@@ -379,7 +387,7 @@ test("the Usage row's value wraps rather than shortening at phone width", async 
   await settle(page);
   const value = page.getByTestId("usage-row").locator(".c-stack-value");
   await expect(value).toHaveText(
-    "Budget 1.64M of 2M tokens this week · This week: 1,640,000 tokens · about $3.29, as of 5:39 PM",
+    "Budget 1,640,000 of 2,000,000 tokens this week · This week: 1,640,000 tokens · about $3.29, as of 5:39 PM",
   );
   const cut = await value.evaluate((element) => element.scrollWidth > element.clientWidth);
   expect(cut).toBe(false);

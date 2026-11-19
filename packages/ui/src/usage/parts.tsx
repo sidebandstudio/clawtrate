@@ -13,15 +13,7 @@ import {
 } from "react";
 import { useBridge } from "../bridge.tsx";
 import { EyeIcon } from "../icons.tsx";
-import {
-  barText,
-  deviceTimeZone,
-  meterTone,
-  PERIODS,
-  reportFits,
-  short,
-  type BarRow,
-} from "./words.ts";
+import { barText, deviceTimeZone, meterTone, PERIODS, reportFits, type BarRow } from "./words.ts";
 
 /** A meter: a 6 px bar with its numbers in text beside it, never alone. */
 export function Meter({
@@ -75,9 +67,7 @@ export function Bars({ rows, testId }: { rows: BarRow[]; testId?: string }) {
           <span className="c-meter-bar" aria-hidden="true">
             {row.tokens !== null && <span style={{ width: `${(row.tokens / max) * 100}%` }} />}
           </span>
-          <span aria-hidden="true" title={barText(row)}>
-            {row.tokens === null ? "Unavailable" : `${short(row.tokens)} tokens${row.note ?? ""}`}
-          </span>
+          <span aria-hidden="true">{barText(row)}</span>
         </li>
       ))}
     </ul>

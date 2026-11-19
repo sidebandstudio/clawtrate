@@ -240,3 +240,17 @@ describe("a budget change that failed", () => {
     );
   });
 });
+
+describe("counts on screen", () => {
+  it("S19 are full numbers, never shortened", () => {
+    const weekly: Budget = { ...routine, id: "bot:otto", routineId: null, tokens: 2_500_000 };
+    expect(budgetLine(weekly, count({ used: 1_640_000 }))).toBe(
+      "1,640,000 of 2,500,000 tokens today",
+    );
+    expect(budgetLine(weekly, null)).toBe("2,500,000 tokens today, not counted yet");
+    expect(warnedLine("Otto", weekly, { ...count({}), used: 2_050_000 }, 82)).toBe(
+      "Otto has used 82% of its daily budget: 2,050,000 of 2,500,000 tokens.",
+    );
+    expect(barText({ name: "Otto", tokens: 41_200 })).toBe("41,200 tokens");
+  });
+});

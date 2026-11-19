@@ -557,7 +557,7 @@ test("F-234: a routine's budget counts that routine's runs, from its own tasks",
   const expected = await routineTotal();
   await expect(row).toContainText(
     new RegExp(
-      `Routine Weekly cleanup ${STAMP} \\(Otto\\) · daily · ${expected >= 1000 ? "[\\d.]+k" : expected} of 1k tokens today`,
+      `Routine Weekly cleanup ${STAMP} \\(Otto\\) · daily · ${expected.toLocaleString("en-US")} of 1,000 tokens today`,
     ),
     { timeout: 60_000 },
   );
