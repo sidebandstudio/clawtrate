@@ -407,6 +407,42 @@ describe("a start holds the instance's lock until it is finished (B4)", () => {
   }, 20_000);
 });
 
+describe("a reset waits a moment for the ports its stopped processes held", () => {
+  /** An instance whose gateway port answers while it runs, and for `lingerMs` after it is stopped. */
+  function lingering(lingerMs: number) {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const faked = fakedInstance(home, runRoot, "linger");
+    let releasedAt: number | null = null;
+    const inst = {
+      ...faked,
+      listening: async (port: number) =>
+        port === readMarker(faked.stateDir)?.gatewayPort
+          ? releasedAt === null || Date.now() < releasedAt
+          : faked.listening(port),
+    };
+    return { inst, stop: () => (releasedAt = Date.now() + lingerMs) };
+  }
+
+  it("removes the instance once a port let go late is free", async () => {
+    const { inst, stop: stopping } = lingering(1500);
+    await start(inst, { seed: false });
+    const marker = readMarker(inst.stateDir)!;
+    stopping();
+    await reset(inst, { runId: marker.runId });
+    expect(existsSync(inst.stateDir)).toBe(false);
+    expect(processState(marker.gatewayPid, marker.gatewayIdentity, processIdentity)).toBe("dead");
+  }, 30_000);
+
+  it("still refuses, and keeps the folder, when something keeps listening", async () => {
+    const { inst, stop: stopping } = lingering(Number.POSITIVE_INFINITY);
+    await start(inst, { seed: false });
+    stopping();
+    await expect(reset(inst)).rejects.toThrow(/may still be in use: something is listening/);
+    expect(existsSync(inst.stateDir)).toBe(true);
+  }, 40_000);
+});
+
 describe("lock files are used only through real directories (B4)", () => {
   it("refuses a lock folder, its parent or a lock file that is a link, and runs nothing", async () => {
     const cases: [string, (home: string) => void][] = [

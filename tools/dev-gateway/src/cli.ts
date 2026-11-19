@@ -896,17 +896,30 @@ function instancePortsToCheck(inst: DevInstance): number[] {
 }
 
 /**
+ * How long a reset that has just stopped the instance's processes waits for
+ * their ports to be let go: a gateway's process can still hold its listener a
+ * moment after the process the tool recorded has exited. Nothing is signalled
+ * while it waits.
+ */
+export const PORT_RELEASE_MS = 15_000;
+
+/**
  * Why the instance's folder must not be deleted, or null. Deleting needs proof
  * that nothing is running: a valid marker naming this instance, every recorded
- * process proven gone, and nothing listening on the instance's ports.
+ * process proven gone, and nothing listening on the instance's ports, checked
+ * again until `waitMs` has passed.
  */
-async function deletionRefusal(inst: DevInstance): Promise<string | null> {
+async function deletionRefusal(inst: DevInstance, waitMs = 0): Promise<string | null> {
   if (ownership(inst.stateDir) !== "owned") return null;
   const busy = activityRefusal(inst.stateDir, inst.name, inst.identify);
   if (busy) return busy;
+  const deadline = Date.now() + waitMs;
   for (const port of instancePortsToCheck(inst)) {
-    if (await inst.listening(port)) {
-      return `${label(inst)} (${inst.stateDir}) may still be in use: something is listening on its port ${port}. Nothing was changed.`;
+    while (await inst.listening(port)) {
+      if (Date.now() >= deadline) {
+        return `${label(inst)} (${inst.stateDir}) may still be in use: something is listening on its port ${port}. Nothing was changed.`;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
   return null;
@@ -1418,7 +1431,8 @@ export async function reset(inst: DevInstance, options: { runId?: string } = {})
           `${label(inst)} (${inst.stateDir}): its browser's processes are still running. Nothing was deleted.`,
         );
       }
-      const blocked = await deletionRefusal(inst);
+      // Its own processes were just stopped: their ports get a moment to be let go.
+      const blocked = await deletionRefusal(inst, PORT_RELEASE_MS);
       if (blocked) throw new StateInUseError(blocked);
       rmSync(inst.stateDir, { recursive: true });
       console.log(`Removed ${inst.stateDir}`);
