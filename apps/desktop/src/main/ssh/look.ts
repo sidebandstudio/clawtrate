@@ -242,7 +242,10 @@ export function parseLookOutput(stdout: string, requestId: string): LookParse {
     },
   };
   const seen = new Set<string>();
-  for (const line of lines.slice(begin + 1)) {
+  const after = lines.slice(begin + 1);
+  // What follows the last line break is not a line.
+  if (after.at(-1) === "") after.pop();
+  for (const line of after) {
     let json: unknown;
     try {
       json = JSON.parse(line);

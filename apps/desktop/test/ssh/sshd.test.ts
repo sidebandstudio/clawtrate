@@ -165,7 +165,8 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       "echo 'Welcome to devbox'",
       `echo '{"k":"begin","id":"00000000-0000-0000-0000-000000000000"}'`,
       `echo '{"k":"program","i":1}'`,
-      "echo 'noise on stderr' >&2",
+      // By /dev/stderr: csh takes `>&2` for a file named 2, and a session starts in the account's own home.
+      "echo 'noise on stderr' > /dev/stderr",
       "",
     ].join("\n");
     for (const file of [

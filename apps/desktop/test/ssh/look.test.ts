@@ -1,0 +1,371 @@
+// The LOOK script and its parser: output well-formed and hostile, and the
+// script itself run under each shell this machine has as the outer login
+// shell, with start-up files that print, in a home of the test's own.
+
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import {
+  LOOK_SCRIPT_BODY,
+  lookScript,
+  parseGatewayStatus,
+  parseLookOutput,
+  sameService,
+  serviceOnPort,
+} from "../../src/main/ssh/look.ts";
+import {
+  absolutePlacesHere,
+  installStubOpenclaw,
+  statusJson,
+  tempDir,
+  testEnv,
+} from "./harness.ts";
+
+const ID = "6f1c2b9e-0d7a-4c3e-9b1f-2a8e5d4c3b21";
+const b64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
+const status = (extra: Record<string, unknown> = {}) =>
+  JSON.stringify({ ...(statusJson({ port: 18789, home: "/srv/you" }) as object), ...extra });
+
+const wellFormed = (lines: string[] = []) =>
+  [
+    `{"k":"begin","id":"${ID}"}`,
+    `{"k":"uname","s":"${b64("Linux\n")}","m":"${b64("x86_64\n")}","n":"${b64("devbox\n")}"}`,
+    `{"k":"program","i":0}`,
+    `{"k":"version","exit":0,"v":"${b64("OpenClaw 2026.10.6 (fe06181)")}"}`,
+    `{"k":"status-default","exit":0,"v":"${b64(status())}"}`,
+    ...lines,
+    `{"k":"signs","state":1,"launchd":0,"systemd":1,"cstate":0,"claunchd":0,"csystemd":0}`,
+    `{"k":"end","id":"${ID}"}`,
+    "",
+  ].join("\n");
+
+describe("the LOOK's output, parsed in memory", () => {
+  it("gives typed, checked facts", () => {
+    const parsed = parseLookOutput(wellFormed(), ID);
+    expect(parsed).toEqual({
+      ok: true,
+      noiseLines: 0,
+      facts: {
+        system: { os: "Linux", machine: "x86_64", nodeName: "devbox" },
+        program: "~/.openclaw/bin/openclaw",
+        version: { year: 2026, month: 10, day: 6, build: "fe06181" },
+        gateways: [
+          {
+            profile: "default",
+            exit: 0,
+            service: { label: "LaunchAgent", loaded: true, running: true, pid: 4242 },
+            configPath: "/srv/you/.openclaw/openclaw.json",
+            port: 18789,
+            bindMode: "loopback",
+            version: { year: 2026, month: 10, day: 6, build: null },
+            rpcOk: true,
+            listenerPids: [4242],
+          },
+        ],
+        signs: {
+          defaultState: true,
+          defaultService: true,
+          clawtrateState: false,
+          clawtrateService: false,
+        },
+      },
+    });
+  });
+
+  it("drops what a login start-up file printed before the begin line, fake facts included", () => {
+    const noise = [
+      "Welcome to devbox",
+      `{"k":"begin","id":"00000000-0000-0000-0000-000000000000"}`,
+      `{"k":"program","i":1}`,
+      `{"k":"end","id":"00000000-0000-0000-0000-000000000000"}`,
+    ].join("\n");
+    const parsed = parseLookOutput(`${noise}\n${wellFormed()}`, ID);
+    expect(parsed).toMatchObject({
+      ok: true,
+      noiseLines: 4,
+      facts: { program: "~/.openclaw/bin/openclaw" },
+    });
+  });
+
+  it("ignores what comes after the end line", () => {
+    expect(parseLookOutput(`${wellFormed()}logout noise\n`, ID).ok).toBe(true);
+  });
+
+  it.each([
+    ["no begin line", "nothing\n", "no-begin"],
+    [
+      "a begin line for another run",
+      wellFormed().replaceAll(ID, "00000000-0000-0000-0000-000000000000"),
+      "no-begin",
+    ],
+    ["no end line", wellFormed().split("\n").slice(0, -2).join("\n"), "no-end"],
+    ["a line that isn't JSON", wellFormed(["not json"]), "malformed"],
+    ["an array", wellFormed(["[1,2]"]), "malformed"],
+    ["an unknown fact", wellFormed([`{"k":"exec","v":"rm"}`]), "malformed"],
+    ["a fact twice", wellFormed([`{"k":"program","i":0}`]), "malformed"],
+    [
+      "a place outside the list",
+      wellFormed().replace(`{"k":"program","i":0}`, `{"k":"program","i":9}`),
+      "malformed",
+    ],
+    [
+      "a place by path",
+      wellFormed().replace(`{"k":"program","i":0}`, `{"k":"program","i":"/tmp/x"}`),
+      "malformed",
+    ],
+    ["output that isn't base64", wellFormed().replace(/"v":"[^"]+"/, `"v":"%%%"`), "malformed"],
+    ["an exit that isn't a number", wellFormed().replace(`"exit":0`, `"exit":"0"`), "malformed"],
+    ["signs that aren't 0 or 1", wellFormed().replace(`"state":1`, `"state":true`), "malformed"],
+    [
+      "an end with another id",
+      wellFormed().replace(`{"k":"end","id":"${ID}"}`, `{"k":"end","id":"x"}`),
+      "malformed",
+    ],
+    ["too much output", wellFormed([`{"k":"pad","v":"${"A".repeat(70000)}"}`]), "too-large"],
+    [
+      "a decoded output over the limit",
+      wellFormed([`{"k":"status-clawtrate","exit":0,"v":"${b64("x".repeat(33 * 1024))}"}`]),
+      "malformed",
+    ],
+  ])("refuses %s", (_name, stdout, reason) => {
+    expect(parseLookOutput(stdout, ID)).toEqual({ ok: false, reason });
+  });
+
+  it("checks every value, and keeps nothing it can't check", () => {
+    const hostile = wellFormed()
+      .replace(b64("OpenClaw 2026.10.6 (fe06181)"), b64("OpenClaw 2026.10.6; rm -rf ~"))
+      .replace(b64("devbox\n"), b64("<img src=x onerror=alert(1)>"));
+    const parsed = parseLookOutput(hostile, ID);
+    expect(parsed).toMatchObject({ ok: true, facts: { version: "unreadable", system: null } });
+
+    const gateway = parseGatewayStatus(
+      "default",
+      0,
+      JSON.stringify({
+        service: {
+          label: "<b>LaunchAgent</b>",
+          loaded: "yes",
+          runtime: { status: "running", pid: -1 },
+        },
+        config: { daemon: { path: "/srv/you/.openclaw/openclaw.json\nrm -rf /" } },
+        gateway: { port: "18789", bindMode: "everywhere", version: "2026.10.6-evil" },
+        rpc: { ok: "true" },
+        port: { listeners: [{ pid: 0 }, { pid: "1" }, { pid: 77 }] },
+      }),
+    );
+    expect(gateway).toEqual({
+      profile: "default",
+      exit: 0,
+      service: { label: "other", loaded: null, running: true, pid: null },
+      configPath: null,
+      port: null,
+      bindMode: null,
+      version: null,
+      rpcOk: null,
+      listenerPids: [77],
+    });
+    expect(
+      parseGatewayStatus("default", 0, JSON.stringify({ gateway: { port: 80 } }))?.port,
+    ).toBeNull();
+    expect(parseGatewayStatus("default", 1, "not json")).toBeNull();
+    // A status that isn't JSON is a fact of its own, not a parse failure.
+    const broken = parseLookOutput(wellFormed().replace(b64(status()), b64("Error: boom")), ID);
+    expect(broken).toMatchObject({
+      ok: true,
+      facts: { gateways: [{ profile: "default", unreadable: true }] },
+    });
+  });
+});
+
+describe("the gateway service on a port", () => {
+  const facts = (extra: Record<string, unknown> = {}) => {
+    const parsed = parseLookOutput(wellFormed().replace(b64(status()), b64(status(extra))), ID);
+    if (!parsed.ok) throw new Error();
+    return parsed.facts;
+  };
+
+  it("names the profile, service, configuration and port, and whether the service's process holds the port", () => {
+    const found = serviceOnPort(facts(), 18789);
+    expect(found).toEqual({
+      ok: true,
+      holdsPort: true,
+      service: {
+        profile: "default",
+        serviceLabel: "LaunchAgent",
+        configPath: "/srv/you/.openclaw/openclaw.json",
+        port: 18789,
+      },
+    });
+    const other = serviceOnPort(facts({ port: { listeners: [{ pid: 9 }] } }), 18789);
+    expect(other).toMatchObject({ ok: true, holdsPort: false });
+    expect(serviceOnPort(facts(), 18790)).toEqual({ ok: false, reason: "none" });
+    expect(serviceOnPort(facts({ rpc: { ok: false } }), 18789)).toEqual({
+      ok: false,
+      reason: "not-running",
+    });
+  });
+
+  it("is the same service only when all four agree", () => {
+    const a = {
+      profile: "default",
+      serviceLabel: "LaunchAgent",
+      configPath: "/srv/a",
+      port: 18789,
+    } as const;
+    expect(sameService(a, { ...a })).toBe(true);
+    expect(sameService(a, { ...a, configPath: "/srv/b" })).toBe(false);
+    expect(sameService(a, { ...a, profile: "clawtrate" })).toBe(false);
+    expect(sameService(a, { ...a, serviceLabel: "systemd user" })).toBe(false);
+    expect(sameService(a, { ...a, port: 18790 })).toBe(false);
+  });
+});
+
+describe("the LOOK script", () => {
+  it("is a constant whose one value is a validated request id", () => {
+    const { requestId, text } = lookScript(ID);
+    expect(requestId).toBe(ID);
+    expect(text).toBe(`request_id='${ID}'\n${LOOK_SCRIPT_BODY}`);
+    expect(() => lookScript("x'; rm -rf ~; '")).toThrow();
+    expect(lookScript().requestId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  const SHELLS = [
+    "/bin/sh",
+    "/bin/bash",
+    "/bin/zsh",
+    "/bin/dash",
+    "/bin/ksh",
+    "/bin/csh",
+    "/bin/tcsh",
+    "/usr/bin/fish",
+  ];
+  const present = SHELLS.filter((shell) => existsSync(shell));
+  const missing = SHELLS.filter((shell) => !existsSync(shell));
+  let root: string;
+  let home: string;
+
+  beforeAll(() => {
+    root = tempDir("clawtrate-look-");
+    home = join(root, "home");
+    mkdirSync(home, { recursive: true });
+    const stub = installStubOpenclaw(home);
+    stub.setVersion("OpenClaw 2026.10.6 (fe06181)\n");
+    stub.setStatus("default", statusJson({ port: 18789, home }));
+    stub.setStatus("clawtrate", statusJson({ port: 18800, home }));
+    mkdirSync(join(home, ".openclaw-clawtrate"));
+    // A hostile login environment: every start-up file prints, on both outputs, with fake facts.
+    // Each writes to stderr by /dev/stderr, which every shell family reads the same way:
+    // csh takes `>&2` for a file named 2.
+    const noise = [
+      "echo 'Last login: never'",
+      `echo '{"k":"begin","id":"${ID}"}'`,
+      "echo 'to stderr' > /dev/stderr",
+      "",
+    ].join("\n");
+    for (const file of [
+      ".zshenv",
+      ".zshrc",
+      ".bashrc",
+      ".profile",
+      ".bash_profile",
+      ".kshrc",
+      ".cshrc",
+      ".tcshrc",
+      ".login",
+    ]) {
+      writeFileSync(join(home, file), noise);
+    }
+    mkdirSync(join(home, ".config", "fish"), { recursive: true });
+    writeFileSync(join(home, ".config", "fish", "config.fish"), "echo 'fish says hi'\n");
+  });
+
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  /**
+   * Runs the script as sshd would: `<login shell> -c '/bin/sh -s'`, in a process
+   * group of its own, as sshd's session is, so its 30-second stop reaches only it.
+   */
+  const runUnder = (shell: string, homeDir: string) =>
+    new Promise<{ status: number | null; parsed: ReturnType<typeof parseLookOutput> }>(
+      (resolve) => {
+        const script = lookScript();
+        const env = testEnv({
+          HOME: homeDir,
+          ZDOTDIR: homeDir,
+          ENV: join(homeDir, ".kshrc"),
+          BASH_ENV: join(homeDir, ".bashrc"),
+        });
+        const child = spawn(shell, ["-c", "/bin/sh -s"], {
+          env,
+          cwd: homeDir,
+          detached: true,
+          stdio: ["pipe", "pipe", "ignore"],
+        });
+        let stdout = "";
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (chunk: string) => (stdout += chunk));
+        child.stdin.end(script.text);
+        const timer = setTimeout(() => child.pid && process.kill(-child.pid, "SIGKILL"), 40000);
+        child.once("close", (status) => {
+          clearTimeout(timer);
+          resolve({ status, parsed: parseLookOutput(stdout, script.requestId) });
+        });
+      },
+    );
+
+  it.each(present)(
+    "runs the same with %s as the login shell, start-up files and all",
+    async (shell) => {
+      const { status, parsed } = await runUnder(shell, home);
+      expect(status).toBe(0);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      expect(parsed.facts.program).toBe("~/.openclaw/bin/openclaw");
+      expect(parsed.facts.version).toMatchObject({ year: 2026, month: 10, day: 6 });
+      expect(parsed.facts.gateways.map((g) => g.profile)).toEqual(["default", "clawtrate"]);
+      expect(parsed.facts.signs).toMatchObject({ defaultState: true, clawtrateState: true });
+    },
+  );
+
+  if (missing.length) {
+    it.skip(`under ${missing.join(", ")} (skipped: not installed here)`, () => {});
+  }
+
+  const places = absolutePlacesHere();
+  it.skipIf(places.length > 0)(
+    places.length
+      ? `finds nothing in a home without OpenClaw (skipped: this machine has a program at a fixed place, ${places.join(", ")}, which the script would run)`
+      : "finds nothing in a home without OpenClaw",
+    async () => {
+      const empty = join(root, "empty");
+      mkdirSync(empty, { recursive: true });
+      const { parsed } = await runUnder("/bin/sh", empty);
+      expect(parsed).toMatchObject({
+        ok: true,
+        facts: {
+          program: null,
+          version: null,
+          gateways: [],
+          signs: { defaultState: false, defaultService: false },
+        },
+      });
+    },
+  );
+
+  it("stops itself after 30 seconds", { timeout: 45000 }, async () => {
+    const slow = join(root, "slow");
+    mkdirSync(join(slow, ".openclaw", "bin"), { recursive: true });
+    writeFileSync(join(slow, ".openclaw", "bin", "openclaw"), "#!/bin/sh\nexec sleep 120\n", {
+      mode: 0o755,
+    });
+    const started = Date.now();
+    const { parsed } = await runUnder("/bin/sh", slow);
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThan(29000);
+    expect(elapsed).toBeLessThan(40000);
+    expect(parsed).toEqual({ ok: false, reason: "no-end" });
+  });
+});
