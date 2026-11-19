@@ -63,26 +63,26 @@ above the composer                low disk on the machine the bot is set to work
 
 ### Components used
 
-| Component | From | Used for |
-| --- | --- | --- |
-| Settings frame, section list, section head and Back | `bots.md` §2, §7 | Every section |
-| Choice list (`.b-choices`), switch (`.b-switch`), note (`.b-note`), result (`.b-result`) | `bots.md` §2 | Gateways, the switches, notes, how a removal ended |
-| Fact block (`.facts`), group word | `visual-language.md` §9 | A gateway's page, Updates |
-| Confirmation (`.b-confirm`, role `alertdialog`) | `bots.md` §7 | Switching with unsent messages, removing, restarting |
-| The access bar and its request | `conversation.md` §3, `bots.md` §2 | Compact on a read-only connection |
-| The status strip | `visual-language.md` §11 | Connecting to the gateway switched to, and failing to |
-| Command block and copy button | `visual-language.md` §10 | The command that removes this device's record |
-| Event line, steps fold | `visual-language.md` §8, `conversation.md` §7.4 | The compacted line and what it folds |
-| The note above the composer | `controls.md` §16 ("Near a provider's limit") | Low disk |
-| The connection column | `visual-language.md` §10 | Update required |
-| The two-way switch (`.seg`) | `conversation.md` §8 | Theme, Your messages |
+| Component                                                                                | From                                            | Used for                                              |
+| ---------------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------- |
+| Settings frame, section list, section head and Back                                      | `bots.md` §2, §7                                | Every section                                         |
+| Choice list (`.b-choices`), switch (`.b-switch`), note (`.b-note`), result (`.b-result`) | `bots.md` §2                                    | Gateways, the switches, notes, how a removal ended    |
+| Fact block (`.facts`), group word                                                        | `visual-language.md` §9                         | A gateway's page, Updates                             |
+| Confirmation (`.b-confirm`, role `alertdialog`)                                          | `bots.md` §7                                    | Switching with unsent messages, removing, restarting  |
+| The access bar and its request                                                           | `conversation.md` §3, `bots.md` §2              | Compact on a read-only connection                     |
+| The status strip                                                                         | `visual-language.md` §11                        | Connecting to the gateway switched to, and failing to |
+| Command block and copy button                                                            | `visual-language.md` §10                        | The command that removes this device's record         |
+| Event line, steps fold                                                                   | `visual-language.md` §8, `conversation.md` §7.4 | The compacted line and what it folds                  |
+| The note above the composer                                                              | `controls.md` §16 ("Near a provider's limit")   | Low disk                                              |
+| The connection column                                                                    | `visual-language.md` §10                        | Update required                                       |
+| The two-way switch (`.seg`)                                                              | `conversation.md` §8                            | Theme, Your messages                                  |
 
 ### New components
 
 One, defined in `prototype/css/settings.css` from existing tokens:
 
-| Component | What it is | Tokens |
-| --- | --- | --- |
+| Component                | What it is                                                                                                                                                                                                                                                                                                 | Tokens                                     |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
 | Removal list (`.s-goes`) | Two short lists under a confirmation's sentence, "Removed from this device" and "Stays", each item a line of 14 with a 16 px mark (a cross in `--text-muted`, a check in `--text-faint`). After the removal the same list is the result, each item marked by what was read back: done, left, or not tried. | `--text-muted`, `--text-faint`, `--danger` |
 
 No new tokens.
@@ -117,17 +117,17 @@ The Settings dialog's polite live region (`bots.md` §2) announces, only once ea
 
 **The sections, in order.** The list is the `nav` of `bots.md` §7; a section that is not built yet is still listed where it will go, so the order does not move later.
 
-| Section | What it holds | Specified in | Desktop | iPhone |
-| --- | --- | --- | --- | --- |
-| Gateway | The gateway in use, as built | `packages/ui/src/Settings.tsx`, `setup.md` §8, §14, §15 | Yes | Yes |
-| Your gateways | Every saved gateway | Section 4 | Yes | Yes |
-| Accounts | The gateway's accounts | `bots.md` §7 | Yes | Yes |
-| Integrations | T3 Code | `bots.md` §15-18 | Yes | Yes |
-| Permissions, Memory, Usage, Machines | Rules, shared memory, usage, machines and devices | `controls.md` §7, §13, §16, §15 | Yes | Yes |
-| Appearance | Theme, Your messages | Section 8 | Yes | Yes |
-| Notifications | Kept for issues #76 and #77 | Not here | — | — |
-| System | Spelling, hardware acceleration | Section 9 | Yes | No |
-| Updates | The version, and updates when there is a source | Section 10 | Yes | No |
+| Section                              | What it holds                                     | Specified in                                            | Desktop | iPhone |
+| ------------------------------------ | ------------------------------------------------- | ------------------------------------------------------- | ------- | ------ |
+| Gateway                              | The gateway in use, as built                      | `packages/ui/src/Settings.tsx`, `setup.md` §8, §14, §15 | Yes     | Yes    |
+| Your gateways                        | Every saved gateway                               | Section 4                                               | Yes     | Yes    |
+| Accounts                             | The gateway's accounts                            | `bots.md` §7                                            | Yes     | Yes    |
+| Integrations                         | T3 Code                                           | `bots.md` §15-18                                        | Yes     | Yes    |
+| Permissions, Memory, Usage, Machines | Rules, shared memory, usage, machines and devices | `controls.md` §7, §13, §16, §15                         | Yes     | Yes    |
+| Appearance                           | Theme, Your messages                              | Section 8                                               | Yes     | Yes    |
+| Notifications                        | Kept for issues #76 and #77                       | Not here                                                | —       | —      |
+| System                               | Spelling, hardware acceleration                   | Section 9                                               | Yes     | No     |
+| Updates                              | The version, and updates when there is a source   | Section 10                                              | Yes     | No     |
 
 The web preview host has no System and no Updates: a browser does its own spelling and acceleration, and the preview updates when its host does.
 
@@ -137,10 +137,10 @@ The web preview host has no System and no Updates: a browser does its own spelli
 
 A sentence: "Clawtrate uses one gateway at a time. Each keeps its own pairing on this device, and nothing from one is sent to another." "Add gateway…" (default) at its right. Then one choice list:
 
-| Row | Title | Line under it | End |
-| --- | --- | --- | --- |
-| The gateway in use | "Home gateway" | "gateway.local · In use" | chevron: opens the Gateway pane |
-| Another gateway | "Studio gateway" | "devbox, over SSH · Last used Nov 18" | "Switch" (default, small), then the chevron |
+| Row                | Title            | Line under it                         | End                                         |
+| ------------------ | ---------------- | ------------------------------------- | ------------------------------------------- |
+| The gateway in use | "Home gateway"   | "gateway.local · In use"              | chevron: opens the Gateway pane             |
+| Another gateway    | "Studio gateway" | "devbox, over SSH · Last used Nov 18" | "Switch" (default, small), then the chevron |
 
 - A gateway's name is the rail's (`gatewayLabel`, or the route's name from `setup.md`); its line is its route as setup names it, and "In use" or when this device last connected to it.
 - "Last used" is this device's record of its last hello there. Nothing is read from a gateway that is not connected: no state, no bots, no version.
@@ -148,12 +148,12 @@ A sentence: "Clawtrate uses one gateway at a time. Each keeps its own pairing on
 
 **A gateway's page** (not the one in use). Title: its name, with Back to Your gateways. A fact block:
 
-| Row | Value |
-| --- | --- |
-| Route | "devbox, over SSH" or the address |
-| Last used | "Nov 18, 4:02 PM" |
+| Row               | Value                                                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Route             | "devbox, over SSH" or the address                                                                                    |
+| Last used         | "Nov 18, 4:02 PM"                                                                                                    |
 | This device there | "Paired, device 9c2e41"; the access it held at its last hello, "Read-only" or "Can send, stop and answer" or "Admin" |
-| Identity | The first 12 characters of the gateway's id, in mono, or "Not read" |
+| Identity          | The first 12 characters of the gateway's id, in mono, or "Not read"                                                  |
 
 "Switch to Studio gateway" (primary), and "Remove…" (quiet, `--danger`) at the far right. For the gateway in use the page is the Gateway pane.
 
@@ -165,12 +165,12 @@ While setup connects to the new gateway, the gateway in use is disconnected (one
 
 **How it ends.** After the new gateway's first hello, Clawtrate reads `gateway.identity.get` and compares it with every saved gateway's:
 
-| What was read | Result screen | Afterwards |
-| --- | --- | --- |
-| A new identity | "Added Lab gateway" · "Clawtrate is connected to it, read-only. Home gateway stays saved: switch back from the gateway menu." | The new gateway is in use and listed; the rail shows its bots |
-| The identity of a saved gateway | "Home gateway is already here" · "This address leads to Home gateway. Clawtrate keeps its saved pairing and didn't add a second entry. A second way to reach one gateway is a route, in Settings, Gateway." | The token just issued for the new address is dropped; Clawtrate reconnects to Home gateway with its own token |
-| No identity (the call failed) | "Added 198.51.100.7" · "Lab gateway didn't say who it is, so Clawtrate keeps it under its address." | Listed under its address, as the rail's arrangement is (`docs/decisions.md`, "The rail's arrangement is this device's") |
-| Setup cancelled, or it failed | "Nothing was added" · "Clawtrate is connected to Home gateway again." | Home gateway in use |
+| What was read                   | Result screen                                                                                                                                                                                               | Afterwards                                                                                                              |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| A new identity                  | "Added Lab gateway" · "Clawtrate is connected to it, read-only. Home gateway stays saved: switch back from the gateway menu."                                                                               | The new gateway is in use and listed; the rail shows its bots                                                           |
+| The identity of a saved gateway | "Home gateway is already here" · "This address leads to Home gateway. Clawtrate keeps its saved pairing and didn't add a second entry. A second way to reach one gateway is a route, in Settings, Gateway." | The token just issued for the new address is dropped; Clawtrate reconnects to Home gateway with its own token           |
+| No identity (the call failed)   | "Added 198.51.100.7" · "Lab gateway didn't say who it is, so Clawtrate keeps it under its address."                                                                                                         | Listed under its address, as the rail's arrangement is (`docs/decisions.md`, "The rail's arrangement is this device's") |
+| Setup cancelled, or it failed   | "Nothing was added" · "Clawtrate is connected to Home gateway again."                                                                                                                                       | Home gateway in use                                                                                                     |
 
 Each line about the gateway in use is written only after its hello: if Home gateway can't be reached on the way back, the screen says "Clawtrate couldn't reach Home gateway" with "Try again", and the strip says the same.
 
@@ -188,13 +188,13 @@ With nothing waiting there is no confirmation. Drafts are kept for each gateway 
 
 **Each step, as it is.**
 
-| Step | The rail | The status strip | Settings, Your gateways |
-| --- | --- | --- | --- |
-| Closing Home gateway | Home's bots leave at once: no bot, task or permission of one gateway is shown under another | — | "Switching" on Studio's row |
-| Connecting to Studio gateway | "Loading this gateway's bots." | "Connecting to Studio gateway" | as above |
-| Hello, then identity | Studio's bots, its tasks, its permissions | — | Studio "In use" |
-| Studio can't be reached | Empty, "Can't reach Studio gateway" | "Can't reach Studio gateway" · its reason, with "Retry" and "Back to Home gateway" | Studio "Can't reach it" |
-| Studio's identity differs from the one saved for it | Empty | "This address now leads to a different gateway" (`setup.md` §15) | Studio "A different gateway answered" |
+| Step                                                | The rail                                                                                    | The status strip                                                                   | Settings, Your gateways               |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------- |
+| Closing Home gateway                                | Home's bots leave at once: no bot, task or permission of one gateway is shown under another | —                                                                                  | "Switching" on Studio's row           |
+| Connecting to Studio gateway                        | "Loading this gateway's bots."                                                              | "Connecting to Studio gateway"                                                     | as above                              |
+| Hello, then identity                                | Studio's bots, its tasks, its permissions                                                   | —                                                                                  | Studio "In use"                       |
+| Studio can't be reached                             | Empty, "Can't reach Studio gateway"                                                         | "Can't reach Studio gateway" · its reason, with "Retry" and "Back to Home gateway" | Studio "Can't reach it"               |
+| Studio's identity differs from the one saved for it | Empty                                                                                       | "This address now leads to a different gateway" (`setup.md` §15)                   | Studio "A different gateway answered" |
 
 "Switched to Studio gateway" is announced after the hello and the identity check. Bots, tasks and transcripts of a gateway are in memory only, so returning loads them again; the rail's arrangement, the open bot and task, and the drafts come back from this device's storage for that gateway (section 18).
 
@@ -205,12 +205,14 @@ With nothing waiting there is no confirmation. Drafts are kept for each gateway 
 > **Remove Studio gateway from this device?**
 >
 > Removed from this device
+>
 > - Its pairing: the device token Clawtrate keeps for its route
 > - Its route: devbox, over SSH, with the key Clawtrate pinned for it (`setup.md` §8)
 > - Drafts in 2 tasks
 > - How you arranged its bots in the rail, and the task last open
 >
 > Stays
+>
 > - On Studio gateway: its bots, tasks, accounts and settings. Nothing there changes.
 > - On Studio gateway: this device's record, device 9c2e41. To remove it, run this on the gateway's computer:
 >   `openclaw devices remove 9c2e41…` [copy]
@@ -233,11 +235,11 @@ With nothing waiting there is no confirmation. Drafts are kept for each gateway 
 
 **How it ended.** The same two lists, each item marked by what was read back:
 
-| Outcome | Title | Then |
-| --- | --- | --- |
-| Every step done | "Studio gateway is removed from this device" | The lists, every "Removed" item done. When it was the gateway in use and others are saved: Your gateways, "Not connected. Choose a gateway to use." with Switch on each; when none is left, setup's first screen |
-| The gateway refused or failed to remove the record | "Home gateway didn't remove this device's record" | "Nothing was removed. Home gateway said: <the error category>." with "Remove from this device only" and "Cancel" |
-| A local step failed | "Couldn't remove everything" | Each item marked done, left or not tried; "Try again" repeats only what is left |
+| Outcome                                            | Title                                             | Then                                                                                                                                                                                                             |
+| -------------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every step done                                    | "Studio gateway is removed from this device"      | The lists, every "Removed" item done. When it was the gateway in use and others are saved: Your gateways, "Not connected. Choose a gateway to use." with Switch on each; when none is left, setup's first screen |
+| The gateway refused or failed to remove the record | "Home gateway didn't remove this device's record" | "Nothing was removed. Home gateway said: <the error category>." with "Remove from this device only" and "Cancel"                                                                                                 |
+| A local step failed                                | "Couldn't remove everything"                      | Each item marked done, left or not tried; "Try again" repeats only what is left                                                                                                                                  |
 
 ## 8. Appearance
 
@@ -254,9 +256,9 @@ Desktop only. Two rows, each a title (15/500), a line under it, and a switch at 
 
 **Check spelling while typing**, on by default (Electron's spellchecker is on by default, research §10).
 
-| System | Line under it | Facts |
-| --- | --- | --- |
-| macOS | "Uses macOS's own spelling checker, in the languages macOS is set to." | `session.setSpellCheckerEnabled`; the language list is macOS's, and Electron cannot set it |
+| System  | Line under it                                                                                                                                                                                                                                                              | Facts                                                                                                 |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| macOS   | "Uses macOS's own spelling checker, in the languages macOS is set to."                                                                                                                                                                                                     | `session.setSpellCheckerEnabled`; the language list is macOS's, and Electron cannot set it            |
 | Windows | Before the dictionary is ready: "Uses a dictionary for English (United States), which Clawtrate downloads once." Ready: "Checks English (United States)." Failed: "Couldn't download the dictionary for English (United States). Spelling isn't checked." with "Try again" | The language matches the system's locale; `spellcheck-dictionary-initialized` and `-download-failure` |
 
 - On, a misspelled word in the composer is underlined; right-click gives the suggestions and "Add to dictionary" (`context-menu`'s `dictionarySuggestions` and `misspelledWord`). Fields where spelling means nothing (addresses, names, search) keep `spellcheck="false"`, as today.
@@ -264,12 +266,12 @@ Desktop only. Two rows, each a title (15/500), a line under it, and a switch at 
 
 **Use hardware acceleration**, on by default. "Turn off if Clawtrate draws badly or flickers on this computer." Off is a choice for the next start, because Electron can turn it off only before the app is ready (research §10):
 
-| State | Line under it | Action |
-| --- | --- | --- |
-| On | the sentence above | — |
-| Turned off, not restarted | "Turns off when Clawtrate restarts." | "Restart now" |
-| Off (read back after the restart) | "Off. Clawtrate draws without the graphics hardware." | — |
-| Turned on again, not restarted | "Turns on when Clawtrate restarts." | "Restart now" |
+| State                             | Line under it                                         | Action        |
+| --------------------------------- | ----------------------------------------------------- | ------------- |
+| On                                | the sentence above                                    | —             |
+| Turned off, not restarted         | "Turns off when Clawtrate restarts."                  | "Restart now" |
+| Off (read back after the restart) | "Off. Clawtrate draws without the graphics hardware." | —             |
+| Turned on again, not restarted    | "Turns on when Clawtrate restarts."                   | "Restart now" |
 
 "Restart now", when nothing waits to be sent, restarts at once (`app.relaunch()`, then quit). When something waits, a confirmation: "Restart Clawtrate?" "1 message to Otto hasn't been sent yet. Restarting drops it. Runs on Home gateway keep going." with "Cancel" and "Restart".
 
@@ -277,23 +279,23 @@ Desktop only. Two rows, each a title (15/500), a line under it, and a switch at 
 
 Desktop only. A fact block, then what the source allows.
 
-| Row | Value |
-| --- | --- |
-| Version | "Clawtrate 0.1.0" |
+| Row     | Value                  |
+| ------- | ---------------------- |
+| Version | "Clawtrate 0.1.0"      |
 | Updates | One of the lines below |
 
 **Today: no update source.** Packaging publishes nothing and the app has no updater (research §4). The row says "This copy can't check for updates: no update source is set up for it." There is no "Check for Updates", no "Automatic Updates" switch and no update track. A copy run from source says instead "A development build. It doesn't update itself." This is what every copy shows until the owner publishes releases.
 
 **With an update source** (drawn as a future example in the prototype, labelled "When releases are published"). On macOS and Windows:
 
-| State | Updates row | Actions |
-| --- | --- | --- |
-| Not checked | "Checked at 9:05 AM" or nothing | "Check for Updates" |
-| Checking | "Checking for updates…" | none |
-| Up to date | "You're up to date. Checked at 5:41 PM." (`update-not-available`) | "Check for Updates" |
-| Downloading | "Downloading Clawtrate 0.2.0…" (`update-available`; no percentage, since Electron's `autoUpdater` has no progress event) | none |
-| Ready | "Clawtrate 0.2.0 is ready. It installs when Clawtrate restarts." (`update-downloaded`) | "Restart to Update" (primary) |
-| Couldn't check | "Couldn't check for updates." | "Try again" |
+| State          | Updates row                                                                                                              | Actions                       |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
+| Not checked    | "Checked at 9:05 AM" or nothing                                                                                          | "Check for Updates"           |
+| Checking       | "Checking for updates…"                                                                                                  | none                          |
+| Up to date     | "You're up to date. Checked at 5:41 PM." (`update-not-available`)                                                        | "Check for Updates"           |
+| Downloading    | "Downloading Clawtrate 0.2.0…" (`update-available`; no percentage, since Electron's `autoUpdater` has no progress event) | none                          |
+| Ready          | "Clawtrate 0.2.0 is ready. It installs when Clawtrate restarts." (`update-downloaded`)                                   | "Restart to Update" (primary) |
+| Couldn't check | "Couldn't check for updates."                                                                                            | "Try again"                   |
 
 - "It installs when Clawtrate restarts" is exact: a downloaded update installs at the next start, whether Clawtrate restarts itself or the person quits and reopens it (research §4).
 - "Restart to Update" asks first when something waits to be sent, with section 9's confirmation and the title "Restart to update?".
@@ -337,12 +339,12 @@ Nothing else is asked of that gateway while the window shows (the core already s
 
 **Where.** The Work pane's Details tab, which is about the open task (`bots.md` §8), gains a group "Context" after the task's facts: one sentence and the button.
 
-| State | Sentence | Button |
-| --- | --- | --- |
-| Available | "Compact replaces older turns in Juniper's context with a summary. Every turn stays here." | "Compact" (default, small) |
-| A run is active | "Compact is available when this run ends. The gateway would stop a run still going a minute after you compact." | "Compact", disabled |
-| Compacting | "Compacting…" with the working mark | none |
-| Read-only | "Compacting sends a message, which needs this device to be able to send." | none; the access bar below, "Request access" |
+| State           | Sentence                                                                                                        | Button                                       |
+| --------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Available       | "Compact replaces older turns in Juniper's context with a summary. Every turn stays here."                      | "Compact" (default, small)                   |
+| A run is active | "Compact is available when this run ends. The gateway would stop a run still going a minute after you compact." | "Compact", disabled                          |
+| Compacting      | "Compacting…" with the working mark                                                                             | none                                         |
+| Read-only       | "Compacting sends a message, which needs this device to be able to send."                                       | none; the access bar below, "Request access" |
 
 Typing `/compact` in the composer is the same thing and is drawn the same way.
 
@@ -350,13 +352,13 @@ Typing `/compact` in the composer is the same thing and is drawn the same way.
 
 **In the transcript.** The `/compact` message and the gateway's reply are not drawn as bubbles. One event line takes their place, at the reply's position:
 
-| What history shows | The line | Announced |
-| --- | --- | --- |
-| Waiting for the reply | "Compacting Juniper's context…" with the working mark | — |
-| A `compaction` row with `tokensBefore` and `tokensAfter` | "Context compacted · 9.7k → 2.1k tokens", and the turns before it folded under it (below) | "Compacted" |
-| A reply that says it skipped | "Nothing to compact yet." | "Nothing to compact yet" |
-| A reply that says it failed, and no `compaction` row | "Couldn't compact. Juniper's context is as it was." with "Show the gateway's reply", which opens the reply's text as text | "Couldn't compact" |
-| A reply that says a run was stopped | The failure or success line, and under it, in `--warn`: "The gateway stopped the run that was going. Send that message again." | as above |
+| What history shows                                       | The line                                                                                                                       | Announced                |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------ |
+| Waiting for the reply                                    | "Compacting Juniper's context…" with the working mark                                                                          | —                        |
+| A `compaction` row with `tokensBefore` and `tokensAfter` | "Context compacted · 9.7k → 2.1k tokens", and the turns before it folded under it (below)                                      | "Compacted"              |
+| A reply that says it skipped                             | "Nothing to compact yet."                                                                                                      | "Nothing to compact yet" |
+| A reply that says it failed, and no `compaction` row     | "Couldn't compact. Juniper's context is as it was." with "Show the gateway's reply", which opens the reply's text as text      | "Couldn't compact"       |
+| A reply that says a run was stopped                      | The failure or success line, and under it, in `--warn`: "The gateway stopped the run that was going. Send that message again." | as above                 |
 
 **The fold.** Only a `compaction` row makes a fold. The turns between the previous compaction row (or the start) and this one are folded under the line, with a disclosure "3 earlier turns" (the client's count of the person's turns there). Opened, they read as they did, with one line at their foot: "Juniper's context now holds a summary of these and its most recent messages." The gateway says the transcript keeps every message and that recent messages stay intact, so the line never says these turns are gone, and never says which of them the bot still sees word for word (research §8). The fold is closed when the task opens; it remembers being opened while the task stays open.
 
@@ -366,10 +368,10 @@ A report, never a clean-up: the gateway offers a client no clean-up of a machine
 
 **Where the figures come from.** Only from a machine the gateway names for this bot, as `work-pane.md` §16 establishes it:
 
-| The bot is set to work on | Figures | Volume |
-| --- | --- | --- |
-| A node | The node's `node.hostStats`, or the copy on its `node.list` record | The node's home volume |
-| The gateway's machine | `system.info`, read when the task opens and every 10 minutes while it is open | The entry of `disks` whose path is the longest that contains the bot's `workspace` (`agents.list`), else the gateway's state folder's |
+| The bot is set to work on | Figures                                                                       | Volume                                                                                                                                |
+| ------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| A node                    | The node's `node.hostStats`, or the copy on its `node.list` record            | The node's home volume                                                                                                                |
+| The gateway's machine     | `system.info`, read when the task opens and every 10 minutes while it is open | The entry of `disks` whose path is the longest that contains the bot's `workspace` (`agents.list`), else the gateway's state folder's |
 
 Both are `operator.read`, so a read-only connection sees the report.
 
@@ -389,113 +391,113 @@ For the gateway's own machine: "Otto is set to run commands on the gateway's mac
 
 ## 15. Widths, themes, keyboard, screen readers, motion
 
-| Concern | Rule |
-| --- | --- |
-| 1440, 1100 | The Settings dialog is 800 × 640 (`bots.md` §2); every section scrolls inside it |
-| 800 | The dialog takes the window's width less 48 px; the section list stays at 208 px |
-| 390 (iPhone) | The list first, full width; a section replaces it with Back (`bots.md` §7). No System, no Updates. "Update required" is the iPhone's words. The gateway menu opens downward from the round button at the top left (`visual-language.md` §7) |
-| Themes | Every state in light and dark, from the tokens only |
-| Keyboard | Section 2, Input. Every action in every walk can be done without a pointer |
+| Concern        | Rule                                                                                                                                                                                                                                                                           |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1440, 1100     | The Settings dialog is 800 × 640 (`bots.md` §2); every section scrolls inside it                                                                                                                                                                                               |
+| 800            | The dialog takes the window's width less 48 px; the section list stays at 208 px                                                                                                                                                                                               |
+| 390 (iPhone)   | The list first, full width; a section replaces it with Back (`bots.md` §7). No System, no Updates. "Update required" is the iPhone's words. The gateway menu opens downward from the round button at the top left (`visual-language.md` §7)                                    |
+| Themes         | Every state in light and dark, from the tokens only                                                                                                                                                                                                                            |
+| Keyboard       | Section 2, Input. Every action in every walk can be done without a pointer                                                                                                                                                                                                     |
 | Screen readers | Each section's title is its `h3`; switches have their row's title as their name and its line as their description; the removal lists are lists; the compacted line is a `button` with `aria-expanded` that names the count; the low-disk note is a `region` named "Disk space" |
-| Motion | The working mark is a still ring when motion is reduced |
+| Motion         | The working mark is a still ring when motion is reduced                                                                                                                                                                                                                        |
 
 ## 16. What each fact drives
 
-| Shown or done | Rests on | Research |
-| --- | --- | --- |
-| One gateway in use; switching closes one connection and opens another | The core holds one connection; a message is never sent to another gateway | §1, §6 |
-| A second gateway apart from a second route | `gateway.identity.get` (`operator.read`) after hello | §1 |
-| Each gateway's own pairing | Device tokens keyed by route | §1, §2 |
-| The removal's "Removed" list | The host's and the interface's storage, item by item | §2 |
-| "This device's record" stays, with the command | `device.pair.remove` needs `operator.pairing`; refused at read and interactive (live) | §3 |
-| "Also remove this device's record" with admin | Admin removed its own record; the result names the id and the connection ends (live) | §3 |
-| No "Check for Updates" today | `publish: null`; no updater in the app | §4 |
-| What an update would need | Squirrel.Mac needs a signed app; Electron cannot update NSIS; electron-builder's updater with a publish provider | §4 |
-| "It installs when Clawtrate restarts" | A downloaded update is applied at the next start | §4 |
-| The automatic update rule, without a screen saver | `lock-screen`, `unlock-screen`, `getSystemIdleState`, `getSystemIdleTime`; nothing reports a screen saver | §5 |
-| "No run is active" | The connected gateway's run state and this client's unsent messages | §6 |
-| Update required, and a gateway too old | `PROTOCOL_MISMATCH` with `expectedProtocol` (live) | §7 |
-| Compact: the button, the wait, the lines | `/compact` through `chat.send` (`operator.write`); the gateway-injected reply with the send's key; skipped and failed replies (live) | §8 |
-| Compact unavailable during a run | `/compact` waits up to 60 s, then stops the run (live) | §8 |
-| The fold and its line | The `compaction` row; the transcript keeps every message; recent messages kept intact | §8 |
-| Free disk, and deleting nothing | `node.hostStats`, `system.info`, `agents.list` workspace (all `operator.read`, live for the last two); no client clean-up of files | §9 |
-| No Language setting | No translation in the interface | §10 |
-| Spelling on each system | Electron's spellchecker; macOS's checker; Hunspell on Windows | §10 |
-| Hardware acceleration needs a restart | `app.disableHardwareAcceleration()` before ready | §10 |
-| No security key setting | No gateway support | §10 |
+| Shown or done                                                         | Rests on                                                                                                                             | Research |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| One gateway in use; switching closes one connection and opens another | The core holds one connection; a message is never sent to another gateway                                                            | §1, §6   |
+| A second gateway apart from a second route                            | `gateway.identity.get` (`operator.read`) after hello                                                                                 | §1       |
+| Each gateway's own pairing                                            | Device tokens keyed by route                                                                                                         | §1, §2   |
+| The removal's "Removed" list                                          | The host's and the interface's storage, item by item                                                                                 | §2       |
+| "This device's record" stays, with the command                        | `device.pair.remove` needs `operator.pairing`; refused at read and interactive (live)                                                | §3       |
+| "Also remove this device's record" with admin                         | Admin removed its own record; the result names the id and the connection ends (live)                                                 | §3       |
+| No "Check for Updates" today                                          | `publish: null`; no updater in the app                                                                                               | §4       |
+| What an update would need                                             | Squirrel.Mac needs a signed app; Electron cannot update NSIS; electron-builder's updater with a publish provider                     | §4       |
+| "It installs when Clawtrate restarts"                                 | A downloaded update is applied at the next start                                                                                     | §4       |
+| The automatic update rule, without a screen saver                     | `lock-screen`, `unlock-screen`, `getSystemIdleState`, `getSystemIdleTime`; nothing reports a screen saver                            | §5       |
+| "No run is active"                                                    | The connected gateway's run state and this client's unsent messages                                                                  | §6       |
+| Update required, and a gateway too old                                | `PROTOCOL_MISMATCH` with `expectedProtocol` (live)                                                                                   | §7       |
+| Compact: the button, the wait, the lines                              | `/compact` through `chat.send` (`operator.write`); the gateway-injected reply with the send's key; skipped and failed replies (live) | §8       |
+| Compact unavailable during a run                                      | `/compact` waits up to 60 s, then stops the run (live)                                                                               | §8       |
+| The fold and its line                                                 | The `compaction` row; the transcript keeps every message; recent messages kept intact                                                | §8       |
+| Free disk, and deleting nothing                                       | `node.hostStats`, `system.info`, `agents.list` workspace (all `operator.read`, live for the last two); no client clean-up of files   | §9       |
+| No Language setting                                                   | No translation in the interface                                                                                                      | §10      |
+| Spelling on each system                                               | Electron's spellchecker; macOS's checker; Hunspell on Windows                                                                        | §10      |
+| Hardware acceleration needs a restart                                 | `app.disableHardwareAcceleration()` before ready                                                                                     | §10      |
+| No security key setting                                               | No gateway support                                                                                                                   | §10      |
 
 ## 17. Parity rows
 
 **Reworded** in `docs/parity.md`, statuses unchanged. Each keeps its target and changes only its gateway dependency cell, to the evidence:
 
-| Row | The dependency cell becomes |
-| --- | --- |
-| F-010 | Says that there is no update feed today and what the handshake does say: `PROTOCOL_MISMATCH` with `expectedProtocol` |
-| F-159 | Adds `system.info` for the gateway's own machine, the volumes, and that no clean-up a client can ask for frees a machine's files |
-| F-229 | Says the interface ships English only, with no translation files or locale handling |
-| F-230 | One connection at a time through the setup flow's pairing; `gateway.identity.get` tells a second gateway from a second route |
-| F-231 | Needs an update source: none is published; a signed macOS build; electron-builder's updater on Windows |
+| Row   | The dependency cell becomes                                                                                                             |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| F-010 | Says that there is no update feed today and what the handshake does say: `PROTOCOL_MISMATCH` with `expectedProtocol`                    |
+| F-159 | Adds `system.info` for the gateway's own machine, the volumes, and that no clean-up a client can ask for frees a machine's files        |
+| F-229 | Says the interface ships English only, with no translation files or locale handling                                                     |
+| F-230 | One connection at a time through the setup flow's pairing; `gateway.identity.get` tells a second gateway from a second route            |
+| F-231 | Needs an update source: none is published; a signed macOS build; electron-builder's updater on Windows                                  |
 | F-279 | Adds the live replies: skipped, failed with history unchanged, and a run stopped after 60 s; the reply's `gateway-injected` row and key |
-| F-388 | As F-229 |
-| F-389 | One connection at a time; messages waiting to send are dropped after a confirmation that names them |
-| F-390 | The device record stays below admin, with the live refusals; admin removes it with `device.pair.remove` |
-| F-391 | What Electron reports on macOS and Windows, and that nothing reports a screen saver |
-| F-393 | Electron's spellchecker per system, and the Windows dictionary download against the app's request filter |
-| F-394 | `app.disableHardwareAcceleration()` only before ready, so a restart |
-| F-458 | No Linux package is built today |
+| F-388 | As F-229                                                                                                                                |
+| F-389 | One connection at a time; messages waiting to send are dropped after a confirmation that names them                                     |
+| F-390 | The device record stays below admin, with the live refusals; admin removes it with `device.pair.remove`                                 |
+| F-391 | What Electron reports on macOS and Windows, and that nothing reports a screen saver                                                     |
+| F-393 | Electron's spellchecker per system, and the Windows dictionary download against the app's request filter                                |
+| F-394 | `app.disableHardwareAcceleration()` only before ready, so a restart                                                                     |
+| F-458 | No Linux package is built today                                                                                                         |
 
 **Asked for a decision**, rows left as they are, because the design differs from their target:
 
-| Row | Where the design differs, and why |
-| --- | --- |
-| F-010 | The target is the client's age against its update feed. With no feed, nothing can tell a newer version exists; the design's "Update required" comes from the protocol mismatch instead (section 11) |
-| F-228 | The target's Accent is "Bot color, Black". The design keeps what is built, Accent or Neutral (section 8): no colour for a bot's messages is defined in this design or by the gateway |
-| F-229, F-388 | No Language setting until a second language ships (section 12) |
-| F-279 | The target's line is "Compacted <n> turns". The gateway keeps recent messages intact and does not say which turns it summarized, so the design's line gives the context's size before and after, and "<n> earlier turns" names what is folded, not what was replaced (section 13) |
-| F-391 | The target installs when the screen is locked **or the screen saver is on**. Nothing reports a screen saver, so the design's rule is a locked screen only (section 10) |
-| F-395 | The target is a switch, on by default, disabled on Linux. No system can honour it, so the design has no switch; `gap` would match the evidence (section 12) |
+| Row          | Where the design differs, and why                                                                                                                                                                                                                                                 |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-010        | The target is the client's age against its update feed. With no feed, nothing can tell a newer version exists; the design's "Update required" comes from the protocol mismatch instead (section 11)                                                                               |
+| F-228        | The target's Accent is "Bot color, Black". The design keeps what is built, Accent or Neutral (section 8): no colour for a bot's messages is defined in this design or by the gateway                                                                                              |
+| F-229, F-388 | No Language setting until a second language ships (section 12)                                                                                                                                                                                                                    |
+| F-279        | The target's line is "Compacted <n> turns". The gateway keeps recent messages intact and does not say which turns it summarized, so the design's line gives the context's size before and after, and "<n> earlier turns" names what is folded, not what was replaced (section 13) |
+| F-391        | The target installs when the screen is locked **or the screen saver is on**. Nothing reports a screen saver, so the design's rule is a locked screen only (section 10)                                                                                                            |
+| F-395        | The target is a switch, on by default, disabled on Linux. No system can honour it, so the design has no switch; `gap` would match the evidence (section 12)                                                                                                                       |
 
 ## 18. For builders
 
 ### What each part uses
 
-| Part | Existing | New |
-| --- | --- | --- |
-| Your gateways, a gateway's page | Settings frame, choice list, fact block | none |
-| Gateway menu group | `.menu`, `menuitemradio` | none |
-| Removing | Confirmation, command block | Removal list |
-| Appearance | `.seg` | none |
-| System, Updates | Switch, fact block, confirmation | none |
-| Update required | The connection column | none |
-| Compact | Details tab, event line, steps fold, access bar | none |
-| Low disk | The note above the composer | none |
+| Part                            | Existing                                        | New          |
+| ------------------------------- | ----------------------------------------------- | ------------ |
+| Your gateways, a gateway's page | Settings frame, choice list, fact block         | none         |
+| Gateway menu group              | `.menu`, `menuitemradio`                        | none         |
+| Removing                        | Confirmation, command block                     | Removal list |
+| Appearance                      | `.seg`                                          | none         |
+| System, Updates                 | Switch, fact block, confirmation                | none         |
+| Update required                 | The connection column                           | none         |
+| Compact                         | Details tab, event line, steps fold, access bar | none         |
+| Low disk                        | The note above the composer                     | none         |
 
 ### What the host does
 
-| Need | How |
-| --- | --- |
-| Saved gateways | A list in host storage, one entry per gateway: its name, routes (`setup.md` §2), the identity read for each route, the last hello's time and access. The `connection` key becomes the entry in use. Token records stay keyed as they are |
-| Switching | Close the connection, open the chosen gateway's route with its own token. The existing generation checks drop anything that finishes after the switch (`docs/decisions.md`) |
-| Removing | The steps of section 7, each followed by a read of what it deleted; the answer to the interface is the list with each item's state |
-| The command to remove this device's record | `openclaw [--profile <p>] devices remove <deviceId>`, chosen by the host as the approve command is |
-| The app's own settings | A file in the app's data folder, read before `app.whenReady()`: `spellcheck`, `hardwareAcceleration`, `autoUpdate`. Writes answer with the file's contents and Electron's reading |
-| Spelling | `session.defaultSession.setSpellCheckerEnabled`; a `context-menu` handler for suggestions; on Windows the dictionary events, and a decision on how the dictionary reaches the app past `lockDownSession` |
-| Hardware acceleration | `app.disableHardwareAcceleration()` before ready when the file says off; `app.isHardwareAccelerationEnabled()` in the answer; "Restart now" is `app.relaunch()` then `app.quit()` |
-| Updates | Until the owner publishes: report "no source" and nothing else. Then: Electron's `autoUpdater` on macOS (signed build, the existing `.zip`), electron-builder's updater for the NSIS installer on Windows, a publish provider in `packaging/config.ts` so `app-update.yml` and `latest*.yml` are written; the rule of section 10 from `powerMonitor` |
-| Unsent messages | A count per gateway and bot of messages waiting to send or to be confirmed, for the confirmations |
+| Need                                       | How                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Saved gateways                             | A list in host storage, one entry per gateway: its name, routes (`setup.md` §2), the identity read for each route, the last hello's time and access. The `connection` key becomes the entry in use. Token records stay keyed as they are                                                                                                             |
+| Switching                                  | Close the connection, open the chosen gateway's route with its own token. The existing generation checks drop anything that finishes after the switch (`docs/decisions.md`)                                                                                                                                                                          |
+| Removing                                   | The steps of section 7, each followed by a read of what it deleted; the answer to the interface is the list with each item's state                                                                                                                                                                                                                   |
+| The command to remove this device's record | `openclaw [--profile <p>] devices remove <deviceId>`, chosen by the host as the approve command is                                                                                                                                                                                                                                                   |
+| The app's own settings                     | A file in the app's data folder, read before `app.whenReady()`: `spellcheck`, `hardwareAcceleration`, `autoUpdate`. Writes answer with the file's contents and Electron's reading                                                                                                                                                                    |
+| Spelling                                   | `session.defaultSession.setSpellCheckerEnabled`; a `context-menu` handler for suggestions; on Windows the dictionary events, and a decision on how the dictionary reaches the app past `lockDownSession`                                                                                                                                             |
+| Hardware acceleration                      | `app.disableHardwareAcceleration()` before ready when the file says off; `app.isHardwareAccelerationEnabled()` in the answer; "Restart now" is `app.relaunch()` then `app.quit()`                                                                                                                                                                    |
+| Updates                                    | Until the owner publishes: report "no source" and nothing else. Then: Electron's `autoUpdater` on macOS (signed build, the existing `.zip`), electron-builder's updater for the NSIS installer on Windows, a publish provider in `packaging/config.ts` so `app-update.yml` and `latest*.yml` are written; the rule of section 10 from `powerMonitor` |
+| Unsent messages                            | A count per gateway and bot of messages waiting to send or to be confirmed, for the confirmations                                                                                                                                                                                                                                                    |
 
 **The interface's storage, per gateway.** `clawtrate.bot`, `clawtrate.tasks`, `clawtrate.seen` and `clawtrate.unfolded` hold the gateway's ids without naming it (research §2). They are keyed by gateway, as the rail's arrangement is, before switching ships; otherwise one gateway's open task is looked for in another, and a removal cannot remove them.
 
 ### What the engine supplies
 
-| Need | Supplied by |
-| --- | --- |
-| The gateway's identity after hello | `gateway.identity.get`, already read (`ConnectionState.gatewayId`) |
-| Who is too old | `ConnectionState.error.protocol {gateway, client}`, already set on `PROTOCOL_MISMATCH` |
-| Removing this device's record | `device.pair.remove {deviceId}`, only with `canAdmin` |
-| Compact | `chat.send` with the text `/compact` and its own key; the task's history rows with their `model` and `idempotencyKey`; the `compaction` row. The mapping of `conversation.md` §22 gains the compacted line |
-| Disk | `node.list`, the `node.hostStats` event, `system.info`, `agents.list`'s `workspace` |
-| Whether a run is active | The run state the status line uses |
+| Need                               | Supplied by                                                                                                                                                                                                |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The gateway's identity after hello | `gateway.identity.get`, already read (`ConnectionState.gatewayId`)                                                                                                                                         |
+| Who is too old                     | `ConnectionState.error.protocol {gateway, client}`, already set on `PROTOCOL_MISMATCH`                                                                                                                     |
+| Removing this device's record      | `device.pair.remove {deviceId}`, only with `canAdmin`                                                                                                                                                      |
+| Compact                            | `chat.send` with the text `/compact` and its own key; the task's history rows with their `model` and `idempotencyKey`; the `compaction` row. The mapping of `conversation.md` §22 gains the compacted line |
+| Disk                               | `node.list`, the `node.hostStats` event, `system.info`, `agents.list`'s `workspace`                                                                                                                        |
+| Whether a run is active            | The run state the status line uses                                                                                                                                                                         |
 
 ### Order
 
@@ -511,47 +513,47 @@ For the gateway's own machine: "Otto is set to run commands on the gateway's mac
 
 `settings.html` takes every parameter `controls.html` takes, and these:
 
-| Parameter | Values |
-| --- | --- |
-| `open=settings&section=` | `gateway`, `gateways`, `appearance`, `system`, `updates` (and every section of `bots.html` and `controls.html`) |
-| `gw` | `studio`: that gateway's page |
-| `gateways` | `one`: Home gateway alone |
-| `waiting` | `1`: a message to Otto waits to be sent |
-| `switchfail` | `1`: Studio gateway can't be reached |
-| `remove` | `studio` or `home`: that removal's confirmation open; `rmfail=remote` or `local` |
-| `os` | `mac`, `windows`, `linux` |
-| `build` | `dev`: a copy run from source |
-| `feed` | `1`: an update source exists (the future example); `upd=checking`, `current`, `downloading`, `ready`, `error` |
-| `spell` | `off`, `downloading`, `failed` (Windows) |
-| `hw` | `pending`, `off` |
-| `required` | `client` or `gateway` |
-| `compact` | `running`, `compacting`, `done`, `skipped`, `failed`, `stopped` (open Juniper's task "Heat pump vs. gas furnace") |
-| `disk` | `node`, `gateway`: the low-disk note in Otto's tasks |
-| `add` | `1`: the setup flow's stand-in open |
+| Parameter                | Values                                                                                                            |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `open=settings&section=` | `gateway`, `gateways`, `appearance`, `system`, `updates` (and every section of `bots.html` and `controls.html`)   |
+| `gw`                     | `studio`: that gateway's page                                                                                     |
+| `gateways`               | `one`: Home gateway alone                                                                                         |
+| `waiting`                | `1`: a message to Otto waits to be sent                                                                           |
+| `switchfail`             | `1`: Studio gateway can't be reached                                                                              |
+| `remove`                 | `studio` or `home`: that removal's confirmation open; `rmfail=remote` or `local`                                  |
+| `os`                     | `mac`, `windows`, `linux`                                                                                         |
+| `build`                  | `dev`: a copy run from source                                                                                     |
+| `feed`                   | `1`: an update source exists (the future example); `upd=checking`, `current`, `downloading`, `ready`, `error`     |
+| `spell`                  | `off`, `downloading`, `failed` (Windows)                                                                          |
+| `hw`                     | `pending`, `off`                                                                                                  |
+| `required`               | `client` or `gateway`                                                                                             |
+| `compact`                | `running`, `compacting`, `done`, `skipped`, `failed`, `stopped` (open Juniper's task "Heat pump vs. gas furnace") |
+| `disk`                   | `node`, `gateway`: the low-disk note in Otto's tasks                                                              |
+| `add`                    | `1`: the setup flow's stand-in open                                                                               |
 
 The check walks these by clicking, and asserts each destination's words:
 
-| Walk | From | Through | To |
-| --- | --- | --- | --- |
-| Switch, nothing waiting | The gateway menu | Studio gateway | Studio's bots only; "Switched to Studio gateway" |
-| Switch, a message waiting | `waiting=1`, the gateway menu | the confirmation, Switch | Studio in use; Cancel leaves Home in use |
-| Switch fails | `switchfail=1` | Studio gateway, "Back to Home gateway" | Home in use again |
-| Add a new gateway | Your gateways | Add gateway…, the stand-in's "Paired: a new gateway" | "Added Lab gateway", three gateways |
-| Add the same gateway | Your gateways | Add gateway…, "Paired: the same gateway" | "Home gateway is already here", two gateways |
-| Add, cancelled | Your gateways | Add gateway…, Cancel | "Nothing was added", Home in use |
-| Remove another gateway | Studio's page | Remove…, the lists, Remove | "Studio gateway is removed from this device"; one gateway |
-| Remove the gateway in use, with admin | Gateway pane | Remove this gateway…, the record checkbox, Remove | Removed; "Not connected. Choose a gateway to use." |
-| Remove, the gateway refuses | `remove=home&rmfail=remote` | Remove | "Home gateway didn't remove this device's record", nothing removed |
-| Remove, a local step fails | `remove=studio&rmfail=local` | Remove, Try again | Removed |
-| Appearance | Appearance | Dark, Neutral | the page dark; neutral bubbles |
-| Spelling | System | the switch | "Spelling isn't checked" |
-| Hardware acceleration | System | the switch, Restart now | "Off. Clawtrate draws without the graphics hardware." |
-| Updates, no source | Updates | — | "no update source"; no button, no switch |
-| Updates, with a source | `feed=1` | Check for Updates | "You're up to date"; then `upd=ready`, Restart to Update with `waiting=1`, the confirmation |
-| Update required | `required=client` | — | "Update required" and Switch gateway; at phone width the App Store line |
-| Compact | Juniper's task, Details | Compact | "Compacting…", then "Context compacted", the fold opening "3 earlier turns" |
-| Compact while running, read-only | `compact=running`; `access=read` | — | disabled with its sentence; the access bar |
-| Low disk | `disk=node` | Show the computer | the Computer tab |
+| Walk                                  | From                             | Through                                              | To                                                                                          |
+| ------------------------------------- | -------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Switch, nothing waiting               | The gateway menu                 | Studio gateway                                       | Studio's bots only; "Switched to Studio gateway"                                            |
+| Switch, a message waiting             | `waiting=1`, the gateway menu    | the confirmation, Switch                             | Studio in use; Cancel leaves Home in use                                                    |
+| Switch fails                          | `switchfail=1`                   | Studio gateway, "Back to Home gateway"               | Home in use again                                                                           |
+| Add a new gateway                     | Your gateways                    | Add gateway…, the stand-in's "Paired: a new gateway" | "Added Lab gateway", three gateways                                                         |
+| Add the same gateway                  | Your gateways                    | Add gateway…, "Paired: the same gateway"             | "Home gateway is already here", two gateways                                                |
+| Add, cancelled                        | Your gateways                    | Add gateway…, Cancel                                 | "Nothing was added", Home in use                                                            |
+| Remove another gateway                | Studio's page                    | Remove…, the lists, Remove                           | "Studio gateway is removed from this device"; one gateway                                   |
+| Remove the gateway in use, with admin | Gateway pane                     | Remove this gateway…, the record checkbox, Remove    | Removed; "Not connected. Choose a gateway to use."                                          |
+| Remove, the gateway refuses           | `remove=home&rmfail=remote`      | Remove                                               | "Home gateway didn't remove this device's record", nothing removed                          |
+| Remove, a local step fails            | `remove=studio&rmfail=local`     | Remove, Try again                                    | Removed                                                                                     |
+| Appearance                            | Appearance                       | Dark, Neutral                                        | the page dark; neutral bubbles                                                              |
+| Spelling                              | System                           | the switch                                           | "Spelling isn't checked"                                                                    |
+| Hardware acceleration                 | System                           | the switch, Restart now                              | "Off. Clawtrate draws without the graphics hardware."                                       |
+| Updates, no source                    | Updates                          | —                                                    | "no update source"; no button, no switch                                                    |
+| Updates, with a source                | `feed=1`                         | Check for Updates                                    | "You're up to date"; then `upd=ready`, Restart to Update with `waiting=1`, the confirmation |
+| Update required                       | `required=client`                | —                                                    | "Update required" and Switch gateway; at phone width the App Store line                     |
+| Compact                               | Juniper's task, Details          | Compact                                              | "Compacting…", then "Context compacted", the fold opening "3 earlier turns"                 |
+| Compact while running, read-only      | `compact=running`; `access=read` | —                                                    | disabled with its sentence; the access bar                                                  |
+| Low disk                              | `disk=node`                      | Show the computer                                    | the Computer tab                                                                            |
 
 ## 19. Not covered here
 
