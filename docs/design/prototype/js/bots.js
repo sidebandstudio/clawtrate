@@ -262,7 +262,7 @@
   }
 
   // Re-rendering keeps focus on the same control: it is found again by its data.
-  const KEYS = ["bChoose", "bBody", "bColor", "bSelect", "bOption", "bAccount", "bSection", "t3", "bs", "b"];
+  const KEYS = ["bChoose", "bBody", "bColor", "bSelect", "bOption", "bAccount", "bSection", "t3", "c", "bs", "b"];
   function keep(root, render) {
     const el = document.activeElement;
     let selector = null;

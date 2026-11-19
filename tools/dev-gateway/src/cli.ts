@@ -374,6 +374,12 @@ export function browserConfig(
 export type StartOptions = {
   /** The scripted provider accounts (accounts.ts); named instances only. */
   accounts?: boolean;
+  /**
+   * Leave `gateway.nodes.pairing.autoApproveLocal` unset, at the gateway's own
+   * default, instead of false; named instances only. For research into what
+   * a first pairing on loopback does when nobody has changed the setting.
+   */
+  defaultLocalPairing?: boolean;
 };
 
 /** The config the development gateway runs with. Written fresh by every start. */
@@ -402,8 +408,9 @@ export function devConfig(
       port: ports.gatewayPort,
       bind: "loopback",
       auth: { mode: "token", token },
-      // Require explicit approval even on loopback, so the pairing flow is real.
-      nodes: { pairing: { autoApproveLocal: false } },
+      // Require explicit approval even on loopback, so the pairing flow is real,
+      // unless this instance was started to see the gateway's own default.
+      ...(options.defaultLocalPairing ? {} : { nodes: { pairing: { autoApproveLocal: false } } }),
     },
     discovery: { mdns: { mode: "off" } },
     update: { checkOnStart: false },
@@ -715,8 +722,9 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
     recorded === null ||
     typeof recorded !== "object" ||
     Array.isArray(recorded) ||
-    Object.keys(recorded).some((key) => key !== "accounts") ||
-    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts)
+    Object.keys(recorded).some((key) => key !== "accounts" && key !== "defaultLocalPairing") ||
+    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts) ||
+    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).defaultLocalPairing)
   ) {
     throw new Error(`${path} is not a record of start options`);
   }
@@ -954,7 +962,13 @@ const RUN_ID_PATTERN = /^[0-9a-f]{48}$/;
  */
 export async function start(
   inst: DevInstance,
-  options: { seed?: boolean; runId?: string; plugins?: string[]; accounts?: boolean } = {},
+  options: {
+    seed?: boolean;
+    runId?: string;
+    plugins?: string[];
+    accounts?: boolean;
+    defaultLocalPairing?: boolean;
+  } = {},
 ): Promise<void> {
   assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
   const runId = options.runId ?? newRunId();
@@ -962,7 +976,15 @@ export async function start(
   if (options.accounts && inst.name === null) {
     throw new Error("the default instance never has scripted accounts; use --instance <name>");
   }
-  const startOptions: StartOptions = options.accounts ? { accounts: true } : {};
+  if (options.defaultLocalPairing && inst.name === null) {
+    throw new Error(
+      "the default instance always requires explicit pairing; use --instance <name> with --default-local-pairing",
+    );
+  }
+  const startOptions: StartOptions = {
+    ...(options.accounts ? { accounts: true } : {}),
+    ...(options.defaultLocalPairing ? { defaultLocalPairing: true } : {}),
+  };
   // Refused before anything changes: a name that is not this checkout's own
   // plugin, or whose addition breaks the rule for plugins.
   const plugins = loadPlugins(inst, options.plugins ?? []);
@@ -1978,7 +2000,7 @@ export async function lockOrder(
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|approve [requestId]|status|stop|reset|forget-handover> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--with-plugin <plugin>]...\n" +
+  "usage: pnpm dev-gateway <start|up|seed|approve [requestId]|status|stop|reset|forget-handover> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-plugin <plugin>]...\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
@@ -1993,6 +2015,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       "run-id": { type: "string" },
       "with-plugin": { type: "string", multiple: true },
       "with-accounts": { type: "boolean", default: false },
+      "default-local-pairing": { type: "boolean", default: false },
       agent: { type: "string" },
       provider: { type: "string" },
     },
@@ -2021,6 +2044,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     process.exitCode = command ? 1 : 0;
     return;
   }
+  if (values["default-local-pairing"] && command !== "start" && command !== "up") {
+    throw new Error(`--default-local-pairing is a start option; ${command} does not take it`);
+  }
   const inst = openInstance(selected);
   const runId = values["run-id"];
   switch (command) {
@@ -2031,6 +2057,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         ...(runId ? { runId } : {}),
         plugins: values["with-plugin"] ?? [],
         accounts: values["with-accounts"],
+        defaultLocalPairing: values["default-local-pairing"],
       });
     case "stop":
       return stop(inst);
