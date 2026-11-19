@@ -1,7 +1,10 @@
-// A rules file whose metadata was read but whose contents could not be (an
-// I/O error, injected here, so the case holds whatever the process may
-// read): the next refresh reads it again. Bad contents are remembered until
-// the file changes.
+// The plugin's files when the filesystem fails, with the failures injected
+// here so each case holds whatever the process may read or write: a rules
+// file whose contents could not be read is read again at the next look (bad
+// contents are remembered until the file changes); a torn last line of the
+// decision record that cannot be cut gets nothing appended after it; and a
+// record that could not be written is written with the rest once the disk
+// recovers, the problem said until then.
 
 import type * as fs from "node:fs";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -14,6 +17,8 @@ const io = vi.hoisted(() => ({
   path: "",
   reads: 0,
   truncateFails: false,
+  appendFails: 0,
+  renameFails: false,
 }));
 vi.mock("node:fs", async (importOriginal) => {
   const real = await importOriginal<typeof fs>();
@@ -26,6 +31,17 @@ vi.mock("node:fs", async (importOriginal) => {
         throw Object.assign(new Error("injected"), { code: io.code });
       }
       return real.readFileSync(...args);
+    },
+    appendFileSync: (...args: Parameters<typeof real.appendFileSync>) => {
+      if (io.appendFails > 0) {
+        io.appendFails -= 1;
+        throw Object.assign(new Error("injected"), { code: "ENOSPC" });
+      }
+      return real.appendFileSync(...args);
+    },
+    renameSync: (...args: Parameters<typeof real.renameSync>) => {
+      if (io.renameFails) throw Object.assign(new Error("injected"), { code: "ENOSPC" });
+      return real.renameSync(...args);
     },
     truncateSync: (...args: Parameters<typeof real.truncateSync>) => {
       if (io.truncateFails) throw Object.assign(new Error("injected"), { code: "EIO" });
@@ -42,6 +58,8 @@ const cleanups: (() => void)[] = [];
 afterEach(() => {
   io.failures = 0;
   io.truncateFails = false;
+  io.appendFails = 0;
+  io.renameFails = false;
   cleanups.splice(0).forEach((done) => done());
 });
 const scope = (tool: string) =>
@@ -102,10 +120,48 @@ describe("a torn last line that cannot be cut", () => {
     const torn = `${readFileSync(file, "utf8")}{"id":"torn`;
     writeFileSync(file, torn);
     io.truncateFails = true;
+    io.renameFails = true;
     const again = new DecisionLog(dir, { now: () => 2 });
     expect(again.problem).toMatch(/last line is torn and could not be repaired/);
-    again.add({ ...fields, tool: "write" });
+    const id = again.add({ ...fields, tool: "write" });
     expect(readFileSync(file, "utf8")).toBe(torn);
-    expect(again.problem).toMatch(/last line is torn/);
+    expect(again.problem).not.toBeNull();
+    // Once the disk takes a write, the whole record is written, torn line gone.
+    io.truncateFails = false;
+    io.renameFails = false;
+    again.add({ ...fields, tool: "edit" });
+    expect(again.problem).toBeNull();
+    expect(readFileSync(file, "utf8")).not.toContain('"torn');
+    const reread = new DecisionLog(dir, { now: () => 3 }).list({ limit: 50 }).records;
+    expect(reread).toHaveLength(12);
+    expect(reread.map((r) => r.id)).toContain(id);
+  });
+});
+
+describe("a decision that could not be written", () => {
+  it("keeps the problem said, and is written with the rest once the disk recovers", () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+    const ids = (log: InstanceType<typeof DecisionLog>) =>
+      log.list({ limit: 100 }).records.map((r) => r.id);
+    const log = new DecisionLog(dir, { now: () => 1 });
+    for (let i = 0; i < 10; i += 1) log.add(fields);
+    io.appendFails = 1;
+    const a = log.add({ ...fields, tool: "write" });
+    expect(log.problem).toMatch(/cannot be written/);
+    // The disk is still failing for a rewrite: the problem stays, though an append would work.
+    io.renameFails = true;
+    const b = log.add({ ...fields, tool: "edit" });
+    expect(log.problem).toMatch(/cannot be written/);
+    expect(ids(new DecisionLog(dir, { now: () => 1 }))).not.toContain(a);
+    // Recovered: the next write puts every retained record on disk, and only then is it clear.
+    io.renameFails = false;
+    const c = log.add({ ...fields, tool: "ls" });
+    expect(log.problem).toBeNull();
+    const reread = ids(new DecisionLog(dir, { now: () => 1 }));
+    for (const id of [a, b, c]) expect(reread).toContain(id);
+    expect(reread).toHaveLength(13);
   });
 });

@@ -371,6 +371,8 @@ export class DecisionLog {
     this.expiryPending = false;
     /** A torn last line still to repair: "end", the byte length to keep, or null. */
     this.tornTail = null;
+    /** Records and answers kept in memory that a failed write left off the disk. */
+    this.unsaved = 0;
     this.problem = null;
     this.#load();
   }
@@ -444,6 +446,7 @@ export class DecisionLog {
       writeFileAtomic(this.dir, DECISIONS_FILE, lines.length > 0 ? `${lines.join("\n")}\n` : "");
       this.extraLines = 0;
       this.tornTail = null;
+      this.unsaved = 0;
       this.expiryPending = false;
       this.problem = null;
     } catch (error) {
@@ -468,13 +471,23 @@ export class DecisionLog {
     }
   }
 
+  /**
+   * Append one line. While anything is not on disk (a failed write, a torn
+   * line that could not be cut), nothing is appended: the whole retained set
+   * is written instead, and the problem is cleared only when that succeeds.
+   */
   #append(value) {
-    if (!this.#repairTail()) return;
+    if (this.unsaved > 0 || !this.#repairTail()) {
+      this.unsaved += 1;
+      this.#maintain(true);
+      return;
+    }
     try {
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
       appendFileSync(this.path, `${JSON.stringify(value)}\n`, { mode: 0o600 });
       if (!this.expiryPending) this.problem = null;
     } catch (error) {
+      this.unsaved += 1;
       this.problem = `the decision record cannot be written (${error.code ?? "error"})`;
     }
   }
