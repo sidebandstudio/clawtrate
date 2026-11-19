@@ -14,8 +14,12 @@
 //
 // The check is conservative: a tool counts as denied only when a deny list
 // names it, by name, a group of OpenClaw 2026.10.6 that holds it, `*` or a
-// pattern matching it, or when an allow list leaves it out. Anything it
-// cannot tell (a tool profile, a group it does not know) counts as offered.
+// pattern matching it, or when a non-empty allow list leaves it out (an
+// empty one restricts nothing, and `write` brings `apply_patch`, as the
+// gateway reads them). Anything it cannot tell (a tool profile, a group it
+// does not know) counts as offered. Commands run elsewhere only on a node,
+// or in a sandbox for every task when the bot does not name the gateway's
+// host. A warning is a warning: it protects nothing.
 
 /** The groups of OpenClaw 2026.10.6 (tool-catalog) holding the tools checked here. */
 const GROUPS = {
@@ -68,9 +72,12 @@ export function surelyDenied(config, agent, tool) {
     if (deny?.some((entry) => covers(entry, tool))) return true;
   }
   for (const allow of [list(global.allow), list(own.allow)]) {
-    // A group this check does not know may hold the tool.
+    // An empty allow list restricts nothing, as the gateway reads it.
+    if (!allow || allow.length === 0) continue;
+    // A group this check does not know may hold the tool; `write` brings apply_patch.
     const unknownGroup = (entry) => entry.startsWith("group:") && !GROUPS[entry];
-    if (allow && !allow.some((entry) => covers(entry, tool) || unknownGroup(entry))) {
+    const brings = (entry) => tool === "apply_patch" && covers(entry, "write");
+    if (!allow.some((entry) => covers(entry, tool) || unknownGroup(entry) || brings(entry))) {
       return true;
     }
   }
@@ -96,8 +103,9 @@ export function exposures(config) {
     const exec = { ...rec(global.exec), ...rec(own.exec) };
     const commandsOff =
       exec.mode === "deny" || (exec.mode === undefined && exec.security === "deny");
+    // A sandbox keeps commands off the gateway's machine unless the bot names that host.
     const elsewhere =
-      exec.host === "node" || exec.host === "sandbox" || sandboxedAll(config, agent);
+      exec.host === "node" || (sandboxedAll(config, agent) && exec.host !== "gateway");
     const shell = ["exec", "process"].some((tool) => !surelyDenied(config, agent, tool));
     if (shell && !commandsOff && !elsewhere) reasons.push("commands-on-gateway-host");
     const fs = { ...rec(global.fs), ...rec(own.fs) };

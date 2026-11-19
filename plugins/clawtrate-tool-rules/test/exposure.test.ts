@@ -65,3 +65,34 @@ describe("surelyDenied", () => {
     expect(surelyDenied({ tools: { allow: ["group:mystery"] } }, agent, "gateway")).toBe(false);
   });
 });
+
+describe("read as the gateway reads it", () => {
+  it("warns about commands on the gateway's host even under sandbox mode", () => {
+    const sandboxed = {
+      tools: { exec: { mode: "ask", host: "gateway" } },
+      sandbox: { mode: "all" },
+    };
+    expect(exposures(withAgent(SAFE, sandboxed))).toEqual([
+      { agentId: "otto", reasons: ["commands-on-gateway-host"] },
+    ]);
+    const viaDefaults = {
+      ...SAFE,
+      tools: { ...SAFE.tools, exec: { mode: "ask", host: "gateway" } },
+      agents: { defaults: { sandbox: { mode: "all" } }, entries: { otto: {} } },
+    };
+    expect(exposures(viaDefaults)).toEqual([
+      { agentId: "otto", reasons: ["commands-on-gateway-host"] },
+    ]);
+  });
+
+  it("reads an empty allow list as no restriction", () => {
+    expect(surelyDenied({ tools: { allow: [] } }, {}, "gateway")).toBe(false);
+    expect(surelyDenied({}, { tools: { allow: [] } }, "exec")).toBe(false);
+    const config = withAgent({ ...SAFE, tools: { ...SAFE.tools, deny: [], allow: [] } });
+    expect(exposures(config)).toEqual([{ agentId: "otto", reasons: ["manages-gateway"] }]);
+  });
+
+  it("reads write in an allow list as allowing apply_patch too", () => {
+    expect(surelyDenied({ tools: { allow: ["read", "write"] } }, {}, "apply_patch")).toBe(false);
+  });
+});
