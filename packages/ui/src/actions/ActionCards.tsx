@@ -48,7 +48,7 @@ import type { StepRawState } from "../cards/useCards.ts";
 import { ChevronIcon, FileIcon } from "../icons.tsx";
 import { useNow } from "../StatusLine.tsx";
 import { KindIcon } from "./icons.tsx";
-import { readView, useView, viewKeys, writeView } from "./view-state.ts";
+import { onSummaryClick, readView, useView, viewKeys, writeView } from "./view-state.ts";
 import { ShowTheThread, T3CallBody } from "./T3Thread.tsx";
 import "./actions.css";
 
@@ -571,6 +571,7 @@ function FoldRow({ member, revision }: { member: FeedMember; revision: number })
       id={actionDomId(call.id)}
       data-status={ROW_STATUS[line.outcome] ?? "done"}
       open={open}
+      onClick={onSummaryClick(env.taskKey, viewKeys.call(call.id))}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary aria-label={line.spoken} title={line.title}>
@@ -677,6 +678,7 @@ export function ActionGroup({ members, revision }: { members: FeedMember[]; revi
     className: "card action",
     "data-fresh": fresh,
     open,
+    onClick: onSummaryClick(env.taskKey, single ? viewKeys.call(first) : viewKeys.fold(first)),
     onToggle: (event: { currentTarget: HTMLDetailsElement }) => {
       if (event.currentTarget.open !== open) setOpen(event.currentTarget.open);
     },

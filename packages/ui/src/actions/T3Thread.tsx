@@ -27,7 +27,7 @@ import { AgentMark, CodeBlock, ExternalIcon, Glyph, RawView } from "../cards/par
 import { useCardEnv } from "../cards/context.tsx";
 import { ChevronIcon } from "../icons.tsx";
 import { actionDomId, rawContentOf, ThoughtLine, useActionEnv } from "./ActionCards.tsx";
-import { readView, useView, viewKeys, writeView } from "./view-state.ts";
+import { onSummaryClick, readView, useView, viewKeys, writeView } from "./view-state.ts";
 
 const W = actionWords.T3_WORDS;
 
@@ -353,6 +353,7 @@ function Item({ call, line, thought }: { call: T3Call; line: boolean; thought: T
         data-item-call={call.id}
         data-state={call.state}
         open={open}
+        onClick={onSummaryClick(env.taskKey, viewKeys.item(call.id))}
         onToggle={(event) => {
           if (event.currentTarget.open !== open) setOpen(event.currentTarget.open);
         }}
@@ -438,6 +439,7 @@ export function T3ThreadCard({ headId, thought }: { headId: string; thought: Rea
       data-connection={lost ? "lost" : undefined}
       id={actionDomId(headId)}
       open={open}
+      onClick={onSummaryClick(env.taskKey, viewKeys.call(headId))}
       onToggle={(event) => {
         if (event.currentTarget.open !== open) setOpen(event.currentTarget.open);
       }}

@@ -122,9 +122,12 @@ async function resultFor(
   callId: string,
   tool: string,
   facts: Record<string, unknown> | null,
+  /** A line the reader clicks in the same task, just before the result: its toggle is reported after. */
+  clickFirst: string | null = null,
 ): Promise<void> {
   await page.evaluate(
-    ({ key, callId, tool, facts }) => {
+    ({ key, callId, tool, facts, clickFirst }) => {
+      if (clickFirst) document.querySelector<HTMLElement>(clickFirst)!.click();
       const fixture = (
         window as unknown as {
           clawtrateFixture: { setState(change: (s: FixtureState) => unknown): void };
@@ -158,7 +161,7 @@ async function resultFor(
         };
       });
     },
-    { key: CARD_TASK, callId, tool, facts },
+    { key: CARD_TASK, callId, tool, facts, clickFirst },
   );
 }
 
@@ -227,6 +230,25 @@ test.describe("T3 Code thread cards", () => {
     await expect(card.locator('[data-item-call="call_t3"]')).toHaveAttribute("open", "");
     await expect(card.locator('[data-item-call="call_t3"] [role=region]')).toHaveCount(0);
     await expect(card.locator(":scope > summary")).toBeFocused();
+  });
+
+  test("F-132 F-134: a card opened just before its result arrives, the result drawn before the opening is reported, is the thread's card open", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=t3-general", "light");
+    const general = page.locator('.card.action[data-call="call_t3"]');
+    await expect(general).not.toHaveAttribute("open", "");
+    await resultFor(
+      page,
+      "call_t3",
+      "t3_thread_launch",
+      LAUNCHED,
+      '.card.action[data-call="call_t3"] > summary',
+    );
+    const card = page.getByTestId("t3-card");
+    await expect(card).toHaveCount(1);
+    await settle(page);
+    await expect(card).toHaveAttribute("open", "");
   });
 
   test("F-132 F-134: a card the map made, its item's Raw open with focus on Copy arguments, whose result names another tool becomes that tool's card on its Raw tab, focus on the same control", async ({
