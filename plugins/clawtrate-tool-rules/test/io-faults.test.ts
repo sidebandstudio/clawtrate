@@ -182,3 +182,25 @@ describe("a save replaced by another writer before it is looked at", () => {
     expect(rules.view().enforced).toEqual(replacement);
   });
 });
+
+describe("a decision that could not be written, on an idle gateway", () => {
+  it("is written by the next hourly maintenance, which alone clears it", () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+    const log = new DecisionLog(dir, { now: () => 1 });
+    io.appendFails = 1;
+    const id = log.add(fields);
+    expect(log.problem).toMatch(/cannot be written/);
+    // No more calls. Maintenance while the disk still fails keeps it unsaved.
+    io.renameFails = true;
+    log.prune();
+    expect(log.problem).toMatch(/cannot be written/);
+    io.renameFails = false;
+    log.prune();
+    expect(log.problem).toBeNull();
+    const reread = new DecisionLog(dir, { now: () => 1 }).list({ limit: 10 }).records;
+    expect(reread.map((r) => r.id)).toEqual([id]);
+  });
+});

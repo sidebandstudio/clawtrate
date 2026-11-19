@@ -517,7 +517,10 @@ export class DecisionLog {
     this.#pruneOversize(cutoff);
     const evictedExpired = this.evictedOldestAt !== null && this.evictedOldestAt < cutoff;
     const heldExpired = this.records.length > 0 && this.records[0].at < cutoff;
-    if (this.expiryPending || evictedExpired || heldExpired) this.#maintain(true);
+    // A record a failed write left off the disk is retried here too, on an idle gateway.
+    if (this.expiryPending || evictedExpired || heldExpired || this.unsaved > 0) {
+      this.#maintain(true);
+    }
   }
 
   /** Remove a record set aside as oversized once it was set aside before `cutoff`. */
