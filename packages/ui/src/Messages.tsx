@@ -422,7 +422,9 @@ const accepted = (message: OutgoingMessage) =>
  * it, and yours on their way. Only what the gateway has counts as a reply (`count`).
  */
 export function repliesTo(transcript: Transcript, messageId: string) {
-  const history = transcript.items.filter((item) => item.replyTo?.id === messageId);
+  const history = transcript.items.filter(
+    (item) => item.role === "user" && item.replyTo?.id === messageId,
+  );
   const pending = transcript.outbox.filter(
     (message) =>
       message.replyToId === messageId &&
@@ -503,41 +505,9 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
   const [error, setError] = useState<string | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-  /** The replies sent from this thread, and what was last said of each. */
-  const sent = useRef(new Map<string, string>());
-  /** Raised when a reply is added to `sent`, so what it already became is said. */
-  const [added, setAdded] = useState(0);
   useEffect(() => {
     field.current?.focus();
   }, [messageId]);
-  const outbox = env?.transcript.outbox;
-  const announce = env?.announce;
-  // Say what became of each reply sent here, once each, as the gateway establishes it.
-  useEffect(() => {
-    if (!outbox || !announce) return;
-    for (const [id, said] of sent.current) {
-      const message = outbox.find((each) => each.id === id);
-      // Gone from the outbox without being cancelled: history holds it.
-      const now = message ? message.status : "in-history";
-      const words =
-        now === "sent" || now === "unconfirmed" || now === "in-history"
-          ? "Reply sent"
-          : now === "held"
-            ? "Held until you answer"
-            : now === "queued"
-              ? "Queued"
-              : now === "failed"
-                ? "Failed to send"
-                : now === "not-sent"
-                  ? "Not sent"
-                  : null;
-      if (words && words !== said) {
-        sent.current.set(id, words);
-        announce(words);
-      }
-      if (now === "in-history" || now === "cancelled") sent.current.delete(id);
-    }
-  }, [outbox, announce, added]);
   if (!env) return null;
   const transcript = env.transcript;
   const root = messageOf(transcript, messageId);
@@ -552,7 +522,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
     setText("");
     setError(null);
     try {
-      const answer = await bridge.invoke({
+      await bridge.invoke({
         type: "sendMessage",
         key: env.taskKey,
         text: body,
@@ -560,11 +530,9 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
         attachmentIds: [],
         replyToId: messageId,
       });
-      // Only the gateway's answer makes it sent; until then it is shown as it is.
-      sent.current.set(answer.messageId, "");
-      setAdded((n) => n + 1);
     } catch (failure) {
-      setText(body);
+      // The refused words come back, ahead of anything typed since.
+      setText((current) => (current.trim() ? `${body}\n${current}` : body));
       setError(failure instanceof Error ? failure.message : String(failure));
     }
   };

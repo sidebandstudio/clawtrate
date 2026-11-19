@@ -250,8 +250,8 @@ export type TranscriptItem = {
    */
   messageId?: string;
   /**
-   * The message this one replies to, as the gateway's history says (a user row's
-   * `__openclaw.replyToId`, or an answer's `openclawDelivery.replyToId`), with its preview of it.
+   * The message this user row replies to, as the gateway's history says (`__openclaw.replyToId`),
+   * with its preview of it. A bot's turn carries none here (see `replyReference` in `mapping.ts`).
    */
   replyTo?: ReplyReference;
   /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */

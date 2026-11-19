@@ -1,5 +1,11 @@
 // What a thread counts and what "Try again" sends (parity F-067).
-import { emptyActivity, type OutgoingMessage, type Run, type Transcript } from "@clawtrate/core";
+import {
+  emptyActivity,
+  mapHistory,
+  type OutgoingMessage,
+  type Run,
+  type Transcript,
+} from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 import { messageReplyOf } from "../src/LiveTurn.tsx";
 import { repliesTo } from "../src/Messages.tsx";
@@ -72,5 +78,31 @@ describe("replies in a thread", () => {
     });
     expect(messageReplyOf(run, t)).toBe("parent");
     expect(messageReplyOf({ ...run, anchorItemId: null } as Run, t)).toBeNull();
+  });
+
+  it("F-067: a progress row and two assistant rows for distinct parents never enter the wrong thread", () => {
+    // One run of the bot's: a progress row, an answer the gateway delivered to A, one to B.
+    const items = mapHistory([
+      { role: "user", content: "Root A", __openclaw: { id: "A" } },
+      { role: "user", content: "Root B", __openclaw: { id: "B" } },
+      { role: "assistant", content: "Unrelated progress", __openclaw: { id: "m0", runId: "r" } },
+      {
+        role: "assistant",
+        content: "A only",
+        openclawDelivery: { replyToId: "A" },
+        __openclaw: { id: "m1", runId: "r" },
+      },
+      {
+        role: "assistant",
+        content: "B only",
+        openclawDelivery: { replyToId: "B" },
+        __openclaw: { id: "m2", runId: "r" },
+      },
+    ]);
+    const t = transcript({ items });
+    // While assistant membership needs a reference on each row, no bot bubble is threaded.
+    for (const parent of ["A", "B"]) {
+      expect(repliesTo(t, parent).history.filter((item) => item.role === "assistant")).toEqual([]);
+    }
   });
 });

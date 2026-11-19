@@ -364,7 +364,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         }
         if (!text.trim()) return;
         const messageId = str(info.id);
-        const replyTo = replyReference(message, info);
+        const replyTo = replyReference(info);
         items.push({
           id,
           role: "user",
@@ -395,9 +395,6 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           items.push(item);
         }
         if (cutByGateway) item.truncated = true;
-        // An answer the gateway delivered as a reply says so itself (`openclawDelivery.replyToId`).
-        const answers = replyReference(message, info);
-        if (answers && !item.replyTo) item.replyTo = answers;
         // A reaction or a reply names the row whose text a bubble shows: each bubble its own row.
         const rowId = str(info.id);
         if (rowId) {
@@ -441,16 +438,14 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
 }
 
 /**
- * A row's reply reference, as OpenClaw 2026.10.6 reads one (`readChatHistoryReplyMessageId` in
- * `chat-history-reply-messages`): a user row's `__openclaw.replyToId`, or an assistant row's
- * `openclawDelivery.replyToId`. Its text is the preview stored beside it (`replyToPreview {text,
- * senderLabel?}`), or else the message history attached at read time (`replyToMessage {ok,
- * message}`). Cut to its bound here. Nothing else makes a row a reply.
+ * A user row's reply reference (`__openclaw.replyToId`). Its text is the preview stored beside it
+ * (`replyToPreview {text, senderLabel?}`), or else the message history attached at read time
+ * (`replyToMessage {ok, message}`). Cut to its bound here. Nothing else makes a row a reply. An
+ * assistant row's own reference (`openclawDelivery.replyToId`) is not read: a bot's turn is one
+ * item of several rows here, and its membership needs a reference on each row's bubble.
  */
-function replyReference(message: RawRecord, info: RawRecord): TranscriptItem["replyTo"] | null {
-  const id =
-    str(info.replyToId) ??
-    (message.role === "assistant" ? str(asRecord(message.openclawDelivery)?.replyToId) : null);
+function replyReference(info: RawRecord): TranscriptItem["replyTo"] | null {
+  const id = str(info.replyToId);
   if (!id) return null;
   const preview = asRecord(info.replyToPreview);
   const attached = asRecord(info.replyToMessage);

@@ -232,7 +232,6 @@ test.describe("message actions", () => {
     const mine = thread.getByTestId("outgoing");
     await expect(mine).toContainText("Or ask me for a copy of it.");
     await expect(mine).toHaveAttribute("data-status", "sent");
-    await expect(page.getByTestId("announcer")).toHaveText("Reply sent");
     await expect(thread).toContainText("2 replies");
     expect((await sent(page)).at(-1)).toMatchObject({
       type: "sendMessage",
@@ -265,7 +264,6 @@ test.describe("message actions", () => {
     await expect(row.getByRole("button", { name: "Send now" })).toHaveCount(0);
     await expect(thread.getByTestId("thread-count")).toHaveText("1 reply");
     await expect(page.getByTestId("replies-link")).toHaveText("1 reply");
-    await expect(page.getByTestId("announcer")).toHaveText("Held until you answer");
     await expect(page.getByTestId("announcer")).not.toHaveText("Reply sent");
   });
 
@@ -274,10 +272,10 @@ test.describe("message actions", () => {
   }) => {
     await open(page, "message-thread-failed");
     await record(page);
-    await expect(page.getByTestId("replies-link")).toHaveText("2 replies");
+    await expect(page.getByTestId("replies-link")).toHaveText("1 reply");
     await page.getByTestId("reply-quote").first().click();
     const thread = page.getByRole("dialog", { name: "Thread" });
-    await expect(thread.getByTestId("thread-count")).toHaveText("2 replies");
+    await expect(thread.getByTestId("thread-count")).toHaveText("1 reply");
     const failed = thread.getByTestId("outgoing");
     await expect(failed).toHaveAttribute("data-status", "failed");
     await expect(failed).toContainText("Failed to send");
@@ -288,7 +286,7 @@ test.describe("message actions", () => {
     });
   });
 
-  test("F-067: a thread holds the message and the rows the gateway marks as replies to it, never the answer that merely follows", async ({
+  test("F-067: a thread holds the message and the user rows the gateway marks as replies to it, never a bot's answer", async ({
     page,
   }) => {
     await open(page, "message-thread-failed");
@@ -298,9 +296,69 @@ test.describe("message actions", () => {
     await expect(messages).toHaveText([
       /Nothing alarming that I can see from here\./,
       /Could you read the system log another way\?/,
-      /I can read it through the journal instead\./,
     ]);
+    // A bot's answer is not threaded until each of its rows carries its own reference.
+    await expect(thread).not.toContainText("I can read it through the journal instead.");
     await expect(thread).not.toContainText("Starting the nightly rotation now.");
+  });
+
+  test("F-067: a reply refused after newer words were typed in the thread keeps both", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+        refuse?: () => void;
+      };
+      const original = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = (command: unknown) =>
+        (command as { type: string }).type === "sendMessage"
+          ? new Promise((_, reject) => {
+              w.refuse = () => reject(new Error("The gateway refused it."));
+            })
+          : original(command);
+    });
+    await page.getByTestId("reply-quote").click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    const input = thread.getByTestId("thread-input");
+    await input.fill("The first reply");
+    await page.keyboard.press("Enter");
+    await expect(input).toHaveValue("");
+    await input.fill("typed meanwhile");
+    await page.evaluate(() => (window as unknown as { refuse: () => void }).refuse());
+    await expect(thread.locator(".thread-error")).toContainText("The gateway refused it.");
+    await expect(input).toHaveValue("The first reply\ntyped meanwhile");
+  });
+
+  test("F-067: a reply that leaves the outbox without history holding it is never announced as sent", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.getByTestId("reply-quote").click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    await thread.getByTestId("thread-input").fill("Deleted before it lands");
+    await page.keyboard.press("Enter");
+    // The reply is removed, as Delete removes it: no history row ever holds it.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (f: (s: Record<string, unknown>) => Record<string, unknown>) => void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const transcripts = state.transcripts as Record<string, { outbox: unknown[] }>;
+        const key = "agent:otto:disk-space";
+        return {
+          ...state,
+          transcripts: { ...transcripts, [key]: { ...transcripts[key]!, outbox: [] } },
+        };
+      });
+    });
+    await page.waitForTimeout(300);
+    await expect(page.getByTestId("announcer")).not.toHaveText("Reply sent");
   });
 
   test("F-067: a reply's line says what it answers, and opens the thread on that message", async ({

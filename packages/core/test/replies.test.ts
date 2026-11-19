@@ -30,7 +30,7 @@ describe("replies", () => {
     client.stop();
   });
 
-  it("F-067: only the gateway's references make a row a reply: a user row's, or an answer's delivery", () => {
+  it("F-067: only a user row's own gateway reference makes it a reply; an assistant row's is not read until each bubble carries its own", () => {
     const items = mapHistory([
       { role: "assistant", content: "The disk is fine.", __openclaw: { id: "a1", runId: "r1" } },
       {
@@ -59,7 +59,7 @@ describe("replies", () => {
       ["a1", null],
       ["u2", "a1"],
       ["a3", null],
-      ["a4", "u2"],
+      ["a4", null],
     ]);
     // With no stored preview, the text is the message history attached to the reference.
     expect(items[1]!.replyTo).toEqual({ id: "a1", text: "The disk is fine.", sender: null });
