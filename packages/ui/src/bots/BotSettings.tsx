@@ -66,6 +66,8 @@ export function BotSettings({
   info,
   visible,
   announce,
+  usagePage = null,
+  extraGroups = null,
 }: {
   bot: Bot;
   accounts: AccountsState;
@@ -76,6 +78,10 @@ export function BotSettings({
   info: HostInfo;
   visible: boolean;
   announce: (text: string) => void;
+  /** A page that replaces the tab's content while it is open (the Usage page). */
+  usagePage?: ReactNode;
+  /** Groups after the Model group on the tab's first page (Usage). */
+  extraGroups?: ReactNode;
 }) {
   const bridge = useBridge();
   const [view, setView] = useState<View>("main");
@@ -173,6 +179,13 @@ export function BotSettings({
       />
     </div>
   ) : null;
+
+  if (usagePage)
+    return (
+      <div ref={rootRef} className="b-tab" data-testid="bot-settings">
+        {usagePage}
+      </div>
+    );
 
   if (!binding) {
     const failed = accounts.status === "error";
@@ -336,6 +349,7 @@ export function BotSettings({
         {binding.mode === "default-model" && (
           <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
         )}
+        {extraGroups}
         {foot}
       </div>
     );
