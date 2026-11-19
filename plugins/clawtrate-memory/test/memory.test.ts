@@ -822,7 +822,8 @@ describe("memory changes", () => {
       root: async (...args: Parameters<typeof fs.root>) => {
         const root = await fs.root(...args);
         const read = root.read.bind(root);
-        root.read = (path: string) => read(path === "MEMORY.md" ? "memory.md" : path);
+        // Stands in for a case-insensitive filesystem, so the check also holds on Linux.
+        root.read = (path: string) => read(path === "./MEMORY.md" ? "./memory.md" : path);
         return root;
       },
     });
