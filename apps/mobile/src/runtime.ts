@@ -21,6 +21,8 @@ export type Runtime = {
   session: BridgeSession;
   devGateway: DevGatewayHint | null;
   send: <C extends BridgeCommand>(command: C) => Promise<BridgeResultFor<C>>;
+  /** Any credential this host holds, scrubbed from a string about to be shown. */
+  redact: (text: string) => string;
 };
 
 let runtime: Runtime | null = null;
@@ -32,13 +34,19 @@ let runtime: Runtime | null = null;
  */
 export function startRuntime(): Runtime {
   if (runtime) return runtime;
-  const { host, devGateway } = createIosHost();
+  const { host, devGateway, secrets } = createIosHost();
   const client = new ClawtrateClient(host, { readOnly: true });
   const session = createBridgeSession(client);
-  runtime = { client, session, devGateway, send: (command) => session.apply(command) };
+  runtime = {
+    client,
+    session,
+    devGateway,
+    send: (command) => session.apply(command),
+    redact: secrets.redact,
+  };
   void client.start().catch((error: unknown) => {
     console.error(
-      `[core] could not start: ${error instanceof Error ? error.message : String(error)}`,
+      `[core] could not start: ${secrets.redact(error instanceof Error ? error.message : String(error))}`,
     );
   });
   return runtime;

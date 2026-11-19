@@ -5,7 +5,8 @@
 // stamps, your messages and the bot's as bubbles, the bot's markdown, each of
 // its actions as one quiet line in the engine's words, and what a running task
 // is doing follow. Jump to latest takes a reader who is not at the end there,
-// and where the composer will be is the read-only explanation.
+// and where the composer will be is the read-only explanation. Nothing shown
+// carries a credential the gateway sent back.
 
 import type { Bot, ClawtrateState, Task } from "@clawtrate/core";
 import {
@@ -23,6 +24,13 @@ import { Button, Dot, Txt } from "../components/ui.tsx";
 import { useRuntime } from "../runtime.ts";
 import { S, TOUCH, useTheme } from "../theme/index.ts";
 import { chatRows, type ChatRow } from "../transcript.ts";
+
+/** A row's words with any credential this host holds scrubbed out. */
+function redactRow(row: ChatRow, redact: (text: string) => string): ChatRow {
+  return row.kind === "action"
+    ? { ...row, text: redact(row.text), spoken: redact(row.spoken) }
+    : { ...row, text: redact(row.text) };
+}
 
 /** Within this distance of the end, new content is followed. */
 const NEAR_END = 96;
@@ -245,7 +253,7 @@ export function Chat({
   /** The task has been read as of what it now shows. */
   onRead: (task: Task) => void;
 }) {
-  const { send } = useRuntime();
+  const { send, redact } = useRuntime();
   const { c } = useTheme();
   const transcript = state.transcripts[task.key];
   const online = state.connection.status === "connected";
@@ -282,7 +290,7 @@ export function Chat({
     transcript &&
     !(transcript.status === "loading" && items === 0) &&
     !(transcript.status === "error" && items === 0)
-      ? chatRows(task, transcript, bot.name, now, online)
+      ? chatRows(task, transcript, bot.name, now, online).map((row) => redactRow(row, redact))
       : [];
   const running = rows.find((row) => row.kind === "running");
   let body: ReactNode;
@@ -324,7 +332,10 @@ export function Chat({
     );
   } else if (transcript.status === "error" && items === 0) {
     body = (
-      <Empty title={W.loadFailed} body={transcript.error}>
+      <Empty
+        title={W.loadFailed}
+        body={transcript.error === null ? null : redact(transcript.error)}
+      >
         <Button label={W.tryAgain} onPress={reload} testID="chat-try-again" />
       </Empty>
     );

@@ -76,7 +76,7 @@ export function Settings({
   /** After Use another gateway: the address screen. */
   onForget: () => void;
 }) {
-  const { send } = useRuntime();
+  const { send, redact } = useRuntime();
   const { c } = useTheme();
   const [licenses, setLicenses] = useState(false);
   const state = gatewayState(connection);
@@ -190,7 +190,7 @@ export function Settings({
                 }}
               >
                 <Txt weight="medium">{problem.title}</Txt>
-                <Txt size={S["text-md"]}>{problem.message}</Txt>
+                <Txt size={S["text-md"]}>{redact(problem.message)}</Txt>
               </View>
             )}
             <View style={{ gap: S["space-2"] }}>

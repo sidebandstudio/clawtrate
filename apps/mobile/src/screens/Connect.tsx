@@ -1,8 +1,9 @@
 // The connection screens (visual-language.md, section 10, at phone size): the
 // welcome screen with the mark and its one action, the gateway's address, the
-// step list while it connects and loads, the pending approval with the exact
-// scopes requested, and the notice for a gateway on another protocol. Every
-// word comes from `@clawtrate/ui/connect-words`, as on the desktop.
+// step list while it connects and loads, the
+// pending approval with the exact scopes requested, and the notice for a gateway
+// on another protocol. Every word comes from `@clawtrate/ui/connect-words`, as on
+// the desktop, and nothing the gateway sent back shows a credential.
 
 import type { ConnectionError, ConnectionState, DiscoveryState } from "@clawtrate/core";
 import {
@@ -151,10 +152,11 @@ function Failure({
   );
 }
 
-function errorFor(error: ConnectionError) {
+/** A connection error as the screen shows it: the gateway's words with any credential this host holds scrubbed out. */
+function errorFor(error: ConnectionError, redact: (text: string) => string) {
   return {
     title: failureTitle(error.code),
-    message: error.hint ? `${error.message} ${error.hint}` : error.message,
+    message: redact(error.hint ? `${error.message} ${error.hint}` : error.message),
     code: error.code,
   };
 }
@@ -240,7 +242,7 @@ export function Address({
   connection: ConnectionState;
   onBack: () => void;
 }) {
-  const { send } = useRuntime();
+  const { send, redact } = useRuntime();
   const [url, setUrl] = useState(connection.gatewayUrl ?? "");
   const [token, setToken] = useState("");
   const [submitError, setSubmitError] = useState<{ title: string; message: string } | null>(null);
@@ -254,14 +256,14 @@ export function Address({
     send({ type: "connect", url: url.trim(), token: token || null }).catch((error: unknown) =>
       setSubmitError({
         title: failureTitle(null),
-        message: error instanceof Error ? error.message : String(error),
+        message: redact(error instanceof Error ? error.message : String(error)),
       }),
     );
   };
   const error = submitError
     ? { ...submitError, code: null }
     : connection.error
-      ? errorFor(connection.error)
+      ? errorFor(connection.error, redact)
       : null;
   // Try again repeats what failed: the saved gateway's connection, or this form.
   const tryAgain = () => {
@@ -383,7 +385,7 @@ export function Setup({
   discovery: DiscoveryState;
   onAnother: () => void;
 }) {
-  const { send } = useRuntime();
+  const { send, redact } = useRuntime();
   const loadingBots = connection.status === "connected" && discovery.status === "loading";
   const error = connection.error;
   return (
@@ -391,7 +393,7 @@ export function Setup({
       <Brand />
       <Steps connection={connection} loadingBots={loadingBots} />
       {error && !loadingBots && (
-        <Failure {...errorFor(error)} onTryAgain={() => void send({ type: "retry" })} />
+        <Failure {...errorFor(error, redact)} onTryAgain={() => void send({ type: "retry" })} />
       )}
       <Button label={W.useAnother} variant="quiet" large onPress={onAnother} testID="use-another" />
       <Foot>{footWords("connect", connection, HOST)}</Foot>
@@ -406,7 +408,7 @@ export function Pairing({
   connection: ConnectionState;
   onAnother: () => void;
 }) {
-  const { send } = useRuntime();
+  const { send, redact } = useRuntime();
   const { c } = useTheme();
   const pairing = connection.pairing!;
   const now = useNow();
@@ -433,7 +435,7 @@ export function Pairing({
       </Txt>
       {pairing.approveNote && (
         <Txt size={S["text-sm"]} color="text-muted" testID="approve-note">
-          {pairing.approveNote}
+          {redact(pairing.approveNote)}
         </Txt>
       )}
       <View
