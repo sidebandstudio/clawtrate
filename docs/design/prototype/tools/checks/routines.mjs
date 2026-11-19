@@ -5,7 +5,7 @@
 // Run from the repository root:  node docs/design/prototype/tools/checks/routines.mjs
 import { chromium, pageUrl } from "./browser.mjs";
 // The pinned gateway schema: every request a page sends is checked against it.
-import { validateCronAddParams, validateCronRemoveParams, validateCronUpdateParams } from "../../../../../packages/core/node_modules/@openclaw/gateway-protocol/dist/index.mjs";
+import { validateCronAddParams, validateCronGetParams, validateCronRemoveParams, validateCronUpdateParams } from "../../../../../packages/core/node_modules/@openclaw/gateway-protocol/dist/index.mjs";
 
 const base = pageUrl("routines.html") + "?chrome=0&theme=light";
 const b = await chromium.launch();
@@ -231,15 +231,28 @@ check("F-196 changing: one button, Changing…", (await text(p, '[data-r="zone-s
 await p.waitForTimeout(600);
 check("F-196 changed: each routine rewritten with cron.update, announced, focus back on Change…", (await text(p, '[data-testid="zone-line"]')) === "Routines' time zone: Paris" && (await live(p)) === "Changed the time zone of 2 routines" && (await focused(p)) === "zone:pip" && (await p.evaluate(() => window.routines.sent.filter((x) => x.params.patch.schedule?.tz === "Europe/Paris").length)) === 2);
 await p.close();
-p = await open("view=checkins&bot=pip&tzfail=cleanup");
-await p.click('[data-r="zone"]');
-await p.selectOption("#z-tz", "Europe/Paris");
-await p.click('[data-r="zone-save"]');
-await p.waitForTimeout(600);
-check("F-196 a failure is reported by name, the dialog stays, focus on Close", (await text(p, '[data-testid="zone-result"]')) === "Changed Plan the week. Couldn't change Inbox tidy-up: the gateway didn't answer." && (await focused(p)) === "zone-close:");
-await p.click('[data-r="zone-close"]');
-check("F-196 after a partial change the zone line says Mixed", (await text(p, '[data-testid="zone-line"]')) === "Routines' time zone: Mixed: Paris, New York");
-await p.close();
+for (const lookup of ["unchanged", "found", "unavailable"]) {
+  p = await open(`view=checkins&bot=pip&tzfail=cleanup&tzlookup=${lookup}`);
+  await p.click('[data-r="zone"]');
+  await p.selectOption("#z-tz", "Europe/Paris");
+  await p.click('[data-r="zone-save"]');
+  await p.waitForTimeout(600);
+  check(`F-196 unanswered zone write (${lookup}): reads the routine once and sends no second write`, JSON.stringify(await p.evaluate(() => window.routines.dispatched.map((x) => [x.method, x.params.id]))) === JSON.stringify([["cron.update", "standup"], ["cron.update", "cleanup"], ["cron.get", "cleanup"]]));
+  const line = await text(p, '[data-testid="zone-line"]');
+  const result = await text(p, '[data-testid="zone-result"]');
+  if (lookup === "found")
+    check("F-196 reply lost after the change: the read confirms both changes", line === "Routines' time zone: Paris" && (await live(p)) === "Changed the time zone of 2 routines");
+  else if (lookup === "unchanged")
+    check("F-196 the gateway still lists the old zone: report the read and keep the dialog open", line === "Routines' time zone: Mixed: Paris, New York" && result.includes("Inbox tidy-up still has New York. The change may still arrive.") && (await focused(p)) === "zone-close:");
+  else {
+    check("F-196 a failed read leaves the zone line unconfirmed and offers a read-only retry", line === "Routines' time zone: checking needed" && result.includes("Couldn't confirm the time zone of Inbox tidy-up.") && (await focused(p)) === "zone-check:");
+    if (await has(p, '[data-r="zone-check"]')) {
+      await p.click('[data-r="zone-check"]');
+      check("F-196 Check now retries only the read", JSON.stringify(await p.evaluate(() => window.routines.dispatched.map((x) => x.method))) === JSON.stringify(["cron.update", "cron.update", "cron.get", "cron.get"]));
+    }
+  }
+  await p.close();
+}
 p = await open("view=checkins&bot=otto");
 await p.click('[data-r="zone"]');
 check("F-196 routines with no zone or a gateway-set schedule are listed as left alone", (await text(p, '[data-testid="zone-change"]')) === "Nightly backup check (now New York)" && (await text(p, '[data-testid="zone-keep"]')) === "Disk space watch (it has no time zone)Certificate renewal (its schedule was set on the gateway)");
@@ -401,6 +414,9 @@ await p.close();
 p = await open("view=routine&routine=digest");
 await event(p, { action: "updated", job: { id: "digest", sessionTarget: "current" } });
 await p.click('[data-testid="run-row"]');
+check("F-190 a recorded isolated run still shows its transcript after the routine switches to current", (await text(p, '[data-testid="scheduled-message"] p')).startsWith("Summarise the notes I added yesterday,"));
+await p.click('[data-r="back-to-routine"]');
+await p.locator('[data-testid="run-row"]').nth(3).click();
 check("a shared run with an unknown destination has no conversation link", (await text(p, ".b-note")).startsWith("This run happened in a shared conversation.") && !(await has(p, '.b-note [data-session]')));
 await p.click('[data-r="back-to-routine"]');
 const sharedKey = "agent:marlow:planning";
@@ -585,6 +601,8 @@ if (process.env.OPENCLAW_PACKAGE_DIR) {
 p = await open();
 const spring = await p.evaluate((expr) => window.routines.cron(expr), springExpr);
 check("F-195 cron preview uses the shifted instant without shortening nominal spacing", new Date(spring.next[0]).toISOString() === springRun && spring.gap === Infinity);
+const overlapping = await p.evaluate(() => window.routines.cron("0 0,30 2,3 14 3 *").next);
+check("F-195 cron preview lists distinct instants in order across the spring gap", JSON.stringify(overlapping.map((t) => new Date(t).toISOString())) === JSON.stringify(["2027-03-14T07:00:00.000Z", "2027-03-14T07:30:00.000Z", "2028-03-14T06:00:00.000Z"]));
 const read = await p.evaluate((rows) => rows.map(([expr]) => window.routines.cron(expr)), CRON_TABLE);
 const misread = CRON_TABLE.filter(([, want, next], i) => {
   const g = read[i];
@@ -626,6 +644,26 @@ for (const [expr, want] of CRON_TABLE) {
     check(`F-195 cron ${expr}: refused before any request (${want})`, got.length === 0 && (await p.evaluate(() => document.querySelector("#edit-dialog").open)) && (want === "floor" ? err === "Routines run at least 5 minutes apart." : want === "never" ? err === "This never runs in the next eight years." : err.startsWith("The gateway can't read this: ")), err);
   await p.close();
 }
+p = await open();
+const createdIds = [];
+for (const name of ["First new routine", "Second new routine", "Third new routine"]) {
+  await p.click('.r-head [data-r="new"]');
+  await p.fill("#e-name", name);
+  await p.fill("#e-instr", "Look.");
+  await p.click('[data-r="save"]');
+  await p.waitForTimeout(700);
+  createdIds.push(await p.locator('[data-r="more"]').getAttribute("data-id"));
+  if (name === "Third new routine") break;
+  await p.click('.r-head [data-r="back"]');
+  if (name === "Second new routine") {
+    await p.getByRole("button", { name: /^First new routine/ }).click();
+    await p.click('[data-r="more"]');
+    await p.click('#r-menu [data-r="delete"]');
+    await p.click('[data-r="confirm-delete"]');
+  }
+}
+check("F-189 each create gets a fresh id and opens its own page after a deletion", (await text(p, "#view-title")) === "Third new routine" && new Set(createdIds).size === 3);
+await p.close();
 p = await open("edit=new&editstate=invalid");
 check("invalid state from the address: the interval error", (await text(p, "#e-when-error")) === "Routines run at least 5 minutes apart.");
 await p.close();
@@ -1110,7 +1148,7 @@ p = await open("motion=reduce&view=routine&routine=digest&state=running");
 check("reduced motion: nothing runs", (await p.evaluate(() => document.getAnimations().filter((a) => a.playState === "running").length)) === 0);
 await p.close();
 
-const invalid = requests.filter((r) => !(r.method === "cron.add" ? validateCronAddParams(r.params) : r.method === "cron.update" ? validateCronUpdateParams(r.params) : r.method === "cron.remove" ? validateCronRemoveParams(r.params) : false));
+const invalid = requests.filter((r) => !(r.method === "cron.add" ? validateCronAddParams(r.params) : r.method === "cron.update" ? validateCronUpdateParams(r.params) : r.method === "cron.remove" ? validateCronRemoveParams(r.params) : r.method === "cron.get" ? validateCronGetParams(r.params) : false));
 check(`every request the pages sent (${requests.length}) passes the pinned gateway schema`, requests.length > 30 && invalid.length === 0, JSON.stringify(invalid.slice(0, 2)));
 await b.close();
 console.log(out.join("\n"));
