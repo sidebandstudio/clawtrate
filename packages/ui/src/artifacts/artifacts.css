@@ -384,7 +384,7 @@ button.artifact-main:hover {
   margin-top: 14px;
 }
 
-.raw-panel pre {
+[data-testid="artifact-raw"] pre {
   max-height: 320px;
   overflow: auto;
   white-space: pre-wrap;
