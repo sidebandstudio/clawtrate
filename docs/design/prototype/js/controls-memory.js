@@ -1,6 +1,6 @@
 // Memory (docs/design/controls.md, sections 12 and 13): what a bot has stored,
 // what loads into its new tasks and on what conditions, what search has
-// confirmed, moving items, export and import, clearing, and shared memory with
+// confirmed, export and import, clearing, and shared memory with
 // the bots that search it. Local fixtures only.
 
 (function () {
@@ -34,22 +34,21 @@
   };
 
   // Otto's memory files, as the workspace reader returns them, split into items.
-  const searchable = MEM === "unsearchable" ? "Not confirmed for this revision" : "This revision returned by a search at 5:42 PM";
+  const searchable = MEM === "unsearchable" ? "Not confirmed for this revision" : "Search returned an excerpt from this file";
   const items = {
     otto: [
-      { id: "m1", group: "root", text: "The media box is media-box; its disk is /srv, 2 TB.", file: "MEMORY.md", line: 3, rev: "7c1e", changed: "Nov 17, 5:41 PM", saver: "Otto, in 'Disk almost full on the media box', this revision" },
+      { id: "m1", group: "root", text: "The media box is media-box; its disk is /srv, 2 TB.", file: "MEMORY.md", line: 3, rev: "7c1e", changed: "Nov 17, 5:41 PM", saver: "Otto, in 'Disk almost full on the media box'" },
       { id: "m2", group: "root", text: "Weekly backups run Sunday at 3 AM; keep four weeks.", file: "MEMORY.md", line: 4, rev: "7c1e", changed: "Nov 17, 5:41 PM", saver: null },
       { id: "m3", group: "root", text: "Ask before deleting anything under /srv/archive.", file: "MEMORY.md", line: 5, rev: "7c1e", changed: "Nov 17, 5:41 PM", saver: "Added in Clawtrate from this device, this revision" },
       { id: "u1", group: "user", text: "Prefers short summaries with the numbers first.", file: "USER.md", line: 2, rev: "a210", changed: "Nov 10", saver: null },
       { id: "u2", group: "user", text: "Works in the evenings; send reports after 6 PM.", file: "USER.md", line: 3, rev: "a210", changed: "Nov 10", saver: null },
-      { id: "n1", group: "notes", text: "Disk at 91% after the camera import. Moved old transcodes to /srv/archive.", file: "memory/2026-11-17.md", line: 1, rev: "19bd", changed: "Nov 17, 5:41 PM", saver: "Otto, in 'Disk almost full on the media box', this revision", size: "1.2 KB" },
+      { id: "n1", group: "notes", text: "Disk at 91% after the camera import. Moved old transcodes to /srv/archive.", file: "memory/2026-11-17.md", line: 1, rev: "19bd", changed: "Nov 17, 5:41 PM", saver: "Otto, in 'Disk almost full on the media box'", size: "1.2 KB" },
       { id: "n2", group: "notes", text: "Router firmware is two releases behind; neither is urgent.", file: "memory/2026-11-16.md", line: 1, rev: "52aa", changed: "Nov 16, 9:02 AM", saver: null, size: "640 B" },
       { id: "n3", group: "notes", text: "Backup verify passed for all four weeks.", file: "memory/2026-11-12-backup.md", line: 1, rev: "0f3c", changed: "Nov 12", saver: null, size: "310 B" },
     ],
   };
   ["juniper", "marlow", "pip"].forEach((b) => (items[b] = [{ id: `${b}1`, group: "root", text: `${botName(b)} keeps its drafts in notes/.`, file: "MEMORY.md", line: 3, rev: "1d2e", changed: "Nov 15", saver: null }]));
   if (MEM === "empty") items.otto = [];
-  if (MEM === "moving") items.otto.push({ ...items.otto[6], id: "n2b", group: "root", file: "MEMORY.md", line: 6, both: true }), (items.otto[6].both = true);
   const list = (bot) => items[bot] || [];
   const rootUsed = () => (MEM === "over" ? 21140 : 1240);
   const totalUsed = () => (MEM === "over" ? 30700 : 10800);
@@ -59,7 +58,7 @@
   const extraBefore = CT.botsExtraGroups;
   CT.botsExtraGroups = (id) => {
     const l = list(id);
-    const root = l.filter((i) => i.group === "root" && !i.both).length;
+    const root = l.filter((i) => i.group === "root").length;
     const notes = l.filter((i) => i.group === "notes").length;
     const value = l.length ? `${root} root items · ${notes} notes · changed 5:41 PM` : "Nothing stored yet";
     return `<h3 class="b-tabgroup">Memory</h3><dl class="facts">${openRow("Memory", value, `data-bs="memory" aria-label="Memory: ${value}. Open."`)}</dl>` + (extraBefore ? extraBefore(id) : "");
@@ -76,17 +75,16 @@
 
   // Past its budget the gateway keeps the start and the end of MEMORY.md and leaves out the middle (row 25).
   const loadsOf = (i) => (i.group === "notes" ? "Not loaded into tasks" : MEM === "over" && i.group === "root" ? "Over budget: the middle of MEMORY.md isn't loaded" : "Loads into new private tasks; fits its budget");
-  const searchOf = (i) => (searchOff ? "Search is off for this bot" : i.group === "notes" ? (i.id === "n1" ? searchable : "This revision returned by a search at 5:42 PM") : "Not searched; loaded instead");
+  const searchOf = (i) => (searchOff ? "Search is off for this bot" : i.group === "notes" ? (i.id === "n1" ? searchable : "Search returned an excerpt from this file") : "Search for this file is unconfirmed.");
   const itemRow = (i) =>
     `<li><button type="button" class="c-mem" data-bs="memitem" data-c-item="${i.id}" aria-label="${esc(`${i.text} ${i.file}. Stored. ${loadsOf(i)}. Open.`)}">${icon(i.group === "root" ? "plan" : i.group === "user" ? "approval" : "note")}` +
     `<span class="c-mem-text"><span>${esc(i.text)}</span><small>${esc(i.file)}${i.size ? ` · ${i.size}` : ""} · Stored, revision ${i.rev} · ${loadsOf(i)}${i.group === "notes" && i.id === "n1" && MEM === "unsearchable" ? " · Not yet confirmed searchable" : ""}</small>` +
-    (i.both ? `<small data-tone="danger">In root memory and in memory/2026-11-16.md: moving it didn't finish.</small>` : "") +
     `</span></button></li>`;
 
   function conditions(name) {
     return (
       `<p class="b-hint">Loaded at the start of ${name}'s new private tasks. Not in its routines, helpers, or group and channel tasks, and not text the gateway doesn't trust. ` +
-      `Past ${fmt(FILE_BUDGET)} characters MEMORY.md is cut in the middle: the gateway keeps the start and the end (about three quarters of what fits from the start, a quarter from the end). All loaded files together are limited to ${fmt(TOTAL_BUDGET)} (now ${fmt(totalUsed())}). ` +
+      `Past ${fmt(FILE_BUDGET)} characters MEMORY.md is cut in the middle: the gateway keeps the start and the end (about three quarters of what fits from the start, a quarter from the end). All loaded files together are limited to ${fmt(TOTAL_BUDGET)} (now about ${fmt(totalUsed())}, estimated from the files under these conditions). ` +
       `If you keep your own USER.md on this gateway, ${name}'s tasks with you use yours instead of About you. A task already open may keep the earlier copy until it starts again.</p>`
     );
   }
@@ -96,7 +94,7 @@
     let html = sub(`What ${name} remembers`, "main", "Back to settings");
     if (MEM === "loading") return html + skeleton(`Loading ${name}'s memory`, 5);
     if (MEM === "error") return html + failed(`Couldn't load ${name}'s memory`, "mem-retry");
-    html += `<p class="b-hint" style="margin-top:0">For each item: what is stored, whether it loads into new tasks, and whether search has found this revision.</p>`;
+    html += `<p class="b-hint" style="margin-top:0">For each item: what is stored, whether it loads into new tasks, and whether search has returned an excerpt from it.</p>`;
     if (!X.plugin) html += note(`<p>Changing notes needs Clawtrate's memory plugin running. The gateway's file writer takes only the files it loads.</p>`, "", icon("plug"));
     const l = list(bot);
     if (!l.length)
@@ -110,15 +108,15 @@
       [
         "root",
         "Root memory",
-        meter(rootUsed(), FILE_BUDGET, `MEMORY.md: ${fmt(rootUsed())} of ${fmt(FILE_BUDGET)} characters.${over ? " The gateway keeps the start and the end and leaves out about 1,250 characters from the middle." : ""}`, `Root memory ${fmt(rootUsed())} of ${fmt(FILE_BUDGET)} characters`) +
-          meter(totalUsed(), TOTAL_BUDGET, `All loaded files: ${fmt(totalUsed())} of ${fmt(TOTAL_BUDGET)} characters.`, `All loaded files ${fmt(totalUsed())} of ${fmt(TOTAL_BUDGET)} characters`) +
+        meter(rootUsed(), FILE_BUDGET, `MEMORY.md: ${fmt(rootUsed())} of ${fmt(FILE_BUDGET)} characters, as reported.${over ? " The gateway keeps the start and the end and leaves out about 1,250 characters from the middle." : ""}`, `Root memory ${fmt(rootUsed())} of ${fmt(FILE_BUDGET)} characters`) +
+          meter(totalUsed(), TOTAL_BUDGET, `All loaded files: ${fmt(totalUsed())} of ${fmt(TOTAL_BUDGET)} characters, estimated.`, `All loaded files ${fmt(totalUsed())} of ${fmt(TOTAL_BUDGET)} characters`) +
           conditions(name),
       ],
       ["user", "About you", meter(420, USER_CAP, `420 of ${fmt(USER_CAP)} characters (the gateway's fixed limit for this file).`, "About you 420 of 4,000 characters")],
       [
         "notes",
         "Notes",
-        `<p class="b-hint">Not loaded into tasks. ${name} finds notes by searching its memory, or reads one by name; a read by name doesn't need the index. ${searchOff ? `Search is off for ${name} in the gateway's settings.` : MEM === "nosearch" ? `${name}'s memory search isn't set up on this gateway: Memory provider unavailable. Files are still listed.` : "Search: available. A revision counts as searchable only once a search returns it."}</p>`,
+        `<p class="b-hint">Not loaded into tasks. ${name} finds notes by searching its memory, or reads one by name; a read by name doesn't need the index. ${searchOff ? `Search is off for ${name} in the gateway's settings.` : MEM === "nosearch" ? `${name}'s memory search isn't set up on this gateway: Memory provider unavailable. Files are still listed.` : "Search: available. A note counts as searchable only once a search returns an excerpt from it."}</p>`,
       ],
     ];
     groups.forEach(([g, title, foot]) => {
@@ -171,8 +169,6 @@
         );
       html += `<div class="b-actions" style="margin-top:10px">${button("Save", 'data-c="mem-save" data-size="sm"', "primary")}${button("Cancel", 'data-c="mem-cancel" data-size="sm"', "quiet")}</div>`;
     } else html += `<div class="c-mem-full">${esc(i.text)}</div>`;
-    if (i.both)
-      html += note(`<p>In root memory and in memory/2026-11-16.md: moving it didn't finish.</p><div class="b-actions">${button("Finish moving", 'data-c="mem-finish" data-size="sm"', "primary")}${button("Keep both", 'data-c="mem-keepboth" data-size="sm"', "quiet")}</div>`, "danger");
     if (X.refused) html += X.refused;
     html +=
       `<dl class="facts">` +
@@ -187,8 +183,6 @@
     if (isAdmin() && X.edit !== i.id) {
       html += `<div class="b-actions" style="margin-top:12px">`;
       if (!needsPlugin) html += button("Edit", 'data-c="mem-edit" data-size="sm"');
-      if (i.group === "notes" && X.plugin) html += button("Move to root memory", 'data-c="mem-pin" data-size="sm"');
-      if (i.group === "root" && X.plugin) html += button("Move to notes", 'data-c="mem-unpin" data-size="sm"');
       if (!needsPlugin) html += button("Delete…", 'data-c="mem-delete" data-size="sm"', "quiet");
       html += `</div>`;
       if (needsPlugin) html += `<p class="b-hint">Changing notes needs Clawtrate's memory plugin running.</p>`;
@@ -217,7 +211,7 @@
       if (isAdmin()) body += `<div class="c-form"><label>A folder on the gateway's machine<input class="input mono" data-c-sharedpath placeholder="/srv/bots/shared" spellcheck="false" /></label><p class="b-hint" style="margin:0">The folder must already exist on the gateway's machine.</p><div class="b-actions">${button("Add a shared folder…", 'data-c="shared-add" data-size="sm"')}</div></div>`;
       return { title: "Memory", back, body, foot: isAdmin() ? "" : D.adminBar("Changing shared memory needs admin access.") };
     }
-    body += `<p class="c-effective"><b>Searched by</b> Juniper, Marlow, Otto. <b>Not by</b> Pip: its memory search is off.</p>`;
+    body += `<p class="c-effective"><b>Search configured for</b> Juniper, Marlow, Otto. <b>Not for</b> Pip: its memory search is off.</p>`;
     const order = sharedItems.map((s, i) => i).sort((a, b) => Number(Boolean(sharedItems[b].copies)) - Number(Boolean(sharedItems[a].copies)));
     body += `<h4 class="b-group"><span class="mono">/srv/bots/shared</span></h4><ul class="c-mems">${order
       .map((i) => {
@@ -232,7 +226,7 @@
       const list = (n) => (n.length > 1 ? `${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}` : n[0]);
       body += `<p class="b-hint" role="status" data-testid="copy-result">${by("copied").length ? `Copied to ${list(by("copied"))}.` : ""}${by("refused").length ? ` Not copied to ${list(by("refused"))}: its root memory would pass its budget.` : ""}${by("unknown").length ? ` Not known for ${list(by("unknown"))}: the gateway didn't answer.` : ""}</p>`;
       if (isAdmin())
-        body += `<div class="b-actions">${by("refused").length ? button(`Try ${list(by("refused"))} again`, 'data-c="shared-retry" data-size="sm"') : ""}${by("unknown").length ? button("Check again", 'data-c="shared-check" data-size="sm"') : ""}${button("Remove the copies", 'data-c="shared-uncopy" data-size="sm"', "quiet")}</div>`;
+        body += `<div class="b-actions">${by("refused").length ? button(`Try ${list(by("refused"))} again`, 'data-c="shared-retry" data-size="sm"') : ""}${by("unknown").length ? button("Check again", 'data-c="shared-check" data-size="sm"') : ""}</div>`;
     }
     if (!plugin) body += `<p class="b-hint">Changing shared memory needs Clawtrate's memory plugin running.</p>`;
     else if (isAdmin()) body += `<div class="b-actions" style="margin-top:12px">${button("Add", 'data-c="shared-new" data-size="sm"')}${button("Copy into bots' root memory…", 'data-c="shared-pin" data-size="sm"')}</div>`;
@@ -256,7 +250,7 @@
     true,
   );
 
-  const CLEAR_FILES = "MEMORY.md and memory/2026-11-17.md, memory/2026-11-16.md and memory/2026-11-12-backup.md";
+  const CLEAR_FILES = "memory/2026-11-17.md, memory/2026-11-16.md and memory/2026-11-12-backup.md";
   const NOT_REMOVED = "Otto's chat history; what tasks already running were given; search results until the index refreshes; copies of shared items in other bots; About you, unless you include it";
 
   document.addEventListener("click", (event) => {
@@ -301,7 +295,7 @@
         return D.confirmBox({
           title: `Clear ${botName(bot)}'s memory?`,
           text: X.plugin
-            ? `This deletes ${CLEAR_FILES}. It doesn't remove: ${NOT_REMOVED.replace(/Otto/g, botName(bot))}. This can't be undone; export first to keep a copy.`
+            ? `This empties MEMORY.md and deletes ${CLEAR_FILES}. It doesn't remove: ${NOT_REMOVED.replace(/Otto/g, botName(bot))}. This can't be undone; export first to keep a copy.`
             : `This empties MEMORY.md. Notes under memory/ stay: deleting them needs Clawtrate's memory plugin. It doesn't remove: ${NOT_REMOVED.replace(/Otto/g, botName(bot))}.`,
           label: "Clear memory",
           run: () => {
@@ -331,27 +325,6 @@
         X.conflict = false;
         rerender();
         return announce("Memory saved");
-      case "mem-pin":
-        if (MEM === "over" || rootUsed() + i.text.length > FILE_BUDGET || MEM === "full") {
-          X.refused = note(`<p>Root memory would be ${fmt(Math.max(rootUsed(), 19960) + 180)} of ${fmt(FILE_BUDGET)} characters, so part of its middle wouldn't load. Move something out first. Both files are unchanged.</p>`, "warn");
-          return rerender();
-        }
-        Object.assign(i, { group: "root", file: "MEMORY.md", line: 6, rev: "e4a9", changed: "just now" });
-        rerender();
-        return announce("Moved to root memory");
-      case "mem-unpin":
-        Object.assign(i, { group: "notes", file: "memory/2026-11-18.md", line: 1, rev: "e4b0", changed: "just now" });
-        rerender();
-        return announce("Moved to notes");
-      case "mem-finish":
-        items[bot] = list(bot).filter((x) => x.id !== "n2");
-        list(bot).forEach((x) => delete x.both);
-        rerender();
-        return announce("Moved to root memory");
-      case "mem-keepboth":
-        list(bot).forEach((x) => delete x.both);
-        rerender();
-        return announce("Kept in both places");
       case "mem-delete":
         return D.confirmBox({
           title: "Delete this from memory?",
@@ -382,12 +355,6 @@
         return announce("Pip's root memory is still full. Nothing was copied to Pip.");
       case "shared-check":
         return announce("Checked each bot's file for the copy's mark.");
-      case "shared-uncopy": {
-        const it = sharedItems[X.sharedSel];
-        delete it.copies;
-        D.renderSettings();
-        return announce("Removed the copies from Juniper, Marlow and Otto");
-      }
       case "shared-item":
         X.sharedSel = Number(t.dataset.value);
         D.renderSettings();

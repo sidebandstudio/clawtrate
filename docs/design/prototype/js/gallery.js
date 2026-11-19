@@ -53,13 +53,12 @@
   const controlStates = [
     [`${tab}`, "A bot's settings, with Tools, Memory, Usage and Runs on"],
     [`${tab}&bview=rules`, "What Otto may do: the glance, the rules plugin running"],
-    [`${tab}&bview=rules&rules=noplugin`, "The rules plugin absent: not being enforced right now"],
+    [`${tab}&bview=rules&rules=noplugin`, "Rules methods unavailable: not being enforced right now"],
     [`${tab}&bview=rules&rules=stopped`, "The rules plugin stopped"],
     [`${tab}&bview=rules&rules=old`, "The rules plugin too old"],
     [`${tab}&bview=rules&rules=unchecked`, "The rules plugin not checked yet"],
-    [`${tab}&bview=rules&rules=stopped&held=1`, "Denied until the rules plugin runs"],
+    [`${tab}&bview=rules&rules=stopped&held=1`, "Denied in Otto's settings"],
     [`${tab}&bview=rules&held=1`, "The plugin running again, the hold still in place"],
-    [`${tab}&bview=rules&held=changed`, "The deny list changed since the hold"],
     [`${tab}&bview=rules&rules=stopped&read=none`, "This device never read the plugin's rules"],
     [`${tab}&bview=rules&rules=stopped&width=phone`, "The phone: the plugin stopped"],
     [`${tab}&bview=rules&msg=gateway`, "The gateway's pairs leave Otto no bot to message"],
@@ -120,7 +119,6 @@
     ["open=settings&section=permissions&part=activity&access=read", "Activity, read-only"],
     [`${tab}&bview=memory`, "What Otto remembers: stored, loads, searchable"],
     [`${tab}&bview=memory&mem=over`, "Root memory past its budget"],
-    [`${tab}&bview=memory&mem=moving`, "A move that didn't finish"],
     [`${tab}&bview=memory&mem=empty`, "Nothing stored yet"],
     [`${tab}&bview=memory&mem=loading`, "Memory loading"],
     [`${tab}&bview=memory&mem=error`, "Memory couldn't load"],
@@ -133,9 +131,7 @@
     [`${tab}&bview=memory&access=read`, "Memory, read-only"],
     [`${tab}&bview=memitem&item=m1`, "A root memory item"],
     [`${tab}&bview=memitem&item=n1`, "A note"],
-    [`${tab}&bview=memitem&item=n2&mem=moving`, "A note whose move didn't finish"],
     [`${tab}&bview=memitem&item=n1&mem=noplugin`, "A note without the memory plugin"],
-    [`${tab}&bview=memitem&item=n1&mem=over`, "Moving to root memory when it's full"],
     [`${tab}&bview=memitem&item=m1&mem=edit`, "Editing an item"],
     [`${tab}&bview=memitem&item=m1&mem=conflict`, "An edit crossed by another change"],
     ["open=settings&section=memory", "Settings, Memory: shared memory and who searches it"],
@@ -169,8 +165,7 @@
     ["bot=otto&plimit=reached", "A provider's limit reached"],
     ["bot=otto&task=o1&saveline=1", "Saved to memory, in a task"],
     ["bot=otto&task=o1&ask=full", "A rules-plugin card at the allow limit, answered live"],
-    ["bot=pip&task=p1&cmd=create", "Pip runs the gateway's command line to create a bot"],
-    ["bot=pip&task=p1&cmd=create&rules=noplugin", "The same, with no rules plugin"],
+    ["bot=pip&task=p1&cmd=create", "Example: a command missing the machine allowlist"],
     [`${tab}&width=phone`, "The phone: a bot's settings"],
     [`${tab}&bview=rules&width=phone`, "The phone: what Otto may do"],
     ["open=settings&section=permissions&part=activity&width=phone", "The phone: Activity"],
@@ -1238,8 +1233,8 @@
       note: "What docs/design/controls.md adds to the conversation, and a link to every state of its pages. A refused call says what decided it, recorded, inferred or not recorded; an ask says who asks and offers what it can complete; an answer and what then happened are two lines; only a gateway setting is called enforced without qualification.",
       specimens: [
         ...[
-          ["gateway", "The gateway's settings for every bot", "Inferred: the gateway's settings for every bot denied this tool when Clawtrate read them at 5:41 PM. The gateway's answer, not found, doesn't say why. Set on the gateway.", JSON.stringify({ result: "Tool exec not found", details: {} })],
-          ["bot", "The bot's own deny list", "Inferred: Otto's settings denied this tool when Clawtrate read them at 5:41 PM. The gateway's answer, not found, doesn't say why. The gateway enforces this.", JSON.stringify({ result: "Tool exec not found", details: {} })],
+          ["gateway", "The gateway's settings for every bot", "Tool exec not found. Inferred: the gateway's settings for every bot denied this tool when Clawtrate read them at 5:41 PM. Set on the gateway.", JSON.stringify({ result: "Tool exec not found", details: {} })],
+          ["bot", "The bot's own deny list", "Tool exec not found. Inferred: Otto's settings denied this tool when Clawtrate read them at 5:41 PM. The gateway enforces this.", JSON.stringify({ result: "Tool exec not found", details: {} })],
           ["inferred", "A not-found call no read explains", "Cause not recorded. The gateway answered 'Tool exec not found'.", JSON.stringify({ result: "Tool exec not found", details: {} })],
           ["plugin", "A rule of Clawtrate's rules plugin", "Clawtrate's rules plugin: Otto's rule 'never matching rm -rf *', version 1.", JSON.stringify({ details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason: "Otto's rule: never run commands matching rm -rf *" } })],
           ["person", "A person, on the card", "You denied it at 5:43 PM.", JSON.stringify({ details: { status: "error", error: "Denied by user. The tool call did not run." } })],
@@ -1252,7 +1247,7 @@
             {
               ...C.rm,
               id: `call_ctl_${key}`,
-              ...({ person: { status: "denied", deniedWord: "Denied" }, expired: { status: "denied", deniedWord: "Expired" }, nobody: { status: "denied", deniedWord: "Not run" }, changed: { status: "denied", deniedWord: "Not run" }, inferred: { status: "denied", deniedWord: "Not run" } }[key] || { blockedBy: "policy" }),
+              ...({ person: { status: "denied", deniedWord: "Denied" }, expired: { status: "denied", deniedWord: "Expired" }, nobody: { status: "denied", deniedWord: "Not run" }, changed: { status: "denied", deniedWord: "Not run" }, inferred: { status: "failed" }, gateway: { status: "failed" }, bot: { status: "failed" } }[key] || { blockedBy: "policy" }),
               body: CT.stepBody({
                 readable: CT.fields([
                   ["Command", "rm -rf /srv/media/transcode-cache", { mono: true }],
@@ -1273,10 +1268,10 @@
             `<section class="card request" data-kind="approval" data-state="pending" role="region" aria-label="Otto wants to change a file. Needs approval.">` +
             `<header class="request-head"><h3 class="request-title">Otto wants to change a file</h3><span class="tag" data-tone="warn">Needs approval</span></header>` +
             `<p class="request-summary">Write notes/disk-2026-11-16.md in Otto's workspace.</p>` +
-            `<p class="request-asker">Asked by Clawtrate's rules plugin: Otto's rule 'Ask first · notes/**', version 1. <button type="button" class="link-button">Edit rule</button></p>` +
+            `<p class="request-asker">Asked by Clawtrate's rules plugin: Otto's rule 'Ask first · notes/**', version 1.</p>` +
             `<div class="request-actions"><button type="button" class="button" data-variant="primary">Allow once</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet">Deny</button></div>` +
             `<p class="c-sentence"><button type="button" class="link-button">Make a rule…</button></p>` +
-            `<p class="request-foot">Waits 10 minutes; if no one answers, Otto doesn't do it.</p></section>`,
+            `<p class="request-foot">The rules plugin asks for a 10-minute wait.</p></section>`,
         },
         {
           name: "A messaging ask",
@@ -1288,11 +1283,11 @@
             `<p class="request-summary">Send Pip: "Could you look over the plan?"</p>` +
             `<p class="request-asker">Asked by Clawtrate's rules plugin: Otto's messaging settings. Each message is asked about.</p>` +
             `<div class="request-actions"><button type="button" class="button" data-variant="primary">Allow once</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet">Deny</button></div>` +
-            `<p class="request-foot">Waits 10 minutes; if no one answers, Otto doesn't do it.</p></section>`,
+            `<p class="request-foot">The rules plugin asks for a 10-minute wait.</p></section>`,
         },
         {
           name: "An ask at the allow limit",
-          note: `Nothing is removed by itself. The card offers Allow once and Deny, and in place of Make a rule… says the limit, with the way to <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files">the rules list</a>. Allow once runs the call once, and the next matching call asks again. <a href="controls.html?bot=otto&amp;task=o1&amp;ask=full">Answer it live</a>.`,
+          note: `Nothing is removed by itself. The card offers Allow once and Deny, and in place of Make a rule… says the limit, with the way to <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files">the rules list</a>. Allow once answers this request. The call's result shows what happened. <a href="controls.html?bot=otto&amp;task=o1&amp;ask=full">Answer it live</a>.`,
           still: true,
           html:
             `<section class="card request" data-kind="approval" data-state="pending" role="region" aria-label="Otto wants to change a file. Needs approval.">` +
@@ -1314,17 +1309,16 @@
         },
         {
           name: "An expired ask",
-          note: `Make a rule… (admin; below admin it is absent) opens <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files&amp;form=fromcard">the rule form filled in from the request</a>, which says what the rule will change given the rules already there. It saves only when the person adds the rule, and the expired call never runs.`,
+          note: `Make a rule… (admin; below admin it is absent) opens <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files&amp;form=fromcard">the rule form filled in from the request</a>, which, for the request's exact value, says what the new Allow does given the rules already there. It saves only when the person adds the rule, and the expired call never runs.`,
           still: true,
           html: `<section class="card request" data-kind="approval" data-state="resolved" role="region" aria-label="Otto wanted to change a file. Expired."><header class="request-head"><h3 class="request-title">Otto wanted to change a file</h3><span class="tag">Expired</span></header><p class="c-outcome">Expired. Nothing ran.</p><div class="request-actions"><button type="button" class="button">Make a rule…</button></div></section>`,
         },
         {
           name: "The Messaged card's policy states",
-          note: "Blocked by the sender's own list, by the gateway's pairs, by an incoming rule (the rules plugin), and not sent after a denied card.",
+          note: "Blocked by the sender's own list, by the gateway's pairs, and not sent after a denied card.",
           html:
             messaged({ target: "marlow", first, state: "blocked", open: true, body: CT.note("Otto may not message Marlow: Otto's messaging settings. The gateway enforces this. Nothing was sent.") + CT.cardFoot("", S.marlowRaw("blocked")) }) +
             messaged({ target: "marlow", first, state: "blocked", body: CT.note("Bots may not message each other on this gateway, or not these two. Set on the gateway. Nothing was sent.") + CT.cardFoot("", S.marlowRaw("blocked")) }) +
-            messaged({ target: "marlow", first, state: "blocked", body: CT.note("Marlow doesn't take messages from Otto: Marlow's messaging settings, held by Clawtrate's rules plugin. Nothing was sent.") + CT.cardFoot("", S.marlowRaw("blocked")) }) +
             messaged({ target: "marlow", first, state: "not-sent", body: CT.note("You denied the approval. Nothing was sent.") + CT.cardFoot("", S.marlowRaw("not-sent")) }),
         },
         {
@@ -1338,14 +1332,14 @@
           still: true,
           html:
             `<div class="event-line" data-side="center">Otto has used 82% of its weekly budget: 1.64M of 2M tokens.</div>` +
-            `<div class="c-composer-note"><p>Otto's weekly budget is used up, so Clawtrate won't send from here. This is shown only: other apps, channels and Otto's routines aren't stopped.</p><button type="button" class="button" data-size="sm">Raise budget</button></div>`,
+            `<div class="c-composer-note"><p>Otto has reached its weekly warning budget. This is shown only: other apps, channels and Otto's routines aren't stopped.</p><button type="button" class="button" data-size="sm">Raise budget</button></div>`,
         },
         {
           name: "A provider's limit",
           still: true,
           html:
             `<div class="c-composer-note" data-tone="neutral"><p>OpenAI reports 92% of a weekly limit used, as of 5:40 PM. It doesn't say which of your OpenAI accounts.</p></div>` +
-            `<div class="c-composer-note"><p>OpenAI reports a weekly limit reached, as of 5:40 PM. Runs that use it wait or fail until it resets, Nov 20.</p></div>`,
+            `<div class="c-composer-note"><p>OpenAI reports a weekly limit reached, as of 5:40 PM. It resets Nov 20.</p></div>`,
         },
         {
           name: "Every state of the controls pages",

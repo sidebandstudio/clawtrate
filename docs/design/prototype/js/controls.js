@@ -25,6 +25,8 @@
 
   // The rules plugin, as its status method would report it (section 2).
   const RULES = p("rules") || "running";
+  // The expired request's own value (form=fromcard).
+  const FROM_TARGET = "notes/disk-2026-11-18.md";
   const PLUGIN = { running: "running", noplugin: "absent", stopped: "stopped", old: "old", unchecked: "unchecked" }[RULES] || "running";
   const C = {
     plugin: PLUGIN,
@@ -34,11 +36,11 @@
     write: p("write") || null,
     waiting: p("waiting") === "1",
     override: p("override") === "1",
-    // The hold (section 2): null, "writing", "done" (written and read back), "changed" (the deny list changed since).
-    hold: p("held") === "1" ? "done" : p("held") === "changed" ? "changed" : null,
-    form: p("form") === "fromcard" ? { pattern: "notes/disk-2026-11-18.md", action: "allow", note: "", from: "5:41 PM" } : p("form") === "open" ? { pattern: p("pattern") === "long" ? "a".repeat(1001) : "", action: p("limit") === "never" ? "never" : p("limit") === "ask" ? "ask" : p("limit") === "allow" ? "allow" : "never" } : null,
+    // The hold (section 2): null, "writing", "done" (written and read back).
+    hold: p("held") === "1" ? "done" : null,
+    form: p("form") === "fromcard" ? { pattern: FROM_TARGET, action: "allow", note: "", from: "5:41 PM" } : p("form") === "open" ? { pattern: p("pattern") === "long" ? "a".repeat(1001) : "", action: p("limit") === "never" ? "never" : p("limit") === "ask" ? "ask" : p("limit") === "allow" ? "allow" : "never" } : null,
     saveNote: null,
-    revoked: new Set(p("saved") === "revoked" ? ["g1"] : []),
+    revoked: new Set(p("saved") === "revoked" ? ["rg1"] : []),
     auditBot: "all",
     auditVerdict: "all",
     logOpen: p("log") || null,
@@ -47,8 +49,8 @@
   };
   const running = () => C.plugin === "running";
   const PLUGIN_WORDS = {
-    running: "Clawtrate's rules plugin is running (version 1.2). It last checked a call at 5:46 PM.",
-    absent: "Clawtrate's rules plugin isn't installed on this gateway.",
+    running: "Rules plugin answered at 5:46 PM. Last tool call seen 5:46 PM.",
+    absent: "Rules methods unavailable on this gateway.",
     stopped: "Clawtrate's rules plugin isn't answering.",
     old: "Clawtrate's rules plugin is version 0.9; Otto's rules need 1.0 or newer.",
     unchecked: "Checking Clawtrate's rules plugin…",
@@ -74,12 +76,12 @@
     { id: "read", words: "Read files", icon: "read", tools: ["read", "ls"], kind: "path", verb: "reads files" },
     { id: "files", words: "Change files", icon: "write", tools: ["write", "edit", "apply_patch"], kind: "path", verb: "changes files" },
     { id: "exec", words: "Run commands", icon: "command", tools: ["exec", "process"], kind: "command", verb: "runs commands" },
-    { id: "web", words: "Search the web", icon: "web", tools: ["web_search", "web_fetch"], kind: "address", verb: "searches the web" },
-    { id: "message", words: "Message other bots", icon: "message", tools: ["sessions_send"], kind: "recipient", verb: "messages other bots" },
+    { id: "web", words: "Search the web", icon: "web", tools: ["web_search", "web_fetch"], kind: null, verb: "searches the web" },
+    { id: "message", words: "Message other bots", icon: "message", tools: ["sessions_send"], kind: null, verb: "messages other bots" },
     { id: "tasks", words: "Look at its tasks", icon: "tasks", tools: ["sessions_list", "sessions_history"], kind: null, verb: "looks at its tasks" },
     { id: "ask", words: "Ask you questions", icon: "question", tools: ["ask_user"], kind: null, fixed: true, verb: "asks you questions" },
     { id: "routines", words: "Manage routines", icon: "clock", tools: ["automations", "cron"], kind: null, verb: "manages routines" },
-    { id: "browser", words: "Use the browser", icon: "screen", tools: ["browser"], kind: "address", verb: "uses the browser" },
+    { id: "browser", words: "Use the browser", icon: "screen", tools: ["browser"], kind: null, verb: "uses the browser" },
     { id: "gateway", words: "Change the gateway's settings", icon: "settings", tools: ["gateway", "plugins"], kind: null, verb: "changes the gateway's settings" },
     { id: "coder", words: "Coding agent coder", icon: "code", tools: ["coder__*"], kind: "tool", verb: "uses the coding agent coder" },
     { id: "t3code", words: "T3 Code", icon: "plugin", tools: ["t3code__*"], kind: "tool", verb: "uses T3 Code" },
@@ -147,7 +149,7 @@
     const there = rs.length
       ? `${name} has ${rs.length} routine${rs.length === 1 ? "" : "s"}, ${rs.map(esc).join(", ")}. There, Ask first means refused: a routine's run has no one to ask, and the call is refused with no card. The routine's own summary may still say the work was done. `
       : "";
-    return `<p class="b-hint" data-testid="ask-limits">${there}When another bot's message starts ${name}'s run, ${name} may not be able to ask; the call is then refused.</p>`;
+    return `<p class="b-hint" data-testid="ask-limits">${there}Approval routing from another bot's message is unverified.</p>`;
   };
   const fill = (action, n, prefix) => {
     for (let i = 0; i < n; i += 1) RULESET.otto.push({ id: `${prefix}${i}`, line: "files", action, pattern: `${prefix}/${i}/**`, version: 1, set: "Nov 9", last: null });
@@ -181,34 +183,44 @@
   const KIND_HELP = {
     path: "A path in Otto's workspace. * within a folder, ** across folders.",
     command: "A command. * matches the rest of a word or line.",
-    recipient: "A bot's name.",
-    address: "An address. * matches within a part of it.",
     tool: "A tool of the server, or *.",
   };
-  const KIND_EXAMPLE = { path: "For example, secrets/**", command: "For example, rm *", recipient: "For example, pip", address: "For example, *.example.net", tool: "For example, run_checks" };
+  const KIND_EXAMPLE = { path: "For example, secrets/**", command: "For example, rm *", tool: "For example, run_checks" };
   // This device's last read of the plugin's rules (section 2). read=none: it never read them.
   const NEVER_READ = p("read") === "none";
+  // With no earlier read, this device knows none of the plugin's rules.
+  if (NEVER_READ && PLUGIN !== "running") {
+    RULESET.otto = [];
+    RULESET["*"] = [];
+    P.otto.message = { value: "allow", by: "default" };
+  }
   // The tool groups whose rules need the plugin, for the not-enforced note and the hold: every line with a
   // rule for this bot or for every bot, messaging when an outgoing or incoming rule applies, and every
   // offered tool but ask_user when "Ask when nothing else decides" is on.
-  const pluginLines = (bot) => (NEVER_READ ? [] : LINES.filter((l) => !l.fixed && (P[bot].fallback ? P[bot][l.id].value !== "never" : P[bot][l.id].by === "rule" || rulesFor(bot, l.id).length || (l.id === "message" && incomingRefusals(bot).length))).map((l) => l.id));
-  const heldLines = (bot) => (C.hold === "done" || C.hold === "changed" ? pluginLines(bot) : []);
+  const pluginLines = (bot) => (NEVER_READ ? [] : LINES.filter((l) => !l.fixed && (P[bot].fallback ? P[bot][l.id].value !== "never" : P[bot][l.id].by === "rule" || rulesFor(bot, l.id).length )).map((l) => l.id));
+  const heldLines = (bot) => (C.hold === "done" ? pluginLines(bot) : []);
 
+  // The machine's approvals file as its own fact; below admin it can't be read (section 5).
+  const machineWords = (bot, short) => {
+    if (!isAdmin()) return short ? "machine policy unavailable" : "Machine policy unavailable.";
+    const host = bot === "otto" && P[bot].exec.host !== "gateway" ? "media-box" : "the gateway's machine";
+    return `${host}'s ${short ? "file" : "approvals file"}: ${P[bot].exec.machineAlways ? "asks every time" : "asks for commands not on its allowlist"}`;
+  };
   // A line's value, its exceptions and its mark, in one place (section 4).
   function lineState(bot, id) {
     const s = P[bot][id];
     const rs = rulesFor(bot, id);
     const nevers = rs.filter((r) => r.action === "never");
     const asks = rs.filter((r) => r.action === "ask");
-    if (heldLines(bot).includes(id)) return { value: "never", word: "Never", sub: "Until the rules plugin runs", mark: "gateway" };
+    if (heldLines(bot).includes(id)) return { value: "never", word: "Never", sub: "", mark: "gateway" };
     if (s.by === "gateway") return { value: "never", word: "Never", sub: "", mark: "set" };
     if (s.value === "never") return { value: "never", word: "Never", sub: "", mark: "gateway" };
     if (id === "message" && !effectiveTargets(bot).length) return { value: "never", word: "Never", sub: PAIRS ? "No bot: the gateway's pairs" : "No bot", mark: PAIRS ? "set" : "gateway" };
-    if (s.by === "rule") return running() ? { value: "ask", word: "Asks first", sub: id === "message" ? messagingSub(bot) : "", mark: "plugin" } : { value: "unknown", word: "Unknown", sub: "Not enforced now: asks first", mark: "notnow" };
+    if (s.by === "rule") return running() ? { value: "ask", word: "Asks first", sub: "", mark: "plugin" } : { value: "unknown", word: "Unknown", sub: "Not enforced now: asks first", mark: "notnow" };
     if (id === "exec") {
       const extra = asks.length ? `Always before ${asks[0].pattern}` : "";
       if (asks.length && !running()) return { value: "unknown", word: "Unknown", sub: `Not enforced now: asks before ${asks[0].pattern}. The gateway still ${s.mode === "auto" ? "reviews first" : "applies Otto's policy"}`.replace("Otto", botName(bot)), mark: "notnow", tone: "danger" };
-      const sub = s.mode === "auto" ? `Review first${extra ? `; ${extra.toLowerCase()}` : ""}` : extra;
+      const sub = [`${botName(bot)}'s setting: ${execWord(s.mode)}`, machineWords(bot, true), asks.length ? `${botName(bot)}'s rule: Ask first · ${asks[0].pattern}` : ""].filter(Boolean).join("; ");
       return { value: s.mode === "full" ? "allow" : "ask", word: s.mode === "full" ? "Allowed" : "Asks first", sub, mark: s.machineAlways ? "set" : "gateway" };
     }
     if (nevers.length || asks.length) {
@@ -223,7 +235,7 @@
     LINES.forEach((l) => (c[lineState(bot, l.id).value] += 1));
     return c;
   }
-  const countWords = (c) => `${c.never} never · ${c.ask} ask first · ${c.allow} without asking${c.unknown ? ` · ${c.unknown} unknown` : ""}`;
+  const countWords = (c, bot) => (bot && P[bot].fallback ? `${c.never} never · the rules plugin can ask for other calls` : `${c.never} never · ${c.ask} ask first · ${c.allow} without asking${c.unknown ? ` · ${c.unknown} unknown` : ""}`);
 
   const sub = (title, backTo, backLabel) =>
     `<div class="b-subhead"><button type="button" class="icon-button" data-variant="quiet" data-bs="${backTo}" aria-label="${backLabel}">${icon("back")}</button>` +
@@ -243,15 +255,15 @@
   function newbotNote(bot) {
     if (!C.newbot || bot !== "pip") return "";
     return C.newbot === "step2"
-      ? note(`<p><b>Pip's restrictive settings weren't written.</b> It has the gateway's defaults for every bot, as read at 5:47 PM: Run commands Never, and nothing denied of its own. Clawtrate won't send to Pip until they are.</p><div class="b-actions">${button("Write them again", 'data-c="newbot-retry" data-size="sm"', "primary")}${button("Delete Pip…", 'data-c="newbot-delete" data-size="sm"', "quiet")}</div>`, "danger")
-      : note(`<p>Pip is as step 2 left it, read back at 5:47 PM: it can't run commands, and Manage routines, Use the browser, Send messages on channels and its tool servers are denied. Clawtrate couldn't write the defaults for a new bot.</p><div class="b-actions">${button("Write them again", 'data-c="newbot-retry" data-size="sm"')}</div>`, "warn");
+      ? note(`<p><b>Couldn't confirm Pip's settings.</b> Clawtrate won't send to Pip until its restrictive settings are confirmed.</p><div class="b-actions">${button("Write them again", 'data-c="newbot-retry" data-size="sm"', "primary")}${button("Delete Pip…", 'data-c="newbot-delete" data-size="sm"', "quiet")}</div>`, "danger")
+      : note(`<p><b>Couldn't confirm Pip's settings.</b></p><div class="b-actions">${button("Write them again", 'data-c="newbot-retry" data-size="sm"')}</div>`, "warn");
   }
 
   // The Tools group's first rows in the bot's settings (bot-settings.js calls this).
   CT.botsToolsRows = (id) => {
     const c = counts(id);
     return (
-      openRow(`What ${esc(botName(id))} may do`, countWords(c), `data-bs="rules" aria-label="What ${esc(botName(id))} may do: ${countWords(c)}. Open."`) +
+      openRow(`What ${esc(botName(id))} may do`, countWords(c, id), `data-bs="rules" aria-label="What ${esc(botName(id))} may do: ${countWords(c, id)}. Open."`) +
       openRow("Messaging other bots", esc(messagingShort(id)), `data-bs="messaging" aria-label="Messaging other bots: ${esc(messagingShort(id))}. Open."`)
     );
   };
@@ -296,8 +308,9 @@
     return (
       `<div class="c-glance">` +
       block("Never", nevers.length, nevers, scoped.join(", "), "never") +
-      block("Asks first", asks.length, asks, "", "ask") +
-      block("Without asking", allows.length, allows, "", "allow") +
+      (P[bot].fallback
+        ? block("The rules plugin can ask for other calls", asks.length + allows.length, [...asks, ...allows], "", "ask")
+        : block("Asks first", asks.length, asks, "", "ask") + block("Without asking", allows.length, allows, "", "allow")) +
       (unknown.length ? block("Not enforced now", unknown.length, unknown, "", "unknown") : "") +
       `</div>`
     );
@@ -310,7 +323,7 @@
     if (files.length) items.push(`changing files under ${files.map((r) => esc(r.pattern)).join(" or ")}`);
     const fileAsks = rulesFor(bot, "files").filter((r) => r.action === "ask");
     if (fileAsks.length) items.push(`changing files under ${fileAsks.map((r) => esc(r.pattern)).join(" or ")} without asking`);
-    if (P[bot].message.by === "rule" || incomingRefusals(bot).length) items.push("messaging other bots");
+    if (P[bot].message.by === "rule") items.push("messaging other bots");
     rulesFor(bot, "exec").filter((r) => r.action === "ask").forEach((r) => items.push(`commands matching ${esc(r.pattern)}`));
     if (P[bot].fallback) items.push("any tool no rule covers");
     return items.length > 1 ? `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}` : items[0] || "";
@@ -319,31 +332,32 @@
     const w = ids.map((id) => lineOf(id).words);
     return w.length > 1 ? `${w.slice(0, -1).join(", ")} and ${w[w.length - 1]}` : w[0] || "";
   };
+  // The exact tool names a hold would deny (section 2).
+  const toolList = (ids) => {
+    const t = ids.flatMap((id) => lineOf(id).tools).map((x) => `<code>${esc(x)}</code>`);
+    return t.length > 1 ? `${t.slice(0, -1).join(", ")} and ${t[t.length - 1]}` : t[0] || "";
+  };
+  const perLine = `<p class="b-hint" style="margin:6px 0 0">To deny a tool, <button type="button" class="link-button" data-c="to-lines">open its line below</button> and choose Never.</p>`;
   function notEnforcedNote(bot) {
     const name = esc(botName(bot));
     const ls = pluginLines(bot);
-    if (C.hold === "done" || C.hold === "changed") {
-      if (running() && C.hold === "changed")
-        return note(
-          `<p><b>${name}'s deny list has changed since Clawtrate added these.</b> Clawtrate's rules plugin is running again, but Clawtrate won't remove them by itself. Choose which to remove:</p>` +
-            `<ul class="c-checks">${ls.map((id) => `<li><label class="b-check"><input type="checkbox" data-c-release value="${id}" checked /> ${lineOf(id).words}</label></li>`).join("")}</ul>` +
-            (isAdmin() ? `<div class="b-actions">${button("Remove the chosen", 'data-c="release-chosen" data-size="sm"')}</div>` : ""),
-          "warn",
-        );
-      if (running())
-        return note(`<p><b>Clawtrate's rules plugin is running again.</b> ${name}'s settings still deny ${lineList(ls)}, which Clawtrate added while it wasn't.</p>` + (isAdmin() ? `<div class="b-actions">${button("Allow them again", 'data-c="unhold" data-size="sm"')}</div><p class="b-hint" style="margin:6px 0 0">Removes exactly the entries Clawtrate added.</p>` : ""), "warn");
-      return note(`<p><b>Denied until the rules plugin runs.</b> ${lineList(ls)} are denied in ${name}'s own settings (read back 5:47 PM), which the gateway enforces.</p>`, "warn");
+    if (C.hold === "done") {
+      if (running()) return note(`<p><b>Clawtrate's rules plugin is running again.</b> ${name}'s settings still deny ${lineList(ls)}, which Clawtrate added while it wasn't. Change them on each line.</p>`, "warn");
+      return note(`<p><b>Denied in ${name}'s settings.</b> ${lineList(ls)} are denied in ${name}'s own settings (read back 5:47 PM), which the gateway enforces.</p>`, "warn");
     }
     if (running() || C.plugin === "unchecked") return "";
-    if (NEVER_READ) return note(`<p><b>Not known right now.</b> Clawtrate's rules plugin isn't answering, and this device has never read its rules, so it can't tell which aren't being enforced.</p>`, "danger");
+    if (NEVER_READ) return note(`<p><b>Not known right now.</b> Clawtrate's rules plugin isn't answering, and this device has never read its rules, so it can't tell which aren't being enforced.</p>` + perLine, "danger");
     if (!ls.length) return "";
+    const bulk = C.hold !== "writing" && isAdmin() && !P[bot].fallback;
     return note(
-      `<p><b>Not being enforced right now.</b> Nothing stops ${name} doing these without asking: ${notHeldWords(bot)}. <span class="b-faint">Rules as last read on this device, 5:41 PM.</span>${C.hold !== "writing" && isAdmin() ? ` Denying them denies ${lineList(ls)} entirely, in ${name}'s own settings. Until that is read back, nothing stops these.` : ""}</p>` +
+      `<p><b>Not being enforced right now.</b> Clawtrate cannot confirm these plugin rules are being enforced. The gateway's own restrictions still apply. <span class="b-faint">Rules as last read on this device, 5:41 PM.</span>${bulk ? ` Denying them adds ${toolList(ls)} to ${name}'s own deny list.` : ""}</p>` +
         (C.hold === "writing"
           ? `<p class="b-hint" role="status" style="margin:6px 0 0">Writing the deny…</p>`
-          : isAdmin()
-            ? `<div class="b-actions">${button("Deny these until the plugin runs", 'data-c="hold" data-size="sm"', "primary")}</div>`
-            : `<p class="b-hint" style="margin:6px 0 0">Only a connection with admin access can deny these. Until one does, nothing stops these.</p>`),
+          : P[bot].fallback
+            ? perLine
+            : isAdmin()
+              ? `<div class="b-actions">${button(`Deny these in ${name}'s settings`, 'data-c="hold" data-size="sm"', "primary")}</div>`
+              : `<p class="b-hint" style="margin:6px 0 0">Only a connection with admin access can deny these.</p>`),
       "danger",
     );
   }
@@ -363,8 +377,8 @@
           ? bad(`${name} runs commands on the gateway's machine as its user. A command can change the gateway's settings and the rules plugin's store, so ${name}'s plugin rules are advice until Run commands is Never there or runs elsewhere.`)
           : ok(`${name}'s commands run on media-box, not on the gateway's machine.`)) +
       `<li>${icon("file")}A rule about a file tool covers that tool, not the file.</li>` +
-      `<li data-testid="create-bot">${icon("command")}${name} has no tool that creates a bot. A command that runs the gateway's command line meets ${name}'s command policy: ${execWord(s.exec.mode)}.` +
-      (isAdmin() && !["ask", "deny"].includes(s.exec.mode) ? ` ${button("Set Run commands to Ask", 'data-c="exec-ask" data-size="sm"')}` : "") +
+      `<li data-testid="create-bot">${icon("command")}The built-in gateway and plugins tools have no Create bot action. The agents.create method requires admin. A command that invokes the gateway's CLI is governed by the effective exec policy. Clawtrate writes Ask when it creates the bot.` +
+      (isAdmin() && !["ask", "deny"].includes(s.exec.mode) ? ` ${button("Set configured command policy to Ask", 'data-c="exec-ask" data-size="sm"')}` : "") +
       `</li></ul>`
     );
   }
@@ -381,13 +395,20 @@
         : RULES === "stale"
           ? `<p class="b-hint">Offered: the gateway's listing for ${name}'s latest task, Nov 17. It can be out of date until ${name} runs again.</p>`
           : `<p class="b-hint">From ${name}'s settings and the gateway's, read at 5:41 PM. Each line opens its exact rule.</p>`;
-    [
-      ["Never", "never"],
-      ["Asks first", "ask"],
-      ["Without asking", "allow"],
-      ["Not enforced now", "unknown"],
-    ].forEach(([title, v]) => {
-      const ls = LINES.filter((l) => lineState(bot, l.id).value === v);
+    (P[bot].fallback
+      ? [
+          ["Never", ["never"]],
+          ["The rules plugin can ask for other calls", ["ask", "allow"]],
+          ["Not enforced now", ["unknown"]],
+        ]
+      : [
+          ["Never", ["never"]],
+          ["Asks first", ["ask"]],
+          ["Without asking", ["allow"]],
+          ["Not enforced now", ["unknown"]],
+        ]
+    ).forEach(([title, vs]) => {
+      const ls = LINES.filter((l) => vs.includes(lineState(bot, l.id).value));
       if (ls.length) html += `<h4 class="b-group">${title}</h4><dl class="facts">${ls.map((l) => ruleLine(bot, l)).join("")}</dl>`;
     });
     html +=
@@ -419,7 +440,7 @@
   // Said before a save, never after (section 3): what was seen when a setting changed while a request waited.
   const waitingNote = (bot) =>
     C.waiting && !C.saving
-      ? note(`<p>${esc(botName(bot))} has a request waiting in 'Disk almost full on the media box'. When a setting was saved while a request waited, the request stayed open but its call didn't run, even when answered.</p><div class="b-actions">${button("Show the request", 'data-c="show-request" data-size="sm"')}</div>`, "warn")
+      ? note(`<p>A pending request may stay open after you change a setting. Its answer and its outcome are shown separately.</p><div class="b-actions">${button("Show the request", 'data-c="show-request" data-size="sm"')}</div>`, "warn")
       : "";
   const execWord = (m) => (EXEC.find(([v]) => v === m) || [m, { allowlist: "Only listed commands", legacy: "Legacy setting: security allowlist, ask on miss" }[m]])[1];
   function choiceGroup(bot, l) {
@@ -444,7 +465,7 @@
       ["never", "Never"],
     ]
       .map(([v, label]) => {
-        const noAsk = v === "ask" && !running();
+        const noAsk = (v === "ask" && !running()) || (v === "allow" && s.by === "rule");
         return `<button type="button" role="radio" aria-checked="${chosen === v}" tabindex="${chosen === v ? 0 : -1}" data-c="choose" data-value="${v}"${dis || noAsk ? ' aria-disabled="true"' : ""}>${label}</button>`;
       })
       .join("");
@@ -455,7 +476,9 @@
         : locked
           ? `${name}'s own choice, Allow, has no effect while the gateway's settings deny this tool for every bot. ${markWords("set")}.`
           : chosen === "allow"
-            ? `${name} ${l.verb} without asking.`
+            ? rulesFor(bot, l.id).length
+              ? `${name}'s own setting is Allow. See Effective for the rules that apply.`
+              : `${name} ${l.verb} without asking.`
             : chosen === "ask"
               ? `${name} asks you before it ${l.verb}. ${markWords("plugin")}.`
               : `${name} can't ${l.words.toLowerCase()}. The gateway removes the tools from ${name}'s tools.`;
@@ -464,6 +487,7 @@
       `<p class="c-choice-label" id="c-choice-label">${name} may:</p><div class="c-choice" role="radiogroup" aria-labelledby="c-choice-label"${locked ? " data-locked" : ""}>${opts}</div>` +
       `<p class="c-sentence" role="status">${sentence}</p>` +
       (!running() && !l.fixed && !locked ? `<p class="b-hint">Asking needs Clawtrate's rules plugin running.</p>` : "") +
+      (s.by === "rule" && !l.fixed ? `<p class="b-hint">This Ask is changed on the rules page, Settings, Permissions.</p>` : "") +
       (chosen === "ask" && !l.fixed
         ? askLimits(bot)
         : "")
@@ -478,33 +502,24 @@
     const deflt = l.id === "exec" ? `Commands: Never <span class="c-mark">${icon("lock")}Set on the gateway</span>` : s.by === "gateway" ? `Never <span class="c-mark">${icon("lock")}Set on the gateway</span>` : "None";
     const owner = (r) => (RULESET["*"].includes(r) ? "a rule for every bot" : `${botName(bot)}'s rule`);
     let effective;
-    if (heldLines(bot).includes(l.id)) effective = `Never, until the rules plugin runs (Clawtrate's deny in ${botName(bot)}'s settings)`;
-    else if (l.id === "exec") {
-      const asks = rulesFor(bot, "exec").filter((r) => r.action === "ask");
-      const gw =
-        s.mode === "deny"
-          ? "Never: nothing runs"
-          : s.machineAlways
-            ? "Every command asks: media-box's approvals file asks every time, so the gateway skips the reviewer"
-            : s.mode === "auto"
-              ? "Review first: media-box's approvals file asks only for commands not on its allowlist, as Otto's policy does, so the reviewer decides those".replace("Otto", botName(bot))
-              : s.mode === "ask"
-                ? "Ask: each command not on media-box's allowlist asks"
-                : `${execWord(s.mode)}, with media-box's approvals file`;
-      effective = asks.length && !running() ? `Not enforced now: ${botName(bot)}'s rule 'Ask first · ${asks[0].pattern}'. What the gateway still does: ${gw.charAt(0).toLowerCase() + gw.slice(1)}` : gw;
-    } else if (st.value === "unknown") effective = `Not enforced now: the rule that ${st.sub.replace("Not enforced now: ", "")}`;
+    if (heldLines(bot).includes(l.id)) effective = `Never. Denied in ${botName(bot)}'s settings.`;
+    else if (l.id === "exec") effective = "Not given as one verdict: the three facts above are shown separately";
+    else if (st.value === "unknown") effective = `Not enforced now: the rule that ${st.sub.replace("Not enforced now: ", "")}`;
     else if (st.word === "Limited") {
       const rs = rulesFor(bot, l.id);
       const nev = rs.filter((r) => r.action === "never").map((r) => `${r.pattern} (${owner(r)})`);
       const ask = rs.filter((r) => r.action === "ask").map((r) => `${r.pattern} (${owner(r)})`);
       effective = `Allowed, except ${[nev.length ? `never under ${nev.join(" or ")}` : "", ask.length ? `asks first under ${ask.join(" or ")}` : ""].filter(Boolean).join("; ")}, only while the rules plugin runs`;
     } else effective = st.word;
+    const execAsks = rulesFor(bot, "exec").filter((r) => r.action === "ask");
+    const pluginRow = execAsks.length ? (running() ? `${botName(bot)}'s rule: Ask first · ${execAsks[0].pattern}, only while the rules plugin runs` : `Not enforced now: ${botName(bot)}'s rule 'Ask first · ${execAsks[0].pattern}'.`) : "None";
     const observed = { files: "Last call 5:46 PM: write, finished (its activity record)", exec: "Last call 5:44 PM: ran on media-box (its own result)", message: "Last call 5:31 PM: a send, refused (its own result)" }[l.id];
     return (
       `<dl class="facts" style="margin-top:14px">` +
       fact("Offered", s.by === "gateway" || s.value === "never" ? `No: removed from ${name}'s tools` : RULES === "fresh" ? "Not listed yet" : `Yes, in ${name}'s latest task (Nov 17 listing)`) +
       fact("Default for every bot", deflt) +
-      fact(`${name}'s own setting`, own) +
+      fact(`${name}'s own setting`, l.id === "exec" && heldLines(bot).includes("exec") ? `Never. Denied in ${name}'s settings.` : own) +
+      (l.id === "exec" ? fact("Machine policy", esc(machineWords(bot))) + fact("Rules plugin", esc(pluginRow)) : "") +
       fact("Effective", esc(effective)) +
       fact("Observed", bot === "otto" && observed ? observed : "No call in the activity record") +
       fact("Tools", `<span class="c-tools">${l.tools.map((t) => `<code>${esc(t)}</code>`).join("")}</span>${copy("tool names", l.tools.join(" "))}`) +
@@ -572,17 +587,14 @@
   // What the new rule will change, worked out from the rules already there (section 6, F-328).
   function predictLine(bot, l, f) {
     if (!f.from) return "";
-    const target = f.pattern;
-    const before = decide(bot, l.id, target);
-    const name = esc(botName(bot));
-    if (f.action !== "allow") return `<p class="c-sentence" data-testid="form-predict">With this rule, the next call ${f.action === "never" ? "is refused" : "asks first"}.</p>`;
-    if (before.verdict === "never") return `<p class="c-sentence" data-testid="form-predict">${esc(before.words.charAt(0).toUpperCase() + before.words.slice(1))} still refuses this call.</p>`;
+    const say = (t) => `<p class="c-sentence" data-testid="form-predict">${t}</p>`;
+    if (f.pattern !== FROM_TARGET || f.action !== "allow") return say("The new rule applies to future matching calls.");
+    const before = decide(bot, l.id, FROM_TARGET);
+    if (before.verdict === "never") return say(`${esc(before.words.charAt(0).toUpperCase() + before.words.slice(1))} still refuses this call.`);
     if (before.rule && before.rule.action === "ask")
-      return (
-        `<p class="c-sentence" data-testid="form-predict">${esc(before.words.charAt(0).toUpperCase() + before.words.slice(1))} still applies, so the next call will still ask until that rule is changed.</p>` +
-        (isAdmin() ? `<div class="b-actions">${button("Change that rule to Allow", `data-c="asker-allow" data-value="${before.rule.id}" data-size="sm"`)}</div>` : "")
-      );
-    return `<p class="c-sentence" data-testid="form-predict">No rule asks for this call, so the next one runs without asking.</p>`;
+      return say("This Allow leaves the matching Ask in place.") + (isAdmin() ? `<div class="b-actions">${button("Change that rule to Allow", `data-c="asker-allow" data-value="${before.rule.id}" data-size="sm"`)}</div>` : "");
+    if (before.verdict === "ask") return say("This Allow passes the plugin's fallback for this request. Gateway policy still applies.");
+    return say("The new rule applies to future matching calls.");
   }
   function ruleForm(bot, l) {
     const name = esc(botName(bot));
@@ -619,10 +631,10 @@
   const MSG = p("msg") || "";
   const PAIRS = MSG === "gateway" ? [["marlow", "pip"]] : null; // null: bots may message each other
   const M = {};
-  app.bots.forEach((b) => (M[b.id] = { out: "gateway", outOnly: [], outAsk: false, in: "any", inOnly: [], inAsk: false }));
+  app.bots.forEach((b) => (M[b.id] = { out: "gateway", outOnly: [], outAsk: false }));
   M.otto.outAsk = true;
-  M.marlow = { out: "some", outOnly: ["pip"], outAsk: false, in: "any", inOnly: [], inAsk: false };
-  M.pip = { out: "some", outOnly: ["marlow"], outAsk: false, in: "some", inOnly: ["marlow"], inAsk: false };
+  M.marlow = { out: "some", outOnly: ["pip"], outAsk: false };
+  M.pip = { out: "some", outOnly: ["marlow"], outAsk: false };
   if (MSG === "none") M.otto.out = "none";
   if (MSG === "some") Object.assign(M.otto, { out: "some", outOnly: ["pip"] });
   const pairAllows = (a, b) => !PAIRS || PAIRS.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
@@ -634,19 +646,9 @@
     return list;
   }
   const names = (ids) => (ids.length ? (ids.length === app.bots.length - 1 && !PAIRS ? "any bot" : ids.map(botName).join(", ").replace(/, ([^,]*)$/, " and $1")) : "no bot");
-  // Recipients whose incoming rule (the rules plugin) refuses this sender.
-  function incomingRefusals(bot) {
-    return effectiveTargets(bot).filter((o) => M[o] && (M[o].in === "none" || (M[o].in === "some" && !M[o].inOnly.includes(bot))));
-  }
-  // Whom the bot can message once every check, the recipients' included, has been applied.
-  const reachable = (bot) => (running() ? effectiveTargets(bot).filter((o) => !incomingRefusals(bot).includes(o)) : effectiveTargets(bot));
-  function messagingSub(bot) {
-    const refused = incomingRefusals(bot);
-    if (!refused.length) return "";
-    return `${names(reachable(bot))}; ${refused.map(botName).join(" and ")} take${refused.length === 1 ? "s" : ""} none from ${botName(bot)}`;
-  }
   function messagingShort(id) {
-    const t = running() ? reachable(id) : effectiveTargets(id);
+    if (heldLines(id).includes("message")) return "Never. The gateway denies sessions_send";
+    const t = effectiveTargets(id);
     return `May message ${names(t)}${M[id].outAsk && t.length ? (running() ? ", asks first" : ", ask not enforced now") : ""}`;
   }
   function messagingView(bot) {
@@ -655,10 +657,10 @@
     const dis = isAdmin() ? "" : " disabled";
     const others = app.bots.filter((b) => b.id !== bot);
     let html = sub("Messaging other bots", "rules", `Back to what ${name} may do`);
-    const refused = incomingRefusals(bot);
-    const t = running() ? reachable(bot) : effectiveTargets(bot);
-    const incoming = refused.length ? ` ${refused.map(botName).join(" and ")} ${running() ? `doesn't take messages from ${name} (${refused.map(botName).join(" and ")}'s incoming rule, only while Clawtrate's rules plugin runs)` : `has an incoming rule against ${name}, which isn't enforced now`}.` : "";
-    html += `<p class="c-effective" role="status"><b>Effective:</b> ${name} may message ${esc(names(t))}${t.length && m.outAsk && running() ? ", asking you first" : ""}.${esc(incoming)} <span class="b-faint">From the gateway's settings, ${name}'s and the recipients'.</span></p>`;
+    const t = effectiveTargets(bot);
+    html += heldLines(bot).includes("message")
+      ? `<p class="c-effective" role="status"><b>Effective:</b> Never. The gateway denies sessions_send.</p>`
+      : `<p class="c-effective" role="status"><b>Effective:</b> ${name} may message ${esc(names(t))}${t.length && m.outAsk && running() ? ", asking you first" : ""}. <span class="b-faint">From the gateway's settings and ${name}'s.</span></p>`;
     html += `<dl class="facts">${fact("For every bot", PAIRS ? "Only these pairs may message each other: Marlow and Pip." : "Bots may message each other.")}</dl><p class="c-sentence">${mark("set")}</p>`;
     // Outgoing: the gateway's list.
     const outRadios = [
@@ -679,20 +681,6 @@
           .join("")}</dl>` + (m.outOnly.length ? "" : `<p class="b-field-error" role="alert">Choose at least one bot, or choose No bot. Nothing is saved until then.</p>`);
     html += `<p class="c-sentence">${mark("gateway")} ${name}'s own list, agentToAgent.send.</p>`;
     html += `<dl class="facts" style="margin-top:8px">${switchRow("Ask me first", running() ? `A card asks you before each message ${name} sends. ${markWords("plugin")}.` : "Asking needs Clawtrate's rules plugin running.", m.outAsk && running(), `data-c="msg-out-ask"${running() ? dis : " disabled"}`, "Ask me first, outgoing")}</dl>`;
-    // Incoming: only the plugin can hold it.
-    const inDis = running() ? dis : " disabled";
-    const inRadios = [
-      ["any", "Any bot the gateway allows"],
-      ["some", "Only these"],
-      ["none", "No bot"],
-    ]
-      .map(([v, l]) => `<div><button type="button" class="b-open" role="radio" aria-checked="${m.in === v}" tabindex="${m.in === v ? 0 : -1}" data-c="msg-in" data-value="${v}"${inDis}><span>${l}</span>${m.in === v ? icon("check") : ""}</button></div>`)
-      .join("");
-    html +=
-      `<h4 class="b-group" id="c-in-label">Other bots may message ${name}:</h4>` +
-      (running() ? "" : `<p class="b-hint">Who may message ${name} needs Clawtrate's rules plugin running. The gateway only lets each bot limit whom it messages.</p>`) +
-      `<dl class="facts" role="radiogroup" aria-labelledby="c-in-label">${inRadios}</dl><p class="c-sentence">${mark(pluginMark())}</p>` +
-      `<dl class="facts" style="margin-top:8px">${switchRow("Ask me first", running() ? `A card asks you before another bot's message reaches ${name}. ${markWords("plugin")}.` : "Asking needs Clawtrate's rules plugin running.", m.inAsk && running(), `data-c="msg-in-ask"${inDis}`, "Ask me first, incoming")}</dl>`;
     html += `<p class="b-hint">Messages from other bots: about 41,200 tokens of ${name}'s this week, counting only runs a send's result names. <button type="button" class="link-button" data-bs="usage">See Usage</button></p>`;
     return html;
   }
@@ -722,10 +710,10 @@
       `<p class="c-subgroup">Ceilings</p><dl class="facts">` +
       fact("Never", `Use the browser${C.override ? ", Search the web" : ""}`) +
       fact("Tools offered", "The coding profile") +
+      fact("Messaging", PAIRS ? "Only Marlow and Pip, with each other" : "Bots may message each other") +
       `</dl><p class="b-hint">No bot's own settings can grant these back. ${mark("set")}</p>` +
       `<p class="c-subgroup">Defaults</p><dl class="facts">` +
       fact("Commands", "Never, for bots that set none") +
-      fact("Messaging", PAIRS ? "Only Marlow and Pip, with each other" : "Bots may message each other") +
       `</dl><p class="b-hint">A bot's own setting replaces a default for that bot, wider or narrower. ${mark("set")}</p>` +
       `<dl class="facts">${fact("media-box's approvals file", isAdmin() ? (C.override ? "Always ask" : "Ask for commands not on its allowlist") : `<span class="b-faint">Seeing a machine's approvals needs admin access.</span>`)}</dl>` +
       `<p class="b-hint">Set on the gateway. Clawtrate can't change it.</p>`;
@@ -737,7 +725,7 @@
         .join("")}</dl>`;
       if (isAdmin()) body += `<div class="b-actions" style="margin-top:8px">${button("Add a rule", 'data-c="all-add" data-size="sm"')}</div>`;
     }
-    body += `<h4 class="b-group">Each bot</h4><dl class="facts">` + app.bots.map((b) => openRow(esc(b.name), countWords(counts(b.id)), `data-c="open-bot-rules" data-value="${b.id}"`)).join("") + `</dl>`;
+    body += `<h4 class="b-group">Each bot</h4><dl class="facts">` + app.bots.map((b) => openRow(esc(b.name), countWords(counts(b.id), b.id), `data-c="open-bot-rules" data-value="${b.id}"`)).join("") + `</dl>`;
     body +=
       `<h4 class="b-group">What a new bot starts with</h4><dl class="facts">` +
       fact("Run commands", "Ask: each command not on the machine's allowlist asks first; listed commands run") +
@@ -751,7 +739,6 @@
 
   const ROUTINE_GRANTS = [{ id: "rg1", what: "Routine Weekly cleanup (Otto) may run <code>du -sh /srv</code> in <code>/srv</code>", grant: "grant 3f2a", granted: "granted Nov 12", until: "until Dec 12", used: "used 4 times, last Nov 17, 3:00 AM" }];
   const ALLOW = [{ id: "al1", what: "<code>ls</code> · Otto · on the gateway's machine · from Always allow", used: "last used 5:40 PM · covers what the gateway matches it to, which can be wider than this exact command" }];
-  if (p("saved") === "revoked") C.revoked.add("rg1");
 
   function savedPart() {
     if (!canApprove())
@@ -780,14 +767,14 @@
 
   // The audit log's records, and what joins to them (section 9).
   const LOG = [
-    { id: "e1", time: "5:46 PM", bot: "otto", task: "Disk almost full on the media box", what: "write · notes/disk-2026-11-16.md", tag: "Allowed", tone: "", cause: "Cause not recorded", needs: null },
-    { id: "e2", time: "5:44 PM", bot: "otto", task: "Disk almost full on the media box", what: "exec · du -sh /srv", tag: "Asked", tone: "warn", cause: "Recorded: your answer, allow once", needs: "approvals" },
+    { id: "e1", time: "5:46 PM", bot: "otto", task: "Disk almost full on the media box", what: "write", tag: "Allowed", tone: "", cause: "Cause not recorded", needs: null },
+    { id: "e2", time: "5:44 PM", bot: "otto", task: "Disk almost full on the media box", what: "exec", tag: "Asked", tone: "warn", cause: "Recorded: answered Allow once", needs: "approvals" },
     { id: "e3", time: "5:43 PM", bot: "otto", task: "Disk almost full on the media box", what: "write · secrets/api.env", tag: "Blocked", tone: "danger", cause: "Recorded: Otto's rule 'never under secrets/**', version 1 (now version 2)", needs: null, step: "o1" },
-    { id: "e4", time: "5:40 PM", bot: "otto", task: "Weekly backup check", what: "exec · ls", tag: "Allowed", tone: "", cause: "Cause not recorded", needs: null },
-    { id: "e5", time: "5:31 PM", bot: "marlow", task: "Main", what: "sessions_send · Pip", tag: "Blocked", tone: "danger", cause: "Inferred: Marlow's messaging list didn't name Pip when it was read at 5:30 PM", needs: null },
+    { id: "e4", time: "5:40 PM", bot: "otto", task: "Weekly backup check", what: "exec", tag: "Allowed", tone: "", cause: "Cause not recorded", needs: null },
+    { id: "e5", time: "5:31 PM", bot: "marlow", task: "Main", what: "sessions_send", tag: "Blocked", tone: "danger", cause: "Inferred: Marlow's messaging list didn't name Pip when it was read at 5:30 PM", needs: null },
     { id: "e6", time: "5:12 PM", bot: "juniper", task: "Heat pump vs. gas furnace", what: "web_search", tag: "Allowed", tone: "", cause: "Cause not recorded", needs: null },
-    { id: "e7", time: "3:00 AM", bot: "otto", task: "Weekly cleanup (routine)", what: "exec · du -sh /srv", tag: "Allowed", tone: "", cause: "Inferred: routine Weekly cleanup's grant 3f2a for du -sh /srv, whose last use matches this call", needs: "approvals" },
-    { id: "e8", time: "2:58 AM", bot: "pip", task: "Plan the week", what: "write · notes/week.md", tag: "Denied", tone: "danger", cause: "Recorded: your answer, deny", needs: "approvals" },
+    { id: "e7", time: "3:00 AM", bot: "otto", task: "Weekly cleanup (routine)", what: "exec", tag: "Allowed", tone: "", cause: "Cause not recorded", needs: null },
+    { id: "e8", time: "2:58 AM", bot: "pip", task: "Plan the week", what: "write", tag: "Denied", tone: "danger", cause: "Recorded: answered Deny", needs: "approvals" },
   ];
   const OLDER = [{ id: "e9", time: "Nov 17", bot: "otto", task: "Router firmware", what: "web_fetch", tag: "Allowed", tone: "", cause: "Cause not recorded", needs: null }];
   function activityPart() {
@@ -920,15 +907,12 @@
         return setTimeout(() => {
           C.hold = "done";
           rerenderTab();
-          announce(`Saved. ${lineList(pluginLines(bot))} denied until the rules plugin runs`);
+          announce(`Saved. ${lineList(pluginLines(bot))} denied in ${botName(bot)}'s settings`);
         }, 300);
-      case "unhold":
-      case "release-chosen":
-        C.hold = null;
-        rerenderTab();
-        return announce("Allowed again: Clawtrate removed the entries it added");
+      case "to-lines":
+        return $("#panel-settings .c-line")?.focus();
       case "exec-ask":
-        return save(bot, () => Object.assign(P[bot].exec, { mode: "ask", value: "ask", by: "bot" }), "Run commands: ask");
+        return save(bot, () => Object.assign(P[bot].exec, { mode: "ask", value: "ask", by: "bot" }), "Configured command policy: ask");
       case "asker-allow": {
         const r = (RULESET[bot] || []).find((x) => x.id === value);
         if (!r) return;
@@ -1026,19 +1010,15 @@
         return announce("Rule removed");
       case "rule-edit":
         return announce("Editing a rule opens the same form, filled in, and saves a new version.");
-      case "msg-out":
-      case "msg-in": {
-        const dir = what === "msg-out" ? "out" : "in";
-        M[bot][dir] = value;
+      case "msg-out": {
+        M[bot].out = value;
         rerenderTab();
-        return announce(`Saved. ${dir === "out" ? `${botName(bot)} may message ${names(effectiveTargets(bot))}` : `Other bots may message ${botName(bot)}: ${value === "any" ? "any bot the gateway allows" : value === "none" ? "no bot" : "only these"}`}`);
+        return announce(`Saved. ${botName(bot)} may message ${names(effectiveTargets(bot))}`);
       }
-      case "msg-out-ask":
-      case "msg-in-ask": {
-        const k = what === "msg-out-ask" ? "outAsk" : "inAsk";
-        M[bot][k] = !M[bot][k];
+      case "msg-out-ask": {
+        M[bot].outAsk = !M[bot].outAsk;
         rerenderTab();
-        return announce(`Saved. Ask me first: ${M[bot][k] ? "on" : "off"}`);
+        return announce(`Saved. Ask me first: ${M[bot].outAsk ? "on" : "off"}`);
       }
       case "show-request":
         return announce("The request is in Otto's task 'Disk almost full on the media box'.");
@@ -1165,7 +1145,7 @@
         : isAdmin()
           ? `<p class="c-sentence"><button type="button" class="link-button" data-c="to-rules-list">Make a rule…</button></p>`
           : "") +
-      `<p class="request-foot">Waits 10 minutes; if no one answers, Otto doesn't do it.</p></section>`
+      `<p class="request-foot">The rules plugin asks for a 10-minute wait.</p></section>`
     );
   };
   let asked = 0;
@@ -1208,7 +1188,7 @@
   }
   if (p("asker") === "fallback") P.otto.fallback = true;
   refresh("otto", "o1");
-  // The command route to a new bot (section 10): Pip runs the gateway's command line, and its command policy asks.
+  // An example of the gateway's own card for a command missing the machine allowlist (section 10).
   if (p("cmd") === "create") {
     const pip = app.bots.find((x) => x.id === "pip");
     P.pip.exec = { value: "ask", mode: "ask", by: "bot" };
@@ -1219,8 +1199,7 @@
       `<header class="request-head"><h3 class="request-title">Pip wants to run a command</h3><span class="tag" data-tone="warn">Needs approval</span></header>` +
       `<p class="request-summary"><code>openclaw agents add helper --workspace workspaces/helper</code> on the gateway's machine</p>` +
       `<p class="request-asker">Asked by the gateway: Pip's command policy, Ask. The command isn't on the gateway machine's allowlist.</p>` +
-      `<div class="request-actions"><button type="button" class="button" data-variant="primary">Allow once</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet">Deny</button></div>` +
-      `<p class="request-foot">${running() ? "" : "Clawtrate's rules plugin isn't running; this card is the gateway's own. "}No tool of Pip's creates a bot; this command is the route left.</p></section>`;
+      `<p class="request-foot">Example: a command missing the machine allowlist.</p></section>`;
     refresh("pip", "p1");
   }
 

@@ -126,10 +126,10 @@
     const pct = pctOf(bot);
     html += meter(used, g.limit, `${short(used)} of ${short(g.limit)} tokens ${periodWords(g)}`, `${name}'s ${kindWord(g)} budget: ${fmt(used)} of ${fmt(g.limit)} tokens`);
     html += `<p class="c-sentence">${mark("shown")}</p>`;
-    html += `<p class="b-hint">A warning: at 80% a line in ${name}'s task, at 100% Clawtrate stops sending from this device. Other apps, channels and routines aren't stopped, and nothing on the gateway stops ${name} at the limit.</p>`;
-    if (pct >= 100) html += note(`<p><b>${name}'s ${kindWord(g)} budget is used up, so Clawtrate won't send from here.</b> This is shown only: other apps, channels and ${name}'s routines aren't stopped.</p>`, "warn");
+    html += `<p class="b-hint">A warning: at 80% a line in ${name}'s task, at 100% a note above the composer. Other apps, channels and routines aren't stopped, and nothing on the gateway stops ${name} at the limit.</p>`;
+    if (pct >= 100) html += note(`<p><b>${name} has reached its ${kindWord(g)} warning budget.</b> This is shown only: other apps, channels and ${name}'s routines aren't stopped.</p>`, "warn");
     else if (pct >= 80) html += note(`<p>${name} has used ${pct}% of its ${kindWord(g)} budget.</p>`, "warn");
-    html += `<p class="b-hint">Counts the total the gateway reports ${periodWords(g)}: input, output and cache, the same figure as Usage below. ${g.kind === "daily" ? "Resets at 00:00" : "Resets Monday at 00:00"}, your time. Refused sends are not replayed.</p>`;
+    html += `<p class="b-hint">Counts the total the gateway reports ${periodWords(g)}: input, output and cache, the same figure as Usage below. ${g.kind === "daily" ? "Resets at 00:00" : "Resets Monday at 00:00"}, your time.</p>`;
     if (B.access !== "read") html += `<div class="b-actions">${button("Raise budget", 'data-c="budget-edit" data-size="sm"')}${pct >= 100 && isAdmin() ? button("Pause Weekly cleanup", 'data-c="pause-routine" data-size="sm"', "quiet") : ""}</div>`;
     if (pct >= 100 && isAdmin()) html += `<p class="b-hint">Pausing stops the routine itself, not the budget.</p>`;
     return html;
@@ -164,14 +164,14 @@
     if (sharedWith) html += note(`<p>${name} shares its workspace folder with ${sharedWith}. Files one bot writes, the other can change.</p>`, "warn");
     html +=
       `<h4 class="b-group">Commands</h4>` +
-      `<label class="b-hint" for="c-machine" style="display:block;margin:0 0 6px">Run ${name}'s commands on:</label>` +
+      `<label class="b-hint" for="c-machine" style="display:block;margin:0 0 6px">Configured to run ${name}'s commands on:</label>` +
       `<select class="input" id="c-machine" data-c-machine${dis}><option${node ? "" : " selected"}>The gateway's machine</option><option${node ? " selected" : ""}>media-box · ${offline ? "Not connected" : "Connected"}</option><option>studio-mac · Not connected</option></select>` +
-      `<p class="c-sentence">A setting for ${name}. A task can be sent to another machine; where a command ran is in its own result. ${mark("gateway")}</p>` +
-      (node ? `<p class="b-hint">Pip is also set to run commands here.${offline ? " media-box isn't connected: last seen 5:12 PM, while going to sleep." : ""}</p>` : "");
+      `<p class="c-sentence">A configured setting for ${name}. A task can be sent to another machine; where a command ran is in its own result. ${mark("gateway")}</p>` +
+      (node && offline ? `<p class="b-hint">media-box isn't connected: Last seen 5:12 PM.</p>` : "");
     html +=
       `<h4 class="b-group">Workspace</h4><dl class="facts">` +
-      fact("Folder", `<span class="mono">workspaces/${bot}</span>, on the gateway's machine${copy("folder", `workspaces/${bot}`)}`) +
-      `</dl><p class="b-hint">${name}'s file tools work here.${node ? " On media-box, commands run in media-box's own folder unless a task names one." : ""}</p>` +
+      fact("Configured folder", `<span class="mono">workspaces/${bot}</span>, on the gateway's machine${copy("folder", `workspaces/${bot}`)}`) +
+      `</dl><p class="b-hint">Configured as the folder for ${name}'s file tools.${node ? " On media-box, commands run in media-box's own folder unless a task names one." : ""}</p>` +
       (isAdmin() ? `<div class="b-actions">${button("Change…", 'data-c="ws-change" data-size="sm"')}</div><p class="b-hint">Takes a path on the gateway's machine; the gateway creates it if it doesn't exist.</p>` : "");
     html +=
       `<h4 class="b-group">Browser</h4><dl class="facts">` +
@@ -212,8 +212,8 @@
     const pairing = p("devices") !== "noscope";
     let body =
       `<h4 class="b-group">Machines</h4><dl class="facts">` +
-      fact("The gateway's machine", "Connected · Bots set to run commands here: Juniper, Marlow") +
-      fact("media-box", `${MACHINE === "offline" ? "Not connected · Last seen 5:12 PM, while going to sleep" : "Connected · Last seen 40 s ago"} · Bots set to run commands here: Otto, Pip`) +
+      fact("The gateway's machine", "Connected · Bots configured to run commands here: Juniper, Marlow, Pip") +
+      fact("media-box", `${MACHINE === "offline" ? "Not connected · Last seen 5:12 PM" : "Connected · Last seen 40 s ago"} · Bots configured to run commands here: Otto`) +
       fact("studio-mac", "Not connected · Last seen Nov 16, 11:02 PM · No bots") +
       `</dl>`;
     body += `<h4 class="b-group" id="c-approvals-label">media-box's approvals file</h4>`;
@@ -230,7 +230,7 @@
           .map(([v, l]) => `<div><button type="button" class="b-open" role="radio" aria-checked="${v === "miss"}" tabindex="${v === "miss" ? 0 : -1}" data-c="node-approvals" data-value="${v}"><span>${l}</span>${v === "miss" ? icon("check") : ""}</button></div>`)
           .join("") +
         `</dl><p class="c-subgroup">Entries</p><dl class="facts">${fact("Otto", ALWAYS ? "Its own entry: Ask on every command" : "No entry: the defaults")}${fact("Pip", "No entry: the defaults")}</dl>` +
-        `<p class="c-subgroup">Effective, for the bots set to media-box</p><dl class="facts">${fact("Otto", ALWAYS ? "Every command asks: its entry here asks every time, so the gateway skips Otto's reviewer" : "Review first: commands on the allowlist run, and the reviewer decides the rest, because this file asks only for commands not on it, as Otto's policy does")}${fact("Pip", "Never (Pip's policy): nothing runs")}</dl>` +
+        `<p class="c-subgroup">Effective, for the bots configured for media-box</p><dl class="facts">${fact("Otto", ALWAYS ? "Every command asks: its entry here asks every time, so the gateway skips Otto's reviewer" : "Review first: commands on the allowlist run, and the reviewer decides the rest, because this file asks only for commands not on it, as Otto's policy does")}</dl>` +
         `<p class="b-hint">The gateway takes the stricter of a bot's policy and this file, and the more asking of the two; it uses a bot's reviewer only when this file doesn't ask more. "Allow every command" still meets each bot's own policy. ${mark("set")}</p>`;
     body += `<div class="b-actions">${button("Rename", `data-c="node-rename" data-size="sm"${pairing ? "" : " disabled"}`)}${button("Remove studio-mac…", `data-c="node-remove" data-size="sm"${pairing ? "" : " disabled"}`, "quiet")}</div>`;
     body += `<h4 class="b-group">Paired devices</h4>`;
@@ -259,9 +259,9 @@
     };
     const lim = p("plimit");
     if (lim === "near" && bot === "otto") add(`<p>OpenAI reports 92% of a weekly limit used, as of 5:40 PM. It doesn't say which of your OpenAI accounts.</p><button type="button" class="icon-button" data-variant="quiet" data-c="banner-close" aria-label="Close">${icon("x")}</button>`, "neutral");
-    if (lim === "reached" && bot === "otto") add(`<p>OpenAI reports a weekly limit reached, as of 5:40 PM. Runs that use it wait or fail until it resets, Nov 20.</p><button type="button" class="icon-button" data-variant="quiet" data-c="banner-close" aria-label="Close">${icon("x")}</button>`);
+    if (lim === "reached" && bot === "otto") add(`<p>OpenAI reports a weekly limit reached, as of 5:40 PM. It resets Nov 20.</p><button type="button" class="icon-button" data-variant="quiet" data-c="banner-close" aria-label="Close">${icon("x")}</button>`);
     const g = G[bot];
-    if (bot === "otto" && g && pctOf(bot) >= 100) add(`<p>Otto's ${kindWord(g)} budget is used up, so Clawtrate won't send from here. This is shown only: other apps, channels and Otto's routines aren't stopped.</p>${button("Raise budget", 'data-c="raise-from-composer" data-size="sm"')}`);
+    if (bot === "otto" && g && pctOf(bot) >= 100) add(`<p>Otto has reached its ${kindWord(g)} warning budget. This is shown only: other apps, channels and Otto's routines aren't stopped.</p>${button("Raise budget", 'data-c="raise-from-composer" data-size="sm"')}`);
   }
   const otto = app.bots.find((b) => b.id === "otto");
   if (BUDGET === "warn") {
@@ -324,7 +324,7 @@
         $("#tab-settings").click();
         return BS.render(true);
       case "node-approvals":
-        return announce(`Saved. media-box's defaults: ${t.textContent}`);
+        return;
       case "node-rename":
       case "node-remove":
       case "ws-change":
@@ -344,9 +344,6 @@
       f?.focus();
       f?.setSelectionRange(pos, pos);
     }
-  });
-  document.addEventListener("change", (event) => {
-    if (event.target.matches("[data-c-machine]")) announce(`Saved. ${botName(current())}'s commands run on ${event.target.value.split(" · ")[0]}`);
   });
 
   new MutationObserver(() => {
