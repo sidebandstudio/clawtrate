@@ -1,0 +1,491 @@
+/* The rest of a bot's life: the components docs/design/bots-lifecycle.md adds.
+   Every value is a token from tokens.css. New components are marked "new";
+   everything else places an existing one (the dialog, choice rows, the picture
+   picker, notes, checks, the command line, the event line) in a new screen. */
+
+/* new: the primary bot's star. A small disc on the avatar's lower right, in the
+   accent, the only colour that is the app's own. */
+.lc-star {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-on);
+  box-shadow: 0 0 0 2px var(--bg-rail);
+}
+
+.lc-star svg {
+  width: 10px;
+  height: 10px;
+}
+
+.bot,
+.pin-avatar {
+  position: relative;
+}
+
+.bot > .lc-star {
+  left: calc(12px + var(--avatar-row) - 14px);
+  right: auto;
+  bottom: auto;
+  top: calc(50% + var(--avatar-row) / 2 - 14px);
+}
+
+.lc-intro-art {
+  position: relative;
+  display: block;
+  width: var(--avatar-create);
+  height: var(--avatar-create);
+  margin: 4px auto var(--space-5);
+}
+
+.lc-intro-art .avatar {
+  width: 100%;
+  height: 100%;
+}
+
+.lc-intro-art .lc-star {
+  width: 30px;
+  height: 30px;
+  right: 2px;
+  bottom: 2px;
+  box-shadow: 0 0 0 3px var(--bg-pane);
+}
+
+.lc-intro-art .lc-star svg {
+  width: 18px;
+  height: 18px;
+}
+
+.lc-center {
+  text-align: center;
+}
+
+.lc-first {
+  margin-top: 0;
+}
+
+.lc-search {
+  width: 100%;
+  margin-bottom: var(--space-4);
+}
+
+.lc-bots .b-choice {
+  gap: 12px;
+}
+
+.lc-bots .avatar {
+  flex: none;
+  width: 32px;
+  height: 32px;
+}
+
+/* The picture editor's tabs sit under the title, as the Work pane's do. */
+.lc-tabs {
+  padding: 0 0 var(--space-4);
+}
+
+.lc-tabpanel .b-result {
+  padding: var(--space-6) 0;
+}
+
+/* new: the drop area of Upload. A dashed outline is the one exception to
+   "nothing is outlined": it marks where a file can be dropped. */
+.lc-drop {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: var(--space-8) var(--space-4);
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+
+.lc-drop p {
+  margin: 0;
+  font-size: var(--text-md);
+}
+
+.lc-drop .b-hint {
+  margin: 0;
+}
+
+/* new: the crop. The image fills a square; the circle is what the picture keeps. */
+.lc-crop {
+  position: relative;
+  width: min(240px, 100%);
+  aspect-ratio: 1;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+.lc-crop-photo {
+  position: absolute;
+  inset: -20%;
+  background-size: cover;
+  background-position: center;
+}
+
+.lc-crop-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.45), inset 0 0 0 2px rgba(255, 255, 255, 0.85);
+}
+
+.lc-zoom {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: var(--space-4) auto 0;
+  max-width: 240px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.lc-zoom input {
+  flex: 1;
+  accent-color: var(--text);
+}
+
+/* The hero, editable in place: the picture is a button, the name and label are
+   plain text until clicked, then a field of the same size. */
+.lc-hero-pic {
+  position: relative;
+  display: inline-grid;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.lc-hero-pic .avatar[data-photo] svg {
+  display: none;
+}
+
+.avatar[data-photo] {
+  background-size: cover;
+  background-position: center;
+  border-radius: 50%;
+}
+
+.lc-pic-badge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--dur-quick) var(--ease-out);
+}
+
+.lc-hero-pic:hover .lc-pic-badge,
+.lc-hero-pic:focus-visible .lc-pic-badge {
+  opacity: 1;
+}
+
+.lc-pic-badge .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.lc-inline-button {
+  padding: 1px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: text;
+}
+
+.lc-inline-button:hover {
+  background: var(--bg-hover);
+}
+
+/* new: a field in place. The text's own size, on the inset fill. */
+.lc-inline {
+  display: block;
+  width: min(240px, 100%);
+  margin: 8px auto 0;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text);
+  font: inherit;
+  text-align: center;
+  outline: none;
+  box-shadow: 0 0 0 1.5px var(--border-strong);
+}
+
+.lc-inline-name {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.lc-inline-label {
+  margin-top: 4px;
+  font-size: var(--text-sm);
+}
+
+.lc-inline[aria-busy="true"] {
+  color: var(--text-muted);
+}
+
+.lc-rail-input {
+  width: 100%;
+  margin: 0;
+  text-align: left;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.lc-hero-line {
+  margin: 6px 0 0;
+}
+
+[data-tone="danger"].b-hint {
+  color: var(--danger);
+}
+
+/* Settings: the Manage group's buttons wrap; nothing in them shortens. */
+.lc-manage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* The Bot tab's picture before a shape and colour are chosen: the bot's own, at full size. */
+.b-preview > .avatar {
+  width: var(--avatar-create);
+  height: var(--avatar-create);
+}
+
+/* Instructions: the text, as the file holds it, in the mono face. A block, not
+   the one-line pill the shared field is. */
+.lc-text {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 72px;
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  resize: vertical;
+}
+
+#lc-agents {
+  min-height: 188px;
+}
+
+.lc-text-read {
+  margin: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  white-space: pre-wrap;
+}
+
+.lc-theirs {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-pane);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+
+.lc-instr-actions {
+  margin-top: var(--space-4);
+}
+
+.lc-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.lc-saved .icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* new: a change as removed and added lines. Removed on the danger fill,
+   added on the bubble fill; the words carry it too, for screen readers. */
+.lc-diff {
+  margin: 4px 0 10px;
+  padding: 8px 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-code);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.lc-diff > span {
+  display: block;
+  padding: 0 10px 0 24px;
+  text-indent: -14px;
+}
+
+.lc-diff > [data-op="del"] {
+  background: var(--danger-soft);
+}
+
+.lc-diff > [data-op="del"]::before {
+  content: "− ";
+  color: var(--danger);
+}
+
+.lc-diff > [data-op="add"] {
+  background: var(--accent-soft);
+}
+
+.lc-diff > [data-op="add"]::before {
+  content: "+ ";
+}
+
+.lc-diff > [data-op="ctx"] {
+  color: var(--text-muted);
+}
+
+.lc-diff > [data-op="ctx"]::before {
+  content: "  ";
+}
+
+/* Lists of what goes and what stays, and the checklist of what is copied. */
+.lc-list {
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+.lc-list > li + li {
+  margin-top: 4px;
+}
+
+.lc-folders {
+  margin: 0 0 var(--space-2) 26px;
+  padding-left: 16px;
+  color: var(--text-muted);
+}
+
+.lc-folders[data-on="true"] {
+  color: var(--text);
+}
+
+.lc-folders [data-state="stays"] {
+  color: var(--text-muted);
+}
+
+.lc-files {
+  margin-top: var(--space-4);
+}
+
+.lc-item {
+  align-items: flex-start;
+  padding: 8px 0;
+}
+
+.lc-item input {
+  margin-top: 3px;
+}
+
+.lc-item-text {
+  display: grid;
+  gap: 1px;
+}
+
+.lc-item-text .b-hint {
+  margin: 0;
+}
+
+.lc-accounts {
+  margin: 0 0 8px 26px;
+}
+
+.lc-dup-name {
+  width: 100%;
+}
+
+/* new: steps with their state, and what a read-back found. */
+.lc-steps,
+.lc-result {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lc-steps > li,
+.lc-result > li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  font-size: var(--text-md);
+}
+
+.lc-result > li {
+  align-items: flex-start;
+  min-height: 0;
+  padding: 6px 0;
+}
+
+.lc-result > li .glyph {
+  margin-top: 2px;
+}
+
+.lc-step-word {
+  margin-left: auto;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.lc-steps [data-state="failed"],
+.lc-result [data-state="failed"] {
+  color: var(--danger);
+}
+
+.lc-command {
+  margin: 8px 0 var(--space-4);
+}
+
+.lc-steps-cmd > li p {
+  font-size: var(--text-md);
+}
+
+.b-dialog[data-kind="lc-delete"] {
+  width: min(480px, calc(100vw - 32px));
+}
+
+@media (max-width: 687px) {
+  #lc-dialog[open] {
+    width: 100vw;
+    max-width: 100vw;
+    height: calc(100dvh - 8px);
+    max-height: none;
+    margin: auto 0 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+}
