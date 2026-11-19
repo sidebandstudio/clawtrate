@@ -14,5 +14,6 @@ export default defineConfig({
   timeout: 90_000,
   fullyParallel: false,
   workers: 1,
+  forbidOnly: !!process.env.CI,
   reporter: [["list"]],
 });

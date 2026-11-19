@@ -1,0 +1,756 @@
+/* The components docs/design/controls.md adds, from existing tokens only:
+   rule lines, choices, enforcement marks, the count strip, meters, log rows,
+   memory items and bars. Everything else is bots.css and conversation.css. */
+
+/* A rule line: a whole-row button with the group's icon, its words, and its
+   value over its mark. The words never shorten; value and mark wrap under them. */
+button.c-line {
+  align-items: center;
+}
+
+.c-line-main {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.c-line-main > .icon {
+  flex: none;
+  margin-top: 2px;
+  width: 18px;
+  height: 18px;
+  color: var(--text-muted);
+}
+
+.c-line-words {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.c-line-words small {
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
+
+.c-line-words .c-mark {
+  margin-top: 2px;
+}
+
+.c-line-value {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  margin-left: auto;
+  text-align: right;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.c-line-value > b {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.c-line-value > b[data-tone="warn"] {
+  color: var(--warn);
+}
+
+/* The enforcement mark: icon and words, never colour alone. */
+.c-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+}
+
+.c-mark .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.c-counts {
+  margin: 2px 0 6px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* A choice: three or four segments in one inset pill. */
+.c-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-inset);
+}
+
+.c-choice button {
+  flex: 1 1 0;
+  min-width: 72px;
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.c-choice button[aria-checked="true"] {
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-button);
+  color: var(--text);
+}
+
+.c-choice button[aria-disabled="true"] {
+  color: var(--text-faint);
+  cursor: not-allowed;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.c-choice[data-locked] button[aria-checked="true"] {
+  box-shadow: none;
+  background: transparent;
+  color: var(--text-muted);
+  outline: 1px dashed var(--border-strong);
+  outline-offset: -3px;
+}
+
+.c-choice-label {
+  margin: 14px 0 6px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.c-sentence {
+  margin: 8px 2px 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* A meter: a thin bar with its numbers in text beside it. */
+.c-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.c-meter-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+  overflow: hidden;
+}
+
+.c-meter-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--text-muted);
+}
+
+.c-meter[data-tone="warn"] .c-meter-bar > span {
+  background: var(--warn);
+}
+
+.c-meter[data-tone="danger"] .c-meter-bar > span {
+  background: var(--danger);
+}
+
+.c-meter-text {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.c-meter-text b {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+/* Activity: one row per tool action. */
+.c-logs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+}
+
+.c-logs > li + li {
+  border-top: 1px solid var(--border);
+}
+
+button.c-log {
+  display: grid;
+  grid-template-columns: 54px 20px 1fr auto;
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 2px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.c-log:hover {
+  background: var(--bg-hover);
+}
+
+.c-logs > li:first-child button.c-log {
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.c-logs > li:last-child button.c-log {
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.c-log-time {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.c-log .avatar {
+  width: 20px;
+  height: 20px;
+}
+
+.c-log .avatar svg {
+  width: 100%;
+  height: 100%;
+}
+
+.c-filters .input {
+  height: 32px;
+  width: auto;
+  padding: 0 32px 0 12px;
+  font-size: var(--text-sm);
+}
+
+.c-log-what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+}
+
+.c-log-source {
+  grid-column: 3 / 5;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.c-tag {
+  justify-self: end;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-selected);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.c-tag[data-tone="danger"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.c-tag[data-tone="warn"] {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.c-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+
+/* Memory items. */
+.c-mems {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+}
+
+.c-mems > li + li {
+  border-top: 1px solid var(--border);
+}
+
+button.c-mem {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.c-mem:hover {
+  background: var(--bg-hover);
+}
+
+.c-mems > li:first-child button.c-mem {
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.c-mems > li:last-child button.c-mem {
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.c-mem > .icon {
+  flex: none;
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  color: var(--text-faint);
+}
+
+.c-mem-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.c-mem-text > span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  font-size: var(--text-md);
+}
+
+.c-mem-text small {
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
+
+.c-mem-full {
+  margin: 12px 0;
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  font-size: var(--text-md);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.c-textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-md);
+  resize: vertical;
+}
+
+.c-textarea:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 1px;
+}
+
+.c-textarea[aria-invalid="true"] {
+  outline: 1.5px solid var(--danger);
+}
+
+/* Bars, for usage by bot or source: name, bar, figure. */
+.c-bars {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.c-bars li {
+  display: grid;
+  grid-template-columns: minmax(96px, 30%) 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-sm);
+}
+
+.c-bars .c-meter-bar > span {
+  background: var(--text-muted);
+}
+
+.c-bars li > span:last-child {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* The rule form, in place. */
+.c-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0;
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+}
+
+.c-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.c-form .input {
+  width: 100%;
+}
+
+.c-tools code {
+  margin-right: 6px;
+}
+
+.c-struck {
+  text-decoration: line-through;
+  color: var(--text-faint);
+}
+
+.c-section-seg {
+  margin: 0 0 14px;
+}
+
+/* The composer's note while a budget holds Clawtrate's own sends. */
+.c-composer-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0 auto 8px;
+  max-width: var(--column, 720px);
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--warn-soft);
+  font-size: var(--text-sm);
+}
+
+.c-composer-note[data-tone="neutral"] {
+  background: var(--bg-bubble);
+}
+
+.c-composer-note p {
+  flex: 1 1 260px;
+  margin: 0;
+}
+
+/* Gallery links to every state of controls.html. */
+.c-state-links {
+  columns: 2 260px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: var(--text-sm);
+}
+
+.c-state-links li {
+  margin: 0 0 4px;
+  break-inside: avoid;
+}
+
+/* Touch and phone. */
+[data-input="touch"] button.c-line {
+  min-height: 56px;
+}
+
+[data-input="touch"] .c-choice button {
+  min-height: 44px;
+}
+
+[data-input="touch"] button.c-log,
+[data-input="touch"] button.c-mem {
+  min-height: 56px;
+}
+
+@media (max-width: 687px) {
+  .c-choice[data-four] button {
+    flex-basis: calc(50% - 2px);
+  }
+
+  button.c-log {
+    grid-template-columns: 48px 20px 1fr;
+  }
+
+  .c-log .c-tag {
+    grid-column: 3;
+    justify-self: start;
+  }
+
+  .c-bars li {
+    grid-template-columns: 1fr auto;
+  }
+
+  .c-bars li > .c-meter-bar {
+    grid-column: 1 / 3;
+    grid-row: 2;
+  }
+}
+
+/* The same inside the app's own frame when it is phone-narrow. */
+@container app (max-width: 687px) {
+  .c-choice[data-four] button {
+    flex-basis: calc(50% - 2px);
+  }
+
+  button.c-log {
+    grid-template-columns: 48px 20px 1fr;
+  }
+
+  .c-log .c-tag {
+    grid-column: 3;
+    justify-self: start;
+  }
+}
+
+/* Round 2: the glance, the plugin's state, the holds list, wrapped row values. */
+.c-glance {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 10px 0 8px;
+}
+
+.c-glance-block {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  font-size: var(--text-sm);
+}
+
+.c-glance-block h4 {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 0 4px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+/* A group with nothing in it is one line. */
+.c-glance-block[data-empty] h4 {
+  justify-content: flex-start;
+  gap: 8px;
+  margin: 0;
+}
+
+.c-glance-block[data-kind="unknown"] h4 {
+  color: var(--danger);
+}
+
+.c-glance-n {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.c-glance-block p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.c-glance-block .link-button {
+  display: inline;
+  padding: 0;
+  min-height: 0;
+  color: var(--text);
+  font-size: inherit;
+  text-align: left;
+}
+
+.c-plugin {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.c-plugin[data-tone="danger"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.c-plugin .icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}
+
+.c-mark[data-tone="danger"],
+.c-line-words small[data-tone="danger"],
+.b-row-main small[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.c-holds {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.c-holds li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 4px 0;
+}
+
+.c-holds li .icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}
+
+.c-holds li[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.c-subgroup {
+  margin: 8px 0 4px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.c-effective {
+  margin: 6px 0 10px;
+  font-size: var(--text-md);
+}
+
+/* A row whose value wraps under its label, so a count is never cut. */
+button.c-wraprow {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+button.c-wraprow > span:first-child {
+  flex: 1 0 auto;
+}
+
+.c-wrapvalue {
+  flex: 1 1 100%;
+  order: 3;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  white-space: normal;
+}
+
+button.c-wraprow > .icon {
+  order: 2;
+}
+
+/* Activity's filters: one band that never wraps over the list. */
+.c-filters[role="group"] {
+  flex-wrap: wrap;
+  padding-bottom: 4px;
+}
+
+.c-filters[role="group"] > * {
+  flex: none;
+  white-space: nowrap;
+}
+
+.c-grantonly {
+  font-size: var(--text-sm);
+}
+
+.c-log-open {
+  padding: 0 14px 12px;
+}
+
+button.c-log .c-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+.c-outcome {
+  margin: 4px 0 0;
+  font-size: var(--text-sm);
+}
+
+.c-glance-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.c-glance-link:hover {
+  text-decoration-color: currentColor;
+}
+
+@container app (max-width: 599px) {
+  .c-glance {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 599px) {
+  /* Stacked, and tight enough that the whole glance stays on the phone's first screen with the not-enforced note (section 19). */
+  .c-glance {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .c-glance-block {
+    padding: 8px 12px;
+  }
+}
