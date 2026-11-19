@@ -12,6 +12,7 @@
 
 import {
   cannotKeep,
+  CHECKIN_BOT_DELETED,
   MAX_CHECKIN_PROMPT_CHARS,
   type Bot,
   type CheckInsState,
@@ -226,6 +227,7 @@ function CheckInsDialog({
   const groupRef = useRef<HTMLUListElement>(null);
   const save = checkIns.save?.id === saveId ? checkIns.save : null;
   const saving = save?.status === "saving";
+  const deleted = save?.status === "conflict" && save.error === CHECKIN_BOT_DELETED;
   const [checking, setChecking] = useState(false);
   const setChoice = (next: Choice) =>
     change({ choice: next, touched: { ...touched, every: true } });
@@ -451,9 +453,9 @@ function CheckInsDialog({
             {save?.status === "conflict" && (
               <Note tone="warn" testId="save-conflict">
                 <p>
-                  <b>Not saved.</b> {save.error} Your changes are kept; the rest of this dialog, and
-                  the check-ins behind it, show what the gateway has now. Save again to apply your
-                  changes over it.
+                  <b>Not saved.</b> {save.error}
+                  {!deleted &&
+                    " Your changes are kept; the rest of this dialog, and the check-ins behind it, show what the gateway has now. Save again to apply your changes over it."}
                 </p>
               </Note>
             )}
@@ -489,7 +491,7 @@ function CheckInsDialog({
               type="button"
               className="button"
               data-variant="primary"
-              disabled={saving || blocked !== null}
+              disabled={saving || deleted || blocked !== null}
               onClick={submit}
             >
               {saving ? "Saving…" : "Save"}

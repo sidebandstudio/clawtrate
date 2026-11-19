@@ -27,6 +27,7 @@ export const MAX_CHECKIN_KEPT = 32;
 export const KEEP_TOO_MANY = `More than ${MAX_CHECKIN_KEPT} other bots check in through the gateway's default, and Clawtrate writes at most ${MAX_CHECKIN_KEPT} of them in one change.`;
 export const KEEP_TOO_LONG =
   "The cadence the gateway's default gives is longer than Clawtrate writes back.";
+export const CHECKIN_BOT_DELETED = "This bot was deleted while you were editing.";
 const READ_BACK_MS = 20_000;
 const READ_BACK_EVERY_MS = 500;
 const JOB_PAGE = 200;
@@ -248,14 +249,14 @@ function enrolledByDefault(agents: RawRecord | null): string[] {
   const defaults = asRecord(agents?.defaults);
   const heartbeat = defaults?.heartbeat;
   const owner = named(asRecord(heartbeat)?.agentId);
-  if (owner) return [owner];
-  if (heartbeat) return [...new Set(ids.map(agentId))];
+  if (owner) return ids.filter((id) => id === owner);
+  if (heartbeat) return [...new Set(ids.map(agentId))].filter((id) => ids.includes(id));
   // The ambient owner: the system agent, else the one bot marked default, else the only bot.
   const system = named(asRecord(defaults?.systemAgent)?.agentId);
-  if (system) return [system];
+  if (system) return ids.filter((id) => id === system);
   const marked = ids.filter((id) => asRecord(entries[id])!.default === true);
-  if (agents?.ownership !== "explicit" && marked.length === 1) return [agentId(marked[0]!)];
-  return ids.length === 1 ? [agentId(ids[0]!)] : [];
+  const ambient = agents?.ownership !== "explicit" && marked.length === 1 ? marked : ids;
+  return ambient.length === 1 ? ids.filter((id) => id === agentId(ambient[0]!)) : [];
 }
 
 /** The cadence a bot without its own `every` gets, exactly as the config gives it. */
@@ -478,8 +479,14 @@ export function planCheckIn(
   | { patch: RawRecord | null; own: RawRecord; expect: CheckInKept[] } {
   const agents = agentsOf(config);
   const entries = asRecord(agents?.entries);
-  if (!entries) return { refused: "Clawtrate couldn't read this gateway's bots from its config." };
-  const raw = asRecord(asRecord(entries[botId])?.heartbeat);
+  if (!entries) {
+    return asRecord(asRecord(config)?.config) && agents?.entries === undefined
+      ? { conflict: CHECKIN_BOT_DELETED }
+      : { refused: "Clawtrate couldn't read this gateway's bots from its config." };
+  }
+  const entry = asRecord(entries[botId]);
+  if (!Object.hasOwn(entries, botId) || !entry) return { conflict: CHECKIN_BOT_DELETED };
+  const raw = asRecord(entry.heartbeat);
   const setting = readSettings(config, [botId])[0];
   if (draft.every !== null && (setting?.every ?? null) !== draft.was.every)
     return { conflict: `${CHANGED} Its cadence was changed.` };

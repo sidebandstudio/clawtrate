@@ -382,6 +382,27 @@ describe("F-201 the patch a save writes", () => {
     expect(state().settings?.find((each) => each.botId === "main")?.every).toBe("24h");
   });
 
+  it.each([
+    ["marlow", /this bot was deleted/i],
+    ["main", /which bots check in through the default changed/i],
+  ] as const)(
+    "F-201: deleting %s while editing Marlow's check-ins is a conflict with no patch",
+    async (deleted, error) => {
+      const { gateway, ctx, state, elsewhere } = fakeGateway();
+      await loadCheckIns(ctx);
+      const asked = draft(state(), "marlow", { every: "24h" });
+      elsewhere((config) => delete config.agents.entries[deleted]);
+
+      await saveCheckIn(ctx, "s1", "marlow", asked);
+
+      expect(state().save).toMatchObject({
+        status: "conflict",
+        error: expect.stringMatching(error),
+      });
+      expect(gateway.attempts).toEqual([]);
+    },
+  );
+
   it("F-201: bots that would stop, and were not named before saving, are a conflict, not a silent write", async () => {
     const { gateway, ctx, state, elsewhere } = fakeGateway();
     await loadCheckIns(ctx);
