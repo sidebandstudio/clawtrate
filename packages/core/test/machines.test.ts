@@ -781,6 +781,37 @@ describe("Settings, Machines: the engine", () => {
     expect(gw.devices.map((d) => d.deviceId)).not.toContain("dev-phone");
   });
 
+  it("F-157: below admin, this device's own record is renamed only when every role it holds is operator", async () => {
+    const gw = gateway();
+    gw.devices[0]!.roles = ["operator", "node"];
+    await expect(engine(gw, { pairing: true }).renameDevice("dev-self", "Desk")).rejects.toThrow(
+      "Renaming this device needs admin access.",
+    );
+    expect(gw.calls.map(([m]) => m)).not.toContain("device.pair.rename");
+    gw.devices[0]!.roles = ["operator"];
+    gw.devices[0]!.tokens = [{ role: "operator" }, { role: "node" }];
+    await expect(engine(gw, { pairing: true }).renameDevice("dev-self", "Desk")).rejects.toThrow(
+      "Renaming this device needs admin access.",
+    );
+    const { devices } = readDevices({ paired: gw.devices }, "dev-self");
+    expect(devices.map((d) => [d.id, d.operatorOnly])).toEqual([
+      ["dev-self", false],
+      ["dev-phone", true],
+    ]);
+  });
+
+  it("F-157: a removal is not confirmed from a read-back that holds no pairing list", async () => {
+    const gw = gateway();
+    gw.handlers["node.list"] = () => ({});
+    await expect(engine(gw, { admin: true }).removeMachine(NODE)).rejects.toThrow(
+      "The gateway did not return the pairing list. Removal could not be confirmed.",
+    );
+    gw.handlers["device.pair.list"] = () => ({ pending: [] });
+    await expect(engine(gw, { admin: true }).removeDevice("dev-phone")).rejects.toThrow(
+      "The gateway did not return the pairing list. Removal could not be confirmed.",
+    );
+  });
+
   it("F-157: a removal is done only when the whole listing read back lacks the id, not the first page", async () => {
     const many = Array.from({ length: MAX_NODES + 4 }, (_, i) =>
       nodeRow({ nodeId: `node-${i}`, displayName: `m-${i}` }),

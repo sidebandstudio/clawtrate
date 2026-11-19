@@ -384,15 +384,31 @@ test("F-157: with admin, another device is renamed and a machine removed after a
   page,
 }) => {
   await openFixture(page, `${PANE}&access=admin`, "light");
+  // media-box as the gateway can list a machine that is connected but not paired.
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    fixture.invoke = async (command) => {
+      const result = await original(command);
+      if (command.type !== "readMachines") return result;
+      const view = result as { machines: Array<{ name: string; node: object | null }> };
+      return {
+        ...view,
+        machines: view.machines.map((row) =>
+          row.name === "media-box" ? { ...row, node: { ...row.node, paired: false } } : row,
+        ),
+      };
+    };
+  });
   await openMachines(page);
+  // The gateway removes only a paired record: no Remove for the unpaired one.
+  await expect(page.getByRole("button", { name: "Remove media-box…" })).toHaveCount(0);
   const list = page.getByTestId("device-list");
   await list.getByRole("button", { name: "Rename" }).nth(1).click();
   await page.getByRole("textbox", { name: /New name for Clawtrate on iPhone/ }).fill("Phone");
   await page.keyboard.press("Enter");
   await expect(settingsAnnouncer(page)).toHaveText("Renamed");
   await expect(list).toContainText("Phone");
-  // Connected or not, as the gateway allows.
-  await expect(page.getByRole("button", { name: "Remove media-box…" })).toBeVisible();
   await page.getByRole("button", { name: "Remove studio-mac…" }).click();
   const confirm = page.getByRole("alertdialog");
   await expect(confirm).toContainText("Asks the gateway to remove studio-mac's pairing.");

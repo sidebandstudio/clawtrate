@@ -66,6 +66,8 @@ export type NodeFacts = {
   approvalsCommands: boolean;
   /** `system.run` is among the commands it declares. */
   listsRun: boolean;
+  /** `node.list` reports it paired (`paired: true`); a connected node can be unpaired. */
+  paired: boolean;
 };
 
 /**
@@ -189,6 +191,8 @@ export type DeviceRow = {
   lastSeenAt: number | null;
   lastSeenReason: string | null;
   thisDevice: boolean;
+  /** Its role, its roles and its tokens' roles are all `operator`: the gateway lets it manage its own record. */
+  operatorOnly: boolean;
 };
 
 /** Settings, Machines (section 15). */
@@ -262,6 +266,7 @@ export function readNode(value: unknown): NodeFacts | null {
     approved: row.approvalState === "approved",
     approvalsCommands: NODE_APPROVALS_COMMANDS.every((c) => commands.includes(c)),
     listsRun: commands.includes("system.run"),
+    paired: row.paired === true,
   };
 }
 
@@ -435,6 +440,16 @@ export function readApprovalsFile(
   };
 }
 
+/** A `device.pair.list` row whose role is `operator` and whose every other role is too. */
+function isOperatorOnly(r: RawRecord): boolean {
+  return (
+    r.role === "operator" &&
+    [...list(r.roles), ...list(r.tokens).map((token) => rec(token).role)]
+      .filter((role): role is string => typeof role === "string" && role.trim() !== "")
+      .every((role) => role.trim() === "operator")
+  );
+}
+
 /** `device.pair.list`'s paired devices. */
 export function readDevices(
   value: unknown,
@@ -453,6 +468,7 @@ export function readDevices(
         lastSeenAt: num(r.lastSeenAtMs),
         lastSeenReason: str(r.lastSeenReason, MAX_SEEN_REASON_CHARS),
         thisDevice: id === ownDeviceId,
+        operatorOnly: isOperatorOnly(r),
       };
     })
     .filter((row): row is DeviceRow => row !== null)
@@ -933,6 +949,10 @@ export class MachinesEngine {
       throw this.refused("the removal", error);
     }
     const again = rec(await this.ctx.request("node.list", {}));
+    if (!Array.isArray(again.nodes))
+      throw new PlacementWriteError(
+        "The gateway did not return the pairing list. Removal could not be confirmed.",
+      );
     if (listsId(again.nodes, "nodeId", nodeId))
       throw new PlacementWriteError("The gateway still lists this machine.");
   }
@@ -944,6 +964,12 @@ export class MachinesEngine {
     const label = name.trim();
     if (label === "" || label.length > MAX_MACHINE_NAME_CHARS)
       throw new PlacementWriteError("Enter a name.");
+    if (own && !this.ctx.admin()) {
+      // Below admin the gateway lets this device rename only an operator-only record.
+      const rows = list(rec(await this.ctx.request("device.pair.list", {})).paired);
+      if (!isOperatorOnly(rec(rows.find((each) => rec(each).deviceId === deviceId))))
+        throw new PlacementWriteError("Renaming this device needs admin access.");
+    }
     try {
       await this.ctx.request("device.pair.rename", { deviceId, label });
     } catch (error) {
@@ -968,6 +994,10 @@ export class MachinesEngine {
       throw this.refused("the removal", error);
     }
     const again = rec(await this.ctx.request("device.pair.list", {}));
+    if (!Array.isArray(again.paired))
+      throw new PlacementWriteError(
+        "The gateway did not return the pairing list. Removal could not be confirmed.",
+      );
     if (listsId(again.paired, "deviceId", deviceId))
       throw new PlacementWriteError("The gateway still lists this device.");
   }

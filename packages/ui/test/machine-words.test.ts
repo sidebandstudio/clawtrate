@@ -15,6 +15,7 @@ const node: NodeFacts = {
   approved: true,
   approvalsCommands: true,
   listsRun: false,
+  paired: true,
 };
 
 const place = (over: Partial<CommandPlace>): CommandPlace => ({

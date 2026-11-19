@@ -92,6 +92,7 @@ function world(now: number, params: MachineParams) {
             approved: true,
             approvalsCommands: true,
             listsRun: true,
+            paired: true,
           },
           {
             id: STUDIO,
@@ -102,6 +103,7 @@ function world(now: number, params: MachineParams) {
             approved: true,
             approvalsCommands: true,
             listsRun: true,
+            paired: true,
           },
         ];
   const exec: Record<string, { host: string | null; node: string | null }> = {
@@ -156,6 +158,7 @@ function world(now: number, params: MachineParams) {
       lastSeenAt: now,
       lastSeenReason: "connect",
       thisDevice: true,
+      operatorOnly: true,
     },
     {
       id: "dev-phone",
@@ -165,6 +168,7 @@ function world(now: number, params: MachineParams) {
       lastSeenAt: now - 43 * 60_000,
       lastSeenReason: "connect",
       thisDevice: false,
+      operatorOnly: true,
     },
   ];
   return {

@@ -517,22 +517,25 @@ export function useMachinesSection({
           >
             Rename
           </button>
-          <button
-            type="button"
-            className="button"
-            data-size="sm"
-            data-variant="quiet"
-            onClick={() =>
-              setRemoving({
-                kind: "machine",
-                id: machine.id,
-                name: machine.name,
-                bots: machine.named,
-              })
-            }
-          >
-            Remove {machine.name}…
-          </button>
+          {/* The gateway removes only a paired node record. */}
+          {machine.node.paired && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              data-variant="quiet"
+              onClick={() =>
+                setRemoving({
+                  kind: "machine",
+                  id: machine.id,
+                  name: machine.name,
+                  bots: machine.named,
+                })
+              }
+            >
+              Remove {machine.name}…
+            </button>
+          )}
         </div>
       )
     ) : null;
@@ -561,7 +564,7 @@ export function useMachinesSection({
           />
         ) : (
           // This device's own name needs device access; another's record needs admin.
-          (device.thisDevice ? pairing : admin) && (
+          (admin || (device.thisDevice && device.operatorOnly && pairing)) && (
             <span className="b-actions m-row-actions">
               <button
                 type="button"
