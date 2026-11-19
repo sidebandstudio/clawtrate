@@ -1012,6 +1012,39 @@ describe("the usage engine", () => {
     engine.onClose();
   });
 
+  it("F-232: a failed recount keeps the earlier count's counting state, and says it failed", async () => {
+    let fail = false;
+    const gateway = fakeGateway({ counting: true });
+    const { engine, usage } = engineOn({
+      ...gateway,
+      request: async (method, raw) => {
+        if (fail && method === "usage.cost") throw new Error("read timed out");
+        return gateway.request(method, raw);
+      },
+    });
+    await engine.changeBudget({
+      op: "set",
+      budget: {
+        botId: "otto",
+        routineId: null,
+        routineName: null,
+        period: "weekly",
+        tokens: 2_000,
+        timeZone: NY,
+      },
+    });
+    await engine.countBudgets();
+    expect(usage().counts[0]).toMatchObject({ used: 1800, counting: true, error: null });
+    fail = true;
+    await engine.countBudgets();
+    expect(usage().counts[0]).toMatchObject({
+      used: 1800,
+      counting: true,
+      error: "read timed out",
+    });
+    engine.onClose();
+  });
+
   it("counts a budget again within seconds while the gateway is still counting it", async () => {
     vi.useFakeTimers();
     const gateway = fakeGateway({ counting: true });

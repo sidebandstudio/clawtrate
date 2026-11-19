@@ -79,6 +79,10 @@ describe("a figure the gateway is still counting", () => {
       "The gateway's estimate so far from its configured prices, in US dollars, while the gateway is still counting.",
     );
     expect(budgetLine(routine, count({ counting: true }))).toMatch(/ so far$/);
+    // A recount that failed keeps the earlier count's state, and says it failed.
+    expect(budgetLine(routine, count({ counting: true, error: "read timed out" }))).toBe(
+      "200 of 1,000 tokens today so far, refresh failed",
+    );
     expect(warnedLine("Otto", routine, { ...count({ counting: true }), used: 900 }, 90)).toMatch(
       / so far\.$/,
     );

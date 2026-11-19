@@ -441,7 +441,7 @@ export class UsageEngine {
         range,
         used: kept?.used ?? null,
         asOf: kept?.asOf ?? null,
-        counting: false,
+        counting: kept?.counting ?? false,
         partial: kept?.partial ?? false,
         error: errorText(error),
       };

@@ -270,7 +270,7 @@ export function BudgetPart({
           used={used}
           limit={budget.tokens}
           words={budgetLine(budget, count)}
-          label={`${name}'s ${kindWord(budget.period)} budget: ${full(used)} of ${full(budget.tokens)} tokens ${periodWord(budget.period)}`}
+          label={`${name}'s ${kindWord(budget.period)} budget: ${budgetLine(budget, count)}`}
           testId="budget-meter"
         />
       )}
