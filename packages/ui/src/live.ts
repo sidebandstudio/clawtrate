@@ -330,6 +330,8 @@ export type RunEnding =
       timeouts: number | null;
     }
   | { kind: "finished-before-stop" }
+  /** Stop was asked for, and the run has ended, but nothing the gateway sent says how. */
+  | { kind: "stop-unknown" }
   /** This client stopped the run at the person's "Turn time limit" (F-100), once confirmed. */
   | { kind: "turn-limit"; minutes: number }
   /** The gateway ended the run at a time limit of its own (its run's `timeoutPhase`). */
@@ -345,7 +347,7 @@ export type RunEnding =
 export function endingOf(run: Run, transcript?: Transcript): RunEnding | null {
   if (run.state === "completed" && run.finishedBeforeStop) return { kind: "finished-before-stop" };
   if (run.state === "stopped") {
-    if (!run.outcomeKnown) return null;
+    if (!run.outcomeKnown) return run.stopRequestedAt !== null ? { kind: "stop-unknown" } : null;
     if (run.turnLimit !== undefined) return { kind: "turn-limit", minutes: run.turnLimit };
     const commanded = (transcript?.outbox ?? []).some(
       (message) =>

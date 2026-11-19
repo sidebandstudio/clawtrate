@@ -1559,7 +1559,9 @@ export class ClawtrateClient {
     // A message that came from the queue keeps that origin through every attempt, until
     // it starts or is removed: it starts now with no run active, and otherwise waits
     // behind the active run, so a refusal still reads "Couldn't start" on the shelf.
-    const fromQueue = message.mode === "queue";
+    // "Send" on one left Not sent after a Stop follows the normal send rules instead: it goes
+    // as a message sent at that moment would, a steer into a run the person has since started.
+    const fromQueue = message.mode === "queue" && message.status !== "not-sent";
     const mode = fromQueue
       ? "queue"
       : !active

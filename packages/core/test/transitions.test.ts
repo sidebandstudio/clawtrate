@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { isActive } from "../src/runs.ts";
 import { agentEvent, KEY, openTask, questionRecord, sentTexts } from "./client-harness.ts";
-import { sleep, until } from "./fake-gateway.ts";
+import { deferred, sleep, until } from "./fake-gateway.ts";
 
 type Opened = Awaited<ReturnType<typeof openTask>>;
 
@@ -142,6 +142,44 @@ const cases: Array<[string, (task: Opened) => Promise<void>]> = [
     },
   ],
   [
+    "a Stop whose outcome is not known: what was queued behind it stays Not sent, and nothing starts by itself",
+    async (task) => {
+      const answer = deferred<unknown>();
+      task.gateway.handlers["chat.send"] = () => answer.promise;
+      task.client.sendMessage(KEY, "first");
+      await until(() => task.gateway.calls("chat.send").length === 1);
+      const local = task.transcript().runs[0]!;
+      // Stop before the gateway named the run, then a message behind it.
+      await task.client.stopRun(KEY, local.id);
+      task.client.sendMessage(KEY, "behind the stop");
+      // Accepted with no run named, and history shows nothing of it: how it ended is not known.
+      answer.resolve({ status: "started" });
+      await until(() => task.transcript().runs.some((run) => run.state === "stopped"));
+      const stopped = task.transcript().runs.find((run) => run.state === "stopped")!;
+      expect(stopped.outcomeKnown).toBe(false);
+      await until(() =>
+        task
+          .transcript()
+          .outbox.some((m) => m.text === "behind the stop" && m.status === "not-sent"),
+      );
+      await sleep(50);
+      expect(sentTexts(task.gateway)).toEqual(["first"]);
+    },
+  ],
+  [
+    "a reply typed in a thread while a question is pending is held, as any message, and keeps what it answers",
+    async (task) => {
+      await asking(task);
+      task.client.sendMessage(KEY, "about that", { replyToId: "row-1" });
+      expect(task.transcript().outbox[0]).toMatchObject({ status: "held", replyToId: "row-1" });
+      await sleep(30);
+      expect(task.gateway.calls("chat.send")).toEqual([]);
+      resolved(task, "ask_1", "answered");
+      await until(() => task.gateway.calls("chat.send").length === 1);
+      expect(task.gateway.calls("chat.send")[0]).toMatchObject({ replyToId: "row-1" });
+    },
+  ],
+  [
     "the stop request fails: the run goes back, the question stays pending and held messages stay held",
     async (task) => {
       task.gateway.handlers["chat.abort"] = () => {
@@ -186,6 +224,26 @@ describe("F-421: a message sent while the run is stopping", () => {
     task.client.retryMessage(KEY, id);
     await until(() => sentTexts(task.gateway).length === 1);
     expect(sentTexts(task.gateway)).toEqual(["then do this"]);
+    task.client.stop();
+  });
+
+  it("F-421: Send on a Not sent row while another run is going sends it as a message sent then would: a steer into that run", async () => {
+    const task = await openTask();
+    start(task);
+    await until(() => task.transcript().runs[0]?.state === "running");
+    await task.client.stopRun(KEY, "run-x");
+    const id = task.client.sendMessage(KEY, "then do this", { mode: "queue" });
+    task.gateway.emit("chat", { runId: "run-x", sessionKey: KEY, seq: 2, state: "aborted" });
+    await until(() => task.transcript().outbox[0]?.status === "not-sent");
+    // The person has started another run since.
+    start(task, "run-y");
+    await until(() =>
+      task.transcript().runs.some((run) => run.id === "run-y" && run.state === "running"),
+    );
+    task.client.retryMessage(KEY, id);
+    await until(() => task.gateway.calls("chat.send").length === 1);
+    expect(queueModes(task)).toEqual(["steer"]);
+    expect(task.transcript().outbox[0]).toMatchObject({ mode: "steer", runId: "run-y" });
     task.client.stop();
   });
 

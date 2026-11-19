@@ -589,6 +589,16 @@ describe("the status line while the gateway retries (F-082)", () => {
   });
 });
 
+describe("a stop whose outcome is not known (F-468)", () => {
+  it("F-468: a run Stop was asked of whose end nothing established says only that the stop was asked for", () => {
+    expect(endingOf(run({ state: "stopped", stopRequestedAt: 1, outcomeKnown: false }))).toEqual({
+      kind: "stop-unknown",
+    });
+    // Nothing asked of it here, nothing established: no ending is claimed.
+    expect(endingOf(run({ state: "stopped", outcomeKnown: false }))).toBeNull();
+  });
+});
+
 describe("a stop after timeouts (F-101)", () => {
   it("F-101: when the automatic stop was refused, a later Stop's ending is a plain stop's", () => {
     expect(

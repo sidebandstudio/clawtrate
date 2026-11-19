@@ -287,6 +287,17 @@ export function RunEnding({
       </div>
     );
   }
+  if (ending.kind === "stop-unknown") {
+    return (
+      <div className="turn-note" data-testid="stop-note" data-run={run.id}>
+        <span className="glyph" data-state="stopped" aria-hidden="true" />
+        <p>
+          <b>Stop requested.</b> The gateway has not said how the turn ended. Messages left behind
+          it are not sent until you send them.
+        </p>
+      </div>
+    );
+  }
   if (ending.kind === "finished-before-stop") {
     return (
       <div className="turn-note" data-testid="stop-note" data-run={run.id}>
