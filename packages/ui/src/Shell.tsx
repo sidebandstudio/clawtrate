@@ -19,6 +19,7 @@ import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { NewBot } from "./bots/NewBot.tsx";
 import "./bots/bots.css";
+import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
 
 /** A control that can take focus now: in the page, shown, and not behind the drawer. */
@@ -92,6 +93,8 @@ export function Shell({
   const [panelOpen, setPanelOpen] = useState(() => readPreference("panel") === "open");
   // In the one-pane layout the rail and the conversation take turns.
   const [view, setView] = useState<"list" | "detail">("detail");
+  // The Routines view takes the conversation's place while open (automation.md section 1).
+  const [routines, setRoutines] = useState<RoutinesNav | null>(null);
   const shellRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -297,6 +300,7 @@ export function Shell({
   const openDetail = useCallback(
     (options?: { composer?: boolean }) => {
       if (onePane) navigatedTo.current = options?.composer ? "composer" : "detail";
+      setRoutines(null);
       setView("detail");
     },
     [onePane],
@@ -443,47 +447,71 @@ export function Shell({
         onBubbles={onBubbles}
         onOpenSettings={onOpenSettings}
         onNewBot={interactive ? openNewBot : null}
+        routines={state.routines.routines}
+        routinesOpen={routines !== null}
+        onOpenRoutines={() => {
+          setRoutines(ROUTINES_HOME);
+          setView("detail");
+        }}
+        onOpenRoutineRun={(id) => {
+          setRoutines({ ...ROUTINES_HOME, routine: id, run: "latest" });
+          setView("detail");
+        }}
         inert={drawerOpen || inert}
         interactive={interactive}
         sidebar={state.sidebar}
         newTaskHint={info.kind === "desktop" ? "⌘T" : "⌥T"}
       />
       <div className="main-pane" ref={mainRef}>
-        <OpenTaskContext.Provider value={selection.selectTask}>
-          <WorkLinksContext.Provider value={workLinks}>
-            <Conversation
-              task={task}
-              bot={bot}
-              taskCount={selection.tasks.length}
-              discovery={state.discovery}
-              transcript={transcript}
-              panelOpen={panelOpen}
-              onTogglePanel={togglePanel}
-              onOpenPanel={() => setPanel(true)}
-              onBack={backToList}
-              onReload={reload}
-              strip={
-                strip && (
-                  <StatusStrip
-                    strip={strip}
-                    retryAt={state.connection.retryAt}
-                    onRetry={() => void send({ type: "retry" })}
-                    onReload={reload}
-                  />
-                )
-              }
-              refreshNote={phase !== "dropped" && refreshFailed(transcript)}
-              interactive={interactive}
-              connection={state.connection}
-              info={info}
-              granted={granted}
-              online={state.connection.status === "connected"}
-              caughtUp={caughtUp}
-              toggleRef={toggleRef}
-              inert={drawerOpen || inert}
-            />
-          </WorkLinksContext.Provider>
-        </OpenTaskContext.Provider>
+        {routines ? (
+          <RoutinesView
+            state={state}
+            nav={routines}
+            onNav={setRoutines}
+            onClose={() => {
+              setRoutines(null);
+              if (onePane) backToList();
+            }}
+            narrow={onePane || (mainWidth !== null && mainWidth < 520)}
+            phone={onePane}
+          />
+        ) : (
+          <OpenTaskContext.Provider value={selection.selectTask}>
+            <WorkLinksContext.Provider value={workLinks}>
+              <Conversation
+                task={task}
+                bot={bot}
+                taskCount={selection.tasks.length}
+                discovery={state.discovery}
+                transcript={transcript}
+                panelOpen={panelOpen}
+                onTogglePanel={togglePanel}
+                onOpenPanel={() => setPanel(true)}
+                onBack={backToList}
+                onReload={reload}
+                strip={
+                  strip && (
+                    <StatusStrip
+                      strip={strip}
+                      retryAt={state.connection.retryAt}
+                      onRetry={() => void send({ type: "retry" })}
+                      onReload={reload}
+                    />
+                  )
+                }
+                refreshNote={phase !== "dropped" && refreshFailed(transcript)}
+                interactive={interactive}
+                connection={state.connection}
+                info={info}
+                granted={granted}
+                online={state.connection.status === "connected"}
+                caughtUp={caughtUp}
+                toggleRef={toggleRef}
+                inert={drawerOpen || inert}
+              />
+            </WorkLinksContext.Provider>
+          </OpenTaskContext.Provider>
+        )}
         <button
           type="button"
           className="drawer-scrim"
@@ -491,7 +519,7 @@ export function Shell({
           tabIndex={-1}
           onClick={() => setPanel(false)}
         />
-        {panelOpen && (
+        {panelOpen && !routines && (
           <WorkPanel
             bot={bot}
             task={task}

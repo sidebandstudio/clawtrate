@@ -1,0 +1,618 @@
+/* The Routines view (docs/design/automation.md sections 3 to 7), from the
+   prototype's styles (docs/design/prototype/css/routines.css), with only
+   existing tokens. Notes and selects come from bots.css. */
+.rail-top .icon-button[aria-current="page"] {
+  background: var(--bg-selected);
+}
+
+.rail-top .icon-button {
+  position: relative;
+}
+
+.r-view {
+  overflow: auto;
+}
+
+.r-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--header-height);
+  padding: 0 12px;
+  background: var(--bg-pane);
+}
+
+.r-head h1 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.r-head .r-titles {
+  min-width: 0;
+}
+
+.r-head .r-titles p {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.r-head .r-titles .avatar {
+  --size: 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.r-head .spacer {
+  flex: 1;
+}
+
+.r-body {
+  width: 100%;
+  max-width: var(--transcript-max);
+  margin: 0 auto;
+  padding: 4px 20px 120px;
+}
+
+.r-view[data-r="calendar"] .r-body {
+  max-width: none;
+}
+
+.r-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.r-toolbar .b-select {
+  width: auto;
+  min-width: 180px;
+  max-width: 260px;
+  height: 40px;
+}
+
+/* View switch */
+.r-seg {
+  display: inline-flex;
+  gap: 2px;
+  height: 36px;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+}
+
+.r-seg button {
+  min-width: 52px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.r-seg button[aria-checked="true"] {
+  background: var(--bg-pane);
+  box-shadow: var(--shadow-button);
+  color: var(--text);
+}
+
+/* Groups and rows */
+.r-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-5) 0 var(--space-2);
+  padding: 0 4px;
+}
+
+.r-group h2 {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.r-group .avatar {
+  width: 24px;
+  height: 24px;
+}
+
+.r-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  overflow: hidden;
+}
+
+.r-rows > li + li {
+  border-top: 1px solid var(--border);
+}
+
+.r-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 64px;
+  padding: 0 14px;
+}
+
+.r-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  min-height: 64px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.r-row-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 14px;
+}
+
+.r-row-text {
+  min-width: 0;
+}
+
+.r-row-name {
+  display: block;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.r-row-line {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.r-row[data-paused="true"] .r-row-line,
+.r-faint {
+  color: var(--text-faint);
+}
+
+.r-row-line [data-tone="danger"],
+.r-run [data-tone="danger"],
+.r-run-foot [data-tone="danger"] {
+  color: var(--danger);
+}
+
+/* A routine's page */
+.r-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 var(--space-5);
+  font-size: var(--text-md);
+  color: var(--text-muted);
+}
+
+.r-section {
+  margin-top: var(--space-6);
+}
+
+.r-section > h3 {
+  margin: 0 0 var(--space-2);
+  padding: 0 4px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text-faint);
+}
+
+.r-instruction {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.r-view .facts dd {
+  white-space: normal;
+  text-align: right;
+}
+
+.r-view .facts dd small {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.r-foot-note {
+  margin: var(--space-3) 4px 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.r-run {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.r-run-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.r-run-when {
+  display: block;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.r-run-how {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.r-run > .icon {
+  color: var(--text-faint);
+}
+
+.r-hint {
+  margin: 6px 4px 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.r-view .b-note {
+  margin-bottom: var(--space-4);
+}
+
+/* A run */
+.r-sched {
+  margin: var(--space-5) 0 var(--space-4);
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.r-sched-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.r-sched p {
+  margin: 6px 0 0;
+  font-size: var(--text-base);
+  line-height: 1.5;
+}
+
+.r-sched details {
+  margin-top: 8px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.r-sched summary {
+  min-height: 28px;
+  cursor: pointer;
+}
+
+.r-run-foot {
+  margin-top: var(--space-6);
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.r-run-facts {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* Calendar */
+.r-cal-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.r-cal-bar .r-zone {
+  margin-left: auto;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.r-cal-scroll {
+  overflow-x: auto;
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.r-cal {
+  --hour: 28px;
+  display: grid;
+  grid-template-columns: 52px repeat(var(--days), minmax(96px, 1fr));
+  min-width: calc(52px + var(--days) * 96px);
+  background: var(--bg-list);
+}
+
+.r-cal-dayhead {
+  position: sticky;
+  top: 0;
+  padding: 8px;
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  background: var(--bg-pane);
+}
+
+.r-cal-dayhead[data-today="true"] {
+  color: var(--text);
+}
+
+.r-cal-dayhead small {
+  display: block;
+  font-weight: var(--weight-regular);
+  color: var(--text-faint);
+}
+
+.r-cal-corner {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-pane);
+}
+
+.r-cal-hours {
+  position: relative;
+  height: calc(24 * var(--hour));
+}
+
+.r-cal-hours span {
+  position: absolute;
+  right: 8px;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  transform: translateY(-50%);
+}
+
+.r-cal-day {
+  position: relative;
+  height: calc(24 * var(--hour));
+  border-left: 1px solid var(--border);
+  background-image: linear-gradient(var(--border) 1px, transparent 1px);
+  background-size: 100% calc(2 * var(--hour));
+}
+
+.r-cal-band {
+  margin: 4px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--bg-bubble);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.r-cal-bands {
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  min-height: 8px;
+}
+
+.r-occ {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--bg-bubble);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.r-occ[data-outcome="failed"] {
+  box-shadow: inset 2px 0 0 var(--danger);
+}
+
+.r-occ[data-past="true"] {
+  color: var(--text-muted);
+}
+
+.r-occ .avatar {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.r-occ span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.r-now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1.5px solid var(--text-muted);
+}
+
+.r-convo {
+  padding-top: var(--space-4);
+}
+
+[data-input="touch"] .r-row-line {
+  white-space: normal;
+}
+
+[data-input="touch"] .r-row-main,
+[data-input="touch"] .r-row {
+  min-height: 72px;
+}
+
+[data-input="touch"] .r-run {
+  min-height: 56px;
+}
+
+[data-input="touch"] .r-seg button {
+  min-height: 44px;
+}
+
+[data-input="touch"] .r-seg {
+  height: 44px;
+}
+
+[data-input="touch"] .r-body {
+  padding: 4px 12px 120px;
+}
+
+[data-input="touch"] .r-head h1 {
+  font-size: var(--text-lg);
+}
+
+@container main (max-width: 520px) {
+  .r-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .r-row-line {
+    white-space: normal;
+  }
+}
+.r-view {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-pane);
+}
+
+.r-view ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.r-mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.r-chevron {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.r-empty {
+  margin-top: var(--space-10);
+}
+
+.r-loading {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.r-skeleton {
+  display: block;
+  height: 64px;
+  border-radius: var(--radius-lg);
+}
+
+.r-step {
+  margin: var(--space-2) 4px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.r-bubble {
+  margin: var(--space-2) 0;
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+}
+
+.r-cal-range {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.r-occ-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+.r-cal-band {
+  display: block;
+  width: calc(100% - 8px);
+  border: 0;
+  font: inherit;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
