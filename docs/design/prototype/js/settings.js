@@ -43,7 +43,8 @@
     inUse: "home",
     conn: "connected", // connected, connecting, unreachable, none
     target: null, // the gateway being connected to
-    waiting: p("waiting") === "1" ? 1 : 0, // messages to Otto not yet sent to the gateway in use
+    waiting: ["1", "unconfirmed"].includes(p("waiting")) ? 1 : 0, // a message to Otto on the gateway in use
+    waitKind: p("waiting") === "unconfirmed" ? "unconfirmed" : "unsent", // not yet sent, or sent and not confirmed
     page: p("gw") || null, // a gateway's page in Settings
     added: null, // how adding ended: added, same, noid, nothing
     removal: null, // { id, outcome, items }
@@ -216,13 +217,14 @@
       holder.insertAdjacentHTML("afterend", items);
       holder.hidden = true;
       const name = inUseName();
-      const state = { connected: "Connected", connecting: "Connecting…", unreachable: "Can't reach the gateway", none: "Not connected", refused: "Can't use it" }[S.conn];
-      $(".gateway-pill strong").textContent = S.conn === "connecting" ? gw(S.target).name : name;
+      const state = { connected: "Connected", connecting: "Connecting…", confirming: "Confirming…", unconfirmed: "Not confirmed", changed: "A different gateway answered", unreachable: "Can't reach the gateway", none: "Not connected", adding: "Adding a gateway", refused: "Can't use it" }[S.conn];
+      const between = ["connecting", "confirming", "unconfirmed", "changed", "unreachable"].includes(S.conn) && S.target;
+      $(".gateway-pill strong").textContent = between ? gw(S.target).name : name;
       $("#gateway-state").textContent = state;
-      $("#gateway-menu .menu-head strong").textContent = S.conn === "connecting" ? gw(S.target).name : name;
+      $("#gateway-menu .menu-head strong").textContent = between ? gw(S.target).name : name;
       $("#gateway-menu-state").textContent = S.inUse ? `${state} · ${gw(S.inUse).route}` : state;
-      $$('[data-action="gateway-menu"]').forEach((b) => b.setAttribute("aria-label", `${S.conn === "connecting" ? gw(S.target).name : name}, ${state.toLowerCase().replace("…", "")}. Open the gateway menu.`));
-      $$(".rail .status-dot").forEach((dot) => (dot.dataset.status = { connected: "connected", connecting: "connecting", unreachable: "error", none: "disconnected", refused: "error" }[S.conn]));
+      $$('[data-action="gateway-menu"]').forEach((b) => b.setAttribute("aria-label", `${between ? gw(S.target).name : name}, ${state.toLowerCase().replace("…", "")}. Open the gateway menu.`));
+      $$(".rail .status-dot").forEach((dot) => (dot.dataset.status = { connected: "connected", connecting: "connecting", confirming: "connecting", unconfirmed: "error", changed: "error", unreachable: "error", none: "disconnected", adding: "disconnected", refused: "error" }[S.conn]));
     }
     const closeGatewayMenu = () => {
       if (!$("#gateway-menu").hidden) $(".gateway-pill").click();
@@ -248,27 +250,39 @@
     }
 
     // Switching (section 6) ------------------------------------------------------------------------------
+    // Connecting, then the identity check, then the gateway in use. Until the check passes the
+    // rail is empty and nothing can be sent, created or changed there.
 
     const SWITCH_FAIL = p("switchfail") === "1";
+    const SWITCH_ID = p("switchid"); // pending, unread or changed, for Studio gateway
+    const RETURN_FAIL = Number(p("returnfail") || 0); // failed returns to the previous gateway after adding
+    let returnFails = 0;
     let timer = null;
-    function connectTo(id, then) {
+    const HOME_ACCESS = D.B.access;
+    const HOME_ACCOUNTS = D.accounts().slice();
+    function connectTo(id, then, { returning = false } = {}) {
       clearTimeout(timer);
       S.target = id;
       S.conn = "connecting";
       if (S.inUse) S.last = S.inUse;
       S.inUse = null;
       showEmpty("Loading bots", "Loading this gateway's bots.", true);
+      $("#new-button").hidden = true;
       strip(`Connecting to ${esc(gw(id).name)}`);
       renderMenu();
       rs();
       timer = setTimeout(() => {
-        if (SWITCH_FAIL && id === "studio" && !S.retried) {
+        const unreachable = (SWITCH_FAIL && id === "studio" && !S.retried) || (returning && returnFails < RETURN_FAIL);
+        if (unreachable) {
+          if (returning) returnFails += 1;
           S.conn = "unreachable";
+          S.returnFailed = returning;
           showEmpty(`Can't reach ${esc(gw(id).name)}`, "It didn't answer.");
           strip(
             `Can't reach ${esc(gw(id).name)}`,
             "it didn't answer",
-            `<button type="button" data-s="retry-switch">Retry</button>` + (S.last && S.last !== id ? `<button type="button" data-s="switch-back">Back to ${esc(gw(S.last).name)}</button>` : ""),
+            `<button type="button" data-s="${returning ? "retry-return" : "retry-switch"}">Retry</button>` +
+              (!returning && S.last && S.last !== id ? `<button type="button" data-s="switch-back">Back to ${esc(gw(S.last).name)}</button>` : ""),
             "danger",
           );
           renderMenu();
@@ -276,21 +290,57 @@
           announce(`Couldn't reach ${gw(id).name}`);
           return;
         }
+        identityCheck(id, then);
+      }, 900);
+    }
+    function identityCheck(id, then) {
+      S.conn = "confirming";
+      showEmpty(`Confirming this is ${esc(gw(id).name)}…`, "Nothing is loaded or sent until it is confirmed.", true);
+      $("#new-button").hidden = true;
+      renderMenu();
+      rs();
+      if (id === "studio" && SWITCH_ID === "pending") return;
+      timer = setTimeout(() => {
+        if (id === "studio" && SWITCH_ID === "unread" && !S.idRetried) {
+          S.conn = "unconfirmed";
+          showEmpty(`Can't confirm this is ${esc(gw(id).name)}`, "Nothing is loaded or sent.");
+          strip(`Clawtrate can't confirm this is ${esc(gw(id).name)}`, "", `<button type="button" data-s="retry-identity">Retry</button>`, "danger");
+          renderMenu();
+          rs();
+          announce(`Can't confirm this is ${gw(id).name}`);
+          return;
+        }
+        if (id === "studio" && SWITCH_ID === "changed") {
+          S.conn = "changed";
+          S.changed = id;
+          showEmpty("A different gateway answered", "Clawtrate disconnected and dropped this route's token.");
+          strip("This address now leads to a different gateway", "", `<button type="button" data-s="review-id" data-gw="${id}">Review</button>`, "danger");
+          renderMenu();
+          rs();
+          announce("This address now leads to a different gateway");
+          return;
+        }
         arrive(id);
         then?.();
-      }, 900);
+      }, 500);
     }
     function arrive(id) {
       S.refused = null;
       S.inUse = id;
       S.target = null;
       S.conn = "connected";
+      S.returnFailed = false;
       const set = id === "home" ? HOME : BOTS[id]();
       appBots.splice(0, appBots.length, ...set);
+      // What the new gateway granted, and its accounts: nothing of the old gateway's stays.
+      D.B.access = id === "home" ? HOME_ACCESS : "read";
+      app.model.access = D.B.access === "read" ? "read" : "write";
+      D.accounts().splice(0, D.accounts().length, ...(id === "home" ? HOME_ACCOUNTS : []));
       app.model.remembered = id === "home" ? { otto: "o1" } : {};
       app.model.unfolded.clear();
       $("#composer").hidden = false;
       $("#title-pill").hidden = false;
+      $("#new-button").hidden = app.model.access === "read";
       app.setConnection("connected");
       app.selectBot(set[0].id === "juniper" && id === "home" ? "otto" : set[0].id);
       strip("");
@@ -302,9 +352,13 @@
       closeGatewayMenu();
       if (id === S.inUse && S.conn === "connected") return;
       if (S.waiting && S.inUse && !confirmed) {
+        const from = esc(gw(S.inUse).name);
         return confirmBox({
           title: `Switch to ${esc(gw(id).name)}?`,
-          text: `${S.waiting} message to Otto hasn't been sent to ${esc(gw(S.inUse).name)} yet. Switching discards it: it isn't kept as a draft. Runs on ${esc(gw(S.inUse).name)} keep going.`,
+          text:
+            S.waitKind === "unconfirmed"
+              ? `${S.waiting} message to Otto was sent to ${from} and isn't confirmed yet. Switching stops following it; ${from} may still have it.`
+              : `${S.waiting} message to Otto hasn't been sent to ${from} yet. Switching discards it: it isn't kept as a draft. Runs on ${from} keep going.`,
           label: "Switch",
           run: () => switchTo(id, true),
         });
@@ -312,6 +366,7 @@
       S.waiting = 0;
       S.added = null;
       S.removal = null;
+      S.changed = null;
       connectTo(id, () => announce(`Switched to ${gw(id).name}`));
     }
 
@@ -328,6 +383,7 @@
     }
 
     // Adding (section 5) ---------------------------------------------------------------------------------
+    // The setup flow takes the app's place; the gateway in use is closed while it runs.
 
     function openAdd(confirmed) {
       closeGatewayMenu();
@@ -342,15 +398,29 @@
       S.waiting = 0;
       S.removal = null;
       S.addFrom = S.inUse || S.last || "home";
-      stand.innerHTML =
-        `<div class="s-confirm"><span class="s-stand-mark">Prototype stand-in</span><h2 id="s-stand-title">Adding a gateway</h2>` +
-        `<p>Adding a gateway. ${esc(gw(S.addFrom).name)} stays saved; Cancel goes back to it.</p>` +
-        `<p style="margin-top:8px">In the app, the setup flow runs here: “Where does OpenClaw run?”, then setup's own screens (<a href="setup.html">setup.html</a>). Choose how it ends:</p>` +
-        `<div class="s-stand-choices">${button("Paired: a new gateway", 'data-s="add-new"')}${button("Paired: the same gateway", 'data-s="add-same"')}` +
-        `${button("Paired: no identity", 'data-s="add-noid"')}${button("Setup failed", 'data-s="add-failed"')}</div>` +
-        `<div class="b-actions">${button("Cancel", 'data-s="add-cancel"', "quiet")}</div></div>`;
+      if (settingsDialog.open) settingsDialog.close();
+      S.last = S.addFrom;
+      S.inUse = null;
+      S.conn = "adding";
+      showEmpty("Adding a gateway", `${esc(gw(S.addFrom).name)} stays saved.`);
+      $("#new-button").hidden = true;
+      strip("");
+      renderMenu();
+      standStep("first");
       stand.showModal();
-      $('[data-s="add-cancel"]', stand).focus();
+      $("[data-s-step]", stand)?.focus();
+    }
+    function standStep(step) {
+      const head =
+        `<div class="s-confirm"><span class="s-stand-mark">Prototype stand-in for setup</span><h2 id="s-stand-title">${step === "first" ? "Where does OpenClaw run?" : "Setup runs here"}</h2>` +
+        `<p>Adding a gateway. ${esc(gw(S.addFrom).name)} stays saved; Cancel goes back to it.</p>`;
+      const body =
+        step === "first"
+          ? `<div class="s-stand-choices">${button("This computer", 'data-s="stand-next" data-s-step')}${button("Another computer", 'data-s="stand-next"')}${button("Have a setup code?", 'data-s="stand-next"', "quiet")}</div>`
+          : `<p style="margin-top:8px">Setup's own screens follow (<a href="setup.html">setup.html</a>): the look, the host's confirmations, pairing read-only. Choose how it ends:</p>` +
+            `<div class="s-stand-choices">${button("Paired: a new gateway", 'data-s="add-new" data-s-step')}${button("Paired: the same gateway", 'data-s="add-same"')}` +
+            `${button("Paired: no identity", 'data-s="add-noid"')}${button("Paired, then setup failed", 'data-s="add-failedpaired"')}${button("Setup failed before pairing", 'data-s="add-failed"')}</div>`;
+      stand.innerHTML = head + body + `<div class="b-actions">${button("Cancel", 'data-s="add-cancel"', "quiet")}</div></div>`;
     }
     function addEnded(how) {
       stand.close();
@@ -370,10 +440,17 @@
           showResult();
         });
       } else {
-        connectTo(S.addFrom, () => {
-          announce(how === "same" ? `${gw(S.addFrom).name} is already here` : "Nothing was added");
-          showResult();
-        });
+        const back = () =>
+          connectTo(
+            S.addFrom,
+            () => {
+              announce(how === "same" ? `${gw(S.addFrom).name} is already here` : "No gateway was saved on this device");
+              showResult();
+            },
+            { returning: true },
+          );
+        S.retryReturn = back;
+        back();
       }
       showResult();
     }
@@ -545,10 +622,16 @@
         new: ["ok", "check", "Added Lab gateway", "Clawtrate is connected to it, read-only. Home gateway stays saved: switch back from the gateway menu."],
         same: ["ok", "check", "Home gateway is already here", "This address leads to Home gateway. Clawtrate keeps its saved pairing and didn't add a second entry. A second way to reach one gateway is a route, in Settings, Gateway."],
         noid: ["warn", "warning", "Added 198.51.100.7", "Lab gateway didn't say who it is, so Clawtrate keeps it under its address."],
-        failed: ["warn", "warning", "Nothing was added", `Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
-        cancelled: ["warn", "warning", "Nothing was added", `Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
+        failed: ["warn", "warning", "No gateway was saved on this device.", `Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
+        cancelled: ["warn", "warning", "No gateway was saved on this device.", `Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
+        failedpaired: ["warn", "warning", "No gateway was saved on this device.", `Setup had already paired with that gateway, so its record of this device may remain there; on that gateway's computer, openclaw devices list shows it. Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
       }[S.added];
-      const added = addedText && S.conn === "connected" ? `<div class="s-result" data-testid="add-result">${D.result(...addedText)}</div>` : "";
+      const added =
+        addedText && S.conn === "connected"
+          ? `<div class="s-result" data-testid="add-result">${D.result(...addedText)}</div>`
+          : S.added && S.returnFailed
+            ? `<div class="s-result" data-testid="add-result">${D.result("danger", "warning", "No gateway was saved on this device.", `Clawtrate couldn't reach ${esc(gw(S.addFrom).name)}.`)}<div class="b-actions" style="justify-content:center">${button("Retry", 'data-s="retry-return"', "primary")}</div></div>`
+            : "";
       const row = (id) => {
         const g = gw(id);
         const sub =
@@ -558,6 +641,12 @@
               ? `${esc(g.route)} · Switching`
               : id === S.target && S.conn === "unreachable"
                 ? `${esc(g.route)} · <span data-tone="danger">Can't reach it</span>`
+                : id === S.target && S.conn === "confirming"
+                  ? `${esc(g.route)} · Confirming it is ${esc(g.name)}`
+                  : id === S.target && S.conn === "unconfirmed"
+                    ? `${esc(g.route)} · <span data-tone="danger">Not confirmed</span>`
+                    : id === S.changed
+                      ? `${esc(g.route)} · <span data-tone="danger">A different gateway answered</span>`
                 : `${esc(g.route)} · Last used ${esc(g.last)}`;
         const text = `<span class="b-choice-text"><span class="b-choice-title">${esc(g.name)}</span><span class="b-choice-sub">${sub}</span></span>`;
         if (id === S.inUse) return `<li><button type="button" class="b-choice" data-s="open-gw" data-gw="${id}">${text}${icon("chevron")}</button></li>`;
@@ -585,6 +674,7 @@
         `<dl class="facts" data-testid="gateway-page"><div><dt>Route</dt><dd>${esc(g.route)}</dd></div><div><dt>Last used</dt><dd>${esc(g.last === "Just now" ? "Just now" : g.last)}</dd></div>` +
         `<div><dt>This device there</dt><dd>Last paired here · ${esc(g.last === "Just now" ? "Just now" : g.last)}</dd></div>` +
         `<div><dt>Identity</dt><dd class="mono">${g.identity ? esc(g.identity) : "Not read"}</dd></div></dl>` +
+        (S.changed === g.id ? note(`<p>A different gateway answered at this address. Clawtrate disconnected and dropped this route's token; nothing of ${esc(g.name)} was shown or sent there. Remove it, or add the gateway that answers as a new one.</p>`, "warn") : "") +
         `<p class="b-hint">What Clawtrate recorded at its last connection. Nothing is read from a gateway that isn't in use.</p>` +
         `<div class="b-actions" style="margin-top:16px">${button(`Switch to ${esc(g.name)}`, `data-s="switch" data-gw="${g.id}" data-size="sm"`, "primary")}` +
         `<span class="spacer"></span>${button("Remove…", `data-s="remove" data-gw="${g.id}" data-size="sm" data-tone="danger"`, "quiet")}</div>`;
@@ -873,6 +963,19 @@
           return addEnded("failed");
         case "add-cancel":
           return addEnded("cancelled");
+        case "add-failedpaired":
+          return addEnded("failedpaired");
+        case "stand-next":
+          standStep("end");
+          return $("[data-s-step]", stand)?.focus();
+        case "retry-return":
+          return S.retryReturn?.();
+        case "retry-identity":
+          S.idRetried = true;
+          return identityCheck(S.target || "studio", () => announce(`Switched to ${gw(S.inUse).name}`));
+        case "review-id":
+          S.page = id;
+          return D.openSettings($(".gateway-pill"), "gateways");
         case "to-gateways":
         case "to-gateways-back":
           D.B.settings.section = "gateways";

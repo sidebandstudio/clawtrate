@@ -141,8 +141,10 @@ await stateWords("A gateway's page: what was recorded, Switch and Remove", "open
 
 // Part 3: switching (section 6) ----------------------------------------------------------------------------
 
+const SWITCHED = 1700; // connecting, then the identity check
 {
-  const p = await open();
+  const p = await open("bot=otto&task=o1");
+  await p.fill(".composer-input", "A draft for Home gateway");
   await click(p, ".gateway-pill");
   const items = await p.evaluate(() => [...document.querySelectorAll('#gateway-menu [data-s="switch"]')].map((e) => [e.textContent.trim(), e.getAttribute("role"), e.getAttribute("aria-checked")]));
   check("menu: one menuitemradio for each gateway, the one in use checked", JSON.stringify(items) === JSON.stringify([["Home gateway", "menuitemradio", "true"], ["Studio gateway", "menuitemradio", "false"]]), JSON.stringify(items));
@@ -153,13 +155,24 @@ await stateWords("A gateway's page: what was recorded, Switch and Remove", "open
   check("walk: switch, nothing waiting: Home's bots leave at once", between.includes("Loading this gateway's bots.") && !between.includes("Otto"), between);
   check("walk: switch: the strip says Connecting to Studio gateway", strip.includes("Connecting to Studio gateway"), strip);
   check("walk: switch: no confirmation without a message waiting", !(await p.evaluate(() => document.querySelector("#confirm-dialog").open)));
-  await p.waitForTimeout(1100);
+  await p.waitForTimeout(1000);
+  check("walk: switch: while the identity is checked, an empty rail and nothing to send or create", (await rail(p)).includes("Confirming this is Studio gateway…") && (await p.locator("#composer").isHidden()) && (await p.locator("#new-button").isHidden()));
+  await p.waitForTimeout(800);
   const after = await rail(p);
   check("walk: switch: Studio's bots only", after.includes("Marlow") && after.includes("Pip") && !after.includes("Otto") && !after.includes("Juniper"), after);
   check("walk: switch: the footer names Studio gateway", (await footer(p)).includes("Studio gateway") && (await footer(p)).includes("Connected"));
-  check("walk: switch: announced after the hello", (await announced(p)) === "Switched to Studio gateway");
+  check("walk: switch: announced after the identity check", (await announced(p)) === "Switched to Studio gateway");
+  check("walk: switch: Home's draft text leaves with Home", !(await p.evaluate(() => document.querySelector(".composer-input")?.value || "")).includes("A draft for Home gateway") && !(await text(p, "#composer")).includes("A draft for Home gateway"));
   await click(p, ".gateway-pill");
   check("walk: switch: Studio is checked", (await p.evaluate(() => document.querySelector('#gateway-menu [data-gw="studio"]').getAttribute("aria-checked"))) === "true");
+  await click(p, ".gateway-pill");
+  await click(p, '[data-action="b-settings"]').catch(() => {});
+  await p.evaluate(() => window.bots.openSettings(document.querySelector(".gateway-pill"), "accounts"));
+  await p.waitForTimeout(150);
+  check("walk: switch: Home's accounts leave with Home", !/OpenAI|xAI|Anthropic/.test(await text(p, settings)));
+  await p.evaluate(() => window.bots.openSettings(document.querySelector(".gateway-pill"), "gateway"));
+  await p.waitForTimeout(150);
+  check("walk: switch: Home's permissions leave with Home", (await text(p, settings)).includes("operator.read") && !(await text(p, settings)).includes("operator.admin"));
   check("walk: switch: no page errors", p.errors.length === 0, p.errors.join(" | "));
   await p.close();
 }
@@ -174,8 +187,16 @@ await stateWords("A gateway's page: what was recorded, Switch and Remove", "open
   check("walk: switch, Cancel: Home still in use", (await rail(p)).includes("Otto") && (await footer(p)).includes("Home gateway"));
   await click(p, ".gateway-pill");
   await click(p, '#gateway-menu [data-gw="studio"]');
-  await click(p, '#confirm-dialog [data-s="confirm-ok"]', 1200);
+  await click(p, '#confirm-dialog [data-s="confirm-ok"]', SWITCHED);
   check("walk: switch, a message waiting: Switch leads to Studio in use", (await rail(p)).includes("Marlow") && (await footer(p)).includes("Studio gateway"));
+  await p.close();
+}
+{
+  const p = await open("waiting=unconfirmed");
+  await click(p, ".gateway-pill");
+  await click(p, '#gateway-menu [data-gw="studio"]');
+  const [ok, miss] = await has(p, confirm, ["Switch to Studio gateway?", "1 message to Otto was sent to Home gateway and isn't confirmed yet. Switching stops following it; Home gateway may still have it."]);
+  check("walk: switch, a message sent and not confirmed: worded apart", ok && !(await text(p, confirm)).includes("discards"), miss);
   await p.close();
 }
 {
@@ -186,31 +207,73 @@ await stateWords("A gateway's page: what was recorded, Switch and Remove", "open
   check("walk: switch fails: the strip says so, with Retry and Back", ok, miss);
   check("walk: switch fails: nothing of either gateway shows", !(await rail(p)).includes("Otto") && !(await rail(p)).includes("Marlow"));
   check("walk: switch fails: announced", (await announced(p)) === "Couldn't reach Studio gateway");
-  await click(p, '#status-strip [data-s="switch-back"]', 1200);
+  await click(p, '#status-strip [data-s="switch-back"]', SWITCHED);
   check("walk: switch fails: Back to Home gateway leads to Home in use", (await rail(p)).includes("Otto") && (await footer(p)).includes("Home gateway"));
+  await p.close();
+}
+{
+  const p = await open("switchid=changed");
+  await click(p, ".gateway-pill");
+  await click(p, '#gateway-menu [data-gw="studio"]', SWITCHED);
+  const [ok, miss] = await has(p, "#status-strip", ["This address now leads to a different gateway", "Review"]);
+  check("walk: switch, a changed identity: disconnected, the strip with Review", ok && !/Marlow|Otto/.test(await rail(p)) && (await p.locator("#composer").isHidden()), miss);
+  check("walk: switch, a changed identity: announced", (await announced(p)) === "This address now leads to a different gateway");
+  await click(p, '#status-strip [data-s="review-id"]', 200);
+  const t = await text(p, settings);
+  check("walk: switch, a changed identity, Review: the gateway's page says what happened, with Remove", t.includes("A different gateway answered at this address. Clawtrate disconnected and dropped this route's token") && t.includes("Remove…"), t.slice(0, 200));
+  await p.close();
+}
+{
+  const p = await open("switchid=unread");
+  await click(p, ".gateway-pill");
+  await click(p, '#gateway-menu [data-gw="studio"]', SWITCHED);
+  const [ok, miss] = await has(p, "#status-strip", ["Clawtrate can't confirm this is Studio gateway", "Retry"]);
+  check("walk: switch, an identity that can't be read: out of use, with Retry", ok && !/Marlow/.test(await rail(p)) && (await p.locator("#composer").isHidden()), miss);
+  await click(p, '#status-strip [data-s="retry-identity"]', 800);
+  check("walk: switch, an identity that can't be read, Retry: confirmed, Studio in use", (await rail(p)).includes("Marlow") && (await announced(p)) === "Switched to Studio gateway");
+  await p.close();
+}
+{
+  const p = await open("switchid=pending");
+  await click(p, ".gateway-pill");
+  await click(p, '#gateway-menu [data-gw="studio"]', 2500);
+  check("walk: switch, the identity unresolved: actions withheld for as long as it lasts", (await rail(p)).includes("Confirming this is Studio gateway…") && (await p.locator("#composer").isHidden()) && (await p.locator("#new-button").isHidden()) && (await p.locator("#title-pill").isHidden()));
   await p.close();
 }
 
 // Part 4: adding (section 5) --------------------------------------------------------------------------------
 
-async function addWalk(name, choice, words, rows, railWord) {
-  const p = await open("open=settings&section=gateways");
+async function addWalk(name, choice, words, rows, railWord, query = "") {
+  const p = await open(`open=settings&section=gateways${query}`);
   await press(p, "button", "Add gateway…");
-  const [ok0, miss0] = await has(p, "#s-stand", ["Prototype stand-in", "Adding a gateway. Home gateway stays saved; Cancel goes back to it.", "Where does OpenClaw run?"]);
-  check(`walk: add, ${name}: the setup stand-in says what stays`, ok0, miss0);
-  await press(p, "button", choice, 1300);
+  const [ok0, miss0] = await has(p, "#s-stand", ["Prototype stand-in for setup", "Where does OpenClaw run?", "Adding a gateway. Home gateway stays saved; Cancel goes back to it.", "This computer", "Another computer"]);
+  check(`walk: add, ${name}: the handoff to setup, and what stays`, ok0 && /Adding a gateway/.test(await rail(p)) && !/Otto/.test(await rail(p)), miss0);
+  if (choice !== "Cancel") {
+    await press(p, "button", "Another computer");
+    check(`walk: add, ${name}: setup's screens, then how it ends`, (await text(p, "#s-stand")).includes("Choose how it ends:"));
+  }
+  await press(p, "button", choice, 1900);
   const [ok, miss] = await has(p, settings, words);
   const count = await p.evaluate(() => document.querySelectorAll('[data-testid="gateway-list"] > li').length);
   check(`walk: add, ${name}: the result`, ok && count === rows, `missing: ${miss}; rows ${count}`);
   check(`walk: add, ${name}: the rail`, (await rail(p)).includes(railWord), await rail(p));
   check(`walk: add, ${name}: no page errors`, p.errors.length === 0, p.errors.join(" | "));
+  return p;
+}
+await (await addWalk("a new gateway", "Paired: a new gateway", ["Added Lab gateway", "Clawtrate is connected to it, read-only. Home gateway stays saved: switch back from the gateway menu.", "198.51.100.7 · In use"], 3, "Juniper")).close();
+await (await addWalk("the same gateway", "Paired: the same gateway", ["Home gateway is already here", "This address leads to Home gateway. Clawtrate keeps its saved pairing and didn't add a second entry.", "gateway.local · In use"], 2, "Otto")).close();
+await (await addWalk("no identity", "Paired: no identity", ["Added 198.51.100.7", "didn't say who it is, so Clawtrate keeps it under its address."], 3, "Pip")).close();
+await (await addWalk("setup failed before pairing", "Setup failed before pairing", ["No gateway was saved on this device.", "Clawtrate is connected to Home gateway again."], 2, "Otto")).close();
+await (await addWalk("paired, then setup failed", "Paired, then setup failed", ["No gateway was saved on this device.", "Setup had already paired with that gateway, so its record of this device may remain there", "Clawtrate is connected to Home gateway again."], 2, "Otto")).close();
+await (await addWalk("cancelled", "Cancel", ["No gateway was saved on this device.", "Clawtrate is connected to Home gateway again."], 2, "Otto")).close();
+{
+  const p = await addWalk("cancelled, the return fails twice", "Cancel", ["No gateway was saved on this device.", "Clawtrate couldn't reach Home gateway.", "Retry"], 2, "Can't reach Home gateway", "&returnfail=2");
+  await click(p, '[data-testid="add-result"] [data-s="retry-return"]', 1200);
+  check("walk: add, return fails: a failed Retry says so again", (await text(p, settings)).includes("Clawtrate couldn't reach Home gateway.") && (await announced(p)) === "Couldn't reach Home gateway");
+  await click(p, '[data-testid="add-result"] [data-s="retry-return"]', SWITCHED);
+  check("walk: add, return fails: a Retry that succeeds leads to Home in use", (await rail(p)).includes("Otto") && (await text(p, settings)).includes("Clawtrate is connected to Home gateway again."));
   await p.close();
 }
-await addWalk("a new gateway", "Paired: a new gateway", ["Added Lab gateway", "Clawtrate is connected to it, read-only. Home gateway stays saved: switch back from the gateway menu.", "198.51.100.7 · In use"], 3, "Juniper");
-await addWalk("the same gateway", "Paired: the same gateway", ["Home gateway is already here", "This address leads to Home gateway. Clawtrate keeps its saved pairing and didn't add a second entry.", "gateway.local · In use"], 2, "Otto");
-await addWalk("no identity", "Paired: no identity", ["Added 198.51.100.7", "didn't say who it is, so Clawtrate keeps it under its address."], 3, "Pip");
-await addWalk("setup failed", "Setup failed", ["Nothing was added", "Clawtrate is connected to Home gateway again."], 2, "Otto");
-await addWalk("cancelled", "Cancel", ["Nothing was added", "Clawtrate is connected to Home gateway again."], 2, "Otto");
 {
   const p = await open("waiting=1");
   await click(p, ".gateway-pill");
@@ -266,7 +329,7 @@ const recordLine = (p) => text(p, '#settings-dialog [data-testid="record-line"]'
   const [ok2, miss2] = await has(p, settings, ["Home gateway is removed from this device", "Gateway removed this device's record. That ends this device's access to Home gateway through every route.", "Not connected. Choose a gateway to use.", "Studio gateway"]);
   check("walk: remove the gateway in use, a matching answer: the record removed, not connected, choose", ok2, miss2);
   check("walk: remove the gateway in use: the rail says not connected", (await rail(p)).includes("Not connected"));
-  await press(p, "button", "Switch to Studio gateway", 1200);
+  await press(p, "button", "Switch to Studio gateway", SWITCHED);
   check("walk: remove the gateway in use: then Switch leads to Studio", (await rail(p)).includes("Marlow"));
   await p.close();
 }
