@@ -120,7 +120,7 @@ for (const size of SIZES) {
         const card = approvalCard(page);
         await expect(card).toHaveAttribute("data-state", "pending");
         await expect(card.locator(".request-ended")).toHaveText(
-          "Otto's run has ended. This request is still open, and you can still answer it.",
+          "Otto's run has ended. The last gateway record shows this request pending.",
         );
         for (const name of ["Allow once", "Always allow…", "Deny"]) {
           await expect(card.getByRole("button", { name, exact: true })).toBeVisible();

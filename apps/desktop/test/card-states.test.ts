@@ -287,6 +287,21 @@ describe("approval cards from the engine's state", () => {
       "allow-once",
       "deny",
     ]);
+    // Before its deadline the line counts down; after it, the card waits for the gateway's outcome.
+    const deadline = card.expiresAt!;
+    expect(expiryLine(card, deadline - 10 * 60_000)).toMatch(
+      /^Expires at \d+:\d\d [AP]M, in 10 minutes\.$/,
+    );
+    for (const now of [deadline, deadline + 60_000]) {
+      expect(expiryLine(card, now)).toMatch(
+        /^Deadline: \d+:\d\d [AP]M\. Waiting for the gateway's outcome\.$/,
+      );
+    }
+    // A record this client closed by inference says only that the deadline passed.
+    expect(resolvedView({ ...card, status: "expired", inferred: true })).toMatchObject({
+      tag: "Closed",
+      sentence: "The recorded deadline passed. The gateway's outcome was not read here.",
+    });
   });
 
   it("F-325 F-165 F-168 F-169 F-032: each settled outcome says what the gateway recorded and who decided, and nothing forecast", () => {

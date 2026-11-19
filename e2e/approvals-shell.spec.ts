@@ -780,7 +780,7 @@ test("F-418: a run that ends while its approval is pending: the card says so and
     await adminClient()
   ).waitFor("the run's end", (event) => isLifecycle(event, runId, "end"), 60_000);
   await expect(card.locator(".request-ended")).toHaveText(
-    "Otto's run has ended. This request is still open, and you can still answer it.",
+    "Otto's run has ended. The last gateway record shows this request pending.",
     { timeout: 30_000 },
   );
   for (const name of ["Allow once", "Deny"])

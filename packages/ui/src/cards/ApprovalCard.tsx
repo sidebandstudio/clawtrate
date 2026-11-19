@@ -509,7 +509,7 @@ function PendingApproval({
       )}
       {card.runEnded && (
         <p className="request-ended">
-          {name}'s run has ended. This request is still open, and you can still answer it.
+          {name}'s run has ended. The last gateway record shows this request pending.
         </p>
       )}
       <FullRequest view={view} card={card} whole={whole} open={fullOpen} onToggle={setFullOpen} />

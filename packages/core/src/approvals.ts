@@ -1133,8 +1133,8 @@ function inferredResolution(
 }
 
 /**
- * Pending approvals past their `expiresAt` expire. The gateway does not run
- * them. This is an inference: the gateway's own outcome, if it differs, wins.
+ * Pending approvals past their `expiresAt` expire. This is an inference: the
+ * gateway's own outcome, if it differs, wins.
  */
 export function expireApprovals(activity: TaskActivity, now: number): TaskActivity {
   let next = activity;

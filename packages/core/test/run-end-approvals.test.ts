@@ -119,6 +119,49 @@ describe("F-418: a request that outlives its run", () => {
     expect(activity(true).approvals[0]!.runEnded).toBe(true);
   });
 
+  it("past the client's deadline a request the gateway still holds stays pending and answerable; it settles only with the gateway's expired outcome", async () => {
+    const held = { ...item("ap-held"), expiresAtMs: Date.now() + 900 };
+    const gateway = gatewayWith([held]);
+    let snapshot: Record<string, unknown> = {
+      id: "ap-held",
+      status: "pending",
+      presentation: { kind: "exec" },
+    };
+    gateway.handlers["approval.get"] = () => ({ approval: snapshot });
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("exec.approval.requested", held);
+    gateway.emit("agent", agentEvent("run-1", 2, "lifecycle", { phase: "end" }));
+    await until(() => transcript().approvals[0]?.runEnded === true);
+    await until(() => gateway.calls("approval.get").length > 0);
+    await sleep(150);
+    expect(transcript().approvals[0]).toMatchObject({ status: "pending", runEnded: true });
+    expect(gateway.calls("exec.approval.resolve")).toEqual([]);
+    // The gateway settles it: its exec event says only deny, and approval.get says how.
+    snapshot = {
+      id: "ap-held",
+      status: "expired",
+      reason: "timeout",
+      resolvedAtMs: held.expiresAtMs,
+      presentation: { kind: "exec" },
+    };
+    gateway.emit("exec.approval.resolved", {
+      id: "ap-held",
+      decision: "deny",
+      ts: held.expiresAtMs,
+      request: held.request,
+    });
+    await until(() => transcript().approvals[0]?.status === "expired");
+    expect(transcript().approvals[0]).toMatchObject({
+      status: "expired",
+      reason: "timeout",
+      inferred: false,
+      outcomeUnknown: false,
+    });
+    expect(gateway.calls("exec.approval.resolve")).toEqual([]);
+    client.stop();
+  });
+
   it("the card closes only with the gateway's own outcome, and keeps who decided as the gateway names them", async () => {
     const gateway = gatewayWith([]);
     const { client, transcript } = await openTask({ gateway });

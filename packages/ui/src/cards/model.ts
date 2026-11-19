@@ -298,6 +298,8 @@ export function allowLabel(view: Pick<ApprovalView, "always">): string {
  */
 export function expiryLine(card: ApprovalCard, now: number): string | null {
   if (card.expiresAt === null || card.status !== "pending") return null;
+  if (card.expiresAt <= now)
+    return `Deadline: ${clock(card.expiresAt)}. Waiting for the gateway's outcome.`;
   const minutes = Math.max(1, Math.round((card.expiresAt - now) / 60_000));
   const span =
     minutes >= 120
@@ -397,11 +399,10 @@ export function resolvedView(
       };
     case "expired":
       if (card.inferred) {
-        const deadline = card.expiresAt ?? at;
         return {
-          tag: "Expired",
+          tag: "Closed",
           tone: null,
-          sentence: `Its deadline${deadline ? `, ${clock(deadline)},` : ""} passed without an answer. The gateway's own outcome was not read here.`,
+          sentence: "The recorded deadline passed. The gateway's outcome was not read here.",
           then,
           saved: null,
           winner: null,

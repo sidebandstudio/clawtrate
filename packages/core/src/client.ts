@@ -22,7 +22,6 @@ import {
   applyApprovalResolved,
   APPROVAL_KINDS,
   decisionText,
-  expireApprovals,
   attemptsOf,
   attemptsSettled,
   decisionRefusal,
@@ -2918,15 +2917,21 @@ export class ClawtrateClient {
     }
   }
 
-  /** Expire pending approvals at their `expiresAt`, then re-read the lists to confirm. */
+  /** At a pending approval's `expiresAt`, read the gateway's outcome for it; the card stays pending until one arrives. */
   private scheduleApprovalExpiry(key: string): void {
     const transcript = this.state.transcripts[key];
     const existing = this.expiryTimers.get(key);
     if (existing) clearTimeout(existing);
     this.expiryTimers.delete(key);
+    const now = this.now();
     const next = Math.min(
       ...(transcript?.approvals ?? [])
-        .filter((approval) => approval.status === "pending" && approval.expiresAt !== null)
+        .filter(
+          (approval) =>
+            approval.status === "pending" &&
+            approval.expiresAt !== null &&
+            approval.expiresAt > now,
+        )
         .map((approval) => approval.expiresAt!),
     );
     if (!Number.isFinite(next)) return;
@@ -2935,13 +2940,17 @@ export class ClawtrateClient {
       setTimeout(
         () => {
           this.expiryTimers.delete(key);
-          const pendingNow = this.pendingApprovalIds(key);
-          this.updateActivity(key, (activity) => expireApprovals(activity, this.now()));
-          this.lookUpInferred(key, pendingNow);
-          void this.backfillApprovals(key, this.generation);
+          for (const approval of this.state.transcripts[key]?.approvals ?? []) {
+            if (
+              approval.status === "pending" &&
+              approval.expiresAt !== null &&
+              approval.expiresAt <= this.now()
+            )
+              void this.lookUpOutcome(approval.id);
+          }
         },
         // setTimeout fires at once past 2^31-1 ms; re-check at that horizon instead.
-        Math.min(MAX_TIMER_MS, Math.max(0, next - this.now())),
+        Math.min(MAX_TIMER_MS, Math.max(0, next - now)),
       ),
     );
   }

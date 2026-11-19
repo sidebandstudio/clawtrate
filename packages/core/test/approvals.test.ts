@@ -664,15 +664,26 @@ describe("approvals through the client (F-163, F-165, F-166, F-168)", () => {
     client.stop();
   });
 
-  it("expires a pending approval at its expiry time", async () => {
+  it("at its expiry time reads the gateway's outcome for a pending approval, and expires the card only with it", async () => {
     const gateway = approvalGateway();
     const expiresAtMs = Date.now() + 150;
     gateway.handlers["exec.approval.list"] = () => [{ ...execItem("ap-1"), expiresAtMs }];
+    gateway.handlers["approval.get"] = () => ({
+      approval: {
+        id: "ap-1",
+        status: "expired",
+        reason: "timeout",
+        resolvedAtMs: expiresAtMs,
+        presentation: { kind: "exec" },
+      },
+    });
     const { client, transcript } = await openTask(INTERACTIVE_SCOPES, gateway);
     await until(() => transcript().approvals.length === 1);
-    // The gateway still lists it until it expires; the client marks the expiry itself.
+    expect(transcript().approvals[0]!.status).toBe("pending");
+    // At the deadline the client asks the gateway how it ended; it marks no expiry itself.
     await until(() => transcript().approvals[0]!.status === "expired");
-    expect(transcript().approvals[0]!.reason).toBe("timeout");
+    expect(gateway.calls("approval.get")).toEqual([{ id: "ap-1" }]);
+    expect(transcript().approvals[0]).toMatchObject({ reason: "timeout", inferred: false });
     client.stop();
   });
 });

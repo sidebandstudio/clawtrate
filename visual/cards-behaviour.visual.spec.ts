@@ -516,7 +516,7 @@ test.describe("approval cards", () => {
     await openFixture(page, "scene=approval-run-ended", "light");
     await expect(
       approvalCard(page).getByText(
-        "Otto's run has ended. This request is still open, and you can still answer it.",
+        "Otto's run has ended. The last gateway record shows this request pending.",
       ),
     ).toBeVisible();
     await expect(approvalCard(page).getByRole("button", { name: "Allow once" })).toBeVisible();
