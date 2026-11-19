@@ -329,6 +329,70 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     }
   });
 
+  it("pins an earlier hashed entry for another key type, and reports a rotation of several keys", async () => {
+    const multi = await startSshd(join(root, "multi"), t.home, t.userKey);
+    const before = readFileSync(t.world.personConfig, "utf8");
+    try {
+      const ecdsa = join(root, "multi", "sshd", "host_ecdsa");
+      keygen(ecdsa, "ecdsa");
+      await multi.stop();
+      await multi.start(undefined, [ecdsa]);
+      t.writeConfig(
+        `Host multibox\n  HostName 127.0.0.1\n  Port ${multi.port}\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n`,
+      );
+      // The person trusts only the ECDSA key, in a hashed entry, as ssh-keygen -H writes it.
+      const [type, key] = readFileSync(`${ecdsa}.pub`, "utf8").trim().split(" ");
+      writeFileSync(t.world.personKnownHosts, `[127.0.0.1]:${multi.port} ${type} ${key}\n`);
+      execFileSync(KEYGEN, ["-H", "-f", t.world.personKnownHosts], {
+        env: testEnv(),
+        stdio: "ignore",
+      });
+      rmSync(`${t.world.personKnownHosts}.old`, { force: true });
+      expect(readFileSync(t.world.personKnownHosts, "utf8")).toMatch(/^\|1\|/);
+
+      const route2 = prepare("multi", "multibox");
+      const check = await transport.checkHostKey(route2);
+      expect(check).toMatchObject({
+        ok: true,
+        state: "pinned-from-known-hosts",
+        label: "ECDSA",
+        fingerprint: fingerprintOfFile(`${ecdsa}.pub`),
+      });
+      expect(readFileSync(join(t.world.appDir, "known_hosts"), "utf8")).toContain(
+        `${route2.alias} ${type} ${key} `,
+      );
+      expect((await transport.look(route2)).ok).toBe(true);
+
+      // Both keys replaced: the change is reported, and what is presented is the key captured now.
+      const newEd = join(root, "multi", "sshd", "host_ed25519_new");
+      const newEcdsa = join(root, "multi", "sshd", "host_ecdsa_new");
+      keygen(newEd);
+      keygen(newEcdsa, "ecdsa");
+      await multi.stop();
+      await multi.start(newEd, [newEcdsa]);
+      const changed = await transport.checkHostKey(route2);
+      expect(changed.ok && changed.state).toBe("changed");
+      if (!changed.ok || changed.state !== "changed") return;
+      expect(changed.trusted).toMatchObject({
+        label: "ECDSA",
+        fingerprint: fingerprintOfFile(`${ecdsa}.pub`),
+      });
+      expect([fingerprintOfFile(`${newEd}.pub`), fingerprintOfFile(`${newEcdsa}.pub`)]).toContain(
+        changed.presented.fingerprint,
+      );
+      expect(transport.replaceTrustedKey(route2, changed.presented.captureId)).toMatchObject({
+        ok: true,
+        fingerprint: changed.presented.fingerprint,
+      });
+      expect((await transport.look(route2)).ok).toBe(true);
+      transport.forget(route2);
+    } finally {
+      rmSync(t.world.personKnownHosts, { force: true });
+      await multi.stop();
+      t.writeConfig(before);
+    }
+  });
+
   it("a certificate-authority line is never pinned: such a host goes through first contact", async () => {
     const [type, key] = readFileSync(`${sshd.hostKey}.pub`, "utf8").trim().split(" ");
     writeFileSync(

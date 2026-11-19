@@ -238,8 +238,10 @@ export type TestSshd = {
   /** Ends every connection's session processes, leaving the listener. */
   dropSessions(): Promise<void>;
   stop(): Promise<void>;
-  /** Starts again on the same port, with `hostKey` or a new one. */
-  start(hostKey?: string): Promise<void>;
+  /** Host keys beside `hostKey`, offered too. */
+  extraHostKeys: string[];
+  /** Starts again on the same port, with `hostKey` or a new one, and the extra keys given. */
+  start(hostKey?: string, extraHostKeys?: string[]): Promise<void>;
 };
 
 /** An `sshd` of the test's own, as the current user, on a loopback port, with `home` as its sessions' HOME. */
@@ -254,6 +256,7 @@ export async function startSshd(
   const port = await freePort();
   let hostKey = join(dir, "host_ed25519");
   keygen(hostKey);
+  let extra: string[] = [];
   writeFileSync(join(dir, "authorized_keys"), readFileSync(`${authorizedKey}.pub`), {
     mode: 0o600,
   });
@@ -264,6 +267,7 @@ export async function startSshd(
       `Port ${port}`,
       "ListenAddress 127.0.0.1",
       `HostKey ${hostKey}`,
+      ...extra.map((key) => `HostKey ${key}`),
       "PidFile none",
       `AuthorizedKeysFile ${join(dir, "authorized_keys")}`,
       "StrictModes no",
@@ -287,8 +291,12 @@ export async function startSshd(
     get hostKey() {
       return hostKey;
     },
-    async start(key) {
+    get extraHostKeys() {
+      return extra;
+    },
+    async start(key, extraHostKeys) {
       if (key) hostKey = key;
+      if (extraHostKeys) extra = extraHostKeys;
       writeFileSync(join(dir, "sshd_config"), config());
       log = "";
       const started = spawn(SSHD, ["-D", "-e", "-f", join(dir, "sshd_config")], {
