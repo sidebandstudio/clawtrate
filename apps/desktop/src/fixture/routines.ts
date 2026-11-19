@@ -61,6 +61,7 @@ const base = (over: Partial<Routine> & Pick<Routine, "id" | "botId" | "name">): 
   schedule: schedule({}),
   payload: "agentTurn",
   text: "",
+  textCut: false,
   target: "isolated",
   delivery: "none",
   deliveryChannel: null,
