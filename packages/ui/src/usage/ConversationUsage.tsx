@@ -54,13 +54,14 @@ export function UsageNotes({ bot, canSet }: { bot: Bot; canSet: boolean }) {
               .map((window) => ({ provider: each, window })),
           )
       : [];
-  const windowKey = (provider: string, label: string) => `${provider}:${label}`;
+  const windowKey = (provider: string, label: string, resetAt: number | null) =>
+    JSON.stringify([provider, label, resetAt]);
   // Closed until the figure changes, and only for the windows reported now.
   const kept = stillClosed(
     closed,
     new Map(
       near.map(({ provider: each, window }) => [
-        windowKey(each.provider, window.label),
+        windowKey(each.provider, window.label, window.resetAt),
         window.usedPercent,
       ]),
     ),
@@ -68,7 +69,7 @@ export function UsageNotes({ bot, canSet }: { bot: Bot; canSet: boolean }) {
   if (kept !== closed) setClosed(kept);
   const notes = near
     .map(({ provider: each, window }) => {
-      const key = windowKey(each.provider, window.label);
+      const key = windowKey(each.provider, window.label, window.resetAt);
       const kind = window.label.toLowerCase();
       const at = asOf(limits?.updatedAt ?? null);
       const words =

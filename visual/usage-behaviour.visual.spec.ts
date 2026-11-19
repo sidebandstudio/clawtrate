@@ -334,6 +334,42 @@ test("F-236: near a provider's limit the note names no account, closes, and at t
   await expect(page.getByTestId("limit-note")).toHaveText(
     "OpenAI reports a weekly limit reached, as of 5:38 PM. It resets Nov 17.",
   );
+  // Closed at 100%, then the provider reports the next window, still at 100%: a new note.
+  await page.getByTestId("limit-note").getByRole("button", { name: "Close" }).click();
+  await expect(page.getByTestId("limit-note")).toHaveCount(0);
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        clawtrateFixture: {
+          setState(
+            change: (state: {
+              usage: {
+                limits: { providers: Array<{ windows: Array<{ resetAt: number | null }> }> };
+              };
+            }) => unknown,
+          ): void;
+        };
+      }
+    ).clawtrateFixture.setState((state) => ({
+      ...state,
+      usage: {
+        ...state.usage,
+        limits: {
+          ...state.usage.limits,
+          providers: state.usage.limits.providers.map((provider) => ({
+            ...provider,
+            windows: provider.windows.map((window) => ({
+              ...window,
+              resetAt: window.resetAt === null ? null : window.resetAt + 7 * 86_400_000,
+            })),
+          })),
+        },
+      },
+    })),
+  );
+  await expect(page.getByTestId("limit-note")).toHaveText(
+    "OpenAI reports a weekly limit reached, as of 5:38 PM. It resets Nov 24.",
+  );
   // A bot on another provider gets no note.
   await openFixture(page, `scene=main&bot=quartermaster&access=write&plimit=near`, "light");
   await expect(page.getByTestId("limit-note")).toHaveCount(0);
