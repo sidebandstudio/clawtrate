@@ -58,6 +58,7 @@ export const SETTINGS_WORDS = {
   device: "This device",
   scopes: "Granted scopes",
   noScopes: "None while not connected",
+  noneGranted: "None granted",
   server: "Gateway",
   reconnect: "Reconnect",
   disconnect: "Disconnect",
@@ -104,9 +105,8 @@ export function serverWords(connection: ConnectionState): string | null {
 
 /** The scopes the gateway granted, while connected. */
 export function grantedWords(connection: ConnectionState): string {
-  return connection.status === "connected" && connection.scopes.length > 0
-    ? connection.scopes.join(", ")
-    : SETTINGS_WORDS.noScopes;
+  if (connection.status !== "connected") return SETTINGS_WORDS.noScopes;
+  return connection.scopes.length > 0 ? connection.scopes.join(", ") : SETTINGS_WORDS.noneGranted;
 }
 
 /** The pane's last line: the pairing is kept, and what this device may do. */

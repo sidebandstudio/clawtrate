@@ -117,7 +117,10 @@ function RowView({ row }: { row: ChatRow }) {
             paddingHorizontal: 14,
           }}
         >
-          <Dot tone="connected" />
+          <Dot
+            tone={row.tone === "live" ? "connected" : row.tone === "lost" ? "connecting" : "off"}
+            testID={`running-dot-${row.tone}`}
+          />
           <Txt testID="running-text" size={S["text-sm"]} color="text-muted">
             {row.text}
           </Txt>
@@ -257,6 +260,7 @@ export function Chat({
   const { c } = useTheme();
   const transcript = state.transcripts[task.key];
   const online = state.connection.status === "connected";
+  const link = { connected: online, closed: state.connection.status === "disconnected" };
   const scroller = useRef<ComponentRef<typeof ScrollView>>(null);
   // A task opens at its start, its title in view; the reader follows the end
   // once they reach it, as section 18 has it.
@@ -290,7 +294,7 @@ export function Chat({
     transcript &&
     !(transcript.status === "loading" && items === 0) &&
     !(transcript.status === "error" && items === 0)
-      ? chatRows(task, transcript, bot.name, now, online).map((row) => redactRow(row, redact))
+      ? chatRows(task, transcript, bot.name, now, link).map((row) => redactRow(row, redact))
       : [];
   const running = rows.find((row) => row.kind === "running");
   let body: ReactNode;

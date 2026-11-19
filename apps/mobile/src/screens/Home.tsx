@@ -5,7 +5,7 @@
 // gateway for its bots and tasks again, as Retry now does.
 
 import type { ClawtrateState } from "@clawtrate/core";
-import { LIST_WORDS } from "@clawtrate/ui/summary";
+import { LIST_WORDS, listNote } from "@clawtrate/ui/summary";
 import type { SeenMap } from "@clawtrate/ui/unread";
 import { useState } from "react";
 import { Pressable, RefreshControl, ScrollView, useWindowDimensions, View } from "react-native";
@@ -186,7 +186,7 @@ export function Home({
   onOpenBot: (botId: string) => void;
   onSettings: () => void;
 }) {
-  const { send } = useRuntime();
+  const { send, redact } = useRuntime();
   const { c } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
   const model = homeModel(state, seen, now);
@@ -201,7 +201,8 @@ export function Home({
       setRefreshing(false);
     }
   };
-  const empty = state.bots.length === 0;
+  // No bots: loading, a failed read (never "No bots" then), or a gateway that has none.
+  const note = listNote(state.bots.length, state.discovery);
   return (
     <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: c.bg }}>
       <Top
@@ -242,18 +243,15 @@ export function Home({
             ))}
           </View>
         ))}
-        {empty && (
+        {note && (
           <View
+            testID={`list-note-${note.state}`}
             style={{ padding: S["space-5"], gap: S["space-1"] }}
-            accessibilityState={{ busy: state.discovery.status === "loading" }}
+            accessibilityState={{ busy: note.state === "loading" }}
           >
-            <Txt weight="medium">
-              {state.discovery.status === "loading"
-                ? LIST_WORDS.loadingTitle
-                : LIST_WORDS.emptyTitle}
-            </Txt>
+            <Txt weight="medium">{note.title}</Txt>
             <Txt size={S["text-sm"]} color="text-faint">
-              {state.discovery.status === "loading" ? LIST_WORDS.loadingBody : LIST_WORDS.emptyBody}
+              {redact(note.body)}
             </Txt>
           </View>
         )}

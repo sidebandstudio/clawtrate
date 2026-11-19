@@ -61,6 +61,7 @@ import {
   botPreview,
   botTime,
   LIST_WORDS,
+  listNote,
   summarize,
   taskLabel,
   taskState,
@@ -1677,6 +1678,7 @@ export function Rail({
     );
   };
 
+  const note = listNote(bots.length, discovery);
   return (
     <nav className="rail" aria-label="Bots" inert={inert}>
       <div className="rail-top">
@@ -1776,18 +1778,12 @@ export function Rail({
         onScroll={() => setTip(null)}
         aria-busy={discovery.status === "loading" && bots.length === 0 ? true : undefined}
       >
-        {bots.length === 0 &&
-          (discovery.status === "loading" ? (
-            <li className="rail-empty">
-              <strong>{LIST_WORDS.loadingTitle}</strong>
-              {LIST_WORDS.loadingBody}
-            </li>
-          ) : (
-            <li className="rail-empty">
-              <strong>{LIST_WORDS.emptyTitle}</strong>
-              {LIST_WORDS.emptyBody}
-            </li>
-          ))}
+        {note && (
+          <li className="rail-empty" data-state={note.state}>
+            <strong>{note.title}</strong>
+            {note.body}
+          </li>
+        )}
         {matches ? (
           <>
             {bots.length > 0 && matches.length === 0 && (

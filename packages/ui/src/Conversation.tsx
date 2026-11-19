@@ -459,6 +459,8 @@ type LiveOptions = {
   /** What the reading needs beyond each call, as the cards read it. */
   reading?: ReadingContext;
   connected: boolean;
+  /** The person closed the connection: the status line says Disconnected, not Reconnecting. */
+  closed?: boolean;
   interactive: boolean;
   /** Ask for the interactive tier; null where the host never asks (pinned read-only). */
   onRequestAccess: (() => void) | null;
@@ -946,6 +948,7 @@ export function Conversation({
         transcript={transcript}
         liveOptions={{
           connected: caughtUp,
+          closed: connection.status === "disconnected",
           interactive,
           onRequestAccess: info.readOnly
             ? null

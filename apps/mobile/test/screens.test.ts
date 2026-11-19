@@ -1,6 +1,7 @@
 import {
   callFromBlock,
   emptyActivity,
+  newRun,
   foldLineOf,
   initialState,
   lineOf,
@@ -14,7 +15,9 @@ import {
 import { describe, expect, it } from "vitest";
 import { homeModel, taskRows } from "../src/lists.ts";
 import { back, connectView, current, HOME, inShell, keptMismatch } from "../src/navigation.ts";
-import { chatRows } from "../src/transcript.ts";
+import { chatRows, runningWords } from "../src/transcript.ts";
+
+const LIVE = { connected: true, closed: false };
 
 const NOW = new Date(2026, 10, 18, 9, 30).getTime();
 
@@ -252,7 +255,7 @@ describe("the iPhone chat's rows", () => {
   ];
 
   it("puts stamps before the first message and after ten quiet minutes, bubbles in order, and each action as a line in the engine's words", () => {
-    const rows = chatRows(task("agent:otto:disk", at), transcript(items), "Otto", NOW, true);
+    const rows = chatRows(task("agent:otto:disk", at), transcript(items), "Otto", NOW, LIVE);
     expect(rows.map((row) => row.kind)).toEqual([
       "stamp",
       "user",
@@ -296,16 +299,63 @@ describe("the iPhone chat's rows", () => {
       transcript(items),
       "Otto",
       NOW,
-      true,
+      LIVE,
     );
-    expect(running.at(-1)).toEqual({ kind: "running", id: "running", text: "Otto, working" });
+    expect(running.at(-1)).toEqual({
+      kind: "running",
+      id: "running",
+      text: "Otto, working",
+      tone: "live",
+    });
     const done = chatRows(
       task("agent:otto:disk", at, { status: "done" }),
       transcript(items),
       "Otto",
       NOW,
-      true,
+      LIVE,
     );
     expect(done.some((row) => row.kind === "running")).toBe(false);
+  });
+
+  it("never says a cached task is working while the connection is lost or closed, and says which", () => {
+    const cached = task("agent:otto:disk", at, { status: "running" });
+    expect(
+      runningWords(cached, transcript([]), "Otto", { connected: false, closed: false }),
+    ).toEqual({
+      text: "Reconnecting. Last seen working",
+      tone: "lost",
+    });
+    expect(
+      runningWords(cached, transcript([]), "Otto", { connected: false, closed: true }),
+    ).toEqual({
+      text: "Disconnected. Last seen working",
+      tone: "off",
+    });
+    // With a run loaded, the status line's words, closed or dropped.
+    const live = {
+      ...transcript([]),
+      runs: [newRun("run-1", { state: "running", origin: "local", bound: true }, 1)],
+    };
+    expect(runningWords(cached, live, "Otto", { connected: false, closed: true })?.text).toBe(
+      "Disconnected. Last seen thinking",
+    );
+  });
+
+  it("shows text that streams with no tool running, and says the bot is writing, not thinking", () => {
+    const run = {
+      ...newRun("run-1", { state: "running", origin: "local", bound: true }, 1),
+      text: "Half a reply",
+    };
+    const rows = chatRows(
+      task("agent:otto:disk", at, { status: "running" }),
+      { ...transcript([]), runs: [run] },
+      "Otto",
+      NOW,
+      LIVE,
+    );
+    expect(rows.slice(-2)).toEqual([
+      { kind: "bot", id: "live:run-1", text: "Half a reply" },
+      { kind: "running", id: "running", text: "Writing", tone: "live" },
+    ]);
   });
 });

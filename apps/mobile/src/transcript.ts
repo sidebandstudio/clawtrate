@@ -2,9 +2,11 @@
 // centred stamps, your messages and the bot's, and each of the bot's actions as
 // one line in the engine's own words (`lineOf`, `foldLineOf`, grouped by
 // `groupFeed` as the desktop groups them). Reasoning stays folded away, as the
-// design says; it is not drawn here. A run that is going on says so in the
-// status line's words; its streaming text is not shown yet, and the history
-// that lands when it ends replaces the note. Pure, so the unit tests cover it.
+// design says; it is not drawn here. A run that is going on shows its streaming
+// text and says what it does in the status line's words, in the past tense
+// while the connection is lost or closed, and the history that lands when it
+// ends replaces both.
+// Pure, so the unit tests cover it.
 
 import {
   activeRun,
@@ -20,6 +22,7 @@ import {
   type Transcript,
   type TranscriptItem,
 } from "@clawtrate/core";
+import { actionWords } from "@clawtrate/core";
 import { stampBefore } from "@clawtrate/ui/conversation-words";
 import { stampTime } from "@clawtrate/ui/format";
 import { statusLineFor } from "@clawtrate/ui/live";
@@ -39,8 +42,15 @@ export type ChatRow =
       tone: "danger" | null;
     }
   | { kind: "event"; id: string; text: string }
-  /** A run going on now: what it is doing, in the status line's words. */
-  | { kind: "running"; id: string; text: string };
+  /**
+   * A run going on now: what it is doing, in the status line's words. `tone` is
+   * the connection's: live while connected, lost while it reconnects, off when
+   * the person closed it.
+   */
+  | { kind: "running"; id: string; text: string; tone: "live" | "lost" | "off" };
+
+/** How the connection stands, for what a run is said to be doing. */
+export type Link = { connected: boolean; closed: boolean };
 
 type Ref = { text: string };
 
@@ -76,17 +86,35 @@ function entriesOf(
   return entries;
 }
 
-/** The phrase for a task that runs now, or null when nothing runs. */
+/** The phrase for a task that runs now, and its tone; null when nothing runs. */
 export function runningWords(
   task: Task,
   transcript: Transcript,
   botName: string,
-  connected: boolean,
-): string | null {
+  link: Link,
+): { text: string; tone: "live" | "lost" | "off" } | null {
+  const tone = link.connected ? "live" : link.closed ? "off" : "lost";
   const run = activeRun(transcript);
-  if (run) return statusLineFor(run, transcript, { connected, interactive: false }).phrase;
-  // The gateway's row says it runs before this client has seen the run itself.
-  return task.status === "running" ? `${botName}, ${STATE_WORDS.working}` : null;
+  if (run) {
+    const view = statusLineFor(run, transcript, {
+      connected: link.connected,
+      interactive: false,
+      closed: link.closed,
+    });
+    // Text that streams with no tool running is the bot writing, not thinking.
+    const writing =
+      link.connected &&
+      view.callId === null &&
+      run.text.trim() !== "" &&
+      view.phrase === actionWords.PHRASES.thinking;
+    return { text: writing ? actionWords.PHRASES.writing : view.phrase, tone };
+  }
+  if (task.status !== "running") return null;
+  // The gateway's row says it runs before this client has seen the run. That is
+  // news only while connected; a row kept from before is what was last seen.
+  if (link.connected) return { text: `${botName}, ${STATE_WORDS.working}`, tone };
+  const phrase = link.closed ? actionWords.PHRASES.disconnected : actionWords.PHRASES.reconnecting;
+  return { text: phrase(STATE_WORDS.working), tone };
 }
 
 export function chatRows(
@@ -94,7 +122,7 @@ export function chatRows(
   transcript: Transcript,
   botName: string,
   now: number,
-  connected: boolean,
+  link: Link,
 ): ChatRow[] {
   const rows: ChatRow[] = [];
   const ctx = readingContextOf(transcript);
@@ -147,7 +175,11 @@ export function chatRows(
       }
     }
   }
-  const running = runningWords(task, transcript, botName, connected);
-  if (running) rows.push({ kind: "running", id: "running", text: running });
+  const active = activeRun(transcript);
+  // What the run has written so far, before it lands in history.
+  if (active && active.text.trim() !== "")
+    rows.push({ kind: "bot", id: `live:${active.id}`, text: active.text });
+  const running = runningWords(task, transcript, botName, link);
+  if (running) rows.push({ kind: "running", id: "running", ...running });
   return rows;
 }

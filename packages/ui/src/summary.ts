@@ -202,6 +202,8 @@ export const LIST_WORDS = {
   loadingBody: "Loading this gateway's bots.",
   emptyTitle: "No bots",
   emptyBody: "Bots appear here once the gateway has one.",
+  failedTitle: "Couldn't load bots and tasks",
+  failedBody: "Could not load this gateway's bots and tasks.",
   partial: "Showing the most recent tasks only.",
 } as const;
 
@@ -215,4 +217,25 @@ export const TASK_WORDS = {
 /** A bot with no tasks, on a connection that reads. */
 export function noTasksBody(botName: string): string {
   return `Conversations with ${botName} will be listed here.`;
+}
+
+/**
+ * The list's note when it has no bot to show: while they load, when the read
+ * failed (an unsuccessful read never says the gateway has none), and when the
+ * gateway has none. Null when there are bots.
+ */
+export function listNote(
+  bots: number,
+  discovery: { status: string; error: string | null },
+): { title: string; body: string; state: "loading" | "failed" | "empty" } | null {
+  if (bots > 0) return null;
+  if (discovery.status === "loading")
+    return { title: LIST_WORDS.loadingTitle, body: LIST_WORDS.loadingBody, state: "loading" };
+  if (discovery.status === "error")
+    return {
+      title: LIST_WORDS.failedTitle,
+      body: discovery.error ?? LIST_WORDS.failedBody,
+      state: "failed",
+    };
+  return { title: LIST_WORDS.emptyTitle, body: LIST_WORDS.emptyBody, state: "empty" };
 }
