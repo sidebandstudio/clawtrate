@@ -26,7 +26,7 @@ import type { HttpFetch } from "../src/host.ts";
 import { mapHistory } from "../src/mapping.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, KEY, URL_A } from "./client-harness.ts";
-import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const GATEWAY = "ws://127.0.0.1:19980";
 const ORIGIN = "http://127.0.0.1:19980";
@@ -676,6 +676,62 @@ describe("nothing remote loads by itself", () => {
     expect(fetched).toEqual([]);
     // A page this task does not name is not read for it.
     expect(await client.readPage(KEY, "another-page")).toMatchObject({ status: "failed" });
+    client.stop();
+  });
+
+  it("F-115 F-307: a message the gateway changes in place after its run is read again, so what it attached or refused shows", async () => {
+    const gateway = grantingGateway();
+    let attached = false;
+    const reply = () => ({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Here is the elevation log." },
+        ...(attached
+          ? [
+              {
+                type: "attachment_error",
+                attachment: {
+                  code: "delivery-failed",
+                  kind: "document",
+                  label: "elevation-log.csv",
+                },
+              },
+            ]
+          : []),
+      ],
+      __openclaw: { seq: 2, runId: "run-1" },
+    });
+    gateway.handlers["chat.history"] = () => ({
+      messages: [{ role: "user", content: "#hand-large", __openclaw: { seq: 1 } }, reply()],
+      hasMore: false,
+    });
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: INTERACTIVE_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+      }),
+    });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.discovery.status === "ready");
+    client.openSession(KEY);
+    await until(() => client.state.transcripts[KEY]?.status === "ready");
+    const blocks = () =>
+      client.state.transcripts[KEY]!.items.at(-1)!.blocks.map((block) => block.kind);
+    expect(blocks()).toEqual(["text"]);
+    const reads = gateway.calls("chat.history").length;
+    // The gateway writes the refusal into the message, then says only that it changed.
+    attached = true;
+    gateway.emit("sessions.changed", { sessionKey: KEY, agentId: "otto", phase: "message", ts: 1 });
+    await until(() => gateway.calls("chat.history").length > reads);
+    await until(() => blocks().includes("attachment-error"));
+    // Another task's change reads nothing here.
+    const after = gateway.calls("chat.history").length;
+    gateway.emit("sessions.changed", { sessionKey: "agent:otto:other", phase: "message", ts: 2 });
+    await sleep(100);
+    expect(gateway.calls("chat.history").length).toBe(after);
     client.stop();
   });
 

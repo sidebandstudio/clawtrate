@@ -4628,6 +4628,7 @@ export class ClawtrateClient {
   private handleSessionsChanged(payload: unknown, generation: number): void {
     if (this.bootstrapping) this.changedDuringBootstrap = true;
     this.noteRunChange(payload);
+    this.noteMessageChange(payload);
     const row = sessionChangeRow(payload);
     const rowKey = row ? sessionRowKey(row) : null;
     // Rows are kept under the id cap.
@@ -4652,6 +4653,18 @@ export class ClawtrateClient {
     if (isTaskSession(merged)) this.rows.set(key, SESSION_ROW(merged));
     else this.rows.delete(key);
     this.publishTasks();
+  }
+
+  /**
+   * A `sessions.changed` with `phase: "message"` for an open task: a message
+   * of it changed in place. The gateway writes what a reply hands over (its
+   * attachments and the files it refused to attach) into the message after
+   * the run ends, with no `session.message`, so history is read again.
+   */
+  private noteMessageChange(payload: unknown): void {
+    const row = asRecord(payload);
+    const key = typeof row?.sessionKey === "string" ? row.sessionKey : null;
+    if (row?.phase === "message" && key && this.tracked(key)) this.scheduleHistory(key);
   }
 
   /**
