@@ -660,10 +660,18 @@ describe("the iOS app", () => {
       notSee(`.*${lit(env.token)}.*`),
       scrollTo({ text: lit(AUTOLINK) }, "DOWN"),
     ]);
-    // A link opens in the system browser: the app leaves the screen.
+    // An address written as itself opens in the system browser without asking.
     await steps("open-link", [tap(lit(AUTOLINK)), waitGone({ id: "transcript" }, 30_000)]);
-    launch({ devGateway: gateway });
-    await steps("back-from-browser", [waitFor({ id: "home" }, 60_000)]);
+    // Back from the browser, the app is where it was.
+    activate();
+    await steps("back-from-browser", [
+      waitFor({ id: "transcript" }, 30_000),
+      see({ id: "task-line", text: lit(reading.title) }),
+      tap({ id: "back" }),
+      waitFor({ id: "bot-tasks-main" }, 20_000),
+      tap({ id: "back" }),
+      waitFor({ id: "home" }, 20_000),
+    ]);
     expect(appLog(Math.ceil((Date.now() - started) / 1000) + 30)).not.toContain(env.token);
   });
 
@@ -779,16 +787,16 @@ describe("the iOS app", () => {
       see({ id: "settings-button", text: "Settings. Gateway (connecting|offline)\\." }),
     ]);
     await shoot("reconnecting");
+    // Retry now while the gateway is still out of reach: it tries, and the strip stays.
+    await steps("retry-while-cut", [
+      tap({ id: "status-strip-action", text: "Retry now" }),
+      waitFor({ id: "status-strip-text", text: "(Reconnecting.*|Can't reach the gateway.*)" }),
+      see({ id: "bot-otto" }),
+    ]);
     await proxy.restore();
+    // The app reconnects on its own schedule; nothing is tapped that reconnecting takes away.
     await steps("returns", [
-      // The app may have reconnected on its own schedule already; else Retry now does it at once.
-      {
-        runFlow: {
-          when: { visible: { id: "status-strip-action", text: "Retry now" } },
-          commands: [tap({ id: "status-strip-action" })],
-        },
-      },
-      waitFor({ id: "connection-dot-connected" }, 90_000),
+      waitFor({ id: "connection-dot-connected" }, 120_000),
       waitGone({ id: "status-strip" }, 60_000),
       see({ id: "bot-otto" }),
     ]);
