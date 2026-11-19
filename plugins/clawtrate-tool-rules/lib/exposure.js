@@ -200,7 +200,7 @@ const REMEDY = {
   "files-outside-workspace":
     "Set tools.fs.workspaceOnly to true, or deny it write, edit and apply_patch.",
   "store-in-workspace":
-    "Give it a workspace outside the gateway's state folder, or deny it write, edit and apply_patch.",
+    "Choose a workspace that does not contain the rules store, or deny it write, edit and apply_patch.",
 };
 
 /** One warning per bot and reason, in words. */

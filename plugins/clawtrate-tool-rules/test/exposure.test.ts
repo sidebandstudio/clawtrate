@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { exposures, surelyDenied } from "../lib/exposure.js";
+import { exposureWarnings, exposures, surelyDenied } from "../lib/exposure.js";
 
 const SAFE = {
   tools: { deny: ["gateway", "plugins"], exec: { mode: "deny" }, fs: { workspaceOnly: true } },
@@ -214,5 +214,18 @@ describe("a store not created yet under a linked folder", () => {
       exposures(withAgent(SAFE), { storeDir, workspaceOf: () => [workspace] })[0]?.reasons ?? [];
     expect(reasonsFor(state)).toEqual(["store-in-workspace"]);
     expect(reasonsFor(temp())).toEqual([]);
+  });
+});
+
+describe("the remedy for a workspace that holds the store", () => {
+  it("says to choose a workspace that does not contain the store, or to deny the file tools", () => {
+    const [line] = exposureWarnings(withAgent(SAFE), {
+      storeDir: "/srv/gateway/clawtrate-tool-rules",
+      workspaceOf: () => ["/srv"],
+    });
+    expect(line).toMatch(
+      /Choose a workspace that does not contain the rules store, or deny it write, edit and apply_patch\.$/,
+    );
+    expect(line).not.toMatch(/outside the gateway's state folder/);
   });
 });
