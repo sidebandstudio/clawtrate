@@ -344,8 +344,11 @@ export const RUN: Bound = flagged<Run>()({
   stoppedWith: object<StoppedWith>()({
     helpers: NUMBER,
     bots: list(MAX_STOPPED_NAMED, ID),
-    processes: list(MAX_STOPPED_NAMED, NAME),
     uncertain: list(MAX_STOPPED_NAMED, ID),
+    refused: list(MAX_STOPPED_NAMED, ID),
+    unanswered: list(MAX_STOPPED_NAMED, ID),
+    omitted: NUMBER,
+    recipientsAsked: FLAG,
   }),
   stoppedForTimeouts: NUMBER,
   retry: object<NonNullable<Run["retry"]>>()({ attempt: NUMBER, of: NUMBER, reason: NAME }),

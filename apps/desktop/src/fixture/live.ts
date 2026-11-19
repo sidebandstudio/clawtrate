@@ -544,7 +544,7 @@ export function liveScene(
         steps: [],
       };
     case "run-stopped-with":
-      // As the gateway reported what stopped with it: helpers, Marlow's run, a process.
+      // As the gateway reported what stopped with it: helpers and Marlow's run.
       return {
         initial: withRun(base, now, {
           state: "stopped",
@@ -555,8 +555,11 @@ export function liveScene(
           stoppedWith: {
             helpers: 1,
             bots: ["agent:marlow:main"],
-            processes: ["sleep 60"],
             uncertain: ["agent:pip:main"],
+            refused: [],
+            unanswered: [],
+            omitted: 0,
+            recipientsAsked: true,
           },
         }),
         steps: [],

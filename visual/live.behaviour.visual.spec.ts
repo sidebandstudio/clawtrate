@@ -903,14 +903,14 @@ test.describe("steering, queueing and holding", () => {
     await expect(note.locator(".glyph")).toHaveAttribute("data-state", "stopped");
   });
 
-  test("F-298 F-296 F-297: after a Stop the note lists what stopped with the run, named, and what may not have been delivered", async ({
+  test("F-298 F-296: after a Stop the note lists what stopped with the run, named, and what may not have been delivered", async ({
     page,
   }) => {
     await open(page, "run-stopped-with");
     const note = page.getByTestId("stop-note");
     await expect(note.locator("p")).toContainText("Completed actions are not undone.");
     await expect(note.getByTestId("stopped-with").getByRole("listitem")).toHaveText([
-      "Stopped with it: 1 helper run, Marlow's run for this message and the process sleep 60.",
+      "Stopped with it: 1 helper run and Marlow's run for this message.",
       "The message to Pip may or may not have been delivered.",
     ]);
     // A plain stop claims nothing more.

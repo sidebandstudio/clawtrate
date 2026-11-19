@@ -121,6 +121,7 @@ import {
   noteRunRequest,
   timeoutsInARow,
   TIMEOUTS_IN_A_ROW,
+  markStopAsked,
   noteStoppedWith,
   cancelQueuedRun,
   dropUnboundRun,
@@ -197,7 +198,6 @@ import {
   MAX_OUTBOX,
   MAX_PENDING_APPROVAL_COUNT,
   MAX_REACTIONS_PER_MESSAGE,
-  MAX_STOPPED_NAMED,
   MAX_RUN_TEXT_CHARS,
   MAX_TASK_LINE_CHARS,
   MAX_TRACKED_TASKS as TRACKED_TASKS,
@@ -347,8 +347,6 @@ export const MAX_MESSAGE_CHARS = 32_000;
 export const DEFAULT_MAX_PAYLOAD_BYTES = 26_214_400;
 /** How often a send with files is sampled as the socket writes it (F-286). */
 const UPLOAD_SAMPLE_MS = 100;
-/** A process started this long before its run's reported start still counts as the run's. */
-const PROCESS_START_SLACK_MS = 1_000;
 /** Room left in a frame for the request envelope around the params. */
 const FRAME_SLACK_BYTES = 1024;
 const SESSION_LIST_PARAMS = {
@@ -2189,14 +2187,23 @@ export class ClawtrateClient {
     const command = runId === null && typeof result?.aborted === "boolean";
     this.updateActivity(key, (activity, ctx) => {
       if (command) {
-        return dropUnboundRun(
-          updateMessage(activity, messageId, {
-            status: "handled",
-            messageSeq: null,
-            runId: null,
-            error: null,
-          }),
-          messageId,
+        // A stop command of this task's stopped the runs its answer names: as this client's Stop.
+        const stopped =
+          result?.aborted === true && Array.isArray(result.runIds)
+            ? result.runIds.filter((id): id is string => typeof id === "string")
+            : [];
+        return markStopAsked(
+          dropUnboundRun(
+            updateMessage(activity, messageId, {
+              status: "handled",
+              messageSeq: null,
+              runId: null,
+              error: null,
+            }),
+            messageId,
+          ),
+          stopped,
+          this.now(),
         );
       }
       if (runId === null && message.mode !== "steer") {
@@ -2296,7 +2303,7 @@ export class ClawtrateClient {
       const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
       // Nothing was aborted: the run ended already. Its terminal event or history settles it.
       if (result?.aborted === false) this.scheduleHistory(key);
-      else if (result?.aborted === true) void this.stopCompanions(key, runId, result);
+      else if (result?.aborted === true) this.noteHelpers(key, runId, result);
     } catch (error) {
       this.noteMissingScope(error);
       if (error instanceof GatewayProtocolRequestError) {
@@ -2318,19 +2325,8 @@ export class ClawtrateClient {
     }
   }
 
-  /**
-   * What a Stop this client's gateway confirmed also ends (F-296, F-297, F-298): the helper runs
-   * the gateway aborted with it (its answer's other `runIds`), the runs of other bots this run's
-   * messages started (`chat.abort` on each recipient's session, by the run its `sessions_send`
-   * result named), and the processes it started on its machine (`sessions.processes.list`, then
-   * `sessions.processes.stop` for each still running that started while the run did). Each is
-   * recorded only as the gateway reported it; a recipient whose run is not named is uncertain.
-   */
-  private async stopCompanions(key: string, runId: string, answer: RawRecord): Promise<void> {
-    const generation = this.generation;
-    const transcript = this.state.transcripts[key];
-    const run = transcript && findRun(transcript, runId);
-    if (!transcript || !run) return;
+  /** The helper runs the gateway's confirmation of a Stop names besides the run (F-098). */
+  private noteHelpers(key: string, runId: string, answer: RawRecord): void {
     const helpers = (Array.isArray(answer.runIds) ? answer.runIds : []).filter(
       (id) => typeof id === "string" && id !== runId,
     ).length;
@@ -2338,85 +2334,57 @@ export class ClawtrateClient {
       this.updateActivity(key, (activity) =>
         noteStoppedWith(activity, runId, (now) => ({ ...now, helpers: now.helpers + helpers })),
       );
+  }
+
+  /**
+   * A run this client stopped (Stop, a typed `/stop`, the timeouts' own stop) has ended as
+   * stopped, however that reached it: the abort's answer, the run's end event after a lost
+   * answer, or history after a reconnect. The runs of other bots its messages started are then
+   * stopped too (F-296), each recipient taken from the run's own record (its `sessions_send`
+   * results), every one of them asked, not only the first `MAX_STOPPED_NAMED`. Each is recorded
+   * as the gateway answered: stopped, refused, unanswered, or, with no run named, uncertain. A
+   * recipient whose run had ended already is not named.
+   */
+  private async stopRecipients(key: string, runId: string): Promise<void> {
+    const transcript = this.state.transcripts[key];
+    const run = transcript && findRun(transcript, runId);
+    if (!transcript || !run) return;
+    this.updateActivity(key, (activity) =>
+      noteStoppedWith(activity, runId, (now) => ({ ...now, recipientsAsked: true })),
+    );
+    const note = (kind: "bots" | "uncertain" | "refused" | "unanswered", sessionKey: string) =>
+      this.updateActivity(key, (activity) =>
+        noteStoppedWith(activity, runId, (now) => ({ ...now, [kind]: [...now[kind], sessionKey] })),
+      );
     const rawOf = (step: Run["steps"][number]) => step.raw ?? this.raw.get(key, step.id);
-    const links = recipientLinks([run], rawOf).slice(0, MAX_STOPPED_NAMED);
-    const recipients = links.map(async (link) => {
+    const recipients = recipientLinks([run], rawOf).map(async (link) => {
       if (!link.sessionKey) return;
       const known = link.runId ? transcript.linkedRuns[link.runId] : undefined;
       if (known && isTerminal(known.state)) return;
-      if (!link.runId) {
-        this.updateActivity(key, (activity) =>
-          noteStoppedWith(activity, runId, (now) => ({
-            ...now,
-            uncertain: [...now.uncertain, link.sessionKey!],
-          })),
-        );
-        return;
-      }
-      try {
-        const stopped = asRecord(
-          await this.request("chat.abort", { sessionKey: link.sessionKey, runId: link.runId }),
-        );
-        if (generation !== this.generation || stopped?.aborted !== true) return;
-        this.updateActivity(key, (activity) =>
-          noteStoppedWith(activity, runId, (now) => ({
-            ...now,
-            bots: [...now.bots, link.sessionKey!],
-          })),
-        );
-      } catch (error) {
-        this.log("warn", `chat.abort of a recipient failed: ${errorMessage(error)}`);
-      }
-    });
-    const processes = (async () => {
-      let listed: RawRecord | null;
-      try {
-        listed = asRecord(await this.request("sessions.processes.list", { key }));
-      } catch (error) {
-        this.log("warn", `sessions.processes.list failed: ${errorMessage(error)}`);
-        return;
-      }
-      if (generation !== this.generation) return;
-      const sessionId = typeof listed?.sessionId === "string" ? listed.sessionId : null;
-      const since = (run.reportedStartAt ?? run.startedAt ?? 0) - PROCESS_START_SLACK_MS;
-      const rows = (Array.isArray(listed?.processes) ? listed.processes : [])
-        .map((each) => asRecord(each))
-        .filter(
-          (row): row is RawRecord =>
-            row !== null &&
-            row.status === "running" &&
-            row.canStop === true &&
-            typeof row.processId === "string" &&
-            typeof row.instanceId === "string" &&
-            typeof row.startedAt === "number" &&
-            row.startedAt >= since,
-        )
-        .slice(0, MAX_STOPPED_NAMED);
-      if (!sessionId) return;
-      for (const row of rows) {
+      if (!link.runId) return note("uncertain", link.sessionKey);
+      const params = { sessionKey: link.sessionKey, runId: link.runId };
+      for (let attempt = 0; ; attempt += 1) {
         try {
-          const stopped = asRecord(
-            await this.request("sessions.processes.stop", {
-              key,
-              sessionId,
-              processId: row.processId,
-              instanceId: row.instanceId,
-            }),
-          );
-          if (generation !== this.generation || stopped?.requested !== true) continue;
-          const name = typeof row.name === "string" && row.name ? row.name : String(row.processId);
-          this.updateActivity(key, (activity) =>
-            noteStoppedWith(activity, runId, (now) => ({
-              ...now,
-              processes: [...now.processes, name],
-            })),
-          );
+          const stopped = asRecord(await this.request("chat.abort", params));
+          // `aborted: false`: nothing of it was running any more.
+          if (stopped?.aborted === true) note("bots", link.sessionKey);
+          return;
         } catch (error) {
-          this.log("warn", `sessions.processes.stop failed: ${errorMessage(error)}`);
+          this.log("warn", `chat.abort of a recipient failed: ${errorMessage(error)}`);
+          if (error instanceof GatewayProtocolRequestError) return note("refused", link.sessionKey);
+          // No answer: once the connection is back, asked once more.
+          if (attempt > 0) return note("unanswered", link.sessionKey);
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          if (!this.protocol) return note("unanswered", link.sessionKey);
+          try {
+            await this.ensureScope(WRITE_SCOPE);
+          } catch {
+            return note("unanswered", link.sessionKey);
+          }
         }
       }
-    })();
-    await Promise.all([...recipients, processes]);
+    });
+    await Promise.all(recipients);
   }
 
   // Approvals -------------------------------------------------------------------
@@ -4093,6 +4061,15 @@ export class ClawtrateClient {
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
     for (const run of transcript.runs) {
+      // A run this client stopped has ended as stopped: stop what its messages started (F-296).
+      if (
+        run.state === "stopped" &&
+        run.stopRequestedAt !== null &&
+        !run.stoppedWith?.recipientsAsked &&
+        this.state.connection.canWrite &&
+        !this.options.readOnly
+      )
+        void this.stopRecipients(key, run.id);
       // Tool calls that keep timing out: the machine may not be responding. Stop the run (F-101).
       if (
         (run.state === "running" || run.state === "waiting") &&

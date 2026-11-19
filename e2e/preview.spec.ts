@@ -1687,7 +1687,7 @@ test("F-099: a run stuck on a tool call that never returns reaches stopped withi
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
-test("F-296 F-298: Stop also stops the run of the bot this run messaged, and the note names it", async ({
+test("F-296 F-298: Stop also stops the exact run of the bot this run messaged, and the note names it", async ({
   page,
 }) => {
   await openShell(page);
@@ -1734,7 +1734,13 @@ test("F-296 F-298: Stop also stops the run of the bot this run messaged, and the
     "Stopped with it: Marlow's run for this message.",
     { timeout: 30_000 },
   );
-  // Marlow's run ended on the gateway, long before its 15 seconds.
+  // Marlow's own run, the one the send named, ended on the gateway by an abort request (`rpc`),
+  // long before its 15 seconds.
+  const ended = await gatewayCall<{ runId?: string; stopReason?: string; endedAt?: number }>(
+    "agent.wait",
+    { runId: peer.runId, timeoutMs: 10_000 },
+  );
+  expect(ended).toMatchObject({ runId: peer.runId, stopReason: "rpc" });
   await expect.poll(() => gatewayIdle(peer.sessionKey), { timeout: 10_000 }).toBe(true);
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });

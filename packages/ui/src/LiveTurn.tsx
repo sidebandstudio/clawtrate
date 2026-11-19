@@ -188,8 +188,9 @@ function listed(words: string[]): string {
 }
 
 /**
- * The lines under a stop's note: every helper run, bot run and process the gateway reported
- * stopped with the run, and each message whose delivery is not known (F-298).
+ * The lines under a stop's note: every helper run and bot run the gateway reported stopped with
+ * the run, each recipient whose stop it refused or did not answer, and each message whose delivery
+ * is not known (F-298). No process is named: the gateway does not say which run started one.
  */
 export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => string): string[] {
   const also = run.stoppedWith;
@@ -199,13 +200,17 @@ export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => strin
   if (also.helpers > 0)
     stopped.push(also.helpers === 1 ? "1 helper run" : `${also.helpers} helper runs`);
   for (const key of also.bots) stopped.push(`${nameOf(key)}'s run for this message`);
-  if (also.processes.length > 0)
-    stopped.push(
-      `${also.processes.length === 1 ? "the process" : "the processes"} ${listed(also.processes)}`,
-    );
   if (stopped.length > 0) lines.push(`Stopped with it: ${listed(stopped)}.`);
+  for (const key of also.refused)
+    lines.push(`The gateway refused to stop ${nameOf(key)}'s run for this message.`);
+  for (const key of also.unanswered)
+    lines.push(`${nameOf(key)}'s run for this message may still be going: its stop got no answer.`);
   for (const key of also.uncertain)
     lines.push(`The message to ${nameOf(key)} may or may not have been delivered.`);
+  if (also.omitted > 0)
+    lines.push(
+      `${also.omitted} more ${also.omitted === 1 ? "run was" : "runs were"} asked to stop, not listed here.`,
+    );
   return lines;
 }
 

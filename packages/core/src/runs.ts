@@ -294,36 +294,81 @@ export function markStoppedForTimeouts(
   return updateRun(activity, runId, (run) => ({ ...run, stoppedForTimeouts: count }));
 }
 
-/** What a confirmed Stop of this client's ended beside the run itself, each as the gateway said. */
+/**
+ * What this client's Stop of a run did to what the run started, each as the gateway said. The
+ * recipients come from the run's own record (its `sessions_send` results), however the stop's
+ * end reached this client. Processes are not here: the gateway's process list does not say which
+ * run started a process, so none is stopped with a run.
+ */
 export type StoppedWith = {
   /** Helper runs the gateway aborted with it (`chat.abort` `runIds` other than the run's own). */
   helpers: number;
   /** The session keys of other bots' runs this run's messages started, aborted with it. */
   bots: string[];
-  /** Processes it started on its machine that the gateway stopped (`sessions.processes.stop`), by name. */
-  processes: string[];
   /** Session keys of messages to other bots whose run could not be stopped or named. */
   uncertain: string[];
+  /** Session keys of recipients' runs whose stop the gateway refused. */
+  refused: string[];
+  /** Session keys of recipients' runs whose stop got no answer: they may still be going. */
+  unanswered: string[];
+  /** Names not kept past `MAX_STOPPED_NAMED` of a kind; every one of them was still asked. */
+  omitted: number;
+  /** The recipients have been asked to stop (once per run). */
+  recipientsAsked: boolean;
 };
 
-/** Record what a confirmed Stop also ended. */
+const NO_COMPANIONS: StoppedWith = {
+  helpers: 0,
+  bots: [],
+  uncertain: [],
+  refused: [],
+  unanswered: [],
+  omitted: 0,
+  recipientsAsked: false,
+};
+
+/** Record what a Stop also ended, or could not end. */
 export function noteStoppedWith(
   activity: TaskActivity,
   runId: string,
   change: (current: StoppedWith) => StoppedWith,
 ): TaskActivity {
   return updateRun(activity, runId, (run) => {
-    const next = change(run.stoppedWith ?? { helpers: 0, bots: [], processes: [], uncertain: [] });
+    const next = change(run.stoppedWith ?? NO_COMPANIONS);
+    let omitted = next.omitted;
+    const keep = (list: string[]) => {
+      omitted += Math.max(0, list.length - MAX_STOPPED_NAMED);
+      return list.slice(0, MAX_STOPPED_NAMED);
+    };
     return {
       ...run,
       stoppedWith: {
         helpers: next.helpers,
-        bots: next.bots.slice(0, MAX_STOPPED_NAMED),
-        processes: next.processes.slice(0, MAX_STOPPED_NAMED),
-        uncertain: next.uncertain.slice(0, MAX_STOPPED_NAMED),
+        bots: keep(next.bots),
+        uncertain: keep(next.uncertain),
+        refused: keep(next.refused),
+        unanswered: keep(next.unanswered),
+        omitted,
+        recipientsAsked: next.recipientsAsked,
       },
     };
   });
+}
+
+/**
+ * A `/stop` typed in this task stopped these runs: each counts as stopped by this client, so what
+ * it started is stopped too, as after Stop.
+ */
+export function markStopAsked(activity: TaskActivity, runIds: string[], now: number): TaskActivity {
+  let next = activity;
+  for (const runId of runIds) {
+    next = updateRun(requestStop(next, runId, now), runId, (run) =>
+      run.state === "stopped" && run.stopRequestedAt === null
+        ? { ...run, stopRequestedAt: now }
+        : run,
+    );
+  }
+  return next;
 }
 
 export type RunError = {
