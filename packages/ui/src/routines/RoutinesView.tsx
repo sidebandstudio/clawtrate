@@ -193,6 +193,7 @@ function List({
   admin,
   actions,
   onMenu,
+  announce,
   create,
 }: {
   routines: Routine[];
@@ -203,6 +204,7 @@ function List({
   admin: boolean;
   actions: RoutineActions;
   onMenu: (routine: Routine, at: { x: number; y: number }) => void;
+  announce: (text: string) => void;
   /** "New routine", with admin: in the empty state and under one bot's routines. */
   create: ((botId: string | null) => void) | null;
 }) {
@@ -294,7 +296,13 @@ function List({
             ))}
           </ul>
           {bot !== null && (
-            <TimeZoneLine routines={rows} botId={each.id} botName={each.name} admin={admin} />
+            <TimeZoneLine
+              routines={rows}
+              botId={each.id}
+              botName={each.name}
+              admin={admin}
+              announce={announce}
+            />
           )}
           {bot !== null && create && (
             <button type="button" className="button r-new-for" onClick={() => create(each.id)}>
@@ -1107,6 +1115,7 @@ export function RoutinesView({
                 admin={admin}
                 actions={actions}
                 onMenu={(routine, at) => setMenu({ routine, ...at })}
+                announce={announce}
                 create={admin ? (botId) => edit({ mode: "new", botId }) : null}
               />
             ) : (

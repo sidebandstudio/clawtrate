@@ -330,7 +330,15 @@ export function nextRuns(draft: Draft, now: number): number[] {
         paused: true,
         ...(schedule.tz ? { timezone: schedule.tz } : {}),
       });
-      return cron.nextRuns(3, new Date(now)).map((date) => date.getTime());
+      // The bulk iterator can revisit an instant during a daylight-saving gap.
+      const runs = [];
+      while (runs.length < 3) {
+        const next = cron.nextRun(new Date(now))?.getTime();
+        if (next === undefined || next <= now) break;
+        runs.push(next);
+        now = next;
+      }
+      return runs;
     } catch {
       return [];
     }

@@ -5,10 +5,12 @@
 
 import {
   fieldsOf,
+  sameSchedule,
   type ConnectionState,
   type HostInfo,
   type Routine,
   type RoutineRunNow,
+  type RoutineSchedule,
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CopyValue } from "../AccessBar.tsx";
@@ -380,33 +382,39 @@ export function TimeZoneLine({
   botId,
   botName,
   admin,
+  announce,
 }: {
   routines: Routine[];
   botId: string;
   botName: string;
   admin: boolean;
+  announce: (text: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [checking, setChecking] = useState(false);
   const zones = [
     ...new Set(routines.filter((each) => each.schedule.tz).map((each) => each.schedule.tz!)),
   ];
-  if (zones.length === 0) return null;
+  if (zones.length === 0 && !open) return null;
+  const zone = zones.map(zoneCity).join(", ");
   return (
     <div className="r-tz-line" data-testid="routines-zone">
       <span>
         Routines&apos; time zone:{" "}
-        {zones.length === 1 ? zoneCity(zones[0]!) : `Mixed: ${zones.map(zoneCity).join(", ")}`}
+        {checking ? "checking needed" : zones.length > 1 ? `Mixed: ${zone}` : zone || "none"}
       </span>
       {admin && (
         <button type="button" className="button" data-size="sm" onClick={() => setOpen(true)}>
           Change…
         </button>
       )}
-      {open && admin && (
+      {open && (admin || checking) && (
         <ZoneDialog
           routines={routines}
           botId={botId}
           botName={botName}
+          onChecking={setChecking}
+          announce={announce}
           onClose={() => setOpen(false)}
         />
       )}
@@ -414,35 +422,85 @@ export function TimeZoneLine({
   );
 }
 
+type ZoneResult = {
+  changed: string[];
+  notes: string[];
+  pending: Array<{ routine: Routine; schedule: RoutineSchedule }>;
+};
+
 function ZoneDialog({
   routines,
   botId,
   botName,
+  onChecking,
+  announce,
   onClose,
 }: {
   routines: Routine[];
   botId: string;
   botName: string;
+  onChecking: (checking: boolean) => void;
+  announce: (text: string) => void;
   onClose: () => void;
 }) {
   const bridge = useBridge();
   const [zone, setZone] = useState("auto");
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState<string[] | null>(null);
+  const [result, setResult] = useState<ZoneResult | null>(null);
+  const actionButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (result && !busy) actionButton.current?.focus();
+  }, [result, busy]);
   const [shown, setShown] = useState(routines);
   const [reconfirm, setReconfirm] = useState(false);
   const tz = zone === "auto" ? viewerZone() : zone;
   const willChange = (routine: Routine) => zoned(routine) && routine.schedule.tz !== tz;
   const changes = shown.filter(willChange);
   const left = shown.filter((each) => !zoned(each));
+  const settle = async (previous: ZoneResult) => {
+    const { pending, changed: alreadyChanged, notes: existingNotes } = previous;
+    const changed = [...alreadyChanged];
+    const notes = [...existingNotes];
+    const unresolved: ZoneResult["pending"] = [];
+    for (const entry of pending) {
+      const { routine, schedule } = entry;
+      try {
+        const current = await bridge.invoke({ type: "readRoutine", id: routine.id });
+        if (current && sameSchedule(current.schedule, schedule)) changed.push(routine.name);
+        else if (current?.schedule.tz && current.schedule.tz !== schedule.tz)
+          notes.push(
+            `${routine.name} still has ${zoneCity(current.schedule.tz)}. The change may still arrive.`,
+          );
+        else if (current)
+          notes.push(
+            `The gateway lists a different schedule for ${routine.name}. The change may still arrive.`,
+          );
+        else notes.push(`The gateway no longer lists ${routine.name}.`);
+      } catch {
+        unresolved.push(entry);
+      }
+    }
+    if (pending.length > unresolved.length)
+      await bridge.invoke({ type: "refreshRoutines" }).catch(() => {});
+    onChecking(unresolved.length > 0);
+    setBusy(false);
+    if (notes.length || unresolved.length) setResult({ changed, notes, pending: unresolved });
+    else {
+      announce(
+        `Changed the time zone of ${changed.length} routine${changed.length === 1 ? "" : "s"}`,
+      );
+      onClose();
+    }
+  };
   const save = async () => {
     setBusy(true);
-    setFailed(null);
+    onChecking(true);
     let fresh: Routine[];
     try {
       fresh = (await bridge.invoke({ type: "readBotRoutines", botId })).routines;
     } catch (error) {
-      setFailed([errorText(error)]);
+      setResult({ changed: [], notes: [errorText(error)], pending: [] });
+      onChecking(false);
       setBusy(false);
       return;
     }
@@ -453,46 +511,48 @@ function ZoneDialog({
     ) {
       setShown(fresh);
       setReconfirm(true);
+      onChecking(false);
       setBusy(false);
       return;
     }
     setReconfirm(false);
-    const failures: string[] = [];
+    const outcome: ZoneResult = { changed: [], notes: [], pending: [] };
     for (const routine of next) {
       const original = fieldsOf(routine);
+      const schedule = { ...original.schedule, tz };
       try {
-        const result = await bridge.invoke({
+        const answer = await bridge.invoke({
           type: "updateRoutine",
           id: routine.id,
           original,
-          edit: { ...original, schedule: { ...original.schedule, tz } },
+          edit: { ...original, schedule },
           expected: { ...original, updatedAt: routine.updatedAt },
         });
-        if (result.status !== "saved")
-          failures.push(
-            `${routine.name} (${
-              result.status === "refused" || result.status === "unknown"
-                ? result.error
-                : result.status === "conflict"
-                  ? "changed elsewhere"
-                  : result.status
-            })`,
-          );
-      } catch (error) {
-        failures.push(`${routine.name} (${errorText(error)})`);
+        if (answer.status === "saved") outcome.changed.push(routine.name);
+        else if (answer.status === "unknown") outcome.pending.push({ routine, schedule });
+        else {
+          const reason =
+            answer.status === "refused"
+              ? answer.error
+              : answer.status === "conflict"
+                ? "changed elsewhere"
+                : answer.status === "deleted"
+                  ? "the routine was deleted"
+                  : "nothing was sent";
+          outcome.notes.push(`Couldn't change ${routine.name} (${reason}).`);
+        }
+      } catch {
+        outcome.pending.push({ routine, schedule });
       }
     }
-    setBusy(false);
-    if (failures.length === 0) onClose();
-    else setFailed(failures);
+    await settle(outcome);
+  };
+  const needsCheck = result && result.pending.length > 0;
+  const close = () => {
+    if (!busy && !needsCheck) onClose();
   };
   return (
-    <Dialog
-      kind="settings"
-      labelledBy="r-zone-title"
-      onClose={onClose}
-      testId="routines-zone-dialog"
-    >
+    <Dialog kind="settings" labelledBy="r-zone-title" onClose={close} testId="routines-zone-dialog">
       <div className="b-sheet r-dialog">
         <header className="b-head">
           <h2 id="r-zone-title" tabIndex={-1}>
@@ -507,10 +567,13 @@ function ZoneDialog({
               </p>
             </Note>
           )}
-          {failed && (
-            <Note tone="danger" testId="zone-failed">
+          {result && (
+            <Note tone="warn" testId="zone-failed">
               <p role="alert">
-                <strong>Some weren&apos;t changed:</strong> {failed.join("; ")}.
+                {result.changed.length > 0 && `Changed ${result.changed.join(", ")}. `}
+                {result.notes.join(" ")}
+                {needsCheck &&
+                  ` Couldn't confirm the time zone of ${result.pending.map(({ routine }) => routine.name).join(", ")}.`}
               </p>
             </Note>
           )}
@@ -521,7 +584,7 @@ function ZoneDialog({
               id="r-zone"
               data-b-focus=""
               value={zone}
-              disabled={busy}
+              disabled={busy || !!result}
               onChange={(event) => setZone(event.target.value)}
             >
               <option value="auto">Auto-detect ({zoneCity(viewerZone())})</option>
@@ -542,18 +605,42 @@ function ZoneDialog({
         </div>
         <footer className="b-foot">
           <div className="b-actions">
-            <button type="button" className="button" data-variant="quiet" onClick={onClose}>
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="button"
-              data-variant="primary"
-              disabled={busy || changes.length === 0}
-              onClick={() => void save()}
-            >
-              {busy ? "Saving…" : "Save"}
-            </button>
+            {needsCheck ? (
+              <button
+                type="button"
+                className="button"
+                ref={actionButton}
+                disabled={busy}
+                onClick={() => {
+                  setBusy(true);
+                  void settle(result);
+                }}
+              >
+                {busy ? "Checking…" : "Check now"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="button"
+                data-variant="quiet"
+                ref={actionButton}
+                disabled={busy}
+                onClick={close}
+              >
+                {result ? "Close" : "Cancel"}
+              </button>
+            )}
+            {!result && (
+              <button
+                type="button"
+                className="button"
+                data-variant="primary"
+                disabled={busy || changes.length === 0}
+                onClick={() => void save()}
+              >
+                {busy ? "Saving…" : "Save"}
+              </button>
+            )}
           </div>
         </footer>
       </div>

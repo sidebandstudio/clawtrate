@@ -104,14 +104,17 @@ async function bridgeCommand(command: Record<string, unknown>): Promise<unknown>
   );
 }
 
-// Control when one write's answer reaches the page while gateway events still go through.
-type Reply = (value?: unknown) => void;
-let heldWrite: { type: string; forward: boolean; ready: (reply: Reply) => void } | null = null;
+// Hold one reply while gateway events still reach the page.
+type Reply = (value?: unknown, error?: string) => void;
+let heldCommand: { type: string; forward: boolean; ready: (reply: Reply) => void } | null = null;
 const unanswered = { status: "unknown", error: "The gateway didn't answer." };
 
-function holdWrite(type: "updateRoutine" | "removeRoutine", forward: boolean): Promise<Reply> {
+function holdCommand(
+  type: "updateRoutine" | "removeRoutine" | "readRoutine",
+  forward: boolean,
+): Promise<Reply> {
   const ready = Promise.withResolvers<Reply>();
-  heldWrite = { type, forward, ready: ready.resolve };
+  heldCommand = { type, forward, ready: ready.resolve };
   return ready.promise;
 }
 
@@ -141,13 +144,19 @@ test.beforeAll(async ({ browser }) => {
     let hold: { id: string; ready: (reply: Reply) => void } | null = null;
     ws.onMessage((message) => {
       const request = JSON.parse(String(message)) as { id: string; command?: { type: string } };
-      const write = heldWrite;
-      if (write && request.command?.type === write.type) {
-        heldWrite = null;
-        if (write.forward) hold = { id: request.id, ready: write.ready };
+      const command = heldCommand;
+      if (command && request.command?.type === command.type) {
+        heldCommand = null;
+        if (command.forward) hold = { id: request.id, ready: command.ready };
         else {
-          write.ready((value) =>
-            ws.send(JSON.stringify({ type: "result", id: request.id, ok: true, value })),
+          command.ready((value, error) =>
+            ws.send(
+              JSON.stringify(
+                error
+                  ? { type: "result", id: request.id, ok: false, error }
+                  : { type: "result", id: request.id, ok: true, value },
+              ),
+            ),
           );
           return;
         }
@@ -349,7 +358,7 @@ test("F-189: a late save answer leaves a deleted routine's draft available as ne
   await openPage(job.name);
   await view().getByRole("button", { name: "Edit", exact: true }).click();
   await editor().getByLabel("Name").fill(name);
-  const held = holdWrite("updateRoutine", true);
+  const held = holdCommand("updateRoutine", true);
   await save().click();
   const reply = await held;
   await call("cron.remove", { id: job.id });
@@ -369,7 +378,7 @@ test("F-189: checking an unanswered edit shows a conflict only when the write di
     await openPage(job.name);
     await view().getByRole("button", { name: "Edit", exact: true }).click();
     await editor().getByLabel("Name").fill(name);
-    const held = holdWrite("updateRoutine", lands);
+    const held = holdCommand("updateRoutine", lands);
     await save().click();
     const reply = await held;
     const liveName = lands ? name : `Their edit ${STAMP}`;
@@ -455,7 +464,7 @@ test("F-352: an unanswered delete checks both a routine still present and a rout
   await expect(dialog).toContainText(
     "It won't run again, and Clawtrate can't show its runs afterwards. It hasn't run yet.",
   );
-  const missed = holdWrite("removeRoutine", false);
+  const missed = holdCommand("removeRoutine", false);
   await dialog.getByRole("button", { name: "Delete", exact: true }).click();
   (await missed)(unanswered);
   const check = dialog.getByRole("button", { name: "Check now" });
@@ -466,7 +475,7 @@ test("F-352: an unanswered delete checks both a routine still present and a rout
     "The gateway still lists this routine. The delete may still arrive.",
   );
   expect((await get(job.id)).id).toBe(job.id);
-  const landed = holdWrite("removeRoutine", true);
+  const landed = holdCommand("removeRoutine", true);
   await dialog.getByRole("button", { name: "Delete again" }).click();
   (await landed)(unanswered);
   await expect(check).toBeFocused();
@@ -554,6 +563,39 @@ test("F-196: a time-zone change asks again when an unlisted routine would be cha
   });
   expect((await get(three.id)).schedule.tz).toBe("Asia/Tokyo");
   await expect(line).toContainText("Routines' time zone: Tokyo");
+});
+
+test("F-196: an unanswered zone write is read back before reporting its outcome", async () => {
+  const job = await add({
+    ...scriptedRoutine(`Zone readback ${STAMP}`, "pip"),
+    schedule: { kind: "cron", expr: "0 9 * * *", tz: NY },
+  });
+  await openRoutines();
+  await view().getByRole("combobox", { name: "Bots" }).selectOption({ label: "Pip" });
+  const line = view().getByTestId("routines-zone");
+  await line.getByRole("button", { name: "Change…" }).click();
+  const dialog = page.getByTestId("routines-zone-dialog");
+  await dialog.getByLabel("Time zone").selectOption("Asia/Tokyo");
+  const write = holdCommand("updateRoutine", true);
+  await dialog.getByRole("button", { name: "Save" }).click();
+  const reply = await write;
+  expect((await get(job.id)).schedule.tz).toBe("Asia/Tokyo");
+  const read = holdCommand("readRoutine", false);
+  reply(unanswered);
+  await expect(line).toContainText("Routines' time zone: checking needed");
+  await expect(dialog.getByRole("button", { name: "Saving…" })).toBeDisabled();
+  (await read)(undefined, "Read unavailable");
+  const check = dialog.getByRole("button", { name: "Check now" });
+  await expect(check).toBeFocused();
+  await expect(dialog).toContainText(`Couldn't confirm the time zone of ${job.name}.`);
+  await expect(line).toContainText("Routines' time zone: checking needed");
+  await expect(dialog.getByRole("button", { name: "Save" })).toHaveCount(0);
+  const retry = holdCommand("readRoutine", true);
+  await check.click();
+  (await retry)();
+  await expect(dialog).toHaveCount(0);
+  await expect(line).toContainText("Routines' time zone: Tokyo");
+  await expect(view().getByTestId("b-announcer")).toHaveText("Changed the time zone of 1 routine");
 });
 
 test("F-349 F-358: with the gateway's hooks on, the page shows their address to copy, and a POST to it starts a bot, not the routine", async () => {

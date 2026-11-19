@@ -104,6 +104,15 @@ describe("F-189: the draft", () => {
     expect(nextRuns(draftOf(saved, NOW), NOW)).toEqual([Date.parse(at)]);
   });
 
+  it("previews three distinct cron instants across the spring gap", () => {
+    const schedule = draft({ cron: "0 0,30 2,3 14 3 *", tz: NY });
+    expect(nextRuns(schedule, NOW).map((ms) => new Date(ms).toISOString())).toEqual([
+      "2027-03-14T07:00:00.000Z",
+      "2027-03-14T07:30:00.000Z",
+      "2028-03-14T06:00:00.000Z",
+    ]);
+  });
+
   it("writes Once as a time with its zone's offset", () => {
     expect(isoAt("2035-01-01", "09:00", NY)).toBe("2035-01-01T09:00:00-05:00");
     expect(isoAt("2035-07-01", "09:00", NY)).toBe("2035-07-01T09:00:00-04:00");
