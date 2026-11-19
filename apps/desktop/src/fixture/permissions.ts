@@ -265,7 +265,7 @@ function log(now: number): Log[] {
       toolName: "web_search",
       status: "started",
       recordId: "a1f0c3d2-0006",
-      cause: { kind: "not-read", reason: "Clawtrate's rules plugin isn't answering." },
+      cause: { kind: "not-read", reason: "Its decision record didn't answer within 60 seconds." },
     },
     {
       ...otto,
