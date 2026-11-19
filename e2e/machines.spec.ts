@@ -1,0 +1,437 @@
+// Where a bot runs and Settings, Machines (docs/design/controls.md sections 14
+// and 15) against a real development gateway: this run's accounts instance,
+// started with a paired machine (`--with-node`: the gateway's own node host,
+// media-box, declaring only its two approvals commands). One preview host
+// writes, as a person drives it; a second, pinned read-only, reads what the
+// first saved. What landed is read from the gateway by a paired admin client.
+// Everything changed on the gateway is put back afterwards, so no later check
+// of the run meets another arrangement.
+//
+// With CLAWTRATE_MACHINE_SHOTS=<folder outside the repository>, it also saves
+// screenshots of what it checked there, at 1440 light and dark and 390 light.
+import { expect, test, type Browser, type Page } from "@playwright/test";
+import type { ChildProcess } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ACCOUNT_CLIENTS } from "../tools/dev-gateway/src/account-checks.ts";
+import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
+import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
+
+const INSTANCE = process.env.CLAWTRATE_E2E_ACCOUNTS!;
+const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
+const SHOTS = process.env.CLAWTRATE_MACHINE_SHOTS ?? null;
+
+test.describe.configure({ mode: "serial" });
+
+type Json = Record<string, unknown>;
+type Host = { child: ChildProcess; url: string; data: string; page: Page };
+
+let admin: OperatorSession;
+let writer: Host;
+let reader: Host;
+let nodeId: string;
+/** What the checks change, as it was before, to put back. */
+let ottoTools: Json;
+let ottoWorkspace: string;
+/** Otto's name as the interface shows it: "otto" on an instance that was not seeded. */
+let OTTO = "Otto";
+
+async function config(): Promise<Json> {
+  return ((await admin.request<{ config: Json }>("config.get", {})).config ?? {}) as Json;
+}
+const entry = (cfg: Json, bot: string) =>
+  (((cfg.agents as Json).entries as Json)[bot] ?? {}) as Json;
+
+async function approve(): Promise<void> {
+  await expect
+    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
+    .toMatch(/^Approved /m);
+}
+
+async function shots(page: Page, name: string): Promise<void> {
+  if (!SHOTS) return;
+  const size = page.viewportSize()!;
+  for (const [width, height, theme] of [
+    [1440, 900, "light"],
+    [1440, 900, "dark"],
+    [390, 844, "light"],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    await page.emulateMedia({ colorScheme: theme });
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: join(SHOTS, `${name}-${theme}-${width}.png`) });
+  }
+  await page.setViewportSize(size);
+  await page.emulateMedia({ colorScheme: "light" });
+}
+
+async function open(browser: Browser, readOnly: boolean): Promise<Host> {
+  const data = mkdtempSync(join(tmpdir(), "clawtrate-machines-"));
+  const started = startHost(INSTANCE, STATIC, data, { readOnly });
+  started.gated.release();
+  const url = await started.url;
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  await page.goto(url);
+  await page.getByRole("button", { name: "Use the development gateway" }).click();
+  await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await approve();
+  await expect(page.getByTestId("bot").first()).toBeVisible({ timeout: 30_000 });
+  return { child: started.host, url, data, page };
+}
+
+/** Otto's "Where Otto runs" page, in the Work pane's Settings tab. */
+async function runsOn(page: Page) {
+  const otto = page
+    .getByTestId("bot-list")
+    .getByRole("button", { name: new RegExp(`^${OTTO}\\b`) });
+  await otto.click();
+  if (!(await page.getByTestId("work-panel").isVisible()))
+    await page.keyboard.press("ControlOrMeta+\\");
+  await page.getByRole("tab", { name: "Settings" }).click();
+  const back = page.getByRole("button", { name: "Back to settings" });
+  if (await back.isVisible()) await back.click();
+  await page
+    .getByRole("button", { name: new RegExp(`^Where ${OTTO} runs: `) })
+    .click({ timeout: 30_000 });
+  await expect(page.getByTestId("runs-on-workspace")).toBeVisible({ timeout: 30_000 });
+}
+
+/** Settings, Machines. */
+async function machines(page: Page) {
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Machines", exact: true }).click();
+  await expect(page.getByTestId("machine-list")).toBeVisible({ timeout: 30_000 });
+  return settings;
+}
+
+test.beforeAll(async ({ browser }) => {
+  test.setTimeout(300_000);
+  expect(INSTANCE, "this run's accounts instance").toMatch(/^e2e-[0-9a-f]{8}-acct$/);
+  expect(listInstances().find((each) => each.name === INSTANCE)?.gatewayRunning).toBe(true);
+  admin = await openOperator(
+    openInstance(INSTANCE),
+    "Clawtrate machines check",
+    [...ACCOUNT_CLIENTS.admin.scopes, "operator.pairing"],
+    [...ACCOUNT_CLIENTS.admin.caps],
+  );
+  // The paired machine, as the gateway lists it to a read client.
+  const nodes = await admin.request<{ nodes: Json[] }>("node.list", {});
+  const media = nodes.nodes.find((node) => node.displayName === "media-box");
+  expect(media, "the instance's paired machine").toBeTruthy();
+  expect(media).toMatchObject({ connected: true, approvalState: "approved" });
+  expect(media!.commands).toEqual(["system.execApprovals.get", "system.execApprovals.set"]);
+  nodeId = media!.nodeId as string;
+  const listed = await admin.request<{ agents: Json[] }>("agents.list", {});
+  const row = listed.agents.find((agent) => agent.id === "otto") ?? {};
+  OTTO = String((row.identity as Json | undefined)?.name ?? row.name ?? "otto");
+  const cfg = await config();
+  ottoTools = (entry(cfg, "otto").tools ?? {}) as Json;
+  ottoWorkspace = entry(cfg, "otto").workspace as string;
+  // Otto's first task, so its Work pane has a task to show beside it.
+  await admin
+    .request("sessions.create", { key: "agent:otto:main", agentId: "otto", label: "Main" })
+    .catch(() => {});
+  writer = await open(browser, false);
+  reader = await open(browser, true);
+});
+
+test.afterAll(async () => {
+  // Put back Otto's settings: its command placement, its deny list and its workspace.
+  if (admin) {
+    const cfg = await admin.request<{ hash: string }>("config.get", {}).catch(() => null);
+    const exec = (ottoTools.exec ?? {}) as Json;
+    const deny = ottoTools.deny as string[] | undefined;
+    if (cfg)
+      await admin.request("config.patch", {
+        raw: JSON.stringify({
+          agents: {
+            entries: {
+              otto: {
+                tools: {
+                  exec: { ...exec, host: exec.host ?? null, node: exec.node ?? null },
+                  deny: deny ?? null,
+                },
+              },
+            },
+          },
+        }),
+        baseHash: cfg.hash,
+        ...(deny ? { replacePaths: ["agents.entries.otto.tools.deny"] } : {}),
+      });
+    const back = (entry(await config(), "otto").tools ?? {}) as Json;
+    expect(back.exec ?? null, "Otto's command placement put back").toEqual(ottoTools.exec ?? null);
+    expect(back.deny ?? null, "Otto's deny list put back").toEqual(ottoTools.deny ?? null);
+    if (ottoWorkspace)
+      await admin
+        .request("agents.update", { agentId: "otto", workspace: ottoWorkspace })
+        .catch(() => {});
+    await admin.close();
+  }
+  for (const host of [writer, reader]) {
+    if (!host) continue;
+    await host.page.context().close();
+    await stopChild(host.child);
+    rmSync(host.data, { recursive: true, force: true });
+  }
+});
+
+test("F-046 F-047: below admin every place shows, nothing can change, and the bar asks for admin only when the person asks", async () => {
+  const page = writer.page;
+  await runsOn(page);
+  await expect(page.getByTestId("runs-on-machine")).toBeDisabled();
+  await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
+    `Where ${OTTO}'s commands run: The gateway's machine`,
+  );
+  await expect(page.getByTestId("runs-on-workspace")).toContainText(ottoWorkspace);
+  await expect(page.getByTestId("inventory-secrets")).toHaveText("Needs admin access");
+  await expect(page.getByTestId("admin-bar")).toContainText(
+    `Changing where ${OTTO} runs needs admin access.`,
+  );
+  // Nothing was asked for by reading.
+  const devices = await admin.request<{ pending: unknown[] }>("device.pair.list", {});
+  expect(devices.pending).toEqual([]);
+  await shots(page, "runs-on-below-admin");
+});
+
+test("F-046: admin asked for explicitly sets Otto's commands to media-box; it is read back, and a read-only connection sees it", async () => {
+  test.setTimeout(180_000);
+  const page = writer.page;
+  const bar = page.getByTestId("admin-bar");
+  await bar.getByRole("button", { name: "Request admin access" }).click();
+  await expect(bar).toContainText("Waiting for the gateway's owner.", { timeout: 15_000 });
+  await approve();
+  await expect(page.getByTestId("runs-on-machine")).toBeEnabled({ timeout: 30_000 });
+  await page.getByTestId("runs-on-machine").click();
+  await page.getByRole("menuitemradio", { name: "media-box · Connected" }).click();
+  await expect(page.getByTestId("work-announcer")).toHaveText(
+    `Saved. ${OTTO}'s commands: media-box`,
+    {
+      timeout: 30_000,
+    },
+  );
+  // On the gateway: Otto's own entry names the machine by its id.
+  const exec = (entry(await config(), "otto").tools as Json).exec as Json;
+  expect(exec).toMatchObject({ host: "node", node: nodeId });
+  // media-box declares no system.run: the page says the gateway refuses commands there.
+  await expect(page.getByTestId("runs-on-no-run")).toContainText("doesn't declare system.run");
+  await shots(page, "runs-on-media-box");
+  // A second connection, pinned to reading, reads the same.
+  await runsOn(reader.page);
+  await expect(reader.page.getByTestId("runs-on-machine")).toHaveAccessibleName(
+    `Where ${OTTO}'s commands run: media-box · Connected`,
+  );
+  await expect(reader.page.getByTestId("runs-on-machine")).toBeDisabled();
+  await expect(reader.page.getByTestId("admin-bar")).toContainText("This connection only reads.");
+  await reader.page.getByRole("button", { name: "Back to settings" }).click();
+  await expect(reader.page.getByTestId("runs-on-value")).toHaveText("Commands on media-box");
+  await shots(reader.page, "runs-on-read-only");
+});
+
+test("F-046: a host pinned to reading refuses a change sent anyway, and the gateway keeps what it had", async () => {
+  const before = (entry(await config(), "otto").tools as Json).exec;
+  const answer = await reader.page.evaluate(
+    () =>
+      new Promise<string>((resolve) => {
+        const socket = new WebSocket(`ws://${location.host}/bridge`);
+        socket.onmessage = (event) => {
+          const message = JSON.parse(String(event.data)) as Record<string, unknown>;
+          if (message.type === "hello")
+            socket.send(
+              JSON.stringify({
+                type: "command",
+                id: "do",
+                command: {
+                  type: "setCommandMachine",
+                  botId: "otto",
+                  host: "gateway",
+                  nodeId: null,
+                },
+              }),
+            );
+          else if (message.id === "do") {
+            socket.close();
+            resolve(message.ok ? "accepted" : String(message.error));
+          }
+        };
+      }),
+  );
+  expect(answer).toMatch(/only reads/);
+  expect((entry(await config(), "otto").tools as Json).exec).toEqual(before);
+});
+
+test("F-047: with coder denied to Otto, a read-only connection sees coder denied for Otto and secrets needing admin", async () => {
+  const cfg = await admin.request<{ hash: string; config: Json }>("config.get", {});
+  const deny = ((entry(cfg.config, "otto").tools as Json).deny as string[] | undefined) ?? [];
+  await admin.request("config.patch", {
+    raw: JSON.stringify({
+      agents: { entries: { otto: { tools: { deny: [...deny, "coder__*"] } } } },
+    }),
+    baseHash: cfg.hash,
+  });
+  const page = reader.page;
+  await runsOn(page);
+  await expect(page.getByTestId("inventory-servers")).toContainText(`coder (denied for ${OTTO})`, {
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId("inventory-secrets")).toHaveText("Needs admin access");
+  await expect(page.getByTestId("inventory-signins")).toHaveText("Needs admin access");
+  await expect(
+    page.getByText(`Inventory. Whether ${OTTO} can use each isn't reported.`),
+  ).toBeVisible();
+  await shots(page, "runs-on-inventory");
+});
+
+test("F-274: admin chooses a new workspace folder for Otto; the gateway creates it and reads it back; on media-box a folder is not supported", async () => {
+  const page = writer.page;
+  await runsOn(page);
+  await expect(page.getByTestId("runs-on-node-folder")).toContainText(
+    "A folder on media-box: Not supported on this machine.",
+  );
+  const moved = join(openInstance(INSTANCE).stateDir, "workspaces", `otto-moved-${Date.now()}`);
+  expect(existsSync(moved)).toBe(false);
+  await page.getByRole("button", { name: "Change…" }).click();
+  const field = page.getByRole("textbox", { name: /folder on the gateway's machine/ });
+  await field.fill(moved);
+  await page.getByRole("button", { name: "Save folder" }).click();
+  await expect(page.getByTestId("work-announcer")).toHaveText(
+    `Saved. ${OTTO}'s workspace: ${moved}`,
+    {
+      timeout: 30_000,
+    },
+  );
+  const agents = await admin.request<{ agents: Json[] }>("agents.list", {});
+  expect(agents.agents.find((agent) => agent.id === "otto")?.workspace).toBe(moved);
+  expect(existsSync(moved)).toBe(true);
+  await expect(page.getByTestId("runs-on-workspace")).toContainText(moved);
+});
+
+test("F-156: admin sets media-box's defaults to Ask every time; the file reads back with a new hash, and Otto's effective result shows it", async () => {
+  test.setTimeout(120_000);
+  const before = await admin.request<{ hash: string; file: Json }>("exec.approvals.node.get", {
+    nodeId,
+  });
+  const page = writer.page;
+  const settings = await machines(page);
+  await expect(page.locator('[data-machine="media-box"]').first()).toContainText(
+    `Connected · Doesn't offer to run commands · Bots configured to run commands here: ${OTTO}`,
+  );
+  const file = settings.locator('[data-testid="approvals-file"][data-machine="media-box"]');
+  await file.getByRole("radio", { name: "Ask every time" }).click();
+  await expect(settings.getByTestId("b-announcer")).toHaveText("Saved. media-box: Ask every time", {
+    timeout: 30_000,
+  });
+  const after = await admin.request<{ hash: string; file: Json }>("exec.approvals.node.get", {
+    nodeId,
+  });
+  expect(after.hash).not.toBe(before.hash);
+  expect((after.file.defaults as Json) ?? {}).toMatchObject({
+    security: "allowlist",
+    ask: "always",
+  });
+  await expect(file.getByRole("radio", { checked: true })).toHaveAccessibleName("Ask every time", {
+    timeout: 20_000,
+  });
+  await expect(file.getByTestId("approvals-effective")).toContainText("Every command asks");
+  await shots(page, "machines-ask-every-time");
+
+  // A file changed on the gateway after the page read it: the save is refused, nothing changes.
+  await admin.request("exec.approvals.node.set", {
+    nodeId,
+    baseHash: after.hash,
+    file: { version: 1, defaults: { security: "deny", ask: "off" }, agents: {} },
+  });
+  const changed = await admin.request<{ hash: string }>("exec.approvals.node.get", { nodeId });
+  await file.getByRole("radio", { name: "Allow every command" }).click();
+  await expect(file.getByTestId("approvals-error")).toContainText("changed since it was read", {
+    timeout: 20_000,
+  });
+  expect((await admin.request<{ hash: string }>("exec.approvals.node.get", { nodeId })).hash).toBe(
+    changed.hash,
+  );
+  // Put the file back as it was.
+  await admin.request("exec.approvals.node.set", {
+    nodeId,
+    baseHash: changed.hash,
+    file: { ...before.file, socket: undefined },
+  });
+  await page.keyboard.press("Escape");
+});
+
+test("F-157: machines and paired devices as last seen; with device access, a machine and a device are renamed and an offline device removed, each read back", async () => {
+  test.setTimeout(120_000);
+  // A device that pairs and goes away: offline, to be removed.
+  const gone = await openOperator(
+    openInstance(INSTANCE),
+    "Clawtrate old laptop",
+    ["operator.read"],
+    [],
+  );
+  await gone.close();
+  const page = writer.page;
+  const settings = await machines(page);
+  const list = settings.getByTestId("device-list");
+  await expect(list.locator("dt").first()).toHaveText("This device");
+  await expect(list).toContainText("Clawtrate old laptop");
+  await expect(list).toContainText(/Last seen/);
+  // Rename the machine, read back, and back again.
+  await settings
+    .locator('[data-machine="media-box"]')
+    .getByRole("button", { name: "Rename" })
+    .click();
+  await settings.getByRole("textbox", { name: "New name for media-box" }).fill("media-shelf");
+  await page.keyboard.press("Enter");
+  await expect(settings.getByTestId("b-announcer")).toHaveText("Renamed", { timeout: 20_000 });
+  expect(
+    (await admin.request<{ nodes: Json[] }>("node.list", {})).nodes.find((n) => n.nodeId === nodeId)
+      ?.displayName,
+  ).toBe("media-shelf");
+  await admin.request("node.rename", { nodeId, displayName: "media-box" });
+  // Rename the offline device, then remove it after the confirmation.
+  const row = list.locator("div", { hasText: "Clawtrate old laptop" }).last();
+  await row.getByRole("button", { name: "Rename" }).click();
+  await settings
+    .getByRole("textbox", { name: /New name for Clawtrate old laptop/ })
+    .fill("Old laptop");
+  await page.keyboard.press("Enter");
+  await expect(list).toContainText("Old laptop", { timeout: 20_000 });
+  const devices = await admin.request<{ paired: Json[] }>("device.pair.list", {});
+  expect(devices.paired.find((d) => d.deviceId === gone.deviceId)?.operatorLabel).toBe(
+    "Old laptop",
+  );
+  await shots(page, "machines-devices");
+  await list
+    .locator("div", { hasText: "Old laptop" })
+    .last()
+    .getByRole("button", { name: "Remove" })
+    .click();
+  const confirm = page.getByRole("alertdialog");
+  await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await confirm.getByRole("button", { name: "Remove" }).click();
+  await expect(list).not.toContainText("Old laptop", { timeout: 20_000 });
+  const after = await admin.request<{ paired: Json[] }>("device.pair.list", {});
+  expect(after.paired.some((d) => d.deviceId === gone.deviceId)).toBe(false);
+  await page.keyboard.press("Escape");
+});
+
+test("F-157: a read-only connection sees the machines, and paired devices and approvals files only say which access they need", async () => {
+  const page = reader.page;
+  const settings = await machines(page);
+  await expect(settings.getByTestId("machine-list")).toContainText("media-box");
+  await expect(settings.getByTestId("devices-unavailable")).toHaveText(
+    "Seeing paired devices needs device access.",
+  );
+  await expect(settings.getByTestId("approvals-unavailable").first()).toHaveText(
+    "Seeing a machine's approvals needs admin access.",
+  );
+  await expect(settings.getByRole("radiogroup")).toHaveCount(0);
+  await expect(settings.getByRole("button", { name: "Rename" })).toHaveCount(0);
+  await expect(settings.getByTestId("device-bar")).toContainText("This connection only reads.");
+  await shots(page, "machines-read-only");
+  await page.keyboard.press("Escape");
+});

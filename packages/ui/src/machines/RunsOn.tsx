@@ -5,7 +5,7 @@
 // Nothing is kept: the page reads the gateway when it opens and after a save.
 
 import type { BotPlacement, ConnectionState, HostInfo } from "@clawtrate/core";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { CopyValue } from "../AccessBar.tsx";
 import { clockTime } from "../format.ts";
@@ -528,6 +528,7 @@ function WorkspaceForm({
   const [value, setValue] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const field = useRef<HTMLInputElement>(null);
   const problem = !value.startsWith("/")
     ? "Enter a full path on the gateway's machine, starting with /."
     : value.split("/").includes("..")
@@ -536,6 +537,7 @@ function WorkspaceForm({
   const submit = async () => {
     if (problem) {
       setError(problem);
+      field.current?.focus();
       return;
     }
     setBusy(true);
@@ -545,6 +547,7 @@ function WorkspaceForm({
       onDone(workspace);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
+      field.current?.focus();
     } finally {
       setBusy(false);
     }
@@ -567,6 +570,7 @@ function WorkspaceForm({
         {botName}'s folder on the gateway's machine. A full path, starting with /.
       </label>
       <input
+        ref={field}
         id="m-workspace"
         className="input mono"
         value={value}

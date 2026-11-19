@@ -507,7 +507,7 @@ export function useMachinesSection({
   };
 
   const nodeActions = (machine: MachineRow) =>
-    machine.kind === "node" && machine.node ? (
+    machine.kind === "node" && machine.node && pairing ? (
       renaming === machine.id ? (
         <Rename
           initial={machine.name}
@@ -526,7 +526,6 @@ export function useMachinesSection({
             type="button"
             className="button"
             data-size="sm"
-            disabled={!pairing}
             onClick={() => setRenaming(machine.id)}
           >
             Rename
@@ -537,7 +536,6 @@ export function useMachinesSection({
               className="button"
               data-size="sm"
               data-variant="quiet"
-              disabled={!pairing}
               onClick={() =>
                 setRemoving({
                   kind: "machine",
@@ -637,7 +635,18 @@ export function useMachinesSection({
       {view.nodesOmitted > 0 && (
         <p className="b-hint">{view.nodesOmitted} more machines aren't listed.</p>
       )}
-      {view.machines.map(approvalsPart)}
+      {view.machines.every(
+        (m) => "status" in m.approvals && m.approvals.status === "needs-admin",
+      ) ? (
+        <>
+          <h4 className="b-group">Approvals files</h4>
+          <p className="b-hint" data-testid="approvals-unavailable">
+            Seeing a machine's approvals needs admin access.
+          </p>
+        </>
+      ) : (
+        view.machines.map(approvalsPart)
+      )}
       <h4 className="b-group">Paired devices</h4>
       {"status" in devices ? (
         <p className="b-hint" data-testid="devices-unavailable">
