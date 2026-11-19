@@ -332,24 +332,66 @@ describe("where a bot runs: the engine", () => {
     expect((await engine(gw).readPlacement("otto")).configActive).toBe(false);
   });
 
-  it("F-046: a change the gateway persisted but didn't apply is said as that, in its words", async () => {
+  /** A gateway whose `config.patch` persists the change, then refuses with `message`. */
+  function persisting(message: string, applies: boolean) {
     const gw = gateway();
     const patch = gw.handlers["config.patch"]!;
     gw.handlers["config.patch"] = (params) => {
-      patch(params);
-      const error = new Error(
-        "config.patch persisted but was not applied to the active Gateway (failed)",
-      ) as Error & { details?: unknown };
-      error.details = { persistedConfig: { hash: "c2" } };
+      if (!applies) gw.ignore.add("apply");
+      const receipt = patch(params) as { hash: string };
+      const error = new Error(message) as Error & { details?: unknown };
+      error.details = { persistedConfig: { hash: receipt.hash } };
       throw error;
     };
-    const save = await engine(gw, { admin: true }).setCommandMachine(
-      "otto",
-      { host: "node", nodeId: NODE },
-      "c1",
-    );
-    expect(save.active).toBe("failed");
-    expect(save.message).toMatch(/persisted but was not applied/);
+    return gw;
+  }
+  const save = (gw: ReturnType<typeof gateway>) =>
+    engine(gw, { admin: true }).setCommandMachine("otto", { host: "node", nodeId: NODE }, "c1");
+  const FAILED =
+    "config.patch persisted but was not applied to the active Gateway (failed); run config.get, then use config.apply to reapply the saved config or restart the Gateway";
+  const RESTART_PENDING =
+    "config.patch persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision";
+  const RECOVERY =
+    "config.patch persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision";
+
+  it("F-046: only the gateway's not-applied reply is failed; its restart replies are kept in its words", async () => {
+    expect(await save(persisting(FAILED, false))).toMatchObject({
+      active: "failed",
+      message: FAILED,
+    });
+    expect(await save(persisting(RESTART_PENDING, false))).toMatchObject({
+      active: "pending",
+      message: RESTART_PENDING,
+    });
+    expect(await save(persisting(RECOVERY, true))).toMatchObject({
+      active: "applied",
+      message: RECOVERY,
+    });
+  });
+
+  it("F-046: applied needs the read-back revision to be the one this write's receipt names", async () => {
+    // Another write lands between this one and the read-back: a later revision, also active.
+    const later = gateway();
+    const patch = later.handlers["config.patch"]!;
+    later.handlers["config.patch"] = (params) => {
+      const receipt = patch(params) as { hash: string };
+      const config = later.config() as { agents: { entries: Record<string, unknown> } };
+      config.agents.entries.marlow = { workspace: "/srv/claw/workspaces/other" };
+      patch({ raw: JSON.stringify({}), baseHash: receipt.hash });
+      return receipt;
+    };
+    const raced = await save(later);
+    const read = (await later.request("config.get", {})) as { hash: string };
+    expect(read.hash).toBe("c3");
+    expect(raced.active).toBe("pending");
+    // A receipt that names no revision is never applied.
+    const bare = gateway();
+    const plain = bare.handlers["config.patch"]!;
+    bare.handlers["config.patch"] = (params) => {
+      plain(params);
+      return { ok: true };
+    };
+    expect((await save(bare)).active).toBe("pending");
   });
 
   it("F-046: a saved node the list doesn't have is the stored id, not the gateway's machine", async () => {
@@ -573,9 +615,38 @@ describe("where a bot runs: the engine", () => {
     const gw = gateway();
     gw.refuse.set("agents.update", "workspace path is not absolute");
     await expect(engine(gw, { admin: true }).setWorkspace("otto", "relative")).rejects.toThrow(
-      "The gateway answered: workspace path is not absolute. It may have created the folder or files before answering. It now reports the workspace as /srv/claw/workspaces/otto.",
+      "The gateway answered: workspace path is not absolute. It may have created the folder or files before answering. The gateway now lists the workspace as /srv/claw/workspaces/otto.",
     );
     expect(gw.calls.map(([m]) => m)).toEqual(["agents.update", "agents.list"]);
+  });
+
+  it("F-274: a workspace the gateway can't be read back for is unconfirmed, never no workspace", async () => {
+    const refused = gateway();
+    refused.refuse.set("agents.update", "workspace path is not absolute");
+    refused.handlers["agents.list"] = () => {
+      throw new Error("agents.list unavailable");
+    };
+    const failure = await engine(refused, { admin: true })
+      .setWorkspace("otto", "relative")
+      .catch((error: Error) => error.message);
+    expect(failure).toBe(
+      "The gateway answered: workspace path is not absolute. It may have created the folder or files before answering. The current workspace could not be confirmed.",
+    );
+    const rejected = gateway();
+    rejected.handlers["agents.list"] = () => {
+      throw new Error("agents.list unavailable");
+    };
+    expect(await engine(rejected, { admin: true }).setWorkspace("otto", "/srv/a")).toEqual({
+      workspace: null,
+      asTyped: false,
+    });
+    const absent = gateway();
+    absent.handlers["agents.list"] = () => ({ agents: [] });
+    expect(await engine(absent, { admin: true }).setWorkspace("otto", "/srv/a")).toEqual({
+      workspace: null,
+      asTyped: false,
+    });
+    expect(failure).not.toContain("no workspace");
   });
 });
 

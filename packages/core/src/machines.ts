@@ -224,11 +224,12 @@ export function choiceOf(levels: ApprovalLevels): DefaultsChoice | null {
 export type ConfigSave = {
   place: CommandPlace;
   /**
-   * `applied`: the gateway reports its active revision equal to the saved one.
-   * `pending`: saved, and the gateway reports another active revision.
-   * `failed`: the gateway answered that it saved the change but didn't apply it (`message`).
+   * `applied`: the read-back revision is the one this write's receipt names, and the
+   * gateway reports it active. `failed`: the gateway answered that it persisted the
+   * change but didn't apply it. `pending`: anything else.
    */
   active: "applied" | "pending" | "failed";
+  /** The gateway's words when it answered with a persisted-change refusal, in any state. */
   message: string | null;
 };
 
@@ -781,19 +782,23 @@ export class MachinesEngine {
       target.host === "node"
         ? { host: "node", node: target.nodeId }
         : { host: "gateway", node: null };
-    let failed: string | null = null;
+    // The revision this write saved: from its receipt, or from the saved config a refusal carries.
+    let savedHash: string | null;
+    let message: string | null = null;
     try {
-      await this.ctx.request("config.patch", {
+      const receipt = await this.ctx.request("config.patch", {
         raw: JSON.stringify({ agents: { entries: { [botId]: { tools: { exec } } } } }),
         ...(baseHash ? { baseHash } : {}),
       });
+      savedHash = str(rec(receipt).hash, MAX_REASON_CHARS);
     } catch (error) {
-      // The gateway can persist a change and fail to apply it; it says so with the saved config.
-      if (asRecord(rec(rec(error).details).persistedConfig) === null)
-        throw this.refused("where its commands run", error);
-      failed = errorText(error);
+      // The gateway can persist a change and not apply it; it says so with the saved config.
+      const persisted = asRecord(rec(rec(error).details).persistedConfig);
+      if (persisted === null) throw this.refused("where its commands run", error);
+      savedHash = str(persisted.hash, MAX_REASON_CHARS);
+      message = errorText(error);
     }
-    const [{ config, raw }, { nodes }] = await Promise.all([
+    const [{ config, hash, raw }, { nodes }] = await Promise.all([
       this.config(),
       this.ctx.request("node.list", {}).then(readNodes),
     ]);
@@ -806,13 +811,15 @@ export class MachinesEngine {
         "The gateway answered, but reading it back shows another setting. Nothing is shown as saved.",
       );
     const active =
-      failed !== null
-        ? "failed"
-        : typeof raw.appliedConfigHash === "string" &&
-            raw.appliedConfigHash === raw.configRevisionHash
-          ? "applied"
+      savedHash !== null &&
+      hash === savedHash &&
+      typeof raw.appliedConfigHash === "string" &&
+      raw.appliedConfigHash === raw.configRevisionHash
+        ? "applied"
+        : message?.startsWith("config.patch persisted but was not applied to the active Gateway")
+          ? "failed"
           : "pending";
-    return { place, active, message: failed };
+    return { place, active, message };
   }
 
   /**
@@ -842,10 +849,12 @@ export class MachinesEngine {
       const now = await reported().catch(() => null);
       throw new PlacementWriteError(
         `The gateway answered: ${errorText(error).replace(/\.$/, "")}. It may have created the folder or files before answering. ` +
-          `It now reports ${now === null ? "no workspace" : `the workspace as ${now}`}.`,
+          (now === null
+            ? "The current workspace could not be confirmed."
+            : `The gateway now lists the workspace as ${now}.`),
       );
     }
-    const workspace = await reported();
+    const workspace = await reported().catch(() => null);
     return { workspace, asTyped: workspace === path };
   }
 

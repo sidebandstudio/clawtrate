@@ -180,6 +180,7 @@ export function RunsOnPage({
   const admin = connection.canAdmin && !info.readOnly;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -257,6 +258,7 @@ export function RunsOnPage({
   const save = async (value: string) => {
     setSaving(true);
     setError(null);
+    setNote(null);
     try {
       const saved = await bridge.invoke({
         type: "setCommandMachine",
@@ -266,6 +268,8 @@ export function RunsOnPage({
         baseHash: placement.configHash,
       });
       const where = `${botName}'s command machine setting: ${hostWords(saved.place)}`;
+      if (saved.active !== "failed" && saved.message)
+        setNote(`The gateway answered: ${saved.message}`);
       if (saved.active === "applied") announce(`Saved and applied. ${where}`);
       else if (saved.active === "pending")
         announce(`Saved. The gateway doesn't report it applied yet. ${where}`);
@@ -351,6 +355,11 @@ export function RunsOnPage({
           {error}
         </p>
       )}
+      {note && (
+        <p className="b-hint" data-testid="runs-on-save-note">
+          {note}
+        </p>
+      )}
       <p className="m-sentence">
         {origin}
         {onNode && commands.nodeInherited
@@ -432,7 +441,9 @@ export function RunsOnPage({
               announce(
                 saved.asTyped
                   ? `Saved. ${botName}'s workspace: ${saved.workspace}`
-                  : `The gateway answered that it saved it. It reports ${botName}'s workspace as ${saved.workspace ?? "none"}.`,
+                  : saved.workspace === null
+                    ? "The gateway accepted the workspace change. The current workspace could not be confirmed."
+                    : `The gateway accepted the workspace change. It now lists ${botName}'s workspace as ${saved.workspace}.`,
               );
               reload();
             }
