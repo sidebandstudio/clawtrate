@@ -173,6 +173,7 @@ export class UsageEngine {
     this.limitsTimer = null;
     this.limitsRead = null;
     this.countAt = 0;
+    this.countAgain = false;
   }
 
   /** Another device changed a preference. */
@@ -369,18 +370,20 @@ export class UsageEngine {
           this.countAgain = false;
           const budgets = this.ctx.get().budgets;
           const counts = await inTurn(budgets, USAGE_REQUESTS_AT_ONCE, (budget) =>
-            this.count(budget),
+            generation === this.generation ? this.count(budget) : Promise.resolve(null),
           );
           if (generation !== this.generation) return;
           this.ctx.update((usage) => ({
             ...usage,
-            counts: counts.filter((count) =>
-              usage.budgets.some((budget) => budget.id === count.budgetId),
+            counts: counts.filter(
+              (count): count is BudgetCount =>
+                count !== null && usage.budgets.some((budget) => budget.id === count.budgetId),
             ),
           }));
         } while (this.countAgain && generation === this.generation);
       } finally {
         this.counting = null;
+        if (generation !== this.generation && this.countAgain) this.scheduleCount(0);
       }
       if (generation === this.generation && this.ctx.get().budgets.length > 0)
         this.scheduleCount(

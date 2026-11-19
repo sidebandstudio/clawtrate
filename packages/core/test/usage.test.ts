@@ -1107,6 +1107,64 @@ describe("the usage engine", () => {
     engine.onClose();
   });
 
+  it("F-234: a recount stops at a disconnect, asks the next gateway nothing of the old budgets, and that gateway's budgets are counted", async () => {
+    const asked: Array<[string, string, unknown]> = [];
+    let gatewayName = "first";
+    const held: Array<() => void> = [];
+    const old = Array.from({ length: 5 }, (_, i) => ({
+      id: `bot:old-${i}`,
+      botId: `old-${i}`,
+      routineId: null,
+      routineName: null,
+      period: "weekly" as const,
+      tokens: 1_000,
+      timeZone: NY,
+      setAt: 0,
+    }));
+    let usage: UsageState = { ...initialUsage, budgetsStatus: "ok", budgets: old };
+    const engine = new UsageEngine({
+      request: async (method, raw) => {
+        const params = (raw ?? {}) as Record<string, unknown>;
+        asked.push([gatewayName, method, params.agentId ?? null]);
+        if (method === "users.prefs.get")
+          return {
+            status: "ok",
+            entries: {
+              [BUDGETS_PREF_KEY]: {
+                budgets: [{ botId: "new", period: "weekly", tokens: 1_000, timeZone: NY }],
+              },
+            },
+          };
+        if (method === "usage.status") return { updatedAt: 1, providers: [] };
+        if (gatewayName === "first") await new Promise<void>((resolve) => held.push(resolve));
+        return { updatedAt: 2, totals: totals(10, 0), cacheStatus: fresh };
+      },
+      get: () => usage,
+      update: (change) => {
+        usage = change(usage);
+      },
+      connected: () => true,
+      now: () => NOW,
+      log: () => {},
+    });
+    const counting = engine.countBudgets();
+    await flush();
+    // Four of the five old budgets are being counted on the first gateway.
+    expect(held).toHaveLength(4);
+    engine.onClose();
+    gatewayName = "second";
+    engine.onHello();
+    // The new connection's count is due.
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    while (held.length > 0) held.shift()!();
+    await counting;
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    const second = asked.filter(([name, method]) => name === "second" && method === "usage.cost");
+    expect(second.map(([, , botId]) => botId)).toEqual(["new"]);
+    expect(usage.counts.map((count) => count.budgetId)).toEqual(["bot:new"]);
+    engine.onClose();
+  });
+
   it("counts a budget again within seconds while the gateway is still counting it", async () => {
     vi.useFakeTimers();
     const gateway = fakeGateway({ counting: true });
