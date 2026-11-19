@@ -449,7 +449,8 @@ describe("T3 Code thread cards from the engine's state", () => {
     expect(word("t3-started")).toEqual({ type: "open", word: "call-started" });
     expect(word("t3-approval")).toEqual({ type: "open", word: "waiting" });
     expect(word("t3-checking")).toEqual({ type: "open", word: "checking" });
-    expect(word("t3-thread")).toMatchObject({ type: "reported", status: "completed" });
+    // Several calls reported a status: Call made, each status on its own item.
+    expect(word("t3-thread")).toMatchObject({ type: "call", state: "made" });
     expect(word("t3-refused")).toMatchObject({ type: "reported", status: "running" });
     // A launch that ended without a result naming a thread joins none: it is a card of its own,
     // saying how the call itself ended.
@@ -490,7 +491,7 @@ describe("T3 Code thread cards from the engine's state", () => {
     const t = t3Of("t3-before-record");
     expect(t.placed.get("call_t3s")).toMatchObject({ type: "card", head: "call_t3s" });
     expect(t.placed.get("call_t3w")).toMatchObject({ type: "joined", head: "call_t3s" });
-    expect(threadStateOf(t.threadOf("call_t3s"))).toMatchObject({ status: "running" });
+    expect(threadStateOf(t.threadOf("call_t3s"))).toMatchObject({ type: "call", state: "made" });
   });
 
   it("F-441: two threads are two cards, and the same thread id on another server is a third", () => {

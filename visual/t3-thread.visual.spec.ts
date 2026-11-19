@@ -328,7 +328,8 @@ test.describe("T3 Code thread cards", () => {
       timedOut: false,
     });
     await expect(line).toHaveCount(0);
-    await expect(thread(page).locator(":scope > summary .state")).toHaveText("Completed");
+    // Two calls reported a status: Call made, each status on its own item.
+    await expect(thread(page).locator(":scope > summary .state")).toHaveText("Call made");
     await expect(thread(page).locator(":scope > summary")).toContainText("· 2 calls");
     const card = await openCard(page);
     await expect(card.locator('[data-item-call="call_t3w"]')).toHaveCount(1);
@@ -403,7 +404,7 @@ test.describe("T3 Code thread cards", () => {
     // What the thread is for: the launch's title; the count stands apart and is never cut.
     await expect(line.locator(".t3-title")).toHaveText("Skip machines that are asleep");
     await expect(line.locator(".t3-count")).toHaveText("· 4 calls");
-    await expect(line.locator(".state")).toHaveText("Completed");
+    await expect(line.locator(".state")).toHaveText("Call made");
   });
 
   test("F-133 F-135: open, it shows each call's sent text, a launch's target fields, what came back with its time, and Open thread as a link", async ({
@@ -453,10 +454,11 @@ test.describe("T3 Code thread cards", () => {
       "t3-started": "Call started",
       "t3-approval": "Waiting for approval",
       "t3-checking": "Checking",
-      "t3-thread": "Completed",
+      // Several calls reported a status: Call made; one did: its status.
+      "t3-thread": "Call made",
       "t3-refused": "Running",
       "t3-work-may-continue": "Running",
-      "t3-before-record": "Running",
+      "t3-before-record": "Call made",
     };
     for (const [scene, state] of Object.entries(states)) {
       await openFixture(page, `scene=${scene}`, "light");

@@ -301,27 +301,12 @@ const SENDING: Record<T3Role, boolean> = {
 };
 
 /**
- * The calls that reported, in the order the gateway recorded their results:
- * by the result's time live, by its history row's time from history, and in
- * the record's order where neither is known. Not the order the calls started.
- */
-function byResult(calls: readonly T3Call[]): T3Call[] {
-  return calls
-    .map((call, index) => ({ call, index }))
-    .sort((a, b) => {
-      const x = a.call.call.resultAt ?? null;
-      const y = b.call.call.resultAt ?? null;
-      return x !== null && y !== null && x !== y ? x - y : a.index - b.index;
-    })
-    .map((each) => each.call);
-}
-
-/**
  * A thread's state, worked out from its calls (11.2): a call that is open
- * first; else the status in the last returned, non-error result the gateway
- * recorded for any call on the thread; else the latest sending call's state. A
- * failed check or a refused follow-up shows on its own item and does not
- * change the thread's word. Null for a thread with no calls.
+ * first; else, when exactly one returned, non-error result reports a status,
+ * that status; when several do, Call made, each status on its own item; else
+ * the latest sending call's state. A failed check or a refused follow-up shows
+ * on its own item and does not change the thread's word. Null for a thread
+ * with no calls.
  */
 export function threadStateOf(calls: readonly T3Call[]): T3ThreadState | null {
   if (calls.length === 0) return null;
@@ -329,15 +314,15 @@ export function threadStateOf(calls: readonly T3Call[]): T3ThreadState | null {
   if (open.some((c) => c.state === "waiting")) return { type: "open", word: "waiting" };
   if (open.some((c) => SENDING[c.role])) return { type: "open", word: "call-started" };
   if (open.length > 0) return { type: "open", word: "checking" };
-  const reported = byResult(calls)
-    .reverse()
-    .find((c) => c.state === "made" && c.reported !== null);
-  if (reported)
+  const reports = calls.filter((c) => c.state === "made" && c.reported !== null);
+  const report = reports[0];
+  if (report && reports.length > 1) return { type: "call", state: "made", callId: report.id };
+  if (report)
     return {
       type: "reported",
-      status: reported.reported!,
-      callId: reported.id,
-      at: reported.call.endedAt,
+      status: report.reported!,
+      callId: report.id,
+      at: report.call.endedAt,
     };
   const sending = [...calls].reverse().find((c) => SENDING[c.role]) ?? calls.at(-1)!;
   return { type: "call", state: sending.state, callId: sending.id };

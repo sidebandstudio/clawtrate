@@ -1009,7 +1009,7 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     }
   };
 
-  test("F-132 F-134 F-313: a thread launched and waited on, live: the wait's line closes up into the thread's card, which reads Completed", async () => {
+  test("F-132 F-134 F-313: a thread launched and waited on, live: the wait's line closes up into the thread's card, which reads Call made, each status on its own item", async () => {
     test.setTimeout(180_000);
     const t = await called("t3-live", "#t3-start #t3-wait");
     // Open while the wait runs: its line, and the card's Checking, as the gateway's events say.
@@ -1023,7 +1023,8 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     await shot(page, "t3-checking");
     await clients.plain.terminal(t.runId);
     await expect(line).toHaveCount(0);
-    await expect(word(page)).toHaveText("Completed");
+    // The launch and the wait each reported a status: Call made, each on its own item.
+    await expect(word(page)).toHaveText("Call made");
     await expect(thread(page).locator(":scope > summary")).toContainText("· 2 calls");
     await expect(thread(page)).toHaveAttribute("data-call", launch!);
     await eachRaw(page, [launch!, wait!]);
@@ -1039,7 +1040,7 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     for (const on of [page, reader]) {
       await reload(on, "Juniper", t.title);
       await expect(card(on, "t3-card")).toHaveCount(1);
-      await expect(word(on)).toHaveText("Completed");
+      await expect(word(on)).toHaveText("Call made");
       await expect(on.locator(`.card.action[data-call="${wait}"]`)).toHaveCount(0);
       await eachRaw(on, [launch!, wait!]);
       const item = thread(on).locator(`[data-item-call="${launch}"]`);
@@ -1158,7 +1159,7 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     await expect(raw).toBeFocused();
     // The result comes and the run ends: the line the reader holds stays, open, Raw still focused.
     await clients.plain.terminal(runId);
-    await expect(word(page)).toHaveText("Completed", { timeout: 45_000 });
+    await expect(word(page)).toHaveText("Call made", { timeout: 45_000 });
     await expect(line).toHaveCount(1);
     await expect(line).toHaveAttribute("open", "");
     await expect(raw).toBeFocused();
@@ -1166,7 +1167,7 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     // its Raw on the thread's card.
     await inHistory(key, 2);
     await reload(page, "Juniper", title);
-    await expect(word(page)).toHaveText("Completed");
+    await expect(word(page)).toHaveText("Call made");
     await expect(line).toHaveCount(0);
     const c = await openCard(page);
     const item = c.locator(`[data-item-call="${wait}"]`);
@@ -1174,14 +1175,16 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     await expect(item.getByRole("region", { name: "What the gateway sent" })).toContainText(wait!);
   });
 
-  test("F-134: a slow run waited on briefly, then asked to stop: the card reads Stop requested, and the wait says it ended first", async () => {
+  test("F-134: a slow run waited on briefly, then asked to stop: the stop's item reads Stop requested, and the wait says it ended first", async () => {
     test.setTimeout(120_000);
     const t = await called("t3-interrupt", "#t3-start #t3-wait-short #t3-stop");
     await clients.plain.terminal(t.runId);
-    const [, wait] = callIds(t.runId);
+    const [, wait, stop] = callIds(t.runId);
     await openTask(page, "Juniper", t.title);
-    await expect(word(page)).toHaveText("Stop requested");
+    // Three calls reported a status: Call made, each status on its own item.
+    await expect(word(page)).toHaveText("Call made");
     const c = await openCard(page);
+    await expect(c.locator(`[data-item-call="${stop}"]`)).toContainText("Stop requested");
     await expect(c.locator(`[data-item-call="${wait}"]`)).toContainText(
       "The wait ended before the run finished",
     );

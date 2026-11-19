@@ -497,32 +497,32 @@ describe("a thread's state (11.2)", () => {
     expect(threadStateOf([l, read, send, waiting])).toEqual({ type: "open", word: "waiting" });
   });
 
-  it("F-134: else what T3 Code last reported, from any call's returned result, with its time", () => {
+  it("F-134: else the one status T3 Code reported, with its time; several reports are Call made, each on its own item", () => {
     const l = launch();
-    expect(threadStateOf([l])).toMatchObject({ type: "reported", status: "running", callId: l.id });
+    expect(threadStateOf([l])).toMatchObject({
+      type: "reported",
+      status: "running",
+      callId: l.id,
+      at: l.call.endedAt,
+    });
     const w = done("t3_thread_wait", {
       threadId: THREAD,
       runId: "run-1",
       status: "completed",
       timedOut: false,
     });
-    expect(threadStateOf([l, w])).toMatchObject({
-      type: "reported",
-      status: "completed",
-      callId: w.id,
-    });
-    expect(threadStateOf([l, w])).toMatchObject({ at: w.call.endedAt });
+    expect(threadStateOf([l, w])).toMatchObject({ type: "call", state: "made" });
+    expect([l.reported, w.reported]).toEqual(["running", "completed"]);
   });
 
   it("F-134: a wait that timed out reports its run's status: Running, never Completed", () => {
-    const l = launch();
     const w = done("t3_thread_wait", {
       threadId: THREAD,
       runId: "run-1",
       status: "running",
       timedOut: true,
     });
-    expect(threadStateOf([l, w])).toMatchObject({ type: "reported", status: "running" });
+    expect(threadStateOf([w])).toMatchObject({ type: "reported", status: "running" });
   });
 
   it("F-134 F-314: a failed check or a refused follow-up shows on its own item and does not change the thread's word", () => {
@@ -538,13 +538,12 @@ describe("a thread's state (11.2)", () => {
   });
 
   it("F-134: a stop asked for reports interrupt_requested, which is Stop requested, not proof that it stopped", () => {
-    const l = launch();
     const i = done(
       "t3_thread_interrupt",
       { threadId: THREAD, runId: "run-1", status: "interrupt_requested" },
       { stop: true },
     );
-    expect(threadStateOf([l, i])).toMatchObject({
+    expect(threadStateOf([i])).toMatchObject({
       type: "reported",
       status: "interrupt_requested",
     });
@@ -777,96 +776,84 @@ describe("own lines' words (11.4)", () => {
   });
 });
 
-/** Two calls of one run from history whose results were recorded in the order given. */
-function historyPair(
-  first: { tool: string; args: Rec; result: Rec },
-  second: { tool: string; args: Rec; result: Rec },
-  resultsOrder: [0 | 1, 0 | 1],
-) {
-  const calls = [first, second].map((c, i) => ({ ...c, id: `call_h${i}` }));
-  const rows: Rec[] = [
-    { role: "user", content: "Go.", timestamp: 1_000, __openclaw: { id: "u1" } },
-    {
-      role: "assistant",
-      content: calls.map((c) => ({
-        type: "toolCall",
-        id: c.id,
-        name: name(c.tool),
-        arguments: c.args,
-      })),
-      timestamp: 2_000,
-      __openclaw: { id: "a1", runId: "run-h" },
+describe("one report shows its status; several show Call made (11.2)", () => {
+  // The record gives no order for results that tie or carry no time: the card claims none.
+  const args = { threadId: THREAD };
+  const wait = { threadId: THREAD, status: "completed", timedOut: false };
+  const read = readResult([], false, "running");
+
+  it("F-134: live, two results in the same millisecond: Call made, each status on its own item", () => {
+    const ctx = { sessionKey: "agent:otto:backup", now: 9_000, raw: new RawTable() };
+    let activity = emptyActivity;
+    let serial = 0;
+    const ingest = (data: Rec, ts: number) => {
+      activity = applyAgentEvent(
+        activity,
+        { runId: "one-run", seq: ++serial, stream: "tool", ts, sessionKey: ctx.sessionKey, data },
+        ctx,
+      ).activity;
+    };
+    const ingestTool = (id: string, tool: string, result?: Rec) =>
+      ingest(
+        result
+          ? {
+              phase: "result",
+              name: name(tool),
+              toolCallId: id,
+              isError: false,
+              result: {
+                content: [{ type: "text", text: rendered(result) }],
+                details: { mcpServer: SERVER, mcpTool: tool },
+              },
+            }
+          : { phase: "start", name: name(tool), toolCallId: id, args },
+        result ? 2_400 : 2_000,
+      );
+    ingestTool("a", "t3_thread_wait");
+    ingestTool("b", "t3_thread_read");
+    ingestTool("b", "t3_thread_read", read);
+    ingestTool("a", "t3_thread_wait", wait);
+    const run = activity.runs[0]!;
+    const calls = run.steps.map((step) => t3(callFromStep(step, run))!);
+    expect(calls.map((c) => c.id)).toEqual(["a", "b"]);
+    expect(threadStateOf(calls)).toMatchObject({ type: "call", state: "made" });
+    expect(calls.map((c) => c.reported)).toEqual(["completed", "running"]);
+  });
+
+  it.each([2_400, undefined])(
+    "F-134: from history, two results at timestamp %s: Call made",
+    (timestamp) => {
+      const calls = [
+        { id: "a", tool: "t3_thread_wait", result: wait },
+        { id: "b", tool: "t3_thread_read", result: read },
+      ];
+      const rows = [
+        { role: "user", content: "Go.", __openclaw: { id: "u" } },
+        {
+          role: "assistant",
+          content: calls.map((c) => ({
+            type: "toolCall",
+            id: c.id,
+            name: name(c.tool),
+            arguments: args,
+          })),
+          __openclaw: { id: "a", runId: "history" },
+        },
+        ...[calls[1]!, calls[0]!].map((c) => ({
+          role: "toolResult",
+          toolCallId: c.id,
+          content: [{ type: "text", text: rendered(c.result) }],
+          isError: false,
+          timestamp,
+          __openclaw: { id: c.id, runId: "history" },
+        })),
+      ];
+      const ctx = { sessionKey: "agent:otto:backup", now: 9_000, raw: new RawTable() };
+      const run = runsFromHistory(rows, null, ctx)[0]!;
+      const history = run.steps.map((step) => t3(callFromStep(step, run))!);
+      expect(threadStateOf(history)).toMatchObject({ type: "call", state: "made" });
     },
-    ...resultsOrder.map((i, n) => ({
-      role: "toolResult",
-      toolCallId: calls[i]!.id,
-      toolName: name(calls[i]!.tool),
-      content: [{ type: "text", text: rendered(calls[i]!.result) }],
-      isError: false,
-      timestamp: 2_400 + n * 100,
-      __openclaw: { id: `r${n}`, runId: "run-h" },
-    })),
-  ];
-  const ctx = { sessionKey: "agent:otto:backup", now: 9_000, raw: new RawTable() };
-  const run = runsFromHistory(rows, null, ctx)[0]!;
-  return calls.map((c) =>
-    t3(
-      callFromStep(
-        run.steps.find((s) => s.toolCallId === c.id)!,
-        run,
-      ),
-    )!,
   );
-}
-
-describe("the last report is the last result recorded (11.2)", () => {
-  it("F-134: live, a call that started earlier and reported later gives the thread's word", () => {
-    const wait = t3(
-      live(
-        "t3_thread_wait",
-        { threadId: THREAD },
-        { threadId: THREAD, status: "completed", timedOut: false },
-      ),
-    )!;
-    const read = t3(
-      live("t3_thread_read", { threadId: THREAD }, readResult([], false, "running")),
-    )!;
-    const state = threadStateOf([
-      { ...wait, call: { ...wait.call, startedAt: 100, endedAt: 400, resultAt: 400 } },
-      { ...read, call: { ...read.call, startedAt: 200, endedAt: 300, resultAt: 300 } },
-    ]);
-    expect(state).toMatchObject({
-      type: "reported",
-      status: "completed",
-      callId: wait.id,
-      at: 400,
-    });
-  });
-
-  it("F-134: from history, by the order of the result rows, not of the calls", () => {
-    const wait = {
-      tool: "t3_thread_wait",
-      args: { threadId: THREAD },
-      result: { threadId: THREAD, status: "completed", timedOut: false },
-    };
-    const read = {
-      tool: "t3_thread_read",
-      args: { threadId: THREAD },
-      result: readResult([], false, "running"),
-    };
-    const [w, r] = historyPair(wait, read, [1, 0]);
-    expect(threadStateOf([w!, r!])).toMatchObject({
-      type: "reported",
-      status: "completed",
-      callId: w!.id,
-    });
-    const [w2, r2] = historyPair(wait, read, [0, 1]);
-    expect(threadStateOf([w2!, r2!])).toMatchObject({
-      type: "reported",
-      status: "running",
-      callId: r2!.id,
-    });
-  });
 });
 
 describe("a call joins a thread only by its own result naming it (11.1)", () => {
