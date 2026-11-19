@@ -1,0 +1,140 @@
+// What a bot must be denied for these rules to mean anything, checked in the
+// gateway's config where the plugin can read it. A pure function of the
+// config; the plugin writes what it finds to the gateway's log when it
+// starts, as a warning, never as a guarantee.
+//
+// A bot can change or remove the rules when it can:
+//   - manage the gateway or its plugins (the `gateway` and `plugins` tools);
+//   - run commands on the gateway's machine outside a sandbox (`exec`,
+//     `process`): a command runs as the gateway's user and can edit the
+//     gateway's config and this plugin's store;
+//   - write files outside its workspace (`write`, `edit`, `apply_patch`
+//     without `tools.fs.workspaceOnly`): the store is in the gateway's state
+//     folder.
+//
+// The check is conservative: a tool counts as denied only when a deny list
+// names it, by name, a group of OpenClaw 2026.10.6 that holds it, `*` or a
+// pattern matching it, or when an allow list leaves it out. Anything it
+// cannot tell (a tool profile, a group it does not know) counts as offered.
+
+/** The groups of OpenClaw 2026.10.6 (tool-catalog) holding the tools checked here. */
+const GROUPS = {
+  "group:openclaw": ["gateway", "plugins"],
+  "group:automation": ["gateway", "plugins"],
+  "group:runtime": ["exec", "process"],
+  "group:fs": ["write", "edit", "apply_patch"],
+};
+const ALIASES = new Map([
+  ["bash", "exec"],
+  ["apply-patch", "apply_patch"],
+]);
+
+const rec = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+const list = (value) => (Array.isArray(value) ? value.filter((v) => typeof v === "string") : null);
+
+function covers(entry, tool) {
+  const name = ALIASES.get(entry.trim().toLowerCase()) ?? entry.trim().toLowerCase();
+  if (name === "*" || name === tool) return true;
+  if (GROUPS[name]?.includes(tool)) return true;
+  if (name.includes("*")) {
+    const pattern = new RegExp(
+      `^${name
+        .split("*")
+        .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+        .join(".*")}$`,
+    );
+    return pattern.test(tool);
+  }
+  return false;
+}
+
+/** The bots the config declares: `agents.entries` and `agents.list`. */
+export function configuredAgents(config) {
+  const agents = rec(rec(config).agents);
+  const out = new Map();
+  for (const [id, entry] of Object.entries(rec(agents.entries))) out.set(id, rec(entry));
+  for (const entry of Array.isArray(agents.list) ? agents.list : []) {
+    if (typeof rec(entry).id === "string") out.set(entry.id, rec(entry));
+  }
+  return out;
+}
+
+/** Whether the config surely keeps `tool` from `agent`: denied, or left out of an allow list. */
+export function surelyDenied(config, agent, tool) {
+  const global = rec(rec(config).tools);
+  const own = rec(agent.tools);
+  for (const deny of [list(global.deny), list(own.deny)]) {
+    if (deny?.some((entry) => covers(entry, tool))) return true;
+  }
+  for (const allow of [list(global.allow), list(own.allow)]) {
+    // A group this check does not know may hold the tool.
+    const unknownGroup = (entry) => entry.startsWith("group:") && !GROUPS[entry];
+    if (allow && !allow.some((entry) => covers(entry, tool) || unknownGroup(entry))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const sandboxedAll = (config, agent) =>
+  (rec(agent.sandbox).mode ?? rec(rec(rec(config).agents).defaults?.sandbox).mode) === "all";
+
+/**
+ * Per bot, what lets it change the rules, as `{agentId, reasons}`; reasons
+ * among "manages-gateway", "commands-on-gateway-host", "files-outside-workspace".
+ */
+export function exposures(config) {
+  const global = rec(rec(config).tools);
+  const out = [];
+  for (const [agentId, agent] of configuredAgents(config)) {
+    const reasons = [];
+    const own = rec(agent.tools);
+    if (!surelyDenied(config, agent, "gateway") || !surelyDenied(config, agent, "plugins")) {
+      reasons.push("manages-gateway");
+    }
+    const exec = { ...rec(global.exec), ...rec(own.exec) };
+    const commandsOff =
+      exec.mode === "deny" || (exec.mode === undefined && exec.security === "deny");
+    const elsewhere =
+      exec.host === "node" || exec.host === "sandbox" || sandboxedAll(config, agent);
+    const shell = ["exec", "process"].some((tool) => !surelyDenied(config, agent, tool));
+    if (shell && !commandsOff && !elsewhere) reasons.push("commands-on-gateway-host");
+    const fs = { ...rec(global.fs), ...rec(own.fs) };
+    const writes = ["write", "edit", "apply_patch"].some(
+      (tool) => !surelyDenied(config, agent, tool),
+    );
+    if (writes && fs.workspaceOnly !== true && !sandboxedAll(config, agent)) {
+      reasons.push("files-outside-workspace");
+    }
+    if (reasons.length > 0) out.push({ agentId, reasons });
+  }
+  return out;
+}
+
+const WORDS = {
+  "manages-gateway":
+    "may use the gateway or plugins tool, which can change or remove the rules plugin and its rules",
+  "commands-on-gateway-host":
+    "may run commands on the gateway's machine outside a sandbox, as the gateway's user, which can edit the gateway's config and the rules plugin's store",
+  "files-outside-workspace":
+    "may write files outside its workspace, where the rules plugin's store is",
+};
+
+const REMEDY = {
+  "manages-gateway": "Deny it the gateway and plugins tools.",
+  "commands-on-gateway-host":
+    "Deny it exec and process, or run its commands on another machine or in a sandbox.",
+  "files-outside-workspace":
+    "Set tools.fs.workspaceOnly to true, or deny it write, edit and apply_patch.",
+};
+
+/** One warning per bot and reason, in words. */
+export function exposureWarnings(config) {
+  return exposures(config).flatMap(({ agentId, reasons }) =>
+    reasons.map(
+      (reason) =>
+        `Bot ${agentId} ${WORDS[reason]}, so Clawtrate's rules are advice for it. ${REMEDY[reason]}`,
+    ),
+  );
+}
