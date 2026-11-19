@@ -127,6 +127,18 @@ describe("device access", () => {
     });
   }
 
+  it("F-274: a workspace change reads the gateway once and publishes no bot list of its own", async () => {
+    const fake = new AccountsGateway();
+    fake.gateway.handlers["agents.update"] = () => ({ ok: true, agentId: "otto" });
+    const { client } = await accountsClient({ gateway: fake, scopes: [...ADMIN_SCOPES] });
+    const before = fake.gateway.calls("agents.list").length;
+    const bots = client.state.bots;
+    await client.setBotWorkspace("otto", "/srv/claw/otto-2");
+    expect(fake.gateway.calls("agents.list").length - before).toBe(1);
+    expect(client.state.bots).toBe(bots);
+    client.stop();
+  });
+
   it("F-046: a session refuses a node choice that names no machine, and sends nothing", async () => {
     const sent: unknown[] = [];
     const client = {

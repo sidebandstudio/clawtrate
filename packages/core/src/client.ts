@@ -3618,9 +3618,8 @@ export class ClawtrateClient {
     botId: string,
     path: string,
   ): Promise<{ workspace: string | null; asTyped: boolean }> {
-    const read = await this.machines.setWorkspace(botId, path);
-    await this.refreshBots().catch(() => {});
-    return read;
+    // The bot list carries no workspace: nothing else is read, so no late list can replace a newer one.
+    return this.machines.setWorkspace(botId, path);
   }
 
   setMachineDefaults(
