@@ -4,7 +4,8 @@
 // known-hosts file is only ever read, never written.
 
 import { createHash } from "node:crypto";
-import { readOwn, writeOwn } from "./app-files.ts";
+import { readOwn, UnsafeAppFile, writeOwn } from "./app-files.ts";
+import { ENDPOINT, ROUTE_ALIAS } from "./destination.ts";
 
 import { MAX_HOST_KEY_CHARS } from "@clawtrate/core";
 
@@ -73,7 +74,7 @@ export function literalKeyAt(text: string, number: number): HostKey | null {
 
 export type Pin = HostKey & { alias: string; endpoint: string; pinnedAt: string };
 
-const PIN_COMMENT = /^endpoint=(\S{1,300}) pinned=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]{8,12}Z)$/;
+const PIN_COMMENT = /^endpoint=(\S{1,330}) pinned=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]{8,12}Z)$/;
 
 /** The app's own known-hosts file: one line per route alias, with the endpoint and date as its comment. */
 export class AppKnownHosts {
@@ -88,18 +89,26 @@ export class AppKnownHosts {
     return text === null ? [] : text.split("\n").filter((line) => line.trim() !== "");
   }
 
-  get(alias: string): Pin | null {
+  /**
+   * The pin of `alias`, only when it was made for `endpoint`. A line under the
+   * alias for another endpoint, or with no endpoint, is not trusted: it is
+   * reported as an unsafe file.
+   */
+  get(alias: string, endpoint: string): Pin | null {
     for (const line of this.readLines()) {
       const parsed = parseKnownHostsLine(line);
       if (!parsed || parsed.hosts !== alias) continue;
       const comment = PIN_COMMENT.exec(line.trim().split(/\s+/).slice(3).join(" "));
+      if (!comment || comment[1] !== endpoint) {
+        throw new UnsafeAppFile("A pin in the app's known-hosts file names another endpoint.");
+      }
       return {
         alias,
         type: parsed.type,
         key: parsed.key,
         fingerprint: parsed.fingerprint,
-        endpoint: comment?.[1] ?? "",
-        pinnedAt: comment?.[2] ?? "",
+        endpoint,
+        pinnedAt: comment[2]!,
       };
     }
     return null;
@@ -107,9 +116,8 @@ export class AppKnownHosts {
 
   /** Pins `key` under `alias`; with `replace` false, a pin already there is an error. */
   pin(alias: string, key: HostKey, endpoint: string, now: Date, replace: boolean): Pin {
-    if (!/^clawtrate-route-[a-z0-9]{1,32}$/.test(alias)) throw new Error("Not a route alias.");
-    if (!/^\[[A-Za-z0-9.-]{1,253}\]:[0-9]{1,5}$/.test(endpoint))
-      throw new Error("Not an endpoint.");
+    if (!ROUTE_ALIAS.test(alias)) throw new Error("Not a route alias.");
+    if (!ENDPOINT.test(endpoint)) throw new Error("Not an endpoint.");
     const lines = this.readLines();
     const others = lines.filter((line) => parseKnownHostsLine(line)?.hosts !== alias);
     if (others.length !== lines.length && !replace)
@@ -125,9 +133,13 @@ export class AppKnownHosts {
     return { alias, ...key, endpoint, pinnedAt };
   }
 
-  remove(alias: string): void {
+  /** Removes every pin whose alias `matches`. */
+  removeWhere(matches: (alias: string) => boolean): void {
     const lines = this.readLines();
-    const others = lines.filter((line) => parseKnownHostsLine(line)?.hosts !== alias);
+    const others = lines.filter((line) => {
+      const hosts = parseKnownHostsLine(line)?.hosts;
+      return hosts === undefined || !matches(hosts);
+    });
     if (others.length === lines.length) return;
     writeOwn(this.path, others.length ? others.join("\n") + "\n" : "");
   }

@@ -2,7 +2,7 @@
 // section 19): one directive per line, one validated value per directive, and
 // no forwards. `ssh` is only ever started with `-F` on a file made here.
 
-import { isHost, isRouteId, isUser, routeAlias } from "./destination.ts";
+import { endpointText, isHost, isRouteId, isUser, routeAlias } from "./destination.ts";
 import type { Target } from "./person-config.ts";
 import type { SshWorld } from "./world.ts";
 
@@ -64,8 +64,9 @@ export function routeConfigText(
     throw new UnsafeConfigValue("The port is not valid.");
   }
   const p = (path: string) => pathValue(path, world.platform);
+  const alias = routeAlias(routeId, endpointText(target.user, target.hostName, target.port));
   const lines = [
-    `Host ${routeAlias(routeId)}`,
+    `Host ${alias}`,
     `  HostName ${target.hostName}`,
     `  User ${target.user}`,
     `  Port ${target.port}`,
@@ -80,7 +81,7 @@ export function routeConfigText(
     ...(purpose === "lookup"
       ? // Prior trust is looked up for the resolved host and port, without the alias.
         [`  UserKnownHostsFile ${p(world.personKnownHosts)}`]
-      : [`  HostKeyAlias ${routeAlias(routeId)}`, `  UserKnownHostsFile ${p(knownHosts)}`]),
+      : [`  HostKeyAlias ${alias}`, `  UserKnownHostsFile ${p(knownHosts)}`]),
     "  GlobalKnownHostsFile none",
     purpose === "capture" ? "  StrictHostKeyChecking accept-new" : "  StrictHostKeyChecking yes",
     "  UpdateHostKeys no",

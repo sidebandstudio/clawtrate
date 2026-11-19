@@ -11,7 +11,7 @@ import {
   readProbeLines,
 } from "../../src/main/ssh/ssh-output.ts";
 import { failureNote, type Route } from "../../src/main/ssh/transport.ts";
-import { parseDestination } from "../../src/main/ssh/destination.ts";
+import { parseDestination, routeAlias } from "../../src/main/ssh/destination.ts";
 
 const FP = "SHA256:dv91cEANbiDdpyNeOeGBAXjZ69LPTU9DqQRjRioGigA";
 
@@ -179,7 +179,9 @@ describe("ssh's three failures, told apart", () => {
 
   const route = {
     id: "1",
-    alias: "clawtrate-route-1",
+    alias: routeAlias("1", "you@[devbox.example]:22"),
+    endpoint: "you@[devbox.example]:22",
+    generation: "g",
     account: "you@devbox.example",
     accountWithPort: "you@devbox.example, port 22",
     target: {

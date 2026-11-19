@@ -141,6 +141,7 @@ const ALLOWED: Record<string, string> = {
   "apps/desktop/src/main/ssh/person-config.ts:REFUSED": "static, the settings refused by name",
   "apps/desktop/src/main/ssh/person-config.ts:IGNORED": "static, the settings left out",
   "apps/desktop/src/main/ssh/person-config.ts:DEFAULT_IDENTITIES": "static, five key names",
+  "apps/desktop/src/main/ssh/world.ts:WINDOWS_ENV": "static, fifteen variable names",
   "apps/desktop/src/main/ssh/run.ts:closed": "weak, dies with the child processes it names",
   "apps/desktop/src/main/ssh/transport.ts:startForward>listening":
     "one forward process's listener from its supervisor, gone with the process",

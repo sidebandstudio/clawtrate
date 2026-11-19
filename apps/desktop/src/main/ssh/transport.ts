@@ -5,15 +5,16 @@
 // screens and the host's confirmations call it.
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 
-import { MAX_SSH_CAPTURES, MAX_SSH_FORWARDS } from "@clawtrate/core";
+import { MAX_SSH_CAPTURES, MAX_SSH_FORWARDS, MAX_SSH_ROUTES } from "@clawtrate/core";
 
 import { createOwn, readOwn, removeOwn, secureDir, UnsafeAppFile, writeOwn } from "./app-files.ts";
 import {
   accountText,
+  endpointText,
   isGatewayPort,
   isRouteId,
   parseDestination,
@@ -55,7 +56,12 @@ const LOOK_TIMEOUT_MS = 35000;
 
 export type Route = {
   id: string;
+  /** `clawtrate-route-<id>-<endpoint tag>`: an alias, its files and its pin belong to one endpoint. */
   alias: string;
+  /** The resolved endpoint: "you@[devbox.example]:22". */
+  endpoint: string;
+  /** Which preparation of the route this is; only the latest is accepted. */
+  generation: string;
   target: Target;
   /** The full destination, as text: "you@devbox.example". */
   account: string;
@@ -153,9 +159,15 @@ export type LookResult =
       reason: "timed-out" | "too-large" | "no-begin" | "no-end" | "malformed";
     };
 
+/** A route prepared again since, or forgotten: nothing is done with it. */
+export type StaleRoute = { ok: false; kind: "stale-route" };
+const STALE: StaleRoute = { ok: false, kind: "stale-route" };
+
 type Capture = {
   id: string;
   routeId: string;
+  /** The preparation and endpoint of the route whose configuration the probe ran with. */
+  generation: string;
   key: HostKey;
   endpoint: string;
   at: number;
@@ -178,6 +190,8 @@ export class SshTransport {
   readonly processes: ProcessTable;
   private readonly known: AppKnownHosts;
   private readonly captures = new Map<string, Capture>();
+  /** Each route id's latest preparation, at most `MAX_SSH_ROUTES`; an older one is stale. */
+  private readonly routes = new Map<string, string>();
   private readonly forwards = new Set<ForwardSupervisor>();
   private readonly now: () => number;
   private client: Promise<{ ok: true } | NotSupportedHere> | null = null;
@@ -242,21 +256,49 @@ export class SshTransport {
       );
     }
     guardWorld(this.world, [...target.identityFiles, ...target.certificateFiles]);
+    const endpoint = endpointText(target.user, target.hostName, target.port);
     const route: Route = {
       id: routeId,
-      alias: routeAlias(routeId),
-      target,
+      alias: routeAlias(routeId, endpoint),
+      endpoint,
+      generation: randomUUID(),
+      target: deepFreeze(target),
       account: accountText(target.user, target.hostName),
       accountWithPort: `${accountText(target.user, target.hostName)}, port ${target.port}`,
     };
+    // An earlier preparation's objects are stale from here on, and its files for another endpoint go.
+    this.routes.delete(routeId);
+    while (this.routes.size >= MAX_SSH_ROUTES) {
+      const oldest = this.routes.keys().next().value;
+      if (oldest === undefined) break;
+      this.routes.delete(oldest);
+    }
+    this.routes.set(routeId, route.generation);
+    this.removeConfigs(routeId, route.alias);
     this.writeConfigs(route);
-    return { ok: true, ...route };
+    return Object.freeze({ ok: true as const, ...route });
+  }
+
+  /** Whether `route` is the latest preparation of its id. */
+  private current(route: Route): boolean {
+    return this.routes.get(route.id) === route.generation;
+  }
+
+  /** Removes the route's configuration files, but those of `keep`. */
+  private removeConfigs(routeId: string, keep: string | null): void {
+    const prefix = `route-${routeId}-`;
+    const keepName = keep === null ? null : keep.slice("clawtrate-".length);
+    for (const name of readdirSync(this.world.appDir)) {
+      if (!name.startsWith(prefix) || !name.endsWith(".conf")) continue;
+      if (keepName !== null && name.startsWith(`${keepName}.`)) continue;
+      removeOwn(join(this.world.appDir, name));
+    }
   }
 
   configPath(route: Route, purpose: "normal" | "lookup" = "normal"): string {
     return join(
       this.world.appDir,
-      `route-${route.id}${purpose === "lookup" ? ".lookup" : ""}.conf`,
+      `${route.alias.slice("clawtrate-".length)}${purpose === "lookup" ? ".lookup" : ""}.conf`,
     );
   }
 
@@ -268,7 +310,7 @@ export class SshTransport {
   }
 
   private endpoint(route: Route): string {
-    return `[${route.target.hostName}]:${route.target.port}`;
+    return route.endpoint;
   }
 
   /** The fixed options of every probe: no session, no credentials offered. */
@@ -319,7 +361,7 @@ export class SshTransport {
   private async checkHostKeyInner(route: Route): Promise<HostKeyCheck | Failed | NotSupportedHere> {
     const client = await this.checkClient();
     if (!client.ok) return client;
-    const pin = this.known.get(route.alias);
+    const pin = this.known.get(route.alias, route.endpoint);
     if (pin) {
       const { run, lines } = await this.probe(this.configPath(route), route.alias);
       if (lines.matches)
@@ -433,6 +475,7 @@ export class SshTransport {
       const capture: Capture = {
         id: randomUUID(),
         routeId: route.id,
+        generation: route.generation,
         key: { type: parsed.type, key: parsed.key, fingerprint: parsed.fingerprint },
         endpoint: this.endpoint(route),
         at: this.now(),
@@ -472,13 +515,13 @@ export class SshTransport {
     if (!capture || capture.routeId !== route.id || capture.replaces !== replaces) return null;
     this.captures.delete(captureId);
     if (this.now() - capture.at > CAPTURE_TTL_MS) return null;
-    if (capture.endpoint !== this.endpoint(route)) return null;
+    if (capture.generation !== route.generation || capture.endpoint !== route.endpoint) return null;
     return capture;
   }
 
   /** After the host's confirmation: pins exactly the bytes captured at first contact. */
   private trustInner(route: Route, captureId: string): PinResult {
-    if (this.known.get(route.alias)) return { ok: false, kind: "already-pinned" };
+    if (this.known.get(route.alias, route.endpoint)) return { ok: false, kind: "already-pinned" };
     const capture = this.takeCapture(route, captureId, false);
     if (!capture) return { ok: false, kind: "no-such-capture" };
     const pin = this.known.pin(
@@ -493,7 +536,8 @@ export class SshTransport {
 
   /** After the host's confirmation with its checkbox: replaces a changed key by the one captured. */
   private replaceInner(route: Route, captureId: string): PinResult {
-    if (!this.known.get(route.alias)) return { ok: false, kind: "nothing-to-replace" };
+    if (!this.known.get(route.alias, route.endpoint))
+      return { ok: false, kind: "nothing-to-replace" };
     const capture = this.takeCapture(route, captureId, true);
     if (!capture) return { ok: false, kind: "no-such-capture" };
     const pin = this.known.pin(
@@ -513,7 +557,7 @@ export class SshTransport {
   ): Promise<LookResult> {
     const client = await this.checkClient();
     if (!client.ok) return client;
-    if (!this.known.get(route.alias)) return { ok: false, kind: "not-pinned" };
+    if (!this.known.get(route.alias, route.endpoint)) return { ok: false, kind: "not-pinned" };
     const script = lookScript();
     const run = await runSsh(
       this.processes,
@@ -540,6 +584,7 @@ export class SshTransport {
    * after a LOOK names `expected` on that port.
    */
   openForward(route: Route, gatewayPort: number, expected: GatewayService): ForwardSupervisor {
+    if (!this.current(route)) throw new Error("The route was prepared again or forgotten.");
     if (!isGatewayPort(gatewayPort) || expected.port !== gatewayPort)
       throw new Error("Not a gateway port.");
     if (this.forwards.size >= MAX_SSH_FORWARDS) throw new Error("Too many forwards at once.");
@@ -616,8 +661,10 @@ export class SshTransport {
 
   /** Forgets the route: its pin and its files. Its forwards must be closed first. */
   private forgetInner(route: Route): void {
-    this.known.remove(route.alias);
-    for (const purpose of ["normal", "lookup"] as const) removeOwn(this.configPath(route, purpose));
+    const prefix = `clawtrate-route-${route.id}-`;
+    this.known.removeWhere((alias) => alias.startsWith(prefix));
+    this.removeConfigs(route.id, null);
+    this.routes.delete(route.id);
   }
 
   /** A route from what was typed, or the refusal that names why not. Writes the route's files. */
@@ -633,27 +680,37 @@ export class SshTransport {
    * already trusts, first contact, or changed. A key is captured without
    * signing in; a changed key is never replaced here.
    */
-  checkHostKey(route: Route): Promise<HostKeyCheck | Failed | NotSupportedHere | AppFilesUnsafe> {
+  checkHostKey(
+    route: Route,
+  ): Promise<HostKeyCheck | Failed | NotSupportedHere | AppFilesUnsafe | StaleRoute> {
+    if (!this.current(route)) return Promise.resolve(STALE);
     return guardedAsync(() => this.checkHostKeyInner(route));
   }
 
   /** After the host's confirmation: pins exactly the bytes captured at first contact. */
-  trustCapturedKey(route: Route, captureId: string): PinResult | AppFilesUnsafe {
+  trustCapturedKey(route: Route, captureId: string): PinResult | AppFilesUnsafe | StaleRoute {
+    if (!this.current(route)) return STALE;
     return guarded(() => this.trustInner(route, captureId));
   }
 
   /** After the host's confirmation with its checkbox: replaces a changed key by the one captured. */
-  replaceTrustedKey(route: Route, captureId: string): PinResult | AppFilesUnsafe {
+  replaceTrustedKey(route: Route, captureId: string): PinResult | AppFilesUnsafe | StaleRoute {
+    if (!this.current(route)) return STALE;
     return guarded(() => this.replaceInner(route, captureId));
   }
 
   /** Runs the LOOK script through the pinned connection, and returns its facts. */
-  look(route: Route, options: { signal?: AbortSignal } = {}): Promise<LookResult | AppFilesUnsafe> {
+  look(
+    route: Route,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<LookResult | AppFilesUnsafe | StaleRoute> {
+    if (!this.current(route)) return Promise.resolve(STALE);
     return guardedAsync(() => this.lookInner(route, options));
   }
 
   /** Forgets the route: its pin and its files. Its forwards must be closed first. */
-  forget(route: Route): { ok: true } | AppFilesUnsafe {
+  forget(route: Route): { ok: true } | AppFilesUnsafe | StaleRoute {
+    if (!this.current(route)) return STALE;
     return guarded(() => {
       this.forgetInner(route);
       return { ok: true } as const;
@@ -664,6 +721,14 @@ export class SshTransport {
   async closeAll(): Promise<void> {
     await Promise.all([...this.forwards].map((forward) => forward.close()));
   }
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object") {
+    for (const inner of Object.values(value)) deepFreeze(inner);
+    Object.freeze(value);
+  }
+  return value;
 }
 
 /** An app SSH file is a link, another account's, or not a plain file: nothing was done with it. */

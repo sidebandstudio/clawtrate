@@ -314,6 +314,8 @@ export const SAVE_OWNERS: Record<string, Owner> = {
 
 /** Captured host keys waiting for the person's decision, in the desktop app's SSH transport. */
 export const MAX_SSH_CAPTURES = 8;
+/** Routes one SSH transport knows the latest preparation of; an older route is stale. */
+export const MAX_SSH_ROUTES = 16;
 /** Forwards one SSH transport keeps open at once. */
 export const MAX_SSH_FORWARDS = 8;
 /** `ssh` processes one SSH transport runs at once. */
@@ -337,6 +339,7 @@ export const SSH_TRANSPORT_OWNERS: Record<string, Owner> = {
     opaque: "one public host key, at most `MAX_HOST_KEY_CHARS`, each dropped after 2 minutes",
   },
   forwards: { max: MAX_SSH_FORWARDS, each: N, row: null },
+  routes: { max: MAX_SSH_ROUTES, each: 2 * ID, row: null },
 };
 /** The `ssh` processes an SSH transport runs (`ProcessTable`), by PID. */
 export const SSH_PROCESS_OWNERS: Record<string, Owner> = {

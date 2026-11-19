@@ -8,7 +8,7 @@ import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { parseDestination } from "../../src/main/ssh/destination.ts";
+import { parseDestination, routeAlias } from "../../src/main/ssh/destination.ts";
 import { hostLineMatches, resolveTarget, type Target } from "../../src/main/ssh/person-config.ts";
 import { pathValue, routeConfigText } from "../../src/main/ssh/route-config.ts";
 import type { SshWorld } from "../../src/main/ssh/world.ts";
@@ -418,6 +418,9 @@ const target = (overrides: Partial<Target> = {}): Target => ({
   ...overrides,
 });
 
+/** The alias of route 1 to the default target's endpoint. */
+const A1 = routeAlias("1", "you@[devbox.example]:22");
+
 describe("the configuration the host writes", () => {
   it("is one directive per line, with its fixed options and no forwards", () => {
     const text = routeConfigText(
@@ -432,14 +435,14 @@ describe("the configuration the host writes", () => {
     );
     expect(text).toBe(
       [
-        "Host clawtrate-route-1",
+        `Host ${A1}`,
         "  HostName devbox.example",
         "  User you",
         "  Port 22",
         '  IdentityFile "/srv/you/.ssh/id_ed25519"',
         "  IdentitiesOnly yes",
         '  CertificateFile "/srv/you/.ssh/id_ed25519-cert.pub"',
-        "  HostKeyAlias clawtrate-route-1",
+        `  HostKeyAlias ${A1}`,
         '  UserKnownHostsFile "/srv/app/known_hosts"',
         "  GlobalKnownHostsFile none",
         "  StrictHostKeyChecking yes",
@@ -557,7 +560,7 @@ describe("the configuration the host writes", () => {
           ),
         );
         // `-G` on the host's own file only: no Match in it, nothing evaluated, no connection.
-        const run = spawnSync(SSH, ["-G", "-F", file, "--", "clawtrate-route-1"], {
+        const run = spawnSync(SSH, ["-G", "-F", file, "--", A1], {
           env: testEnv(),
           encoding: "utf8",
         });
@@ -616,7 +619,7 @@ describe("the configuration the host writes", () => {
             purpose,
           ),
         );
-        const run = spawnSync(SSH, ["-G", "-F", file, "--", "clawtrate-route-1"], {
+        const run = spawnSync(SSH, ["-G", "-F", file, "--", A1], {
           env: testEnv(),
           encoding: "utf8",
         });
@@ -657,10 +660,14 @@ describe("the configuration the host writes", () => {
         ),
       );
       // `-G` on the host's own file only: it holds no Match, so nothing is evaluated or run.
-      const run = spawnSync(SSH, ["-G", "-F", file, "--", "clawtrate-route-7"], {
-        env: testEnv(),
-        encoding: "utf8",
-      });
+      const run = spawnSync(
+        SSH,
+        ["-G", "-F", file, "--", routeAlias("7", "you@[198.51.100.7]:2222")],
+        {
+          env: testEnv(),
+          encoding: "utf8",
+        },
+      );
       expect(run.status).toBe(0);
       const settings = new Map(
         run.stdout
@@ -671,7 +678,7 @@ describe("the configuration the host writes", () => {
       expect(settings.get("port")).toBe("2222");
       expect(settings.get("identityfile")).toBe(join(dir, "my key"));
       expect(settings.get("userknownhostsfile")).toBe(join(dir, "known_hosts"));
-      expect(settings.get("hostkeyalias")).toBe("clawtrate-route-7");
+      expect(settings.get("hostkeyalias")).toBe(routeAlias("7", "you@[198.51.100.7]:2222"));
       expect(settings.get("stricthostkeychecking")).toBe("true");
       expect(settings.get("clearallforwardings")).toBe("yes");
       expect(settings.get("identityagent")).toBe("none");

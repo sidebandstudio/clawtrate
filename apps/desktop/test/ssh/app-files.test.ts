@@ -25,6 +25,7 @@ import {
   UnsafeAppFile,
   writeOwn,
 } from "../../src/main/ssh/app-files.ts";
+import { routeAlias } from "../../src/main/ssh/destination.ts";
 import { AppKnownHosts } from "../../src/main/ssh/known-hosts.ts";
 import { SshTransport } from "../../src/main/ssh/transport.ts";
 import type { SshWorld } from "../../src/main/ssh/world.ts";
@@ -82,13 +83,14 @@ describe.skipIf(!unix)("the app's SSH folder and files", () => {
     writeFileSync(file, "");
     chmodSync(file, 0o644);
     const known = new AppKnownHosts(file);
-    expect(known.get("clawtrate-route-1")).toBeNull();
+    const alias = routeAlias("1", "you@[127.0.0.1]:22");
+    expect(known.get(alias, "you@[127.0.0.1]:22")).toBeNull();
     expect(mode(file)).toBe(0o600);
     chmodSync(file, 0o644);
-    known.pin("clawtrate-route-1", key, "[127.0.0.1]:22", new Date(0), false);
+    known.pin(alias, key, "you@[127.0.0.1]:22", new Date(0), false);
     expect(mode(file)).toBe(0o600);
     chmodSync(file, 0o666);
-    known.remove("clawtrate-route-1");
+    known.removeWhere((each) => each === alias);
     expect(mode(file)).toBe(0o600);
   });
 
