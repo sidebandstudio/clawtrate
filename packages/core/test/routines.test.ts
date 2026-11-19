@@ -4,12 +4,16 @@
 
 import { describe, expect, it } from "vitest";
 import { ClawtrateClient } from "../src/client.ts";
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import {
   applyCronEvent,
+  fieldsOf,
   initialRoutinesState,
   MAX_ROUTINE_RUNS,
   parseRoutine,
+  patchOf,
   RoutinesEngine,
+  type RoutineFields,
   type RoutinesState,
 } from "../src/routines.ts";
 import { FAST, grantingGateway, URL_A } from "./client-harness.ts";
@@ -61,7 +65,10 @@ const runEntry = (runAtMs: number, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-function engine(handlers: Record<string, (params: Record<string, unknown>) => unknown>) {
+function engine(
+  handlers: Record<string, (params: Record<string, unknown>) => unknown>,
+  access: { admin: boolean; connected: boolean } = { admin: false, connected: true },
+) {
   let state: RoutinesState = initialRoutinesState;
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   const routines = new RoutinesEngine({
@@ -75,6 +82,8 @@ function engine(handlers: Record<string, (params: Record<string, unknown>) => un
     update: (change) => {
       state = change(state);
     },
+    connected: () => access.connected,
+    admin: () => access.admin,
   });
   return { routines, requests, state: () => state };
 }
@@ -292,6 +301,319 @@ describe("F-193: a run's conversation", () => {
       error: null,
     });
     expect(requests).toEqual([]);
+  });
+});
+
+const refused = (message: string) =>
+  new GatewayProtocolRequestError({ code: "INVALID_REQUEST", message });
+const ADMIN = { admin: true, connected: true };
+
+describe("changing routines needs admin", () => {
+  it("F-189 F-350 F-351 F-352: below admin nothing is sent, whatever asked for it", async () => {
+    const { routines, requests } = engine({});
+    const fields = fieldsOf(parseRoutine(job())!);
+    expect(await routines.create({ ...fields, botId: "marlow" }, "k1")).toEqual({
+      status: "not-sent",
+      reason: "admin",
+    });
+    expect(await routines.update(JOB, fields, { ...fields, name: "New" })).toMatchObject({
+      status: "not-sent",
+    });
+    expect(await routines.setEnabled(JOB, false)).toMatchObject({ status: "not-sent" });
+    expect(await routines.runNow(JOB)).toMatchObject({ status: "not-sent" });
+    expect(await routines.remove(JOB)).toMatchObject({ status: "not-sent" });
+    expect(await routines.hooks()).toBeNull();
+    expect(requests).toEqual([]);
+  });
+});
+
+describe("F-189: creating a routine", () => {
+  const input = { ...fieldsOf(parseRoutine(job())!), botId: "marlow" };
+
+  it("adds it under the draft's own key, results kept with the run, and calls it saved only from the gateway's answer", async () => {
+    const { routines, requests, state } = engine(
+      {
+        "cron.add": (params) => ({
+          created: true,
+          job: job({ declarationKey: params.declarationKey }),
+        }),
+      },
+      ADMIN,
+    );
+    const result = await routines.create(input, "draft-1");
+    expect(requests[0]).toEqual({
+      method: "cron.add",
+      params: {
+        name: "Morning digest",
+        agentId: "marlow",
+        schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "Summarise yesterday's notes." },
+        delivery: { mode: "none" },
+        declarationKey: "clawtrate:draft-1",
+      },
+    });
+    expect(result).toMatchObject({ status: "saved", routine: { id: JOB } });
+    expect(state().routines.map((r) => r.id)).toEqual([JOB]);
+  });
+
+  it("says why the gateway refused, and an answer that never came is unknown, not saved", async () => {
+    const bad = engine(
+      {
+        "cron.add": () => {
+          throw refused(
+            "invalid cron.add params: CronPattern: invalid configuration format ('99 * * *')",
+          );
+        },
+      },
+      ADMIN,
+    );
+    expect(await bad.routines.create(input, "k")).toEqual({
+      status: "refused",
+      error: "invalid cron.add params: CronPattern: invalid configuration format ('99 * * *')",
+    });
+    const silent = engine(
+      {
+        "cron.add": () => {
+          throw new Error("gateway request timed out");
+        },
+      },
+      ADMIN,
+    );
+    expect(await silent.routines.create(input, "k")).toMatchObject({ status: "unknown" });
+    expect(silent.state().routines).toEqual([]);
+  });
+
+  it("finds a create in doubt by the draft's key only, never another routine of the same name and bot", async () => {
+    const { routines } = engine({
+      "cron.list": () => ({
+        jobs: [
+          job({ id: "theirs", declarationKey: "clawtrate:someone-else" }),
+          job({ id: "other-client" }),
+        ],
+        hasMore: false,
+      }),
+    });
+    expect(await routines.findCreated("draft-1")).toBeNull();
+    const found = engine({
+      "cron.list": () => ({
+        jobs: [
+          job({ id: "other-client" }),
+          job({ id: "mine", declarationKey: "clawtrate:draft-1" }),
+        ],
+        hasMore: false,
+      }),
+    });
+    expect((await found.routines.findCreated("draft-1"))?.id).toBe("mine");
+  });
+
+  it("writes a one-time schedule as a time with its offset, never a zone beside it", () => {
+    const original = fieldsOf(parseRoutine(job())!);
+    const at = {
+      ...original.schedule,
+      kind: "at" as const,
+      expr: null,
+      tz: null,
+      at: "2035-01-01T09:00:00-05:00",
+    };
+    expect(patchOf(original, { ...original, schedule: at }, "agentTurn")).toEqual({
+      schedule: { kind: "at", at: "2035-01-01T09:00:00-05:00" },
+    });
+    // A wall time with no offset is not written: the gateway would read it as UTC.
+    expect(
+      patchOf(
+        original,
+        { ...original, schedule: { ...at, at: "2035-01-01T09:00:00" } },
+        "agentTurn",
+      ),
+    ).toEqual({});
+  });
+});
+
+describe("F-189: changing a routine", () => {
+  const once = job({
+    schedule: { kind: "at", at: "2035-01-01T14:00:00.000Z" },
+    deleteAfterRun: true,
+  });
+  const original = fieldsOf(parseRoutine(once)!);
+
+  it("writes only what changed: a new name leaves the saved time as it is", async () => {
+    const { routines, requests } = engine(
+      {
+        "cron.get": () => once,
+        "cron.update": (params) => ({ ...once, ...(params.patch as Record<string, unknown>) }),
+      },
+      ADMIN,
+    );
+    // The editor may hold the same instant written with an offset.
+    const edit: RoutineFields = {
+      ...original,
+      name: "New year note",
+      schedule: { ...original.schedule, at: "2035-01-01T09:00:00-05:00" },
+    };
+    expect(await routines.update(JOB, original, edit)).toMatchObject({
+      status: "saved",
+      routine: { name: "New year note", schedule: { at: "2035-01-01T14:00:00.000Z" } },
+    });
+    expect(requests.at(-1)).toEqual({
+      method: "cron.update",
+      params: { id: JOB, patch: { name: "New year note" } },
+    });
+  });
+
+  it("writes nothing when another client changed it since the editor opened, and gives back the new version", async () => {
+    const { routines, requests } = engine(
+      { "cron.get": () => ({ ...once, payload: { kind: "agentTurn", message: "Theirs." } }) },
+      ADMIN,
+    );
+    expect(await routines.update(JOB, original, { ...original, name: "Mine" })).toMatchObject({
+      status: "conflict",
+      current: { text: "Theirs." },
+    });
+    expect(requests.map((r) => r.method)).toEqual(["cron.get"]);
+  });
+
+  it("says when it was deleted elsewhere, and keeps the gateway's reason for a refusal", async () => {
+    const gone = engine(
+      {
+        "cron.get": () => {
+          throw refused(
+            `Automation not found: ${JOB}. List automations and retry with a current job id.`,
+          );
+        },
+      },
+      ADMIN,
+    );
+    expect(await gone.routines.update(JOB, original, { ...original, name: "x" })).toEqual({
+      status: "deleted",
+    });
+    const bad = engine(
+      {
+        "cron.get": () => once,
+        "cron.update": () => {
+          throw refused("invalid cron.update params: CronPattern: invalid configuration format");
+        },
+      },
+      ADMIN,
+    );
+    expect(
+      await bad.routines.update(JOB, original, {
+        ...original,
+        schedule: { kind: "cron", expr: "99 * * *", tz: null, everyMs: null, at: null, name: null },
+      }),
+    ).toEqual({
+      status: "refused",
+      error: "invalid cron.update params: CronPattern: invalid configuration format",
+    });
+  });
+
+  it("keeps a reminder a reminder: its text is written as a system event, never as a bot's turn", () => {
+    const reminder = parseRoutine(
+      job({ sessionTarget: "main", payload: { kind: "systemEvent", text: "Stretch" } }),
+    )!;
+    expect(
+      patchOf(fieldsOf(reminder), { ...fieldsOf(reminder), text: "Stand up" }, "systemEvent"),
+    ).toEqual({
+      payload: { kind: "systemEvent", text: "Stand up" },
+    });
+    // A command or script is never written from here.
+    expect(patchOf(fieldsOf(reminder), { ...fieldsOf(reminder), text: "rm" }, "other")).toEqual({});
+  });
+
+  it("does not apply an answer from a connection that has since closed", async () => {
+    let release: () => void = () => {};
+    const { routines, state } = engine(
+      {
+        "cron.get": () => once,
+        "cron.update": () =>
+          new Promise((resolve) => {
+            release = () => resolve({ ...once, name: "Late" });
+          }),
+      },
+      ADMIN,
+    );
+    const pending = routines.update(JOB, original, { ...original, name: "Late" });
+    // Once `cron.update` is under way.
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), 0));
+    routines.onClose();
+    release();
+    expect(await pending).toMatchObject({ status: "saved" });
+    expect(state().routines).toEqual([]);
+  });
+});
+
+describe("F-350 F-351 F-352: pause, run now and delete", () => {
+  it("F-350: pausing writes enabled alone and is done only when the gateway shows it paused", async () => {
+    const { routines, requests } = engine(
+      { "cron.update": () => job({ enabled: false }, { nextRunAtMs: undefined }) },
+      ADMIN,
+    );
+    expect(await routines.setEnabled(JOB, false)).toMatchObject({
+      status: "saved",
+      routine: { enabled: false, nextRunAt: null },
+    });
+    expect(requests[0]!.params).toEqual({ id: JOB, patch: { enabled: false } });
+    const stale = engine({ "cron.update": () => job() }, ADMIN);
+    expect(await stale.routines.setEnabled(JOB, false)).toMatchObject({ status: "unknown" });
+  });
+
+  it("F-351: run now forces a run, and says when one is already in progress or it was refused", async () => {
+    const answers = [
+      { ok: true, enqueued: true, runId: `manual:${JOB}:1:1` },
+      { ok: true, ran: false, reason: "already-running" },
+    ];
+    const { routines, requests } = engine({ "cron.run": () => answers.shift() }, ADMIN);
+    expect(await routines.runNow(JOB)).toEqual({ status: "started", runId: `manual:${JOB}:1:1` });
+    expect(requests[0]!.params).toEqual({ id: JOB, mode: "force" });
+    expect(await routines.runNow(JOB)).toEqual({ status: "already-running" });
+    const bad = engine(
+      {
+        "cron.run": () => {
+          throw refused("Automation not found: x.");
+        },
+      },
+      ADMIN,
+    );
+    expect(await bad.routines.runNow(JOB)).toEqual({
+      status: "refused",
+      error: "Automation not found: x.",
+    });
+  });
+
+  it("F-352: deleting removes it from the list; one already gone counts as deleted", async () => {
+    const { routines, state } = engine(
+      {
+        "cron.list": () => ({ jobs: [job()], hasMore: false }),
+        "cron.status": () => ({ enabled: true }),
+        "cron.remove": () => ({ ok: true, removed: true }),
+      },
+      ADMIN,
+    );
+    await routines.load();
+    expect(await routines.remove(JOB)).toEqual({ status: "removed" });
+    expect(state().routines).toEqual([]);
+    const gone = engine(
+      {
+        "cron.remove": () => {
+          throw refused(`Automation not found: ${JOB}.`);
+        },
+      },
+      ADMIN,
+    );
+    expect(await gone.routines.remove(JOB)).toEqual({ status: "removed" });
+  });
+
+  it("F-349: reads the gateway's hooks from its config, with admin", async () => {
+    const { routines } = engine(
+      {
+        "config.get": () => ({
+          config: { hooks: { enabled: true, path: "/hooks", token: "__OPENCLAW_REDACTED__" } },
+        }),
+      },
+      ADMIN,
+    );
+    expect(await routines.hooks()).toEqual({ enabled: true, path: "/hooks" });
   });
 });
 

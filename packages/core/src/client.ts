@@ -16,7 +16,18 @@ import {
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
-import { RoutinesEngine, type RoutineRun, type RunConversation } from "./routines.ts";
+import {
+  RoutinesEngine,
+  type GatewayHooks,
+  type NewRoutine,
+  type Routine,
+  type RoutineFields,
+  type RoutineRemove,
+  type RoutineRun,
+  type RoutineRunNow,
+  type RoutineWrite,
+  type RunConversation,
+} from "./routines.ts";
 import {
   admitApproval,
   applyApprovalRequested,
@@ -827,6 +838,8 @@ export class ClawtrateClient {
     get: () => this.state.routines,
     update: (change) =>
       this.store.update((state) => ({ ...state, routines: change(state.routines) })),
+    connected: () => this.state.connection.status === "connected",
+    admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
   });
   /**
    * Task lists being read, each its rows so far, already bounded: at most two,
@@ -3454,6 +3467,40 @@ export class ClawtrateClient {
     sessionKey: string | null,
   ): Promise<RunConversation> {
     return this.routines.conversation(id, runId, sessionKey);
+  }
+
+  // Changing routines (automation.md sections 9 and 10): `operator.admin`, checked by the engine.
+
+  /** A new routine; `key` is its draft's, the same for every try of that draft. */
+  createRoutine(input: NewRoutine, key: string): Promise<RoutineWrite> {
+    return this.routines.create(input, key);
+  }
+
+  /** The routine a draft made, if the gateway lists it. */
+  findCreatedRoutine(key: string): Promise<Routine | null> {
+    return this.routines.findCreated(key);
+  }
+
+  /** Write what changed from `original`, unless the routine no longer reads so. */
+  updateRoutine(id: string, original: RoutineFields, edit: RoutineFields): Promise<RoutineWrite> {
+    return this.routines.update(id, original, edit);
+  }
+
+  setRoutineEnabled(id: string, enabled: boolean): Promise<RoutineWrite> {
+    return this.routines.setEnabled(id, enabled);
+  }
+
+  runRoutineNow(id: string): Promise<RoutineRunNow> {
+    return this.routines.runNow(id);
+  }
+
+  removeRoutine(id: string): Promise<RoutineRemove> {
+    return this.routines.remove(id);
+  }
+
+  /** The gateway's inbound hooks, read with admin; null below it. */
+  readGatewayHooks(): Promise<GatewayHooks | null> {
+    return this.routines.hooks();
   }
 
   // Provider accounts (`accounts.ts`, `accounts-engine.ts`; bots.md sections 3 to 11) ----------

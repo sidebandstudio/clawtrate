@@ -884,6 +884,7 @@ const routine = object<Routine>()({
   schedule: routineSchedule,
   payload: ENUM,
   text: text(MAX_ROUTINE_TEXT_CHARS),
+  textCut: FLAG,
   target: ENUM,
   delivery: ENUM,
   deliveryChannel: NAME,
