@@ -90,9 +90,43 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     return result;
   };
 
+  /** The home of every world these tests made: the shared one and each case's own. */
+  const homes: string[] = [];
+
+  /**
+   * A world of a case's own: its home, key, configuration, transport and
+   * sshds. A case that runs out of time can't change another case's inputs.
+   */
+  const ownWorld = (name: string) => {
+    const own = makeWorld(join(root, name));
+    homes.push(own.home);
+    const servers: TestSshd[] = [];
+    const ownTransport = new SshTransport(own.world, { spawn: recordingSpawn });
+    return {
+      t: own,
+      transport: ownTransport,
+      async server(dir: string, options: { forwarding?: "local" | "no" } = {}) {
+        const server = await startSshd(join(own.root, dir), own.home, own.userKey, options);
+        servers.push(server);
+        assertSessionHome(join(own.root, dir), server, own.world, own.userKey);
+        return server;
+      },
+      prepare(id: string, typed: string): Route {
+        const result = ownTransport.prepareRoute(id, typed);
+        if (!result.ok) throw new Error(`refused: ${JSON.stringify(result)}`);
+        return result;
+      },
+      async close() {
+        await ownTransport.closeAll();
+        for (const server of servers.reverse()) await server.stop();
+      },
+    };
+  };
+
   beforeAll(async () => {
     root = tempDir("clawtrate-ssh-it-");
     t = makeWorld(root);
+    homes.push(t.home);
     sshd = await startSshd(root, t.home, t.userKey);
     assertSessionHome(root, sshd, t.world, t.userKey);
     gateway = await httpGateway();
@@ -255,77 +289,82 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
   });
 
   it("a route is one endpoint: prepared again for another, its earlier objects, capture and pin don't carry over", async () => {
-    const second = await startSshd(join(root, "second"), t.home, t.userKey);
-    const before = readFileSync(t.world.personConfig, "utf8");
-    const block = (port: number) =>
-      `Host movebox\n  HostName 127.0.0.1\n  Port ${port}\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n`;
+    const own = ownWorld("move");
     try {
-      t.writeConfig(block(sshd.port));
-      const first = prepare("move", "movebox");
-      const contact = await transport.checkHostKey(first);
+      const a = await own.server("a");
+      const b = await own.server("b");
+      const block = (port: number) =>
+        `Host movebox\n  HostName 127.0.0.1\n  Port ${port}\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n`;
+      own.t.writeConfig(block(a.port));
+      const first = own.prepare("move", "movebox");
+      const contact = await own.transport.checkHostKey(first);
       if (!contact.ok || contact.state !== "first-contact")
         throw new Error("expected first contact");
-      expect(transport.trustCapturedKey(first, contact.presented.captureId).ok).toBe(true);
-      // A capture of the first endpoint, waiting for a decision when the route moves.
-      const firstConfig = transport.configPath(first);
-      const pending = await transport.checkHostKey(prepare("move", "movebox"));
+      expect(own.transport.trustCapturedKey(first, contact.presented.captureId).ok).toBe(true);
+      // Prepared again for the same endpoint, the route keeps its pin: this checks that pin, and captures nothing.
+      const firstConfig = own.transport.configPath(first);
+      const pending = await own.transport.checkHostKey(own.prepare("move", "movebox"));
       expect(pending).toMatchObject({ ok: true, state: "pinned" });
 
-      t.writeConfig(block(second.port));
-      const moved = prepare("move", "movebox");
+      own.t.writeConfig(block(b.port));
+      const moved = own.prepare("move", "movebox");
       expect(moved.alias).not.toBe(first.alias);
-      expect(moved.endpoint).toBe(`${t.world.localUser}@[127.0.0.1]:${second.port}`);
-      expect(transport.configPath(moved)).not.toBe(firstConfig);
+      expect(moved.endpoint).toBe(`${own.t.world.localUser}@[127.0.0.1]:${b.port}`);
+      expect(own.transport.configPath(moved)).not.toBe(firstConfig);
       expect(existsSync(firstConfig)).toBe(false);
       // The earlier object is stale for every call.
-      expect(await transport.look(first)).toEqual({ ok: false, kind: "stale-route" });
-      expect(await transport.checkHostKey(first)).toEqual({ ok: false, kind: "stale-route" });
-      expect(transport.trustCapturedKey(first, contact.presented.captureId)).toEqual({
+      expect(await own.transport.look(first)).toEqual({ ok: false, kind: "stale-route" });
+      expect(await own.transport.checkHostKey(first)).toEqual({ ok: false, kind: "stale-route" });
+      expect(own.transport.trustCapturedKey(first, contact.presented.captureId)).toEqual({
         ok: false,
         kind: "stale-route",
       });
       // The new endpoint is not trusted by the old pin: it is first contact, with the second server's key.
-      const fresh = await transport.checkHostKey(moved);
+      const fresh = await own.transport.checkHostKey(moved);
       expect(fresh).toMatchObject({
         ok: true,
         state: "first-contact",
-        presented: { fingerprint: fingerprintOfFile(`${second.hostKey}.pub`) },
+        presented: { fingerprint: fingerprintOfFile(`${b.hostKey}.pub`) },
       });
-      expect(await transport.look(moved)).toEqual({ ok: false, kind: "not-pinned" });
-      // A capture made on the earlier preparation can't be used on this one.
-      expect(transport.trustCapturedKey(moved, contact.presented.captureId)).toEqual({
+      expect(await own.transport.look(moved)).toEqual({ ok: false, kind: "not-pinned" });
+      // The capture trusted above was used then, so it is gone here too. (A capture left unused would be needed to test one crossing preparations.)
+      expect(own.transport.trustCapturedKey(moved, contact.presented.captureId)).toEqual({
         ok: false,
         kind: "no-such-capture",
       });
       if (!fresh.ok || fresh.state !== "first-contact") return;
-      expect(transport.trustCapturedKey(moved, fresh.presented.captureId).ok).toBe(true);
-      expect((await transport.look(moved)).ok).toBe(true);
-      transport.forget(moved);
+      expect(own.transport.trustCapturedKey(moved, fresh.presented.captureId).ok).toBe(true);
+      expect((await own.transport.look(moved)).ok).toBe(true);
+      own.transport.forget(moved);
     } finally {
-      await second.stop();
-      t.writeConfig(before);
+      await own.close();
     }
   });
 
   it("a key the person already trusts is found by the resolved host and port and pinned without first contact", async () => {
-    const [type, key] = readFileSync(`${sshd.hostKey}.pub`, "utf8").trim().split(" ");
-    writeFileSync(
-      t.world.personKnownHosts,
-      `# the person's own\n[127.0.0.1]:${sshd.port} ${type} ${key}\n`,
-    );
+    const own = ownWorld("prior");
     try {
-      const other = prepare("two", "devbox");
-      const check = await transport.checkHostKey(other);
+      const server = await own.server("sshd");
+      own.t.writeConfig(
+        `Host devbox\n  HostName 127.0.0.1\n  Port ${server.port}\n  IdentityFile ~/.ssh/id_ed25519\n  IdentitiesOnly yes\n`,
+      );
+      const [type, key] = readFileSync(`${server.hostKey}.pub`, "utf8").trim().split(" ");
+      writeFileSync(
+        own.t.world.personKnownHosts,
+        `# the person's own\n[127.0.0.1]:${server.port} ${type} ${key}\n`,
+      );
+      const other = own.prepare("two", "devbox");
+      const check = await own.transport.checkHostKey(other);
       expect(check).toMatchObject({ ok: true, state: "pinned-from-known-hosts", label: "ED25519" });
-      const pinned = readFileSync(join(t.world.appDir, "known_hosts"), "utf8");
+      const pinned = readFileSync(join(own.t.world.appDir, "known_hosts"), "utf8");
       expect(pinned).toContain(`${other.alias} ${type} ${key} `);
       // The person's file is unchanged.
-      expect(readFileSync(t.world.personKnownHosts, "utf8")).toBe(
-        `# the person's own\n[127.0.0.1]:${sshd.port} ${type} ${key}\n`,
+      expect(readFileSync(own.t.world.personKnownHosts, "utf8")).toBe(
+        `# the person's own\n[127.0.0.1]:${server.port} ${type} ${key}\n`,
       );
-      transport.forget(other);
+      own.transport.forget(other);
     } finally {
-      rmSync(t.world.personKnownHosts, { force: true });
+      await own.close();
     }
   });
 
@@ -729,7 +768,9 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       expect(keys.length, text).toBeGreaterThan(0);
       for (const line of keys) {
         const path = line.slice(line.indexOf(" ") + 1);
-        expect(path === "none" || path.startsWith(`${t.home}/`), line).toBe(true);
+        expect(path === "none" || homes.some((home) => path.startsWith(`${home}/`)), line).toBe(
+          true,
+        );
       }
       expect(lines).toContain("identityagent none");
       expect(lines.filter((line) => line.includes("~/.ssh") || line.includes(realHomeSsh))).toEqual(

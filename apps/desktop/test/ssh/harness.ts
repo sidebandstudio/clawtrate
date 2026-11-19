@@ -309,13 +309,19 @@ export async function startSshd(
         log = (log + chunk).slice(-65536);
       });
       sshd.pid = started.pid ?? 0;
-      await waitFor(
-        () =>
-          log.includes(`Server listening on 127.0.0.1 port ${port}`) || started.exitCode !== null,
-        10000,
-        "sshd to listen",
-      );
-      if (started.exitCode !== null) throw new Error(`sshd exited (${started.exitCode})`);
+      try {
+        await waitFor(
+          () =>
+            log.includes(`Server listening on 127.0.0.1 port ${port}`) || started.exitCode !== null,
+          10000,
+          "sshd to listen",
+        );
+        if (started.exitCode !== null) throw new Error(`sshd exited (${started.exitCode})`);
+      } catch (error) {
+        // A listener that didn't start in time is stopped here, by its PID, before the error goes on.
+        await sshd.stop();
+        throw error;
+      }
     },
     async dropSessions() {
       if (!sshd.pid) return;
