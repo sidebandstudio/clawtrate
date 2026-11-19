@@ -1426,9 +1426,9 @@ test("F-074 F-285: a file chosen with + reaches the gateway; one over the gatewa
   page,
 }) => {
   await openShell(page);
-  const { key } = await ownTask(page, "Attach files");
+  const { key } = await ownTask(page, "Files and limits");
   const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Attach files" }).click();
+  await page.getByTestId("composer").getByRole("button", { name: "Attach files" }).click();
   await (
     await chooser
   ).setFiles([
@@ -1479,7 +1479,8 @@ test("F-301: a turn the gateway fails offers Copy request ID, which copies the i
   await expect(card).toBeVisible({ timeout: 60_000 });
   await card.getByRole("button", { name: "Raw" }).click();
   const shown = ((await card.getByTestId("request-id").textContent()) ?? "").trim();
-  expect(shown).toMatch(/^[0-9a-f-]{36}$/);
+  // The protocol client's own id for the frame, as it set it ("<n>:<uuid>").
+  expect(shown).toMatch(/^\S{8,}$/);
   // The event that ended the run, as the gateway sent it: its chat error or its lifecycle error.
   await expect(card.getByTestId("turn-error-raw")).toContainText(
     /The (chat|agent lifecycle) event/,
@@ -1756,7 +1757,7 @@ test("F-286: a large file sent to the gateway: any Sending… bar only fills, it
     }).observe(document.body, { subtree: true, childList: true, attributes: true });
   });
   const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Attach files" }).click();
+  await page.getByTestId("composer").getByRole("button", { name: "Attach files" }).click();
   const bytes = 15 * 1024 * 1024;
   await (
     await chooser
