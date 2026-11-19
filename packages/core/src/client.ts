@@ -2254,8 +2254,10 @@ export class ClawtrateClient {
    * until the gateway reports how it ended: `stopped` when the abort took,
    * `completed` with `finishedBeforeStop` when the run finished first.
    */
-  async stopRun(key: string, runId: string, options: { owner?: object } = {}): Promise<void> {
-    const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
+  async stopRun(key: string, asked: string, options: { owner?: object } = {}): Promise<void> {
+    const transcript = this.state.transcripts[key];
+    const runId = transcript ? runningRunId(transcript, asked) : asked;
+    const run = transcript && findRun(transcript, runId);
     if (!run || (run.state !== "running" && run.state !== "waiting")) return;
     this.updateActivity(key, (activity) => requestStop(activity, runId, this.now()));
     try {
@@ -5845,6 +5847,21 @@ export function hostLimit(value: number | undefined, max: number, name: string):
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * The run Stop aborts: the one running on the task, whatever acknowledgements this client has
+ * collected since. A steer's own run id stands for the run it was sent into; and the gateway runs
+ * one turn of a session at a time, so among the task's active runs the one that started first is
+ * the one running, and any later one is a turn queued behind it (OpenClaw 2026.10.6 holds a steer
+ * into a run waiting on an approval as such a queued turn, under an id of its own). Item 17.
+ */
+export function runningRunId(activity: TaskActivity, asked: string): string {
+  const direct = activity.steerAliases[asked] ?? asked;
+  const active = activity.runs.filter((run) => run.state === "running" || run.state === "waiting");
+  if (!active.some((run) => run.id === direct)) return direct;
+  const started = (run: Run) => run.reportedStartAt ?? run.startedAt ?? Number.POSITIVE_INFINITY;
+  return active.reduce((first, run) => (started(run) < started(first) ? run : first)).id;
 }
 
 /** The reactions kept for the messages these history items show, and no others (F-283). */
