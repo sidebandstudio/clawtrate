@@ -305,44 +305,19 @@ t = await panel(p);
 check("S6 below admin the files are text and the bar asks for admin", (await p.evaluate(() => !document.querySelector("#panel-settings textarea"))) && t.includes("Changing Juniper's instructions needs admin access.") && t.includes("Cite every source you use."));
 await p.close();
 
-// A change to the instructions in the conversation (section 7) ---------------------------------------
+// A write to the instructions in the conversation (section 7) ---------------------------------------
 const role = (p) => text(p, "#lc-role");
 p = await open("bot=juniper&task=j1&rolechange=1");
-check("F-041 the run's change posts an event line", (await role(p)).startsWith("Juniper changed its instructions"));
+check("F-041 a run's write to the instructions posts an event line naming the file", (await role(p)).startsWith("Juniper wrote to AGENTS.md"));
 await click(p, "#lc-role summary");
 t = await role(p);
-check("F-041 opened, it shows the diff from Clawtrate's last copy", has(t, "AGENTS.md, since Clawtrate read it at 5:38 PM", "Removed: Keep answers under 300 words.", "Added: Keep answers under 200 words.", "Accept", "Undo", "The change is already saved on the gateway."));
-await clickText(p, "#lc-role", "Accept");
-check("F-041 Accept writes nothing and says so", (await role(p)).includes("Accepted. The change was already on the gateway, so nothing was written.") && (await role(p)).includes("· accepted"));
-await p.close();
-p = await open("bot=juniper&task=j1&rolechange=1");
-await click(p, "#lc-role summary");
-await clickText(p, "#lc-role", "Undo");
-check("F-041 Undo shows Undoing, then what the gateway has", (await role(p)).includes("Undoing…") && (await announced(p, 550)) === "Undone" && (await role(p)).includes("Undone. AGENTS.md on the gateway is back to Clawtrate's copy from 5:38 PM."));
-await p.close();
-p = await open("bot=juniper&task=j1&rolechange=1&undo=conflict");
-await click(p, "#lc-role summary");
-await clickText(p, "#lc-role", "Undo");
-await p.waitForTimeout(550);
-check("S7 an undo that would overwrite a later change is refused", (await role(p)).includes("Nothing was undone: AGENTS.md changed again after this run. Open the instructions to see what it has now."));
+check("F-041 opened, it says what a read established and nothing more", has(t, "Juniper's write tool changed AGENTS.md in its workspace during this run: the gateway says the file was last changed at 5:41 PM, after the call started.", "Clawtrate can't show what changed or undo it here: the gateway keeps no earlier version of the file."));
+check("F-041 no difference, no Accept, no Undo in this unit", !(await p.$("#lc-role .lc-diff")) && (await p.evaluate(() => ![...document.querySelectorAll("#lc-role button")].some((x) => ["Accept", "Undo"].includes(x.textContent)))));
 await clickText(p, "#lc-role", "Open instructions");
 await p.waitForTimeout(100);
 check("S7 Open instructions opens the page", (await panel(p)).includes("Personality · SOUL.md"));
-await p.close();
-p = await open("bot=juniper&task=j1&rolechange=1&rolediff=nocopy");
-await click(p, "#lc-role summary");
-t = await role(p);
-check("S7 with no earlier copy it says so and offers no Undo", t.includes("Juniper wrote to AGENTS.md in this run. Clawtrate has no earlier copy of the file to compare, so it can't show the change or undo it.") && !t.includes("Undo"));
-await p.close();
-p = await open("bot=juniper&task=j1&rolechange=1&rolediff=toolarge");
-await click(p, "#lc-role summary");
-t = await role(p);
-check("F-041 S7 an earlier copy too large to keep is said, with no diff and no Undo", t.includes("Clawtrate keeps an earlier copy only of a file up to 65,536 characters, and this one is longer, so it can't show the change or undo it.") && !t.includes("Undo") && !t.includes("Accept"));
-await p.close();
-p = await open("bot=juniper&task=j1&rolechange=1&access=read");
-await click(p, "#lc-role summary");
-t = await role(p);
-check("S7 below admin: Accept only, and why", t.includes("Undoing it needs admin access.") && !(await p.evaluate(() => [...document.querySelectorAll("#lc-role button")].some((x) => x.textContent === "Undo"))));
+t = await panel(p);
+check("S6 the editor says the gateway controls loading, with no fixed figure", t.includes("The gateway controls when it loads these files and how much of them it includes.") && !t.includes("20,000") && !t.includes("keeps the copy it started with"));
 await p.close();
 
 // Duplicate (section 8) -----------------------------------------------------------------------------

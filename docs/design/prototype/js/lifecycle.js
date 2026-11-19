@@ -16,8 +16,7 @@
 //   edit=name|label     the hero's name or label open for editing
 //   namefail=1          the gateway refuses the rename
 //   bview=instructions  the Instructions page (instr=conflict: the file changed meanwhile)
-//   rolechange=1        Juniper's open task shows a change to its instructions
-//   rolediff=nocopy|toolarge  ... with no earlier copy, or one too large to keep; undo=conflict: the undo is refused
+//   rolechange=1        Juniper's open task shows that a run wrote to its instructions
 //   delbot=<id>         the bot the Delete or Duplicate dialog is for (default: the open bot)
 //   shared=1            Pip's workspace folder is also Juniper's
 //   files=1             Delete's folder option ticked
@@ -560,10 +559,10 @@
       };
       return (
         `<div class="b-subhead"><button type="button" class="icon-button" data-variant="quiet" data-bs="main" aria-label="Back to settings">${icon("back")}</button><h3 tabindex="-1" data-bs-focus>Instructions</h3></div>` +
-        `<p class="b-hint lc-first">${name} reads these two files at the start of each new task. A task already open keeps the copy it started with. Changed ${esc(i.at)}.</p>` +
+        `<p class="b-hint lc-first">${name}'s instructions and personality, as the gateway has them. The gateway controls when it loads these files and how much of them it includes. Changed ${esc(i.at)}.</p>` +
         field("agents", "Instructions", "AGENTS.md", "How it works: rules, priorities, what to do and not do.") +
         field("soul", "Personality", "SOUL.md", "Its tone and manner.") +
-        `<p class="b-hint">Past 20,000 characters the gateway loads the start and the end of a file and leaves out the middle. Memory is separate: what ${name} remembers is under Memory, and these files don't change it.</p>` +
+        `<p class="b-hint">Memory is separate: what ${name} remembers is under Memory, and these files don't change it.</p>` +
         (admin
           ? `<div class="b-actions lc-instr-actions"><span class="spacer"></span>` +
             button(I.status === "saving" ? "Saving…" : "Save", `data-lc="instr-save" data-size="sm"${changed && I.status !== "saving" ? "" : " disabled"}${I.status === "saving" ? ' aria-busy="true"' : ""}`, "primary") +
@@ -620,10 +619,14 @@
     }
   });
 
-  // A role change from the conversation (section 7) -----------------------------------------------
+  // A write to the instructions, in the conversation (section 7) ----------------------------------
+  // Drawn only when the call's path, read as the Work pane reads it, is the bot's
+  // own AGENTS.md or SOUL.md in the task's folder that is the bot's workspace, the
+  // call ended without an error, and agents.files.get says the file changed after
+  // the call started. No difference and no Undo: the gateway keeps no earlier version.
 
-  const R = { state: p("rolechange") ? "new" : null, nocopy: p("rolediff") === "nocopy", toolarge: p("rolediff") === "toolarge" };
-  if (R.state) {
+  const R = { on: Boolean(p("rolechange")), open: false };
+  if (R.on) {
     const j = botOf("juniper");
     const t = j.tasks.find((x) => x.id === (p("task") || "j1")) || j.tasks[0];
     t.html =
@@ -633,37 +636,15 @@
       `<div id="lc-role" data-testid="role-line"></div>`;
     t.fresh = false;
   }
-  const DIFF = { removed: "Keep answers under 300 words.", added: "Keep answers under 200 words." };
   function roleLine() {
     const slot = $("#lc-role");
-    if (!slot || slot.dataset.state === `${R.state}:${isAdmin()}:${R.open}`) return;
-    slot.dataset.state = `${R.state}:${isAdmin()}:${R.open}`;
-    const head = `Juniper changed its instructions`;
-    let body;
-    if (R.toolarge)
-      body = `<p class="b-p">Juniper wrote to AGENTS.md in this run. Clawtrate keeps an earlier copy only of a file up to 65,536 characters, and this one is longer, so it can't show the change or undo it.</p><div class="b-actions">${button("Open instructions", 'data-lc="open-instructions" data-size="sm"')}</div>`;
-    else if (R.nocopy)
-      body = `<p class="b-p">Juniper wrote to AGENTS.md in this run. Clawtrate has no earlier copy of the file to compare, so it can't show the change or undo it.</p><div class="b-actions">${button("Open instructions", 'data-lc="open-instructions" data-size="sm"')}</div>`;
-    else {
-      const diff =
-        `<p class="code-label">AGENTS.md, since Clawtrate read it at 5:38 PM</p>` +
-        `<pre class="lc-diff" aria-label="Changes"><span data-op="ctx">You research questions for the household.</span><span data-op="ctx">Cite every source you use.</span><span data-op="del"><span class="visually-hidden">Removed: </span>${esc(DIFF.removed)}</span><span data-op="add"><span class="visually-hidden">Added: </span>${esc(DIFF.added)}</span></pre>`;
-      const actions =
-        R.state === "new"
-          ? isAdmin()
-            ? `<div class="b-actions">${button("Accept", 'data-lc="role-keep" data-size="sm"')}${button("Undo", 'data-lc="role-undo" data-size="sm"')}<span class="spacer"></span><span class="b-hint">The change is already saved on the gateway.</span></div>`
-            : `<div class="b-actions">${button("Accept", 'data-lc="role-keep" data-size="sm"')}<span class="spacer"></span><span class="b-hint">The change is already saved on the gateway. Undoing it needs admin access.</span></div>`
-          : R.state === "undoing"
-            ? `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Undoing…</p>`
-            : R.state === "kept"
-              ? `<p class="b-p" role="status">Accepted. The change was already on the gateway, so nothing was written.</p>`
-              : R.state === "undone"
-                ? `<p class="b-p" role="status">Undone. AGENTS.md on the gateway is back to Clawtrate's copy from 5:38 PM.</p>`
-                : `<p class="b-p" role="alert">Nothing was undone: AGENTS.md changed again after this run. Open the instructions to see what it has now.</p><div class="b-actions">${button("Open instructions", 'data-lc="open-instructions" data-size="sm"')}</div>`;
-      body = diff + actions;
-    }
-    const tail = R.state === "kept" ? " · accepted" : R.state === "undone" ? " · undone" : "";
-    slot.innerHTML = `<details class="event-details"${R.open ? " open" : ""}><summary class="event-line">${head}${tail}${icon("chevron", "icon chevron")}</summary><div class="card event-body">${body}</div></details>`;
+    if (!slot || slot.dataset.drawn === String(R.open)) return;
+    slot.dataset.drawn = String(R.open);
+    slot.innerHTML =
+      `<details class="event-details"${R.open ? " open" : ""}><summary class="event-line">Juniper wrote to AGENTS.md${icon("chevron", "icon chevron")}</summary>` +
+      `<div class="card event-body"><p class="b-p">Juniper's write tool changed AGENTS.md in its workspace during this run: the gateway says the file was last changed at 5:41 PM, after the call started.</p>` +
+      `<p class="b-p b-faint">Clawtrate can't show what changed or undo it here: the gateway keeps no earlier version of the file.</p>` +
+      `<div class="b-actions">${button("Open instructions", 'data-lc="open-instructions" data-size="sm"')}</div></div></details>`;
     CT.hydrate(slot);
   }
   new MutationObserver(() => roleLine()).observe($("#transcript"), { childList: true, subtree: false });
@@ -1210,19 +1191,6 @@
       }
       case "open-instructions":
         return CT.botsOpenSettings("juniper", "instructions");
-      case "role-keep":
-        R.state = "kept";
-        roleLine();
-        return announce("Accepted");
-      case "role-undo":
-        R.state = "undoing";
-        roleLine();
-        return setTimeout(() => {
-          // agents.files.set {content: Clawtrate's copy, expectedHash: the file's hash now}, then agents.files.get.
-          R.state = p("undo") === "conflict" ? "conflict" : "undone";
-          roleLine();
-          announce(R.state === "undone" ? "Undone" : "Nothing was undone");
-        }, 450);
       case "open-duplicate":
         return openDialog("duplicate", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot, name: `${nameOf(bot)} copy`, copy: { look: true, model: true, instr: true, tools: true }, acct: null });
       case "dup-go":
