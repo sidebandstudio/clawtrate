@@ -19,8 +19,19 @@ export {
   type CreatedBot,
 } from "./accounts-engine.ts";
 export * from "./sidebar.ts";
+export * from "./usage.ts";
+export {
+  COUNT_AFTER_RUN_MS,
+  COUNT_COUNTING_MS,
+  COUNT_EVERY_MS,
+  MAX_USAGE_REPORTS,
+  SESSIONS_LIMIT,
+  type UsageBusy,
+  type UsageReport,
+} from "./usage-engine.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
+export * from "./machines.ts";
 export * from "./sidebar.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
