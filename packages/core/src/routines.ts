@@ -78,6 +78,8 @@ export type Routine = {
   textCut: boolean;
   /** `isolated`: a conversation of its own each run; `main`: the bot's main conversation. */
   target: "isolated" | "main" | "other";
+  /** The bound conversation of a current or named target, as the gateway recorded it. */
+  sharedSessionKey?: string;
   delivery: "none" | "announce" | "webhook" | "other";
   deliveryChannel: string | null;
   nextRunAt: number | null;
@@ -134,7 +136,7 @@ export type RoutineRun = {
   inputTokens: number | null;
   outputTokens: number | null;
   totalTokens: number | null;
-  /** The run's own session; absent for a run in the main conversation. */
+  /** The session the gateway used for this run, when it reports one. */
   sessionKey: string | null;
   /** Started with Run now: the gateway gives a forced run the id `manual:<job>:<ms>:<n>`. */
   manual: boolean;
@@ -203,6 +205,12 @@ export function parseRoutine(value: unknown): Routine | null {
   const target = str(job.sessionTarget);
   const fullText = str(payload.message) ?? str(payload.text) ?? str(payload.command) ?? "";
   const text = cutText(fullText, MAX_ROUTINE_TEXT_CHARS);
+  const sharedSessionKey =
+    target === "current"
+      ? str(job.sessionKey)
+      : target?.startsWith("session:")
+        ? str(target.slice(8))
+        : null;
   return {
     id,
     botId: str(job.agentId) ?? str(job.effectiveAgentId) ?? "main",
@@ -213,6 +221,7 @@ export function parseRoutine(value: unknown): Routine | null {
     text,
     textCut: text.length < fullText.length,
     target: target === "isolated" || target === "main" ? target : "other",
+    ...(sharedSessionKey ? { sharedSessionKey } : {}),
     // A job without delivery announces: the gateway's default (`mode: "announce"`, observed).
     delivery:
       mode === null

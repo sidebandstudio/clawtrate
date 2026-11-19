@@ -6,7 +6,15 @@
 // without it nothing that writes is offered, and the access bar at the foot
 // says how to ask for admin.
 
-import type { Bot, ClawtrateState, HostInfo, Routine, RoutineRun } from "@clawtrate/core";
+import {
+  botIdFromSessionKey,
+  mainTaskKey,
+  type Bot,
+  type ClawtrateState,
+  type HostInfo,
+  type Routine,
+  type RoutineRun,
+} from "@clawtrate/core";
 import {
   useEffect,
   useRef,
@@ -565,33 +573,51 @@ function Page({
   );
 }
 
-/** Where a run with no conversation of its own happened, in the design's words (section 7). */
-function sharedWords(routine: Routine, bot: Bot): string {
-  if (routine.payload === "other") return "A command runs on the gateway, not a bot,";
-  if (routine.target === "main") return `This run happened in ${bot.name}'s main conversation.`;
-  return "This run happened in the conversation the routine was made in.";
-}
-
 function RunView({
   gateway,
   routine,
   run,
   bot,
+  mainKey,
+  onOpenTask,
 }: {
   gateway: string;
   routine: Routine;
   run: RoutineRun;
   bot: Bot;
+  mainKey: string;
+  onOpenTask: (botId: string, key: string) => void;
 }) {
   const bridge = useBridge();
-  const [read, retry] = useKeyedRead(`${gateway}:${routine.id}:${run.runId ?? run.runAt}`, () =>
-    bridge.invoke({
-      type: "readRunConversation",
-      id: routine.id,
-      runId: run.runId,
-      runAt: run.runAt,
-      sessionKey: run.sessionKey,
-    }),
+  const command = routine.payload === "other";
+  const isolated = run.sessionKey?.includes(`:cron:${run.jobId}:run:`);
+  // A current target runs detached. Its execution key is not the bound conversation.
+  const bound =
+    routine.updatedAt === null || routine.updatedAt <= run.runAt + (run.durationMs ?? 0)
+      ? routine.sharedSessionKey
+      : undefined;
+  const session = command
+    ? null
+    : (!isolated && run.sessionKey) ||
+      bound ||
+      (routine.target === "main" && !isolated ? mainKey : null);
+  const shared = session !== null || routine.target !== "isolated";
+  const main = session === mainKey;
+  const conversation = main
+    ? `${bot.name}'s main conversation`
+    : session
+      ? `the shared conversation (${session})`
+      : "a shared conversation";
+  const [read, retry] = useKeyedRead(
+    command || shared ? null : `${gateway}:${routine.id}:${run.runId ?? run.runAt}`,
+    () =>
+      bridge.invoke({
+        type: "readRunConversation",
+        id: routine.id,
+        runId: run.runId,
+        runAt: run.runAt,
+        sessionKey: run.sessionKey,
+      }),
   );
   const outcome = runOutcome(run);
   const facts = [
@@ -605,7 +631,34 @@ function RunView({
   );
   return (
     <div className="r-convo" data-testid="run-view">
-      {read.status === "loading" ? (
+      {command || shared ? (
+        <Note testId="run-not-kept">
+          <p>
+            {command ? (
+              <>
+                <strong>A command runs on the gateway, not a bot,</strong> so this run has no
+                conversation.
+              </>
+            ) : (
+              <>
+                <strong>This run happened in {conversation}.</strong> Its turn is there among the
+                others; the gateway doesn&apos;t keep it apart.
+              </>
+            )}
+          </p>
+          {returned}
+          {session && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              onClick={() => onOpenTask(botIdFromSessionKey(session) ?? bot.id, session)}
+            >
+              {main ? `Open ${conversation}` : "Open conversation"}
+            </button>
+          )}
+        </Note>
+      ) : read.status === "loading" ? (
         <p className="r-hint">Loading this run…</p>
       ) : read.status === "error" ? (
         <Retry text="Couldn't load this run." error={read.error} onRetry={retry} />
@@ -643,14 +696,7 @@ function RunView({
       ) : (
         <Note testId="run-not-kept">
           <p>
-            {read.value.reason === "no-session" ? (
-              <>
-                <strong>{sharedWords(routine, bot)}</strong>{" "}
-                {routine.payload === "other"
-                  ? "so this run has no conversation."
-                  : "Its turn is there among the others; the gateway doesn't keep it apart."}
-              </>
-            ) : read.value.reason === "too-long" ? (
+            {read.value.reason === "too-long" ? (
               <>
                 <strong>This run&apos;s conversation is longer than Clawtrate reads.</strong> Its
                 start, the scheduled message, is further back than the pages read here.
@@ -730,6 +776,7 @@ export function RoutinesView({
   nav,
   onNav,
   onClose,
+  onOpenTask,
   narrow,
   phone,
 }: {
@@ -738,6 +785,7 @@ export function RoutinesView({
   nav: RoutinesNav;
   onNav: (nav: RoutinesNav) => void;
   onClose: () => void;
+  onOpenTask: (botId: string, key: string) => void;
   /** Below 800 px: the header has less room. */
   narrow: boolean;
   /** One pane: the view switch offers List and Day, and Back goes to the bots. */
@@ -940,6 +988,11 @@ export function RoutinesView({
                 routine={shown.routine}
                 run={run}
                 bot={shown.bot}
+                mainKey={
+                  state.tasksByBot[shown.bot.id]?.find((task) => task.isMain)?.key ??
+                  mainTaskKey(shown.bot.id)
+                }
+                onOpenTask={onOpenTask}
               />
             ) : found.status === "error" ? (
               <Retry text="Couldn't load this run." error={found.error} onRetry={retryFound} />

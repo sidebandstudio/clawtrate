@@ -126,7 +126,18 @@ describe("F-197: occurrences", () => {
   // The expected instants are what OpenClaw 2026.10.6's own scheduler
   // (`computeNextRunAtMs`, croner) returned for these schedules, one after another.
   const iso = (times: number[]) => times.map((ms) => new Date(ms).toISOString());
-  it("skip a time the clock skips (spring forward), as the gateway does", () => {
+  it.each(["0 0 ? * MON", "0 0 1 * ?"])("treats a question mark as all days in %s", (expr) => {
+    const daily = routine({
+      schedule: schedule({ expr, tz: NY }),
+      nextRunAt: Date.parse("2027-03-13T05:00:00Z"),
+    });
+    expect(
+      iso(
+        occurrences(daily, Date.parse("2027-03-13T00:00:00Z"), Date.parse("2027-03-16T00:00:00Z")),
+      ),
+    ).toEqual(["2027-03-13T05:00:00.000Z", "2027-03-14T05:00:00.000Z", "2027-03-15T04:00:00.000Z"]);
+  });
+  it("moves a skipped time forward by the spring gap", () => {
     const daily = routine({
       schedule: schedule({ expr: "30 2 * * *", tz: NY }),
       nextRunAt: Date.parse("2026-03-07T07:30:00Z"),
@@ -135,7 +146,12 @@ describe("F-197: occurrences", () => {
       iso(
         occurrences(daily, Date.parse("2026-03-07T00:00:00Z"), Date.parse("2026-03-11T00:00:00Z")),
       ),
-    ).toEqual(["2026-03-07T07:30:00.000Z", "2026-03-09T06:30:00.000Z", "2026-03-10T06:30:00.000Z"]);
+    ).toEqual([
+      "2026-03-07T07:30:00.000Z",
+      "2026-03-08T07:30:00.000Z",
+      "2026-03-09T06:30:00.000Z",
+      "2026-03-10T06:30:00.000Z",
+    ]);
   });
   it("run a time the clock passes twice (fall back) once, the first time, as the gateway does", () => {
     const daily = routine({

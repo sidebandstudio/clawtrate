@@ -886,6 +886,7 @@ const routine = object<Routine>()({
   text: text(MAX_ROUTINE_TEXT_CHARS),
   textCut: FLAG,
   target: ENUM,
+  sharedSessionKey: ID,
   delivery: ENUM,
   deliveryChannel: NAME,
   nextRunAt: NUMBER,

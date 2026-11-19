@@ -55,7 +55,7 @@ const made = new Set<string>();
 
 const call = <T>(method: string, params: unknown) => admin.request(method, params) as Promise<T>;
 
-async function add(routine: ReturnType<typeof scriptedRoutine>): Promise<Job> {
+async function add(routine: unknown): Promise<Job> {
   const job = await call<Job>("cron.add", routine);
   made.add(job.id);
   return job;
@@ -285,6 +285,38 @@ test("F-190 F-193: a run opens its conversation as the run recorded it, from the
   await expect(task).toBeVisible();
   await task.click();
   await expect(view().getByTestId("scheduled-message")).toContainText("Summarise my notes. #steps");
+});
+
+test("F-190: shared routine runs open the recorded conversation", async () => {
+  const title = `Bound conversation ${STAMP}`;
+  const key = `agent:marlow:dashboard:${STAMP}`;
+  await call("sessions.create", { key, agentId: "marlow", label: title });
+  await call("sessions.create", { key: "agent:marlow:main", agentId: "marlow", label: "Main" });
+  for (const target of ["current", `session:${key}`, "main"]) {
+    const name = `Shared ${target} ${STAMP}`;
+    const job = await add({
+      ...scriptedRoutine(name, "marlow", "Note the time."),
+      sessionTarget: target,
+      ...(target === "current" ? { sessionKey: key } : {}),
+      ...(target === "main" ? { payload: { kind: "systemEvent", text: "A reminder." } } : {}),
+    });
+    expect((await runNow(job.id)).run?.status).toBe("ok");
+    await openRoutines();
+    await row(name).click();
+    await view().getByTestId("run-row").first().click();
+    await expect(view().getByTestId("run-summary")).toBeVisible();
+    if (target === "main") {
+      await view().getByRole("button", { name: "Open Marlow's main conversation" }).click();
+      await expect(
+        page.getByTestId("transcript").getByRole("heading", { name: "Main", exact: true }),
+      ).toBeVisible();
+    } else {
+      await view().getByRole("button", { name: "Open conversation", exact: true }).click();
+      await expect(
+        page.getByTestId("transcript").getByRole("heading", { name: title }),
+      ).toBeVisible();
+    }
+  }
 });
 
 test("F-355: a routine's page lists the 20 runs that finished most recently, in the gateway's order, when it has more", async () => {

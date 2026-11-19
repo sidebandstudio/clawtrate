@@ -1,4 +1,4 @@
-import type { ClawtrateState, HostInfo } from "@clawtrate/core";
+import { mapSessionRow, type ClawtrateState, type HostInfo } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -491,6 +491,10 @@ export function Shell({
             nav={routines}
             onNav={setRoutines}
             onClose={closeRoutines}
+            onOpenTask={(botId, key) => {
+              selection.selectTask(botId, key, mapSessionRow({ key, agentId: botId }));
+              openDetail();
+            }}
             narrow={onePane || (mainWidth !== null && mainWidth < 520)}
             phone={onePane}
           />

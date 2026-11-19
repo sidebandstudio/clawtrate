@@ -2,8 +2,8 @@
 // occurrences (automation.md sections 4 and 5). The gateway gives only a
 // routine's next run, so later occurrences are computed here from the
 // schedule, the way the gateway's scheduler (OpenClaw 2026.10.6) does around
-// daylight saving: a time the clock skips that day does not run, and a time
-// the clock passes twice runs once, the first time. What cannot be computed
+// daylight saving: a skipped time moves forward by the gap, and a time the
+// clock passes twice runs once, the first time. What cannot be computed
 // is drawn only at its next run.
 
 import type { Bot, Routine, RoutineRun, RoutineSchedule } from "@clawtrate/core";
@@ -81,7 +81,10 @@ export function zonedTime(
     );
   };
   const first = wall - offset(wall);
-  return wall - offset(first);
+  const second = wall - offset(first);
+  if (first === second) return second;
+  // In a gap the offsets alternate. Croner uses the later instant.
+  return wall - offset(second) === first ? Math.max(first, second) : second;
 }
 
 const clock = (ms: number, tz: string) =>
@@ -163,15 +166,21 @@ export function parseCron(expr: string): Cron | null {
   const fields = expr.trim().split(/\s+/u);
   if (fields.length !== 5) return null;
   const [minute, hour, dom, month, dowText] = fields as [string, string, string, string, string];
-  const dow = field(dowText, 0, 7);
+  const weekdays = dowText.replace(/sun|mon|tue|wed|thu|fri|sat/giu, (name) =>
+    String(DAYS.findIndex((day) => day.slice(0, 3).toLowerCase() === name.toLowerCase())),
+  );
+  const dow = field(weekdays.replaceAll("?", "*"), 0, 7);
   const parsed = {
     minute: field(minute, 0, 59),
     hour: field(hour, 0, 23),
-    dom: field(dom, 1, 31),
+    dom: field(dom.replaceAll("?", "*"), 1, 31),
     month: field(month, 1, 12),
     dow,
   };
   if (!parsed.minute || !parsed.hour || !parsed.dom || !parsed.month || !dow) return null;
+  // Croner expands ? to all days but counts the field as restricted for day matching.
+  if (dom === "?") parsed.dom.any = false;
+  if (dowText === "?") dow.any = false;
   if (dow.values.has(7)) dow.values.add(0);
   return parsed as Cron;
 }
@@ -327,8 +336,6 @@ function scheduled(schedule: RoutineSchedule, next: number, from: number, to: nu
       for (const minute of [...cron.minute.values].sort((a, b) => a - b)) {
         let at = zonedTime(year, month, day, hour, minute, tz);
         const wall = partsIn(at, tz);
-        // Skipped by the clock that day (spring forward): the gateway does not run it.
-        if (wall.hour !== hour || wall.minute !== minute) continue;
         // Passed twice (fall back): the gateway runs it once, the first time.
         // shortcut: assumes an hour's shift, as in every zone with daylight saving but Lord Howe's.
         const earlier = partsIn(at - HOUR, tz);

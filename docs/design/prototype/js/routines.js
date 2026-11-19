@@ -296,18 +296,25 @@
         const h = Math.floor(sec / 3600), mi = Math.floor(sec / 60) % 60;
         const t = fromZoned(y, m, d, h, mi, tz) + (sec % 60) * 1000;
         const p = parts(t, tz);
-        // A time a daylight-saving change skips doesn't fire, as croner skips it.
-        if (p.h !== h || p.min !== mi) continue;
-        if (t >= until || out.length >= max) break;
-        if (t >= from) out.push(t);
+        // Croner uses the offset before the gap for a skipped wall time.
+        const shift = Date.UTC(y, m - 1, d, h, mi) - Date.UTC(p.y, p.m - 1, p.d, p.h, p.min);
+        if ((shift === 0 && t >= until) || out.length >= max) break;
+        const firing = t + Math.max(0, shift);
+        if (firing >= from && firing < until) out.push(firing);
       }
     }
     return out;
   }
   // What Clawtrate can't expand is drawn only at the gateway's own next run (section 4).
-  const computable = (r) => ["at", "every"].includes(r.schedule.kind) || (r.schedule.kind === "cron" && !r.pacing && !cronSpec(r.schedule.expr).error);
+  const computable = (r) => ["at", "every"].includes(r.schedule.kind) || (r.schedule.kind === "cron" && r.schedule.tz && !r.pacing && !cronSpec(r.schedule.expr).error);
   // The gateway's own `state.nextRunAtMs` when the job carries it; computed only for a fixture without it.
-  const nextRun = (r) => (!r.enabled ? undefined : r.state?.nextRunAtMs ?? (computable(r) ? occurrences(r.schedule, NOW + 1, NOW + 400 * DAY, 1)[0] : undefined));
+  function nextRun(r) {
+    if (!r.enabled) return;
+    if (r.state?.nextRunAtMs !== undefined) return r.state.nextRunAtMs;
+    if (!computable(r)) return;
+    const s = r.schedule;
+    return occurrences(s, NOW + 1, s.kind === "cron" ? horizon(s.tz) : Infinity, 1)[0];
+  }
   const perDay = (r) => (!computable(r) ? 1 : r.schedule.kind === "every" ? DAY / r.schedule.everyMs : r.schedule.kind === "cron" ? cronSpec(r.schedule.expr).times.length : 1);
 
   // Fixtures ------------------------------------------------------------------------------
@@ -432,7 +439,7 @@
   if (P.has("runs")) r0().runs = Array.from({ length: +P.get("runs") }, (_, k) => ({ ...run(0, 10, 0), at: at(0, 10, 0) - k * 6 * HOUR }));
   // A successful one-shot: the gateway sends finished, then removed, and keeps nothing of it.
   if (S.state === "ran-once") {
-    r0().runs = [run(0, 9, 0, { summary: "Posted the reminder in Marlow's main conversation.", dur: 0.4, tokens: 0 })];
+    r0().runs = [run(0, 9, 0, { sessionKey: "agent:marlow:main", summary: "Posted the reminder in Marlow's main conversation.", dur: 0.4, tokens: 0 })];
     r0().gone = true;
     S.deleted = "once";
   }
@@ -779,7 +786,7 @@
     // When to run
     const c = r.schedule.kind === "cron" ? readCron(r.schedule.expr) : null;
     const schedCell = r.schedule.kind === "cron" && !plainCron(c) ? `<code class="r-mono">${esc(r.schedule.expr)}</code><small>in the gateway's cron format</small>` : wordsHtml(r.schedule, r.schedule.kind === "at");
-    const nextCell = !r.enabled ? "None while paused" : n === undefined ? "None: it ran once and is done" :
+    const nextCell = !r.enabled ? "None while paused" : n === undefined ? (r.schedule.kind === "at" ? "None: it ran once and is done" : "The gateway hasn't reported a next run.") :
       `${schedulerOff() ? '<span class="r-struck">' : ""}${esc(`${dayWord(n, tz || VIEWER, true)}, ${longDate(n, tz || VIEWER)}, ${clock(n, tz || VIEWER)}`)}${schedulerOff() ? "</span>" : ""}` +
       (tz && tz !== VIEWER ? `<small>${esc(clock(n))} your time</small>` : "");
     const fact = (k, v, id = "") => `<div${id ? ` data-fact="${id}"` : ""}><dt>${k}</dt><dd>${v}</dd></div>`;
@@ -822,7 +829,9 @@
       `<p data-testid="run-when"><span class="avatar" data-bot="${r.bot}"></span>${botName(r.bot)} · ${esc(when(x.at, VIEWER, true))}</p></div></header>`;
     // A transcript is shown only when cron.history returned this run's messages. A run in a
     // shared conversation, or a job that is not an agent turn, has no conversation of its own.
-    const where = r.payload.kind === "command" ? "command" : r.payload.kind !== "agentTurn" || r.sessionTarget !== "isolated" ? "main" : "";
+    const session = x.sharedSessionKey || (x.sessionKey && !x.sessionKey.includes(`:cron:${r.id}:run:`) ? x.sessionKey : "");
+    const shared = session || r.payload.kind !== "agentTurn" || r.sessionTarget !== "isolated";
+    const where = r.payload.kind === "command" ? "command" : shared ? "main" : "";
     const rs = S.runstate || (x.running ? "running" : where || (x.history ? "" : "none"));
     const returned = () => `<p class="r-returned-head">What the run returned:</p><p data-testid="returned">${esc(x.summary || outcome(x).text)}</p>`;
     let body = "";
@@ -831,9 +840,11 @@
     else {
       if (rs === "none")
         body += note(`<p><b>Clawtrate can't show this run's conversation.</b> The gateway returned none for it. It keeps a run's conversation for 24 hours unless it is set to keep them longer, so an older one may have been removed.</p>${returned()}`);
-      else if (rs === "main")
-        body += note(`<p><b>This run happened in ${botName(r.bot)}'s main conversation.</b> Its turn is there among the others; the gateway doesn't keep it apart.</p>${returned()}<div class="b-actions">${button(`Open ${botName(r.bot)}'s main conversation`, 'data-size="sm" data-r="open-bot"')}</div>`);
-      else if (rs === "command") body += note(`<p><b>A command runs on the gateway, not a bot,</b> so this run has no conversation.</p>${returned()}`);
+      else if (rs === "main") {
+        const main = `agent:${r.bot}:main`;
+        const title = session === main ? `${botName(r.bot)}'s main conversation` : session ? `the shared conversation (${session})` : "a shared conversation";
+        body += note(`<p><b>This run happened in ${esc(title)}.</b> Its turn is there among the others; the gateway doesn't keep it apart.</p>${returned()}${session ? `<div class="b-actions">${button(session === main ? `Open ${title}` : "Open conversation", `data-size="sm" data-r="open-bot" data-id="${r.bot}" data-session="${esc(session)}"`)}</div>` : ""}`);
+      } else if (rs === "command") body += note(`<p><b>A command runs on the gateway, not a bot,</b> so this run has no conversation.</p>${returned()}`);
       else {
         // While it runs, the message shows only once cron.history returns it.
         if (x.history) body += `<div class="r-sched" data-testid="scheduled-message"><div class="r-sched-head">${icon("clock")}<span>Scheduled message, as the gateway recorded it</span></div><p>${esc(x.history.message)}</p></div>`;
@@ -854,6 +865,15 @@
   // A task with check-ins in it: the conversation's side of section 13.
 
   function renderConvo() {
+    if (S.session) {
+      const bot = r0().bot;
+      const title = S.session === `agent:${bot}:main` ? `${botName(bot)}'s main conversation` : S.session;
+      return {
+        head: `<header class="r-head">${backButton("Back to run", "back-to-run")}<div class="r-titles"><h1 id="view-title">${esc(title)}</h1></div></header>`,
+        body: `<div class="r-convo"><p>Conversation history isn't included in this prototype.</p></div>`,
+        r: "convo",
+      };
+    }
     const head = `<header class="r-head">${backButton("Back to bots", "to-bots")}<div class="r-titles"><h1 id="view-title">Heat pump vs. gas furnace</h1><p><span class="avatar" data-bot="juniper"></span>Juniper</p></div></header>`;
     const body =
       `<div class="r-convo transcript-inner" data-testid="convo">` +
@@ -900,7 +920,9 @@
   // A `finished` event's own top-level fields, as the gateway sends them; `runId` may be absent.
   // `history` and `manual` are the fixture's: what cron.history would return, and a Run now.
   const fromFinished = (ev) => ({
-    runId: ev.runId, at: ev.runAtMs, status: ev.status, completion: ev.completionStatus, error: ev.error, delivery: ev.deliveryError, summary: ev.summary,
+    runId: ev.runId, sessionKey: ev.sessionKey,
+    sharedSessionKey: ev.job?.sessionTarget === "current" ? ev.job.sessionKey : undefined,
+    at: ev.runAtMs, status: ev.status, completion: ev.completionStatus, error: ev.error, delivery: ev.deliveryError, summary: ev.summary,
     dur: (ev.durationMs ?? 0) / 1000, inT: ev.usage?.input_tokens ?? 0, outT: ev.usage?.output_tokens ?? 0, tokens: ev.usage?.total_tokens ?? 0, manual: !!ev.manual, history: ev.history,
   });
   function applyEvent(ev) {
@@ -915,13 +937,14 @@
       const edited = EDITED.some((k) => k in ev.job && JSON.stringify(ev.job[k]) !== JSON.stringify(r[k]));
       Object.assign(r, ev.job);
       // An attempt whose outcome isn't known yet stays pending until the person checks it;
-      // the change elsewhere is shown after that, so no write is offered before the check.
-      if (D?.id === r.id && edited && ["saving", "noanswer", "checking"].includes(D.status)) D.elsewhere = true;
+      // a differing read can show a conflict after that check.
+      const pendingSave = D?.id === r.id && ["saving", "noanswer", "checking"].includes(D.status);
+      if (pendingSave && edited) D.elsewhere = true;
       else if (D?.id === r.id && edited) {
         D.status = "conflict";
         renderEditor(inDialog());
       }
-      if (onScreen && edited) announce(`${r.name} was changed elsewhere`);
+      if (onScreen && edited && !pendingSave) announce(`${r.name} was changed elsewhere`);
     } else if (ev.action === "removed") {
       r.gone = true;
       // A one-shot removes itself after it succeeds (deleteAfterRun): finished, then removed.
@@ -1026,9 +1049,10 @@
         announce("Couldn't start a run");
         return repaint();
       }
+      const runId = `manual:${id}:${NOW}:${++runSeq}`;
       applyEvent({ action: "started", jobId: id, runAtMs: NOW });
       setTimeout(() => {
-        applyEvent({ action: "finished", jobId: id, runId: `manual:${id}:${NOW}:1`, runAtMs: NOW, status: "ok", completionStatus: "succeeded", durationMs: 2400, usage: { input_tokens: 124, output_tokens: 80, total_tokens: 204 }, summary: DIGEST_SUMMARY, manual: true, history: r.payload.kind === "agentTurn" ? recorded(r.payload.message, DIGEST_SUMMARY) : undefined });
+        applyEvent({ action: "finished", jobId: id, runId, runAtMs: NOW, status: "ok", completionStatus: "succeeded", durationMs: 2400, usage: { input_tokens: 124, output_tokens: 80, total_tokens: 204 }, summary: DIGEST_SUMMARY, manual: true, history: r.payload.kind === "agentTurn" ? recorded(r.payload.message, DIGEST_SUMMARY) : undefined });
       }, 1800);
     }, 500);
   }
@@ -1044,6 +1068,13 @@
     lastFocus = document.activeElement;
     confirmDialog.showModal();
     $('[data-r="confirm-cancel"]', confirmDialog).focus();
+  }
+
+  function finishDelete(r) {
+    routines = routines.filter((x) => x !== r);
+    confirmDialog.close();
+    announce(`Deleted ${r.name}`);
+    return go("list", { focus: "#view-title" });
   }
 
   // The editor ----------------------------------------------------------------------------------------------------
@@ -1121,7 +1152,7 @@
     if (missing) return skipped(d) || `${missing.replace(/\.$/, "")} to see when it runs.`;
     const s = draftSchedule(d);
     if (s.kind === "cron" && cronSpec(s.expr).error) return "The gateway can't read this cron expression.";
-    const next = occurrences(s, NOW, horizon(s.tz || VIEWER), 3);
+    const next = occurrences(s, NOW, s.kind === "cron" ? horizon(s.tz) : Infinity, 3);
     if (!next.length) return s.kind === "cron" ? `Runs as the gateway reads "${s.expr}", and not in the next eight years.` : "It wouldn't run: that time has passed.";
     const tz = s.tz || VIEWER;
     const first = `${longDate(next[0], tz)}, ${clock(next[0], tz)}${tz !== VIEWER ? ` (${clock(next[0])} your time)` : ""}`;
@@ -1162,8 +1193,10 @@
     const dis = saving ? " disabled" : "";
     let notes = "";
     if (d.status === "refused") notes += note(`<p><b>The gateway didn't save this.</b> invalid cron.add params: CronPattern: invalid configuration format ('99 * * *'), exactly five, six, or seven space separated parts are required.</p>`, "danger");
-    if (d.status === "conflict")
+    if (d.status === "conflict") {
+      d.conflictAt = r.updatedAtMs;
       notes += note(`<p><b>This routine was changed elsewhere</b> while you were editing.</p><div class="b-actions">${button("Show the new version", 'data-size="sm" data-r="conflict-show"')}${button("Save mine anyway", 'data-size="sm" data-r="conflict-save"', "quiet")}</div>`, "warn");
+    }
     // After "Show the new version": what was typed, kept to copy from.
     if (d.mine)
       notes += `<details class="b-disclosure" data-testid="your-version"><summary>Your version</summary><div class="b-disclosure-body"><dl class="facts">` +
@@ -1180,8 +1213,8 @@
       notes += note(
         f.kind === "same" ? `<p><b>${esc(r.name)} now reads as you typed it.</b> That may be your save, or the same change made elsewhere.</p><div class="b-actions">${button("Close", 'data-size="sm" data-r="edit-close"')}</div>`
           : f.kind === "differs" ? `<p><b>${esc(r.name)} doesn't read as you typed it.</b> The gateway has: ${esc(f.has)}.</p><div class="b-actions">${button("Check again", 'data-size="sm" data-r="check-now"')}${again}</div>`
-          : f.kind === "match" ? `<p><b>The gateway has ${f.ids.length === 1 ? "a routine" : `${f.ids.length} routines`} for ${botName(d.bot)} named ${esc(d.name.trim())},</b> created ${esc(when(f.at))}. It may be the one you saved, or one made elsewhere.</p><div class="b-actions">${button("Open it", `data-size="sm" data-r="open-found" data-id="${f.ids[0]}"`)}${again}</div><p class="r-hint">Saving again makes another routine if that one is yours.</p>`
-          : `<p><b>The gateway has no routine for ${botName(d.bot)} named ${esc(d.name.trim())}.</b> The save may still arrive.</p><div class="b-actions">${button("Check again", 'data-size="sm" data-r="check-now"')}${again}</div>`,
+          : f.kind === "match" ? `<p><b>The gateway has ${f.ids.length === 1 ? "a routine" : `${f.ids.length} routines`} for ${botName(d.submitted.params.agentId)} named ${esc(d.submitted.params.name)},</b> created ${esc(when(f.at))}. It may be the one you saved, or one made elsewhere.</p><div class="b-actions">${button("Open it", `data-size="sm" data-r="open-found" data-id="${f.ids[0]}"`)}${again}</div><p class="r-hint">Saving again makes another routine if that one is yours.</p>`
+          : `<p><b>The gateway has no routine for ${botName(d.submitted.params.agentId)} named ${esc(d.submitted.params.name)}.</b> The save may still arrive.</p><div class="b-actions">${button("Check again", 'data-size="sm" data-r="check-now"')}${again}</div>`,
         "warn",
       );
     }
@@ -1245,8 +1278,9 @@
   }
   // Every write from the editor comes here, Save again and the notes' own buttons included,
   // so each is validated and ends in one of the outcomes of section 9.
-  function save(delay = 600) {
+  function save(delay = 600, acknowledgedAt = D.updatedAtMs) {
     const d = D;
+    d.updatedAtMs = acknowledgedAt;
     d.errors = validate(d);
     const first = Object.keys(d.errors)[0];
     if (first) {
@@ -1254,20 +1288,28 @@
       renderEditor(first === "when" ? "#e-when [aria-checked='true'], #e-n" : `#e-${first === "instruction" ? "instr" : first}`);
       return;
     }
+    const current = d.id && routines.find((r) => r.id === d.id);
+    if (current && current.updatedAtMs > acknowledgedAt) {
+      d.status = "conflict";
+      renderEditor('[data-r="conflict-show"]');
+      return;
+    }
     // The address's outcome is the first attempt's; a retry is answered as saved.
     d.attempts = (d.attempts || 0) + 1;
     const outcomeOf = d.attempts === 1 ? d.simulate : "";
     // What this attempt sends, kept with its draft: Check now compares the gateway with it.
-    d.submitted = request(d);
-    dispatched.push(d.submitted);
+    const submitted = request(d);
+    d.submitted = submitted;
+    dispatched.push(submitted);
     d.status = "saving";
     // Save is disabled while saving, so focus waits on the heading rather than falling to the page.
     renderEditor("#edit-title");
     setTimeout(() => {
+      if (current?.gone) return;
       // An answer belongs to the draft that sent it, even if its dialog has closed since.
       if (D !== d) {
         if (!["adminlost", "refused", "conflict", "noanswer"].includes(outcomeOf)) {
-          land(d.submitted);
+          land(submitted);
           announce(`Saved ${d.name.trim()}`);
           paint();
         }
@@ -1284,13 +1326,17 @@
       }
       if (outcomeOf === "refused" || outcomeOf === "conflict" || outcomeOf === "noanswer") {
         // lookup=found: the unanswered save did reach the gateway.
-        if (outcomeOf === "noanswer" && P.get("lookup") === "found") land(d.submitted);
+        if (outcomeOf === "noanswer" && P.get("lookup") === "found") land(submitted);
         d.status = outcomeOf === "refused" && d.elsewhere ? "conflict" : outcomeOf;
         if (d.status !== "noanswer") d.elsewhere = false;
         renderEditor(outcomeOf === "noanswer" ? '[data-r="check-now"]' : outcomeOf === "conflict" ? '[data-r="conflict-show"]' : '[data-r="save"]');
         return;
       }
-      commit(d);
+      const id = land(submitted);
+      editDialog.close();
+      D = null;
+      announce(d.id ? "Saved" : "Routine created");
+      go("routine", { routine: id, deleted: false });
     }, delay);
   }
   const sameSchedule = (a, b) =>
@@ -1304,17 +1350,18 @@
     d.status = "checking";
     renderEditor("#edit-title");
     setTimeout(() => {
-      if (D !== d) return;
+      if (D !== d || d.status !== "checking") return;
       const r = d.id && routines.find((x) => x.id === d.id);
       if (r) {
         const patch = d.submitted.params.patch;
         const differs = Object.keys(patch).some((k) => !sameField(k, r[k], patch[k]));
         d.found = differs ? { kind: "differs", has: `${r.name}, ${wordsText(r.schedule)}` } : { kind: "same" };
       } else {
-        const ids = routines.filter((x) => !x.gone && x.bot === d.bot && x.name === d.name.trim()).map((x) => x.id);
+        const { agentId, name } = d.submitted.params;
+        const ids = routines.filter((x) => !x.gone && x.bot === agentId && x.name === name).map((x) => x.id);
         d.found = ids.length ? { kind: "match", ids, at: routines.find((x) => x.id === ids[0]).createdAtMs } : { kind: "none" };
       }
-      d.status = d.elsewhere ? "conflict" : "found";
+      d.status = d.elsewhere && d.found.kind === "differs" ? "conflict" : "found";
       d.elsewhere = false;
       renderEditor(d.status === "conflict" ? '[data-r="conflict-show"]' : ".b-note .button");
       announce("Checked");
@@ -1360,14 +1407,6 @@
     routines.push({ id, bot: agentId, enabled: true, runs: [], updatedAtMs: NOW, createdAtMs: NOW, ...fields });
     return id;
   }
-  function commit(d) {
-    const id = land(d.submitted);
-    editDialog.close();
-    D = null;
-    announce(d.id ? "Saved" : "Routine created");
-    go("routine", { routine: id, deleted: false });
-  }
-
   // Check-ins ----------------------------------------------------------------------------------------------------------
 
   const ciDialog = $("#checkins-dialog");
@@ -1390,7 +1429,7 @@
         : note(`<p>${defaultBots.map(botName).join(" and ")} checks in now through the gateway's default. Saving also gives ${defaultBots.map(botName).join(" and ")} a setting of its own with the same cadence, so it keeps checking in.</p>`);
     }
     const promptNote = C.prompt.trim()
-      ? `<p class="r-error" id="ci-prompt-note" data-testid="prompt-note">This prompt replaces the gateway's own, which asks ${esc(name)} to reply NO_REPLY when nothing needs attention. Whether ${esc(name)} stays quiet depends on what this prompt asks.</p>` : "";
+      ? `<p class="r-error" id="ci-prompt-note" data-testid="prompt-note">${DEFAULT_PROMPT === "" ? `This prompt replaces the gateway's own, which asks ${esc(name)} to reply NO_REPLY when nothing needs attention.` : "This prompt replaces the gateway's default for this bot."} Whether ${esc(name)} stays quiet depends on what this prompt asks.</p>` : "";
     const saving = C.status === "saving";
     const dis = saving ? " disabled" : "";
     ciDialog.innerHTML =
@@ -1429,7 +1468,8 @@
     return { change, keep: rs.filter((r) => !change.includes(r)).map((r) => [r, why(r)]) };
   }
   function renderZone(focusSel) {
-    const { change, keep } = zonePlan(Z.bot);
+    const { change, keep } = Z.plan;
+    const finished = Z.result && !Z.reconfirm;
     const saving = Z.status === "saving";
     const dis = saving ? " disabled" : "";
     zoneDialog.innerHTML =
@@ -1439,7 +1479,7 @@
       ZONES.map((z) => `<option value="${z}"${Z.tz === z ? " selected" : ""}>${city(z)} (${z})</option>`).join("") + `</select></div>` +
       `<p>Changes ${change.length === 1 ? "this routine" : `these ${change.length} routines`}:</p><ul class="r-zone-list" data-testid="zone-change">${change.map((r) => `<li>${esc(r.name)} <span class="r-faint">(now ${esc(city(r.schedule.tz))})</span></li>`).join("")}</ul>` +
       (keep.length ? `<p class="r-hint">Left alone:</p><ul class="r-zone-list" data-testid="zone-keep">${keep.map(([r, why]) => `<li>${esc(r.name)} <span class="r-faint">(${why})</span></li>`).join("")}</ul>` : "") +
-      `</div><footer class="b-foot"><div class="b-actions">${button(Z.result ? "Close" : "Cancel", `data-r="zone-close"${dis}`, "quiet")}${Z.result ? "" : button(saving ? "Changing…" : "Change", `data-r="zone-save"${dis}`, "primary")}</div></footer>`;
+      `</div><footer class="b-foot"><div class="b-actions">${button(finished ? "Close" : "Cancel", `data-r="zone-close"${dis}`, "quiet")}${finished ? "" : button(saving ? "Changing…" : "Change", `data-r="zone-save"${dis}`, "primary")}</div></footer>`;
     if (!zoneDialog.open) {
       lastFocus = document.activeElement;
       zoneDialog.showModal();
@@ -1448,7 +1488,7 @@
   }
   function openZone(bot) {
     if (!isAdmin()) return;
-    Z = { bot, tz: "auto", status: "", result: "" };
+    Z = { bot, plan: zonePlan(bot), tz: "auto", status: "", result: "" };
     renderZone();
   }
   function saveZone() {
@@ -1459,7 +1499,16 @@
       const tz = z.tz === "auto" ? VIEWER : z.tz;
       const failed = [];
       const done = [];
-      for (const r of zonePlan(z.bot).change) {
+      const plan = zonePlan(z.bot);
+      if (plan.change.length !== z.plan.change.length || plan.change.some((r, i) => r.id !== z.plan.change[i].id)) {
+        z.plan = plan;
+        z.status = "";
+        z.reconfirm = true;
+        z.result = "The list of routines changed. Review it and confirm again.";
+        return renderZone('[data-r="zone-save"]');
+      }
+      z.reconfirm = false;
+      for (const r of plan.change) {
         const schedule = { ...r.schedule, tz };
         const req = { method: "cron.update", params: { id: r.id, patch: { schedule } } };
         dispatched.push(req);
@@ -1540,7 +1589,9 @@
       case "back-to-routine":
         return go("routine", { focus: `[data-r="open-run"][data-run="${S.runKey}"]` });
       case "open-bot":
-        return go("convo");
+        return go("convo", { session: t.dataset.session });
+      case "back-to-run":
+        return go("run", { session: "" });
       case "to-bots":
         $(".shell").dataset.view = "list";
         return $("#routines-button").focus();
@@ -1565,15 +1616,29 @@
         return lastFocus?.focus();
       case "confirm-delete": {
         const r = routines.find((x) => x.id === id);
-        if (P.get("deletefail") === "1") {
-          $("#confirm-error", confirmDialog)?.remove();
-          $(".b-actions", confirmDialog).insertAdjacentHTML("beforebegin", `<p class="r-error" id="confirm-error" role="alert">Couldn't delete ${esc(r.name)}: the gateway didn't answer. It is still there.</p>`);
-          return;
+        const req = { method: "cron.remove", params: { id } };
+        dispatched.push(req);
+        const unanswered = P.get("deletefail");
+        if (unanswered !== "1") {
+          sent.push(req);
+          r.gone = true;
         }
-        routines = routines.filter((x) => x.id !== id);
-        confirmDialog.close();
-        announce(`Deleted ${r.name}`);
-        return go("list", { focus: "#view-title" });
+        if (unanswered !== "1" && unanswered !== "landed") return finishDelete(r);
+        confirmDialog.dataset.pending = id;
+        $("#confirm-error", confirmDialog)?.remove();
+        $(".b-actions", confirmDialog).outerHTML = `<p class="r-error" id="confirm-error" role="alert">The gateway didn't answer. This routine may have been deleted.</p><div class="b-actions">${button("Check now", `data-r="check-delete" data-id="${id}"`)}</div>`;
+        $('[data-r="check-delete"]', confirmDialog).focus();
+        return;
+      }
+      case "check-delete": {
+        const r = routines.find((x) => x.id === id);
+        delete confirmDialog.dataset.pending;
+        if (r.gone) return finishDelete(r);
+        $("#confirm-error", confirmDialog).textContent = "The gateway still lists this routine. The delete may still arrive.";
+        $(".b-actions", confirmDialog).innerHTML = button("Cancel", 'data-r="confirm-cancel"', "quiet") +
+          button("Delete", `data-r="confirm-delete" data-id="${id}" data-tone="danger"`);
+        $('[data-r="confirm-cancel"]', confirmDialog).focus();
+        return;
       }
       case "edit-close":
         editDialog.close();
@@ -1587,9 +1652,7 @@
         return renderEditor("#e-name");
       }
       case "conflict-save":
-        // Mine anyway: against the version now on the gateway, through the same validated save.
-        D.updatedAtMs = routines.find((x) => x.id === D.id).updatedAtMs;
-        return save();
+        return save(600, D.conflictAt);
       case "check-now":
         return checkNow();
       case "open-found":
@@ -1761,6 +1824,9 @@
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && busy()) event.preventDefault();
   }, true);
+  confirmDialog.addEventListener("cancel", (event) => {
+    if (confirmDialog.dataset.pending) event.preventDefault();
+  });
   for (const dlg of [editDialog, ciDialog, zoneDialog]) dlg.addEventListener("cancel", (event) => busy() && event.preventDefault());
   for (const dlg of [editDialog, ciDialog, confirmDialog, zoneDialog])
     dlg.addEventListener("close", () => {
