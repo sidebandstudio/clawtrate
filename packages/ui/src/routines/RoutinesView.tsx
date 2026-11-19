@@ -6,14 +6,7 @@
 // without it nothing that writes is offered, and the access bar at the foot
 // says how to ask for admin.
 
-import type {
-  Bot,
-  ClawtrateState,
-  HostInfo,
-  Routine,
-  RoutineRun,
-  RunConversation,
-} from "@clawtrate/core";
+import type { Bot, ClawtrateState, HostInfo, Routine, RoutineRun } from "@clawtrate/core";
 import {
   useEffect,
   useRef,
