@@ -23,7 +23,7 @@ const permissions =
     await expect(
       settings(page).getByRole("heading", { name: "Permissions", level: 3 }),
     ).toBeVisible();
-    if (part !== "Rules") await settings(page).getByRole("radio", { name: part }).click();
+    await settings(page).getByRole("radio", { name: part }).click();
     await expect(settings(page).getByRole("radio", { name: part })).toHaveAttribute(
       "aria-checked",
       "true",
@@ -183,7 +183,7 @@ const SCENES: Scene[] = [
     query: ADMIN,
     ready: permissions("Activity", async (page) => {
       await page.getByRole("button", { name: "Show older" }).click();
-      await expect(page.getByTestId("activity-end")).toBeVisible();
+      await expect(page.getByTestId("activity-end")).toHaveText("No older records available.");
     }),
   },
 ];
@@ -418,11 +418,14 @@ test.describe("behaviour", () => {
     const all = page.getByTestId("activity-row");
     await expect(all).toHaveCount(6);
     await expect(all.nth(1)).toHaveAccessibleName(
-      "5:19 PM, Otto, write, Blocked, Recorded: Otto's Never rule, version 1 (now version 2).",
+      "5:19 PM, Otto, A task not listed here, write, Blocked, Recorded: Otto's Never rule, version 1 (now version 2).",
     );
     await expect(all.nth(3)).toHaveAccessibleName(
-      `2:40 AM, Pip, write, Failed, Recorded: asked because "Ask when nothing else decides", on for every bot; answered Deny.`,
+      `2:40 AM, Pip, Plan the week, write, Failed, Recorded: asked because "Ask when nothing else decides", on for every bot; answered Deny.`,
     );
+    // The bot's and the task's names are on the row, not only in its name.
+    await expect(all.nth(0)).toContainText("Otto · Disk almost full on the media box");
+    await expect(all.nth(3)).toContainText("Pip · Plan the week");
     // A routine's call no record joins: cause not recorded.
     await expect(all.nth(2)).toContainText("A routine's run");
     await expect(all.nth(2)).toContainText("Cause not recorded");
@@ -430,7 +433,7 @@ test.describe("behaviour", () => {
     await expect(all.nth(4)).toContainText("Started");
     await expect(all.nth(4)).toContainText("Cause not read.");
     await expect(all.nth(5)).toHaveAccessibleName(
-      /^Yesterday, Otto, write, Ran, Recorded: asked by Otto's rule 'Ask first · notes\/\*\*', version 1; answered Allow once\.$/,
+      /^Yesterday, Otto, [^,]+, write, Ran, Recorded: asked by Otto's rule 'Ask first · notes\/\*\*', version 1; answered Allow once\.$/,
     );
   });
 
@@ -507,10 +510,16 @@ test.describe("behaviour", () => {
     await expect(page.getByRole("button", { name: "Loading…" })).toHaveCount(0);
   });
 
-  test("permissions: its parts are one radio group with one tab stop, moved by the arrows", async ({
+  test("permissions: it opens on Saved approvals, and its parts are one radio group with one tab stop, moved by the arrows", async ({
     page,
   }) => {
     await openFixture(page, ADMIN, "light");
+    await page.keyboard.press("ControlOrMeta+,");
+    await settings(page).getByRole("button", { name: "Permissions", exact: true }).click();
+    await expect(settings(page).getByRole("radio", { name: "Saved approvals" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
     await permissions("Rules")(page);
     const group = settings(page).getByRole("radiogroup", { name: "Permissions" });
     await expect(group.locator('[tabindex="0"]')).toHaveCount(1);

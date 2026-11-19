@@ -218,7 +218,8 @@ export function PermissionsSection({
   onShowInChat: ShowInChat;
 }) {
   const bridge = useBridge();
-  const [part, setPart] = useState<Part>("rules");
+  // Saved approvals first: until rules for every bot are here, the Rules part only says so.
+  const [part, setPart] = useState<Part>("saved");
   const [plugin, setPlugin] = useState<RulesPluginState | "checking" | { failed: string }>(
     "checking",
   );
@@ -921,6 +922,7 @@ function ActivityPart({
           const tag = STATUS_WORDS[row.status];
           const what = row.toolName ?? "A tool";
           const time = rowTime(row.at, now);
+          const task = taskWords(row, tasksByBot);
           const expanded = open === row.id;
           return (
             <li key={row.id}>
@@ -928,7 +930,7 @@ function ActivityPart({
                 type="button"
                 className="c-log"
                 aria-expanded={expanded}
-                aria-label={`${time}, ${botName(row.agentId)}, ${what}, ${tag}, ${cause}`}
+                aria-label={`${time}, ${botName(row.agentId)}, ${task}, ${what}, ${tag}, ${cause}`}
                 onClick={() => setOpen(expanded ? null : row.id)}
                 data-testid="activity-row"
               >
@@ -937,7 +939,9 @@ function ActivityPart({
                 <span className="c-log-what">
                   <span className="mono">{what}</span>
                   <br />
-                  <span className="b-faint">{taskWords(row, tasksByBot)}</span>
+                  <span className="b-faint">
+                    {botName(row.agentId)} · {task}
+                  </span>
                 </span>
                 <span className="c-tag" data-tone={STATUS_TONE[row.status]}>
                   {tag}
@@ -1049,7 +1053,7 @@ function ActivityPart({
       )}
       {ready && rows.length > 0 && !ready.nextCursor && (
         <p className="b-hint" data-testid="activity-end">
-          The gateway lists nothing older than {fullDate(now - AUDIT_DAYS * DAY)}: it keeps 30 days.
+          No older records available.
         </p>
       )}
       <p className="b-hint">
