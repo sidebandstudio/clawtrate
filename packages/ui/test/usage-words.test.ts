@@ -4,6 +4,7 @@
 
 import type { Budget, BudgetCount, UsageFigure, UsageReport } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
+import { clock } from "../src/bots/words.ts";
 import {
   barText,
   botBars,
@@ -87,8 +88,8 @@ describe("a figure the gateway is still counting", () => {
   it("F-232: says so wherever it appears: the row, the cost and the budget's count", () => {
     const cold = figure({ counting: true });
     expect(figureLine(cold)).toBe("1,800 tokens so far · about $0.00 so far, still being counted");
-    expect(figureLine(figure({}))).toMatch(
-      /^1,800 tokens · about \$0\.00, as of \d{1,2}:07 [AP]M$/,
+    expect(figureLine(figure({}))).toBe(
+      `1,800 tokens · about $0.00, as of ${clock(Date.UTC(2026, 10, 19, 15, 7))}`,
     );
     expect(costValue(cold.cost, true)).toBe("About $0.00 so far");
     expect(costHint(cold.cost, cold.asOf, true)).toBe(
@@ -135,7 +136,7 @@ describe("every bot's bars", () => {
       { ...report, bots: [{ botId: "pip", figure: figure({}), error: null }] },
       () => "Pip",
     )[0]!;
-    expect(barText(settled)).toMatch(/^1,800 tokens, as of \d{1,2}:07 [AP]M$/);
+    expect(barText(settled)).toBe(`1,800 tokens, as of ${clock(Date.UTC(2026, 10, 19, 15, 7))}`);
   });
 });
 
