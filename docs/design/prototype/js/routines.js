@@ -287,23 +287,27 @@
     const c = cronSpec(s.expr);
     const tz = s.tz || VIEWER;
     const start = parts(from - DAY, tz);
-    for (let i = 0; i <= CRON_SCAN_DAYS && out.length < max; i++) {
+    const instants = new Set();
+    for (let i = 0; i <= CRON_SCAN_DAYS && instants.size < max; i++) {
       const day = new Date(Date.UTC(start.y, start.m - 1, start.d + i));
       const y = day.getUTCFullYear(), m = day.getUTCMonth() + 1, d = day.getUTCDate();
-      if (fromZoned(y, m, d, 0, 0, tz) >= until) break;
+      const midnight = fromZoned(y, m, d, 0, 0, tz);
+      if (midnight >= until) break;
       if (!c.day(y, m, d)) continue;
+      const regular = fromZoned(y, m, d + 1, 0, 0, tz) - midnight === DAY;
       for (const sec of c.times) {
         const h = Math.floor(sec / 3600), mi = Math.floor(sec / 60) % 60;
         const t = fromZoned(y, m, d, h, mi, tz) + (sec % 60) * 1000;
         const p = parts(t, tz);
         // Croner uses the offset before the gap for a skipped wall time.
         const shift = Date.UTC(y, m - 1, d, h, mi) - Date.UTC(p.y, p.m - 1, p.d, p.h, p.min);
-        if ((shift === 0 && t >= until) || out.length >= max) break;
+        if (regular && (t >= until || instants.size >= max)) break;
         const firing = t + Math.max(0, shift);
-        if (firing >= from && firing < until) out.push(firing);
+        if (firing >= from && firing < until) instants.add(firing);
       }
     }
-    return out;
+    // The gateway schedules each instant once, even if two wall times map to it.
+    return [...instants].sort((a, b) => a - b).slice(0, max);
   }
   // What Clawtrate can't expand is drawn only at the gateway's own next run (section 4).
   const computable = (r) => ["at", "every"].includes(r.schedule.kind) || (r.schedule.kind === "cron" && r.schedule.tz && !r.pacing && !cronSpec(r.schedule.expr).error);
@@ -337,6 +341,7 @@
   const recorded = (instruction, reply) => ({ message: `${instruction}\n\n${PREAMBLE}`, reply });
   const DIGEST_SUMMARY =
     "Three notes from yesterday. The draft for Sam is ready to send. Two emails need an answer today: the venue's question about numbers and the printer's quote.";
+  let routineSeq = 0;
   let routines = [
     {
       id: "digest", bot: "marlow", name: "Morning digest", enabled: true,
@@ -344,7 +349,7 @@
       payload: { kind: "agentTurn", message: "Summarise the notes I added yesterday, and list anything I need to answer today." },
       sessionTarget: "isolated", delivery: { mode: "none" }, updatedAtMs: NOW - 3 * DAY,
       runs: [
-        run(0, 8, 0, { summary: DIGEST_SUMMARY, history: recorded("Summarise the notes I added yesterday, and list anything I need to answer today.", DIGEST_SUMMARY) }),
+        run(0, 8, 0, { sessionKey: "agent:marlow:cron:digest:run:run-1", summary: DIGEST_SUMMARY, history: recorded("Summarise the notes I added yesterday, and list anything I need to answer today.", DIGEST_SUMMARY) }),
         // Recorded before the instruction was last edited: the run shows what it was sent.
         run(1, 11, 40, { manual: true, dur: 3.1, tokens: 214, summary: "Two notes from yesterday, both about the venue.", history: recorded("Summarise the notes I added yesterday.", "Two notes from yesterday, both about the venue.") }),
         run(1, 8, 0, { completion: "failed", delivery: "No channel is set up to deliver to." }),
@@ -623,7 +628,7 @@
       `<section class="r-checkins" aria-labelledby="checkins-head" data-testid="checkins"><div class="r-checkins-head"><h3 id="checkins-head">Check-ins</h3>` +
       (isAdmin() ? button("Change", `data-size="sm" data-r="checkins" data-id="${b}"`) : "") + `</div>` +
       `<p data-testid="checkins-text">${esc(text)}</p>${next ? `<p class="r-faint">${esc(next)}</p>` : ""}` +
-      (zones.length ? `<div class="r-zone-line"><p class="r-faint" data-testid="zone-line">Routines' time zone: ${zones.length > 1 ? `Mixed: ${zones.join(", ")}` : zones[0]}</p>${isAdmin() ? button("Change…", `data-size="sm" data-r="zone" data-id="${b}"`, "quiet") : ""}</div>` : "") +
+      (zones.length ? `<div class="r-zone-line"><p class="r-faint" data-testid="zone-line">Routines' time zone: ${Z?.bot === b && Z.pending ? "checking needed" : zones.length > 1 ? `Mixed: ${zones.join(", ")}` : zones[0]}</p>${isAdmin() ? button("Change…", `data-size="sm" data-r="zone" data-id="${b}"`, "quiet") : ""}</div>` : "") +
       `</section>`
     );
   }
@@ -830,7 +835,7 @@
     // A transcript is shown only when cron.history returned this run's messages. A run in a
     // shared conversation, or a job that is not an agent turn, has no conversation of its own.
     const session = x.sharedSessionKey || (x.sessionKey && !x.sessionKey.includes(`:cron:${r.id}:run:`) ? x.sessionKey : "");
-    const shared = session || r.payload.kind !== "agentTurn" || r.sessionTarget !== "isolated";
+    const shared = session || r.payload.kind !== "agentTurn" || (!x.sessionKey && r.sessionTarget !== "isolated");
     const where = r.payload.kind === "command" ? "command" : shared ? "main" : "";
     const rs = S.runstate || (x.running ? "running" : where || (x.history ? "" : "none"));
     const returned = () => `<p class="r-returned-head">What the run returned:</p><p data-testid="returned">${esc(x.summary || outcome(x).text)}</p>`;
@@ -1403,7 +1408,7 @@
       return req.params.id;
     }
     const { agentId, wakeMode, ...fields } = req.params;
-    const id = `r${routines.length + 1}`;
+    const id = `r${++routineSeq}`;
     routines.push({ id, bot: agentId, enabled: true, runs: [], updatedAtMs: NOW, createdAtMs: NOW, ...fields });
     return id;
   }
@@ -1471,7 +1476,7 @@
     const { change, keep } = Z.plan;
     const finished = Z.result && !Z.reconfirm;
     const saving = Z.status === "saving";
-    const dis = saving ? " disabled" : "";
+    const dis = saving || Z.pending ? " disabled" : "";
     zoneDialog.innerHTML =
       `<header class="b-head"><h2 id="zone-title" tabindex="-1">${esc(botName(Z.bot))}'s routines' time zone</h2><button type="button" class="icon-button b-close" data-r="zone-close" aria-label="Close"${dis}>${icon("x")}</button></header>` +
       `<div class="b-body">${Z.result ? `<div class="b-note" data-tone="warn" role="alert" data-testid="zone-result">${icon("warning")}<div><p>${esc(Z.result)}</p></div></div>` : ""}` +
@@ -1479,7 +1484,7 @@
       ZONES.map((z) => `<option value="${z}"${Z.tz === z ? " selected" : ""}>${city(z)} (${z})</option>`).join("") + `</select></div>` +
       `<p>Changes ${change.length === 1 ? "this routine" : `these ${change.length} routines`}:</p><ul class="r-zone-list" data-testid="zone-change">${change.map((r) => `<li>${esc(r.name)} <span class="r-faint">(now ${esc(city(r.schedule.tz))})</span></li>`).join("")}</ul>` +
       (keep.length ? `<p class="r-hint">Left alone:</p><ul class="r-zone-list" data-testid="zone-keep">${keep.map(([r, why]) => `<li>${esc(r.name)} <span class="r-faint">(${why})</span></li>`).join("")}</ul>` : "") +
-      `</div><footer class="b-foot"><div class="b-actions">${button(finished ? "Close" : "Cancel", `data-r="zone-close"${dis}`, "quiet")}${finished ? "" : button(saving ? "Changing…" : "Change", `data-r="zone-save"${dis}`, "primary")}</div></footer>`;
+      `</div><footer class="b-foot"><div class="b-actions">${Z.pending ? button("Check now", 'data-r="zone-check"', "primary") : button(finished ? "Close" : "Cancel", `data-r="zone-close"${dis}`, "quiet")}${finished ? "" : button(saving ? "Changing…" : "Change", `data-r="zone-save"${dis}`, "primary")}</div></footer>`;
     if (!zoneDialog.open) {
       lastFocus = document.activeElement;
       zoneDialog.showModal();
@@ -1497,8 +1502,7 @@
     renderZone('[data-r="zone-save"]');
     setTimeout(() => {
       const tz = z.tz === "auto" ? VIEWER : z.tz;
-      const failed = [];
-      const done = [];
+      z.done = [];
       const plan = zonePlan(z.bot);
       if (plan.change.length !== z.plan.change.length || plan.change.some((r, i) => r.id !== z.plan.change[i].id)) {
         z.plan = plan;
@@ -1513,24 +1517,42 @@
         const req = { method: "cron.update", params: { id: r.id, patch: { schedule } } };
         dispatched.push(req);
         if (P.get("tzfail") === r.id) {
-          failed.push(r.name);
-          continue;
+          if (P.get("tzlookup") === "found") land(req);
+          z.pending = { id: r.id, name: r.name, schedule };
+        } else {
+          land(req);
+          z.done.push(r.name);
         }
-        sent.push(req);
-        r.schedule = schedule;
-        r.state = { ...r.state, nextRunAtMs: undefined };
-        done.push(r.name);
       }
-      z.status = "";
-      if (!failed.length) {
-        zoneDialog.close();
-        announce(`Changed the time zone of ${done.length} routine${done.length === 1 ? "" : "s"}`);
-        return paint('[data-r="zone"]');
-      }
-      z.result = `${done.length ? `Changed ${done.join(", ")}. ` : ""}Couldn't change ${failed.join(", ")}: the gateway didn't answer.`;
-      paint();
-      renderZone('[data-r="zone-close"]');
+      checkZone();
     }, 500);
+  }
+  function checkZone() {
+    const z = Z;
+    const changed = () => z.done.length ? `Changed ${z.done.join(", ")}. ` : "";
+    z.status = "";
+    if (z.pending) {
+      const { id, name, schedule } = z.pending;
+      dispatched.push({ method: "cron.get", params: { id } });
+      if (!z.checked && P.get("tzlookup") === "unavailable") {
+        z.checked = true;
+        z.result = `${changed()}Couldn't confirm the time zone of ${name}.`;
+        paint();
+        return renderZone('[data-r="zone-check"]');
+      }
+      z.pending = null;
+      const current = routines.find((r) => r.id === id).schedule;
+      if (current.kind !== schedule.kind || current.expr !== schedule.expr || current.tz !== schedule.tz) {
+        const reported = current.tz && current.tz !== schedule.tz ? `${name} still has ${city(current.tz)}.` : `The gateway lists a different schedule for ${name}.`;
+        z.result = `${changed()}${reported} The change may still arrive.`;
+        paint();
+        return renderZone('[data-r="zone-close"]');
+      }
+      z.done.push(name);
+    }
+    zoneDialog.close();
+    announce(`Changed the time zone of ${z.done.length} routine${z.done.length === 1 ? "" : "s"}`);
+    paint('[data-r="zone"]');
   }
 
   // Events ---------------------------------------------------------------------------------------------------------------
@@ -1667,6 +1689,8 @@
         return openZone(id);
       case "zone-save":
         return saveZone();
+      case "zone-check":
+        return checkZone();
       case "zone-close":
         zoneDialog.close();
         return lastFocus?.focus();
@@ -1820,7 +1844,7 @@
     openMenu(rowMain, routineMenu(routines.find((x) => x.id === rowMain.dataset.id)), event.clientX, event.clientY);
   });
   // While a save is in flight its dialog stays open: Escape waits for the answer.
-  const busy = () => ["saving", "checking"].includes(D?.status) || C?.status === "saving" || Z?.status === "saving";
+  const busy = () => ["saving", "checking"].includes(D?.status) || C?.status === "saving" || Z?.status === "saving" || !!Z?.pending;
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && busy()) event.preventDefault();
   }, true);
