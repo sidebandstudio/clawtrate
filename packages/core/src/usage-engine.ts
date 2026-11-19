@@ -101,6 +101,10 @@ export type UsageReport = {
 /** The answer while the host already reads `MAX_USAGE_REPORTS` reports: ask again later. */
 export type UsageBusy = { busy: true };
 
+/** Sources read apart from the total, which can't both be right: neither is shown. */
+const SOURCES_DISAGREE =
+  "The tasks' records and the gateway's total don't agree yet, so where the tokens came from isn't shown.";
+
 /** A `sessions.usage` reply without its list of tasks. */
 const NO_TASK_LIST = "The gateway's answer had no task list.";
 
@@ -621,8 +625,7 @@ export class UsageEngine {
       const sources = await this.sources(tasks, figure.tokens.total, range, ask);
       if (sources.people + sources.routines + sources.bots > figure.tokens.total)
         // Read at different times, the parts and the total can't both be right: neither is shown.
-        report.detailError =
-          "The tasks' records and the gateway's total don't agree yet, so where the tokens came from isn't shown.";
+        report.detailError = SOURCES_DISAGREE;
       else
         report.sources = {
           ...sources,
@@ -665,8 +668,14 @@ export class UsageEngine {
           }),
         );
         if (result?.hasMore === true) partial = true;
-        return { key: task.key, runs: runsOfHistory(result?.messages, range) };
-      } catch {
+        const runs = runsOfHistory(result?.messages, range);
+        // A history whose runs come to more than its task's own figure was read at another
+        // moment: none of the sources can be set beside the total.
+        if (runs.reduce((sum, run) => sum + run.tokens, 0) > task.total)
+          throw new Error(SOURCES_DISAGREE);
+        return { key: task.key, runs };
+      } catch (error) {
+        if (error instanceof Error && error.message === SOURCES_DISAGREE) throw error;
         partial = true;
         return { key: task.key, runs: [] };
       }

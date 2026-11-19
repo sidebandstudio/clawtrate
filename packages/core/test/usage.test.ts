@@ -674,7 +674,7 @@ function fakeGateway(options: { identity?: boolean; meddle?: number; counting?: 
                 ]
               : [
                   { key: "agent:marlow:main", usage: totals(400, 0) },
-                  { key: "agent:marlow:other", usage: totals(800, 0) },
+                  { key: "agent:marlow:other", usage: totals(1300, 0) },
                 ],
           cacheStatus: fresh,
         };
@@ -1213,7 +1213,7 @@ describe("the usage engine", () => {
     });
     expect(report.figure.tokens.total).toBe(1700);
     expect(report.tasks?.map((t) => [t.key, t.total])).toEqual([
-      ["agent:marlow:other", 800],
+      ["agent:marlow:other", 1300],
       ["agent:marlow:main", 400],
     ]);
     // m1 (a person's, 200) and m3 (500) are people's; m2 (200) is the run Pip's send names, and
@@ -1439,6 +1439,42 @@ describe("the usage engine", () => {
     expect(opposite.sources).toBeNull();
     expect(opposite.detailError).toMatch(/don't agree yet/);
     three.engine.onClose();
+  });
+
+  it("F-237: a task whose history comes to more than its own figure keeps the sources from being shown", async () => {
+    const gateway = fakeGateway();
+    const T = Date.UTC(2026, 10, 19, 6);
+    const apart: typeof gateway.request = async (method, raw) => {
+      if (method === "usage.cost")
+        return { updatedAt: 1, totals: totals(120, 80), cacheStatus: fresh };
+      if (method === "sessions.usage")
+        return {
+          updatedAt: 1,
+          cacheStatus: fresh,
+          totals: totals(120, 80),
+          sessions: [
+            { key: "agent:otto:a", usage: totals(60, 40) },
+            { key: "agent:otto:b", usage: totals(60, 40) },
+          ],
+        };
+      if (method === "chat.history")
+        // Task A is listed at 100 tokens, but its history, read later, holds a 150-token run.
+        return (raw as { sessionKey: string }).sessionKey === "agent:otto:a"
+          ? { messages: [person("a1", T), assistant("a1", T + 1, 150)], hasMore: false }
+          : { messages: [], hasMore: false };
+      return gateway.request(method, raw);
+    };
+    const { engine } = engineOn({ ...gateway, request: apart });
+    const report = await reportOf(engine, {
+      botId: "otto",
+      period: "week",
+      timeZone: NY,
+      detail: true,
+      bots: [],
+    });
+    expect(report.sources).toBeNull();
+    expect(report.detailError).toMatch(/don't agree yet/);
+    engine.onClose();
   });
 
   it("F-237: a task list the gateway capped says so, and the sources read from it are partial", async () => {
