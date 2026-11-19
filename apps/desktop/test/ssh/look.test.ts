@@ -11,6 +11,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   LOOK_SCRIPT_BODY,
   lookScript,
+  MAX_LOOK_NOISE,
+  MAX_LOOK_OUTPUT,
   parseGatewayStatus,
   parseLookOutput,
   sameService,
@@ -124,7 +126,11 @@ describe("the LOOK's output, parsed in memory", () => {
       wellFormed().replace(`{"k":"end","id":"${ID}"}`, `{"k":"end","id":"x"}`),
       "malformed",
     ],
-    ["too much output", wellFormed([`{"k":"pad","v":"${"A".repeat(70000)}"}`]), "too-large"],
+    [
+      "too much output",
+      wellFormed([`{"k":"pad","v":"${"A".repeat(MAX_LOOK_OUTPUT)}"}`]),
+      "too-large",
+    ],
     [
       "a decoded output over the limit",
       wellFormed([`{"k":"status-clawtrate","exit":0,"v":"${b64("x".repeat(33 * 1024))}"}`]),
@@ -177,6 +183,52 @@ describe("the LOOK's output, parsed in memory", () => {
     expect(broken).toMatchObject({
       ok: true,
       facts: { gateways: [{ profile: "default", unreadable: true }] },
+    });
+  });
+});
+
+describe("the LOOK's output limit", () => {
+  /** A status of valid JSON that is exactly `bytes` long. */
+  const statusOf = (bytes: number) => {
+    const status = JSON.parse(status_()) as Record<string, unknown>;
+    status.pad = "";
+    status.pad = "x".repeat(bytes - JSON.stringify(status).length);
+    return JSON.stringify(status);
+  };
+  const largest = (noise: string) =>
+    noise +
+    [
+      `{"k":"begin","id":"${ID}"}`,
+      `{"k":"uname","s":"${b64("x".repeat(256))}","m":"${b64("x".repeat(256))}","n":"${b64("x".repeat(256))}"}`,
+      `{"k":"program","i":4}`,
+      `{"k":"version","v":"${b64("v".repeat(32 * 1024))}","exit":255}`,
+      `{"k":"status-default","v":"${b64(statusOf(32 * 1024))}","exit":0}`,
+      `{"k":"status-clawtrate","v":"${b64(statusOf(32 * 1024))}","exit":0}`,
+      `{"k":"signs","state":1,"launchd":1,"systemd":1,"cstate":1,"claunchd":1,"csystemd":1}`,
+      `{"k":"end","id":"${ID}"}`,
+      "",
+    ].join("\n");
+
+  it("is the largest whole LOOK the script can print, plus an allowance for login noise", () => {
+    // 32 KiB is 43,692 characters of base64; 256 bytes, 344.
+    // begin 58 + uname 1,067 + program 22 + three program records of 43,735 + signs 85 + end 56
+    // = 132,493 characters, and 16,384 more for what login files print before the begin line.
+    expect(MAX_LOOK_NOISE).toBe(16 * 1024);
+    expect(MAX_LOOK_OUTPUT).toBe(132493 + 16384);
+    const noise = "x".repeat(MAX_LOOK_NOISE - 1) + "\n";
+    const out = largest(noise);
+    expect(out.length).toBeLessThanOrEqual(MAX_LOOK_OUTPUT);
+    // Both profiles' statuses at the script's own limit, beside a version at its limit too.
+    expect(parseLookOutput(out, ID)).toMatchObject({
+      ok: true,
+      facts: { gateways: [{ profile: "default" }, { profile: "clawtrate" }] },
+    });
+  });
+
+  it("is too large when login files print more than their allowance before the begin line", () => {
+    expect(parseLookOutput(largest("x".repeat(MAX_LOOK_NOISE) + "\n"), ID)).toEqual({
+      ok: false,
+      reason: "too-large",
     });
   });
 });

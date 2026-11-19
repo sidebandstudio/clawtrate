@@ -217,7 +217,7 @@ On macOS and Linux Clawtrate can use a selected key-agent socket to sign in, wit
 
 **The account, confirmed before anything runs there.** "Look there" opens the host's dialog "Look for OpenClaw as you@devbox.example, port 22?", with the detail "This uses the remote account's SSH login environment." (rule 3). Cancel returns to the field, where the setup code and Advanced links stay.
 
-**The look over SSH.** Back, the title "Looking on you@devbox.example", and a step list: "Reaching devbox", "Finding OpenClaw", "Checking its version", "Asking the gateway". The host runs `ssh -F <its file> <fixed options> -- clawtrate-route-<id> /bin/sh -s` with the LOOK script on standard input (section 19). The script looks only in fixed places, like section 4, prints one JSON line per fact, and stops after 30 s. The host reads at most 64 KiB of its output and validates each fact.
+**The look over SSH.** Back, the title "Looking on you@devbox.example", and a step list: "Reaching devbox", "Finding OpenClaw", "Checking its version", "Asking the gateway". The host runs `ssh -F <its file> <fixed options> -- clawtrate-route-<id> /bin/sh -s` with the LOOK script on standard input (section 19). The script looks only in fixed places, like section 4, prints one JSON line per fact, and stops after 30 s. The host reads at most the largest whole output the script can print, plus a bounded allowance for what login files print first, and validates each fact.
 
 **The three failures.** `ssh` exits with 255 for all three; the host tells them apart from its error output, in memory, and keeps only the category and the one cause in brackets (research §7). Each failure replaces the step list with a note with a direct "Advanced" link, and the field stays filled.
 
@@ -577,7 +577,7 @@ Host clawtrate-route-<id>
 - CODE runs `openclaw qr --json --voice-node --url "ws://127.0.0.1:$port"` for the selected profile.
 - START and STOP follow the same pattern, one fixed OpenClaw command each.
 
-**Remote output**: at most 64 KiB per script and 30 s, parsed line by line as JSON; a line that isn't valid JSON of the expected shape ends the step as "Can't tell".
+**Remote output**: bounded per script (for the LOOK, its largest whole output and a separate allowance for login noise) and 30 s, parsed line by line as JSON; a line that isn't valid JSON of the expected shape ends the step as "Can't tell".
 
 **What the host keeps**: routes (section 2), each with its own device token, its pinned key in Clawtrate's own known-hosts file, and the gateway's identity; the records of installs and started gateways. Of a failed step it keeps only the typed record: step, error category and exit code. Bootstrap and device credentials stay out of tracking, snapshots and child environments.
 

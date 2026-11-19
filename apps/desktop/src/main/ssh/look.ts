@@ -114,8 +114,37 @@ export type LookParse =
   | { ok: true; facts: LookFacts; noiseLines: number }
   | { ok: false; reason: "no-begin" | "no-end" | "malformed" | "too-large" | "incomplete" };
 
-export const MAX_LOOK_OUTPUT = 64 * 1024;
-const MAX_DECODED = 32 * 1024;
+/** What the script keeps of one program's answer (`b64 32768`), and of each `uname` value (`b64 256`). */
+const MAX_PROGRAM_BYTES = 32 * 1024;
+const MAX_UNAME_BYTES = 256;
+const MAX_DECODED = MAX_PROGRAM_BYTES;
+const base64Chars = (bytes: number) => Math.ceil(bytes / 3) * 4;
+/** One line the script prints, at its largest: its fixed characters, its values and its line break. */
+const lineChars = (fixed: string, values: number) => fixed.length + values + 1;
+
+/**
+ * The largest whole LOOK the script can print, line by line. 32 KiB is 43,692
+ * characters of base64 and 256 bytes are 344, so: begin 58 + uname 1,067 +
+ * program 22 + three program records (version and both profiles' statuses,
+ * each counted with the longest key and a three-digit exit) of 43,735 + signs
+ * 85 + end 56 = 132,493 characters.
+ */
+const MAX_LOOK_FACTS =
+  lineChars('{"k":"begin","id":""}', 36) +
+  lineChars('{"k":"uname","s":"","m":"","n":""}', 3 * base64Chars(MAX_UNAME_BYTES)) +
+  lineChars('{"k":"program","i":4}', 0) +
+  3 * lineChars('{"k":"status-clawtrate","v":"","exit":255}', base64Chars(MAX_PROGRAM_BYTES)) +
+  lineChars(
+    '{"k":"signs","state":1,"launchd":1,"systemd":1,"cstate":1,"claunchd":1,"csystemd":1}',
+    0,
+  ) +
+  lineChars('{"k":"end","id":""}', 36);
+
+/** What login start-up files may print before the begin line: a bound of its own. */
+export const MAX_LOOK_NOISE = 16 * 1024;
+
+/** The most the host reads of a LOOK: the largest whole LOOK and the noise allowance, 148,877. */
+export const MAX_LOOK_OUTPUT = MAX_LOOK_FACTS + MAX_LOOK_NOISE;
 
 const VERSION = /^OpenClaw (\d{4})\.(\d{1,2})\.(\d{1,3})( \(([0-9a-f]{7,12})\))?$/;
 const GATEWAY_VERSION = /^(\d{4})\.(\d{1,2})\.(\d{1,3})$/;
@@ -236,6 +265,9 @@ export function parseLookOutput(stdout: string, requestId: string): LookParse {
   const lines = stdout.split("\n").map((line) => line.replace(/\r$/, ""));
   const begin = lines.findIndex((line) => line === `{"k":"begin","id":"${requestId}"}`);
   if (begin === -1) return { ok: false, reason: "no-begin" };
+  // What login files printed before the begin line has its own allowance.
+  const noise = lines.slice(0, begin).reduce((sum, line) => sum + line.length + 1, 0);
+  if (noise > MAX_LOOK_NOISE) return { ok: false, reason: "too-large" };
   const facts: LookFacts = {
     system: null,
     program: null,

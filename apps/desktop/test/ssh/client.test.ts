@@ -15,6 +15,7 @@ import { parseDestination } from "../../src/main/ssh/destination.ts";
 import { AppKnownHosts, fingerprintOf } from "../../src/main/ssh/known-hosts.ts";
 import { routeConfigText } from "../../src/main/ssh/route-config.ts";
 import type { Spawn } from "../../src/main/ssh/run.ts";
+import { MAX_LOOK_OUTPUT } from "../../src/main/ssh/look.ts";
 import { SshTransport } from "../../src/main/ssh/transport.ts";
 import { productionWorld, type SshWorld } from "../../src/main/ssh/world.ts";
 import { tempDir, testEnv } from "./harness.ts";
@@ -439,16 +440,17 @@ describe.skipIf(process.platform === "win32")("the ssh client", () => {
     });
   });
 
-  it("counts the LOOK's output in bytes: multibyte noise past 64 KiB is too much", async () => {
+  it("counts the LOOK's output in bytes: multibyte noise past the limit is too much", async () => {
     const world = worldWith("OpenSSH_9.9p2, LibreSSL 3.3.6", "darwin", "bytes");
-    // 40,000 two-byte characters: 80,000 bytes, though fewer than 65,536 characters.
+    // Two-byte characters: more bytes than the limit, though fewer characters.
+    const count = Math.ceil(MAX_LOOK_OUTPUT * 0.6);
     writeFileSync(
       world.ssh,
       [
         "#!/bin/sh",
         'if [ "$1" = "-V" ]; then echo "OpenSSH_9.9p2, LibreSSL 3.3.6" >&2; exit 0; fi',
         "cat >/dev/null",
-        `printf '${"é".repeat(40000)}\\n'`,
+        `printf '${"é".repeat(count)}\\n'`,
         "exit 0",
         "",
       ].join("\n"),
