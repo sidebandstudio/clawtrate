@@ -6,6 +6,7 @@ import {
   choiceOf,
   MachinesEngine,
   MAX_NODES,
+  MAX_PATH_CHARS,
   readBrowserSettings,
   readCommandPlace,
   readDevices,
@@ -477,6 +478,29 @@ describe("where a bot runs: the engine", () => {
     expect(pip.sameSetting.workspace).toEqual(["marlow"]);
     const otto = await engine(gw).readPlacement("otto");
     expect(otto.sameSetting.workspace).toEqual([]);
+  });
+
+  it("F-272: workspace paths are kept whole: a shared long prefix is not the same setting, and an oversize one is unavailable", async () => {
+    const prefix = `/srv/${"p".repeat(1_020)}`;
+    const ottoPath = `${prefix}/otto`;
+    const pipPath = `${prefix}/pip`;
+    const gw = gateway({
+      config: {
+        agents: {
+          entries: {
+            otto: { workspace: ottoPath },
+            pip: { workspace: pipPath },
+            marlow: { workspace: `/${"x".repeat(MAX_PATH_CHARS)}` },
+          },
+        },
+      },
+    });
+    expect(ottoPath.slice(0, 1_024)).toBe(pipPath.slice(0, 1_024));
+    const otto = await engine(gw).readPlacement("otto");
+    expect(otto.workspace).toBe(ottoPath);
+    expect(otto.sameSetting.workspace).toEqual([]);
+    expect((await engine(gw).readPlacement("pip")).workspace).toBe(pipPath);
+    expect((await engine(gw).readPlacement("marlow")).workspace).toBeNull();
   });
 
   it("F-273: the browser is the stored tool lists and the computer plugin's profile, and nothing more", () => {

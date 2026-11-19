@@ -314,9 +314,9 @@ test("F-047: with coder denied to Otto, a read-only connection sees coder denied
 test("F-274: admin chooses a new workspace folder for Otto; the gateway creates it and reads it back; on media-box a folder is not supported", async () => {
   const page = writer.page;
   await runsOn(page);
-  await expect(page.getByTestId("runs-on-node-folder")).toContainText(
-    "A folder on media-box: Not supported on this machine.",
-  );
+  await expect(
+    page.getByText("This control sets the bot's workspace in the gateway's settings."),
+  ).toBeVisible();
   const moved = join(openInstance(INSTANCE).stateDir, "workspaces", `otto-moved-${Date.now()}`);
   expect(existsSync(moved)).toBe(false);
   await page.getByRole("button", { name: "Change…" }).click();

@@ -400,17 +400,12 @@ export function RunsOnPage({
               <CopyValue value={placement.workspace} label="Copy folder" />
             </>
           ) : (
-            "Not reported"
+            "Workspace path unavailable here"
           )}
         </Fact>
       </dl>
       <p className="b-hint">{botName}'s workspace, as the gateway reports it.</p>
-      {onNode && (
-        <p className="b-hint" data-testid="runs-on-node-folder">
-          A folder on {machineName}: Not supported on this machine. Change… sets {botName}'s
-          workspace in the gateway's settings.
-        </p>
-      )}
+      <p className="b-hint">This control sets the bot's workspace in the gateway's settings.</p>
       {admin && editing === null && (
         <div className="b-actions">
           <button
@@ -468,10 +463,8 @@ export function RunsOnPage({
         </Fact>
       </dl>
       <p className="b-hint" data-testid="runs-on-browser-choice">
-        As stored in the gateway's settings. <Mark kind="shown" />{" "}
-        {onNode
-          ? `A browser profile on ${machineName}: Not supported on this machine.`
-          : "Choosing or creating a browser profile isn't offered here."}
+        As stored in the gateway's settings. <Mark kind="shown" /> Choosing or creating a browser
+        profile isn't offered here.
       </p>
 
       <h4 className="b-group">What {botName}'s settings name</h4>

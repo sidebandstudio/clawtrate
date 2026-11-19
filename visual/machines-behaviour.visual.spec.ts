@@ -45,6 +45,14 @@ test("F-046: choosing where Otto's commands run is announced only once the answe
   const select = page.getByTestId("runs-on-machine");
   await expect(select).toHaveAccessibleName("Otto's command machine: media-box · Connected");
   await expect(page.getByTestId("runs-on-page")).not.toContainText("enforces");
+  // The workspace and browser lines claim nothing about the machine named for commands.
+  await expect(page.getByTestId("runs-on-page")).not.toContainText("Not supported on this machine");
+  await expect(
+    page.getByText("This control sets the bot's workspace in the gateway's settings."),
+  ).toBeVisible();
+  await expect(page.getByTestId("runs-on-browser-choice")).toContainText(
+    "Choosing or creating a browser profile isn't offered here.",
+  );
   await select.click();
   await page.getByRole("menuitemradio", { name: "The gateway's machine" }).click();
   // The fixture answers after 300 ms; nothing is announced before.

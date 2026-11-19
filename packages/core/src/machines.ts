@@ -31,7 +31,7 @@ export const MAX_MACHINE_NAME_CHARS = 128;
 /** A last-seen reason (`connect`, …). */
 export const MAX_SEEN_REASON_CHARS = 64;
 /** A path the gateway reports or a person types. */
-export const MAX_PATH_CHARS = 1024;
+export const MAX_PATH_CHARS = 4096;
 /** A reason or an error. */
 export const MAX_REASON_CHARS = 512;
 
@@ -461,12 +461,19 @@ export function readDevices(
   return { devices: all.slice(0, MAX_DEVICES), omitted: Math.max(0, all.length - MAX_DEVICES) };
 }
 
+/** A workspace path whole, or null: never a prefix to compare or copy. */
+export function workspacePath(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" && value.length <= MAX_PATH_CHARS
+    ? value
+    : null;
+}
+
 /** `agents.list`: each bot's workspace folder as the gateway reports it. */
 export function readWorkspaces(value: unknown): Map<string, string> {
   const out = new Map<string, string>();
   for (const agent of list(rec(value).agents)) {
     const id = str(rec(agent).id);
-    const workspace = str(rec(agent).workspace, MAX_PATH_CHARS);
+    const workspace = workspacePath(rec(agent).workspace);
     if (id && workspace) out.set(id, workspace);
   }
   return out;
@@ -595,7 +602,7 @@ export class MachinesEngine {
       configHash: hash,
       configActive: active,
       commands,
-      workspace: workspace === null ? null : cap(workspace, MAX_PATH_CHARS),
+      workspace,
       browser: readBrowserSettings(config, botId),
       sameSetting,
       inventory: {
@@ -822,13 +829,12 @@ export class MachinesEngine {
     this.requireWrite("admin", "Changing a bot's workspace");
     if (path === "") throw new PlacementWriteError("Enter a path.");
     const reported = async () =>
-      str(
+      workspacePath(
         rec(
           list(rec(await this.ctx.request("agents.list", {})).agents).find(
             (agent) => rec(agent).id === botId,
           ),
         ).workspace,
-        MAX_PATH_CHARS,
       );
     try {
       await this.ctx.request("agents.update", { agentId: botId, workspace: path });
