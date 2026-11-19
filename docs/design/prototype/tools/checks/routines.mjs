@@ -537,8 +537,14 @@ check("F-194 the Routines button says it needs an answer", (await label(p, "#rou
 await p.click('[data-r="away-pause"]');
 check("F-194 Pause them all pauses every routine", (await count(p, '.b-switch[aria-checked="true"]')) === 0 && !(await has(p, '[data-testid="away"]')));
 await p.close();
-p = await open("away=1&access=read");
+p = await open("away=1&access=write");
 check("F-357 below admin the card says pausing needs admin, and offers no pause", !(await has(p, '[data-r="away-pause"]')) && (await text(p, '[data-testid="away"]')).includes("Pausing them needs admin access."));
+await p.close();
+p = await open("away=1&access=read");
+check("F-194 a read-only connection can't keep the answer: no card, no dot", !(await has(p, '[data-testid="away"]')) && !(await has(p, "#routines-button .r-away-dot")) && (await label(p, "#routines-button")) === "Routines");
+await p.close();
+p = await open("away=1&prefs=none");
+check("F-194 without a durable identity the card says its answer stays on this device", (await text(p, '[data-testid="away-device"]')) === "This gateway can't keep your answer for your other devices, so Clawtrate keeps it on this one; another device may ask again.");
 await p.close();
 
 // Widths, themes, motion ------------------------------------------------------------------------

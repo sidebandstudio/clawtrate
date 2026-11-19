@@ -276,7 +276,8 @@
     runstate: P.get("runstate") || "",
     edit: P.get("edit") || "",
     editstate: P.get("editstate") || "",
-    away: P.get("away") === "1",
+    // A read-only connection can't write users.prefs, so it can't keep the answer: no card.
+    away: P.get("away") === "1" && P.get("access") !== "read",
     from: "list",
     starting: false,
     already: false,
@@ -475,7 +476,10 @@
       (isAdmin() ? button("Pause them all", 'data-r="away-pause"') : "") +
       button("Keep running, don't ask again", 'data-r="away-never"', "quiet") + `</div>` +
       (isAdmin() ? "" : `<small>Pausing them needs admin access.</small>`) +
-      `<small>If you don't answer, Clawtrate pauses them on Nov 25, the first time it is open with admin access on or after that day.</small></section>`
+      `<small>If you don't answer, Clawtrate pauses them on Nov 25, the first time it is open with admin access on or after that day.</small>` +
+      // prefs=none: users.prefs answered no_durable_identity, so the dates live on this device.
+      (P.get("prefs") === "none" ? `<small data-testid="away-device">This gateway can't keep your answer for your other devices, so Clawtrate keeps it on this one; another device may ask again.</small>` : "") +
+      `</section>`
     );
   }
   function renderList() {
