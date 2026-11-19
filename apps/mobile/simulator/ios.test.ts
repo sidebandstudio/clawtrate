@@ -673,7 +673,8 @@ describe("the iOS app", () => {
     activate();
     await steps("back-from-browser", [
       waitFor({ id: "transcript" }, 30_000),
-      see({ id: "task-line", text: lit(reading.title) }),
+      // Where it was: at the end of the task, the link it opened in view.
+      see(lit(AUTOLINK)),
       tap({ id: "back" }),
       waitFor({ id: "bot-tasks-main" }, 20_000),
       tap({ id: "back" }),
