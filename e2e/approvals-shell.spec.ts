@@ -259,9 +259,14 @@ test("F-171 F-164 F-432: a command the gateway warns about: the warning on the c
   await full.locator("summary").click();
   await expect(full.locator("summary")).toHaveText(/Show full request/);
 
+  // Inline code offers no reusable rule: the card offers Allow and Deny only.
+  await expect(card.locator('.request-actions[data-row="main"] button')).toHaveText([
+    "Allow",
+    "Deny",
+  ]);
   // Allowed once, the command runs: its card, opened while it runs, shows each line as the
   // gateway streams it, before the call completes.
-  await card.getByRole("button", { name: "Allow once" }).click();
+  await card.getByRole("button", { name: "Allow", exact: true }).click({ timeout: 15_000 });
   await expect(card.locator(".tag")).toHaveText("Allowed once", { timeout: 30_000 });
   const action = page.locator(".transcript details.card.action[data-kind='command']").last();
   await expect(action).toHaveAttribute("data-status", "running", { timeout: 30_000 });
