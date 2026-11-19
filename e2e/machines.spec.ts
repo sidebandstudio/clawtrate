@@ -149,44 +149,63 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
-  // Put back Otto's settings: its command placement, its deny list and its workspace.
-  if (admin) {
-    const cfg = await admin.request<{ hash: string }>("config.get", {}).catch(() => null);
-    const exec = (ottoTools.exec ?? {}) as Json;
-    const deny = ottoTools.deny as string[] | undefined;
-    if (cfg)
-      await admin.request("config.patch", {
-        raw: JSON.stringify({
-          agents: {
-            entries: {
-              otto: {
-                tools: {
-                  exec: { ...exec, host: exec.host ?? null, node: exec.node ?? null },
-                  deny: deny ?? null,
+  // Put back Otto's settings: its command placement, its deny list and its workspace. Only
+  // what beforeAll recorded is put back; a failure here is reported after everything is closed.
+  let restoreError: unknown = null;
+  if (admin && ottoTools) {
+    try {
+      const cfg = await admin.request<{ hash: string }>("config.get", {}).catch(() => null);
+      const exec = (ottoTools.exec ?? {}) as Json;
+      const deny = ottoTools.deny as string[] | undefined;
+      if (cfg)
+        await admin.request("config.patch", {
+          raw: JSON.stringify({
+            agents: {
+              entries: {
+                otto: {
+                  tools: {
+                    exec: { ...exec, host: exec.host ?? null, node: exec.node ?? null },
+                    deny: deny ?? null,
+                  },
                 },
               },
             },
-          },
-        }),
-        baseHash: cfg.hash,
-        // The list is replaced, or removed when Otto had none: either way its path is named.
-        replacePaths: ["agents.entries.otto.tools.deny"],
-      });
-    const back = (entry(await config(), "otto").tools ?? {}) as Json;
-    expect(back.exec ?? null, "Otto's command placement put back").toEqual(ottoTools.exec ?? null);
-    expect(back.deny ?? null, "Otto's deny list put back").toEqual(ottoTools.deny ?? null);
-    if (ottoWorkspace)
-      await admin
-        .request("agents.update", { agentId: "otto", workspace: ottoWorkspace })
-        .catch(() => {});
-    await admin.close();
+          }),
+          baseHash: cfg.hash,
+          // The list is replaced, or removed when Otto had none: either way its path is named.
+          replacePaths: ["agents.entries.otto.tools.deny"],
+        });
+      const back = (entry(await config(), "otto").tools ?? {}) as Json;
+      expect(back.exec ?? null, "Otto's command placement put back").toEqual(
+        ottoTools.exec ?? null,
+      );
+      expect(back.deny ?? null, "Otto's deny list put back").toEqual(ottoTools.deny ?? null);
+      if (ottoWorkspace)
+        await admin
+          .request("agents.update", { agentId: "otto", workspace: ottoWorkspace })
+          .catch(() => {});
+    } catch (error) {
+      restoreError = error;
+    }
   }
+  // Each resource is released on its own, so one failure leaves none of the others behind.
+  const steps: Array<() => unknown> = [() => admin?.close()];
   for (const host of [writer, reader]) {
     if (!host) continue;
-    await host.page.context().close();
-    await stopChild(host.child);
-    rmSync(host.data, { recursive: true, force: true });
+    steps.push(
+      () => host.page.context().close(),
+      () => stopChild(host.child),
+      () => rmSync(host.data, { recursive: true, force: true }),
+    );
   }
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      console.warn(`machines cleanup: ${String(error)}`);
+    }
+  }
+  if (restoreError) throw restoreError;
 });
 
 test("F-046 F-047: below admin every place shows, nothing can change, and the bar asks for admin only when the person asks", async () => {
