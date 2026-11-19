@@ -358,7 +358,7 @@ Under the facts (13, faint): "Nothing is asked for: no account and no model key.
 
 The step list shows elapsed time after 10 s on the running step. An install takes about a minute (research §6.2, §6.8; the times in the prototype are samples). When every step is done, the look's running card for the `clawtrate` profile appears, and Connect pairs as in section 7.
 
-**A failed step** is drawn failed, the steps after it stay waiting, and a `--danger` note under the list says "**<the step's words> failed.**" and the fixed cause. "Show details" opens the step's typed record: step, error category, and numeric exit code. "Try again" (primary) is a new operation on the same computer, with a new host confirmation. Back returns to the not-found card.
+**A failed step** is drawn failed, the steps after it stay waiting, and a `--danger` note under the list says "**<the step's words> failed.**" and the fixed cause. "Show details" opens the step's typed record: step, error category, and numeric exit code. Back returns to the not-found card. Trying again is `todo` with Cancel (F-502): a new install refuses while anything this attempt made is there ("Nothing there before", above), and removing it waits until each attempt's ownership is proved (F-514).
 
 **Cancel** (`todo`, not in this version): the host's dialog "Stop setting up OpenClaw?", with the detail "Clawtrate will stop this setup and remove what it can verify this attempt created. It will list anything left." It reports only cleanup it verified.
 
@@ -615,7 +615,7 @@ The packages, in this order, each with checks of its security and failure cases 
 | A changed key                   | `hostkey-changed`       | the host's dialog with its checkbox                                                                      | `looking-there`                                            |
 | Another computer, nothing there | `there` (an empty host) | the host's account dialog, `looking-there`                                                               | `notfound-there`                                           |
 | This computer, nothing there    | `notfound`              | `install-confirm`, the host's dialog, `installing`                                                       | `found`                                                    |
-| A failed install, retried       | `install-failed`        | the host's dialog                                                                                        | `installing`                                               |
+| A failed install                | `install-failed`        | Back                                                                                                     | `notfound`                                                 |
 | Windows, this computer          | `first` on Windows      | "This computer"                                                                                          | `notfound-windows`, then "Use another computer" to `there` |
 | A pasted code                   | `code`                  | an invalid code (Connect unavailable), a valid one                                                       | `code-pairing`, naming the address                         |
 | The iPhone                      | `iphone`                | `iphone-review`                                                                                          | `iphone-waiting`                                           |

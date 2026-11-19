@@ -524,7 +524,6 @@
         ["Start and check", "waiting"],
       ]) +
       note("danger", "Install Node.js and OpenClaw failed.", "The installer didn't use the checked Node.js.") +
-      actions(button("Try again", { variant: "primary", host: "install" })) +
       disclosure("Show details", sentenceFacts([["Step", "Install Node.js and OpenClaw"], ["Error", "Node.js check"], ["Exit status", "1"]])),
   };
 

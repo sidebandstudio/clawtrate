@@ -152,7 +152,7 @@ await walk(
   ],
   "found",
 );
-await walk("a failed install, retried: a new host confirmation on the same computer", "install-failed", [[btn("Try again"), null], [hostIs("install"), null], [hostConfirm, "installing"]]);
+await walk("a failed install: Back to the not-found card", "install-failed", [[link("Back"), "notfound"]]);
 await walk(
   "Windows, this computer: straight to Advanced or another computer",
   "first&os=windows",
@@ -205,7 +205,7 @@ const WORDS = {
   "notfound-there": ["On you@devbox.example", "Clawtrate didn't find OpenClaw here", "Setting OpenClaw up on another computer isn't offered in this version.", "Use a setup code", "Advanced"],
   "install-confirm": ["Set up OpenClaw on this computer", "OpenClaw 2026.10.6, the version this Clawtrate is tested with, with its own copy of Node.js 24.22.1", "Clawtrate puts OpenClaw's program and gateway data in its own folders and adds a user service. npm can also write its cache and OpenClaw can write service logs.", "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.", "as a LaunchAgent that starts when you log in", "Nothing is asked for: no account and no model key.", "Set up OpenClaw…"],
   installing: ["Setting up OpenClaw", "Download and check OpenClaw 2026.10.6", "Install Node.js and OpenClaw", "Node.js 24.22.1, checked", "Set up the gateway", "Start and check", "The times are samples."],
-  "install-failed": ["Install Node.js and OpenClaw failed.", "The installer didn't use the checked Node.js.", "Try again", "Show details", "Error", "Node.js check", "Exit status"],
+  "install-failed": ["Install Node.js and OpenClaw failed.", "The installer didn't use the checked Node.js.", "Show details", "Error", "Node.js check", "Exit status"],
   approve: ["Waiting for the gateway's owner.", "On devbox, approve this request for the default profile:", "openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942", "Request e5eb4aa8", "Check now", "Cancel request"],
   restoring: ["Restoring the connection to devbox", "· showing saved messages", "Retry now"],
   "route-changed": ["This address now leads to a different gateway", "Review"],
@@ -301,7 +301,7 @@ await offers("screen=notfound-windows", "Windows: no setup, no look; Advanced an
 await offers("screen=first&os=windows", "Windows first screen: This computer doesn't start a look", () => document.querySelector("[data-choice]").getAttribute("href").includes("screen=notfound-windows"));
 await offers("screen=notfound-there", "another computer, nothing there: no setup offered", () => !/Set up OpenClaw/.test(document.getElementById("root").textContent));
 await offers("screen=installing", "installing: no Cancel in this version", () => !/Cancel/.test(document.getElementById("root").textContent));
-await offers("screen=install-failed", "a failed install: retry asks the host, details are fixed copy", () => document.querySelector('[data-host="install"]') !== null && !/event|said/i.test(document.querySelector(".s-disclosure").textContent));
+await offers("screen=install-failed", "a failed install: no Try again in this version, details are fixed copy", () => !document.querySelector("[data-host]") && !/Try again/.test(document.getElementById("root").textContent) && !/event|said/i.test(document.querySelector(".s-disclosure").textContent));
 await offers("screen=install-failed", "a failed step is drawn failed and the later ones wait", () => [...document.querySelectorAll(".s-steps li")].map((li) => li.dataset.state).join(",") === "done,failed,waiting,waiting");
 await offers("screen=settings", "settings: Tailscale is read-only, with OpenClaw's instructions; no switch", () => !document.querySelector('[role="switch"]') && [...document.querySelectorAll("a")].some((a) => a.href === "https://docs.openclaw.ai/gateway/tailscale"));
 await offers("screen=settings", "settings: no removal of OpenClaw in this version", () => !/Remove OpenClaw/.test(document.getElementById("root").textContent));
