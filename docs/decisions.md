@@ -592,3 +592,5 @@ The host side of "Another computer" (`docs/design/setup.md` sections 5, 8 and 19
 - The launch check's fuse reader (`apps/desktop/packaging/fuse-check.ts`) hands the executable's path to `@electron/fuses`, which takes any path containing `.app` for a macOS bundle. A Windows install folder whose path contains `.app` (`Clawtrate.apps`, say) makes it look for a macOS Electron Framework and fail with `ENOENT`. CI's install folder does not.
 - The Expo app has not been started; `apps/mobile` does not exist yet.
 - After a reload, a T3 Code call keeps its own card and Raw, and joins no thread, until the gateway stores which tool server made it: history keeps no tool server or tool for a call.
+- The scripted T3 Code stand-in (`tools/dev-gateway/src/t3-code-mcp.ts`) keeps its threads, their runs and items, and queued messages until its instance is reset; it has no lifetime budget and no test at a capacity boundary.
+- The T3 Code card's 200 ms cross-fade has no measured duration; the stand-in's unsupported workspace and interaction options, and the merged-base recovery validator, are still follow-up work.
