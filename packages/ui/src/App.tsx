@@ -107,6 +107,7 @@ export function App({
           connection={state.connection}
           info={info}
           accounts={state.accounts}
+          checkIns={state.checkIns}
           bots={state.bots}
           onClose={closeSettings}
         />

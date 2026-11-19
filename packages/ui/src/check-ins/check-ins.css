@@ -1,0 +1,132 @@
+/* A bot's check-ins (automation.md section 13): the block from the design's
+   `.r-checkins`, under names of its own until the Routines view takes it. */
+
+.ci-intro {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.ci-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.ci-block {
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+}
+
+.ci-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 30px;
+}
+
+.ci-head .ci-avatar {
+  width: 24px;
+  height: 24px;
+  flex: none;
+}
+
+.ci-head h4 {
+  flex: 0 0 auto;
+  max-width: 55%;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* On a narrow screen the name keeps its room and this gives way: the sentence below says it whole. */
+.ci-summary {
+  flex: 0 1 auto;
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.ci-head .button {
+  flex: none;
+}
+
+.ci-block p {
+  margin: 6px 0 0;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.ci-block p.ci-faint,
+p.ci-faint {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.ci-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* The body scrolls; its parts keep their height instead of shrinking into it. */
+.ci-body > * {
+  flex: none;
+}
+
+.ci-every {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+}
+
+.ci-hint {
+  margin: 6px 4px 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.ci-prompt summary {
+  cursor: pointer;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.ci-label {
+  display: block;
+  margin: var(--space-2) 4px 6px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.ci-prompt textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+/* The choices' sentences are whole sentences here, never cut. */
+.ci-body .b-choice-sub {
+  white-space: normal;
+}
+
+.ci-prompt textarea.input {
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  line-height: 1.45;
+}

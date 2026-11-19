@@ -2,20 +2,22 @@
 // panes: the list of sections, and the chosen one. Its Gateway pane shows the
 // connection as it is (address, state, this device, the scopes the gateway
 // granted) and offers Reconnect and Disconnect; Accounts lists the gateway's
-// accounts. A modal dialog: focus stays inside it, Escape closes it, and
-// focus returns to where it was.
+// accounts; Check-ins shows each bot's check-ins. A modal dialog: focus stays
+// inside it, Escape closes it, and focus returns to where it was.
 
 import {
   INTERACTIVE_SCOPES,
   scopeSatisfied,
   type AccountsState,
   type Bot,
+  type CheckInsState,
   type ConnectionState,
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
+import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
 import { Dialog } from "./bots/Dialog.tsx";
 import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
@@ -65,10 +67,11 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = "gateway" | "accounts";
+type Section = "gateway" | "accounts" | "checkins";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
+  ["checkins", "Check-ins"],
 ];
 /** ⌘, opens on the section last shown, Gateway the first time. */
 const SHOWN_LAST = "settings-section";
@@ -77,12 +80,14 @@ export function Settings({
   connection,
   info,
   accounts,
+  checkIns,
   bots,
   onClose,
 }: {
   connection: ConnectionState;
   info: HostInfo;
   accounts: AccountsState;
+  checkIns: CheckInsState | undefined;
   bots: readonly Bot[];
   onClose: () => void;
 }) {
@@ -189,6 +194,14 @@ export function Settings({
   );
 
   const accountsSection = useAccountsSection({ accounts, bots, connection, info, announce, toNav });
+  const checkInsSection = useCheckInsSection({
+    checkIns,
+    bots,
+    connection,
+    info,
+    announce,
+    toNav,
+  });
 
   const gatewayPane = (
     <>
@@ -321,7 +334,9 @@ export function Settings({
     const view =
       section === "accounts" && accountsSection.view
         ? accountsSection.view
-        : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+        : section === "checkins"
+          ? checkInsSection
+          : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">
