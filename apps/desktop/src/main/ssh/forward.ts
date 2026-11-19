@@ -5,6 +5,8 @@
 // waits until its process is gone. The process, the LOOK, the port picker and
 // the clock are passed in, so the state machine is tested without `ssh`.
 
+import { MAX_FORWARD_LISTENERS } from "@clawtrate/core";
+
 import type { SshFailure, UnreachableCause } from "./ssh-output.ts";
 
 /** Seconds before each try after a failure: 1, 2, 4, 8 and 16, then every 30. */
@@ -111,7 +113,9 @@ export class ForwardSupervisor {
     return this.current;
   }
 
+  /** At most `MAX_FORWARD_LISTENERS` at once. */
   onState(listener: (state: ForwardState) => void): () => void {
+    if (this.listeners.size >= MAX_FORWARD_LISTENERS) throw new Error("Too many listeners.");
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }

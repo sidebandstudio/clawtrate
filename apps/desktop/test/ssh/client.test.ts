@@ -97,7 +97,13 @@ describe.skipIf(process.platform === "win32")("the ssh client", () => {
   });
 
   it("is not supported here when the program is missing, and nothing else runs", async () => {
-    const transport = new SshTransport(worldWith(null, "win32", "missing"));
+    const started: string[][] = [];
+    const transport = new SshTransport(worldWith(null, "win32", "missing"), {
+      spawn: (_file, args) => {
+        started.push([...args]);
+        throw new Error("nothing may start");
+      },
+    });
     writeFileSync(transport.world.personConfig, "Host devbox\n  HostName devbox.example\n");
     const route = transport.prepareRoute("1", "devbox");
     if (!route.ok) throw new Error();
@@ -111,7 +117,7 @@ describe.skipIf(process.platform === "win32")("the ssh client", () => {
       kind: "not-supported-here",
       reason: "ssh-missing",
     });
-    expect(transport.processes.started).toEqual([]);
+    expect(started).toEqual([]);
   });
 
   it("writes Windows paths with forward slashes, and uses Windows' bundled ssh in production", () => {

@@ -6,6 +6,8 @@
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 
+import { MAX_HOST_KEY_CHARS } from "@clawtrate/core";
+
 const KEY_TYPES = new Set([
   "ssh-ed25519",
   "ssh-rsa",
@@ -49,7 +51,7 @@ export function parseKnownHostsLine(raw: string): (HostKey & { hosts: string }) 
   if (fields.length < 3) return null;
   const [hosts, type, key] = fields as [string, string, string];
   if (!KEY_TYPES.has(type)) return null;
-  if (!/^[A-Za-z0-9+/]{16,8192}={0,2}$/.test(key)) return null;
+  if (key.length > MAX_HOST_KEY_CHARS || !/^[A-Za-z0-9+/]{16,}={0,2}$/.test(key)) return null;
   // The blob names its own type first; a line whose blob says otherwise is not a key of that type.
   const blob = Buffer.from(key, "base64");
   if (blob.length < 4) return null;

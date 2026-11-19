@@ -2,6 +2,7 @@
 // test's own: every state reported, the stated back-off, a lost port race, a
 // changed key, another gateway on the port, a long outage, and closing.
 
+import { MAX_FORWARD_LISTENERS } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -103,6 +104,15 @@ describe("the forward's back-off", () => {
     expect([1, 2, 3, 4, 5, 6, 7, 20].map(backoffMs)).toEqual([
       1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000,
     ]);
+  });
+});
+
+describe("the forward's listeners", () => {
+  it("are bounded", () => {
+    const h = harness();
+    // The harness holds one already.
+    for (let i = 1; i < MAX_FORWARD_LISTENERS; i++) h.forward.onState(() => {});
+    expect(() => h.forward.onState(() => {})).toThrow();
   });
 });
 

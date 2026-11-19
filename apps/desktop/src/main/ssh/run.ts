@@ -4,6 +4,8 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 
+import { MAX_SSH_PROCESSES } from "@clawtrate/core";
+
 import { childEnv, type SshWorld } from "./world.ts";
 
 export type Spawn = (file: string, args: readonly string[], env: NodeJS.ProcessEnv) => ChildProcess;
@@ -14,11 +16,9 @@ const closed = new WeakSet<ChildProcess>();
 export const defaultSpawn: Spawn = (file, args, env) =>
   spawn(file, args, { env, shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
 
-/** The processes this module started and has not yet seen end. */
+/** The processes this module started and has not yet seen end, at most `MAX_SSH_PROCESSES`. */
 export class ProcessTable {
   readonly running = new Set<number>();
-  /** Every PID ever started, for a check that each has ended. */
-  readonly started: number[] = [];
   readonly spawnProcess: Spawn;
 
   constructor(spawnProcess: Spawn = defaultSpawn) {
@@ -26,12 +26,12 @@ export class ProcessTable {
   }
 
   start(world: SshWorld, args: readonly string[]): ChildProcess {
+    if (this.running.size >= MAX_SSH_PROCESSES) throw new Error("Too many ssh processes at once.");
     const child = this.spawnProcess(world.ssh, args, childEnv(world));
     const pid = child.pid;
     child.once("close", () => closed.add(child));
     if (pid !== undefined) {
       this.running.add(pid);
-      this.started.push(pid);
       child.once("close", () => this.running.delete(pid));
     }
     return child;

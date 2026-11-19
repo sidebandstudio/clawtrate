@@ -9,6 +9,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { createServer } from "node:net";
 import { join } from "node:path";
 
+import { MAX_SSH_CAPTURES, MAX_SSH_FORWARDS } from "@clawtrate/core";
+
 import {
   accountText,
   isGatewayPort,
@@ -432,11 +434,24 @@ export class SshTransport {
         at: this.now(),
         replaces,
       };
-      this.captures.set(capture.id, capture);
+      this.keepCapture(capture);
       return { ok: true, capture };
     } finally {
       rmSync(file, { force: true });
     }
+  }
+
+  /** Keeps a capture: expired ones are dropped, then the oldest past `MAX_SSH_CAPTURES`. */
+  private keepCapture(capture: Capture): void {
+    for (const [id, kept] of this.captures) {
+      if (this.now() - kept.at > CAPTURE_TTL_MS) this.captures.delete(id);
+    }
+    while (this.captures.size >= MAX_SSH_CAPTURES) {
+      const oldest = this.captures.keys().next().value;
+      if (oldest === undefined) break;
+      this.captures.delete(oldest);
+    }
+    this.captures.set(capture.id, capture);
   }
 
   private shown(capture: Capture): ShownKey {
@@ -519,6 +534,7 @@ export class SshTransport {
   openForward(route: Route, gatewayPort: number, expected: GatewayService): ForwardSupervisor {
     if (!isGatewayPort(gatewayPort) || expected.port !== gatewayPort)
       throw new Error("Not a gateway port.");
+    if (this.forwards.size >= MAX_SSH_FORWARDS) throw new Error("Too many forwards at once.");
     const forward = new ForwardSupervisor({
       pickPort: freeLoopbackPort,
       start: (localPort) => this.startForward(route, localPort, gatewayPort),
