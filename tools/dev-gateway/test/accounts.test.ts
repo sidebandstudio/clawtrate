@@ -24,6 +24,7 @@ import {
 import {
   devConfig,
   lockOrder,
+  main,
   openInstance,
   PLUGIN_RULE,
   recordedStartOptions,
@@ -238,6 +239,67 @@ describe("the closed contract with accounts", () => {
       ["[]", false],
       ['[{"accounts":true}]', false],
       ['{"accounts":[true]}', false],
+    ] as const) {
+      rmSync(join(runDir, "start-options.json"), { force: true });
+      writeFileSync(join(runDir, "start-options.json"), text);
+      if (ok) expect(recordedStartOptions({ runDir })).toEqual(JSON.parse(text));
+      else expect(() => recordedStartOptions({ runDir })).toThrow(/not a record of start options/);
+    }
+  });
+});
+
+describe("local pairing at the gateway's default", () => {
+  const DEFAULT_PAIRING = { defaultLocalPairing: true } as const;
+  const config = () => devConfig("token", PORTS, STATE, [], DEFAULT_PAIRING);
+
+  it("leaves autoApproveLocal unset, and only that", () => {
+    const plain = devConfig("token", PORTS, STATE) as unknown as {
+      gateway: Record<string, unknown>;
+    };
+    const left = config() as unknown as { gateway: Record<string, unknown> };
+    expect(plain.gateway.nodes).toEqual({ pairing: { autoApproveLocal: false } });
+    expect(left.gateway.nodes).toBeUndefined();
+    const { nodes: _nodes, ...rest } = plain.gateway;
+    expect(left.gateway).toEqual(rest);
+    expect({ ...plain, gateway: undefined }).toEqual({ ...left, gateway: undefined });
+  });
+
+  it("is kept by the contract in both directions", () => {
+    expect(sandboxProblems(config(), PORTS, STATE, [], DEFAULT_PAIRING)).toEqual([]);
+    expect(sandboxProblems(config(), PORTS, STATE)).toEqual(["gateway.nodes is required"]);
+    const approving = config() as unknown as { gateway: Record<string, unknown> };
+    approving.gateway.nodes = { pairing: { autoApproveLocal: true } };
+    expect(sandboxProblems(approving, PORTS, STATE, [], DEFAULT_PAIRING)).toEqual([
+      "gateway.nodes is not allowed",
+    ]);
+    expect(sandboxProblems(approving, PORTS, STATE)).toEqual([
+      "gateway.nodes.pairing.autoApproveLocal must be false, found true",
+    ]);
+  });
+
+  it("is refused on the default instance before anything is touched", async () => {
+    const home = temp();
+    await expect(
+      start(openInstance(null, { home, runRoot: join(home, "run") }), DEFAULT_PAIRING),
+    ).rejects.toThrow(/default instance always requires explicit pairing/);
+    expect(readdirSync(home)).toEqual([]);
+  });
+
+  it("is refused by every command but start and up", async () => {
+    for (const command of ["status", "stop", "seed", "reset", "approve"]) {
+      await expect(
+        main([command, "--instance", "probe", "--default-local-pairing"], {}),
+      ).rejects.toThrow(`--default-local-pairing is a start option; ${command} does not take it`);
+    }
+  });
+
+  it("is read back from the record of start options", () => {
+    const runDir = temp();
+    for (const [text, ok] of [
+      ['{"defaultLocalPairing":true}', true],
+      ['{"accounts":true,"defaultLocalPairing":true}', true],
+      ['{"defaultLocalPairing":"yes"}', false],
+      ['{"defaultLocalPairing":true,"autoApproveLocal":true}', false],
     ] as const) {
       rmSync(join(runDir, "start-options.json"), { force: true });
       writeFileSync(join(runDir, "start-options.json"), text);

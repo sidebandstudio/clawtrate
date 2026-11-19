@@ -65,6 +65,14 @@ pnpm dev-gateway lock --instance acct --agent <bot> --provider acme acme:home
 
 A named instance can carry scripted provider accounts: two scripted providers on its own scripted model, labelled accounts of both in the shared store and one kept by Otto alone, a record of which account's credential reached the scripted model for every request, failures scripted per account, and scripted sign-ins (a link and a code, a browser sign-in with the code pasted back, one that finishes on the gateway's machine, one whose callback the gateway takes, an API key) through the gateway's own `models.authLogin`, and a Globex key through the gateway's own key method. `lock` and `unlock` set and clear a bot's one-account order through the gateway's command line. [`tools/dev-gateway/README.md`](../../tools/dev-gateway/README.md) explains all of it, the account checks and what the gateway did.
 
+## Local pairing at the gateway's default
+
+```bash
+pnpm dev-gateway start --instance pairing --default-local-pairing
+```
+
+Every instance sets `gateway.nodes.pairing.autoApproveLocal` to `false`, so a device's first pairing waits for approval even on loopback. `--default-local-pairing` leaves that one setting out of a named instance's config, at the gateway's own default, for research into what a first pairing on the gateway's own computer does when nobody has changed it ([`docs/research/setup-flow.md`](../research/setup-flow.md)). The contract follows: such an instance refuses the setting, and an ordinary instance still requires it. The default instance refuses the option.
+
 ## Migrating from an older version
 
 Earlier versions of the tool recorded no process start times, so this version cannot prove anything about the state they left and refuses it for good: it never signals its processes, starts it over or deletes it. Move it aside once, by hand, from the checkout that started it. For the default instance:
