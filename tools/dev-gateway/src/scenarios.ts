@@ -14,6 +14,7 @@ import type { ReplyStep } from "./scripts.ts";
 import { MESSAGING_PAIR, messagingPartner, SEED_BOTS } from "./seed-data.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
 import { PICTURE_PATH } from "./seed-files.ts";
+import { outcomeMarker } from "./scripted-images.ts";
 
 /** What a scenario may look at: who is answering, and what its tools returned so far. */
 export type PlanContext = {
@@ -276,6 +277,68 @@ const ask = (questions: unknown[]): Step[] => [
   tool("ask_user", { questions, timeoutSeconds: 600 }),
   answerText,
 ];
+
+/** What every `#image` scenario asks the image tool to draw. */
+export const IMAGE_PROMPT = "A sun over a green hill, in flat solid colours";
+
+/** The reply after an image_generate call: what the tool's result says happened. */
+const afterImage: Step = (ctx) => {
+  const result = [...ctx.results].reverse().find((r) => r.name === "image_generate");
+  if (!result) return [];
+  if (/Background task started/.test(result.text)) {
+    return [say("I asked for the picture. It will arrive in this task when it is ready.")];
+  }
+  if (/not found|not available|denied/i.test(result.text)) {
+    return [say("I have no image tool here.")];
+  }
+  return [say(`The image tool answered: ${result.text.split("\n")[0]!.slice(0, 200)}`)];
+};
+
+/**
+ * One scenario per outcome of the stand-in image provider (scripted-images.ts),
+ * which reads the outcome from a marker in the prompt. Only an instance
+ * started with `--with-images` offers the tool.
+ */
+function imageScenarios(): Scenario[] {
+  const call = (suffix: string, extra: Record<string, unknown> = {}): Step[] => [
+    think("I will ask the image tool for a picture."),
+    tool("image_generate", { prompt: `${IMAGE_PROMPT}${suffix}`, ...extra }),
+    afterImage,
+  ];
+  const bots = "any bot, on an instance started with `--with-images`";
+  return [
+    {
+      name: "image",
+      phrase: "draw a picture",
+      summary:
+        "Asks the image tool for a picture. The tool starts a background task; the picture arrives in a later turn of the same task.",
+      bots,
+      steps: () => call(""),
+    },
+    {
+      name: "image-refuse",
+      phrase: "draw a picture the provider refuses",
+      summary: "Asks for a picture the stand-in image provider refuses (400, content policy).",
+      bots,
+      steps: () => call(` ${outcomeMarker("refuse")}`),
+    },
+    {
+      name: "image-fail",
+      phrase: "draw a picture that fails",
+      summary: "Asks for a picture the stand-in image provider fails to make (500).",
+      bots,
+      steps: () => call(` ${outcomeMarker("fail")}`),
+    },
+    {
+      name: "image-hang",
+      phrase: "draw a picture that never comes",
+      summary:
+        "Asks for a picture the stand-in image provider never answers; the call gives up after 5 seconds.",
+      bots,
+      steps: () => call(` ${outcomeMarker("hang")}`, { timeoutMs: 5000 }),
+    },
+  ];
+}
 
 export const SCENARIOS: Scenario[] = [
   {
@@ -804,6 +867,7 @@ export const SCENARIOS: Scenario[] = [
       afterBrowser("Tried both addresses."),
     ],
   },
+  ...imageScenarios(),
 ];
 
 const BY_NAME = new Map(SCENARIOS.map((scenario) => [scenario.name, scenario]));

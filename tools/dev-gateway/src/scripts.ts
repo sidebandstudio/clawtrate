@@ -126,6 +126,28 @@ export const GATEWAY_TURN_PROMPTS = [
 const REMINDER_PROMPT = "A scheduled reminder has been triggered. The reminder content is:\n\n";
 const REMINDER_RELAY = "Please relay this reminder to the user in a helpful and friendly way.";
 
+/**
+ * The gateway's report that a background image_generate task ended, which it
+ * delivers as a turn of its own in the task that asked, as an inter-session
+ * message (formatTaskCompletionEvent in OpenClaw 2026.10.6, plain or labelled):
+ * whether it succeeded, and the `MEDIA:` lines of what it made. Null for any
+ * other text.
+ */
+export function imageCompletion(text: string): { ok: boolean; media: string[] } | null {
+  if (!/^(?:A background task completed\.|\[Internal task completion event\])/m.test(text)) {
+    return null;
+  }
+  if (!/^type: image generation task$/m.test(text)) return null;
+  return {
+    ok: /^status: completed successfully$/m.test(text),
+    media: [...text.matchAll(/^MEDIA:\S.*$/gm)].map((match) => match[0]),
+  };
+}
+
+/** The reply to a finished image task: a caption and its pictures, as the gateway asks. */
+export const IMAGE_READY_REPLY = "Here is the picture you asked for.";
+export const IMAGE_FAILED_REPLY = "The picture could not be made.";
+
 export const isGatewayTurn = (prompt: string) =>
   GATEWAY_TURN_PROMPTS.some((start) => prompt.startsWith(start));
 
@@ -185,6 +207,14 @@ export function planReply(
     const [content, instruction] = prompt.slice(REMINDER_PROMPT.length).split(/\n\n(?=[^\n]*$)/);
     if (instruction === REMINDER_RELAY) return [{ kind: "text", text: `Reminder: ${content}` }];
     return [{ kind: "text", text: SILENT_REPLY }];
+  }
+  // A finished image task: the caption and the pictures, or a short failure.
+  const completion = [prompt, ...messages.slice(lastUserIndex).map(messageText)]
+    .map(imageCompletion)
+    .find((found) => found !== null);
+  if (completion) {
+    if (!completion.ok) return [{ kind: "text", text: IMAGE_FAILED_REPLY }];
+    return [{ kind: "text", text: [IMAGE_READY_REPLY, "", ...completion.media].join("\n") }];
   }
   if (isGatewayTurn(prompt) && !forwarded) return [{ kind: "text", text: SILENT_REPLY }];
 
