@@ -291,7 +291,11 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
               <p className="b-hint">
                 Messages from other bots counts only runs a send's result names. The rest is not
                 attributed, never charged to one message.
-                {r.sources.partial ? " Partial: some tasks weren't read in full." : ""}
+                {r.sources.partial
+                  ? r.figure.counting
+                    ? " Partial: the gateway is still counting, so these may not add up to its total yet."
+                    : " Partial: some tasks weren't read in full."
+                  : ""}
               </p>
             </>
           ) : (

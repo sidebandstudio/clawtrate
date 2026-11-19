@@ -58,6 +58,8 @@ export const MAX_USAGE_REPORTS = 2;
 export const USAGE_REQUESTS_AT_ONCE = 4;
 /** How often budgets are counted again while there are any. */
 export const COUNT_EVERY_MS = 60_000;
+/** While the gateway says a count is still being counted, how soon it is counted again. */
+export const COUNT_COUNTING_MS = 5_000;
 /** After a budgeted bot's run ends: the gateway serves a total up to 30 s old, so a little later. */
 export const COUNT_AFTER_RUN_MS = 31_000;
 /** How often the providers' limits are read again. */
@@ -333,7 +335,11 @@ export class UsageEngine {
         this.counting = null;
       }
       if (generation === this.generation && this.ctx.get().budgets.length > 0)
-        this.scheduleCount(COUNT_EVERY_MS);
+        this.scheduleCount(
+          this.ctx.get().counts.some((count) => count.counting)
+            ? COUNT_COUNTING_MS
+            : COUNT_EVERY_MS,
+        );
     })();
     return this.counting;
   }
@@ -466,7 +472,12 @@ export class UsageEngine {
       );
       report.tasks = tasks.slice(0, MAX_REPORT_TASKS);
       report.tasksOmitted = Math.max(0, tasks.length - MAX_REPORT_TASKS);
-      report.sources = await this.sources(tasks, figure.tokens.total, range);
+      const sources = await this.sources(tasks, figure.tokens.total, range);
+      // While the gateway is still counting, its total may not include what the histories show.
+      report.sources =
+        figure.counting || tasks.some((task) => task.computing)
+          ? { ...sources, partial: true }
+          : sources;
     } catch (error) {
       report.detailError = errorText(error);
     }

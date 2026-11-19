@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseBridgeCommand } from "../src/bridge.ts";
 import {
   COUNT_AFTER_RUN_MS,
+  COUNT_COUNTING_MS,
   COUNT_EVERY_MS,
   MAX_USAGE_REPORTS,
   rangeSpan,
@@ -437,7 +438,7 @@ describe("budgets kept with the gateway", () => {
 });
 
 /** A gateway that answers the usage methods and `users.prefs` from fixed records. */
-function fakeGateway(options: { identity?: boolean; meddle?: number } = {}) {
+function fakeGateway(options: { identity?: boolean; meddle?: number; counting?: boolean } = {}) {
   let prefs: unknown = undefined;
   let meddle = options.meddle ?? 0;
   const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -492,7 +493,7 @@ function fakeGateway(options: { identity?: boolean; meddle?: number } = {}) {
         return {
           updatedAt: 4242,
           totals: totals(byAgent[agent as string] ?? 0, 0),
-          cacheStatus: fresh,
+          cacheStatus: options.counting ? { status: "refreshing", pendingFiles: 3 } : fresh,
         };
       }
       case "sessions.usage":
@@ -753,6 +754,44 @@ describe("the usage engine", () => {
       unattributed: 800,
       partial: false,
     });
+    engine.onClose();
+  });
+
+  it("counts a budget again within seconds while the gateway is still counting it", async () => {
+    vi.useFakeTimers();
+    const gateway = fakeGateway({ counting: true });
+    const { engine, usage } = engineOn(gateway, () => Date.now());
+    await engine.changeBudget({
+      op: "set",
+      budget: {
+        botId: "otto",
+        routineId: null,
+        routineName: null,
+        period: "daily",
+        tokens: 1_000,
+        timeZone: NY,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(usage().counts[0]?.counting).toBe(true);
+    const counted = () => gateway.calls.filter((c) => c.method === "usage.cost").length;
+    const first = counted();
+    await vi.advanceTimersByTimeAsync(COUNT_COUNTING_MS + 10);
+    expect(counted()).toBe(first + 1);
+    engine.onClose();
+  });
+
+  it("F-232: while the gateway is still counting, the sources are marked partial and the figure says so", async () => {
+    const { engine } = engineOn(fakeGateway({ counting: true }));
+    const report = await engine.readReport({
+      botId: "marlow",
+      period: "week",
+      timeZone: NY,
+      detail: true,
+      bots: [],
+    });
+    expect(report.figure.counting).toBe(true);
+    expect(report.sources?.partial).toBe(true);
     engine.onClose();
   });
 

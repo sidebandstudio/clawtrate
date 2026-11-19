@@ -58,22 +58,37 @@ async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
   );
 }
 
-/** What the gateway answers for a bot's (or every bot's) total over a period, in the page's time zone. */
+/**
+ * What the gateway answers for a bot's (or every bot's) total over a period, in the page's time
+ * zone, once it has finished counting: a cold gateway first answers with what it has read so
+ * far and `cacheStatus.status: "refreshing"`, which the page shows as still being counted.
+ */
 async function gatewayTotal(botId: string | null, period: UsagePeriod | "daily" | "weekly") {
   const range = rangeFor(period, Date.now(), timeZone);
-  const result = await gateway.request<{ totals: Json; updatedAt: number }>("usage.cost", {
-    ...(botId ? { agentId: botId } : { agentScope: "all" }),
-    ...rangeParams(range),
-  });
-  return {
-    input: Number(result.totals.input),
-    output: Number(result.totals.output),
-    cacheRead: Number(result.totals.cacheRead),
-    cacheWrite: Number(result.totals.cacheWrite),
-    total: Number(result.totals.totalTokens),
-    unpriced: Number(result.totals.missingCostEntries),
-    cost: Number(result.totals.totalCost),
-  };
+  const deadline = Date.now() + 90_000;
+  for (;;) {
+    const result = await gateway.request<{ totals: Json; updatedAt: number; cacheStatus?: Json }>(
+      "usage.cost",
+      { ...(botId ? { agentId: botId } : { agentScope: "all" }), ...rangeParams(range) },
+    );
+    const status = result.cacheStatus ?? {};
+    const counting =
+      (typeof status.status === "string" && status.status !== "fresh") ||
+      Number(status.pendingFiles ?? 0) > 0 ||
+      Number(status.staleFiles ?? 0) > 0;
+    if (!counting || Date.now() > deadline)
+      return {
+        input: Number(result.totals.input),
+        output: Number(result.totals.output),
+        cacheRead: Number(result.totals.cacheRead),
+        cacheWrite: Number(result.totals.cacheWrite),
+        total: Number(result.totals.totalTokens),
+        unpriced: Number(result.totals.missingCostEntries),
+        cost: Number(result.totals.totalCost),
+        counting,
+      };
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
 }
 
 const n = (text: string | null) => Number((text ?? "").replace(/[^\d]/g, ""));
@@ -277,10 +292,14 @@ test("F-232 F-237: a bot's Usage page shows the gateway's own totals for each pe
     ["30 days", "month"],
   ] as const) {
     await page.getByTestId("usage-page").getByRole("radio", { name: choice }).click();
-    await expect(page.getByTestId("usage-page")).not.toHaveAttribute("aria-busy", "true");
     const expected = await gatewayTotal("otto", period);
+    expect(expected.counting, "the gateway finished counting").toBe(false);
+    // The page reads again while the gateway is still counting, and then shows what it settled on.
+    await expect(page.getByTestId("usage-source")).not.toContainText("still being counted", {
+      timeout: 60_000,
+    });
     await expect
-      .poll(() => shownTokens(page))
+      .poll(() => shownTokens(page), { timeout: 30_000 })
       .toEqual({
         input: expected.input,
         output: expected.output,
@@ -408,8 +427,10 @@ test("F-234: a weekly budget set on one device is shown with the same value afte
   const week = (await gatewayTotal("otto", "week")).total;
   const tokens = Math.max(1_000, week * 3);
   await setBudget(page, "Weekly", tokens);
+  await expect
+    .poll(() => meter(page), { timeout: 60_000 })
+    .toEqual({ used: week, tokens, words: "this week" });
   const shown = await meter(page);
-  expect(shown).toEqual({ used: week, tokens, words: "this week" });
   await expect(page.getByTestId("usage-page")).toContainText("Shown only");
   // The gateway keeps it, as the person's preference.
   expect(await keptBudgets()).toEqual([
@@ -419,10 +440,10 @@ test("F-234: a weekly budget set on one device is shown with the same value afte
   await page.reload();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
   await usagePage(page, "Otto");
-  expect(await meter(page)).toEqual(shown);
+  await expect.poll(() => meter(page), { timeout: 60_000 }).toEqual(shown);
   // On the second device, which only reads: the same value, and no way to change it.
   await usagePage(reader, "Otto");
-  expect(await meter(reader)).toEqual(shown);
+  await expect.poll(() => meter(reader), { timeout: 60_000 }).toEqual(shown);
   await expect(reader.getByTestId("budget-edit")).toHaveCount(0);
   await expect(reader.getByTestId("budget-new")).toHaveCount(0);
   await shot(page, "usage-page");
@@ -524,7 +545,7 @@ test("F-396: the warning appears in the task and as a notification once the gate
   const tokens = Math.max(1_000, Math.ceil((before + 100) / 0.8));
   await usagePage(page, "Juniper");
   await setBudget(page, "Weekly", tokens);
-  expect((await meter(page)).used).toBe(before);
+  await expect.poll(async () => (await meter(page)).used, { timeout: 60_000 }).toBe(before);
   await expect(page.getByTestId("budget-line")).toHaveCount(0);
   await expect(page.getByTestId("budget-warned")).toHaveCount(0);
   // The person sends; the run goes ahead and answers.

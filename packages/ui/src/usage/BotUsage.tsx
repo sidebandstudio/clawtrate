@@ -222,7 +222,9 @@ export function BotUsagePage({
             routine's. Messages from other bots: runs a send's result names. The rest is not
             attributed, never charged to one message.
             {sources.partial
-              ? " Partial: some tasks weren't read in full, so more may belong to a named source."
+              ? counting
+                ? " Partial: the gateway is still counting, so these may not add up to its total yet."
+                : " Partial: some tasks weren't read in full, so more may belong to a named source."
               : ""}
           </p>
         </>

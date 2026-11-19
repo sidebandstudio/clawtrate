@@ -22,6 +22,7 @@ export * from "./sidebar.ts";
 export * from "./usage.ts";
 export {
   COUNT_AFTER_RUN_MS,
+  COUNT_COUNTING_MS,
   COUNT_EVERY_MS,
   MAX_USAGE_REPORTS,
   rangeSpan,
