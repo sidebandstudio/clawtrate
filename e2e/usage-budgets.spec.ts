@@ -216,7 +216,8 @@ async function bar(on: Page, list: string, name: string): Promise<number> {
     .locator("li", { hasText: name })
     .first()
     .getAttribute("aria-label");
-  return n(label?.split(":").at(-1) ?? null);
+  // The digits just before "tokens": a bar's time ("as of 10:07 AM") is no part of its figure.
+  return n(/([\d,]+) tokens/.exec(label ?? "")?.[1] ?? null);
 }
 
 /** The budget meter's count and tokens, from its accessible name. */

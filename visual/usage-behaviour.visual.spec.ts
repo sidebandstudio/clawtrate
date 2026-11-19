@@ -318,6 +318,26 @@ test("F-234: a saved routine budget whose routine now shares a task says its cou
   await expect(row).toHaveCount(0);
 });
 
+test("F-237: each settled bar names its own time, and each saved budget its own time zone (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write&usage=ages`, "light");
+  const settings = await settingsUsage(page);
+  const bots = settings.getByTestId("usage-bots");
+  await expect(
+    bots.getByRole("listitem", { name: "Pip: 379,000 tokens, as of 4:39 PM" }),
+  ).toHaveCount(1);
+  await expect(
+    bots.getByRole("listitem", { name: "Otto: 1,640,000 tokens, as of 5:39 PM" }),
+  ).toHaveCount(1);
+  await expect(settings.locator('[data-budget="routine:weekly-cleanup"]')).toContainText(
+    "200,000 tokens today · Asia/Tokyo",
+  );
+  await expect(settings.locator('[data-budget="bot:otto"]')).toContainText(
+    "2,500,000 tokens this week · your time",
+  );
+});
+
 test("F-235: provider limits carry their window, reset, the gateway's time and no account (fixture)", async ({
   page,
 }) => {
@@ -415,7 +435,9 @@ test("F-131 F-237: usage by source keeps Messages from other bots apart and char
   await expect(usage(page)).toContainText("never charged to one message");
   const settings = await settingsUsage(page);
   await expect(
-    settings.getByTestId("usage-bots").getByRole("listitem", { name: "Otto: 1,640,000 tokens" }),
+    settings
+      .getByTestId("usage-bots")
+      .getByRole("listitem", { name: "Otto: 1,640,000 tokens, as of 5:39 PM" }),
   ).toHaveCount(1);
   await expect(settings.getByTestId("usage-sources")).toBeVisible();
 });
@@ -428,7 +450,9 @@ test("F-237: a bot whose own figure couldn't be read is Unavailable on its bar a
   const bots = settings.getByTestId("usage-bots");
   await expect(bots.getByRole("listitem", { name: "Otto: Unavailable" })).toHaveCount(1);
   await expect(bots.getByRole("listitem", { name: /^Otto: \d/ })).toHaveCount(0);
-  await expect(bots.getByRole("listitem", { name: "Marlow: 562,000 tokens" })).toHaveCount(1);
+  await expect(
+    bots.getByRole("listitem", { name: "Marlow: 562,000 tokens, as of 5:39 PM" }),
+  ).toHaveCount(1);
 });
 
 test("F-234: while the host is busy reading other usage the page says it waits, never that it couldn't load (fixture)", async ({

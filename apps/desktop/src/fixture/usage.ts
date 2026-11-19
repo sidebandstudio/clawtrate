@@ -7,6 +7,7 @@
 //   &usage=busy                                               the host is reading other reports
 //   &usage=periodfail                                         reading Today fails
 //   &usage=retargeted                                         the routine now runs in a shared task
+//   &usage=ages                                               Pip's figure is an hour older; the routine's budget is in Tokyo
 //   &budget=none|warn|reached|daily|invalid                   Otto's budget
 //   &plimit=near|reached                                      a provider's reported limit
 //   &uview=usage                                              open Otto's Usage page
@@ -37,6 +38,7 @@ export type UsageParams = {
     | "busy"
     | "periodfail"
     | "retargeted"
+    | "ages"
     | null;
   budget: "none" | "warn" | "reached" | "daily" | "invalid" | null;
   plimit: "near" | "reached" | null;
@@ -61,6 +63,7 @@ export function usageParams(params: URLSearchParams): UsageParams {
       "busy",
       "periodfail",
       "retargeted",
+      "ages",
     ]),
     budget: pick("budget", ["none", "warn", "reached", "daily", "invalid"]),
     plimit: pick("plimit", ["near", "reached"]),
@@ -155,7 +158,7 @@ export function fixtureUsage(now: number, params: UsageParams): UsageState {
     routineName: "Weekly cleanup",
     period: "daily",
     tokens: 200_000,
-    timeZone,
+    timeZone: params.usage === "ages" ? "Asia/Tokyo" : timeZone,
     setAt: now - 86_400_000,
   });
   const counts: BudgetCount[] = budgets.map((budget) =>
@@ -268,7 +271,16 @@ function report(
       : ids.map((id) =>
           params.usage === "botfail" && id === "otto"
             ? { botId: id, figure: null, error: "usage.cost timed out after 60 seconds." }
-            : { botId: id, figure: figure(id, command.period, params, at), error: null },
+            : {
+                botId: id,
+                figure: figure(
+                  id,
+                  command.period,
+                  params,
+                  params.usage === "ages" && id === "pip" ? at - 3_600_000 : at,
+                ),
+                error: null,
+              },
         ),
     tasks: command.detail ? tasks : null,
     tasksOmitted: command.detail && command.botId === "otto" ? 2 : 0,

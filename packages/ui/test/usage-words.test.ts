@@ -116,9 +116,15 @@ describe("every bot's bars", () => {
     };
     const bars = botBars(report, (id) => id[0]!.toUpperCase() + id.slice(1));
     expect(bars.map((bar) => `${bar.name}: ${barText(bar)}`)).toEqual([
-      "Marlow: 1,800 tokens so far",
+      "Marlow: 1,800 tokens so far, still being counted",
       "Otto: Unavailable",
     ]);
+    // A settled bar names its own time: each bot's figure is read on its own.
+    const settled = botBars(
+      { ...report, bots: [{ botId: "pip", figure: figure({}), error: null }] },
+      () => "Pip",
+    )[0]!;
+    expect(barText(settled)).toMatch(/^1,800 tokens, as of \d{1,2}:07 [AP]M$/);
   });
 });
 

@@ -196,7 +196,7 @@ export function botBars(report: UsageReport, nameOf: (botId: string) => string):
   return (report.bots ?? []).map((each) => ({
     name: nameOf(each.botId),
     tokens: each.figure ? each.figure.tokens.total : null,
-    note: each.figure ? soFar(each.figure.counting) : "",
+    note: each.figure ? `${soFar(each.figure.counting)}, ${figureAge(each.figure)}` : "",
   }));
 }
 

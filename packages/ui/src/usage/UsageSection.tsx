@@ -40,6 +40,7 @@ import {
   sourceBars,
   sourcesNote,
   USAGE_WAITING,
+  zoneWords,
 } from "./words.ts";
 import "./usage.css";
 
@@ -180,7 +181,7 @@ function Budgets({
           {budgets.map((budget) => {
             const count = currentCount(usage, budget, now);
             const percent = budgetPercent(budget, count?.used ?? null);
-            const line = `${who(budget)} · ${kindWord(budget.period)} · ${budgetLine(budget, count)}${
+            const line = `${who(budget)} · ${kindWord(budget.period)} · ${budgetLine(budget, count)} · ${zoneWords(budget.timeZone)}${
               percent !== null && percent >= 100
                 ? " · reached"
                 : percent !== null && percent >= 80
@@ -361,8 +362,7 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
             </p>
           )}
           <p className="b-hint" style={{ marginTop: 0 }}>
-            From the gateway's usage records {reportWindow(r.period, r.range)},{" "}
-            {asOf(r.figure.asOf)}.
+            From the gateway's usage records {reportWindow(r.period, r.range)}.
             {stillCounted(r) ? " Some of the gateway's records are still being counted." : ""}
           </p>
           <Bars

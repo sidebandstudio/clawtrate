@@ -232,7 +232,7 @@ export function BotUsagePage({
         <div>
           <dt>Total</dt>
           <dd data-testid="usage-total">
-            {full(figure.tokens.total)} tokens{counting ? " so far" : ""}
+            {full(figure.tokens.total)} tokens{figure.counting ? " so far" : ""}
           </dd>
         </div>
         <div>
