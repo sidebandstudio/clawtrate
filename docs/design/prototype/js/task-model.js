@@ -197,7 +197,7 @@
       `<p class="run-record"><span>${esc(record)}</span><span aria-hidden="true">·</span><span class="mono">run-7c41d09e</span>` +
       `<button type="button" class="button" data-variant="quiet" data-size="sm" aria-expanded="false" data-t-raw>Raw</button></p>` +
       `<div class="t-raw" hidden><p class="code-label">Model, as the gateway sends it</p><pre class="code-block">{"phase":"model","provider":"acme","model":"dev-2"}</pre>` +
-      `<p class="code-label">Sent</p><pre class="code-block">{"method":"chat.send","params":{"thinking":"low"}}</pre></div>`;
+      `<p class="code-label">The task's effort when this turn was sent, from its row</p><pre class="code-block">{"thinkingDefault":"low"}</pre></div>`;
     if (params.get("record") === "open") run.open = true;
     inner.append(run);
     for (const line of S.lines) {

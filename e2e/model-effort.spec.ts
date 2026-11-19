@@ -244,7 +244,7 @@ test("F-042 F-044 F-045: a task's model changed during a turn is held, saved whe
   await runLine.locator("summary").click();
   await runLine.getByRole("button", { name: "Raw" }).click();
   await expect(runLine.getByRole("region", { name: "What the gateway sent" })).toContainText(
-    '"thinking": "low"',
+    '"thinkingDefault": "low"',
   );
   await shots(page, "task-record", DESKTOP_AND_PHONE);
   await chip(page).click();
@@ -311,7 +311,10 @@ test("F-042 F-043: a bot's model and effort chosen in its settings are saved on 
   await settings.getByRole("button", { name: "Request admin access" }).click();
   await approve();
   await expect(settings.getByTestId("model-select")).toBeEnabled({ timeout: 30_000 });
-  await expect(settings).toContainText("Acme's models, as the gateway lists them.");
+  // Quill's latest task, from the checks above, carries Quill's own account: its catalogue is listed.
+  await expect(settings).toContainText(
+    "The models Acme · Work offers, as the gateway lists them for Quill's latest task.",
+  );
   await settings.getByTestId("model-select").click();
   await page.getByRole("menuitemradio", { name: "dev-2" }).click();
   await expect(page.getByTestId("work-announcer")).toHaveText("Model saved", { timeout: 30_000 });

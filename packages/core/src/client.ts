@@ -1480,7 +1480,6 @@ export class ClawtrateClient {
     idempotencyKey: string,
     queueMode: "steer" | "followup",
     attachments: OutgoingAttachment[],
-    thinking: string | null = null,
   ) {
     return {
       sessionKey: key,
@@ -1489,7 +1488,6 @@ export class ClawtrateClient {
       // Always the mode meant: with none the gateway steers.
       queueMode,
       ...(attachments.length > 0 ? { attachments } : {}),
-      ...(thinking ? { thinking } : {}),
     };
   }
 
@@ -2084,9 +2082,9 @@ export class ClawtrateClient {
     message = this.outgoing(key, messageId)!;
 
     let result: RawRecord | null;
-    // The effort the chip shows, sent with a message that starts a turn, so the turn's record can
-    // say what was asked for (25.5). A steer joins a turn as it is.
-    const thinking = message.mode === "steer" ? null : this.taskModels.effortToSend(key);
+    // The effort the task asks for as this message starts a turn, for the turn's record (25.5).
+    // A steer joins a turn as it is.
+    const asked = message.mode === "steer" ? null : this.taskModels.effortAsked(key);
     try {
       const params = this.sendParams(
         key,
@@ -2094,7 +2092,6 @@ export class ClawtrateClient {
         message.id,
         message.mode === "steer" ? "steer" : "followup",
         this.attachmentContent.get(messageId)?.files ?? [],
-        thinking,
       );
       this.checkSize(params);
       const sent = this.request("chat.send", params);
@@ -2134,7 +2131,7 @@ export class ClawtrateClient {
     const runId = typeof result?.runId === "string" ? result.runId : null;
     const messageSeq = typeof result?.messageSeq === "number" ? result.messageSeq : null;
     const steeredInto = message.mode === "steer" ? message.runId : null;
-    if (thinking && runId) this.taskModels.recordRequested(key, runId, thinking);
+    if (asked && runId) this.taskModels.recordRequested(key, runId, asked);
     // A stop command (`/stop`) is answered `{ok, aborted, runIds}` before any
     // run or turn is recorded: the gateway handled it, and no run or history
     // row will follow.

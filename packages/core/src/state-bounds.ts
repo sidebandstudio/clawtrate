@@ -918,7 +918,7 @@ export const TASK_MODEL: Bound = object<TaskModelView>()({
   events: list(MAX_TASK_MODEL_EVENTS, taskModelEvent),
   requested: list(
     MAX_REQUESTED_EFFORTS,
-    object<RequestedEffort>()({ runId: taskModelId, effort: taskModelId }),
+    object<RequestedEffort>()({ runId: taskModelId, effort: taskModelId, from: ENUM }),
   ),
 });
 

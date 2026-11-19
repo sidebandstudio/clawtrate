@@ -176,8 +176,8 @@ test.describe("a task's model and effort, behaviour", () => {
     const raw = runLine(page).getByRole("region", { name: "What the gateway sent" });
     await expect(raw).toContainText("Model, from the history row");
     await expect(raw).toContainText('"provider": "acme"');
-    await expect(raw).toContainText("Sent");
-    await expect(raw).toContainText('"thinking": "low"');
+    await expect(raw).toContainText("The task's effort when this turn was sent, from its row");
+    await expect(raw).toContainText('"thinkingDefault": "low"');
   });
 
   test("F-045: a refused change says why, in Details and as a line, and the chip shows what the gateway has", async ({

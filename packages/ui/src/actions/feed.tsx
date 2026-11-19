@@ -774,7 +774,7 @@ export function RunLine({ run }: { run: Run }) {
       model={run.model}
       provider={run.provider ?? null}
       modelFrom={run.modelFrom ?? null}
-      effort={requested?.effort ?? null}
+      effort={requested ?? null}
     />
   );
 }

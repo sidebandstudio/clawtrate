@@ -136,7 +136,7 @@ function view(state: ClawtrateState, change: Partial<TaskModelView>): TaskModelV
     events: [],
     requested: runs
       .filter((run) => run.state === "completed")
-      .map((run) => ({ runId: run.id, effort: "low" })),
+      .map((run) => ({ runId: run.id, effort: "low", from: "thinkingDefault" as const })),
     ...change,
   };
 }

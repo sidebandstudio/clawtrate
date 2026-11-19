@@ -6,9 +6,10 @@
 // view per followed task. The client wires it in (`client.ts`).
 //
 // The gateway records no change of a task's model or effort, and no public
-// field reports the effort a turn used. So the lines and the requested efforts
-// are this app's own record, kept on this device in the host's storage, one
-// key per gateway, for the most recent `MAX_LOGGED_TASKS` tasks.
+// field reports the effort a turn used. So the lines, and the effort each turn
+// this app started asked for (as the task's row named it then), are this app's
+// own record, kept on this device in the host's storage, one key per gateway,
+// for the most recent `MAX_LOGGED_TASKS` tasks.
 
 import { parseModelRef, readCatalog, type CatalogModel } from "./accounts.ts";
 import type { KeyValueStore } from "./host.ts";
@@ -69,8 +70,16 @@ export type TaskModelEvent = {
   sessionId: string | null;
 };
 
-/** The `thinking` this app sent with the message that started a turn (25.5). */
-export type RequestedEffort = { runId: string; effort: string };
+/**
+ * The effort a turn this app started asked for (25.5): the task's own level
+ * (`thinkingLevel`, which a change of effort writes) or, with none, the
+ * default its row reported (`thinkingDefault`), when the message was sent.
+ */
+export type RequestedEffort = {
+  runId: string;
+  effort: string;
+  from: "thinkingLevel" | "thinkingDefault";
+};
 
 export type TaskModelView = {
   catalog: "idle" | "loading" | "ready" | "error";
@@ -277,7 +286,8 @@ function readLog(value: string | null): Array<[string, LogEntry]> {
         const raw = asRecord(each);
         const runId = shortId(raw?.runId);
         const effort = shortId(raw?.effort);
-        return runId && effort ? [{ runId, effort }] : [];
+        const from = raw?.from === "thinkingLevel" ? "thinkingLevel" : "thinkingDefault";
+        return runId && effort ? [{ runId, effort, from }] : [];
       });
     out.push([key, { events, requested }]);
   }
@@ -386,25 +396,31 @@ export class TaskModelsEngine {
   }
 
   /**
-   * The effort the next message asks for (`chat.send {thinking}`): the one the
-   * chip shows, when the task's model offers it. Null when nothing is known.
+   * The effort the task asks the gateway for now, as its row names it: its own
+   * level, else the default the gateway reports for it. Taken when a message
+   * that starts a turn is sent. Nothing is added to the message itself: a
+   * `chat.send` that carries `thinking` and is stopped at once stays listed by
+   * the gateway as a cancelled pending input.
    */
-  effortToSend(key: string): string | null {
+  effortAsked(key: string): Pick<RequestedEffort, "effort" | "from"> | null {
     const task = this.ctx.task(key);
-    const level = rowEffort(task);
-    if (!level) return null;
-    const view = this.ctx.get()[key];
-    const model = view ? catalogEntry(view.models, task?.model) : undefined;
-    return model && !model.levels.includes(level) ? null : level;
+    if (task?.effort) return { effort: task.effort, from: "thinkingLevel" };
+    if (task?.effortDefault) return { effort: task.effortDefault, from: "thinkingDefault" };
+    return null;
   }
 
-  /** The `thinking` a message sent, by the run the gateway named for it. */
-  recordRequested(key: string, runId: string, effort: string): void {
+  /** What a turn asked for, by the run the gateway named for it. */
+  recordRequested(
+    key: string,
+    runId: string,
+    asked: Pick<RequestedEffort, "effort" | "from">,
+  ): void {
     const kept = shortId(runId);
-    if (!kept || !this.ctx.get()[key]) return;
+    const effort = shortId(asked.effort);
+    if (!kept || !effort || !this.ctx.get()[key]) return;
     this.patch(key, (view) => ({
       ...view,
-      requested: mergeRequested(view.requested, [{ runId: kept, effort }]),
+      requested: mergeRequested(view.requested, [{ runId: kept, effort, from: asked.from }]),
     }));
     this.persist(key);
   }

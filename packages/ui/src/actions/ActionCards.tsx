@@ -876,13 +876,13 @@ export function RunLineView({
   provider?: string | null;
   /** Which report the model comes from: the run's `model` event, or its history row. */
   modelFrom?: "lifecycle" | "history" | null;
-  /** The `thinking` this app sent with the message that started the turn (conversation.md 25.5). */
-  effort?: string | null;
+  /** The effort the task asked for when this app started the turn, as its row named it (25.5). */
+  effort?: { effort: string; from: "thinkingLevel" | "thinkingDefault" } | null;
 }) {
   const env = useActionEnv();
   const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.run(runId), false);
   const named = model ? (provider ? `${provider}/${model}` : model) : null;
-  const record = `${named ?? actionWords.RUN_LINE.modelNotReported} · ${actionWords.RUN_LINE.effort(effort)}`;
+  const record = `${named ?? actionWords.RUN_LINE.modelNotReported} · ${actionWords.RUN_LINE.effort(effort?.effort ?? null)}`;
   const disclosure = useRawDisclosure();
   // What the record is made of, each part labelled; a part with nothing behind it is absent.
   const events: Array<[string, unknown]> = [];
@@ -895,7 +895,11 @@ export function RunLineView({
             provider ? { phase: "model", provider, model } : { phase: "model", model },
           ],
     );
-  if (effort) events.push(["Sent", { method: "chat.send", params: { thinking: effort } }]);
+  if (effort)
+    events.push([
+      "The task's effort when this turn was sent, from its row",
+      { [effort.from]: effort.effort },
+    ]);
   const raw: RawContent = {
     state: "loaded",
     events,

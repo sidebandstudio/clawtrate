@@ -1533,7 +1533,7 @@ The gateway's facts this rests on, observed on the development gateway (OpenClaw
 - A model change made during a run marks a pending live switch (`liveModelSwitchPending`): the running turn may adopt it, otherwise the next turn starts from it. When an effort change applies is not documented. Nothing in the task's history records either change.
 - A model written as `<provider>/<model>@<account>` keeps the task on that account (`authProfileOverride`); written without it, a model other than the bot's own is served by an account the gateway chooses (`bots.md` section 20, row 2).
 - A level the model does not offer is refused with the gateway's message (`thinkingLevel "high" is not supported for acme/dev-lite (use off|ultra)`). A patch naming a session that no longer exists makes a new one, unless it carries `expectedSessionId`, which makes the gateway refuse it ("Session … changed before patch. Retry.").
-- A turn's model is reported twice: `lifecycle` `phase:"model"` `{provider, model}` while it runs, and the history row's `provider` and `model` after it. No public field reports the effort a turn used (F-044); the app knows only the `thinking` it sent with the message that started the turn.
+- A turn's model is reported twice: `lifecycle` `phase:"model"` `{provider, model}` while it runs, and the history row's `provider` and `model` after it. No public field reports the effort a turn used (F-044); the app knows only what the task asked for when it sent the message that started the turn. A `chat.send` that carries its own `thinking` and is stopped at once stays listed by the gateway as a cancelled pending input, so the app does not add one.
 
 ### 25.1 Where it is
 
@@ -1617,8 +1617,8 @@ Its tooltip, and the line's accessible name, add what it was and when: "Was acme
 Section 7.7's run line, opened, reads the turn's record: "acme/dev-2 · high effort requested", the run id and its copy button, and "Raw". The same record is the run line's tooltip on the desktop. On touch, tapping the run line opens it.
 
 - **The model** is the run's `lifecycle` `phase:"model"` `{provider, model}`, or, after it, the history row's `provider` and `model`: "acme/dev-2". Neither: "model not reported".
-- **The effort** is the `thinking` the app sent with the message that started the turn: "high effort requested". The app sends `chat.send {thinking}` with every new message: the effort the chip shows (the task's level, or the default its row reports), so "requested" is what was asked. A turn this app did not start, or one it started on another device: "effort not reported". The record never says "used".
-- **Raw** (section 9) holds what the record is made of, each part labelled: "Model, as the gateway sends it", the lifecycle event's `{"phase":"model","provider":"acme","model":"dev-2"}` or the history row's `{"provider":"acme","model":"dev-2"}`; and "Sent", `{"method":"chat.send","params":{"thinking":"high"}}`. A part with nothing behind it is absent, never "none".
+- **The effort** is what the task asked the gateway for when this app sent the message that started the turn, as the task's row named it then: its own level (`thinkingLevel`, which a change of effort writes), or else the default the row reports (`thinkingDefault`): "high effort requested". A turn this app did not start, or one it started on another device: "effort not reported". The record never says "used".
+- **Raw** (section 9) holds what the record is made of, each part labelled: "Model, as the gateway sends it", the lifecycle event's `{"phase":"model","provider":"acme","model":"dev-2"}` or the history row's `{"provider":"acme","model":"dev-2"}`; and "The task's effort when this turn was sent, from its row", `{"thinkingLevel":"high"}` or `{"thinkingDefault":"low"}`. A part with nothing behind it is absent, never "none".
 
 ### 25.6 Access
 

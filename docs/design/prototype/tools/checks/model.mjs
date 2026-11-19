@@ -106,7 +106,7 @@ check("25.5 opened, it shows the record and the run id, and says requested, neve
 await p.click("[data-t-raw]");
 check("25.5 Raw holds the model as the gateway sends it and what was sent, each labelled", await p.evaluate(() => {
   const raw = document.querySelector(".t-raw");
-  return !raw.hidden && raw.textContent.includes("Model, as the gateway sends it") && raw.textContent.includes('"phase":"model"') && raw.textContent.includes("Sent") && raw.textContent.includes('"thinking":"low"');
+  return !raw.hidden && raw.textContent.includes("Model, as the gateway sends it") && raw.textContent.includes('"phase":"model"') && raw.textContent.includes("The task's effort when this turn was sent, from its row") && raw.textContent.includes('"thinkingDefault":"low"');
 }));
 await p.close();
 

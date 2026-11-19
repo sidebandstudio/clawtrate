@@ -350,8 +350,8 @@ describe("a task's model and effort", () => {
     const r = rig();
     await opened(r);
     await r.engine.choose(KEY, { model: "acme/dev-2", effort: null });
-    expect(r.engine.effortToSend(KEY)).toBe("low");
-    r.engine.recordRequested(KEY, "run-1", "low");
+    expect(r.engine.effortAsked(KEY)).toEqual({ effort: "low", from: "thinkingDefault" });
+    r.engine.recordRequested(KEY, "run-1", { effort: "low", from: "thinkingDefault" });
     await until(() =>
       (r.storage.data.get("clawtrate.task-models:gateway-1") ?? "").includes("run-1"),
     );
@@ -360,7 +360,9 @@ describe("a task's model and effort", () => {
     for (const [key, value] of r.storage.data) await again.storage.set(key, value);
     await opened(again);
     await until(() => again.view().events.length === 1);
-    expect(again.view().requested).toEqual([{ runId: "run-1", effort: "low" }]);
+    expect(again.view().requested).toEqual([
+      { runId: "run-1", effort: "low", from: "thinkingDefault" },
+    ]);
     expect(again.view().events[0]?.model).toBe("acme/dev-2");
   });
 
@@ -409,14 +411,27 @@ describe("the client around a task's model", () => {
     return gateway;
   }
 
-  it("F-044: a message that starts a turn asks for the effort the chip shows, and the turn records it as requested", async () => {
+  it("F-044: a turn this app starts records the effort the task asked for, as its row named it, and the message carries nothing more", async () => {
     const { client, gateway } = await openTask({ gateway: gatewayWithTask() });
     await until(() => client.state.taskModels[KEY]?.catalog === "ready");
     client.sendMessage(KEY, "hello");
     await until(() => gateway.calls("chat.send").length === 1);
-    expect(gateway.calls("chat.send")[0]).toMatchObject({ message: "hello", thinking: "low" });
+    expect(gateway.calls("chat.send")[0]).not.toHaveProperty("thinking");
     await until(() => client.state.taskModels[KEY]?.requested.length === 1);
-    expect(client.state.taskModels[KEY]?.requested).toEqual([{ runId: "run-1", effort: "low" }]);
+    expect(client.state.taskModels[KEY]?.requested).toEqual([
+      { runId: "run-1", effort: "low", from: "thinkingDefault" },
+    ]);
+    // Once the task has a level of its own, that is what the next turn asks for.
+    gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("agent", agentEvent("run-1", 2, "lifecycle", { phase: "end" }));
+    await until(() => !client.state.transcripts[KEY]!.runs.some((run) => run.state === "running"));
+    await expect(client.setTaskModel(KEY, null, "high")).resolves.toBe("saved");
+    client.sendMessage(KEY, "again");
+    await until(() => client.state.taskModels[KEY]?.requested.length === 2);
+    expect(client.state.taskModels[KEY]?.requested[1]).toMatchObject({
+      effort: "high",
+      from: "thinkingLevel",
+    });
     client.stop();
   });
 
