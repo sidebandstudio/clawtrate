@@ -3622,12 +3622,16 @@ export class ClawtrateClient {
     return this.machines.setWorkspace(botId, path);
   }
 
+  /** `owner` names the viewer that asked: once it is withdrawn, the write read first is not sent. */
   setMachineDefaults(
     machineId: string,
     choice: DefaultsChoice,
     expectedHash: string | null,
+    options: { owner?: object } = {},
   ): Promise<ApprovalsFile> {
-    return this.machines.setMachineDefaults(machineId, choice, expectedHash);
+    return this.machines.setMachineDefaults(machineId, choice, expectedHash, () =>
+      this.checkNotWithdrawn(options.owner),
+    );
   }
 
   renameMachine(nodeId: string, name: string): Promise<void> {
@@ -3638,8 +3642,8 @@ export class ClawtrateClient {
     return this.machines.removeMachine(nodeId);
   }
 
-  renameDevice(deviceId: string, name: string): Promise<void> {
-    return this.machines.renameDevice(deviceId, name);
+  renameDevice(deviceId: string, name: string, options: { owner?: object } = {}): Promise<void> {
+    return this.machines.renameDevice(deviceId, name, () => this.checkNotWithdrawn(options.owner));
   }
 
   removeDevice(deviceId: string): Promise<void> {

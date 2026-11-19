@@ -929,6 +929,7 @@ export class MachinesEngine {
     machineId: string,
     choice: DefaultsChoice,
     expectedHash: string | null,
+    beforeSend: () => void = () => {},
   ): Promise<ApprovalsFile> {
     this.requireWrite("admin", "Setting a machine's approvals");
     const node = machineId === "gateway" ? null : machineId;
@@ -951,6 +952,8 @@ export class MachinesEngine {
       );
     const { socket: _socket, ...file } = rec(current.file);
     const next = { ...file, defaults: { ...rec(file.defaults), ...CHOICE_LEVELS[choice] } };
+    // Whoever asked may have gone while the file was read: then nothing is sent.
+    beforeSend();
     try {
       await this.ctx.request(node ? "exec.approvals.node.set" : "exec.approvals.set", {
         ...(node ? { nodeId: node } : {}),
@@ -1009,7 +1012,11 @@ export class MachinesEngine {
   }
 
   /** `device.pair.rename`: this device's own name with device access, another's with admin. */
-  async renameDevice(deviceId: string, name: string): Promise<void> {
+  async renameDevice(
+    deviceId: string,
+    name: string,
+    beforeSend: () => void = () => {},
+  ): Promise<void> {
     const own = deviceId === this.ctx.deviceId();
     this.requireWrite(own ? "pairing" : "admin", "Renaming a device");
     const label = name.trim();
@@ -1021,6 +1028,7 @@ export class MachinesEngine {
       if (!isOperatorOnly(rec(rows.find((each) => rec(each).deviceId === deviceId))))
         throw new PlacementWriteError("Renaming this device needs admin access.");
     }
+    beforeSend();
     try {
       await this.ctx.request("device.pair.rename", { deviceId, label });
     } catch (error) {

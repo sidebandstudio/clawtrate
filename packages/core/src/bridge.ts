@@ -1194,13 +1194,15 @@ class ViewerSession implements BridgeSession {
       case "setBotWorkspace":
         return client.setBotWorkspace(command.botId, command.path);
       case "setMachineDefaults":
-        return client.setMachineDefaults(command.machineId, command.choice, command.expectedHash);
+        return client.setMachineDefaults(command.machineId, command.choice, command.expectedHash, {
+          owner,
+        });
       case "renameMachine":
         return client.renameMachine(command.nodeId, command.name);
       case "removeMachine":
         return client.removeMachine(command.nodeId);
       case "renameDevice":
-        return client.renameDevice(command.deviceId, command.name);
+        return client.renameDevice(command.deviceId, command.name, { owner });
       case "removeDevice":
         return client.removeDevice(command.deviceId);
     }

@@ -204,6 +204,60 @@ describe("device access", () => {
     session.dispose();
   });
 
+  it("F-156 F-157: a write read first is not sent once its viewer has closed", async () => {
+    const fake = new AccountsGateway();
+    const fileRead = deferred<unknown>();
+    fake.gateway.handlers["exec.approvals.get"] = () => fileRead.promise;
+    fake.gateway.handlers["exec.approvals.set"] = () => ({});
+    const { client } = await accountsClient({ gateway: fake, scopes: [...ADMIN_SCOPES] });
+    const viewer = createBridgeSession(client);
+    const write = viewer.apply({
+      type: "setMachineDefaults",
+      machineId: "gateway",
+      choice: "always",
+      expectedHash: "h1",
+    });
+    await until(() => fake.gateway.calls("exec.approvals.get").length === 1);
+    viewer.dispose();
+    fileRead.resolve({ path: "/p", exists: true, hash: "h1", file: { version: 1 } });
+    await expect(write).rejects.toThrow("The request was withdrawn.");
+    expect(fake.gateway.calls("exec.approvals.set")).toEqual([]);
+    client.stop();
+
+    // This device's own rename below admin reads its record first: the same holds.
+    const devices = new AccountsGateway();
+    const listRead = deferred<unknown>();
+    devices.gateway.handlers["device.pair.list"] = () => listRead.promise;
+    devices.gateway.handlers["device.pair.rename"] = () => ({});
+    const scopes = [READ_SCOPE, PAIRING_SCOPE];
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: scopes,
+        heldScopes: scopes,
+        pairingHeld: true,
+      }),
+    });
+    const own = new ClawtrateClient(testHost(devices.gateway, storage), FAST);
+    await own.start();
+    await until(() => own.state.connection.scopes.includes(PAIRING_SCOPE));
+    const second = createBridgeSession(own);
+    const rename = second.apply({
+      type: "renameDevice",
+      deviceId: own.state.connection.deviceId!,
+      name: "Desk",
+    });
+    await until(() => devices.gateway.calls("device.pair.list").length === 1);
+    second.dispose();
+    listRead.resolve({
+      paired: [{ deviceId: own.state.connection.deviceId, role: "operator" }],
+    });
+    await expect(rename).rejects.toThrow("The request was withdrawn.");
+    expect(devices.gateway.calls("device.pair.rename")).toEqual([]);
+    own.stop();
+  });
+
   it("F-157: the bridge takes the request by name and nothing else", () => {
     expect(parseBridgeCommand({ type: "requestAccess", tier: "pairing" })).toEqual({
       type: "requestAccess",
