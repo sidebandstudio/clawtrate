@@ -386,11 +386,18 @@ export function readInventoryAccounts(
 ): InventoryAccount[] {
   const bound = parseModelRef(modelRef)?.account ?? null;
   const out: InventoryAccount[] = [];
+  // Whole ids are compared; only the shown id is cut to length.
+  const seen = new Set<string>();
   for (const provider of list(rec(status).providers))
     for (const profile of list(rec(provider).profiles)) {
-      const id = str(rec(profile).profileId);
-      if (!id || out.some((each) => each.id === id)) continue;
-      out.push({ id, label: str(rec(profile).displayName), bound: id === bound });
+      const id = rec(profile).profileId;
+      if (typeof id !== "string" || id.trim() === "" || seen.has(id)) continue;
+      seen.add(id);
+      out.push({
+        id: cap(id, MAX_MACHINE_NAME_CHARS),
+        label: str(rec(profile).displayName),
+        bound: id === bound,
+      });
     }
   return out.slice(0, MAX_INVENTORY);
 }

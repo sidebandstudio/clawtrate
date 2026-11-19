@@ -5,11 +5,13 @@ import { describe, expect, it } from "vitest";
 import {
   choiceOf,
   MachinesEngine,
+  MAX_MACHINE_NAME_CHARS,
   MAX_NODES,
   MAX_PATH_CHARS,
   readBrowserSettings,
   readCommandPlace,
   readDevices,
+  readInventoryAccounts,
   readNodes,
   type MachinesContext,
 } from "../src/machines.ts";
@@ -462,6 +464,16 @@ describe("where a bot runs: the engine", () => {
     expect(gw.calls.map(([method]) => method)).not.toContain("secrets.store.list");
     const admin = await engine(gw, { admin: true }).readPlacement("otto");
     expect(admin.inventory.secrets).toEqual(["router-admin", "nas-backup"]);
+  });
+
+  it("F-047: accounts are told apart and matched to the model by their whole ids", () => {
+    const head = `acme:${"a".repeat(130)}`;
+    const accounts = readInventoryAccounts(
+      { providers: [{ profiles: [{ profileId: `${head}-1` }, { profileId: `${head}-2` }] }] },
+      `acme/dev-1@${head}-2`,
+    );
+    expect(accounts.map((each) => each.bound)).toEqual([false, true]);
+    expect(accounts.every((each) => each.id.length === MAX_MACHINE_NAME_CHARS)).toBe(true);
   });
 
   it("F-047: a refused read at the tier says which access it needs, not that there is nothing", async () => {
