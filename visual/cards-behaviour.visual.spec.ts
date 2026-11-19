@@ -63,7 +63,9 @@ test.describe("approval cards", () => {
       "Run mv /srv/media/transcode-cache /srv/scratch/transcode-cache on media-box.",
     );
     await expect(card.locator(".request-summary b")).toHaveText("media-box");
-    await expect(card.locator(".request-warnings li")).toHaveText(["This can't be undone"]);
+    await expect(card.locator(".request-warnings li")).toHaveText([
+      "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+    ]);
     const actions = card.locator('.request-actions[data-row="main"] button');
     await expect(actions).toHaveText(["Allow once", "Always allow…", "Deny"]);
     // A refusal is always called Deny; there is no Skip or Not now.
@@ -155,12 +157,7 @@ test.describe("approval cards", () => {
     );
     await expect(card.locator(".command-line code")).toHaveCSS("font-family", /Mono/);
     await expect(card.getByRole("button", { name: "Copy command" })).toBeVisible();
-    await expect(card.locator(".request-inset dt")).toHaveText([
-      "Runs on",
-      "Folder",
-      "Asked by",
-      "Warning",
-    ]);
+    await expect(card.locator(".request-inset dt")).toHaveText(["Runs on", "Folder", "Asked by"]);
     await expect(card.locator(".request-full > summary .when-open")).toBeVisible();
     await expect(card.locator(".request-full > summary .when-open")).toHaveText(
       "Hide full request",

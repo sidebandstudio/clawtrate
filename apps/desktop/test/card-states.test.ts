@@ -25,6 +25,7 @@ import {
   allowLabel,
   answeredRows,
   approvalView,
+  approvalWarnings,
   botMessageKey,
   botMessageNote,
   decisionPhase,
@@ -126,7 +127,9 @@ describe("approval cards from the engine's state", () => {
       middle: " on ",
       machine: "media-box",
     });
-    expect(view.warnings).toEqual(["This can't be undone"]);
+    expect(view.warnings).toEqual([
+      "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+    ]);
     // The deadline the gateway recorded, and nothing forecast about what happens at it.
     expect(expiryLine(card, NOW)).toMatch(/^Expires at \d+:\d\d [AP]M, in 28 minutes\.$/);
     expect([view.once, view.always, allowLabel(view)]).toEqual([true, true, "Allow once"]);
@@ -142,6 +145,58 @@ describe("approval cards from the engine's state", () => {
     expect([...sendableDecisions(only, false)].sort()).toEqual(["allow-once", "deny"]);
   });
 
+  it("F-171: every warning OpenClaw 2026.10.6 can attach reaches the card in the gateway's words, and Clawtrate adds none (fixture)", () => {
+    const { card } = approval("approval-pending");
+    const warn = (warningText: string | null, warningLines: string[]) =>
+      approvalWarnings({
+        ...card,
+        exec: {
+          ...card.exec!,
+          warningText,
+          commandAnalysis: { commandCount: 1, nestedCommandCount: 0, riskKinds: [], warningLines },
+        },
+      });
+    // Each analysis kind, as the gateway words it (`explainShellCommand` and its labels).
+    const analysis = [
+      "Contains inline-eval: python3 -c",
+      "Contains shell-wrapper: bash -c",
+      "Contains command-carrier: sudo",
+      "Contains dynamic-argument: ls dynamic argument",
+      "Contains eval",
+      "Contains source",
+      "Contains alias",
+      "Contains shell-wrapper-through-carrier",
+      "Contains line-continuation",
+      "Contains function-definition: f",
+      "Contains command-substitution",
+      "Contains process-substitution",
+      "Contains heredoc",
+      "Contains here-string",
+      "Contains redirect",
+      "Contains syntax-error",
+      "Contains dynamic-executable",
+    ];
+    for (const line of analysis) expect(warn(null, [line]), line).toEqual([line]);
+    // The exec tool's own warnings, joined one to a line in `warningText`, come first.
+    const tool = [
+      "Warning: strict inline-eval mode requires reviewer or explicit approval for python3 -c.",
+      "Warning: heredoc execution requires reviewer or explicit approval in allowlist mode.",
+      "Warning: allowlist auto-execution is unavailable on win32; reviewer or explicit approval is required.",
+      "Exec auto-review deferred to human approval (medium risk): Moves files outside the workspace.",
+      "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+    ];
+    expect(warn(tool.join("\n"), ["Contains heredoc"])).toEqual([...tool, "Contains heredoc"]);
+    // A line sent twice is shown once; a request with no warning shows none.
+    expect(warn("Contains eval", ["Contains eval"])).toEqual(["Contains eval"]);
+    expect(warn(null, [])).toEqual([]);
+    expect(
+      approvalWarnings({
+        ...card,
+        exec: { ...card.exec!, warningText: null, commandAnalysis: null },
+      }),
+    ).toEqual([]);
+  });
+
   it("F-164: the full request carries the exact command and the request's own fields", () => {
     const view = approvalView(approval("approval-pending").card, bots, otto);
     expect(view.exact).toEqual({
@@ -153,7 +208,6 @@ describe("approval cards from the engine's state", () => {
       "Runs on",
       "Folder",
       "Asked by",
-      "Warning",
     ]);
     expect(view.argv).toEqual(["mv", "/srv/media/transcode-cache", "/srv/scratch/transcode-cache"]);
   });

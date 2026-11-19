@@ -85,11 +85,21 @@ function machineOf(card: ApprovalCard): string | null {
   return exec.host;
 }
 
-/** The warnings the request carries: its analysis's warning lines, as sent. */
+/**
+ * Every warning the gateway attached to the request, in its words and its order:
+ * each line of the exec tool's `warningText`, then its analysis's `warningLines`.
+ * Clawtrate adds none of its own.
+ */
 export function approvalWarnings(card: ApprovalCard): string[] {
   const analysis = record(card.exec?.commandAnalysis);
-  const lines = Array.isArray(analysis?.warningLines) ? analysis.warningLines : [];
-  return lines.filter((line): line is string => typeof line === "string" && line.trim() !== "");
+  const lines = [
+    ...(card.exec?.warningText ?? "").split("\n"),
+    ...(Array.isArray(analysis?.warningLines) ? analysis.warningLines : []),
+  ];
+  const kept = lines.filter(
+    (line): line is string => typeof line === "string" && line.trim() !== "",
+  );
+  return [...new Set(kept.map((line) => line.trim()))];
 }
 
 export type ApprovalView = {
@@ -165,7 +175,6 @@ export function approvalView(
     if (machine) rows.push({ label: "Runs on", value: machine });
     if (card.exec.cwd) rows.push({ label: "Folder", value: card.exec.cwd, mono: true });
     if (card.agentId) rows.push({ label: "Asked by", value: asker });
-    if (card.exec.warningText) rows.push({ label: "Warning", value: card.exec.warningText });
   } else if (card.plugin) {
     summary = {
       lead:
