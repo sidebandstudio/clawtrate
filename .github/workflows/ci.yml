@@ -16,6 +16,32 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # A pull request that changes only documentation cannot change what the end-to-end, visual and
+  # packaging jobs test, so they are skipped for it. `check` always runs: its unit tests read
+  # docs/parity.md. Pushes to main and runs by hand run everything.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          code=true
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            files=$(git diff --name-only "origin/$BASE...HEAD")
+            printf '%s\n' "$files"
+            if ! printf '%s\n' "$files" | grep -qvE '^(docs/|[^/]+\.md$|LICENSE$|\.github/ISSUE_TEMPLATE/|\.github/pull_request_template\.md$)'; then
+              code=false
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -38,9 +64,17 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
 
+  # The suite runs one test at a time against one gateway, so it is split by file across three
+  # runners, each with a gateway of its own.
   e2e:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
@@ -55,16 +89,18 @@ jobs:
       - run: npm install --global openclaw@2026.10.6
       - run: openclaw --version
       - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm e2e
+      - run: pnpm e2e --shard=${{ matrix.shard }}/3
       # What a failed check saw: traces and error contexts, kept for a few days.
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-results
+          name: e2e-results-${{ matrix.shard }}
           path: test-results/
           retention-days: 3
 
   macos:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     # The visual baselines were taken on macOS 15; font rasterising differs between releases.
     runs-on: macos-15
     timeout-minutes: 60
@@ -89,6 +125,8 @@ jobs:
       - run: pnpm package:mac
 
   windows:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
