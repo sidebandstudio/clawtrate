@@ -26,7 +26,6 @@ import {
   routinesOf,
   runsOfHistory,
   sentRunIds,
-  shiftDate,
   stillCounting,
   tasksOf,
   type Budget,
@@ -120,39 +119,6 @@ async function inTurn<T, R>(
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return out;
-}
-
-/** The wall-clock reading of `ms` in `timeZone`, as if it were UTC. */
-function wallClock(ms: number, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).formatToParts(new Date(ms));
-  const n = (type: string) => Number(parts.find((each) => each.type === type)?.value ?? 0);
-  return Date.UTC(n("year"), n("month") - 1, n("day"), n("hour"), n("minute"), n("second"));
-}
-
-/** The moment a calendar date begins in `timeZone`. */
-export function startOfDate(date: string, timeZone: string): number {
-  const [y, m, d] = date.split("-").map(Number) as [number, number, number];
-  const target = Date.UTC(y, m - 1, d);
-  let guess = target;
-  for (let i = 0; i < 3; i += 1) guess += target - wallClock(guess, timeZone);
-  return guess;
-}
-
-/** The moments a range covers. */
-export function rangeSpan(range: DateRange): { startMs: number; endMs: number } {
-  return {
-    startMs: startOfDate(range.startDate, range.timeZone),
-    endMs: startOfDate(shiftDate(range.endDate, 1), range.timeZone) - 1,
-  };
 }
 
 const sameRange = (a: DateRange, b: DateRange) =>
@@ -512,7 +478,6 @@ export class UsageEngine {
     total: number,
     range: DateRange,
   ): Promise<UsageSources> {
-    const { startMs, endMs } = rangeSpan(range);
     const routines = tasks
       .filter((task) => task.routineId)
       .reduce((sum, task) => sum + task.total, 0);
@@ -529,7 +494,7 @@ export class UsageEngine {
           }),
         );
         if (result?.hasMore === true) partial = true;
-        return { key: task.key, runs: runsOfHistory(result?.messages, startMs, endMs) };
+        return { key: task.key, runs: runsOfHistory(result?.messages, range) };
       } catch {
         partial = true;
         return { key: task.key, runs: [] };

@@ -25,8 +25,6 @@ export {
   COUNT_COUNTING_MS,
   COUNT_EVERY_MS,
   MAX_USAGE_REPORTS,
-  rangeSpan,
-  startOfDate,
   type UsageReport,
 } from "./usage-engine.ts";
 export * from "./task-actions.ts";

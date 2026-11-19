@@ -100,16 +100,37 @@ export function validTimeZone(value: unknown): string | null {
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** The calendar date `ms` falls on in `timeZone`, as YYYY-MM-DD. */
-export function dateIn(ms: number, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
+/** The calendar date of each moment in `timeZone`, as YYYY-MM-DD: one formatter for many moments. */
+export function datesIn(timeZone: string): (ms: number) => string {
+  const format = new Intl.DateTimeFormat("en-CA", {
     timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).formatToParts(new Date(ms));
-  const part = (type: string) => parts.find((each) => each.type === type)?.value ?? "";
-  return `${part("year")}-${part("month")}-${part("day")}`;
+  });
+  return (ms) => {
+    const parts = format.formatToParts(new Date(ms));
+    const part = (type: string) => parts.find((each) => each.type === type)?.value ?? "";
+    return `${part("year")}-${part("month")}-${part("day")}`;
+  };
+}
+
+/** The calendar date `ms` falls on in `timeZone`, as YYYY-MM-DD. */
+export function dateIn(ms: number, timeZone: string): string {
+  return datesIn(timeZone)(ms);
+}
+
+/**
+ * Whether a moment is in a range: its calendar date in the range's time zone
+ * is one of the range's days, as the gateway counts a day (also on a day whose
+ * midnight does not exist on the clock).
+ */
+export function inRange(range: DateRange): (ms: number) => boolean {
+  const dateOf = datesIn(range.timeZone);
+  return (ms) => {
+    const date = dateOf(ms);
+    return date >= range.startDate && date <= range.endDate;
+  };
 }
 
 /** A calendar date moved by whole days. */
@@ -278,15 +299,16 @@ export type RunUse = {
 };
 
 /**
- * The runs in one task's history and their tokens within `[startMs, endMs]`.
+ * The runs in one task's history and their tokens on the days of `range`.
  * A run's tokens are the sum of its model answers' `usage` (each assistant row
  * names its run, `__openclaw.runId`). What started it is the row the gateway
  * keyed `<run id>:user`: a person's message, a message another bot's send
  * delivered (`provenance.kind: "inter_session"` from `sessions_send`), or a turn
  * the gateway wrote itself. A run with no such row in the page is `unknown`.
  */
-export function runsOfHistory(messages: unknown, startMs: number, endMs: number): RunUse[] {
+export function runsOfHistory(messages: unknown, range: DateRange): RunUse[] {
   if (!Array.isArray(messages)) return [];
+  const within = inRange(range);
   const runs = new Map<string, RunUse>();
   const triggers = new Map<string, { trigger: RunTrigger; sourceKey: string | null }>();
   for (const each of messages) {
@@ -309,7 +331,7 @@ export function runsOfHistory(messages: unknown, startMs: number, endMs: number)
     if (row.role !== "assistant" || typeof meta.runId !== "string" || !asRecord(row.usage))
       continue;
     const at = typeof row.timestamp === "number" ? row.timestamp : null;
-    if (at === null || at < startMs || at > endMs) continue;
+    if (at === null || !Number.isFinite(at) || !within(at)) continue;
     const use = runs.get(meta.runId) ?? {
       runId: meta.runId,
       tokens: 0,

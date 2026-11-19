@@ -15,9 +15,9 @@ import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { rangeSpan } from "../packages/core/src/usage-engine.ts";
 import {
   BUDGETS_PREF_KEY,
+  inRange,
   rangeFor,
   rangeParams,
   type UsagePeriod,
@@ -403,7 +403,7 @@ test("F-131: the Messages from other bots line counts only the run a send's resu
   // Every bot-to-bot run of Marlow's this week, worked out from the gateway's own records: a
   // turn another bot's send delivered, in any of Marlow's tasks, whose run the sending task's
   // `sessions_send` result names. Other checks of this run may have added more than the seed's.
-  const { startMs, endMs } = rangeSpan(range);
+  const within = inRange(range);
   const marlowTasks = await gateway.request<{ sessions: Array<{ key: string; usage?: Json }> }>(
     "sessions.usage",
     { agentId: "marlow", ...rangeParams(range), limit: 200 },
@@ -452,8 +452,7 @@ test("F-131: the Messages from other bots line counts only the run a send's resu
           (each) =>
             each.role === "assistant" &&
             (each.__openclaw as Json | undefined)?.runId === runId &&
-            Number(each.timestamp) >= startMs &&
-            Number(each.timestamp) <= endMs,
+            within(Number(each.timestamp)),
         )
         .reduce((sum, each) => sum + Number((each.usage as Json | undefined)?.totalTokens ?? 0), 0);
     }

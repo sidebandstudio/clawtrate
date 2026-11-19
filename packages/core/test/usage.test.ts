@@ -10,8 +10,6 @@ import {
   COUNT_EVERY_MS,
   MAX_USAGE_REPORTS,
   MAX_WAITING_USAGE_REPORTS,
-  rangeSpan,
-  startOfDate,
   UsageEngine,
   type UsageContext,
 } from "../src/usage-engine.ts";
@@ -139,17 +137,22 @@ describe("periods", () => {
     );
   });
 
-  it("a day starts at 00:00 in its time zone, across a change of the clocks", () => {
-    expect(startOfDate("2026-11-19", NY)).toBe(Date.UTC(2026, 10, 19, 5));
-    expect(startOfDate("2026-11-19", "Asia/Tokyo")).toBe(Date.UTC(2026, 10, 18, 15));
-    // New York moves from UTC-4 to UTC-5 on 1 November 2026.
-    expect(startOfDate("2026-11-01", NY)).toBe(Date.UTC(2026, 10, 1, 4));
-    expect(startOfDate("2026-11-02", NY)).toBe(Date.UTC(2026, 10, 2, 5));
-    const span = rangeSpan({ startDate: "2026-11-16", endDate: "2026-11-19", timeZone: NY });
-    expect(span).toEqual({
-      startMs: Date.UTC(2026, 10, 16, 5),
-      endMs: Date.UTC(2026, 10, 20, 5) - 1,
-    });
+  it("a run is in a period when its date in the period's time zone is one of the days asked of the gateway, across a change of the clocks", () => {
+    const runAt = (at: number, range: { startDate: string; endDate: string; timeZone: string }) =>
+      runsOfHistory([person("r", at - 1), assistant("r", at)], range).map((run) => run.tokens);
+    // Cairo's 24 April 2026 has no midnight: the clocks go from 23:59 on the 23rd to 01:00.
+    // The gateway's day starts at 22:00 UTC, so a run at 21:30 UTC (23:30 on the 23rd) is not in it.
+    const cairo = { startDate: "2026-04-24", endDate: "2026-04-24", timeZone: "Africa/Cairo" };
+    expect(runAt(Date.parse("2026-04-23T21:30:00Z"), cairo)).toEqual([]);
+    expect(runAt(Date.parse("2026-04-23T22:00:00Z"), cairo)).toEqual([200]);
+    // After the change it is UTC+3: the day has 23 hours and ends at 21:00 UTC.
+    expect(runAt(Date.parse("2026-04-24T20:59:59Z"), cairo)).toEqual([200]);
+    expect(runAt(Date.parse("2026-04-24T21:00:00Z"), cairo)).toEqual([]);
+    // New York's 1 November 2026 has 25 hours, 04:00 UTC to 05:00 UTC the next day.
+    const fall = { startDate: "2026-11-01", endDate: "2026-11-01", timeZone: NY };
+    expect(runAt(Date.parse("2026-11-01T03:59:59Z"), fall)).toEqual([]);
+    expect(runAt(Date.parse("2026-11-02T04:59:59Z"), fall)).toEqual([200]);
+    expect(runAt(Date.parse("2026-11-02T05:00:00Z"), fall)).toEqual([]);
   });
 });
 
@@ -291,8 +294,7 @@ describe("where a bot's runs came from", () => {
         assistant("r3", T + 5),
         assistant("r4", T - 10_000_000),
       ],
-      T - 1000,
-      T + 1000,
+      { startDate: "2026-11-19", endDate: "2026-11-19", timeZone: NY },
     );
     expect(runs).toEqual([
       { runId: "r1", tokens: 200, trigger: "person", sourceKey: null },
