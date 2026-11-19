@@ -44,13 +44,29 @@ export const hashCallId = (toolCallId) =>
     ? `sha256:${createHash("sha256").update(toolCallId).digest("hex")}`
     : null;
 
-/** Write `text` to `path` atomically: a temporary file, flushed and renamed over it. */
+/** Write every byte of `bytes` to `fd`, or throw: a write that makes no progress fails. */
+function writeAll(fd, bytes) {
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = writeSync(fd, bytes, offset, bytes.length - offset);
+    if (!Number.isInteger(written) || written <= 0) {
+      throw Object.assign(new Error("a write made no progress"), { code: "EIO" });
+    }
+    offset += written;
+  }
+}
+
+/**
+ * Write `text` to `path` atomically: a temporary file, written whole and
+ * flushed, then renamed over it. Anything short of that throws before the
+ * rename, so the old file stays as it was.
+ */
 export function writeFileAtomic(dir, name, text) {
   const target = join(dir, name);
   const temp = join(dir, `.${name}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
   const fd = openSync(temp, "wx", 0o600);
   try {
-    writeSync(fd, text);
+    writeAll(fd, Buffer.from(text, "utf8"));
     fsyncSync(fd);
   } catch (error) {
     closeSync(fd);
