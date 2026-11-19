@@ -55,6 +55,7 @@ import {
   type StoredOrder,
 } from "./accounts.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { onceMore } from "./task-models.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 
 /** What the engine needs from the client. */
@@ -1448,7 +1449,7 @@ export class AccountsEngine {
       return;
     }
     try {
-      const answer = await ctx.request("models.list", { sessionKey });
+      const answer = await onceMore(() => ctx.request("models.list", { sessionKey }));
       const selection = asRecord(asRecord(answer)?.accountSelection);
       const account =
         selection?.kind === "shared" && typeof selection.authProfileId === "string"

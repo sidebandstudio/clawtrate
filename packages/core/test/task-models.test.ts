@@ -310,6 +310,21 @@ describe("a task's model and effort", () => {
     expect(r.view().events.at(-1)?.outcome).toBe("refused");
   });
 
+  it("F-042: a list of models the gateway answers as retryable is read once more", async () => {
+    const r = rig();
+    const request = r.ctx.request;
+    let busy = 1;
+    r.ctx.request = async (method, params) => {
+      if (method === "models.list" && busy-- > 0)
+        throw Object.assign(new Error("Chat metadata access changed. Retry the request."), {
+          retryable: true,
+        });
+      return request(method, params);
+    };
+    await opened(r);
+    expect(r.view().models).toHaveLength(3);
+  });
+
   it("F-042: the account the task's conversation selected is written before the bot's", async () => {
     const r = rig();
     r.ctx.request = async (method, params) => {

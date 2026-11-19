@@ -133,6 +133,20 @@ export type TaskModelsContext = {
   pause?: (ms: number) => Promise<void>;
 };
 
+/**
+ * One request, sent once more when the gateway answers it as retryable, as it
+ * does for `models.list` while it prepares a task's metadata.
+ */
+export async function onceMore<T>(send: () => Promise<T>): Promise<T> {
+  try {
+    return await send();
+  } catch (error) {
+    if ((error as { retryable?: unknown } | null)?.retryable !== true) throw error;
+    await new Promise<void>((resolve) => setTimeout(() => resolve(), SAVE_RETRY_MS));
+    return send();
+  }
+}
+
 /** The gateway says the request may be sent again (`retryable`), and when. */
 function retryAfter(error: unknown, attempt: number): number | null {
   const shape = error as { retryable?: unknown; retryAfterMs?: unknown } | null;
@@ -348,7 +362,7 @@ export class TaskModelsEngine {
       catalog: view.catalog === "ready" ? "ready" : "loading",
     }));
     try {
-      const answer = await this.ctx.request("models.list", { sessionKey: key });
+      const answer = await onceMore(() => this.ctx.request("models.list", { sessionKey: key }));
       const provider = parseModelRef(this.ctx.task(key)?.model)?.provider ?? null;
       const models = readCatalog(answer)
         .filter((each) => provider === null || each.provider === provider)
