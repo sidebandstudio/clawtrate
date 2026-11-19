@@ -3,7 +3,8 @@
 // what it must never do (design section 21).
 
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type * as fs from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin, {
@@ -13,8 +14,24 @@ import plugin, {
   PLUGIN_VERSION,
   TITLE_MAX,
 } from "../index.js";
-import { RulesStore } from "../lib/store.js";
+import { RulesStore, serializeRules } from "../lib/store.js";
 import { load, running, tempState } from "./harness.ts";
+
+// A read of one path fails with an I/O error while `failPath` names it,
+// whatever the process may read: the unreadable rules file.
+const io = vi.hoisted(() => ({ failPath: "" }));
+vi.mock("node:fs", async (importOriginal) => {
+  const real = await importOriginal<typeof fs>();
+  return {
+    ...real,
+    readFileSync: (...args: Parameters<typeof real.readFileSync>) => {
+      if (io.failPath && String(args[0]) === io.failPath) {
+        throw Object.assign(new Error("injected"), { code: "EIO" });
+      }
+      return real.readFileSync(...args);
+    },
+  };
+});
 
 const cleanups: (() => void)[] = [];
 const started: { stop(): void }[] = [];
@@ -148,7 +165,12 @@ describe("a lost policy is not an empty one", () => {
         ),
       /not a valid rules store/,
     ],
-    ["unreadable", (f) => (writeFileSync(f, "{}"), chmodSync(f, 0o000)), /cannot be read/],
+    [
+      "unreadable",
+      (f) => (writeFileSync(f, JSON.stringify(serializeRules(new Map()))), (io.failPath = f)),
+      /cannot be read \(EIO\)/,
+    ],
+    ["valid JSON that is not a store", (f) => writeFileSync(f, "{}"), /not a rules store/],
   ];
 
   it("no rules file: nothing was saved, and nothing is decided", () => {
@@ -198,7 +220,7 @@ describe("a lost policy is not an empty one", () => {
           details: { reason: "rules_unavailable" },
         });
       } finally {
-        chmodSync(rulesFile(h0.stateDir), 0o600);
+        io.failPath = "";
       }
     });
   }
@@ -223,7 +245,7 @@ describe("a lost policy is not an empty one", () => {
         });
         expect(set.error?.message).toMatch(/Enforcing the copy read at /);
       } finally {
-        chmodSync(rulesFile(h.stateDir), 0o600);
+        io.failPath = "";
       }
     }
     const records = (await h.call("decisions.list")).payload!.records as Record<string, unknown>[];
