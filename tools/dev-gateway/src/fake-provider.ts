@@ -4,6 +4,7 @@
 
 import { writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import { MODEL_ID } from "./env.ts";
 import { ScriptedAccounts, type FailureStatus, type ScriptedFailure } from "./scripted-accounts.ts";
 import {
@@ -253,6 +254,13 @@ export function startFakeProvider(options: FakeProviderOptions) {
   const log = options.log ?? (() => {});
   const server = createServer((req, res) => {
     void (async () => {
+      // The gateway's egress proxy points here (`proxy.proxyUrl` in devConfig):
+      // a request for another host arrives in absolute form, and is refused.
+      if (/^[a-z][a-z0-9+.-]*:\/\//i.test(req.url ?? "")) {
+        log(`refused a request beyond loopback: ${req.method} ${beyondLoopback(req.url!)}`);
+        sendJson(res, 403, { error: { message: "nothing beyond loopback", type: "refused" } });
+        return;
+      }
       const url = new URL(req.url ?? "/", "http://localhost");
       if (req.method === "GET" && url.pathname === "/health") {
         sendJson(res, 200, { ok: true });
@@ -364,6 +372,21 @@ export function startFakeProvider(options: FakeProviderOptions) {
       else res.end();
     });
   });
+  // An HTTPS request through the proxy asks for a tunnel first, and gets none.
+  server.on("connect", (req: IncomingMessage, socket: Duplex) => {
+    log(`refused a request beyond loopback: CONNECT ${req.url ?? ""}`);
+    socket.end("HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+  });
   server.listen(options.port, options.host ?? "127.0.0.1");
   return server;
+}
+
+/** The scheme, host and path of a proxied request, without its query. */
+function beyondLoopback(raw: string): string {
+  try {
+    const url = new URL(raw);
+    return `${url.protocol}//${url.host}${url.pathname}`;
+  } catch {
+    return "(an unreadable address)";
+  }
 }
