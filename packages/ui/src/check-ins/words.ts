@@ -21,14 +21,19 @@ export const EVERY_CHOICES: Array<{ value: string; label: string }> = [
   { value: "12h", label: "12 hours" },
 ];
 
-/** A cadence in words: "30 minutes", "2 hours", "1 hour". */
+/** A cadence in words, exactly, in the largest unit that divides it: "30 minutes", "90 seconds", "1 hour". */
 export function cadence(ms: number): string {
-  if (ms % 3_600_000 === 0) {
-    const hours = ms / 3_600_000;
-    return hours === 1 ? "1 hour" : `${hours} hours`;
+  for (const [size, unit] of [
+    [3_600_000, "hour"],
+    [60_000, "minute"],
+    [1_000, "second"],
+    [1, "millisecond"],
+  ] as const) {
+    if (ms % size !== 0) continue;
+    const count = ms / size;
+    return count === 1 ? `1 ${unit}` : `${count.toLocaleString("en-US")} ${unit}s`;
   }
-  const minutes = Math.max(1, Math.round(ms / 60_000));
-  return minutes === 1 ? "1 minute" : `${minutes} minutes`;
+  return `${ms} milliseconds`;
 }
 
 const checksIn = (job: CheckInJob | undefined): job is CheckInJob & { everyMs: number } =>
@@ -78,7 +83,7 @@ export function everyFor(choice: Choice, every: string): string {
         : every;
 }
 
-/** `quiet`: the prompt the bot will get asks it to reply NO_REPLY when nothing needs attention. */
+/** `quiet`: the bot will get the gateway's own prompt, which asks it to reply NO_REPLY when nothing needs attention. */
 export function choiceWords(choice: Choice, name: string, quiet: boolean): string {
   switch (choice) {
     case "off":

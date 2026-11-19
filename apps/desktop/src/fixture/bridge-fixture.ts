@@ -497,7 +497,11 @@ export function createFixtureBridge(
     save: null,
   };
   const checkInCommand = checkInCommands(checkInParams);
-  if (state.bots.length > 0) state = { ...state, checkIns: fixtureCheckIns(now, checkInParams) };
+  if (state.bots.length > 0)
+    state = {
+      ...state,
+      checkIns: fixtureCheckIns(now, checkInParams, state.connection.gatewayId),
+    };
   const listeners = new Set<(state: ClawtrateState) => void>();
   const set = (next: ClawtrateState) => {
     state = next;

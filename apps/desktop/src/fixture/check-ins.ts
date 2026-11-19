@@ -8,7 +8,7 @@
 //   &cidefault=prompt  the gateway's default carries a custom prompt without NO_REPLY
 //   &scheduler=off     the gateway's scheduler is off, as on the development gateway
 //   &cisave=fail       a save the gateway refuses; &cisave=unknown, one it may have applied;
-//   &cisave=conflict   another client changes Juniper's cadence while a dialog is open
+//   &cisave=conflict   another client changes Juniper's cadence and prompt while a dialog is open
 
 import {
   durationMs,
@@ -94,13 +94,18 @@ function jobsFor(config: Config, now: number): CheckInJob[] {
 function shown(config: Config, now: number) {
   const answer = { config };
   const jobs = jobsFor(config, now);
-  return { jobs, settings: readSettings(answer, BOTS), defaults: readDefaults(answer, jobs) };
+  return { jobs, settings: readSettings(answer, BOTS), defaults: readDefaults(answer) };
 }
 
-export function fixtureCheckIns(now: number, params: CheckInParams): CheckInsState {
+export function fixtureCheckIns(
+  now: number,
+  params: CheckInParams,
+  gatewayId: string | null,
+): CheckInsState {
   return {
     status: "ready",
     error: null,
+    gatewayId,
     scheduler: params.scheduler,
     ...shown(configFor(params), now),
     save: null,
@@ -124,8 +129,9 @@ export function checkInCommands(params: CheckInParams) {
         set({
           ...get(),
           checkIns: {
-            ...(get().checkIns ?? fixtureCheckIns(Date.now(), params)),
+            ...(get().checkIns ?? fixtureCheckIns(Date.now(), params, null)),
             ...shown(config, Date.now()),
+            gatewayId: get().connection.gatewayId,
           },
         });
         return Promise.resolve();
@@ -137,6 +143,10 @@ export function checkInCommands(params: CheckInParams) {
       case "saveCheckIn": {
         if (!get().connection.canAdmin)
           return Promise.reject(new Error("Changing check-ins needs admin access."));
+        if (command.gatewayId !== get().connection.gatewayId)
+          return Promise.reject(
+            new Error("This change was made for another gateway, so nothing was sent."),
+          );
         const { saveId, botId } = command;
         const settle = (
           status: "saved" | "failed" | "unknown" | "conflict",
@@ -150,7 +160,12 @@ export function checkInCommands(params: CheckInParams) {
         put((c) => ({ ...c, save: { id: saveId, botId, status: "saving", error: null } }));
         // Another client, between the dialog opening and this save.
         if (params.save === "conflict")
-          config.agents.entries.main = { heartbeat: { every: "24h" } };
+          config.agents.entries.main = {
+            heartbeat: {
+              every: "24h",
+              prompt: "Theirs. If nothing needs attention, reply NO_REPLY.",
+            },
+          };
         setTimeout(() => {
           if (params.save === "fail")
             return settle("failed", "invalid config: the gateway refused the change.");
@@ -159,11 +174,9 @@ export function checkInCommands(params: CheckInParams) {
               "unknown",
               "Clawtrate couldn't confirm the change: the gateway's config and check-in jobs didn't both show it.",
             );
-          const plan = planCheckIn(botId, command, {
-            config: { config },
-            ...shown(config, Date.now()),
-          });
+          const plan = planCheckIn(botId, command, { config });
           if ("conflict" in plan) return settle("conflict", plan.conflict);
+          if ("refused" in plan) return settle("failed", plan.refused);
           const entries = (
             plan.patch?.agents as { entries?: Record<string, { heartbeat: Heartbeat }> }
           )?.entries;

@@ -22,6 +22,7 @@ import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
 import {
   CHECKIN_EVERY,
+  MAX_CHECKIN_EVERY_CHARS,
   MAX_CHECKIN_KEPT,
   MAX_CHECKIN_PROMPT_CHARS,
   type CheckInDraft,
@@ -503,7 +504,8 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "refreshCheckIns":
       return { type: command.type };
     case "saveCheckIn": {
-      const every = (value: unknown) => (value === null ? null : shortText(value, 64, "cadence"));
+      const every = (value: unknown) =>
+        value === null ? null : shortText(value, MAX_CHECKIN_EVERY_CHARS, "cadence");
       const prompt = (value: unknown) =>
         value === null ? null : shortText(value, MAX_CHECKIN_PROMPT_CHARS, "prompt");
       if (command.every !== null && !CHECKIN_EVERY.test(String(command.every)))
@@ -516,12 +518,13 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "saveCheckIn",
         saveId: id(command.saveId, "save"),
         botId: botId(command.botId),
+        gatewayId: id(command.gatewayId, "gateway"),
         every: every(command.every),
         prompt: prompt(command.prompt),
         was: { every: every(was.every), prompt: prompt(was.prompt) },
         kept: command.kept.map((each: Record<string, unknown>) => ({
           botId: botId(each?.botId),
-          every: shortText(each?.every, 64, "cadence"),
+          every: shortText(each?.every, MAX_CHECKIN_EVERY_CHARS, "cadence"),
         })),
       };
     }
@@ -991,6 +994,7 @@ class ViewerSession implements BridgeSession {
         return client.refreshCheckIns();
       case "saveCheckIn":
         return client.saveCheckIn(command.saveId, command.botId, {
+          gatewayId: command.gatewayId,
           every: command.every,
           prompt: command.prompt,
           was: command.was,

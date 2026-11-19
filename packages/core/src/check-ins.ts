@@ -6,8 +6,10 @@
 // - any bot with a `heartbeat` of its own (even `{}`): only those bots have a job;
 // - else `agents.defaults.heartbeat.agentId`: only that bot;
 // - else an `agents.defaults.heartbeat` block: every bot in the config;
-// - else the gateway's ambient owner, which Clawtrate reads from the jobs;
+// - else the gateway's ambient owner, from the config (`tryResolveAmbientOwnerAgentId`);
 // - a bot's cadence is its own `every`, else the default's, else "30m";
+// - the job list is re-derived only when a heartbeat setting changes, so it can
+//   name an owner the config no longer does: enrollment is read from the config;
 // - `every: "0m"` keeps the bot's job with `enabled: false` (and its old `everyMs`);
 // - the job cannot be edited with `cron.update` ("system-owned monitor jobs").
 
@@ -18,13 +20,20 @@ import { asRecord, type RawRecord } from "./mapping.ts";
 export const MAX_CHECKIN_PROMPT_CHARS = 4_000;
 /** The `every` values Clawtrate writes. */
 export const CHECKIN_EVERY = /^(\d{1,9})(ms|s|m|h)$/;
+/** The longest `every` kept and written back; a longer one is never written back cut. */
+export const MAX_CHECKIN_EVERY_CHARS = 64;
 /** The most bots a save may also write: one per bot Clawtrate lists. */
 export const MAX_CHECKIN_KEPT = 32;
+export const KEEP_TOO_MANY = `More than ${MAX_CHECKIN_KEPT} other bots check in through the gateway's default, and Clawtrate writes at most ${MAX_CHECKIN_KEPT} of them in one change.`;
+export const KEEP_TOO_LONG =
+  "The cadence the gateway's default gives is longer than Clawtrate writes back.";
 const READ_BACK_MS = 20_000;
 const READ_BACK_EVERY_MS = 500;
 const JOB_PAGE = 200;
 /** Past this many pages of jobs (10,000), the list is not read whole and nothing is confirmed by it. */
 const MAX_JOB_PAGES = 50;
+/** Reads of the whole list begun again because it changed between pages, as the gateway's own CLI does. */
+const MAX_JOB_RESTARTS = 3;
 
 /** The bot's heartbeat job as `cron.list` returns it: what will actually run. */
 export type CheckInJob = {
@@ -46,12 +55,18 @@ export type CheckInSetting = {
 
 /** What a bot without a setting of its own gets, from the same config read as the settings. */
 export type CheckInDefaults = {
-  /** The bots that check in now through the default, and would stop once any bot has its own. */
+  /**
+   * The bots that check in now through the default, and would stop once any
+   * bot has its own: up to one more than `MAX_CHECKIN_KEPT`, since the bot
+   * being saved is not kept.
+   */
   inherited: string[];
-  /** More bots inherit than `MAX_CHECKIN_KEPT`; a save that would have to write them all is refused. */
+  /** More bots inherit than `inherited` holds. */
   inheritedCut: boolean;
-  /** The cadence they inherit, exactly as the config gives it. */
+  /** The cadence they inherit, exactly as the config gives it, unless `everyCut`. */
   every: string;
+  /** The cadence is longer than `MAX_CHECKIN_EVERY_CHARS`: `every` is its start and is never written. */
+  everyCut: boolean;
   /** `agents.defaults.heartbeat.prompt`; null for the gateway's built-in prompt. */
   prompt: string | null;
   promptCut: boolean;
@@ -72,6 +87,8 @@ export type CheckInSave = {
 export type CheckInsState = {
   status: "loading" | "ready" | "error";
   error: string | null;
+  /** The identity (`gateway.identity.get`) of the gateway this was read from; null once its connection closed. */
+  gatewayId: string | null;
   /** `cron.status` `enabled`: false means no scheduled check-in runs; null when not read. */
   scheduler: boolean | null;
   jobs: CheckInJob[];
@@ -89,8 +106,10 @@ export type CheckInKept = { botId: string; every: string };
  * as they were ("" prompt: the default's). `was` is the bot's own setting the
  * draft started from, and `kept` the other bots the dialog said it would also
  * write: if the gateway's config no longer matches them, nothing is written.
+ * `gatewayId` is the gateway the draft was made on; no other is written.
  */
 export type CheckInDraft = {
+  gatewayId: string;
   every: string | null;
   prompt: string | null;
   was: { every: string | null; prompt: string | null };
@@ -99,12 +118,16 @@ export type CheckInDraft = {
 
 /** One open connection: requests go to it alone, and `alive` turns false once it is gone. */
 export type CheckInsLink = {
-  request(method: string, params: unknown): Promise<unknown>;
+  request(method: string, params: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
   alive(): boolean;
 };
 
 export type CheckInsContext = {
   link(): CheckInsLink;
+  /** The current connection's gateway identity, once `gateway.identity.get` answered; null if it gave none. */
+  gateway(): Promise<string | null>;
+  /** Marks a read begun; the check turns false once a later one begins, and its answer is then not shown. */
+  begin(): () => boolean;
   get(): CheckInsState | undefined;
   set(next: CheckInsState): void;
   botIds(): string[];
@@ -188,29 +211,70 @@ export function readSettings(config: unknown, botIds: readonly string[]): CheckI
     if (!heartbeat) continue;
     out.push({
       botId,
-      every: typeof heartbeat.every === "string" ? heartbeat.every.slice(0, 64) : null,
+      every:
+        typeof heartbeat.every === "string"
+          ? heartbeat.every.slice(0, MAX_CHECKIN_EVERY_CHARS)
+          : null,
       ...prompt(heartbeat.prompt),
     });
   }
   return out;
 }
 
-/** Who checks in through the default, and with what, by the gateway's rules (top of this file). */
-export function readDefaults(config: unknown, jobs: readonly CheckInJob[]): CheckInDefaults {
-  const agents = agentsOf(config);
+const VALID_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+/** A bot id as the gateway normalizes it (`normalizeAgentId`). */
+function agentId(raw: string): string {
+  const lower = raw.trim().toLowerCase();
+  if (VALID_ID.test(raw.trim())) return lower;
+  const cleaned = lower
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "")
+    .slice(0, 64);
+  return cleaned || "main";
+}
+const named = (value: unknown) =>
+  typeof value === "string" && value.trim() !== "" ? agentId(value) : null;
+
+/**
+ * Every bot that checks in through the default, by the gateway's rules (top of
+ * this file); none once any bot has a setting of its own. From the config
+ * alone, so it agrees with the `baseHash` read with it.
+ */
+function enrolledByDefault(agents: RawRecord | null): string[] {
   const entries = asRecord(agents?.entries) ?? {};
-  const heartbeat = asRecord(agents?.defaults)?.heartbeat;
-  const defaults = asRecord(heartbeat);
-  const owner = typeof defaults?.agentId === "string" ? defaults.agentId.trim().toLowerCase() : "";
-  let inherited: string[];
-  if (Object.values(entries).some((entry) => asRecord(entry)?.heartbeat)) inherited = [];
-  else if (owner) inherited = [owner];
-  else if (heartbeat) inherited = Object.keys(entries).map((id) => id.toLowerCase());
-  else inherited = jobs.map((job) => job.botId);
+  const ids = Object.keys(entries).filter((id) => asRecord(entries[id]));
+  if (ids.some((id) => asRecord(entries[id])!.heartbeat)) return [];
+  const defaults = asRecord(agents?.defaults);
+  const heartbeat = defaults?.heartbeat;
+  const owner = named(asRecord(heartbeat)?.agentId);
+  if (owner) return [owner];
+  if (heartbeat) return [...new Set(ids.map(agentId))];
+  // The ambient owner: the system agent, else the one bot marked default, else the only bot.
+  const system = named(asRecord(defaults?.systemAgent)?.agentId);
+  if (system) return [system];
+  const marked = ids.filter((id) => asRecord(entries[id])!.default === true);
+  if (agents?.ownership !== "explicit" && marked.length === 1) return [agentId(marked[0]!)];
+  return ids.length === 1 ? [agentId(ids[0]!)] : [];
+}
+
+/** The cadence a bot without its own `every` gets, exactly as the config gives it. */
+function inheritedEvery(agents: RawRecord | null): string {
+  const every = asRecord(asRecord(agents?.defaults)?.heartbeat)?.every;
+  return typeof every === "string" ? every : "30m";
+}
+
+/** Who checks in through the default, and with what, by the gateway's rules (top of this file). */
+export function readDefaults(config: unknown): CheckInDefaults {
+  const agents = agentsOf(config);
+  const defaults = asRecord(asRecord(agents?.defaults)?.heartbeat);
+  const inherited = enrolledByDefault(agents);
+  const every = inheritedEvery(agents);
   return {
-    inherited: inherited.slice(0, MAX_CHECKIN_KEPT),
-    inheritedCut: inherited.length > MAX_CHECKIN_KEPT,
-    every: typeof defaults?.every === "string" ? defaults.every.slice(0, 64) : "30m",
+    inherited: inherited.slice(0, MAX_CHECKIN_KEPT + 1),
+    inheritedCut: inherited.length > MAX_CHECKIN_KEPT + 1,
+    every: every.slice(0, MAX_CHECKIN_EVERY_CHARS),
+    everyCut: every.length > MAX_CHECKIN_EVERY_CHARS,
     ...prompt(defaults?.prompt),
   };
 }
@@ -227,6 +291,18 @@ export function keptByDefault(
     .map((id) => ({ botId: id, every: defaults.every }));
 }
 
+/** Why a save for `botId` cannot also write the bots it would have to keep, or null when it can. */
+export function cannotKeep(
+  botId: string,
+  settings: readonly CheckInSetting[] | null,
+  defaults: CheckInDefaults | null,
+): string | null {
+  const kept = keptByDefault(botId, settings, defaults);
+  if (kept.length === 0) return null;
+  if (defaults!.inheritedCut || kept.length > MAX_CHECKIN_KEPT) return KEEP_TOO_MANY;
+  return defaults!.everyCut ? KEEP_TOO_LONG : null;
+}
+
 /** The jobs show `every` for this bot: Off a disabled job, a cadence an enabled job at it. */
 function shows(jobs: readonly CheckInJob[], botId: string, every: string): boolean {
   const job = jobs.find((each) => each.botId === botId);
@@ -238,6 +314,7 @@ function shows(jobs: readonly CheckInJob[], botId: string, every: string): boole
 const emptyState = (): CheckInsState => ({
   status: "loading",
   error: null,
+  gatewayId: null,
   scheduler: null,
   jobs: [],
   settings: null,
@@ -247,25 +324,43 @@ const emptyState = (): CheckInsState => ({
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-/** Every page of heartbeat jobs: the list is read whole or not at all. */
-async function readAllJobs(link: CheckInsLink): Promise<CheckInJob[]> {
-  const out: CheckInJob[] = [];
-  let offset = 0;
-  for (let page = 0; page < MAX_JOB_PAGES; page += 1) {
-    const answer = await link.request("cron.list", {
-      includeDisabled: true,
-      scheduleKind: "every",
-      limit: JOB_PAGE,
-      offset,
-    });
-    for (const job of readJobs(answer))
-      if (!out.some((each) => each.botId === job.botId)) out.push(job);
-    const next = asRecord(answer)?.nextOffset;
-    if (asRecord(answer)?.hasMore !== true || typeof next !== "number" || next <= offset)
-      return out;
-    offset = next;
+type Ask = () => { timeoutMs: number } | undefined;
+
+/**
+ * Every page of heartbeat jobs: the list is read whole or not at all. Pages
+ * of one read carry the same `snapshotRevision` and `total`; when either
+ * changes between pages the jobs moved, and the read begins again.
+ */
+async function readAllJobs(link: CheckInsLink, ask: Ask): Promise<CheckInJob[]> {
+  for (let restart = 0; restart <= MAX_JOB_RESTARTS; restart += 1) {
+    const out: CheckInJob[] = [];
+    let offset = 0;
+    let first: RawRecord | null = null;
+    let moved = false;
+    for (let page = 0; page < MAX_JOB_PAGES && !moved; page += 1) {
+      const answer = asRecord(
+        await link.request(
+          "cron.list",
+          { includeDisabled: true, scheduleKind: "every", limit: JOB_PAGE, offset },
+          ask(),
+        ),
+      );
+      first ??= answer;
+      if (answer?.snapshotRevision !== first?.snapshotRevision || answer?.total !== first?.total) {
+        moved = true;
+        break;
+      }
+      for (const job of readJobs(answer))
+        if (!out.some((each) => each.botId === job.botId)) out.push(job);
+      if (answer?.hasMore !== true) return out;
+      const next = answer.nextOffset;
+      if (typeof next !== "number" || next <= offset)
+        throw new Error("The gateway's list of scheduled jobs couldn't be read whole.");
+      offset = next;
+    }
+    if (!moved) throw new Error("The gateway has too many scheduled jobs to read whole.");
   }
-  throw new Error("The gateway has too many scheduled jobs to read whole.");
+  throw new Error("The gateway's scheduled jobs kept changing while Clawtrate read them.");
 }
 
 type Snapshot = {
@@ -279,25 +374,35 @@ type Snapshot = {
   defaults: CheckInDefaults | null;
 };
 
-/** One config read and the jobs read after it; `required`: a config that cannot be read fails. */
-async function read(ctx: CheckInsContext, link: CheckInsLink, required = false): Promise<Snapshot> {
+/**
+ * One config read and the jobs read after it. `required`: a config that
+ * cannot be read fails. `deadline` (on `ctx.now()`): no request waits past it.
+ */
+async function read(
+  ctx: CheckInsContext,
+  link: CheckInsLink,
+  { required = false, deadline }: { required?: boolean; deadline?: number } = {},
+): Promise<Snapshot> {
   const bots = ctx.botIds();
-  const configRead = link.request("config.get", {});
+  const ask: Ask = () =>
+    deadline === undefined ? undefined : { timeoutMs: Math.max(1, deadline - ctx.now()) };
+  const configRead = link.request("config.get", {}, ask());
   const [config, allJobs, status] = await Promise.all([
     required ? configRead : configRead.catch(() => null),
-    readAllJobs(link),
-    link.request("cron.status", {}).catch(() => null),
+    readAllJobs(link, ask),
+    link.request("cron.status", {}, ask()).catch(() => null),
   ]);
   const hash = asRecord(config)?.hash;
   const enabled = asRecord(status)?.enabled;
   return {
-    hash: typeof hash === "string" ? hash : null,
+    // A blank hash is no hash: the gateway reads it as missing.
+    hash: typeof hash === "string" && hash.trim() !== "" ? hash : null,
     config,
     allJobs,
     jobs: allJobs.filter((job) => bots.includes(job.botId)),
     scheduler: typeof enabled === "boolean" ? enabled : null,
     settings: config ? readSettings(config, bots) : null,
-    defaults: config ? readDefaults(config, allJobs) : null,
+    defaults: config ? readDefaults(config) : null,
   };
 }
 
@@ -313,12 +418,21 @@ export async function loadCheckIns(ctx: CheckInsContext): Promise<void> {
   const link = ctx.link();
   if (!link.alive()) return;
   if (!ctx.get()) ctx.set(emptyState());
+  const latest = ctx.begin();
+  // What is read is tied to the gateway that answered, so a draft is never carried to another.
+  const gatewayId = await ctx.gateway();
   try {
     const next = await read(ctx, link);
-    if (!link.alive()) return;
-    ctx.set({ ...(ctx.get() ?? emptyState()), ...shown(next), status: "ready", error: null });
+    if (!link.alive() || !latest()) return;
+    ctx.set({
+      ...(ctx.get() ?? emptyState()),
+      ...shown(next),
+      gatewayId,
+      status: "ready",
+      error: null,
+    });
   } catch (error) {
-    if (!link.alive()) return;
+    if (!link.alive() || !latest()) return;
     ctx.set({ ...(ctx.get() ?? emptyState()), status: "error", error: message(error) });
   }
 }
@@ -349,20 +463,24 @@ const CHANGED = "Check-ins changed on the gateway since this dialog opened, so n
 
 /**
  * The one patch a save writes and what must be true once it took, or why it
- * cannot be written over this config. Only the fields the person changed are
- * written, and the other bots only as the draft disclosed.
+ * cannot be written over this `config.get` answer: a `conflict` the person
+ * can save over once they have seen it, or a save `refused` outright. Only
+ * the fields the person changed are written, and the other bots only as the
+ * draft disclosed. Everything here comes from the same config as `baseHash`.
  */
 export function planCheckIn(
   botId: string,
   draft: CheckInDraft,
-  snapshot: Pick<Snapshot, "config" | "settings" | "defaults">,
+  config: unknown,
 ):
   | { conflict: string }
-  | { patch: RawRecord | null; own: RawRecord; expect: Array<{ botId: string; every: string }> } {
-  if (!entriesOf(snapshot.config) || !snapshot.settings || !snapshot.defaults)
-    return { conflict: "Clawtrate couldn't read this gateway's bots from its config." };
-  const { settings, defaults } = snapshot;
-  const setting = settings.find((each) => each.botId === botId);
+  | { refused: string }
+  | { patch: RawRecord | null; own: RawRecord; expect: CheckInKept[] } {
+  const agents = agentsOf(config);
+  const entries = asRecord(agents?.entries);
+  if (!entries) return { refused: "Clawtrate couldn't read this gateway's bots from its config." };
+  const raw = asRecord(asRecord(entries[botId])?.heartbeat);
+  const setting = readSettings(config, [botId])[0];
   if (draft.every !== null && (setting?.every ?? null) !== draft.was.every)
     return { conflict: `${CHANGED} Its cadence was changed.` };
   if (draft.prompt !== null && setting?.promptCut)
@@ -372,27 +490,25 @@ export function planCheckIn(
   const heartbeat: RawRecord = {};
   if (draft.every !== null) heartbeat.every = draft.every;
   if (draft.prompt !== null) heartbeat.prompt = draft.prompt.trim() === "" ? null : draft.prompt;
-  const inherits = defaults.inherited.includes(botId);
+  const inherited = enrolledByDefault(agents);
   // Any setting of its own enrolls the bot: one that did not check in stays off.
-  if (!setting && !inherits && draft.every === null && draft.prompt !== null)
+  if (!raw && !inherited.includes(botId) && draft.every === null && draft.prompt !== null)
     heartbeat.every = "0m";
   if (Object.keys(heartbeat).length === 0) return { patch: null, own: {}, expect: [] };
-  const kept = keptByDefault(botId, settings, defaults);
+  const every = inheritedEvery(agents);
+  const kept = inherited.filter((id) => id !== botId).map((id) => ({ botId: id, every }));
+  if (kept.length > MAX_CHECKIN_KEPT) return { refused: KEEP_TOO_MANY };
+  if (kept.length > 0 && every.length > MAX_CHECKIN_EVERY_CHARS) return { refused: KEEP_TOO_LONG };
   if (!sameKept(kept, draft.kept))
     return { conflict: `${CHANGED} Which bots check in through the default changed.` };
-  if (kept.length > 0 && defaults.inheritedCut)
-    return {
-      conflict:
-        "More bots check in through the default than Clawtrate can write in one change, so nothing was saved.",
-    };
-  const entries: RawRecord = { [botId]: { heartbeat } };
-  for (const each of kept) entries[each.botId] = { heartbeat: { every: each.every } };
-  const every =
-    (heartbeat.every as string | undefined) ?? setting?.every ?? (inherits ? defaults.every : null);
+  const patch: RawRecord = { [botId]: { heartbeat } };
+  for (const each of kept) patch[each.botId] = { heartbeat: { every: each.every } };
+  // Once written, the bot has a setting of its own, so it has a job, at the cadence the gateway resolves.
+  const own = typeof raw?.every === "string" ? raw.every : every;
   return {
-    patch: { agents: { entries } },
+    patch: { agents: { entries: patch } },
     own: heartbeat,
-    expect: [...(every === null ? [] : [{ botId, every }]), ...kept],
+    expect: [{ botId, every: (heartbeat.every as string | undefined) ?? own }, ...kept],
   };
 }
 
@@ -421,8 +537,9 @@ function took(
 
 /**
  * Save one bot's check-ins in one `config.patch` over the config read just
- * before, then read the config and the jobs until both show it. Only then is
- * it `saved`. Everything runs on the connection open when it started.
+ * before, then read the config and the jobs until both show it, for at most
+ * `READ_BACK_MS` in all. Only then is it `saved`. Everything runs on the
+ * connection open when it started, to the gateway the draft was made on.
  */
 export async function saveCheckIn(
   ctx: CheckInsContext,
@@ -433,17 +550,31 @@ export async function saveCheckIn(
   if (!ctx.admin()) throw new Error("Changing check-ins needs admin access.");
   if (draft.every !== null && !CHECKIN_EVERY.test(draft.every))
     throw new Error("invalid check-in cadence");
-  if (ctx.get()?.save?.status === "saving") throw new Error("A save is under way.");
   const link = ctx.link();
   if (!link.alive()) throw new Error("Not connected to the gateway.");
-  const settle = (status: CheckInSave["status"], error: string | null) => {
+  const here = await ctx.gateway();
+  if (!link.alive()) throw new Error("The connection changed before the change was sent.");
+  if (here === null || here !== draft.gatewayId)
+    throw new Error("This change was made for another gateway, so nothing was sent.");
+  if (ctx.get()?.save?.status === "saving") throw new Error("A save is under way.");
+  const settle = (status: CheckInSave["status"], error: string | null, loading = false) => {
     const state = ctx.get();
     if (state?.save?.id !== saveId) return;
-    ctx.set({ ...state, save: { ...state.save, status, error } });
+    ctx.set({
+      ...state,
+      ...(loading ? { status: "loading" as const } : {}),
+      save: { ...state.save, status, error },
+    });
   };
-  const show = (snapshot: Snapshot) => {
-    if (link.alive())
-      ctx.set({ ...(ctx.get() ?? emptyState()), ...shown(snapshot), status: "ready", error: null });
+  const show = (latest: () => boolean, snapshot: Snapshot) => {
+    if (link.alive() && latest())
+      ctx.set({
+        ...(ctx.get() ?? emptyState()),
+        ...shown(snapshot),
+        gatewayId: here,
+        status: "ready",
+        error: null,
+      });
   };
   ctx.set({
     ...(ctx.get() ?? emptyState()),
@@ -451,21 +582,18 @@ export async function saveCheckIn(
   });
   const gone = "The connection changed before the change was sent. Nothing changed.";
   let fresh: Snapshot;
+  const latest = ctx.begin();
   try {
-    fresh = await read(ctx, link, true);
+    fresh = await read(ctx, link, { required: true });
   } catch (error) {
     return settle("failed", link.alive() ? message(error) : gone);
   }
   if (!link.alive()) return settle("failed", gone);
-  const plan = planCheckIn(botId, draft, fresh);
-  if ("conflict" in plan) {
-    show(fresh);
-    return settle("conflict", plan.conflict);
-  }
-  if (!plan.patch) {
-    show(fresh);
-    return settle("saved", null);
-  }
+  const plan = planCheckIn(botId, draft, fresh.config);
+  if ("conflict" in plan || "refused" in plan || !plan.patch) show(latest, fresh);
+  if ("conflict" in plan) return settle("conflict", plan.conflict);
+  if ("refused" in plan) return settle("failed", plan.refused);
+  if (!plan.patch) return settle("saved", null);
   if (fresh.hash === null)
     return settle("failed", "The gateway's config had no version to change it against.");
   if (!ctx.admin()) return settle("failed", "Admin access ended before the change was sent.");
@@ -473,25 +601,28 @@ export async function saveCheckIn(
     await link.request("config.patch", { raw: JSON.stringify(plan.patch), baseHash: fresh.hash });
   } catch (error) {
     if (/changed since last load/i.test(message(error))) {
-      await loadCheckIns(ctx);
-      return settle("conflict", CHANGED);
+      // Said first, so the dialog never waits on the read that shows what changed.
+      settle("conflict", CHANGED, true);
+      return loadCheckIns(ctx);
     }
     return settle(certainlyNotApplied(error) ? "failed" : "unknown", message(error));
   }
-  const started = ctx.now();
-  for (let reads = 0; reads < 60 && ctx.now() - started < READ_BACK_MS; reads += 1) {
-    if (!link.alive()) break;
+  const deadline = ctx.now() + READ_BACK_MS;
+  while (link.alive() && ctx.now() < deadline) {
+    const latest = ctx.begin();
     try {
-      const next = await read(ctx, link, true);
+      const next = await read(ctx, link, { required: true, deadline });
       if (!link.alive()) break;
       if (took(next, botId, plan.own, plan.expect)) {
-        show(next);
+        show(latest, next);
         return settle("saved", null);
       }
     } catch {
-      // A read that failed says nothing about the save; read again.
+      // A read that failed says nothing about the save; read again while there is time.
     }
-    await ctx.sleep(READ_BACK_EVERY_MS);
+    const left = deadline - ctx.now();
+    if (left <= 0) break;
+    await ctx.sleep(Math.min(READ_BACK_EVERY_MS, left));
   }
   settle(
     "unknown",

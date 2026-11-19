@@ -1,13 +1,20 @@
 // The check-ins engine against a fake gateway that enrolls bots by OpenClaw
 // 2026.10.6's rules (docs/decisions.md, "Check-ins"): bots with a heartbeat of
 // their own, else the default's `agentId`, else every bot when a default block
-// exists; a bot's cadence is its own `every`, else the default's, else 30m;
-// `every: "0m"` keeps the job, disabled. Its jobs come one per page, and what
-// it derives can be held back to see what the engine says meanwhile.
+// exists, else `systemAgent.agentId`; a bot's cadence is its own `every`, else
+// the default's, else 30m; `every: "0m"` keeps the job, disabled. Its jobs
+// come one per page with a snapshot revision, what it derives can be held back
+// to see what the engine says meanwhile, and its answers can be held or left
+// unanswered until the request's own timeout.
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
+import { ClawtrateClient } from "../src/client.ts";
+import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
+import { FAST, grantingGateway, URL_A } from "./client-harness.ts";
+import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 import {
+  cannotKeep,
   durationMs,
   everyText,
   keptByDefault,
@@ -27,14 +34,10 @@ const BOTS = ["main", "marlow", "otto"];
 type Heartbeat = { every?: string; prompt?: string; agentId?: string };
 type Config = {
   agents: {
-    defaults: { heartbeat?: Heartbeat };
+    defaults: { heartbeat?: Heartbeat; systemAgent?: { agentId: string } };
     entries: Record<string, { heartbeat?: Heartbeat }>;
   };
 };
-
-const parse = (every: string) =>
-  Number(every.slice(0, -1)) *
-  (every.endsWith("h") ? 3_600_000 : every.endsWith("s") ? 1_000 : 60_000);
 
 function fakeGateway(
   options: {
@@ -52,7 +55,22 @@ function fakeGateway(
   const gateway = {
     config,
     patches: [] as Array<{ raw: unknown; baseHash: unknown }>,
+    /** Every `config.patch` asked, applied or not. */
+    attempts: [] as Array<{ baseHash: unknown }>,
     hash: 0,
+    /** What `config.get` gives as its hash instead of the real one. */
+    hashText: null as string | null,
+    /** The gateway's identity (`gateway.identity.get`). */
+    identity: "gw-1",
+    /** Requests then wait for their own timeout, unanswered. */
+    stall: false,
+    /** Awaited before a request is answered. */
+    gate: (_method: string): Promise<void> | void => {},
+    /** The jobs `cron.list` pages through, in its order; the revision names that order. */
+    arrange: (jobs: unknown[]) => jobs,
+    revision: 0,
+    /** The jobs the gateway lists, when they are not what it would derive now. */
+    jobs: null as unknown[] | null,
     /** Off: config and jobs answer as they were before the last patch until `release`. */
     hold: false,
     held: null as { config: Config; jobs: unknown[] } | null,
@@ -63,21 +81,36 @@ function fakeGateway(
   const view = () =>
     gateway.held ?? {
       config: JSON.parse(JSON.stringify(gateway.config)) as Config,
-      jobs: fakeJobs(gateway.config),
+      jobs: gateway.jobs ?? fakeJobs(gateway.config),
     };
-  const request = async (method: string, params: unknown): Promise<unknown> => {
+  const request = async (
+    method: string,
+    params: unknown,
+    asked?: { timeoutMs?: number },
+  ): Promise<unknown> => {
     gateway.before(method);
+    if (gateway.stall) {
+      // Nothing answers: the request gives up at its own timeout (60 s when none is asked).
+      const started = now;
+      await Promise.resolve();
+      now = Math.max(now, started + (asked?.timeoutMs ?? 60_000));
+      throw new Error("request timeout");
+    }
+    await gateway.gate(method);
     const p = params as { raw?: string; baseHash?: string; offset?: number };
     switch (method) {
       case "cron.list": {
-        const all = [
+        const all = gateway.arrange([
           { agentId: "otto", payload: { kind: "agentTurn" }, enabled: true },
           ...view().jobs,
-        ];
+        ]);
         const offset = p.offset ?? 0;
         const more = offset + 1 < all.length;
         return {
           jobs: all.slice(offset, offset + 1),
+          total: all.length,
+          offset,
+          snapshotRevision: `r${gateway.revision}`,
           hasMore: more,
           nextOffset: more ? offset + 1 : null,
         };
@@ -85,8 +118,9 @@ function fakeGateway(
       case "cron.status":
         return { enabled: false };
       case "config.get":
-        return { hash: `h${gateway.hash}`, config: view().config };
+        return { hash: gateway.hashText ?? `h${gateway.hash}`, config: view().config };
       case "config.patch": {
+        gateway.attempts.push({ baseHash: p.baseHash });
         if (options.patch) options.patch();
         if (p.baseHash !== `h${gateway.hash}`)
           throw new GatewayProtocolRequestError({
@@ -120,17 +154,23 @@ function fakeGateway(
   let state: CheckInsState | undefined;
   let now = 0;
   let admin = true;
+  let reads = 0;
   const ctx: CheckInsContext = {
     link: () => {
       gateway.linkAlive = true;
       const alive = () => gateway.linkAlive;
       return {
         alive,
-        request: (method, params) =>
+        request: (method, params, asked) =>
           alive()
-            ? request(method, params)
+            ? request(method, params, asked)
             : Promise.reject(Object.assign(new Error("not sent"), { name: "NotSentError" })),
       };
+    },
+    gateway: async () => gateway.identity,
+    begin: () => {
+      const mine = (reads += 1);
+      return () => mine === reads;
     },
     get: () => state,
     set: (next) => (state = next),
@@ -151,6 +191,7 @@ function fakeGateway(
     setAdmin: (value: boolean) => (admin = value),
     onSleep: (run: () => void) => (onSleep = run),
     release: () => (gateway.held = null),
+    now: () => now,
   };
 }
 
@@ -162,6 +203,7 @@ function draft(
 ): CheckInDraft {
   const setting = state.settings?.find((each) => each.botId === botId);
   return {
+    gatewayId: "gw-1",
     every: change.every ?? null,
     prompt: change.prompt ?? null,
     was: { every: setting?.every ?? null, prompt: setting?.prompt ?? null },
@@ -209,25 +251,26 @@ describe("reading check-ins", () => {
     expect(settings[0]!.prompt).toHaveLength(4_000);
   });
 
-  it("finds who checks in through the default by the gateway's four rules", () => {
-    const config = (defaults: unknown, entries: unknown) => ({
-      config: { agents: { defaults: { heartbeat: defaults }, entries } },
+  it("finds who checks in through the default by the gateway's rules, from the config alone", () => {
+    const config = (defaults: unknown, entries: unknown, more: Record<string, unknown> = {}) => ({
+      config: { agents: { defaults: { heartbeat: defaults, ...more }, entries } },
     });
     const entries = { main: {}, marlow: {}, quill: {} };
-    expect(readDefaults(config({ agentId: "Main" }, entries), []).inherited).toEqual(["main"]);
-    expect(readDefaults(config({ every: "90s" }, entries), [])).toMatchObject({
+    expect(readDefaults(config({ agentId: "Main" }, entries)).inherited).toEqual(["main"]);
+    expect(readDefaults(config({ every: "90s" }, entries))).toMatchObject({
       inherited: ["main", "marlow", "quill"],
       every: "90s",
     });
+    expect(readDefaults(config({}, { ...entries, marlow: { heartbeat: {} } })).inherited).toEqual(
+      [],
+    );
+    // No default block: the ambient owner, which the gateway takes from `systemAgent`.
     expect(
-      readDefaults(config({}, { ...entries, marlow: { heartbeat: {} } }), []).inherited,
-    ).toEqual([]);
-    const ambient = [{ botId: "main", enabled: true, everyMs: 1_800_000, nextRunAtMs: null }];
-    expect(readDefaults(config(undefined, entries), ambient)).toMatchObject({
-      inherited: ["main"],
-      every: "30m",
-      prompt: null,
-    });
+      readDefaults(config(undefined, entries, { systemAgent: { agentId: "Marlow" } })),
+    ).toMatchObject({ inherited: ["marlow"], every: "30m", prompt: null });
+    // A sole bot owns it; with several and nothing naming one, nobody does.
+    expect(readDefaults(config(undefined, { quill: {} })).inherited).toEqual(["quill"]);
+    expect(readDefaults(config(undefined, entries)).inherited).toEqual([]);
   });
 
   it("reads cadences exactly as the gateway does, and writes them back without rounding", () => {
@@ -353,38 +396,153 @@ describe("F-201 the patch a save writes", () => {
     expect(gateway.patches).toEqual([]);
   });
 
+  it("F-201: with no default block the bot kept is the owner the config names now, not the one a stale job still shows", async () => {
+    const { gateway, ctx, state, elsewhere } = fakeGateway({ defaults: {} });
+    delete gateway.config.agents.defaults.heartbeat;
+    gateway.config.agents.defaults.systemAgent = { agentId: "main" };
+    await loadCheckIns(ctx);
+    expect(state().defaults?.inherited).toEqual(["main"]);
+    // The owner moves to Pip; the gateway still lists Juniper's job until a heartbeat changes.
+    elsewhere((config) => {
+      config.agents.defaults.systemAgent = { agentId: "pip" };
+      config.agents.entries.pip = {};
+    });
+    gateway.jobs = fakeJobs({
+      agents: { ...gateway.config.agents, defaults: { systemAgent: { agentId: "main" } } },
+    });
+    await loadCheckIns(ctx);
+    expect(state().defaults?.inherited).toEqual(["pip"]);
+    gateway.jobs = null;
+    const asked = draft(state(), "marlow", { every: "24h" });
+    expect(asked.kept).toEqual([{ botId: "pip", every: "30m" }]);
+    await saveCheckIn(ctx, "s1", "marlow", asked);
+    expect(gateway.patches.map((each) => each.raw)).toEqual([
+      {
+        agents: {
+          entries: {
+            marlow: { heartbeat: { every: "24h" } },
+            pip: { heartbeat: { every: "30m" } },
+          },
+        },
+      },
+    ]);
+    expect(state().save?.status).toBe("saved");
+  });
+
+  it("F-201: a default cadence too long to write back whole is refused before anything is written, never cut", async () => {
+    const every = "0s".repeat(32) + "90s";
+    expect(durationMs(every)).toBe(90_000);
+    const { gateway, ctx, state } = fakeGateway({ defaults: { every } });
+    await loadCheckIns(ctx);
+    expect(state().defaults).toMatchObject({ everyCut: true });
+    expect(cannotKeep("marlow", state().settings, state().defaults)).toMatch(/longer than/);
+    await saveCheckIn(ctx, "s1", "marlow", draft(state(), "marlow", { every: "24h" }));
+    expect(gateway.attempts).toEqual([]);
+    expect(state().save).toMatchObject({
+      status: "failed",
+      error: expect.stringMatching(/longer/),
+    });
+  });
+
+  it("F-201: the 32-bot limit counts the bots kept, not the bot being saved", async () => {
+    const entries = (count: number) =>
+      Object.fromEntries(Array.from({ length: count }, (_, i) => [`b${i}`, {}]));
+    const many = fakeGateway({ defaults: {}, entries: entries(33) });
+    await loadCheckIns(many.ctx);
+    // Each listed here: b0 is saved, the 32 others are kept.
+    const asked = draft(many.state(), "b0", { every: "24h" });
+    expect(asked.kept).toHaveLength(32);
+    expect(cannotKeep("b0", many.state().settings, many.state().defaults)).toBeNull();
+    expect(planCheckIn("b0", asked, { config: many.gateway.config })).toMatchObject({
+      expect: expect.arrayContaining([{ botId: "b32", every: "30m" }]),
+    });
+    const more = fakeGateway({ defaults: {}, entries: entries(34) });
+    await loadCheckIns(more.ctx);
+    expect(cannotKeep("b0", more.state().settings, more.state().defaults)).toMatch(/at most 32/);
+    await saveCheckIn(more.ctx, "s1", "b0", {
+      ...draft(more.state(), "b0", { every: "24h" }),
+      kept: [],
+    });
+    expect(more.gateway.attempts).toEqual([]);
+    expect(more.state().save).toMatchObject({ status: "failed" });
+  });
+
+  it("F-201: a save is refused before anything is read or written when the gateway is not the one its draft was made on", async () => {
+    const { gateway, ctx, state } = fakeGateway();
+    await loadCheckIns(ctx);
+    expect(state().gatewayId).toBe("gw-1");
+    const asked = draft(state(), "marlow", { every: "24h" });
+    gateway.identity = "gw-2";
+    const before = gateway.attempts.length;
+    await expect(saveCheckIn(ctx, "s1", "marlow", asked)).rejects.toThrow(/another gateway/);
+    expect(gateway.attempts.length).toBe(before);
+    expect(state().save).toBeNull();
+  });
+
   it("F-201: a prompt for a bot that does not check in keeps it off, and clearing a prompt removes it", () => {
-    const snapshot = {
-      config: {
-        config: { agents: { entries: { otto: {}, main: { heartbeat: { prompt: "P" } } } } },
-      },
-      settings: [{ botId: "main", every: null, prompt: "P", promptCut: false }],
-      defaults: {
-        inherited: [],
-        inheritedCut: false,
-        every: "30m",
-        prompt: null,
-        promptCut: false,
-      },
+    const config = {
+      config: { agents: { entries: { otto: {}, main: { heartbeat: { prompt: "P" } } } } },
     };
     const was = { every: null, prompt: null };
+    const gatewayId = "gw-1";
     expect(
-      planCheckIn("otto", { every: null, prompt: "Q", was, kept: [] }, snapshot),
+      planCheckIn("otto", { gatewayId, every: null, prompt: "Q", was, kept: [] }, config),
     ).toMatchObject({
       patch: { agents: { entries: { otto: { heartbeat: { every: "0m", prompt: "Q" } } } } },
     });
     expect(
       planCheckIn(
         "main",
-        { every: null, prompt: "", was: { every: null, prompt: "P" }, kept: [] },
-        snapshot,
+        { gatewayId, every: null, prompt: "", was: { every: null, prompt: "P" }, kept: [] },
+        config,
       ),
     ).toMatchObject({ patch: { agents: { entries: { main: { heartbeat: { prompt: null } } } } } });
-    expect(planCheckIn("otto", { every: null, prompt: null, was, kept: [] }, snapshot)).toEqual({
-      patch: null,
-      own: {},
-      expect: [],
-    });
+    expect(
+      planCheckIn("otto", { gatewayId, every: null, prompt: null, was, kept: [] }, config),
+    ).toEqual({ patch: null, own: {}, expect: [] });
+  });
+});
+
+describe("reading check-ins while they change", () => {
+  it("reads the jobs again from the start when their order changes between pages, so none is missed", async () => {
+    const { gateway, ctx, state } = fakeGateway({ defaults: { every: "90s" } });
+    let reordered = false;
+    gateway.before = (method) => {
+      if (method !== "cron.list" || reordered || gateway.revision > 0) return;
+      // After the first two pages, another job's change moves main to the end.
+      if (++pages === 3) {
+        reordered = true;
+        gateway.revision += 1;
+        gateway.arrange = (jobs) => [jobs[0], ...jobs.slice(2), jobs[1]];
+      }
+    };
+    let pages = 0;
+    await loadCheckIns(ctx);
+    expect(reordered).toBe(true);
+    expect(jobsOf(state())).toEqual([
+      ["main", true, 90_000],
+      ["marlow", true, 90_000],
+      ["otto", true, 90_000],
+    ]);
+  });
+
+  it("a read that a later one overtook does not replace what the later one showed", async () => {
+    const { gateway, ctx, state } = fakeGateway();
+    await loadCheckIns(ctx);
+    let slow: (() => void) | null = null;
+    gateway.gate = (method) => {
+      if (method === "config.get" && !slow) return new Promise<void>((go) => (slow = go));
+    };
+    const stale = loadCheckIns(ctx);
+    await until(() => slow !== null);
+    gateway.gate = () => {};
+    await saveCheckIn(ctx, "s1", "marlow", draft(state(), "marlow", { every: "24h" }));
+    expect(state().save?.status).toBe("saved");
+    // The slow read began before the save and answers with what it read then.
+    gateway.config.agents.entries = { main: {}, marlow: {}, otto: {}, quill: {} };
+    slow!();
+    await stale;
+    expect(jobsOf(state())).toContainEqual(["marlow", true, 86_400_000]);
   });
 });
 
@@ -402,14 +560,24 @@ describe("F-201 F-366 saving", () => {
     expect(jobsOf(state())).toEqual([["main", true, 1_800_000]]);
   });
 
-  it("F-366: Off writes every 0m and is saved only when the bot's job is disabled", async () => {
-    const { gateway, ctx, state } = fakeGateway();
-    await loadCheckIns(ctx);
-    await saveCheckIn(ctx, "s1", "main", draft(state(), "main", { every: "0m" }));
-    expect(gateway.patches).toHaveLength(1);
-    expect(gateway.config.agents.entries.main?.heartbeat?.every).toBe("0m");
-    expect(state().save?.status).toBe("saved");
-    expect(state().jobs).toEqual([
+  it("F-366: Off writes every 0m and is saved only once the bot's job is disabled", async () => {
+    const fake = fakeGateway();
+    await loadCheckIns(fake.ctx);
+    fake.gateway.hold = true;
+    let reads = 0;
+    fake.onSleep(() => {
+      reads += 1;
+      // The config already holds Off, and the job still runs.
+      expect(fake.state().save?.status).toBe("saving");
+      if (reads === 1) fake.gateway.held!.config = JSON.parse(JSON.stringify(fake.gateway.config));
+      if (reads === 3) fake.release();
+    });
+    await saveCheckIn(fake.ctx, "s1", "main", draft(fake.state(), "main", { every: "0m" }));
+    expect(reads).toBe(3);
+    expect(fake.gateway.patches).toHaveLength(1);
+    expect(fake.gateway.config.agents.entries.main?.heartbeat?.every).toBe("0m");
+    expect(fake.state().save?.status).toBe("saved");
+    expect(fake.state().jobs).toEqual([
       { botId: "main", enabled: false, everyMs: 1_800_000, nextRunAtMs: null },
     ]);
   });
@@ -485,15 +653,73 @@ describe("F-201 F-366 saving", () => {
     expect(lost.state().save).toMatchObject({ status: "unknown" });
   });
 
-  it("a config changed between the read and the patch is a conflict, sent with the hash it read", async () => {
+  it("a config changed between the read and the patch is a conflict: the patch carried the hash read, and the save settles before the list is read again", async () => {
     const { gateway, ctx, state, elsewhere } = fakeGateway();
     await loadCheckIns(ctx);
     gateway.before = (method) => {
       if (method === "config.patch") elsewhere((config) => (config.agents.entries.pip = {}));
     };
-    await saveCheckIn(ctx, "s1", "marlow", draft(state(), "marlow", { every: "24h" }));
+    let reread: (() => void) | null = null;
+    let during: string | undefined;
+    gateway.gate = (method) => {
+      if (method !== "config.get" || gateway.attempts.length === 0 || reread) return;
+      during = state().save?.status;
+      return new Promise<void>((resolve) => (reread = resolve));
+    };
+    const saving = saveCheckIn(ctx, "s1", "marlow", draft(state(), "marlow", { every: "24h" }));
+    await until(() => reread !== null);
+    expect(during).toBe("conflict");
+    reread!();
+    await saving;
+    expect(gateway.attempts).toEqual([{ baseHash: "h0" }]);
     expect(state().save?.status).toBe("conflict");
+    expect(state().status).toBe("ready");
     expect(gateway.patches).toEqual([]);
+  });
+
+  it("F-201: a config whose hash is blank is never patched", async () => {
+    const { gateway, ctx, state } = fakeGateway();
+    await loadCheckIns(ctx);
+    gateway.hashText = "  ";
+    await saveCheckIn(ctx, "s1", "marlow", draft(state(), "marlow", { every: "24h" }));
+    expect(gateway.attempts).toEqual([]);
+    expect(state().save).toMatchObject({
+      status: "failed",
+      error: expect.stringMatching(/version/),
+    });
+  });
+
+  it("F-201: a prompt-only save for a bot whose own setting is {} is saved only once its job shows the default's cadence", async () => {
+    const { gateway, ctx, state } = fakeGateway({
+      defaults: { every: "90s" },
+      entries: { main: { heartbeat: {} }, marlow: {}, otto: {}, quill: {} },
+    });
+    await loadCheckIns(ctx);
+    expect(
+      planCheckIn("main", draft(state(), "main", { prompt: "P. NO_REPLY" }), {
+        config: gateway.config,
+      }),
+    ).toMatchObject({ expect: [{ botId: "main", every: "90s" }] });
+    // The gateway never lists main's job.
+    gateway.jobs = [];
+    await saveCheckIn(ctx, "s1", "main", draft(state(), "main", { prompt: "P. NO_REPLY" }));
+    expect(gateway.patches).toHaveLength(1);
+    expect(state().save?.status).toBe("unknown");
+  });
+
+  it("F-201: confirming a save ends at 20 seconds even while the gateway answers nothing", async () => {
+    const fake = fakeGateway();
+    await loadCheckIns(fake.ctx);
+    let patchedAt = 0;
+    let settledAt: number | null = null;
+    fake.gateway.before = (method) => {
+      if (method === "config.patch") patchedAt = fake.now();
+      else if (fake.gateway.patches.length === 1) fake.gateway.stall = true;
+      if (settledAt === null && fake.state().save?.status === "unknown") settledAt = fake.now();
+    };
+    await saveCheckIn(fake.ctx, "s1", "marlow", draft(fake.state(), "marlow", { every: "24h" }));
+    expect(fake.state().save?.status).toBe("unknown");
+    expect(settledAt! - patchedAt).toBeLessThanOrEqual(20_000);
   });
 
   it("refuses without admin and while another save is under way", async () => {
@@ -521,7 +747,7 @@ describe("F-201 a save across a connection change", () => {
     });
   });
 
-  it("F-201: a reconnect or another gateway between the read and the patch sends nothing on the new connection", async () => {
+  it("F-201: a link that reports itself gone between the read and the patch sends nothing on it", async () => {
     const { gateway, ctx, state } = fakeGateway();
     await loadCheckIns(ctx);
     gateway.before = (method) => {
@@ -535,7 +761,7 @@ describe("F-201 a save across a connection change", () => {
     });
   });
 
-  it("F-201: a connection that ends after the patch is not confirmed by anything read later", async () => {
+  it("F-201: a link that reports itself gone after the patch is not confirmed by anything read later", async () => {
     const { gateway, ctx, state } = fakeGateway();
     await loadCheckIns(ctx);
     gateway.before = (method) => {
@@ -549,7 +775,7 @@ describe("F-201 a save across a connection change", () => {
     });
   });
 
-  it("a read that ends after its connection did changes nothing on screen", async () => {
+  it("a read whose link reports itself gone changes nothing on screen", async () => {
     const { gateway, ctx, state } = fakeGateway();
     gateway.before = (method) => {
       if (method === "cron.status") gateway.linkAlive = false;
@@ -563,6 +789,7 @@ describe("F-201 a save across a connection change", () => {
 const emptyLoading: CheckInsState = {
   status: "loading",
   error: null,
+  gatewayId: null,
   scheduler: null,
   jobs: [],
   settings: null,
@@ -574,10 +801,19 @@ function fakeJobs(cfg: Config) {
   const ids = Object.keys(cfg.agents.entries);
   const own = ids.filter((id) => cfg.agents.entries[id]!.heartbeat);
   const defaults = cfg.agents.defaults.heartbeat;
+  const system = cfg.agents.defaults.systemAgent?.agentId;
   const enrolled =
-    own.length > 0 ? own : defaults?.agentId ? [defaults.agentId] : defaults ? ids : [];
+    own.length > 0
+      ? own
+      : defaults?.agentId
+        ? [defaults.agentId]
+        : defaults
+          ? ids
+          : system
+            ? [system]
+            : [];
   return enrolled.map((id) => {
-    const ms = parse(cfg.agents.entries[id]?.heartbeat?.every ?? defaults?.every ?? "30m");
+    const ms = durationMs(cfg.agents.entries[id]?.heartbeat?.every ?? defaults?.every ?? "30m")!;
     return {
       agentId: id,
       payload: { kind: "heartbeat" },
@@ -587,3 +823,102 @@ function fakeJobs(cfg: Config) {
     };
   });
 }
+
+describe("F-201 a save across a real connection change", () => {
+  /** A client with admin on a gateway whose check-ins are Juniper's default, and whose identity can change. */
+  async function adminClient() {
+    const gateway = grantingGateway();
+    const world = { identity: "gw-1", patches: 0 };
+    gateway.handlers["agents.list"] = () => ({
+      defaultId: "main",
+      agents: [
+        { id: "main", identity: { name: "Juniper" } },
+        { id: "marlow", identity: { name: "Marlow" } },
+      ],
+    });
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: world.identity });
+    const entries = (): Config["agents"]["entries"] =>
+      world.patches === 0
+        ? { main: {}, marlow: {} }
+        : { main: { heartbeat: { every: "30m" } }, marlow: { heartbeat: { every: "24h" } } };
+    gateway.handlers["config.get"] = () => ({
+      hash: `h${world.patches}`,
+      config: { agents: { defaults: { heartbeat: { agentId: "main" } }, entries: entries() } },
+    });
+    gateway.handlers["cron.list"] = () => ({
+      jobs: fakeJobs({
+        agents: { defaults: { heartbeat: { agentId: "main" } }, entries: entries() },
+      }),
+      total: world.patches + 1,
+      offset: 0,
+      snapshotRevision: "r0",
+      hasMore: false,
+      nextOffset: null,
+    });
+    gateway.handlers["cron.status"] = () => ({ enabled: false });
+    gateway.handlers["config.patch"] = () => {
+      world.patches += 1;
+      return { ok: true };
+    };
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: ADMIN_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+        adminHeld: true,
+      }),
+    });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await until(
+      () => client.state.discovery.status === "ready" && client.state.connection.canAdmin,
+    );
+    await client.refreshCheckIns();
+    return { client, gateway, world };
+  }
+  const daily: CheckInDraft = {
+    gatewayId: "gw-1",
+    every: "24h",
+    prompt: null,
+    was: { every: null, prompt: null },
+    kept: [{ botId: "main", every: "30m" }],
+  };
+
+  it("F-201: a reconnect between the read and the patch sends nothing on the new connection", async () => {
+    const { client, gateway, world } = await adminClient();
+    expect(client.state.checkIns?.gatewayId).toBe("gw-1");
+    gateway.handlers["cron.status"] = () => {
+      gateway.handlers["cron.status"] = () => ({ enabled: false });
+      gateway.dropAll();
+      return { enabled: false };
+    };
+    await client.saveCheckIn("s1", "marlow", daily);
+    expect(client.state.checkIns?.save).toMatchObject({
+      status: "failed",
+      error: expect.stringMatching(/connection changed/),
+    });
+    await until(() => client.state.connection.status === "connected");
+    expect(world.patches).toBe(0);
+    client.stop();
+  });
+
+  it("F-201: a draft made on one gateway is never saved to the gateway that answers at the same address after a reconnect", async () => {
+    const { client, gateway, world } = await adminClient();
+    world.identity = "gw-2";
+    gateway.dropAll();
+    // Until the new connection says which gateway it is, what is shown belongs to none.
+    await until(() => client.state.checkIns?.gatewayId === null);
+    await until(
+      () => client.state.connection.status === "connected" && client.state.connection.canAdmin,
+    );
+    await expect(client.saveCheckIn("s1", "marlow", daily)).rejects.toThrow(/another gateway/);
+    await client.refreshCheckIns();
+    expect(client.state.checkIns?.gatewayId).toBe("gw-2");
+    await expect(client.saveCheckIn("s2", "marlow", daily)).rejects.toThrow(/another gateway/);
+    expect(world.patches).toBe(0);
+    await client.saveCheckIn("s3", "marlow", { ...daily, gatewayId: "gw-2" });
+    expect(world.patches).toBe(1);
+    client.stop();
+  });
+});

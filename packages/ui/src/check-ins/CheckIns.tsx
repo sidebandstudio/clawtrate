@@ -5,13 +5,13 @@
 //
 // The dialog is mounted only while the connection holds admin, whatever
 // opened it: below admin there is nothing that changes anything, and admin
-// is asked for only by the access bar's button. Its draft lives in the
-// section, not the dialog, so admin that drops and returns finds it again,
-// for the same gateway and bot only. A save's outcome is shown only in the
-// dialog whose draft made it (`checkIns.save.id`).
+// is asked for only by the access bar's button. Its draft (draft.ts) lives in
+// the section, not the dialog, so admin that drops and returns finds it again,
+// for the same gateway, by its identity, and bot only. A save's outcome is
+// shown only in the dialog whose draft made it (`checkIns.save.id`).
 
 import {
-  keptByDefault,
+  cannotKeep,
   MAX_CHECKIN_PROMPT_CHARS,
   type Bot,
   type CheckInsState,
@@ -26,32 +26,17 @@ import { Dialog } from "../bots/Dialog.tsx";
 import { AdminBar, GrantedBar, Note, Select, useGranted } from "../bots/parts.tsx";
 import { clock } from "../bots/words.ts";
 import type { SectionView } from "../bots/AccountsSection.tsx";
+import { draftToSave, openDraft, rebase, type Draft } from "./draft.ts";
 import {
   asksForSilence,
-  choiceOf,
   choiceWords,
   DEFAULT_PROMPT,
   EVERY_CHOICES,
-  everyFor,
   sentence,
   summary,
   type Choice,
 } from "./words.ts";
 import "./check-ins.css";
-
-/** What the dialog holds: the person's choices, and what they started from. */
-type Draft = {
-  gateway: string | null;
-  botId: string;
-  initial: { choice: Choice; every: string };
-  choice: Choice;
-  every: string;
-  prompt: string;
-  /** The bot's own setting when the draft began, or when a conflict was last shown. */
-  was: { every: string | null; prompt: string | null };
-  saveId: string | null;
-  refused: string | null;
-};
 
 const CHOICES: Array<[Choice, string]> = [
   ["off", "Off"],
@@ -84,40 +69,48 @@ export function useCheckInsSection({
   const admin = connection.canAdmin;
   const connected = connection.status === "connected";
   const refresh = () => void bridge.send({ type: "refreshCheckIns" }).catch(() => {});
+  // The bots are listed after the connection is: a reconnect reads again once they arrive.
+  const roster = bots.map((bot) => bot.id).join("\n");
 
   useEffect(() => {
     if (active && connected) void bridge.send({ type: "refreshCheckIns" }).catch(() => {});
-  }, [bridge, active, connected]);
+  }, [bridge, active, connected, roster]);
 
   const jobOf = (botId: string) => checkIns?.jobs.find((job) => job.botId === botId);
   const editingBot = bots.find((bot) => bot.id === draft?.botId);
-  // A draft belongs to the gateway it was made on; another one never shows it.
-  const draftHere = draft !== null && draft.gateway === connection.gatewayUrl && editingBot;
+  // A draft belongs to the gateway it was made on, by identity; no other one shows it.
+  const draftHere =
+    draft !== null && connected && draft.gatewayId === checkIns?.gatewayId && editingBot;
 
   const edit = (bot: Bot) => {
-    const setting = checkIns?.settings?.find((each) => each.botId === bot.id);
-    const initial = choiceOf(jobOf(bot.id));
-    setDraft({
-      gateway: connection.gatewayUrl,
-      botId: bot.id,
-      initial,
-      ...initial,
-      prompt: setting?.prompt ?? "",
-      was: { every: setting?.every ?? null, prompt: setting?.prompt ?? null },
-      saveId: null,
-      refused: null,
-    });
+    const next = checkIns && openDraft(checkIns, bot.id);
+    if (next) setDraft(next);
   };
+  const refreshButton = checkIns && (
+    <button
+      type="button"
+      className="button"
+      data-size="sm"
+      data-variant="quiet"
+      disabled={!connected || checkIns.status === "loading"}
+      onClick={refresh}
+    >
+      Refresh
+    </button>
+  );
 
   let body: ReactNode;
   if (!checkIns || (checkIns.status === "loading" && checkIns.jobs.length === 0)) {
     body = <p className="ci-faint">Reading check-ins…</p>;
   } else if (checkIns.status === "error") {
     body = (
-      <div className="form-error" role="alert">
-        <strong>Couldn't read check-ins</strong>
-        {checkIns.error}
-      </div>
+      <>
+        <div className="form-error" role="alert">
+          <strong>Couldn't read check-ins</strong>
+          {checkIns.error}
+        </div>
+        <div className="ci-intro">{refreshButton}</div>
+      </>
     );
   } else {
     body = (
@@ -127,16 +120,7 @@ export function useCheckInsSection({
             A bot that checks in gets a turn on a schedule to look for anything that needs you. The
             gateway can skip a scheduled attempt.
           </p>
-          <button
-            type="button"
-            className="button"
-            data-size="sm"
-            data-variant="quiet"
-            disabled={!connected || checkIns.status === "loading"}
-            onClick={refresh}
-          >
-            Refresh
-          </button>
+          {refreshButton}
         </div>
         {checkIns.scheduler === false && (
           <Note tone="warn" testId="scheduler-off">
@@ -170,6 +154,7 @@ export function useCheckInsSection({
                       className="button"
                       data-size="sm"
                       aria-label={`Change ${bot.name}'s check-ins`}
+                      disabled={checkIns.gatewayId === null}
                       onClick={() => edit(bot)}
                     >
                       Change
@@ -199,6 +184,7 @@ export function useCheckInsSection({
             checkIns={checkIns}
             draft={draft}
             change={(next) => setDraft((each) => (each ? { ...each, ...next } : each))}
+            refresh={() => bridge.send({ type: "refreshCheckIns" })}
             announce={announce}
             onClose={() => setDraft(null)}
           />
@@ -219,6 +205,7 @@ function CheckInsDialog({
   checkIns,
   draft,
   change,
+  refresh,
   announce,
   onClose,
 }: {
@@ -227,16 +214,32 @@ function CheckInsDialog({
   checkIns: CheckInsState;
   draft: Draft;
   change: (next: Partial<Draft>) => void;
+  refresh: () => Promise<unknown>;
   announce: (text: string) => void;
   onClose: () => void;
 }) {
   const bridge = useBridge();
   const setting = checkIns.settings?.find((each) => each.botId === bot.id);
-  const { choice, every, prompt, saveId, refused } = draft;
+  const { choice, every, prompt, saveId, refused, base, touched } = draft;
   const groupRef = useRef<HTMLUListElement>(null);
   const save = checkIns.save?.id === saveId ? checkIns.save : null;
   const saving = save?.status === "saving";
-  const setChoice = (next: Choice) => change({ choice: next });
+  const [checking, setChecking] = useState(false);
+  const setChoice = (next: Choice) =>
+    change({ choice: next, touched: { ...touched, every: true } });
+
+  // The base moves only once the gateway was seen to differ: after a conflict,
+  // or an unknown outcome the person checked, and only on a read that finished.
+  const rebaseOn =
+    save &&
+    draft.rebased !== save.id &&
+    checkIns.status === "ready" &&
+    (save.status === "conflict" || (save.status === "unknown" && draft.checked === save.id))
+      ? save.id
+      : null;
+  useEffect(() => {
+    if (rebaseOn) change({ ...rebase(draft, checkIns), rebased: rebaseOn });
+  }, [rebaseOn, draft, checkIns, change]);
 
   useEffect(() => {
     if (save?.status !== "saved") return;
@@ -253,7 +256,7 @@ function CheckInsDialog({
   const outcomeRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (ended) outcomeRef.current?.scrollIntoView({ block: "nearest" });
-  }, [ended, save?.status]);
+  }, [ended, save?.status, draft.rebased]);
 
   // While a save is under way the dialog waits for its answer, Escape included.
   const close = () => {
@@ -263,27 +266,23 @@ function CheckInsDialog({
   };
   const submit = () => {
     const id = crypto.randomUUID();
-    // After a conflict the person has seen what the gateway has now; that is what they save over.
-    const was =
-      save?.status === "conflict"
-        ? { every: setting?.every ?? null, prompt: setting?.prompt ?? null }
-        : draft.was;
-    const value = everyFor(choice, every);
-    const promptChanged = !setting?.promptCut && prompt !== (was.prompt ?? "");
-    change({ saveId: id, refused: null, was });
+    change({ saveId: id, refused: null });
     bridge
-      .send({
-        type: "saveCheckIn",
-        saveId: id,
-        botId: bot.id,
-        every: value !== everyFor(draft.initial.choice, draft.initial.every) ? value : null,
-        prompt: promptChanged ? prompt : null,
-        was,
-        kept: keptByDefault(bot.id, checkIns.settings, checkIns.defaults),
-      })
+      .send({ type: "saveCheckIn", saveId: id, botId: bot.id, ...draftToSave(draft) })
       .catch((error: unknown) =>
         change({ refused: error instanceof Error ? error.message : String(error) }),
       );
+  };
+  // Reads only: whether the change landed is the gateway's to say, and saving again is the person's.
+  const check = () => {
+    if (!save) return;
+    setChecking(true);
+    void refresh()
+      .catch(() => {})
+      .then(() => {
+        setChecking(false);
+        change({ checked: save.id });
+      });
   };
 
   const onKey = (event: KeyboardEvent<HTMLUListElement>) => {
@@ -302,7 +301,8 @@ function CheckInsDialog({
     groupRef.current?.querySelector<HTMLElement>(`[data-value="${value}"]`)?.focus();
   };
 
-  const kept = keptByDefault(bot.id, checkIns.settings, checkIns.defaults);
+  const kept = base.kept;
+  const blocked = cannotKeep(bot.id, checkIns.settings, checkIns.defaults);
   const names =
     kept.map((each) => bots.find((one) => one.id === each.botId)?.name ?? each.botId).join(", ") +
     (checkIns.defaults?.inheritedCut ? " and others" : "");
@@ -313,7 +313,13 @@ function CheckInsDialog({
     ? EVERY_CHOICES
     : [...EVERY_CHOICES, { value: every, label: `${every} (as set now)` }];
   const inheritedPrompt = checkIns.defaults?.prompt ?? null;
-  const promptWarning = !asksForSilence(prompt.trim() === "" ? (inheritedPrompt ?? "") : prompt);
+  const empty = prompt.trim() === "";
+  // Only the gateway's own prompt is known to ask for quiet; a custom one says what it says.
+  const builtIn = empty && inheritedPrompt === null;
+  // A prompt shown cut may ask for NO_REPLY past where it is cut.
+  const shownWhole = empty ? !checkIns.defaults?.promptCut : !base.promptCut;
+  const promptWarning = shownWhole && !asksForSilence(empty ? (inheritedPrompt ?? "") : prompt);
+  const checkedHere = save?.status === "unknown" && draft.rebased === save.id;
   const title = `${bot.name}'s check-ins`;
 
   return (
@@ -350,9 +356,7 @@ function CheckInsDialog({
                 >
                   <span className="b-choice-text">
                     <span className="b-choice-title">{label}</span>
-                    <span className="b-choice-sub">
-                      {choiceWords(value, bot.name, !promptWarning)}
-                    </span>
+                    <span className="b-choice-sub">{choiceWords(value, bot.name, builtIn)}</span>
                   </span>
                   <CheckIcon className="b-tick" />
                 </button>
@@ -366,7 +370,7 @@ function CheckInsDialog({
                 label="How often"
                 value={every}
                 choices={everyChoices}
-                onChoose={(next) => change({ every: next })}
+                onChoose={(next) => change({ every: next, touched: { ...touched, every: true } })}
                 disabled={saving}
                 testId="ci-every"
               />
@@ -378,7 +382,7 @@ function CheckInsDialog({
               stops only the schedule, and the gateway starts that turn.
             </p>
           )}
-          <details className="ci-prompt" open={Boolean(setting?.prompt || prompt) || undefined}>
+          <details className="ci-prompt" open={Boolean(base.was.prompt || prompt) || undefined}>
             <summary>What to check</summary>
             <label htmlFor="ci-prompt-field" className="ci-label">
               Prompt
@@ -388,11 +392,13 @@ function CheckInsDialog({
               className="input"
               rows={4}
               value={prompt}
-              readOnly={setting?.promptCut || saving}
+              readOnly={base.promptCut || saving}
               maxLength={MAX_CHECKIN_PROMPT_CHARS}
               placeholder={inheritedPrompt ?? DEFAULT_PROMPT}
               aria-describedby={promptWarning ? "ci-prompt-note ci-prompt-hint" : "ci-prompt-hint"}
-              onChange={(event) => change({ prompt: event.target.value })}
+              onChange={(event) =>
+                change({ prompt: event.target.value, touched: { ...touched, prompt: true } })
+              }
             />
             {promptWarning && (
               <p className="ci-hint" id="ci-prompt-note" data-testid="prompt-note">
@@ -401,14 +407,22 @@ function CheckInsDialog({
               </p>
             )}
             <p className="ci-hint" id="ci-prompt-hint">
-              {setting?.promptCut
+              {base.promptCut
                 ? "This prompt is longer than Clawtrate edits. Saving leaves it as it is."
                 : inheritedPrompt !== null
                   ? `Empty uses the prompt set as the gateway's default for every bot, shown faint above. Up to ${MAX_CHECKIN_PROMPT_CHARS.toLocaleString("en-US")} characters.`
                   : `Empty uses the gateway's built-in prompt, which asks the bot to reply NO_REPLY when nothing needs attention. Up to ${MAX_CHECKIN_PROMPT_CHARS.toLocaleString("en-US")} characters.`}
             </p>
           </details>
-          {kept.length > 0 && (
+          {blocked && (
+            <Note tone="warn" testId="catch-blocked">
+              <p>
+                <b>Can't save here.</b> {blocked} Saving would have to give each bot that checks in
+                through the default a setting of its own, so Save is off.
+              </p>
+            </Note>
+          )}
+          {kept.length > 0 && !blocked && (
             <Note testId="catch-note">
               <p>
                 {names} {many ? "check" : "checks"} in now through the gateway's default. Once any
@@ -436,16 +450,25 @@ function CheckInsDialog({
             {save?.status === "conflict" && (
               <Note tone="warn" testId="save-conflict">
                 <p>
-                  <b>Not saved.</b> {save.error} Your draft is kept, and the check-ins behind this
-                  dialog show what the gateway has now. Save again to apply it over them.
+                  <b>Not saved.</b> {save.error} Your changes are kept; the rest of this dialog, and
+                  the check-ins behind it, show what the gateway has now. Save again to apply your
+                  changes over it.
                 </p>
               </Note>
             )}
-            {save?.status === "unknown" && (
+            {save?.status === "unknown" && !checkedHere && (
               <Note tone="warn" testId="save-unknown">
                 <p>
-                  <b>Not confirmed.</b> {save.error} The gateway may have applied it; the check-ins
-                  behind this dialog show what it reports now.
+                  <b>Not confirmed.</b> {save.error} The gateway may have applied it. Check reads
+                  what it has now and changes nothing; saving again is a separate change.
+                </p>
+              </Note>
+            )}
+            {checkedHere && (
+              <Note testId="save-checked">
+                <p>
+                  <b>Checked.</b> This dialog now starts from what the gateway has, and keeps the
+                  changes of yours it doesn't have. Save sends those.
                 </p>
               </Note>
             )}
@@ -456,11 +479,16 @@ function CheckInsDialog({
             <button type="button" className="button" data-variant="quiet" onClick={close}>
               Cancel
             </button>
+            {save?.status === "unknown" && !checkedHere && (
+              <button type="button" className="button" disabled={checking} onClick={check}>
+                {checking ? "Checking…" : "Check"}
+              </button>
+            )}
             <button
               type="button"
               className="button"
               data-variant="primary"
-              disabled={saving}
+              disabled={saving || blocked !== null}
               onClick={submit}
             >
               {saving ? "Saving…" : "Save"}

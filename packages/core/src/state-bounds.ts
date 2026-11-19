@@ -882,9 +882,10 @@ const checkInSetting = object<CheckInSetting>()({
   promptCut: FLAG,
 });
 const checkInDefaults = object<CheckInDefaults>()({
-  inherited: list(MAX_CHECKIN_KEPT, ID),
+  inherited: list(MAX_CHECKIN_KEPT + 1, ID),
   inheritedCut: FLAG,
   every: NAME,
+  everyCut: FLAG,
   prompt: text(MAX_CHECKIN_PROMPT_CHARS),
   promptCut: FLAG,
 });
@@ -897,6 +898,7 @@ const checkInSave = object<CheckInSave>()({
 export const CHECK_INS: Bound = object<CheckInsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
+  gatewayId: ID,
   scheduler: FLAG,
   jobs: list(MAX_BOTS, checkInJob),
   settings: list(MAX_BOTS, checkInSetting),

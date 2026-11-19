@@ -804,6 +804,10 @@ export class ClawtrateClient {
   private fileReads = 0;
   /** Changes with every hello and every close, so work started on one connection never runs on the next. */
   private epoch = 0;
+  /** The gateway's identity as read on the connection of `epoch`, once asked. */
+  private gatewayIdentity: { epoch: number; id: Promise<string | null> } | null = null;
+  /** Check-in reads begun; only the latest one's answer is shown. */
+  private checkInReads = 0;
   /** Provider accounts per bot (`accounts-engine.ts`); its state is `accounts`. */
   private readonly accounts = new AccountsEngine({
     request: (method, params, options) => {
@@ -3537,11 +3541,19 @@ export class ClawtrateClient {
           this.state.connection.status === "connected";
         return {
           alive,
-          request: (method, params) =>
+          request: (method, params, options) =>
             protocol && alive()
-              ? protocol.request(method, params)
+              ? protocol.request(method, params, options)
               : Promise.reject(new NotSentError()),
         };
+      },
+      gateway: () => {
+        const known = this.gatewayIdentity;
+        return known?.epoch === this.epoch ? known.id : Promise.resolve(null);
+      },
+      begin: () => {
+        const mine = (this.checkInReads += 1);
+        return () => mine === this.checkInReads;
       },
       get: () => this.state.checkIns,
       set: (checkIns) => this.store.update((state) => ({ ...state, checkIns })),
@@ -4164,6 +4176,10 @@ export class ClawtrateClient {
         this.epoch += 1;
         this.streams.clear();
         this.accounts.onClose();
+        // Check-ins read now belong to no gateway until the next connection says which one answers.
+        const checkIns = this.state.checkIns;
+        if (checkIns?.gatewayId)
+          this.store.update((state) => ({ ...state, checkIns: { ...checkIns, gatewayId: null } }));
         const status = this.state.connection.status;
         if (status !== "pairing" && status !== "error") {
           // Once this gateway has answered, every later drop is a reconnect, not a first connect.
@@ -4453,6 +4469,7 @@ export class ClawtrateClient {
       },
       () => null,
     );
+    this.gatewayIdentity = { epoch: this.epoch, id: gatewayId };
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const [agents, sessions] = await Promise.allSettled([
