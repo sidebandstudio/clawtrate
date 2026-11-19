@@ -350,7 +350,7 @@
     if (!ls.length) return "";
     const bulk = C.hold !== "writing" && isAdmin() && !P[bot].fallback;
     return note(
-      `<p><b>Not being enforced right now.</b> Clawtrate cannot confirm these plugin rules are being enforced. The gateway's own restrictions still apply. <span class="b-faint">Rules as last read on this device, 5:41 PM.</span>${bulk ? ` Denying them adds ${toolList(ls)} to ${name}'s own deny list.` : ""}</p>` +
+      `<p><b>Enforcement not confirmed.</b> Clawtrate cannot confirm these plugin rules are being enforced. The gateway's own restrictions still apply. <span class="b-faint">Rules as last read on this device, 5:41 PM.</span>${bulk ? ` Denying them adds ${toolList(ls)} to ${name}'s own deny list.` : ""}</p>` +
         (C.hold === "writing"
           ? `<p class="b-hint" role="status" style="margin:6px 0 0">Writing the deny…</p>`
           : P[bot].fallback
