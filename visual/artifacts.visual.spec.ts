@@ -16,17 +16,25 @@ import {
 
 type Scene = { name: string; rows: string; query: string; ready: (page: Page) => Promise<void> };
 
-/** Scroll the conversation to its top with the wheel, as a reader does, and let it rest there. */
+/**
+ * Scroll the conversation to its top with the wheel, as a reader does, once the
+ * pictures below have arrived (they change its height), and let it rest there.
+ */
 const toTop = async (page: Page) => {
+  await expect(cell(page, "apps-compared.png").locator("img")).toBeVisible();
+  await picturesDecoded(page);
+  await settle(page);
   const transcript = page.locator(".transcript");
   await transcript.hover();
   await expect
     .poll(async () => {
       await page.mouse.wheel(0, -4000);
+      await settle(page);
       return transcript.evaluate((element) => element.scrollTop);
     })
     .toBe(0);
   await settle(page);
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
 };
 
 const openViewer = async (page: Page, name: string) => {

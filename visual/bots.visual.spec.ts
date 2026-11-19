@@ -374,7 +374,12 @@ test("F-027: Hide from sidebar moves a bot into a collapsible Hidden bots sectio
         .map((c) => c.type),
     sentBefore,
   );
-  expect(sent.filter((type) => type !== "openSession" && type !== "closeSession")).toEqual([]);
+  // Opening a task reads it, and the items its bot handed over (`listArtifacts`).
+  expect(
+    sent.filter(
+      (type) => type !== "openSession" && type !== "closeSession" && type !== "listArtifacts",
+    ),
+  ).toEqual([]);
 
   // Hidden bots stay hidden after a restart.
   await page.reload();

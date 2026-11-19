@@ -21,7 +21,9 @@ async function recordCommands(page: Page): Promise<void> {
     const fixture = w.clawtrateFixture;
     const invoke = fixture.invoke!.bind(fixture);
     const send = fixture.send!.bind(fixture);
-    fixture.invoke = (command) => (w.sent.push(command), invoke(command));
+    // The card list of the open task (`listArtifacts`) is read as the task is: not recorded.
+    const list = (command: unknown) => (command as { type?: string }).type === "listArtifacts";
+    fixture.invoke = (command) => (list(command) || w.sent.push(command), invoke(command));
     fixture.send = (command) => (w.sent.push(command), send(command));
   });
 }
