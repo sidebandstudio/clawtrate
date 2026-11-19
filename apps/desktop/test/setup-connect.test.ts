@@ -181,7 +181,7 @@ function temporaryFiles(since: number): string[] {
     }
     if (stat.mtimeMs < since) return;
     if (stat.isDirectory() && depth < 4) {
-      let entries: string[] = [];
+      let entries: string[];
       try {
         entries = readdirSync(path);
       } catch {
