@@ -246,7 +246,17 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                       ? ArchiveResult
                                       : C extends { type: "listArchived" }
                                         ? ArchivedList
-                                        : void;
+                                        : C extends { type: "readPlacement" }
+                                          ? BotPlacement
+                                          : C extends { type: "readMachines" }
+                                            ? MachinesView
+                                            : C extends { type: "setCommandMachine" }
+                                              ? CommandPlace
+                                              : C extends { type: "setBotWorkspace" }
+                                                ? { workspace: string }
+                                                : C extends { type: "setMachineDefaults" }
+                                                  ? ApprovalsFile
+                                                  : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
