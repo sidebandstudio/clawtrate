@@ -12,7 +12,7 @@ Three rules hold for every part of the plan:
 
 - **Design before build.** Where an area has a document in [`docs/design/`](design/), that document governs how it looks, reads and moves, and `docs/parity.md` governs what must be true. An area without one gets its design document and a clickable prototype (`docs/design/prototype/`, with a check file under `docs/design/prototype/tools/checks/`) before it is built.
 - **Nothing is claimed that the gateway does not do.** Each row's gateway cell names what it relies on; [`docs/research/gateway-capabilities.md`](research/gateway-capabilities.md) is the map. A screen says what the gateway established and no more, and a behavior that rests on something the map marks unverified is not marked done on fixture evidence alone.
-- **Everything is developed against a development gateway** with a scripted model (`pnpm dev-gateway`, see the [README](../README.md) and `tools/dev-gateway/README.md`): no real provider, no real key, loopback only. Add scenarios there when a row needs gateway behavior on demand.
+- **Everything is developed against a development gateway** with a scripted model (`pnpm dev-gateway`, see [the development gateway guide](development/dev-gateway.md) and `tools/dev-gateway/README.md`): no real provider, no real key, loopback only. Add scenarios there when a row needs gateway behavior on demand.
 
 Status lives in `docs/parity.md` and in the issues, not here. This document says what each segment is, what it needs and who has it.
 
@@ -222,7 +222,7 @@ The iOS half of a `both` row is proven the same way as its desktop half: by an a
 
 A pull request is judged on these points:
 
-- `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm e2e` and `pnpm visual` pass, and so do all required CI checks ([CONTRIBUTING.md](../CONTRIBUTING.md) has the commands).
+- `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm e2e` and `pnpm visual` pass, and so do all required CI checks ([Testing](development/testing.md) has the commands).
 - Each row it marks `done` or `desktop done` has a check whose title begins with the row's id, and the check would fail if the behavior broke. A row that cannot be done is left `todo` with the exact reason and a linked follow-up, or made `gap` with the evidence, in its gateway cell, agreed on its issue first.
 - It follows the design that governs it, at 1440, 1100 and 800 px and the 390 px one-pane layout, in light and dark, by keyboard and with a screen reader.
 - It claims nothing the gateway does not do, asks for the smallest scope that works (read first, the interactive tier on first use, admin only on an explicit request), and records in `docs/decisions.md` what a later contributor needs to know, including what the gateway really returned where it differs from the map.

@@ -9,9 +9,16 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels that pull request's older run. Runs on main each get a group
+# of their own, so every commit on main keeps its result.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       # Lint, typecheck and unit tests do not start Electron.
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
@@ -33,6 +40,7 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
@@ -59,6 +67,7 @@ jobs:
   macos:
     # The visual baselines were taken on macOS 15; font rasterising differs between releases.
     runs-on: macos-15
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
