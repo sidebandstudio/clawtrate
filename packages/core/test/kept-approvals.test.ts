@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { agentEvent, KEY, openTask } from "./client-harness.ts";
-import { until } from "./fake-gateway.ts";
+import { sleep, until } from "./fake-gateway.ts";
 
 const request = (id: string) => ({
   id,
@@ -100,5 +100,29 @@ describe("F-091 F-165: settled approvals across a task's release", () => {
     await until(() => client.state.transcripts[KEY]?.approvalAccess === "ready");
     expect(transcript().approvals.filter((card) => card.status === "pending")).toEqual([]);
     client.stop();
+  });
+  it("a task the gateway deletes keeps no settled card, whether it was let go before or after", async () => {
+    for (const order of ["closed first", "deleted first"] as const) {
+      const { client, gateway, transcript } = await openTask();
+      gateway.handlers["chat.history"] = () => history;
+      gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
+      gateway.emit("exec.approval.requested", request("ap-1"));
+      await until(() => transcript().approvals.length === 1);
+      gateway.emit("exec.approval.resolved", {
+        id: "ap-1",
+        decision: "allow-once",
+        resolvedBy: "Clawtrate",
+        request: request("ap-1").request,
+      });
+      await until(() => transcript().approvals[0]!.status === "allowed");
+      if (order === "closed first") client.closeSession(KEY);
+      gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
+      await sleep(30);
+      if (order === "deleted first") client.closeSession(KEY);
+      client.openSession(KEY);
+      await until(() => client.state.transcripts[KEY]?.status === "ready");
+      expect(transcript().approvals, order).toEqual([]);
+      client.stop();
+    }
   });
 });

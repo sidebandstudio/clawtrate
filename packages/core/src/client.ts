@@ -1079,6 +1079,19 @@ export class ClawtrateClient {
   }
 
   /**
+   * The gateway confirmed the task deleted: the settled cards kept for it go,
+   * and an open copy of the task keeps none to be kept when it is let go.
+   */
+  private dropSettledApprovals(key: string): void {
+    this.keptApprovals.delete(key);
+    if (this.state.transcripts[key]?.approvals.some((card) => card.status !== "pending"))
+      this.updateActivity(key, (activity) => ({
+        ...activity,
+        approvals: activity.approvals.filter((card) => card.status === "pending"),
+      }));
+  }
+
+  /**
    * A task let go keeps its settled approval cards, as settled: none of them can
    * be answered again, and a pending one is the gateway's lists' to give back.
    */
@@ -4627,6 +4640,7 @@ export class ClawtrateClient {
     if (isSessionRemoval(payload)) {
       this.cancelAllQueued(key);
       this.retireForeign(key);
+      this.dropSettledApprovals(key);
       if (this.rows.delete(key)) this.publishTasks();
       return;
     }
