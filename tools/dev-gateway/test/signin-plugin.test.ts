@@ -292,7 +292,6 @@ describe("the sign-in plugin's requests", () => {
       access: "a",
       refresh: "r",
       expires: 1,
-      email: "x@acme.example",
     };
     const scripted = await returning(tokens);
     const { method } = await registered(`${scripted.url}/scripted/signin`);
@@ -326,7 +325,6 @@ describe("the sign-in plugin's requests", () => {
       access: "a",
       refresh: "r",
       expires: 1,
-      email: "x@acme.example",
     };
     for (const confirmed of [true, false]) {
       const scripted = await serve((body) => {
