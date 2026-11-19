@@ -489,3 +489,44 @@
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
 }
+
+/* Export and import: which of the two ways the screen is, said as a title. */
+.lc-way-title {
+  margin: 0 0 6px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+/* The import review: each row opens to what it would write, in full. */
+.lc-review {
+  border-top: 1px solid var(--border);
+}
+
+.lc-review:last-of-type {
+  border-bottom: 1px solid var(--border);
+}
+
+.lc-review > summary {
+  padding: 12px 2px;
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+
+.lc-review > .lc-theirs,
+.lc-review > .lc-list,
+.lc-review > .lc-settings,
+.lc-review > .b-hint {
+  margin: 0 0 12px;
+}
+
+.lc-settings [data-state="left"] {
+  color: var(--text-muted);
+}
+
+.lc-settings [data-state="left"] .lc-step-word {
+  color: var(--warn);
+}
+
+.lc-files-hint {
+  margin: 0 0 var(--space-2) 26px;
+}

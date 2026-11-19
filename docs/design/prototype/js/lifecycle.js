@@ -17,7 +17,7 @@
 //   namefail=1          the gateway refuses the rename
 //   bview=instructions  the Instructions page (instr=conflict: the file changed meanwhile)
 //   rolechange=1        Juniper's open task shows a change to its instructions
-//   rolediff=nocopy     ... with no earlier copy to compare; undo=conflict: the undo is refused
+//   rolediff=nocopy|toolarge  ... with no earlier copy, or one too large to keep; undo=conflict: the undo is refused
 //   delbot=<id>         the bot the Delete or Duplicate dialog is for (default: the open bot)
 //   shared=1            Pip's workspace folder is also Juniper's
 //   files=1             Delete's folder option ticked
@@ -262,7 +262,7 @@
       body = p("imagetool") === "unknown"
         ? `<div class="b-result"><span class="empty-mark">${icon("image")}</span><h3>Not known yet</h3><p>The gateway says which tools ${esc(nameOf(id))} is offered for one of its tasks, and ${esc(nameOf(id))} has none yet. Start a task, then look here again.</p></div>`
         : p("imagetool")
-        ? `<div class="b-result"><span class="empty-mark">${icon("image")}</span><h3>Not in this version</h3><p>${esc(nameOf(id))} is offered the gateway's image tool, but Clawtrate can't make a picture with it yet. Ask ${esc(nameOf(id))} for one in a task.</p></div>`
+        ? `<div class="b-result"><span class="empty-mark">${icon("image")}</span><h3>Generating a picture isn't available in this version</h3><p>The gateway offers ${esc(nameOf(id))} an image tool, but Clawtrate can't use it here yet. You can ask ${esc(nameOf(id))} for a picture in a task, then upload it.</p></div>`
         : `<div class="b-result"><span class="empty-mark">${icon("image")}</span><h3>Image generation isn't available on this gateway</h3><p>The gateway doesn't offer ${esc(nameOf(id))} its image tool: “Denied by tools.deny”, in the gateway's own words.</p></div>`;
       foot = button("Generate", 'data-size="lg" disabled', "primary");
     } else {
@@ -499,7 +499,8 @@
 
   CT.botsAboutRows = (id, row) => {
     const i = instr(id);
-    return row("Instructions", `AGENTS.md, ${lines(i.agents)} lines · SOUL.md, ${lines(i.soul)} ${lines(i.soul) === 1 ? "line" : "lines"}`, `data-bs="instructions" aria-label="Instructions: AGENTS.md and SOUL.md. Open."`);
+    // bots.md section 8's Description row stays as that document places it.
+    return row("Description", `<span class="b-faint">None</span>`) + row("Instructions", `AGENTS.md, ${lines(i.agents)} lines · SOUL.md, ${lines(i.soul)} ${lines(i.soul) === 1 ? "line" : "lines"}`, `data-bs="instructions" aria-label="Instructions: AGENTS.md and SOUL.md. Open."`);
   };
   CT.botsSettingsTail = (id) => {
     const primary = id === primaryId();
@@ -601,7 +602,7 @@
 
   // A role change from the conversation (section 7) -----------------------------------------------
 
-  const R = { state: p("rolechange") ? "new" : null, nocopy: p("rolediff") === "nocopy" };
+  const R = { state: p("rolechange") ? "new" : null, nocopy: p("rolediff") === "nocopy", toolarge: p("rolediff") === "toolarge" };
   if (R.state) {
     const j = botOf("juniper");
     const t = j.tasks.find((x) => x.id === (p("task") || "j1")) || j.tasks[0];
@@ -619,7 +620,9 @@
     slot.dataset.state = `${R.state}:${isAdmin()}:${R.open}`;
     const head = `Juniper changed its instructions`;
     let body;
-    if (R.nocopy)
+    if (R.toolarge)
+      body = `<p class="b-p">Juniper wrote to AGENTS.md in this run. Clawtrate keeps an earlier copy only of a file up to 65,536 characters, and this one is longer, so it can't show the change or undo it.</p><div class="b-actions">${button("Open instructions", 'data-lc="open-instructions" data-size="sm"')}</div>`;
+    else if (R.nocopy)
       body = `<p class="b-p">Juniper wrote to AGENTS.md in this run. Clawtrate has no earlier copy of the file to compare, so it can't show the change or undo it.</p><div class="b-actions">${button("Open instructions", 'data-lc="open-instructions" data-size="sm"')}</div>`;
     else {
       const diff =
@@ -657,36 +660,7 @@
     const own = p("dupacct") === "own";
     const b = D.binding[id] || {};
     const a = D.acct(own ? "anthropic:pip" : b.account);
-    if (d.status === "working" || d.status === "done" || d.status === "partial") {
-      const steps = [
-        ["made", `Made ${esc(d.name)}`],
-        ["look", "Picture and label"],
-        ["model", "Model, account and effort"],
-        ["instr", "Instructions and personality"],
-        ["tools", "Tool permissions and skills"],
-        ["read", `Read back ${esc(d.name)} from the gateway`],
-      ].filter(([k]) => k === "made" || k === "read" || d.copy[k]);
-      const at = d.at ?? 0;
-      const row = ([k, label], i) => {
-        const failed = d.status === "partial" && k === "instr";
-        const state = failed ? "failed" : i < at || d.status !== "working" ? "done" : i === at ? "running" : "queued";
-        const word = { done: "Done", running: "Working", queued: "Waiting", failed: "Not copied" }[state];
-        return `<li data-state="${state}">${glyph(state === "done" ? "done" : state === "failed" ? "failed" : state === "running" ? "sending" : "queued")}<span>${label}</span><span class="lc-step-word">${word}</span></li>`;
-      };
-      const list = `<ol class="lc-steps" aria-label="Progress">${steps.map(row).join("")}</ol>`;
-      if (d.status === "working") return sheet(`Duplicating ${name}`, list, "");
-      if (d.status === "done")
-        return sheet(
-          `${esc(d.name)} is ready`,
-          list + `<p class="b-hint">Read back from the gateway: ${esc(d.name)} is listed with what's ticked above. It's a new bot with its own workspace folder; nothing links it to ${name}.</p>`,
-          button(`Open ${esc(d.name)}`, 'data-lc="dup-open" data-size="lg" data-lc-focus', "primary"),
-        );
-      return sheet(
-        `${esc(d.name)} was made, without ${name}'s instructions`,
-        list + note(`<p><b>Its instructions weren't copied:</b> the gateway didn't answer. ${esc(d.name)} has the gateway's starting AGENTS.md and SOUL.md.</p>`, "danger"),
-        button("Try again", 'data-lc="dup-retry" data-size="lg" data-lc-focus', "primary") + button("Leave it as it is", 'data-lc="dup-open" data-size="lg"', "quiet"),
-      );
-    }
+    if (d.status === "working" || d.status === "done" || d.status === "partial") return stepsView(d);
     const item = (key, title, sub, disabled) =>
       `<label class="b-check lc-item"><input type="checkbox" data-lc-copy="${key}"${d.copy[key] ? " checked" : ""}${disabled ? " disabled" : ""} /><span class="lc-item-text"><span>${title}</span><span class="b-hint">${sub}</span></span></label>`;
     const shared = D.shared().filter((x) => x.provider !== "anthropic" || true);
@@ -725,7 +699,8 @@
 
   function runDuplicate(retry) {
     const d = L.dialog;
-    if (!retry && p("dup") === "refused" && !d.refusedOnce) {
+    const refuse = d.kind === "import" ? p("impresult") === "taken" : p("dup") === "refused";
+    if (!retry && refuse && !d.refusedOnce) {
       d.refusedOnce = true;
       d.refused = `${d.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
       d.status = "sending";
@@ -733,7 +708,7 @@
       setTimeout(() => {
         d.status = null;
         paint(true);
-        announce("The gateway didn't make the copy");
+        announce(d.kind === "import" ? "The gateway didn't make the bot" : "The gateway didn't make the copy");
       }, 300);
       return;
     }
@@ -747,19 +722,20 @@
       d.at += 1;
       if (d.at >= total) {
         d.busy = false;
-        d.status = p("dup") === "partial" && !retry && d.copy.instr ? "partial" : "done";
+        d.status = (d.kind === "import" ? p("impresult") : p("dup")) === "partial" && !retry && d.copy.instr ? "partial" : "done";
         if (!retry) {
           let nid = d.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "copy";
           while (botOf(nid)) nid += "-2";
           d.newId = nid;
-          CT.botArt[nid] = d.copy.look ? CT.botArt[d.bot] || { body: "drop", color: "#ff6f9c", tilt: 0, look: [0.6, 0] } : { body: "pebble", color: "#9aa0a6", tilt: 0, look: [0.6, 0] };
-          D.binding[nid] = { ...(D.binding[d.bot] || {}), ...(d.acct ? { account: d.acct } : {}), locked: false };
+          CT.botArt[nid] = d.kind === "import" ? CT.botArt.__wren : d.copy.look ? CT.botArt[d.bot] || { body: "drop", color: "#ff6f9c", tilt: 0, look: [0.6, 0] } : { body: "pebble", color: "#9aa0a6", tilt: 0, look: [0.6, 0] };
+          D.binding[nid] = d.kind === "import" ? { account: null, mode: "gateway", model: "gpt-5.5", effort: "Medium", locked: false } : { ...(D.binding[d.bot] || {}), ...(d.acct ? { account: d.acct } : {}), locked: false };
           FACTS[nid] = { folder: `workspace-${nid}`, files: 4, memory: "no memory yet", tasks: 0, routines: [], routes: 0, own: [] };
-          app.bots.push({ id: nid, name: d.name.trim(), label: d.copy.look ? botOf(d.bot).label : "", tasks: [{ id: `${nid}-1`, title: "Main", at: 3000, when: "now", preview: "No messages yet.", unread: false, status: "idle", html: "", fresh: true }] });
+          app.bots.push({ id: nid, name: d.name.trim(), label: d.kind === "import" ? "Garden" : d.copy.look ? botOf(d.bot).label : "", tasks: [{ id: `${nid}-1`, title: "Main", at: 3000, when: "now", preview: "No messages yet.", unread: false, status: "idle", html: "", fresh: true }] });
           refreshRail();
         }
         paint(true);
         announce(d.status === "done" ? `${d.name.trim()} is ready` : `${d.name.trim()} was made, without its instructions`);
+        if (d.kind === "import" && d.status === "done") INSTR[d.newId] = { agents: WREN().agents, soul: WREN().soul, at: "Nov 19, 5:46 PM" };
         return;
       }
       paint();
@@ -774,42 +750,188 @@
   // How the gateway's list says each bot was made (agents.list createdVia): from a
   // package ("claw"), by the create method ("operator"), or no record.
   const VIA = { marlow: "claw", pip: "operator" };
+  const NEVER = [
+    "Memory and About you (MEMORY.md, notes, USER.md)",
+    "Tasks and their transcripts",
+    "Routines",
+    "Any account, sign-in or secret",
+    "Approvals and rules",
+    "Channel routes",
+    "Other files in the workspace folder",
+  ];
+  const neverList = () => `<ul class="lc-list">${NEVER.map((x) => `<li>${x}</li>`).join("")}</ul>`;
+  const wayTabs = (d, words) =>
+    `<div class="tabs lc-tabs" role="tablist" aria-label="Which way">${words
+      .map(([t, label]) => `<button type="button" class="tab" role="tab" aria-selected="${t === d.way}" tabindex="${t === d.way ? 0 : -1}" data-lc-way="${t}">${label}</button>`)
+      .join("")}</div>`;
+  const fileName = (name) => `${name.replace(/[^A-Za-z0-9 _-]+/g, "").trim() || "bot"}.clawtrate-bot.json`;
+
   VIEWS.export = (d) => {
     const id = d.bot;
     const name = esc(nameOf(id));
+    const tabs = wayTabs(d, [
+      ["file", "Clawtrate file"],
+      ["package", "Gateway package"],
+    ]);
+    if (d.way === "file") {
+      const f = fileName(nameOf(id));
+      const what =
+        `<h3 class="lc-way-title">A Clawtrate file</h3>` +
+        `<p class="b-hint lc-first">Clawtrate's own format: a JSON file this app writes and reads. The gateway doesn't know it, and other apps may not.</p>` +
+        `<h4 class="b-group">It holds</h4><ul class="lc-list"><li>${name}'s picture and label</li><li>Its model and effort, by name</li><li>Its instructions and personality, AGENTS.md and SOUL.md, in full</li><li>Its tool permissions and skills</li></ul>` +
+        `<h4 class="b-group">It never holds</h4>${neverList()}` +
+        note(`<p><b>The file holds ${name}'s instructions in full</b>, and they may hold private text. Share it only with people who may read them.</p>`, "warn");
+      if (d.exp === "saving") return sheet(`Export ${name}`, tabs + `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Reading ${name} from the gateway…</p>`, "");
+      if (d.exp === "saved")
+        return sheet(
+          `Export ${name}`,
+          tabs + `<div class="b-result"><span class="empty-mark">${icon("check")}</span><h3 tabindex="-1" data-lc-focus>Saved ${esc(f)}</h3><p>In Downloads on this computer, 16 KB. Nothing was sent anywhere.</p></div>`,
+          button("Done", 'data-lc="close" data-size="lg"'),
+        );
+      if (d.exp === "readfail")
+        return sheet(`Export ${name}`, tabs + what + note(`<p><b>Couldn't read ${name}'s instructions.</b> The gateway didn't answer. Nothing was saved.</p>`, "danger"), button("Try again", 'data-lc="export-file" data-size="lg" data-lc-focus', "primary"));
+      if (d.exp === "toolarge")
+        return sheet(`Export ${name}`, tabs + what + note(`<p><b>${name}'s file would be 5.4 MB.</b> A Clawtrate bot file holds at most 5 MB, so it wasn't saved. Its instructions are the large part.</p>`, "danger"), button("Close", 'data-lc="close" data-size="lg"'));
+      return sheet(`Export ${name}`, tabs + what + `<p class="b-hint">You choose where to save it on this computer; it's named ${esc(f)}. Nothing is sent anywhere.</p>`, button("Export file…", 'data-lc="export-file" data-size="lg" data-lc-focus', "primary"));
+    }
     const via = VIA[id];
     const exp = `OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws export ${id} --out ./${id}-claw`;
     const check = `OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws migrate ${id} --dry-run`;
     const body =
-      via === "claw"
+      `<h3 class="lc-way-title">The gateway's package</h3>` +
+      (via === "claw"
         ? `<p class="b-lead">${name} was installed from a package, so the gateway can export it again with its own command line. Clawtrate can't make a package itself. On the gateway's machine:</p>` +
           cmdBlock(exp, "export command") +
           `<h4 class="b-group">The package holds</h4><ul class="lc-list"><li>${name}'s name, and the settings and files its package manages</li></ul>` +
           `<h4 class="b-group">It doesn't hold</h4><ul class="lc-list"><li>Its memory, its tasks and their transcripts</li><li>Sign-ins and keys</li><li>Its channel routes</li></ul>`
         : via === "operator"
-          ? `<div class="b-result"><span class="empty-mark">${icon("warning")}</span><h3>The gateway can't export ${name}</h3><p>The gateway exports only bots installed from a package. ${name} was made with the gateway's create method, which gives it settings a package can't hold, and Clawtrate has no other way to export a bot.</p></div>` +
-            `<p class="b-hint">To keep a copy on this gateway, duplicate it instead.</p>`
-          : `<div class="b-result"><span class="empty-mark">${icon("warning")}</span><h3>${name} isn't in a package</h3><p>The gateway exports only bots installed from a package, and Clawtrate has no other way to export a bot. The gateway's owner can check whether the gateway would put ${name} in one, without changing anything:</p></div>` +
+          ? `<div class="b-result"><span class="empty-mark">${icon("warning")}</span><h3>The gateway can't export ${name}</h3><p>The gateway exports only bots installed from a package. ${name} was made with the gateway's create method, which gives it settings a package can't hold. A Clawtrate file can hold it.</p></div>`
+          : `<div class="b-result"><span class="empty-mark">${icon("warning")}</span><h3>${name} isn't in a package</h3><p>The gateway exports only bots installed from a package. The gateway's owner can check whether the gateway would put ${name} in one, without changing anything:</p></div>` +
             cmdBlock(check, "check command") +
-            `<p class="b-hint">If it can, the same command without <code>--dry-run</code> asks before it does; then the export command works.</p>`;
-    return sheet(
-      `Export ${name}`,
-      body + `<p class="b-hint">Packages are an experimental part of the gateway, switched on by the first word of each command; their format may change.</p>`,
-      via === "operator" && isAdmin() ? button("Duplicate…", `data-lc="open-duplicate" data-lc-bot="${id}" data-size="lg"`) + button("Close", 'data-lc="close" data-size="lg"', "quiet") : button("Done", 'data-lc="close" data-size="lg"'),
-    );
+            `<p class="b-hint">If it can, the same command without <code>--dry-run</code> asks before it does; then the export command works.</p>`) +
+      `<p class="b-hint">Packages are an experimental part of the gateway, switched on by the first word of each command; their format may change.</p>`;
+    return sheet(`Export ${name}`, tabs + body, button("Done", 'data-lc="close" data-size="lg"'));
   };
-  VIEWS.import = () => {
-    const look = "OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws add ./pip-claw --dry-run";
-    const add = "OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws add ./pip-claw --yes --plan-integrity <digest>";
+
+  // The file a person chose, as the fixtures have it: Wren, from another gateway.
+  const WREN = () => {
+    const odd = p("imp") === "unavailable";
+    return {
+      name: "Wren",
+      label: "Garden",
+      model: odd ? "globex/atlas-2" : "openai/gpt-5.5",
+      effort: "Medium",
+      agents: "# Wren\n\nYou keep the garden calendar.\nAsk before ordering seeds.\nNever water on a rain day.\n",
+      soul: "Patient and practical.\n",
+      settings: [
+        ["Model", odd ? "globex/atlas-2" : "openai/gpt-5.5", !odd],
+        ["Effort", "Medium", odd ? "with-model" : true],
+        ["Tools never allowed", "Run commands (exec)", true],
+        ...(odd ? [["Tools also allowed", "Use the browser (browser)", false]] : []),
+        ["Skills", "weather", true],
+        ...(odd ? [["Skills", "trail-maps", false]] : []),
+      ],
+    };
+  };
+  CT.botArt.__wren = { body: "bloom", color: "#a5d955", tilt: 0, look: [0.6, 0] };
+
+  VIEWS.import = (d) => {
+    const tabs = wayTabs(d, [
+      ["file", "Clawtrate file"],
+      ["package", "Gateway package"],
+    ]);
+    if (d.way === "package") {
+      const look = "OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws add ./pip-claw --dry-run";
+      const add = "OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws add ./pip-claw --yes --plan-integrity <digest>";
+      return sheet(
+        "Import a bot",
+        tabs +
+          `<h3 class="lc-way-title">The gateway's package</h3>` +
+          `<p class="b-lead">The gateway adds a bot from a package with its own command line. Clawtrate can't read a package or add one itself. On the gateway's machine:</p>` +
+          `<ol class="b-steps lc-steps-cmd"><li><div><p>See what the package would create, without changing anything. The gateway lists the bot, its folder, every action and what it would need:</p>${cmdBlock(look, "review command")}</div></li>` +
+          `<li><div><p>Add it, with the digest the first command printed. The gateway refuses if anything changed since:</p>${cmdBlock(add, "add command")}</div></li></ol>` +
+          `<p class="b-hint">The new bot appears in your list when the gateway lists it. Packages are an experimental part of the gateway; their format may change.</p>`,
+        button("Done", 'data-lc="close" data-size="lg"'),
+      );
+    }
+    if (d.status === "working" || d.status === "done" || d.status === "partial") return stepsView(d);
+    if (d.stage === "reading") return sheet("Import a bot", tabs + `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Reading wren.clawtrate-bot.json…</p>`, "");
+    if (d.stage === "refused") {
+      const why = {
+        version: "<b>Clawtrate can't read this file.</b> Its format version is 3, and this version of Clawtrate reads version 1. Nothing was read as a bot.",
+        size: "<b>Clawtrate can't read this file.</b> It is 6.2 MB, and a Clawtrate bot file holds at most 5 MB. Nothing was read as a bot.",
+        type: "<b>Clawtrate can't read this file.</b> Its label is a number, not text. Nothing was read as a bot.",
+      }[p("imp")];
+      return sheet("Import a bot", tabs + note(`<p>${why}</p>`, "danger"), button("Choose another file…", 'data-lc="import-choose" data-size="lg" data-lc-focus', "primary"));
+    }
+    if (d.stage === "review") {
+      const w = WREN();
+      const left = w.settings.filter(([, , ok]) => ok === false);
+      const writes = w.settings.filter(([, , ok]) => ok === true);
+      const word = (ok) => (ok === true ? "Will be written" : ok === "with-model" ? "Left out with the model" : "Not available here, left out");
+      const row = ([k, v, ok]) => `<li data-state="${ok === true ? "write" : "left"}"><span>${k}: ${esc(v)}</span><span class="lc-step-word">${word(ok)}</span></li>`;
+      return sheet(
+        "Add Wren?",
+        tabs +
+          `<span class="b-preview" role="img" aria-label="Wren's picture">${CT.character("__wren")}</span>` +
+          `<label class="b-label" for="lc-imp-name">Name</label><input class="input lc-dup-name" id="lc-imp-name" value="${esc(d.name)}" data-lc-impname maxlength="40" />` +
+          (d.refused ? note(`<p><b>The gateway didn't make the bot:</b> “agent "${esc(d.refused)}" already exists”. Nothing was made.</p>`, "danger") : "") +
+          `<p class="b-hint lc-center">Label: ${esc(w.label)} · from wren.clawtrate-bot.json, written by Clawtrate 0.4.0</p>` +
+          note(`<p>This file is someone's text. Clawtrate shows it here and doesn't run it; nothing is created until Add Bot.</p>`) +
+          `<details class="lc-review" data-lc-row="agents"><summary>Instructions · AGENTS.md <span class="b-faint">· ${lines(w.agents)} lines, in full</span></summary><pre class="lc-theirs">${esc(w.agents)}</pre></details>` +
+          `<details class="lc-review" data-lc-row="soul"><summary>Personality · SOUL.md <span class="b-faint">· ${lines(w.soul)} line, in full</span></summary><pre class="lc-theirs">${esc(w.soul)}</pre></details>` +
+          `<details class="lc-review" data-lc-row="settings"><summary>Settings <span class="b-faint">· ${writes.length} to write${left.length ? `, ${left.length} not available here` : ""}</span></summary><ul class="lc-result lc-settings">${w.settings.map(row).join("")}</ul>` +
+          (left.some(([k]) => k === "Model") ? `<p class="b-hint">With its model left out, Wren uses the gateway's default model until you choose one, and its effort is left out with it.</p>` : "") +
+          `</details>` +
+          `<details class="lc-review" data-lc-row="never"><summary>Not created <span class="b-faint">· a Clawtrate file never carries these</span></summary>${neverList()}</details>`,
+        isAdmin() ? button("Add Bot", `data-lc="import-add" data-size="lg"${d.name.trim() ? "" : " disabled"}`, "primary") : adminBar("Adding a bot needs admin access."),
+      );
+    }
     return sheet(
       "Import a bot",
-      `<p class="b-lead">The gateway adds a bot from a package with its own command line. Clawtrate can't read a package or add one itself. On the gateway's machine:</p>` +
-        `<ol class="b-steps lc-steps-cmd"><li><div><p>See what the package would create, without changing anything. The gateway lists the bot, its folder, every action and what it would need:</p>${cmdBlock(look, "review command")}</div></li>` +
-        `<li><div><p>Add it, with the digest the first command printed. The gateway refuses if anything changed since:</p>${cmdBlock(add, "add command")}</div></li></ol>` +
-        `<p class="b-hint">The new bot appears in your list when the gateway lists it. Packages are an experimental part of the gateway; their format may change.</p>`,
-      button("Done", 'data-lc="close" data-size="lg"'),
+      tabs +
+        `<h3 class="lc-way-title">A Clawtrate file</h3>` +
+        `<p class="b-lead">Choose a file another Clawtrate exported. You'll see everything it would create before anything is.</p>` +
+        `<div class="lc-drop" data-lc-drop><span class="empty-mark">${icon("file")}</span><p>Drop a .clawtrate-bot.json file here</p>${button("Choose file…", 'data-lc="import-choose" data-size="sm" data-lc-focus')}<p class="b-hint">At most 5 MB.</p></div>`,
+      "",
     );
   };
+
+  // Duplicate's steps, shared with Import: the same writes, each read back.
+  function stepsView(d) {
+    const from = d.kind === "import" ? null : esc(nameOf(d.bot));
+    const steps = [
+      ["made", `Made ${esc(d.name)}`],
+      ["look", "Picture and label"],
+      ["model", d.kind === "import" ? "Model and effort" : "Model, account and effort"],
+      ["instr", "Instructions and personality"],
+      ["tools", "Tool permissions and skills"],
+      ["read", `Read back ${esc(d.name)} from the gateway`],
+    ].filter(([k]) => k === "made" || k === "read" || d.copy[k]);
+    const at = d.at ?? 0;
+    const row = ([k, label], i) => {
+      const failed = d.status === "partial" && k === "instr";
+      const state = failed ? "failed" : i < at || d.status !== "working" ? "done" : i === at ? "running" : "queued";
+      const word = { done: "Done", running: "Working", queued: "Waiting", failed: d.kind === "import" ? "Not written" : "Not copied" }[state];
+      return `<li data-state="${state}">${glyph(state === "done" ? "done" : state === "failed" ? "failed" : state === "running" ? "sending" : "queued")}<span>${label}</span><span class="lc-step-word">${word}</span></li>`;
+    };
+    const list = `<ol class="lc-steps" aria-label="Progress">${steps.map(row).join("")}</ol>`;
+    if (d.status === "working") return sheet(d.kind === "import" ? `Adding ${esc(d.name)}` : `Duplicating ${from}`, list, "");
+    if (d.status === "done")
+      return sheet(
+        `${esc(d.name)} is ready`,
+        list +
+          (d.kind === "import"
+            ? `<p class="b-hint">Read back from the gateway: ${esc(d.name)} is listed with what the review said would be written. It's a new bot with its own workspace folder.</p>`
+            : `<p class="b-hint">Read back from the gateway: ${esc(d.name)} is listed with what's ticked above. It's a new bot with its own workspace folder; nothing links it to ${from}.</p>`),
+        button(`Open ${esc(d.name)}`, 'data-lc="dup-open" data-size="lg" data-lc-focus', "primary"),
+      );
+    return sheet(
+      d.kind === "import" ? `${esc(d.name)} was made, without its instructions` : `${esc(d.name)} was made, without ${from}'s instructions`,
+      list + note(`<p><b>Its instructions weren't ${d.kind === "import" ? "written" : "copied"}:</b> the gateway didn't answer. ${esc(d.name)} has the gateway's starting AGENTS.md and SOUL.md.</p>`, "danger"),
+      button("Try again", 'data-lc="dup-retry" data-size="lg" data-lc-focus', "primary") + button("Leave it as it is", 'data-lc="dup-open" data-size="lg"', "quiet"),
+    );
+  }
 
   // Delete (section 10) ---------------------------------------------------------------------------------
 
@@ -844,10 +966,12 @@
       else if (!d.files) rows += ok(`Its folders stay on the gateway's machine, as asked`);
       else if (d.status === "partial") rows += ok(`Its own folder and its tasks' transcripts moved to the Trash`) + bad(`${esc(f.folder)} wasn't moved: permission denied. It's still on the gateway's machine.`);
       else rows += ok(share.length ? `Its own folder and its tasks' transcripts moved to the Trash; ${esc(f.folder)} stays for ${esc(share.join(", "))}` : `Its workspace folder, its own folder and its tasks' transcripts moved to the Trash`);
+      const trashLine = d.files && d.status !== "uncertain" ? `<p class="b-hint">What was moved to the Trash on the gateway's machine can be restored from there until it's emptied.</p>` : "";
       const title = d.status === "done" ? `${name} was deleted` : d.status === "partial" ? `${name} was deleted, but one folder is still there` : `${name} is no longer listed`;
       return sheet(
         title,
         `<p class="b-hint lc-first">Read back from the gateway just now:</p><ul class="lc-result" aria-label="What the gateway has now">${rows}</ul>` +
+          trashLine +
           (d.status === "uncertain" ? `<p class="b-hint">Trying again finishes the same delete: the gateway keeps a record of it until it's complete.</p>` : "") +
           (d.status === "partial" ? `<p class="b-hint">Trying again moves what's left. The gateway keeps a record of the delete until it's complete.</p>` : ""),
         d.status === "done"
@@ -866,6 +990,7 @@
         (f.routines.length ? `<li>Its ${f.routines.length === 1 ? "routine" : `${f.routines.length} routines`}: ${esc(f.routines.join(", "))}</li>` : "") +
         `<li>Approvals saved for its commands</li></ul>` +
         `<label class="b-check lc-files"><input type="checkbox" data-lc-files${d.files ? " checked" : ""} /><span>Also move ${name}'s folders to the Trash on the gateway's machine</span></label>` +
+        `<p class="b-hint lc-files-hint">They can be restored from that Trash, on the gateway's machine, until it's emptied.</p>` +
         `<ul class="lc-list lc-folders" data-on="${Boolean(d.files)}">${workspaceLine}<li><span>Its own folder${f.own.length ? `, with the sign-ins only ${name} uses (${esc(f.own.join(", "))})` : ""}</span></li><li><span>Its tasks' transcripts</span></li></ul>` +
         `<h4 class="b-group">Stays</h4><ul class="lc-list">` +
         (d.files ? "" : `<li>All three folders above, where they are now</li>`) +
@@ -914,6 +1039,13 @@
       if (L.dialog.status === "failed") L.dialog.status = null;
       paint();
       $(`[data-lc-pick="${L.dialog.pick}"]`, dialog)?.focus();
+      return;
+    }
+    const way = t.closest("[data-lc-way]");
+    if (way) {
+      L.dialog.way = way.dataset.lcWay;
+      paint();
+      $(`[data-lc-way="${L.dialog.way}"]`, dialog).focus();
       return;
     }
     const tab = t.closest("[data-lc-tab]");
@@ -1025,11 +1157,31 @@
         return app.selectBot(nid);
       }
       case "open-export":
-        return openDialog("export", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot });
+        return openDialog("export", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot, way: "file", exp: null });
       case "open-import":
-        return openDialog("import", $("#new-button"));
+        return openDialog("import", $("#new-button"), { kind: "import", way: "file", stage: null, name: "Wren", copy: { look: true, model: true, instr: true, tools: true } });
       case "open-delete":
         return openDialog("delete", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot, files: Boolean(p("files")), read: p("delread") || null });
+      case "export-file":
+        L.dialog.exp = "saving";
+        paint();
+        return setTimeout(() => {
+          // agents.list, config.get and agents.files.get, then the host's save dialog.
+          L.dialog.exp = p("exp") === "readfail" && !L.dialog.retried ? ((L.dialog.retried = true), "readfail") : p("exp") === "toolarge" ? "toolarge" : "saved";
+          paint(true);
+          announce(L.dialog.exp === "saved" ? `Saved ${fileName(nameOf(L.dialog.bot))}` : L.dialog.exp === "readfail" ? "Nothing was saved" : "Too large to save");
+        }, 450);
+      case "import-choose":
+        L.dialog.stage = "reading";
+        L.dialog.refused = null;
+        paint();
+        return setTimeout(() => {
+          L.dialog.stage = ["version", "size", "type"].includes(p("imp")) && !L.dialog.triedOther ? ((L.dialog.triedOther = true), "refused") : "review";
+          paint(true);
+          announce(L.dialog.stage === "review" ? "Showing what the file would create" : "Clawtrate can't read this file");
+        }, 400);
+      case "import-add":
+        return runDuplicate(false);
       case "del-reread":
         L.dialog.read = null;
         return paint(true);
@@ -1053,6 +1205,11 @@
     }
   });
   dialog.addEventListener("input", (e) => {
+    if (e.target.closest("[data-lc-impname]")) {
+      L.dialog.name = e.target.value;
+      const go = $('[data-lc="import-add"]', dialog);
+      if (go) go.disabled = !e.target.value.trim();
+    }
     if (e.target.closest("[data-lc-dupname]")) {
       L.dialog.name = e.target.value;
       const go = $('[data-lc="dup-go"]', dialog);
@@ -1096,7 +1253,8 @@
   if (start === "choose") openDialog("choose", $("#bot-list .bot"));
   if (start === "picture") openDialog("picture", $(".lc-hero-pic") || hero, { bot: app.model.selectedBot, tab: p("ptab") || "bot", upload: p("upload") || null });
   if (start === "duplicate") openDialog("duplicate", null, { bot: p("delbot") || app.model.selectedBot, name: `${nameOf(p("delbot") || app.model.selectedBot)} copy`, copy: { look: true, model: true, instr: true, tools: true }, acct: null });
-  if (start === "export") openDialog("export", null, { bot: p("delbot") || app.model.selectedBot });
-  if (start === "import") openDialog("import", $("#new-button"));
+  if (start === "export") openDialog("export", null, { bot: p("delbot") || app.model.selectedBot, way: p("way") || "file", exp: null });
+  if (start === "import") openDialog("import", $("#new-button"), { kind: "import", way: p("way") || "file", stage: p("imp") ? "reading" : null, name: "Wren", copy: { look: true, model: true, instr: true, tools: true } });
+  if (start === "import" && p("imp")) setTimeout(() => { L.dialog.stage = ["version", "size", "type"].includes(p("imp")) ? ((L.dialog.triedOther = true), "refused") : "review"; paint(); }, 0);
   if (start === "delete") openDialog("delete", null, { bot: p("delbot") || app.model.selectedBot, files: Boolean(p("files")), read: p("delread") || null });
 })();

@@ -184,7 +184,7 @@ t = await dlg(p);
 check("F-269 with no image tool, Generate is disabled with the row's words and the gateway's reason", t.includes("Image generation isn't available on this gateway") && t.includes("The gateway doesn't offer Juniper its image tool: “Denied by tools.deny”, in the gateway's own words.") && (await p.evaluate(() => [...document.querySelectorAll("#lc-dialog button")].find((x) => x.textContent === "Generate" && !x.dataset.lcTab).disabled)));
 await p.close();
 p = await open(`bot=juniper&${settings}&lc=picture&ptab=generate&imagetool=1`);
-check("S4 with the tool offered, the tab says less, not more", (await dlg(p)).includes("Juniper is offered the gateway's image tool, but Clawtrate can't make a picture with it yet. Ask Juniper for one in a task."));
+check("S4 with the tool offered, it says generating isn't in this version", (await dlg(p)).includes("Generating a picture isn't available in this version") && (await dlg(p)).includes("The gateway offers Juniper an image tool, but Clawtrate can't use it here yet."));
 await p.close();
 p = await open(`bot=juniper&${settings}&lc=picture&ptab=generate&imagetool=unknown`);
 check("S4 with no task to ask about, it says it can't tell yet", (await dlg(p)).includes("The gateway says which tools Juniper is offered for one of its tasks, and Juniper has none yet. Start a task, then look here again."));
@@ -266,7 +266,7 @@ await p.close();
 // Instructions (section 6) ----------------------------------------------------------------------------
 p = await open(`bot=juniper&${settings}`);
 t = await panel(p);
-check("F-040 About has one row: the two files", (await p.evaluate(() => document.querySelector('[data-bs="instructions"] .b-open-value')?.textContent)) === "AGENTS.md, 5 lines · SOUL.md, 1 line" && !t.includes("Description"));
+check("F-040 About keeps bots.md's Description row and opens the two files", (await p.evaluate(() => document.querySelector('[data-bs="instructions"] .b-open-value')?.textContent)) === "AGENTS.md, 5 lines · SOUL.md, 1 line" && t.includes("Description"));
 await click(p, '[data-bs="instructions"]');
 t = await panel(p);
 check("F-040 the page names both files and says when they are read", has(t, "Juniper reads these two files at the start of each new task. A task already open keeps the copy it started with.", "Instructions · AGENTS.md", "Personality · SOUL.md"));
@@ -327,6 +327,11 @@ await click(p, "#lc-role summary");
 t = await role(p);
 check("S7 with no earlier copy it says so and offers no Undo", t.includes("Juniper wrote to AGENTS.md in this run. Clawtrate has no earlier copy of the file to compare, so it can't show the change or undo it.") && !t.includes("Undo"));
 await p.close();
+p = await open("bot=juniper&task=j1&rolechange=1&rolediff=toolarge");
+await click(p, "#lc-role summary");
+t = await role(p);
+check("F-041 S7 an earlier copy too large to keep is said, with no diff and no Undo", t.includes("Clawtrate keeps an earlier copy only of a file up to 65,536 characters, and this one is longer, so it can't show the change or undo it.") && !t.includes("Undo") && !t.includes("Accept"));
+await p.close();
 p = await open("bot=juniper&task=j1&rolechange=1&access=read");
 await click(p, "#lc-role summary");
 t = await role(p);
@@ -377,26 +382,125 @@ check("S2 below admin Duplicate asks for admin", (await dlg(p)).includes("Duplic
 await p.close();
 
 // Export and import (section 9) ------------------------------------------------------------------------
-p = await open("lc=export&delbot=marlow");
-t = await dlg(p);
-check("F-049 a bot installed from a package: the gateway's own export command", has(t, "Marlow was installed from a package, so the gateway can export it again with its own command line. Clawtrate can't make a package itself.", "OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws export marlow --out ./marlow-claw", "Its memory, its tasks and their transcripts", "Sign-ins and keys"));
-await p.close();
+const tabWay = (p, w) => p.click(`[data-lc-way="${w}"]`);
 p = await open("lc=export&delbot=pip");
 t = await dlg(p);
-check("F-049 a bot made by the create method can't be exported, said plainly", has(t, "The gateway can't export Pip", "The gateway exports only bots installed from a package. Pip was made with the gateway's create method, which gives it settings a package can't hold, and Clawtrate has no other way to export a bot."));
-await clickText(p, "#lc-dialog", "Duplicate…");
-check("S9 ... and offers to duplicate instead", (await dlg(p)).includes("Duplicate Pip"));
+check("F-049 Export opens on the Clawtrate file and says which way it is", has(t, "Export Pip", "Clawtrate file", "Gateway package", "A Clawtrate file", "Clawtrate's own format: a JSON file this app writes and reads. The gateway doesn't know it, and other apps may not.") && (await p.evaluate(() => document.querySelector('[data-lc-way="file"]').getAttribute("aria-selected") === "true")));
+check("F-049 the file holds Duplicate's checklist and nothing more", has(t, "Pip's picture and label", "Its model and effort, by name", "Its instructions and personality, AGENTS.md and SOUL.md, in full", "Its tool permissions and skills"));
+check("F-049 it lists what the file never holds", has(t, "Memory and About you (MEMORY.md, notes, USER.md)", "Tasks and their transcripts", "Routines", "Any account, sign-in or secret", "Approvals and rules", "Channel routes", "Other files in the workspace folder"));
+check("F-049 before writing it says the file holds the instructions in full, where it goes, and that nothing is sent", has(t, "The file holds Pip's instructions in full, and they may hold private text.", "You choose where to save it on this computer; it's named Pip.clawtrate-bot.json. Nothing is sent anywhere."));
+await clickText(p, "#lc-dialog", "Export file…");
+check("F-049 exporting reads the bot first", (await dlg(p)).includes("Reading Pip from the gateway…"));
+await p.waitForTimeout(500);
+check("F-049 then it names the file it saved", (await dlg(p)).includes("Saved Pip.clawtrate-bot.json") && (await dlg(p)).includes("Nothing was sent anywhere.") && (await announced(p)) === "Saved Pip.clawtrate-bot.json");
 await p.close();
-p = await open("lc=export&delbot=otto");
-check("F-049 a bot with no record: the gateway's own check", (await dlg(p)).includes("OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws migrate otto --dry-run") && (await dlg(p)).includes("Packages are an experimental part of the gateway"));
+p = await open("lc=export&delbot=pip&exp=readfail");
+await clickText(p, "#lc-dialog", "Export file…");
+await p.waitForTimeout(500);
+check("S9 a failed read saves nothing and says so", (await dlg(p)).includes("Couldn't read Pip's instructions. The gateway didn't answer. Nothing was saved."));
+await clickText(p, "#lc-dialog", "Try again");
+await p.waitForTimeout(500);
+check("S9 Try again saves", (await dlg(p)).includes("Saved Pip.clawtrate-bot.json"));
 await p.close();
+p = await open("lc=export&delbot=pip&exp=toolarge");
+await clickText(p, "#lc-dialog", "Export file…");
+await p.waitForTimeout(500);
+check("S9 a bot too large for a file is refused with its size and the limit", (await dlg(p)).includes("Pip's file would be 5.4 MB. A Clawtrate bot file holds at most 5 MB, so it wasn't saved."));
+await p.close();
+
+p = await open("lc=export&delbot=marlow");
+await tabWay(p, "package");
+t = await dlg(p);
+check("F-049 the gateway's package is the second way, and says so", t.includes("The gateway's package") && has(t, "Marlow was installed from a package, so the gateway can export it again with its own command line.", "OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws export marlow --out ./marlow-claw"));
+await p.close();
+p = await open("lc=export&delbot=pip&way=package");
+check("F-049 a bot the gateway made by its create method: no package, and the file can hold it", (await dlg(p)).includes("The gateway can't export Pip") && (await dlg(p)).includes("A Clawtrate file can hold it."));
+await p.close();
+p = await open("lc=export&delbot=otto&way=package");
+check("F-049 a bot with no record: the gateway's own check", (await dlg(p)).includes("OPENCLAW_EXPERIMENTAL_CLAWS=1 openclaw claws migrate otto --dry-run"));
+await p.close();
+
 p = await open("");
 await click(p, "#new-button");
 await p.waitForTimeout(60);
 check("F-265 the + menu has Import a bot…", (await text(p, "#rail-menu")).includes("Import a bot…"));
 await clickText(p, "#rail-menu", "Import a bot…");
 t = await dlg(p);
-check("F-265 Import shows the gateway's dry run, then the add with its digest", has(t, "Clawtrate can't read a package or add one itself.", "openclaw claws add ./pip-claw --dry-run", "openclaw claws add ./pip-claw --yes --plan-integrity <digest>", "The new bot appears in your list when the gateway lists it."));
+check("F-265 Import opens on a Clawtrate file", has(t, "Import a bot", "A Clawtrate file", "Choose a file another Clawtrate exported. You'll see everything it would create before anything is.", "At most 5 MB."));
+await clickText(p, "#lc-dialog", "Choose file…");
+check("F-265 the file is read first", (await dlg(p)).includes("Reading wren.clawtrate-bot.json…"));
+await p.waitForTimeout(500);
+t = await dlg(p);
+check("F-265 the review shows the picture, name and label", has(t, "Add Wren?", "Label: Garden · from wren.clawtrate-bot.json, written by Clawtrate 0.4.0") && (await p.evaluate(() => document.querySelector("#lc-imp-name").value === "Wren" && Boolean(document.querySelector("#lc-dialog .b-preview svg")))));
+check("F-265 the file is shown, never run, and nothing is created until Add Bot", t.includes("This file is someone's text. Clawtrate shows it here and doesn't run it; nothing is created until Add Bot.") && (await p.evaluate(() => app.bots.length === 4)));
+check("F-265 every row is folded and expands", (await p.evaluate(() => [...document.querySelectorAll(".lc-review")].map((d) => d.dataset.lcRow + ":" + d.open).join(","))) === "agents:false,soul:false,settings:false,never:false");
+await click(p, '[data-lc-row="agents"] summary');
+check("F-265 the instructions row shows AGENTS.md in full", (await text(p, '[data-lc-row="agents"]')).includes("You keep the garden calendar. Ask before ordering seeds. Never water on a rain day."));
+await click(p, '[data-lc-row="settings"] summary');
+t = await text(p, '[data-lc-row="settings"]');
+check("F-265 the settings row lists each setting that will be written", has(t, "Model: openai/gpt-5.5Will be written", "Effort: MediumWill be written", "Tools never allowed: Run commands (exec)Will be written", "Skills: weatherWill be written"));
+await click(p, '[data-lc-row="never"] summary');
+check("F-265 the review lists what will not be created", has(await text(p, '[data-lc-row="never"]'), "a Clawtrate file never carries these", "Routines", "Any account, sign-in or secret", "Channel routes"));
+await clickText(p, "#lc-dialog", "Add Bot");
+check("F-265 Add Bot runs Duplicate's steps", has(await dlg(p), "Adding Wren", "Made Wren", "Picture and label", "Model and effort", "Instructions and personality", "Tool permissions and skills"));
+await p.waitForTimeout(1600);
+check("F-265 each step read back, Wren is ready", has(await dlg(p), "Wren is ready", "Read back Wren from the gateway", "Read back from the gateway: Wren is listed with what the review said would be written."));
+await clickText(p, "#lc-dialog", "Open Wren");
+check("F-265 Open shows Wren in the list", (await text(p, "#bot-list")).includes("Wren") && (await p.evaluate(() => app.model.selectedBot)) === "wren");
+await p.close();
+
+p = await open("lc=import&imp=unavailable");
+await click(p, '[data-lc-row="settings"] summary');
+t = await text(p, '[data-lc-row="settings"]');
+check("F-265 what this gateway doesn't offer is listed as not available here and left out", has(t, "2 to write, 3 not available here", "Model: globex/atlas-2Not available here, left out", "Effort: MediumLeft out with the model", "Tools also allowed: Use the browser (browser)Not available here, left out", "Skills: trail-mapsNot available here, left out", "Tools never allowed: Run commands (exec)Will be written"));
+check("F-265 ... and what that means for the model, not guessed", t.includes("With its model left out, Wren uses the gateway's default model until you choose one, and its effort is left out with it."));
+await p.close();
+
+for (const [imp, words] of [
+  ["version", "Its format version is 3, and this version of Clawtrate reads version 1. Nothing was read as a bot."],
+  ["size", "It is 6.2 MB, and a Clawtrate bot file holds at most 5 MB. Nothing was read as a bot."],
+  ["type", "Its label is a number, not text. Nothing was read as a bot."],
+]) {
+  p = await open(`lc=import&imp=${imp}`);
+  await p.waitForTimeout(80);
+  check(`F-265 a file refused before it is read as a bot: ${imp}`, (await dlg(p)).includes(`Clawtrate can't read this file. ${words}`) && (await p.evaluate(() => !document.querySelector('[data-lc="import-add"]'))));
+  await p.close();
+}
+p = await open("lc=import&imp=version");
+await p.waitForTimeout(80);
+await clickText(p, "#lc-dialog", "Choose another file…");
+await p.waitForTimeout(500);
+check("F-265 Choose another file reads the next one", (await dlg(p)).includes("Add Wren?"));
+await p.close();
+
+p = await open("lc=import&imp=review&impresult=taken");
+await p.waitForTimeout(80);
+await clickText(p, "#lc-dialog", "Add Bot");
+await p.waitForTimeout(500);
+check("F-265 a name already taken is refused as in Duplicate, nothing made", (await dlg(p)).includes("The gateway didn't make the bot: “agent \"wren\" already exists”. Nothing was made.") && (await p.evaluate(() => !app.bots.some((x) => x.id === "wren"))));
+await p.fill("#lc-imp-name", "Wren 2");
+await clickText(p, "#lc-dialog", "Add Bot");
+await p.waitForTimeout(1600);
+check("F-265 ... and another name goes through", (await dlg(p)).includes("Wren 2 is ready"));
+await p.close();
+p = await open("lc=import&imp=review&impresult=partial");
+await p.waitForTimeout(80);
+await clickText(p, "#lc-dialog", "Add Bot");
+await p.waitForTimeout(1600);
+t = await dlg(p);
+check("F-265 a step that failed after the bot was made: made without its instructions", has(t, "Wren was made, without its instructions", "Not written", "Its instructions weren't written: the gateway didn't answer.", "Try again"));
+await clickText(p, "#lc-dialog", "Try again");
+await p.waitForTimeout(800);
+check("F-265 Try again writes what was missing", (await dlg(p)).includes("Wren is ready"));
+await p.close();
+p = await open("lc=import&imp=review&access=read");
+await p.waitForTimeout(80);
+check("S2 a read-only connection reviews and can't add", (await dlg(p)).includes("Adding a bot needs admin access.") && (await p.evaluate(() => !document.querySelector('[data-lc="import-add"]'))));
+await p.close();
+p = await open("lc=import");
+await tabWay(p, "package");
+t = await dlg(p);
+check("F-265 the gateway's package is the second way, with its plan as the review", has(t, "The gateway's package", "openclaw claws add ./pip-claw --dry-run", "openclaw claws add ./pip-claw --yes --plan-integrity <digest>", "The new bot appears in your list when the gateway lists it."));
 await p.close();
 
 // Delete (section 10) --------------------------------------------------------------------------------------
@@ -413,6 +517,7 @@ p = await open("lc=delete&delbot=pip");
 t = await dlg(p);
 check("F-050 the dialog lists what goes now", has(t, "Delete Pip?", "Pip's settings", "Its 4 tasks, from every task list", "Its 2 routines: Weekly plan, Sunday reminder", "Approvals saved for its commands"));
 check("F-276 the folder option is unticked, and names each folder and the memory in it", has(t, "Also move Pip's folders to the Trash on the gateway's machine", "Its workspace folder, workspace-pip: 23 files, its memory among them (MEMORY.md and 3 notes)", "Its own folder, with the sign-ins only Pip uses (Pip's key)", "Its tasks' transcripts") && (await p.evaluate(() => !document.querySelector("[data-lc-files]").checked)));
+check("F-050 the folder option says the Trash can give them back", t.includes("They can be restored from that Trash, on the gateway's machine, until it's emptied."));
 check("F-050 the dialog lists what stays", has(t, "All three folders above, where they are now", "Accounts other bots use, and shared memory", "What Pip said in other bots' tasks", "This can't be undone from Clawtrate."));
 check("S10 focus starts on Cancel", await p.evaluate(() => document.activeElement?.textContent === "Cancel"));
 await clickText(p, "#lc-dialog", "Delete Pip");
@@ -428,6 +533,7 @@ check("F-276 ticked, the folders leave the Stays list", !(await dlg(p)).includes
 await clickText(p, "#lc-dialog", "Delete Pip");
 await p.waitForTimeout(700);
 check("F-276 ticked, the folders are moved to the Trash", (await dlg(p)).includes("Its workspace folder, its own folder and its tasks' transcripts moved to the Trash"));
+check("F-276 ... and the after state says they can be restored from there", (await dlg(p)).includes("What was moved to the Trash on the gateway's machine can be restored from there until it's emptied."));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&shared=1&files=1");
