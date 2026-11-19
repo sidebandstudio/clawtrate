@@ -79,7 +79,7 @@ function engine(handlers: Record<string, (params: Record<string, unknown>) => un
   return { routines, requests, state: () => state };
 }
 
-describe("F-191 the routine list", () => {
+describe("F-191: the routine list", () => {
   it("reads every page with paused routines, leaves check-in jobs out, and says whether the scheduler runs", async () => {
     const second = job(
       { id: "j2", name: "Inbox tidy-up", enabled: false },
@@ -153,7 +153,7 @@ describe("the cron event", () => {
     });
     expect(next[0]!.enabled).toBe(false);
   });
-  it("F-024 started marks it running from the event's runAtMs, and finished clears that with its last run", () => {
+  it("F-024: started marks it running from the event's runAtMs, and finished clears that with its last run", () => {
     const started = applyCronEvent(list, {
       jobId: JOB,
       action: "started",
@@ -183,7 +183,7 @@ describe("the cron event", () => {
   });
 });
 
-describe("F-355 a routine's runs", () => {
+describe("F-355: a routine's runs", () => {
   it("are the 20 most recent, newest first, however many the gateway returns", async () => {
     // Out of order and more than 20, so both the cut and the order are the engine's.
     const entries = Array.from({ length: 27 }, (_, index) =>
@@ -198,7 +198,7 @@ describe("F-355 a routine's runs", () => {
     );
   });
 
-  it("F-190 carry how each ended, its usage and whether it was started by hand", async () => {
+  it("F-190: carry how each ended, its usage and whether it was started by hand", async () => {
     const { routines } = engine({
       "cron.runs": () => ({
         entries: [
@@ -223,7 +223,7 @@ describe("F-355 a routine's runs", () => {
   });
 });
 
-describe("F-193 a run's conversation", () => {
+describe("F-193: a run's conversation", () => {
   const recorded = (content: string, provenance: Record<string, unknown> = {}) => ({
     messages: [
       {
@@ -296,7 +296,7 @@ describe("F-193 a run's conversation", () => {
 });
 
 describe("the client", () => {
-  it("F-024 reads routines on connect and applies the gateway's cron events to them", async () => {
+  it("F-024: reads routines on connect and applies the gateway's cron events to them", async () => {
     const gateway = grantingGateway();
     gateway.handlers["cron.status"] = () => ({ enabled: true });
     gateway.handlers["cron.list"] = () => ({ jobs: [job()], hasMore: false });

@@ -45,7 +45,7 @@ const routine = (over: Partial<Routine> = {}): Routine => ({
   ...over,
 });
 
-describe("F-191 a schedule in words", () => {
+describe("F-191: a schedule in words", () => {
   it("names the common cron schedules and shows any other as written", () => {
     expect(scheduleWords(schedule({ expr: "0 8 * * 1-5", tz: NY }))).toEqual({
       text: "Weekdays at 8:00 AM",
@@ -78,7 +78,7 @@ describe("F-191 a schedule in words", () => {
   });
 });
 
-describe("F-353 times in a zone", () => {
+describe("F-353: times in a zone", () => {
   it("say the day relative to now in that zone", () => {
     const next = zonedTime(2026, 11, 19, 8, 0, NY);
     expect(when(next, NOW, NY)).toBe("tomorrow 8:00 AM");
@@ -98,7 +98,7 @@ describe("F-353 times in a zone", () => {
   });
 });
 
-describe("F-197 occurrences", () => {
+describe("F-197: occurrences", () => {
   const week = [NOW, NOW + 7 * 86_400_000] as const;
   it("follow the cron schedule in the routine's zone", () => {
     const times = occurrences(routine(), ...week).map((ms) => when(ms, NOW, NY));
@@ -128,7 +128,7 @@ describe("F-197 occurrences", () => {
   });
 });
 
-describe("F-190 a run's outcome", () => {
+describe("F-190: a run's outcome", () => {
   const run = {
     jobId: "r",
     runId: "x",

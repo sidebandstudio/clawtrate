@@ -24,7 +24,7 @@ const dayHeads = (page: Page) =>
 test.describe("1440", () => {
   test.use(contextFor(size("1440"), "light"));
 
-  test("F-191 lists every bot's routines with schedule, zone, next and last run, and Paused", async ({
+  test("F-191: lists every bot's routines with schedule, zone, next and last run, and Paused", async ({
     page,
   }) => {
     await open(page);
@@ -41,7 +41,7 @@ test.describe("1440", () => {
     await expect(view(page).getByTestId("routine-count")).toHaveText("3 routines");
   });
 
-  test("F-188 F-353 a routine's page says its instruction, schedule, zone, next run, where it runs and its triggers", async ({
+  test("F-188 F-353: a routine's page says its instruction, schedule, zone, next run, where it runs and its triggers", async ({
     page,
   }) => {
     await open(page);
@@ -67,7 +67,7 @@ test.describe("1440", () => {
     await expect(view(page).getByTestId("routine-next")).toContainText("your time");
   });
 
-  test("F-190 runs say how each ended, with usage, and open their conversation or say why there is none", async ({
+  test("F-190: runs say how each ended, with usage, and open their conversation or say why there is none", async ({
     page,
   }) => {
     await open(page);
@@ -96,7 +96,7 @@ test.describe("1440", () => {
     );
   });
 
-  test("F-190 a reminder in the main conversation is shown as such, not as a run of its own", async ({
+  test("F-190: a reminder in the main conversation is shown as such, not as a run of its own", async ({
     page,
   }) => {
     await open(page);
@@ -111,7 +111,7 @@ test.describe("1440", () => {
     );
   });
 
-  test("F-355 a routine's page shows its 20 most recent runs, newest first", async ({ page }) => {
+  test("F-355: a routine's page shows its 20 most recent runs, newest first", async ({ page }) => {
     await open(page, "scene=main&routines=many");
     await view(page).getByTestId("routine-row").filter({ hasText: "Morning digest" }).click();
     const rows = view(page).locator("[data-run-at]");
@@ -123,7 +123,7 @@ test.describe("1440", () => {
     await expect(view(page)).toContainText("Clawtrate shows the 20 most recent runs.");
   });
 
-  test("F-024 a bot whose routine is running shows the working mark and the routine's name", async ({
+  test("F-024: a bot whose routine is running shows the working mark and the routine's name", async ({
     page,
   }) => {
     await openFixture(page, "scene=main&routines=running", "light");
@@ -138,7 +138,7 @@ test.describe("1440", () => {
     ).not.toHaveAttribute("data-state", "working");
   });
 
-  test("F-193 a routine's latest run is a row under its bot that opens the run", async ({
+  test("F-193: a routine's latest run is a row under its bot that opens the run", async ({
     page,
   }) => {
     await openFixture(page, ROUTINES, "light");
@@ -157,7 +157,7 @@ test.describe("1440", () => {
     await expect(view(page).getByRole("button", { name: "All runs" })).toBeVisible();
   });
 
-  test("F-197 the calendar moves by its arrows, Today and the Left and Right keys", async ({
+  test("F-197: the calendar moves by its arrows, Today and the Left and Right keys", async ({
     page,
   }) => {
     await open(page);
@@ -183,7 +183,7 @@ test.describe("1440", () => {
     expect(await dayHeads(page)).toHaveLength(3);
   });
 
-  test("F-197 the calendar is lists of chips by day, with past runs of paused and frequent routines kept", async ({
+  test("F-197: the calendar is lists of chips by day, with past runs of paused and frequent routines kept", async ({
     page,
   }) => {
     await open(page);
@@ -217,7 +217,7 @@ test.describe("1440", () => {
 
 test.describe("1100", () => {
   test.use(contextFor(size("1100"), "light"));
-  test("F-197 the week keeps all seven days in view", async ({ page }) => {
+  test("F-197: the week keeps all seven days in view", async ({ page }) => {
     await open(page);
     await view(page).getByRole("radio", { name: "Week" }).click();
     const scroll = page.locator(".r-cal-scroll");
@@ -231,7 +231,7 @@ test.describe("1100", () => {
 
 test.describe("phone", () => {
   test.use(contextFor(size("phone"), "light"));
-  test("F-193 a run's title and time are both readable at phone width", async ({ page }) => {
+  test("F-193: a run's title and time are both readable at phone width", async ({ page }) => {
     await open(page);
     // The phone offers List and Day.
     await expect(view(page).getByRole("radio")).toHaveCount(2);

@@ -80,6 +80,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/types.ts:initialState.unroutedApprovals":
     "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.creations": "static, an empty list copied on write",
+  "packages/core/src/routines.ts:initialRoutinesState.routines":
+    "the empty list before the first read; the state replaces it, never grows it",
+  "packages/core/src/routines.ts:load>routines":
+    "one read's routines, at most `MAX_ROUTINES`, handed to the state",
   "packages/core/src/accounts.ts:initialAccountsState.accounts":
     "static, an empty list copied on write",
   "packages/core/src/accounts.ts:initialAccountsState.methods":

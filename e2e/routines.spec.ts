@@ -99,7 +99,7 @@ test.afterAll(async () => {
 });
 process.once("exit", () => host?.child.kill("SIGKILL"));
 
-test("F-191 the list shows each routine with its schedule in words and zone, next and last run, or Paused", async () => {
+test("F-191: the list shows each routine with its schedule in words and zone, next and last run, or Paused", async () => {
   const digest = await add({ ...SCRIPTED_ROUTINES[0]!, name: `Morning digest ${STAMP}` });
   const paused = await add({ ...scriptedRoutine(`Paused one ${STAMP}`, "pip") });
   await call("cron.update", { id: paused.id, patch: { enabled: false } });
@@ -117,7 +117,7 @@ test("F-191 the list shows each routine with its schedule in words and zone, nex
   await view().getByRole("combobox", { name: "Bots" }).selectOption({ label: "All bots" });
 });
 
-test("F-188 F-353 a routine's page shows its instruction, when it runs in words with its zone and next run, where runs go and what triggers it", async () => {
+test("F-188 F-353: a routine's page shows its instruction, when it runs in words with its zone and next run, where runs go and what triggers it", async () => {
   const name = `Page check ${STAMP}`;
   const job = await add({ ...SCRIPTED_ROUTINES[0]!, name });
   await openRoutines();
@@ -169,7 +169,7 @@ test("live: removed takes the row away, and an open page says it was deleted", a
   await expect(view().getByRole("heading", { name: open.name })).toBeVisible();
 });
 
-test("F-024 live: started marks the routine and its bot as working, and finished clears it with the run in its history", async () => {
+test("F-024: started marks the routine and its bot as working, and finished clears it with the run in its history", async () => {
   const name = `Slow run ${STAMP}`;
   const job = await add(scriptedRoutine(name, "otto", "#slow 8"));
   await openRoutines();
@@ -194,7 +194,7 @@ test("F-024 live: started marks the routine and its bot as working, and finished
   await expect(view().getByTestId("run-row").first()).toContainText("started by hand");
 });
 
-test("F-190 F-193 a run opens its conversation as the run recorded it, from the routine's page and from the rail", async () => {
+test("F-190 F-193: a run opens its conversation as the run recorded it, from the routine's page and from the rail", async () => {
   const name = `Conversation ${STAMP}`;
   const job = await add(scriptedRoutine(name, "marlow", "Summarise my notes. #steps"));
   const ran = await runNow(job.id);
@@ -228,7 +228,7 @@ test("F-190 F-193 a run opens its conversation as the run recorded it, from the 
   await expect(view().getByTestId("scheduled-message")).toContainText("Summarise my notes. #steps");
 });
 
-test("F-355 a routine's page lists its 20 most recent runs, newest first, when it has more", async () => {
+test("F-355: a routine's page lists its 20 most recent runs, newest first, when it has more", async () => {
   test.setTimeout(240_000);
   const name = `Many runs ${STAMP}`;
   // No directive: the scripted model's shortest reply.
@@ -250,7 +250,7 @@ test("F-355 a routine's page lists its 20 most recent runs, newest first, when i
   ).toEqual(newest);
 });
 
-test("F-197 the week calendar shows today's recorded run and the coming scheduled times, and moves by its arrows and keys", async () => {
+test("F-197: the week calendar shows today's recorded run and the coming scheduled times, and moves by its arrows and keys", async () => {
   const digest = await add({ ...SCRIPTED_ROUTINES[0]!, name: `Calendar digest ${STAMP}` });
   await runNow(digest.id);
   await openRoutines();
