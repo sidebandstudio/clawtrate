@@ -631,10 +631,14 @@ function parseBudget(value: unknown): Budget | null {
   if (!record) return null;
   const botId =
     typeof record.botId === "string" && PLAIN_ID.test(record.botId) ? record.botId : null;
-  const routineId =
-    typeof record.routineId === "string" && PLAIN_ID.test(record.routineId)
-      ? record.routineId
-      : null;
+  // Only a missing routine makes a bot's budget: a routine id that isn't one is no budget at all.
+  if (
+    record.routineId !== undefined &&
+    record.routineId !== null &&
+    (typeof record.routineId !== "string" || !PLAIN_ID.test(record.routineId))
+  )
+    return null;
+  const routineId = typeof record.routineId === "string" ? record.routineId : null;
   const period = record.period === "daily" || record.period === "weekly" ? record.period : null;
   const tokens = typeof record.tokens === "number" ? budgetTokens(record.tokens) : null;
   const timeZone = validTimeZone(record.timeZone);

@@ -499,6 +499,16 @@ describe("budgets kept with the gateway", () => {
       ],
     });
     expect(parseBudgets(null)).toEqual({ budgets: [] });
+    // A routine budget with an id that isn't one is dropped, never read as the bot's budget,
+    // which would then push out the bot's own budget as a duplicate.
+    expect(
+      parseBudgets({
+        budgets: [
+          { botId: "otto", routineId: "bad id!", period: "daily", tokens: 5_000, timeZone: NY },
+          { botId: "otto", period: "weekly", tokens: 2_000_000, timeZone: NY },
+        ],
+      }).budgets.map((b) => [b.id, b.tokens]),
+    ).toEqual([["bot:otto", 2_000_000]]);
   });
 
   it("F-396: a budget's share is its count over its tokens, and a count from another period is not shown as this one's", () => {
