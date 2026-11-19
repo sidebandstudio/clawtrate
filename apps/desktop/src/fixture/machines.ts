@@ -363,14 +363,14 @@ export function machineCommands(now: number, params: MachineParams) {
           return later(300, () => {
             throw new Error("The gateway did not answer.");
           });
-        return later(120, () => placement(get(), command.botId));
+        return later(0, () => placement(get(), command.botId));
       case "readMachines":
         if (params.machine === "loading") return new Promise(() => {});
         if (params.machine === "error")
           return later(300, () => {
             throw new Error("The gateway did not answer.");
           });
-        return later(120, () => machines(get()));
+        return later(0, () => machines(get()));
       case "setCommandMachine":
         return later(300, () => {
           if (!admin(state)) throw new Error("Changing where a bot runs needs admin access.");
