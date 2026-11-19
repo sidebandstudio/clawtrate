@@ -155,7 +155,13 @@ export class ForwardSupervisor {
 
   private set(state: ForwardState): void {
     this.current = state;
-    for (const listener of this.listeners) listener(state);
+    for (const listener of this.listeners) {
+      try {
+        listener(state);
+      } catch {
+        // An observer's fault is its own: the others still hear, and the forward's life goes on.
+      }
+    }
   }
 
   private clearTimer(): void {

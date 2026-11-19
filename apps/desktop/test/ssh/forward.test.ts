@@ -432,3 +432,23 @@ describe("the forward's states", () => {
     expect(w.forward.state).toEqual({ phase: "closed", reason: "closed" });
   });
 });
+
+describe("the forward and its observers", () => {
+  it("keeps its life going when an observer throws: the retry is set, close resolves", async () => {
+    const h = harness([], ["no-answer"]);
+    const seen: string[] = [];
+    h.forward.onState(() => {
+      throw new Error("an observer's own fault");
+    });
+    h.forward.onState((state) => seen.push(state.phase));
+    h.forward.open();
+    await h.up();
+    expect(h.forward.state).toMatchObject({ phase: "waiting", cause: { kind: "cant-tell" } });
+    // The observer after the one that threw still heard every state, and the retry is set.
+    expect(seen).toEqual(["starting", "verifying", "waiting"]);
+    expect(h.pending()).toEqual([1000]);
+    await expect(h.forward.close()).resolves.toBeUndefined();
+    expect(h.forward.state).toEqual({ phase: "closed", reason: "closed" });
+    expect(seen.at(-1)).toBe("closed");
+  });
+});
