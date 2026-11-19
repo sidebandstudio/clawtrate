@@ -2,6 +2,7 @@
 // loopback servers of the test's own: an HTTP answer, something else, and a
 // connection closed while the forward reports why.
 
+import { getEventListeners } from "node:events";
 import { createServer, type Server, type Socket } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -85,6 +86,27 @@ describe("the probe through a forward", () => {
         "http",
       );
     }
+  });
+
+  it("leaves no listener on the forward's signal once it settles, and connects nowhere when already stopped", async () => {
+    const gateway = await httpGateway();
+    servers.push(gateway.close);
+    const silent = await tcp(() => {});
+    const stop = new AbortController();
+    for (let i = 0; i < 3; i++) {
+      expect(await probeHttp(gateway.port, 18789, quiet, 5000, stop.signal)).toBe("http");
+      expect(await probeHttp(silent, 18789, quiet, 100, stop.signal)).toBe("no-answer");
+    }
+    expect(getEventListeners(stop.signal, "abort")).toHaveLength(0);
+    stop.abort();
+    const before = gateway.requests.length;
+    let connected = 0;
+    const counting = await tcp(() => connected++);
+    expect(await probeHttp(counting, 18789, quiet, 5000, stop.signal)).toBe("no-answer");
+    expect(await probeHttp(gateway.port, 18789, quiet, 5000, stop.signal)).toBe("no-answer");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(connected).toBe(0);
+    expect(gateway.requests.length).toBe(before);
   });
 
   it("tells a refused forwarding and a closed gateway port by what the forward reported", async () => {

@@ -574,7 +574,7 @@ The host side of "Another computer" (`docs/design/setup.md` sections 5, 8 and 19
   - Required of the unit that builds the setup screens: before the setup host constructs a transport, it establishes that its app-data directory and its ancestors are private, and a host-boundary test gives it an app-data candidate whose parent resolves outside a private, synthetic root and expects Advanced, with no transport made.
   - A known-hosts read bounded before it is loaded, and one answer for parallel prior-trust lookups of the same route.
   - A stand-in client test of a refusal that arrives before the process closes, then a stop or exit 255, and a strict recheck before "pinned" after a transient key change.
-  - The HTTP probe removing its abort listener and grace timer when it settles, with at most one grace poll per socket.
+  - The HTTP probe cancelling its grace poll when it settles another way, with at most one grace poll per socket (its abort listener is removed when it settles).
   - Real sign-in with the Linux and Windows client versions the design supports: an explicit agent, host-bound public-key authentication and certificate authentication.
 
 ## Not done yet

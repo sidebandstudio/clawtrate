@@ -32,19 +32,26 @@ export function probeHttp(
   signal?: AbortSignal,
 ): Promise<ProbeResult> {
   return new Promise((resolve) => {
+    // Already stopped: no connection is made.
+    if (signal?.aborted) {
+      resolve("no-answer");
+      return;
+    }
     let settled = false;
     let received = Buffer.alloc(0);
     const socket = connect(localPort, "127.0.0.1");
+    const onAbort = () => finish("no-answer");
     const finish = (result: ProbeResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // The forward's signal outlives every probe: nothing of this one stays on it.
+      signal?.removeEventListener("abort", onAbort);
       socket.destroy();
       resolve(result);
     };
     const timer = setTimeout(() => finish("no-answer"), timeoutMs);
-    if (signal?.aborted) finish("no-answer");
-    signal?.addEventListener("abort", () => finish("no-answer"), { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
     socket.on("connect", () => {
       socket.write(
         `GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:${gatewayPort}\r\nConnection: close\r\n\r\n`,
