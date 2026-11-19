@@ -569,15 +569,19 @@ test("F-234: a hidden window asks for no report at the date's rollover, and read
     timezoneId: "America/New_York",
   });
   const page = await context.newPage();
-  await page.clock.install({ time: new Date("2026-11-16T23:59:40-05:00") });
+  // Two minutes before midnight, so the page's first report is for Nov 16 however long it loads;
+  // then the clock is held just before midnight until the page is hidden.
+  await page.clock.install({ time: new Date("2026-11-16T23:58:00-05:00") });
   await page.goto(`/?${PAGE}&theme=light`);
   await expect(page.getByTestId("usage-source")).toContainText("this week (Nov 16, your time)");
+  await page.clock.pauseAt(new Date("2026-11-16T23:59:50-05:00"));
   await setHidden(page, true);
   const before = await usageReads(page);
   // Past midnight and the page's 30-second tick, while hidden.
   await page.clock.fastForward("01:00");
   expect(await usageReads(page)).toBe(before);
   await setHidden(page, false);
+  await page.clock.resume();
   await expect.poll(() => usageReads(page)).toBeGreaterThan(before);
   await expect(page.getByTestId("usage-source")).toContainText(
     "this week (Nov 16 to Nov 17, your time)",
