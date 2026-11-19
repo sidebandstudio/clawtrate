@@ -425,14 +425,14 @@ One gateway can be reached by several routes: this computer, SSH, an address on 
 
 **Each route pairs for itself.** A route uses its own device token and no other: silently for this computer and SSH, by a setup code and approval otherwise.
 
-**No automatic reuse where the gateway can't be authenticated first.** On a route whose gateway can't be authenticated before the token is sent (an address without verified TLS, as Advanced may have), Clawtrate doesn't send the saved token by itself; it waits for the person to reconnect.
+**No automatic reuse where the gateway can't be authenticated first.** On a route whose gateway can't be authenticated before the token is sent (an address without verified TLS, as Advanced may have), Clawtrate doesn't send the saved token by itself; it waits for the person to reconnect. On this computer and over SSH the token goes only to the gateway's port on a computer that is authenticated first, this one or devbox by its pinned key, and Clawtrate sends it by itself there, as section 8 does when it restores a forward: that is the local boundary OpenClaw trusts when it pairs a loopback connection silently (research §1, §5). It doesn't prove which process holds the port. Another account on that computer could take it while the gateway is stopped, and the identity check after hello then drops the route's token, after it was sent.
 
 **Grouping and continuity.** After each connection the host reads `gateway.identity.get`. Routes that report the same identity are one gateway in the rail and in Settings. A route that reports a different identity than it did before is not that gateway any more: the host disconnects, drops that route's token, and the strip says "This address now leads to a different gateway". A credential is never sent on a route because another route reported the same identity (research §5).
 
 **Failover and failback.** Settings, Gateway lists the gateway's routes in an order the person can change, with "In use" on one:
 
-- Clawtrate connects over the first route that answers and authenticates with its own token, and whose identity matches; one that doesn't answer within 3 s is skipped.
-- While connected over a later route, it checks the earlier ones on a network change, on wake, and every minute, and moves back as soon as one works. The move keeps everything open, as a reconnect does.
+- Clawtrate connects over the first route, in that order, that answers, accepts that route's own token and reports the identity recorded for it; one that doesn't answer within 3 s is skipped, and so is a route where the token isn't sent by itself (above), until the person reconnects over it.
+- While connected over a later route, it checks the earlier ones it may use by itself on a network change, on wake, and every minute, and moves back as soon as one works. The move keeps everything open, as a reconnect does.
 - A route whose sign-in is refused is marked "Sign-in refused", with "Pair again".
 
 **Adding a route** is a button, "Add route", that pairs over the new route. A route the gateway reports about itself (its Tailscale address) is offered as a suggestion, never added by itself.
