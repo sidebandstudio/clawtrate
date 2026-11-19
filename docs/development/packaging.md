@@ -41,7 +41,9 @@ macOS, notarizing, which runs only when signing is on, one of:
 
 Signing turns on the hardened runtime with electron-builder's default entitlements. Notarizing runs only with one complete set; a partial set (an `APPLE_ID` without its password, say), or notarizing credentials without a signing identity, stops `pnpm package:mac` before it builds, naming the variables and never their values.
 
-Windows: `WIN_CSC_LINK` (a `.pfx` file's path, or its base64) and `WIN_CSC_KEY_PASSWORD`. `CSC_LINK` and `CSC_KEY_PASSWORD` also work when the build runs on Windows.
+Windows: `WIN_CSC_LINK` (a `.pfx` file's path, or its base64) and `WIN_CSC_KEY_PASSWORD`. `CSC_LINK` and `CSC_KEY_PASSWORD` also work when the build runs on Windows: electron-builder takes `WIN_CSC_LINK` if it is set at all, even empty, and `CSC_LINK` otherwise, and the password the same way, each on its own.
+
+A certificate and its password go together. A build given one without the other stops before it starts, naming the missing variable; it never builds unsigned, or with an empty password, without saying so. For a certificate that has no password, set the password variable to an empty string (`CSC_KEY_PASSWORD=`). A certificate variable that is set but blank stops the build too, and so does a blank `WIN_` variable that would hide a generic one electron-builder would otherwise use.
 
 Every build prints one line saying which signing it does, such as `Signing: none. The macOS app is signed ad hoc and not notarized.`, and a macOS build then reads each app's signature back with `codesign --display` and prints `ad hoc` or `certificate`. It fails if that is not what the variables asked for: electron-builder skips signing in a pull request's CI run even with an identity set.
 

@@ -22,16 +22,80 @@ const NOTARIZE_SETS: ReadonlyArray<[NotarizeWith, readonly string[]]> = [
 ];
 
 /**
+ * The certificate variables a build reads, in electron-builder 26.18.1's own
+ * order: the first one set at all, even to an empty string, is the one used
+ * (`getCscLink` and `doGetCscPassword` in platformPackager.js, and
+ * winPackager.js's `doGetCscPassword` for Windows).
+ */
+const CERTIFICATE_VARIABLES = {
+  mac: { link: ["CSC_LINK"], password: ["CSC_KEY_PASSWORD"] },
+  win: {
+    link: ["WIN_CSC_LINK", "CSC_LINK"],
+    password: ["WIN_CSC_KEY_PASSWORD", "CSC_KEY_PASSWORD"],
+  },
+} as const;
+
+/** The variable electron-builder takes the value from, or null when none of them is set. */
+function chosen(env: Env, names: readonly string[]): string | null {
+  return names.find((name) => env[name] !== undefined) ?? null;
+}
+
+/** The certificate's variable when it names one: set and not blank. */
+function certificate(env: Env, target: "mac" | "win"): string | null {
+  const link = chosen(env, CERTIFICATE_VARIABLES[target].link);
+  return link && set(env, link) ? link : null;
+}
+
+/**
  * macOS signing is on when a Developer ID certificate is named: CSC_LINK (a
  * .p12 file or its base64) or CSC_NAME (an identity already in the keychain).
  */
 export function macSigningRequested(env: Env): boolean {
-  return set(env, "CSC_LINK") || set(env, "CSC_NAME");
+  return certificate(env, "mac") !== null || set(env, "CSC_NAME");
 }
 
-/** Windows signing is on when a certificate is given: WIN_CSC_LINK, or CSC_LINK. */
+/** Windows signing is on when a certificate is given: WIN_CSC_LINK, or else CSC_LINK. */
 export function windowsSigningRequested(env: Env): boolean {
-  return set(env, "WIN_CSC_LINK") || set(env, "CSC_LINK");
+  return certificate(env, "win") !== null;
+}
+
+/**
+ * The certificate and its password go together, as electron-builder would read
+ * them: a certificate without a password, a password without a certificate, or
+ * a blank variable that electron-builder would take instead of the one after
+ * it, is a problem. An empty password is a certificate without one, and must
+ * be set empty on purpose.
+ */
+function certificateProblems(env: Env, target: "mac" | "win"): string[] {
+  const names = CERTIFICATE_VARIABLES[target];
+  const problems: string[] = [];
+  const link = chosen(env, names.link);
+  const password = chosen(env, names.password);
+  const hidden = (list: readonly string[], name: string) =>
+    list.slice(list.indexOf(name) + 1).filter((other) => set(env, other));
+  if (link && !set(env, link)) {
+    const hides = hidden(names.link, link);
+    problems.push(
+      hides.length > 0
+        ? `${link} is set but blank, and hides ${hides.join(", ")}`
+        : `${link} is set but blank`,
+    );
+  }
+  if (password && !set(env, password)) {
+    const hides = hidden(names.password, password);
+    if (hides.length > 0)
+      problems.push(`${password} is set but blank, and hides ${hides.join(", ")}`);
+  }
+  const given = certificate(env, target);
+  if (given && password === null) {
+    problems.push(
+      `${given} set without ${names.password.join(" or ")} (set it empty for a certificate without a password)`,
+    );
+  }
+  if (password !== null && link === null) {
+    problems.push(`${password} set without ${names.link.join(" or ")}`);
+  }
+  return problems;
 }
 
 /** The first complete set of notarizing credentials, or null. Never throws. */
@@ -41,8 +105,8 @@ export function notarizeWith(env: Env): NotarizeWith | null {
 
 /** What a partial or inconsistent set of variables lacks, by name; empty when it is consistent. */
 export function signingProblems(env: Env, target: "mac" | "win"): string[] {
-  if (target === "win") return [];
-  const problems: string[] = [];
+  const problems = certificateProblems(env, target);
+  if (target === "win") return problems;
   for (const [, names] of NOTARIZE_SETS) {
     const given = names.filter((name) => set(env, name));
     if (given.length > 0 && given.length < names.length) {

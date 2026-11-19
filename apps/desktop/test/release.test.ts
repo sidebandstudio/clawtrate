@@ -28,44 +28,93 @@ describe("signing", () => {
       "Signing: none. The macOS app is signed ad hoc and not notarized.",
     );
     expect(signingSummary(plan, "win")).toBe("Signing: none. The Windows installer is unsigned.");
-    // Blank values are no identity.
-    expect(signingPlan({ CSC_LINK: " ", WIN_CSC_LINK: "", APPLE_KEYCHAIN_PROFILE: " " })).toEqual(
-      plan,
-    );
   });
 
   it("signs and notarizes from the owner's variables, naming the method and never a value", () => {
     const apple = { APPLE_ID: "a", APPLE_APP_SPECIFIC_PASSWORD: "b", APPLE_TEAM_ID: "c" };
     const key = { APPLE_API_KEY: "k.p8", APPLE_API_KEY_ID: "d", APPLE_API_ISSUER: "e" };
+    const cert = { CSC_LINK: "x", CSC_KEY_PASSWORD: "y" };
     expect(signingPlan({ CSC_NAME: "x", ...apple }).notarize).toBe("apple-id");
-    expect(signingPlan({ CSC_LINK: "x", ...key }).notarize).toBe("api-key");
-    expect(signingPlan({ CSC_LINK: "x", APPLE_KEYCHAIN_PROFILE: "p" }).notarize).toBe(
-      "keychain-profile",
-    );
-    expect(signingPlan({ CSC_LINK: "x" })).toEqual({
+    expect(signingPlan({ ...cert, ...key }).notarize).toBe("api-key");
+    expect(signingPlan({ ...cert, APPLE_KEYCHAIN_PROFILE: "p" }).notarize).toBe("keychain-profile");
+    expect(signingPlan(cert)).toEqual({
       mac: "developer-id",
       notarize: null,
       windows: "certificate",
     });
-    expect(signingPlan({ WIN_CSC_LINK: "x" }).windows).toBe("certificate");
-    const summary = signingSummary(signingPlan({ CSC_LINK: "secret-file", ...key }), "mac");
+    expect(signingProblems(cert, "mac")).toEqual([]);
+    expect(signingProblems(cert, "win")).toEqual([]);
+    expect(signingPlan({ WIN_CSC_LINK: "x", WIN_CSC_KEY_PASSWORD: "y" }).windows).toBe(
+      "certificate",
+    );
+    const summary = signingSummary(
+      signingPlan({ CSC_LINK: "secret-file", CSC_KEY_PASSWORD: "y", ...key }),
+      "mac",
+    );
     expect(summary).toBe(
       "Signing: the macOS app is signed with a Developer ID and notarized (api-key).",
     );
     expect(summary).not.toMatch(/secret|k\.p8/);
-    expect(signingSummary(signingPlan({ WIN_CSC_LINK: "secret-file" }), "win")).not.toMatch(
-      /secret/,
-    );
+    expect(
+      signingSummary(
+        signingPlan({ WIN_CSC_LINK: "secret-file", WIN_CSC_KEY_PASSWORD: "y" }),
+        "win",
+      ),
+    ).not.toMatch(/secret/);
+  });
+
+  it("takes a certificate and its password together, read as electron-builder reads them, on each system", () => {
+    // A certificate alone, or a password alone, never becomes a silent unsigned or passwordless build.
+    expect(signingProblems({ CSC_LINK: "x" }, "mac")).toEqual([
+      "CSC_LINK set without CSC_KEY_PASSWORD (set it empty for a certificate without a password)",
+    ]);
+    expect(signingProblems({ CSC_KEY_PASSWORD: "y" }, "mac")).toEqual([
+      "CSC_KEY_PASSWORD set without CSC_LINK",
+    ]);
+    expect(signingProblems({ CSC_NAME: "n", CSC_KEY_PASSWORD: "y" }, "mac")).toEqual([
+      "CSC_KEY_PASSWORD set without CSC_LINK",
+    ]);
+    expect(signingProblems({ WIN_CSC_LINK: "x" }, "win")).toEqual([
+      "WIN_CSC_LINK set without WIN_CSC_KEY_PASSWORD or CSC_KEY_PASSWORD (set it empty for a certificate without a password)",
+    ]);
+    expect(signingProblems({ CSC_LINK: "x" }, "win")).toEqual([
+      "CSC_LINK set without WIN_CSC_KEY_PASSWORD or CSC_KEY_PASSWORD (set it empty for a certificate without a password)",
+    ]);
+    expect(signingProblems({ WIN_CSC_KEY_PASSWORD: "y" }, "win")).toEqual([
+      "WIN_CSC_KEY_PASSWORD set without WIN_CSC_LINK or CSC_LINK",
+    ]);
+    // Windows falls back to the generic variables, each on its own.
+    expect(signingProblems({ WIN_CSC_LINK: "x", CSC_KEY_PASSWORD: "y" }, "win")).toEqual([]);
+    expect(signingProblems({ CSC_LINK: "x", WIN_CSC_KEY_PASSWORD: "y" }, "win")).toEqual([]);
+    // A certificate without a password, only when the password is set empty on purpose.
+    expect(signingProblems({ CSC_LINK: "x", CSC_KEY_PASSWORD: "" }, "mac")).toEqual([]);
+    expect(signingProblems({ WIN_CSC_LINK: "x", WIN_CSC_KEY_PASSWORD: "" }, "win")).toEqual([]);
+    // A blank variable electron-builder would take instead of a good one after it.
+    expect(
+      signingProblems({ WIN_CSC_LINK: "", CSC_LINK: "x", CSC_KEY_PASSWORD: "y" }, "win"),
+    ).toEqual(["WIN_CSC_LINK is set but blank, and hides CSC_LINK"]);
+    expect(signingPlan({ WIN_CSC_LINK: "", CSC_LINK: "x" }).windows).toBe("unsigned");
+    expect(
+      signingProblems(
+        { WIN_CSC_LINK: "x", WIN_CSC_KEY_PASSWORD: " ", CSC_KEY_PASSWORD: "y" },
+        "win",
+      ),
+    ).toEqual(["WIN_CSC_KEY_PASSWORD is set but blank, and hides CSC_KEY_PASSWORD"]);
+    expect(signingProblems({ CSC_LINK: " " }, "mac")).toEqual(["CSC_LINK is set but blank"]);
+    // A system's build reads only its own variables.
+    expect(signingProblems({ WIN_CSC_LINK: "x" }, "mac")).toEqual([]);
+    expect(signingProblems({ CSC_NAME: "n" }, "mac")).toEqual([]);
   });
 
   it("stops on a partial set, or on notarizing without an identity, naming only the variables", () => {
-    expect(signingProblems({ CSC_LINK: "x", APPLE_ID: "someone" }, "mac")).toEqual([
+    const cert = { CSC_LINK: "x", CSC_KEY_PASSWORD: "y" };
+    expect(signingProblems({ ...cert, APPLE_ID: "someone" }, "mac")).toEqual([
       "APPLE_ID set without APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID",
     ]);
-    expect(
-      signingProblems({ CSC_LINK: "x", APPLE_API_KEY: "k", APPLE_API_ISSUER: "i" }, "mac"),
-    ).toEqual(["APPLE_API_KEY, APPLE_API_ISSUER set without APPLE_API_KEY_ID"]);
-    expect(signingProblems({ CSC_LINK: "x", APPLE_KEYCHAIN: "k" }, "mac")).toEqual([
+    expect(signingProblems({ ...cert, APPLE_API_KEY: "k", APPLE_API_ISSUER: "i" }, "mac")).toEqual([
+      "APPLE_API_KEY, APPLE_API_ISSUER set without APPLE_API_KEY_ID",
+    ]);
+    expect(signingProblems({ ...cert, APPLE_KEYCHAIN: "k" }, "mac")).toEqual([
       "APPLE_KEYCHAIN set without APPLE_KEYCHAIN_PROFILE",
     ]);
     expect(signingProblems({ APPLE_KEYCHAIN_PROFILE: "p" }, "mac")).toEqual([

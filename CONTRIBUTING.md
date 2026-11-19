@@ -59,7 +59,7 @@ Run `pnpm scenarios` too when you change the development gateway or its scenario
 
 Releasing is the owner's. A build signs only when the owner's identities are in its environment, and without them it is unsigned and says so in its output. Nothing in the repository signs, notarizes, publishes or uploads anything. These are the variables, all read at build time only; never commit their values:
 
-- macOS signing: `CSC_LINK` and `CSC_KEY_PASSWORD`, or `CSC_NAME`.
+- macOS signing: `CSC_LINK` and `CSC_KEY_PASSWORD` (set empty for a certificate without a password), or `CSC_NAME`.
 - macOS notarizing, with signing on, one complete set: `APPLE_API_KEY`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`; or `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`; or `APPLE_KEYCHAIN_PROFILE`, optionally with `APPLE_KEYCHAIN`.
 - Windows signing: `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` (or `CSC_LINK` and `CSC_KEY_PASSWORD` on Windows).
 - The update feed: `CLAWTRATE_UPDATE_FEED_URL`, an `https` address such as `https://updates.example/clawtrate/feed.json`, and `SOURCE_DATE_EPOCH`, the build's release date in seconds.
