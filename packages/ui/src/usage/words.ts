@@ -176,7 +176,9 @@ const records = (n: number) => (n === 1 ? "1 usage record has" : `${full(n)} usa
 export function costHint(cost: UsageCost, at: number | null, counting = false): string {
   const when = counting ? "while the gateway is still counting" : asOf(at);
   if (cost.status === "unavailable")
-    return `Cost unavailable: the gateway has no price configured for what was used, ${when}.`;
+    return cost.unpriced === 0
+      ? `Cost unavailable: the gateway's answer gave no cost, ${when}.`
+      : `Cost unavailable: the gateway has no price configured for what was used, ${when}.`;
   const base = `The gateway's estimate${soFar(counting)} from its configured prices, in US dollars, ${when}.`;
   return cost.status === "partial"
     ? `${base} Partial: ${records(cost.unpriced)} no price configured.`

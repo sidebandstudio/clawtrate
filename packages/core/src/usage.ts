@@ -209,6 +209,9 @@ export function costOf(value: unknown): UsageCost {
   const record = asRecord(value) ?? {};
   const usd = count(record.totalCost);
   const unpriced = Math.round(count(record.missingCostEntries));
+  // A total with no cost in it says nothing of the cost: there is no estimate, not a zero one.
+  if (typeof record.totalCost !== "number" || !Number.isFinite(record.totalCost))
+    return { status: "unavailable", unpriced };
   const priced =
     usd > 0 ||
     count(record.inputCost) +

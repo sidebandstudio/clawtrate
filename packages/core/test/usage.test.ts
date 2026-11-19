@@ -179,6 +179,9 @@ describe("the gateway's figures", () => {
     });
     // A configured price of zero is an estimate of zero, not an absence.
     expect(costOf(totals(1, 1))).toEqual({ status: "estimate", usd: 0 });
+    // A total that gives no cost at all is no estimate of $0.00.
+    expect(costOf({ totalTokens: 1000 })).toEqual({ status: "unavailable", unpriced: 0 });
+    expect(figureOf({ totals: { totalTokens: 1000 } }).tokens.total).toBe(1000);
   });
 
   it("F-232: says the figure is still being counted when the gateway's records are being read", () => {

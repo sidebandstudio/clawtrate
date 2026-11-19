@@ -74,6 +74,15 @@ const figure = (change: Partial<UsageFigure>): UsageFigure => ({
   ...change,
 });
 
+describe("a cost the gateway's answer didn't give", () => {
+  it("F-232: is unavailable, said as the answer's gap, not as a missing price", () => {
+    expect(costValue({ status: "unavailable", unpriced: 0 })).toBe("Unavailable");
+    expect(costHint({ status: "unavailable", unpriced: 0 }, null)).toBe(
+      "Cost unavailable: the gateway's answer gave no cost, at a time the gateway didn't give.",
+    );
+  });
+});
+
 describe("a figure the gateway is still counting", () => {
   it("F-232: says so wherever it appears: the row, the cost and the budget's count", () => {
     const cold = figure({ counting: true });
