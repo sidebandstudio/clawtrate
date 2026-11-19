@@ -157,9 +157,12 @@ test("F-115 F-118: a file Marlow hands over is a card that opens in the pane, on
   await report.getByRole("button", { name: /^trail-report\.md/ }).click();
   const reader = page.getByTestId("artifact-reader");
   await expect(reader.getByRole("heading", { name: "trail-report.md" })).toBeVisible();
-  await expect(reader.locator(".reader-preview")).toContainText("Ridge path: muddy below the saddle.", {
-    timeout: 30_000,
-  });
+  await expect(reader.locator(".reader-preview")).toContainText(
+    "Ridge path: muddy below the saddle.",
+    {
+      timeout: 30_000,
+    },
+  );
   await expect(reader.locator(".reader-source")).toContainText("Sent by Marlow at");
   await shoot("pane-file");
   const [download] = await Promise.all([
