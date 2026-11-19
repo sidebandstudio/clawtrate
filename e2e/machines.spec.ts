@@ -162,7 +162,8 @@ test.afterAll(async () => {
           },
         }),
         baseHash: cfg.hash,
-        ...(deny ? { replacePaths: ["agents.entries.otto.tools.deny"] } : {}),
+        // The list is replaced, or removed when Otto had none: either way its path is named.
+        replacePaths: ["agents.entries.otto.tools.deny"],
       });
     const back = (entry(await config(), "otto").tools ?? {}) as Json;
     expect(back.exec ?? null, "Otto's command placement put back").toEqual(ottoTools.exec ?? null);
