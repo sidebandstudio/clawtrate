@@ -194,6 +194,7 @@ import {
   SESSION_ROW,
   WORST_STATE_CHARS,
 } from "./state-bounds.ts";
+import type { SetupState } from "./setup.ts";
 import { createStore, type Store } from "./store.ts";
 import {
   changeSidebar,
@@ -466,6 +467,37 @@ type StoredDeviceToken = {
   adminHeld?: boolean;
 };
 
+/** The state with the host's setup slice, or without one. */
+function withSetup(state: ClawtrateState, setup: SetupState | undefined): ClawtrateState {
+  if (setup) return { ...state, setup };
+  const { setup: _dropped, ...rest } = state;
+  return rest;
+}
+
+/** A setup connection's first device token, held in memory until its grant is checked. */
+type StagedDeviceToken = { deviceId: string; role: string; token: string; scopes: string[] };
+
+/** The error a setup connection ends with when the gateway granted other than exactly read. */
+export const SETUP_GRANT_REFUSED = "SETUP_GRANT_REFUSED";
+
+/**
+ * What a setup connection's hello granted: `read` only for this protocol, the
+ * operator role and exactly `["operator.read"]`; anything else, another role,
+ * no scopes or more scopes, is `other` and nothing is written.
+ */
+export function setupGrant(hello: Pick<HelloOk, "auth" | "protocol">): "read" | "other" {
+  const auth = asRecord(hello.auth);
+  const scopes = auth?.scopes;
+  return hello.protocol === PROTOCOL_VERSION &&
+    auth?.role === "operator" &&
+    Array.isArray(scopes) &&
+    scopes.length === 1 &&
+    scopes[0] === READ_SCOPES[0] &&
+    READ_SCOPES.length === 1
+    ? "read"
+    : "other";
+}
+
 type Waiter = {
   scope: string;
   resolve: () => void;
@@ -646,8 +678,29 @@ export class ClawtrateClient {
    * written, so nothing the host keeps can exceed its arithmetic worst case.
    */
   readonly store: Store<ClawtrateState> = createStore(initialState, (next) =>
-    withAlarm(enforceState(next)),
+    withAlarm(
+      enforceState(next.setup === this.setupSlice ? next : withSetup(next, this.setupSlice)),
+    ),
   );
+  /**
+   * The host's setup slice (`setup.ts`), kept through every reset of the
+   * state, since the host alone writes it (`setSetup`).
+   */
+  private setupSlice: SetupState | undefined;
+  /**
+   * A one-time setup code the host made for its own connection
+   * (`connectWithSetupCode`), in memory only, for one gateway. Dropped after
+   * a hello, after any failure but a pairing that waits, on another connect or
+   * a disconnect, and when it expires.
+   */
+  private setupCode: { url: string; bootstrapToken: string; expiresAtMs: number } | null = null;
+  /**
+   * The setup connection whose first device token is staged here until its
+   * grant is checked (`setupGrant`): written only for the operator role with
+   * exactly `operator.read`.
+   */
+  private tokenGate: { generation: number; url: string; staged: StagedDeviceToken | null } | null =
+    null;
 
   private readonly host: ClawtrateHost;
   private readonly options: ClientOptions;
@@ -868,16 +921,57 @@ export class ClawtrateClient {
     if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
     const token = options.token?.trim() || null;
     if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
+    this.setupCode = null;
     this.settings = { url, token };
     this.pairingSeen = null;
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
     await this.open();
   }
 
+  /**
+   * Connect with a one-time setup code the host made and redeems at once
+   * (docs/design/setup.md §7). The code stays in memory, is never written to
+   * storage, and is dropped after the first hello or failure. The first device
+   * token is written only when the gateway granted the operator role and
+   * exactly `operator.read`; anything else writes nothing and disconnects. The
+   * gateway is saved once that token is.
+   */
+  async connectWithSetupCode(options: {
+    url: string;
+    bootstrapToken: string;
+    expiresAtMs: number;
+  }): Promise<void> {
+    const url = validateGatewayUrl(options.url);
+    if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
+    if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
+    if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
+    this.settings = { url, token: null };
+    this.pairingSeen = null;
+    this.setupCode = {
+      url,
+      bootstrapToken: options.bootstrapToken,
+      expiresAtMs: options.expiresAtMs,
+    };
+    await this.open();
+  }
+
+  /** Whether this device already holds a token for the gateway at `url`. */
+  async hasDeviceToken(url: string): Promise<boolean> {
+    const identity = await this.loadIdentity();
+    return (await this.loadToken(validateGatewayUrl(url), identity.deviceId, "operator")) !== null;
+  }
+
+  /** The host's setup slice: what its look found and where setup stands. */
+  setSetup(next: SetupState | undefined): void {
+    this.setupSlice = next;
+    this.store.update((state) => ({ ...state }));
+  }
+
   /** Close the connection and forget the gateway. The device key and any device token remain. */
   async disconnect(): Promise<void> {
     this.abandonAccessRequest("Disconnected from the gateway.");
     this.close();
+    this.setupCode = null;
     this.settings = null;
     this.pairingSeen = null;
     this.rows = new Map();
@@ -3912,6 +4006,9 @@ export class ClawtrateClient {
     const settings = this.settings;
     if (!settings) return;
     const generation = ++this.generation;
+    // A connection made with the host's setup code stages its first token here.
+    this.tokenGate =
+      this.setupCode?.url === settings.url ? { generation, url: settings.url, staged: null } : null;
     const identity = await this.loadIdentity();
     if (generation !== this.generation) return;
 
@@ -4025,14 +4122,20 @@ export class ClawtrateClient {
       createRequestId: () => this.randomId(),
       buildConnectPlan: async ({ nonce, challengeTs }) => {
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
+        // The host's one-time code, while it lives, for a device not yet paired with this gateway.
+        const code =
+          !token && this.setupCode?.url === settings.url && this.now() < this.setupCode.expiresAtMs
+            ? this.setupCode.bootstrapToken
+            : null;
         // Once paired, the device token is the credential; the bootstrap token is no longer sent.
-        const bootstrap = token ? null : settings.token;
+        const bootstrap = token || code ? null : settings.token;
         // Exactly the scopes this client means to hold, never what the token happens to allow.
         const requested = token && !this.options.readOnly ? token.heldScopes : [...READ_SCOPES];
         const plan = await lifecycle.buildPlan({
           client,
           role: "operator",
           defaultScopes: requested,
+          ...(code ? { bootstrapToken: code, bootstrapScopes: requested } : {}),
           ...(bootstrap ? { token: bootstrap } : {}),
           nonce,
           challengeTs: challengeTs ?? null,
@@ -4060,6 +4163,25 @@ export class ClawtrateClient {
         await lifecycle.acceptHello(hello, context.plan);
         // Only this connection may drop this gateway's bootstrap secret.
         if (generation !== this.generation || this.settings?.url !== settings.url) return;
+        const gate = this.tokenGate;
+        if (gate?.generation === generation) {
+          // The code is used: it is forgotten whatever the grant.
+          this.tokenGate = null;
+          this.setupCode = null;
+          const staged = gate.staged;
+          if (setupGrant(hello) !== "read" || staged === null || staged.role !== "operator") {
+            this.refuseSetupGrant();
+            return;
+          }
+          await this.writeToken(settings.url, staged.deviceId, staged.role, {
+            token: staged.token,
+            grantedScopes: [...staged.scopes],
+            heldScopes: [...READ_SCOPES],
+          });
+          if (generation !== this.generation) return;
+          await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
+          return;
+        }
         if (hello.auth.deviceToken && this.settings?.token) {
           // Paired: drop the bootstrap secret, the device token replaces it.
           this.settings = { ...this.settings, token: null };
@@ -4090,19 +4212,43 @@ export class ClawtrateClient {
         this.handleHello(hello, generation);
       },
       onConnectFailure: async (error) =>
-        this.handleConnectFailure(error, identity.deviceId, settings.url, tokenStore),
-      resolveClose: (context) => ({
-        retry: true,
-        notify: true,
-        ...(context.connectFailure?.reconnectDelayMs !== undefined
-          ? { reconnectDelayMs: context.connectFailure.reconnectDelayMs }
-          : {}),
-      }),
+        this.handleConnectFailure(error, identity.deviceId, settings.url, tokenStore, generation),
+      resolveClose: (context) => {
+        // A setup connection that ended before its hello is not retried and its code is
+        // forgotten, unless the gateway is waiting for its owner to approve this device.
+        const setup = this.tokenGate?.generation === generation;
+        if (setup && this.state.connection.status !== "pairing") this.setupCode = null;
+        return {
+          retry: !(setup && this.setupCode === null),
+          notify: true,
+          ...(context.connectFailure?.reconnectDelayMs !== undefined
+            ? { reconnectDelayMs: context.connectFailure.reconnectDelayMs }
+            : {}),
+        };
+      },
       onClose: () => {
         if (generation !== this.generation) return;
         this.streams.clear();
         this.accounts.onClose();
         const status = this.state.connection.status;
+        if (status !== "pairing" && this.tokenGate?.generation === generation) {
+          // The setup connection ended before its hello: its code is forgotten and it stops.
+          this.setupCode = null;
+          this.setConnection({
+            status: "error",
+            retryAt: null,
+            ...(this.state.connection.error || this.attemptGreeted
+              ? {}
+              : {
+                  error: {
+                    code: "UNREACHABLE",
+                    message: `Nothing answered at ${hostOf(settings.url)}.`,
+                    hint: "Check that the gateway is running and that the address is right.",
+                  },
+                }),
+          });
+          return;
+        }
         if (status !== "pairing" && status !== "error") {
           // Once this gateway has answered, every later drop is a reconnect, not a first connect.
           // An attempt that never got an answer says so, unless the gateway gave a reason.
@@ -4208,15 +4354,37 @@ export class ClawtrateClient {
     this.creationTimers.clear();
   }
 
+  /** The setup connection was granted more or less than read: disconnect, nothing written. */
+  private refuseSetupGrant(): void {
+    this.close();
+    this.setConnection({
+      status: "error",
+      retryAt: null,
+      canWrite: false,
+      canAnswer: false,
+      canApprove: false,
+      canAdmin: false,
+      error: {
+        code: SETUP_GRANT_REFUSED,
+        message: "The gateway granted something other than read access, so Clawtrate disconnected.",
+        hint: null,
+      },
+    });
+  }
+
   private handleConnectFailure(
     error: GatewayProtocolRequestError,
     deviceId: string,
     url: string,
     tokenStore: GatewayBrowserDeviceTokenStore,
+    generation: number,
   ) {
     const details = asRecord(error.details) ?? {};
     const code = typeof details.code === "string" ? details.code : error.gatewayCode;
     const hint = typeof details.remediationHint === "string" ? details.remediationHint : null;
+    // A setup connection keeps its code only while the gateway waits for its owner's approval.
+    const setup = this.tokenGate?.generation === generation;
+    if (setup && code !== "PAIRING_REQUIRED") this.setupCode = null;
 
     const mismatch = protocolMismatch(details);
     if (mismatch) {
@@ -4286,7 +4454,7 @@ export class ClawtrateClient {
       void tokenStore.clear(this.tokenParams(deviceId));
     }
 
-    const pause = shouldPauseGatewayReconnect({ details: error.details });
+    const pause = setup || shouldPauseGatewayReconnect({ details: error.details });
     this.setConnection({
       status: pause ? "error" : this.everConnected ? "reconnecting" : "connecting",
       pairing: null,
@@ -5315,6 +5483,12 @@ export class ClawtrateClient {
       },
       store: async ({ deviceId, role, token, scopes }) => {
         if (!current()) return;
+        // A setup connection's first token waits in memory for its grant to be checked.
+        const gate = this.tokenGate;
+        if (gate?.generation === generation && gate.url === url) {
+          gate.staged = { deviceId, role, token, scopes: [...scopes] };
+          return;
+        }
         const existing = await this.loadToken(url, deviceId, role);
         if (!current()) return;
         await this.writeToken(url, deviceId, role, {

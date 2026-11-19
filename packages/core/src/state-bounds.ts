@@ -86,6 +86,13 @@ import {
   type SidebarState,
 } from "./sidebar.ts";
 import type { Digest } from "./bounds.ts";
+import {
+  MAX_LOOK_OTHER_CHARS,
+  MAX_LOOK_OTHERS,
+  type SetupFailure,
+  type SetupLook,
+  type SetupState,
+} from "./setup.ts";
 import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
 import type {
   Bot,
@@ -859,6 +866,26 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   write: accountWrite,
 });
 
+/** Setting up on the host's computer (`setup.ts`): fixed facts and a few short names. */
+const setupLook = object<SetupLook>()({
+  outcome: ENUM,
+  reason: ENUM,
+  version: NAME,
+  profile: NAME,
+  listens: ENUM,
+  service: ENUM,
+  port: NUMBER,
+  authMode: ENUM,
+  others: list(MAX_LOOK_OTHERS, text(MAX_LOOK_OTHER_CHARS)),
+});
+const setup = object<SetupState>()({
+  phase: ENUM,
+  step: NUMBER,
+  slow: FLAG,
+  look: setupLook,
+  failure: object<SetupFailure>()({ kind: ENUM, exitCode: NUMBER, port: NUMBER }),
+});
+
 /** Every part of the state but the transcripts, and the transcripts as one map. */
 export const STATE: Bound = flagged<ClawtrateState>()({
   connection,
@@ -872,6 +899,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   accounts: ACCOUNTS,
   retention: retentionAlarm,
   sidebar,
+  setup,
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };
