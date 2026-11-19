@@ -281,6 +281,33 @@ describe("a task's model and effort", () => {
     expect(r.state.refreshed).toBe(1);
   });
 
+  it("F-045: a save the gateway answers as retryable, as a turn ends, is sent again; any other refusal is not", async () => {
+    const r = rig();
+    r.ctx.pause = async () => {};
+    await opened(r);
+    const request = r.ctx.request;
+    let busy = 2;
+    r.ctx.request = async (method, params) => {
+      if (method === "sessions.patch" && busy > 0) {
+        busy -= 1;
+        r.requests.push({ method, params: params as Record<string, unknown> });
+        throw Object.assign(new Error("Session patch failed unexpectedly. Retry the request."), {
+          code: "UNAVAILABLE",
+          retryable: true,
+        });
+      }
+      return request(method, params);
+    };
+    await r.engine.choose(KEY, { model: "acme/dev-2", effort: null });
+    expect(r.patches()).toHaveLength(3);
+    expect(r.view().events.at(-1)?.outcome).toBe("changed");
+    // A refusal that is not retryable is said at once.
+    r.state.refuse = "not this one";
+    await r.engine.choose(KEY, { model: null, effort: "high" });
+    expect(r.patches()).toHaveLength(4);
+    expect(r.view().events.at(-1)?.outcome).toBe("refused");
+  });
+
   it("F-042: the account the task's conversation selected is written before the bot's", async () => {
     const r = rig();
     r.ctx.request = async (method, params) => {

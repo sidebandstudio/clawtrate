@@ -27,6 +27,13 @@ export const MAX_LOGGED_TASKS = 64;
 export const TASK_MODEL_LOG_PREFIX = "clawtrate.task-models:";
 /** The longest model reference, account, effort or id this engine keeps. */
 export const MAX_TASK_MODEL_ID_CHARS = 256;
+/**
+ * How often a save the gateway answers as retryable is sent again, and the
+ * pause before the first retry, doubled each time: a patch sent as a turn
+ * ends can meet the gateway still settling it (`UNAVAILABLE`, `retryable`).
+ */
+export const MAX_SAVE_ATTEMPTS = 5;
+export const SAVE_RETRY_MS = 400;
 /** The longest refusal kept: the gateway's reason, cut. */
 export const MAX_TASK_MODEL_ERROR_CHARS = 512;
 
@@ -117,7 +124,17 @@ export type TaskModelsContext = {
   now(): number;
   randomId(): string;
   log(message: string): void;
+  /** Wait before a retry; a test can make it immediate. */
+  pause?: (ms: number) => Promise<void>;
 };
+
+/** The gateway says the request may be sent again (`retryable`), and when. */
+function retryAfter(error: unknown, attempt: number): number | null {
+  const shape = error as { retryable?: unknown; retryAfterMs?: unknown } | null;
+  if (shape?.retryable !== true) return null;
+  const asked = typeof shape.retryAfterMs === "number" ? shape.retryAfterMs : 0;
+  return Math.min(5_000, Math.max(asked, SAVE_RETRY_MS * 2 ** attempt));
+}
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const cut = (value: string, max: number) => (value.length > max ? value.slice(0, max) : value);
@@ -495,7 +512,18 @@ export class TaskModelsEngine {
       });
       try {
         await this.ctx.ensureWrite();
-        const answer = asRecord(await this.ctx.request("sessions.patch", params));
+        let answer: RawRecord | null = null;
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            answer = asRecord(await this.ctx.request("sessions.patch", params));
+            break;
+          } catch (error) {
+            const wait = retryAfter(error, attempt);
+            if (wait === null || attempt + 1 >= MAX_SAVE_ATTEMPTS || !this.ctx.connected())
+              throw error;
+            await (this.ctx.pause ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(wait);
+          }
+        }
         const resolved = asRecord(answer?.resolved);
         const entry = asRecord(answer?.entry);
         const fields: RawRecord = {};
