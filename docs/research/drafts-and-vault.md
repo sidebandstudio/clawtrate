@@ -25,7 +25,8 @@ Every value submitted was made up (`example-secret-value-<uuid>`, entry names `D
 | 3 | Can it hold a call, and what does the person's answer send? | Yes, with `requireApproval`. Allow once ran the call with the arguments the hook returned when it asked; Deny ran nothing. The gateway copies those arguments when the hold starts: the plugin changed its own object afterwards and the tool still received the original. So the hook that asked cannot apply a later edit. **Live.** | 1 |
 | 3a | Can a person's edit reach the tool after all? | Yes, with a second hold. A trusted tool policy held the call; the person's edit went to the plugin through its own method (`operator.approvals`), bound to that call id; after the answer the plugin's ordinary hook returned the edited `params` with a second `requireApproval`, and after Allow once on that second hold the tool received the edit. Returning the edited `params` without the second hold was refused: "Tool call parameters changed after trusted approval", and the tool did not run. Deny on either hold, a changed file, or a gateway restart sent nothing. **Live.** | 1a |
 | 4 | Which tools send an email or a Slack message here, and how does a plugin know one? | No email-sending tool is built in; the bundled `imap` plugin only receives mail. Slack is a channel, and the built-in `message` tool sends through configured channels. **Source.** A hook knows a tool only by its name: its event carries `toolName`, `params`, `runId` and `toolCallId`, and its context names the bot and task but not which plugin owns the tool. **Live.** | 2 |
-| 5 | Can a plugin know an attached file changed between the draft and the send? | Only with the trusted tier. A file changed while an ordinary hold waited was sent changed. A trusted tool policy that held the call, followed by the same plugin's ordinary hook rechecking the file after the answer, refused the changed file and nothing ran; an unchanged file was sent. **Live.** | 3 |
+| 5 | Can a plugin know an attached file changed between the draft and the send? | Partly, and only with the trusted tier. A file changed while an ordinary hold waited was sent changed. A trusted tool policy that held the call, followed by the same plugin's ordinary hook rechecking the file after the answer, refused the changed file and nothing ran; an unchanged file was sent. For an edited draft the recheck runs before the second hold, and a file changed during that hold was sent changed (section 1b). **Live.** | 3, 1b |
+| 5a | Who can see a held draft or a question? | Read-only: neither (refused, no event). Another device with approvals: no hold listed, no event. A second admin, and the run's own device: the hold. Only admin lists the Vault. **Live** (section 1b). | 1b |
 | 6 | What does the bot's `secrets` tool do with a made-up value? | It raises a masked question (`isSecret`, `secretStore {name, kind, allowedHosts, reason}`). The value travels once, in `question.resolve`; the answer the gateway keeps reads `"stored"`. The value was in no event, no transcript, no store listing, no gateway log and no model request, and was in plain text in the instance's state database. A run started without admin could not ask at all. **Live.** | 4 |
 | 7 | The Vault: what does `secrets.store.*` offer? | One store for the whole gateway (`scopeKind: "team"`), admin only for list, set and delete. Entries are named values with allowed hosts; nothing in them names a bot. Another bot listed an entry Pip had asked for, and deleted it. Delete answers `ok` even for an entry that is not there, and keeps the value for 30 days. **Live** and **source**. | 5 |
 | 8 | Can an item be limited to chosen bots? | Not by the gateway. A plugin can refuse a bot's `secrets` calls, and a bot's own deny list can remove the tool, but neither stops a stored value being used by every bot through the gateway's egress substitution or a setting that refers to it. **Source**, with the listing and deletion **live**. | 5 |
@@ -87,6 +88,32 @@ After the first answer:
 
 So an edit can reach the tool, at this strength: the person answers twice. The first answer releases the bot's call to the plugin; the plugin swaps in the edit and holds again; the second answer, on a hold whose arguments the gateway froze as the edit, sends it.
 
+## 1b. Four more behaviors, confirmed for the review (round 1 fixes)
+
+Run on the same named instance, started again and set up as above, with the scenarios `edit-file-second`, `scopes`, `store-env` and `edit-abort`, then reset.
+
+- **A file changed during the second hold** (`edit-file-second`). The plugin's recheck after the first answer saw `report.txt` unchanged (28 bytes). The file was then rewritten while the second hold waited, and after Allow once on it the tool read 45 bytes (`sha256 d5ed87b6…`). The gateway runs no hook between the second answer and the tool (`agent-tools.before-tool-call` lines 3373-3437). The edited body, with two spaces and a line break (`"EDITED  twice-spaced\nsecond line"`), arrived exactly.
+- **Who can see a hold or a question** (`scopes`), while the run owner's call was held:
+
+  | Connection | `plugin.approval.list` | The hold's event | `question.list`, `question.get` | `secrets.store.list` |
+  |---|---|---|---|---|
+  | Read only | Refused, "missing scope: operator.approvals" | Not received | Refused, "missing scope: operator.questions" | Refused, "missing scope: operator.admin" |
+  | Another device with read, write, approvals and questions | `[]` | Not received | — | Refused, "missing scope: operator.admin" |
+  | A second admin connection | The hold | — | — | — |
+  | The run's own device (admin) | The hold | Received | — | — |
+
+  The gateway lets a client see one approval only if it holds admin, or holds approvals and is the device the approval is bound to (`canAccessOperatorApproval`, `<openclaw>/dist/operator-approval-authorization-C9wV2RU-.mjs` lines 5-22). Neither list carries the call's arguments.
+- **An environment entry** (`store-env`). `secrets.store.set` with `kind: "env"` and `allowedHosts: []` was refused, "Allowed hosts apply only to secret entries."; without hosts it was saved, and `secrets.store.list` returned its value (`value`, 54 characters). Source: `toProtocolStoreEntry` returns `value` for `env` entries (`secrets-VYaSXWxr.mjs` lines 18-38), and the store hands `env` values to commands as plain environment (`<openclaw>/dist/secret-store-CwR360wK.mjs` lines 208-227).
+- **Stopping the run during the second hold** (`edit-abort`). `chat.abort` answered `{"aborted":true}` and the run ended `aborted`, but `plugin.approval.list` right afterwards still listed the second hold; answering it was refused, "approval already resolved", and the tool did not run.
+
+Read in source only, for the same review:
+
+- A masked answer can come back as an error after the value was stored: `"Secret store entry was saved, but runtime refresh failed. Resolve provider errors and retry secrets.reload; do not resubmit this answer."` (`<openclaw>/dist/question-BTDP13J4.mjs` lines 317-367).
+- `secrets.store.set` and `delete` can likewise answer with an error after they committed: "Secret store entry was saved, but post-write runtime refresh failed…" and "Secret store entry was deleted, but the active runtime could not refresh…" (`secrets-VYaSXWxr.mjs` lines 96-130). Their success answer is `{ok: true, reloaded}`.
+- A deleted row keeps its value until a purge removes rows deleted more than 30 days earlier (`<openclaw>/dist/secret-store-validation-C11QxAUr.mjs` lines 11-25); a later write of the same name revives the row with the new value (`<openclaw>/dist/openclaw-state-worker-runtime-D_3s_wGm.mjs` lines 804-828).
+- The secrets tool's `currentPolicy` is `available` (the complete host list), `omitted`, `missing`, `kind_changed` or `unavailable` (`<openclaw>/dist/openclaw-tools-DV-z1IAc.mjs` lines 10767-10812).
+- The message tool also takes `targets`, `replyTo` and `threadId` (lines 6675-6681, 6805-6808), so one `target` alone may not be the whole destination.
+
 ## 2. Which tools send, and what a card can show
 
 - **Email.** No tool the gateway provides sends email: the tool catalogue of 2026.10.6 has none (`tools/dev-gateway/src/cli.ts`, `GATEWAY_TOOLS`), the bundled `imap` plugin "watch[es] IMAP mailboxes and dispatch[es] authenticated incoming email" (`<openclaw>/dist/extensions/imap/openclaw.plugin.json`), and the gateway's Gmail watcher is incoming too. An email tool comes from a connector: a plugin or an MCP server (issue #85). **Source.**
@@ -121,7 +148,7 @@ Live, `secrets`, run from the probe client (admin and questions) in a task of Pi
   | The development model's log, and every request the research model received (the name was in three) | Absent |
   | The instance's state folder | Present once, in plain text: `state/openclaw.sqlite`, table `secret_store_entries`, column `value` |
 
-- **Who updated it.** `updatedBy` held the full name of the operating-system account the gateway runs as, not the device that answered. A bot sees it (below).
+- **Who updated it.** `updatedBy` held a person's display name: the gateway takes it from the connection's authenticated user profile, else the client's display name or id (`storeUpdatedBy`, `<openclaw>/dist/secrets-VYaSXWxr.mjs` lines 40-42). A bot sees it (below).
 - **Who can ask.** From a connection holding read, write, approvals and questions but not admin (`secrets-noadmin`), the bot's call failed at once, `"missing scope: operator.questions"`, and no question was raised. The tool registers its question with the admin scope, and the gateway requires "`operator.admin` plus the agent's trusted, live runtime authority" (`<openclaw>/docs/tools/secrets.md` line 125). The masked question exists only in a run started from a connection with admin; the gateway's message names the wrong scope.
 - **What a request is.** Protected only: "Requests are protected-secret only" (`secrets.md` line 31); submitting replaces an existing entry's value; skipping or letting it expire tells the bot `no_answer` (`secrets.md`, "Answering a request"). There is no request that uses a value once without storing it.
 
@@ -157,10 +184,10 @@ Live, `secrets`, run from the probe client (admin and questions) in a task of Pi
 
 ## 9. The instance afterwards
 
-`d8vault` was reset with `pnpm dev-gateway reset --instance d8vault` once the probes were done, and the research model's process was stopped by its PID; for section 1a it was started again the same way, set up as above, and reset again afterwards. Its state folder held only made-up values: the entries `D8_EXAMPLE_TOKEN_…` and `D8_EXAMPLE_STORE_…` with values `example-secret-value-<uuid>`, the stand-ins' made-up addresses at `example.com` and `example.org`, and the file `outbox/report.txt` with two lines of made-up text.
+`d8vault` was reset with `pnpm dev-gateway reset --instance d8vault` once the probes were done, and the research model's process was stopped by its PID; for sections 1a and 1b it was started again the same way, set up as above, and reset again afterwards. Its state folder held only made-up values: the entries `D8_EXAMPLE_TOKEN_…` and `D8_EXAMPLE_STORE_…` with values `example-secret-value-<uuid>`, the stand-ins' made-up addresses at `example.com` and `example.org`, and the file `outbox/report.txt` with two lines of made-up text.
 
 ## Files
 
 - [`dev-gateway/drafts-probe-plugin/`](dev-gateway/drafts-probe-plugin/): the research plugin (no dependencies).
-- [`dev-gateway/drafts-probe/probe.ts`](dev-gateway/drafts-probe/probe.ts): the scenarios `rewrite`, `rewrite-write`, `hold-allow`, `hold-deny`, `hold-mutate`, `file-hold`, `file-trusted`, `file-trusted-unchanged`, `secrets`, `secrets-noadmin`, `secrets-delete-by-other` and `store`; and, for section 1a, `edit-plain`, `edit-approve`, `edit-deny-first`, `edit-deny-second`, `edit-file`, `edit-restart` and `edit-readonly`.
+- [`dev-gateway/drafts-probe/probe.ts`](dev-gateway/drafts-probe/probe.ts): for section 1b, `edit-file-second`, `scopes`, `store-env` and `edit-abort`; and the scenarios `rewrite`, `rewrite-write`, `hold-allow`, `hold-deny`, `hold-mutate`, `file-hold`, `file-trusted`, `file-trusted-unchanged`, `secrets`, `secrets-noadmin`, `secrets-delete-by-other` and `store`; and, for section 1a, `edit-plain`, `edit-approve`, `edit-deny-first`, `edit-deny-second`, `edit-file`, `edit-restart` and `edit-readonly`.
 - [`dev-gateway/fake-openai.mjs`](dev-gateway/fake-openai.mjs): the research scripted model, unchanged.

@@ -220,6 +220,91 @@ const scenarios: Record<string, (op: OperatorSession) => Promise<void>> = {
   async "edit-deny-first"(op) {
     await editScenario(op, "trusted-edit-approve", { first: "deny", second: "none" });
   },
+  // Review fixes: a file changed during the second hold; who can list holds and
+  // questions; an env entry's value; stopping the run during the second hold.
+  async "edit-file-second"(op) {
+    await op.request(`${PLUGIN}.mode`, { mode: "trusted-edit-approve" });
+    const dir = await workspace("pip");
+    await mkdir(path.join(dir, "outbox"), { recursive: true });
+    const file = path.join(dir, "outbox", "report.txt");
+    await writeFile(file, "Disk report, first version.\n");
+    const key = await task(op, "pip", "edit file second");
+    const after = op.lastSeq;
+    const original = email({ attachments: ["outbox/report.txt"] });
+    const runId = await sendTool(op, key, "probe_send_email", original);
+    const req = await waitApproval(op, after);
+    const callId = String(rec(req.request).toolCallId);
+    out("edit", await op.request(`${PLUGIN}.edit`, { toolCallId: callId, params: { ...original, body: "EDITED  twice-spaced\nsecond line" } }));
+    const afterFirst = op.lastSeq;
+    await op.request("plugin.approval.resolve", { id: req.id, decision: "allow-once" });
+    const req2 = await waitApproval(op, afterFirst);
+    await writeFile(file, "Disk report, CHANGED during the second hold.\n");
+    out("file changed during the second hold", true);
+    await op.request("plugin.approval.resolve", { id: req2.id, decision: "allow-once" });
+    await op.terminal(runId);
+    out("what the tool received", (await pluginLog(op)).filter((r) => r.kind === "executed" && r.toolCallId === callId).map((r) => ({ received: r.received, attachments: r.attachments })));
+    out("plugin rechecks", (await pluginLog(op)).filter((r) => r.kind === "recheck" && r.toolCallId === callId).map((r) => ({ before: r.before, now: r.now })));
+  },
+  async scopes(op) {
+    await op.request(`${PLUGIN}.mode`, { mode: "hold" });
+    const reader = await openOperator(inst, "Clawtrate drafts probe reader", ["operator.read"], ["tool-events"]);
+    const other = await openOperator(inst, "Clawtrate drafts probe other", ["operator.read", "operator.write", "operator.approvals", "operator.questions"], CAPS);
+    const admin2 = await openOperator(inst, "Clawtrate drafts probe admin 2", ALL, CAPS);
+    try {
+      const key = await task(op, "pip", "scopes");
+      const after = op.lastSeq;
+      const runId = await sendTool(op, key, "probe_send_email", email());
+      const req = await waitApproval(op, after);
+      const ids = (r: unknown) => (Array.isArray(r) ? r.map((x) => rec(x).id) : r);
+      out("read-only: plugin.approval.list", await reader.request("plugin.approval.list", {}).then(ids, (e: Error) => `refused: ${e.message}`));
+      out("read-only: question.list", await reader.request("question.list", {}).then(() => "listed", (e: Error) => `refused: ${e.message}`));
+      out("read-only: question.get", await reader.request("question.get", { id: "ask_x" }).then(() => "got", (e: Error) => `refused: ${e.message}`));
+      out("read-only: received the hold event", reader.events.some((e) => e.event === "plugin.approval.requested"));
+      out("other interactive device: plugin.approval.list", await other.request("plugin.approval.list", {}).then(ids, (e: Error) => `refused: ${e.message}`));
+      out("other interactive device: received the hold event", other.events.some((e) => e.event === "plugin.approval.requested"));
+      out("second admin: plugin.approval.list", await admin2.request("plugin.approval.list", {}).then(ids, (e: Error) => `refused: ${e.message}`));
+      out("the hold's id", req.id);
+      out("run owner: plugin.approval.list", await op.request("plugin.approval.list", {}).then(ids, (e: Error) => `refused: ${e.message}`));
+      out("read-only: secrets.store.list", await reader.request("secrets.store.list", {}).then(() => "listed", (e: Error) => `refused: ${e.message}`));
+      out("other interactive device: secrets.store.list", await other.request("secrets.store.list", {}).then(() => "listed", (e: Error) => `refused: ${e.message}`));
+      await op.request("plugin.approval.resolve", { id: req.id, decision: "deny" });
+      await op.terminal(runId);
+    } finally {
+      await reader.close();
+      await other.close();
+      await admin2.close();
+    }
+  },
+  async "store-env"(op) {
+    const NAME = `D8_EXAMPLE_ENV_${randomUUID().slice(0, 6).toUpperCase().replace(/-/g, "")}`;
+    const VALUE = `example-env-value-${randomUUID()}`;
+    out("env with allowedHosts []", await op.request("secrets.store.set", { name: NAME, value: VALUE, kind: "env", allowedHosts: [] }).catch((e: Error) => `refused: ${e.message}`));
+    out("env without hosts", await op.request("secrets.store.set", { name: NAME, value: VALUE, kind: "env" }).catch((e: Error) => `refused: ${e.message}`));
+    const listed = ((rec(await op.request("secrets.store.list", {})).entries as Rec[]) ?? []).filter((e) => e.name === NAME);
+    out("the env entry as listed (value replaced by its length)", listed.map((e) => ({ ...e, value: typeof e.value === "string" ? `<${(e.value as string).length} chars>` : e.value, updatedBy: e.updatedBy ? "<set>" : undefined })));
+    out("the listing carries the env value", JSON.stringify(listed).includes(VALUE));
+    out("delete", await op.request("secrets.store.delete", { name: NAME }));
+  },
+  async "edit-abort"(op) {
+    await op.request(`${PLUGIN}.mode`, { mode: "trusted-edit-approve" });
+    const key = await task(op, "pip", "edit abort");
+    const after = op.lastSeq;
+    const runId = await sendTool(op, key, "probe_send_email", email());
+    const req = await waitApproval(op, after);
+    const callId = String(rec(req.request).toolCallId);
+    await op.request(`${PLUGIN}.edit`, { toolCallId: callId, params: { ...email(), body: "EDITED" } });
+    const afterFirst = op.lastSeq;
+    await op.request("plugin.approval.resolve", { id: req.id, decision: "allow-once" });
+    const req2 = await waitApproval(op, afterFirst);
+    out("second hold", req2.id);
+    out("abort", await op.request("chat.abort", { sessionKey: key, runId }).catch((e: Error) => `refused: ${e.message}`));
+    out("listed right after the abort", await op.request("plugin.approval.list", {}).then((r: unknown) => (Array.isArray(r) ? r.map((x) => rec(x).id) : r)));
+    const fin = await op.terminal(runId).catch((e: Error) => ({ state: e.message }));
+    out("run", rec(fin).state);
+    out("answer the second hold after the abort", await op.request("plugin.approval.resolve", { id: req2.id, decision: "allow-once" }).catch((e: Error) => `refused: ${e.message}`));
+    out("the tool ran", (await pluginLog(op)).some((r) => r.kind === "executed" && r.toolCallId === callId));
+  },
+
   async "edit-readonly"(op) {
     const reader = await openOperator(inst, "Clawtrate drafts probe reader", ["operator.read"], ["tool-events"]);
     try {
