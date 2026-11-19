@@ -297,7 +297,17 @@ export function warnedLine(
   return `${name} has used ${percent}% of its ${kindWord(budget.period)} budget: ${short(count.used)} of ${short(budget.tokens)} tokens${count.counting ? " so far" : ""}.`;
 }
 
-/** The composer's note at 100 percent: a warning, said as one. */
+/** The note at 100 percent, above the composer and on the Usage page: a warning, said as one. */
 export function reachedLine(name: string, budget: Budget): string {
-  return `${name} has reached its ${kindWord(budget.period)} warning budget. This is shown only: other apps, channels and ${name}'s routines aren't stopped.`;
+  return `${name} has reached its ${kindWord(budget.period)} warning budget. Runs continue when this warning appears: nothing stops ${name}, here or in other apps, channels or routines.`;
+}
+
+/** What a budget is, said under its meter. */
+export function warningWords(name: string): string {
+  return `A warning: at 80% a line in ${name}'s task, at 100% a note above the composer. Runs continue when it appears: nothing stops ${name} at the limit, here or in other apps, channels or routines.`;
+}
+
+/** A meter's tone: a warning's from 80 percent, at 100 percent and past it too, never a stop's. */
+export function meterTone(used: number, limit: number): "warn" | undefined {
+  return limit > 0 && Math.floor((used / limit) * 100) >= 80 ? "warn" : undefined;
 }

@@ -17,12 +17,15 @@ import {
   costValue,
   deviceTimeZone,
   figureLine,
+  meterTone,
   moreTasks,
+  reachedLine,
   reportFits,
   reportWindow,
   sourceBars,
   sourcesNote,
   warnedLine,
+  warningWords,
 } from "../src/usage/words.ts";
 
 const NY = "America/New_York";
@@ -189,5 +192,19 @@ describe("the open task's context", () => {
     expect(CONTEXT_HINT).toMatch(/output isn't part of it/);
     expect(CONTEXT_HINT).not.toMatch(/counts input, output/);
     expect(CONTEXT_HINT).toMatch(/Breakdown unavailable/);
+  });
+});
+
+describe("a budget reached", () => {
+  it("S17 says runs continue when the warning appears, and its meter is a warning's, not a stop's", () => {
+    const weekly: Budget = { ...routine, id: "bot:otto", routineId: null, period: "weekly" };
+    expect(reachedLine("Otto", weekly)).toBe(
+      "Otto has reached its weekly warning budget. Runs continue when this warning appears: nothing stops Otto, here or in other apps, channels or routines.",
+    );
+    expect(warningWords("Otto")).toMatch(/Runs continue when it appears/);
+    expect(meterTone(799, 1_000)).toBeUndefined();
+    expect(meterTone(800, 1_000)).toBe("warn");
+    expect(meterTone(1_000, 1_000)).toBe("warn");
+    expect(meterTone(2_400, 1_000)).toBe("warn");
   });
 });

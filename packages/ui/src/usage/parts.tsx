@@ -13,7 +13,15 @@ import {
 } from "react";
 import { useBridge } from "../bridge.tsx";
 import { EyeIcon } from "../icons.tsx";
-import { barText, deviceTimeZone, PERIODS, reportFits, short, type BarRow } from "./words.ts";
+import {
+  barText,
+  deviceTimeZone,
+  meterTone,
+  PERIODS,
+  reportFits,
+  short,
+  type BarRow,
+} from "./words.ts";
 
 /** A meter: a 6 px bar with its numbers in text beside it, never alone. */
 export function Meter({
@@ -33,9 +41,8 @@ export function Meter({
 }) {
   const share = limit > 0 ? used / limit : 0;
   const percent = Math.floor(share * 100);
-  const tone = share >= 1 ? "danger" : percent >= 80 ? "warn" : undefined;
   return (
-    <div className="c-meter" data-tone={tone} data-testid={testId}>
+    <div className="c-meter" data-tone={meterTone(used, limit)} data-testid={testId}>
       <div
         className="c-meter-bar"
         role="meter"

@@ -637,7 +637,7 @@ test("F-396: the warning appears in the bot's task once the gateway's figure pas
   await setBudget(page, "Weekly", 1_000);
   const note = page.getByTestId("budget-reached-note");
   await expect(note).toHaveText(
-    /^Juniper has reached its weekly warning budget\. This is shown only: other apps, channels and Juniper's routines aren't stopped\.Raise budget$/,
+    /^Juniper has reached its weekly warning budget\. Runs continue when this warning appears: nothing stops Juniper, here or in other apps, channels or routines\.Raise budget$/,
     { timeout: 60_000 },
   );
   await page.getByTestId("composer-input").fill("Still there?");

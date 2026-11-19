@@ -50,10 +50,6 @@
   background: var(--warn);
 }
 
-.c-meter[data-tone="danger"] .c-meter-bar > span {
-  background: var(--danger);
-}
-
 .c-meter-text {
   display: flex;
   justify-content: space-between;

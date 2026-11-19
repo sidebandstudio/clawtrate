@@ -24,6 +24,7 @@ import {
   periodWord,
   reachedLine,
   resetWords,
+  warningWords,
   zoneWords,
 } from "./words.ts";
 
@@ -273,10 +274,7 @@ export function BudgetPart({
       <p className="c-sentence">
         <ShownOnly />
       </p>
-      <p className="b-hint">
-        A warning: at 80% a line in {name}'s task, at 100% a note above the composer. Other apps,
-        channels and routines aren't stopped, and nothing on the gateway stops {name} at the limit.
-      </p>
+      <p className="b-hint">{warningWords(name)}</p>
       {percent !== null && percent >= 100 ? (
         <Note tone="warn" testId="budget-reached">
           <p>

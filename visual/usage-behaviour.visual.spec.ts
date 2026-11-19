@@ -111,13 +111,13 @@ test("S16 the budget comes first, and it and the figures each name their own per
 test("S17 a budget is a warning everywhere, and says so", async ({ page }) => {
   await openFixture(page, `${PAGE}&budget=reached`, "light");
   await expect(page.getByTestId("shown-only").first()).toHaveText("Shown only");
-  await expect(usage(page)).toContainText("nothing on the gateway stops Otto at the limit");
-  await expect(page.getByTestId("budget-reached")).toHaveText(
-    "Otto has reached its weekly warning budget. This is shown only: other apps, channels and Otto's routines aren't stopped.",
-  );
-  await expect(page.getByTestId("budget-reached-note")).toContainText(
-    "Otto has reached its weekly warning budget. This is shown only",
-  );
+  await expect(usage(page)).toContainText("nothing stops Otto at the limit");
+  const reached =
+    "Otto has reached its weekly warning budget. Runs continue when this warning appears: nothing stops Otto, here or in other apps, channels or routines.";
+  await expect(page.getByTestId("budget-reached")).toHaveText(reached);
+  await expect(page.getByTestId("budget-reached-note")).toContainText(reached);
+  // Past 100 percent the meter is a warning's colour, not a stop's.
+  await expect(page.getByTestId("budget-meter")).toHaveAttribute("data-tone", "warn");
   const all = await page.locator("body").innerText();
   expect(all).not.toMatch(/won't send|didn't start|was stopped|held until|refused/i);
 });
