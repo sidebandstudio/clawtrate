@@ -325,7 +325,8 @@ export type StoppedWith = {
   recipientsAsked: boolean;
 };
 
-const NO_COMPANIONS: StoppedWith = {
+/** A stop's record before anything is known of what it ended: a new one each time. */
+const noCompanions = (): StoppedWith => ({
   helpers: 0,
   bots: [],
   uncertain: [],
@@ -333,7 +334,7 @@ const NO_COMPANIONS: StoppedWith = {
   unanswered: [],
   omitted: 0,
   recipientsAsked: false,
-};
+});
 
 /** Record what a Stop also ended, or could not end. */
 export function noteStoppedWith(
@@ -342,7 +343,7 @@ export function noteStoppedWith(
   change: (current: StoppedWith) => StoppedWith,
 ): TaskActivity {
   return updateRun(activity, runId, (run) => {
-    const next = change(run.stoppedWith ?? NO_COMPANIONS);
+    const next = change(run.stoppedWith ?? noCompanions());
     let omitted = next.omitted;
     const keep = (list: string[]) => {
       omitted += Math.max(0, list.length - MAX_STOPPED_NAMED);
