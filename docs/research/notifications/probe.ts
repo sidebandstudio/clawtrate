@@ -25,7 +25,10 @@
 //   prefs     --a <dir> --b <dir> --r <dir>: users.prefs on A, read back on B,
 //             users.prefs.changed on B and R, a write from R, the bounds
 //   deleted   --a <dir> --bot <id>: a task is created, deleted, then read and
-//             listed again by its key
+//             listed again by its key; sessions.describe by key before and after
+//   missed    --a <dir> --b <dir> --bot <id> --directive <text>: B is away while A
+//             sends; B connects afterwards and logs every event it receives, and
+//             what it lists
 
 import { mkdirSync } from "node:fs";
 import { homedir, hostname, networkInterfaces } from "node:os";
@@ -328,6 +331,7 @@ async function deleted() {
   const key = (created.result as { key?: string })?.key;
   if (!key) throw new Error("no task");
   say("created:", key);
+  say("sessions.describe before:", ((await attempt(A.request, "sessions.describe", { key })).result as { session?: unknown })?.session ? "session" : "null");
   say("sessions.delete:", await attempt(A.request, "sessions.delete", { key }));
   await sleep(1500);
   const listed = await attempt(A.request, "sessions.list", { limit: 200 });
@@ -338,6 +342,8 @@ async function deleted() {
   say("chat.history after delete:", history.ok ? { ok: true, messages: h?.messages?.length, sessionInfo: Boolean(h?.sessionInfo) } : history.error);
   const changed = A.seen.filter((e) => e.name === "sessions.changed" && JSON.stringify(e.payload).includes(key)).map((e) => e.payload.reason);
   say("sessions.changed reasons naming the task:", changed);
+  const described = await attempt(A.request, "sessions.describe", { key });
+  say("sessions.describe after:", described.ok ? ((described.result as { session?: unknown }).session ? "session" : "session: null") : described.error);
   say("sessions.list once more:", ((await attempt(A.request, "sessions.list", { limit: 200 })).result as { sessions?: { key: string }[] })?.sessions?.some((s) => s.key === key) ? "listed" : "not listed");
   A.client.stop();
 }
@@ -378,7 +384,30 @@ async function upgrade() {
   client.stop();
 }
 
-const experiments: Record<string, () => Promise<void>> = { pair, upgrade, two, prefs, deleted };
+async function missed() {
+  if (!values.a || !values.b) throw new Error("--a and --b are required");
+  const A = await device(values.a, "A");
+  const created = await attempt(A.request, "sessions.create", { agentId: values.bot, idempotencyKey: randomUUID() });
+  const key = (created.result as { key?: string })?.key;
+  if (!key) throw new Error("no task");
+  say(`A created a task with ${values.bot}; B is not connected`);
+  say(`A sent ${values.directive}:`, (await attempt(A.request, "chat.send", { sessionKey: key, message: values.directive, idempotencyKey: randomUUID(), queueMode: "followup" })).ok);
+  await sleep(Number(values.wait) * 1000);
+  const since = Date.now();
+  const B = await device(values.b, "B (connects after the run)");
+  await sleep(6000);
+  const events = B.seen.filter((e) => e.at >= since && JSON.stringify(e.payload).includes(key)).map((e) => `${e.name}${e.payload.stream ? `:${(e.payload.data as { phase?: string })?.phase ?? e.payload.stream}` : ""}${e.payload.state ? `:${e.payload.state}` : ""}`);
+  say("B events naming the task after it connected:", events);
+  await pendingFor(B, key);
+  const listed = await attempt(B.request, "sessions.list", { limit: 200 });
+  const row = ((listed.result as { sessions?: Record<string, unknown>[] })?.sessions ?? []).find((s) => s.key === key);
+  say("B sessions.list row:", row ? { status: row.status, unread: row.unread } : "not listed");
+  const history = await attempt(B.request, "chat.history", { sessionKey: key, limit: 10 });
+  say("B chat.history messages:", history.ok ? ((history.result as { messages?: unknown[] }).messages ?? []).length : history.error);
+  for (const d of [A, B]) d.client.stop();
+}
+
+const experiments: Record<string, () => Promise<void>> = { pair, upgrade, two, prefs, deleted, missed };
 const run = experiment ? experiments[experiment] : undefined;
 if (!run) throw new Error(`experiment: one of ${Object.keys(experiments).join(", ")}`);
 await run();

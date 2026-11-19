@@ -18,7 +18,7 @@ Where things were run:
 
 | # | Question | Answer | Section |
 |---|---|---|---|
-| 1 | Who receives an approval request? | Only the device whose message started the run. B, at the same tier, received no `exec.approval.requested`, listed nothing in `exec.approval.list`, and its `exec.approval.resolve` was refused "unknown or expired approval id"; A's was accepted. With A disconnected the approval stayed pending and still invisible to B; A, reconnected, listed it again. **Tried.** | 1 |
+| 1 | Who receives an approval request? | Only the device whose message started the run. B, at the same tier, received no `exec.approval.requested`, listed nothing in `exec.approval.list`, and its `exec.approval.resolve` was refused "unknown or expired approval id"; A's was accepted. With A disconnected the approval stayed pending and still invisible to B; A, reconnected, listed it again. An admin device also receives and lists it (section 10). **Tried.** | 1, 10 |
 | 2 | What do the other devices learn while an approval waits? | The run's lifecycle phase `waiting-approval`, then `approval-resolved`, on every connection, read-only included (`agent` events, `operator.read`). No id, no command, nothing to answer with. **Tried.** | 1 |
 | 3 | Who receives a question? | Every connection holding `operator.questions`: A and B both received `question.requested` and listed it, and B's `question.resolve` was accepted, after which A's was refused "already cancelled". The read-only device received no question event and no lifecycle phase for it: only the `ask_user` tool's start and result (`session.tool`). A question raised in another bot's task (Marlow, working on a message from Pip) reached A and B under Marlow's own task key. **Tried.** | 2 |
 | 4 | Which event says a run ended, and what can be said about it? | On every connection, read-only included, whether or not it started the run: `agent` lifecycle `end` with `stopReason`, then `chat` `final` carrying the reply's text; a failure is lifecycle `error` and `chat` `error`; a stop is `chat` `aborted` and lifecycle `end` with `stopReason: "rpc"`, `status: "cancelled"`. **Tried.** | 3 |
@@ -32,6 +32,7 @@ Where things were run:
 | 12 | What does the app already have? | The gateway connection lives in Electron's main process; macOS keeps the app running with no window, other systems quit when the last window closes. The dock or taskbar badge counts unread tasks, computed in the renderer. The single-instance lock focuses the window on a second launch. No protocol handler, no main-process notification, and the session refuses every web permission except clipboard writes, `notifications` included. **Read from source.** | 7 |
 | 13 | Opening a task that is gone | `sessions.delete` (admin) removed the task from `sessions.list` and sent `sessions.changed` with reason `delete`; `chat.history` on the deleted key still answered ok, with no messages and a `sessionInfo`, exactly like a new task. Only the task list says a task is gone. **Tried.** | 8 |
 | 14 | The budget notification on `m59-usage-budgets` | A web `Notification` from the renderer, once per budget and period, kept in the renderer's local storage; the desktop session refuses the `notifications` permission, so on the desktop it is most likely never shown. **Read from source**; not run. | 9 |
+| 15 | What does a device that was away get when it reconnects? | No event of what it missed: a missed reply is in history and marks the task unread, a pending question is in the question list, another device's approval nowhere. **Tried.** A read by key, `sessions.describe`, returns `session: null` for a deleted task and for one this connection may not see. **Tried** and source. | 10 |
 
 ## 1. Approvals: who receives them, and what everyone else sees
 
@@ -158,7 +159,7 @@ All four devices belong to the instance's one profile, `gateway-owner`, so a sec
 
 ### For the design
 
-Per-bot switches, task overrides and quiet hours can be one person's settings on the gateway, the same on every device of theirs, readable on a read-only connection and changeable from the interactive tier. A task override costs about 70 bytes (a 57-character task key and its value), so one 4,096-byte value holds a few dozen; the design keeps them in their own key and bounds their number. When the gateway answers `no_durable_identity`, the settings can only be this device's, and the screen has to say so.
+Per-bot switches, task overrides and quiet hours can be one person's settings on the gateway, the same on every device of theirs, readable on a read-only connection and changeable from the interactive tier. A task override with a 57-character key costs about 70 bytes; with longer keys, which the gateway accepts, far fewer fit (section 10), so the design keeps them in their own key and measures the encoded value before each write. When the gateway answers `no_durable_identity`, the settings can only be this device's, and the screen has to say so.
 
 ## 5. The gateway's own Web Push, as precedent
 
@@ -230,19 +231,52 @@ Read with `git show origin/m59-usage-budgets:<path>` and `git diff origin/main..
 - Its end-to-end test runs in a browser page with a recorded `Notification` stand-in. Nothing in the branch changes the desktop main process, whose session refuses `notifications` (section 7), so in the desktop app the permission reads as not granted and the warning shows only as the line in the task.
 - It has no click target, ignores quiet hours, and is the only notification in the code.
 
-## 10. What could not be proven here
+## 10. A device that was away, an admin device, a task read by its key, the room in a preference
+
+Added after the first independent review, on development instance `d10fix` (started and reset as in the note's opening), with devices A and B at the interactive tier and X with admin.
+
+**A device that was away gets nothing replayed.** `probe.ts missed`: B is not connected while A sends; B connects afterwards and logs every event naming the task for six seconds. **Tried.**
+
+```
+=== #text
+B events naming the task after it connected: []
+B sessions.list row: {"status":"done","unread":true}
+B chat.history messages: 2
+=== #ask
+B events naming the task after it connected: []
+B (connects after the run) lists: {…,"question.list":{"pendingForThisTask":1}}
+B sessions.list row: {"status":"running","unread":true}
+=== #approve
+B events naming the task after it connected: []
+B (connects after the run) lists: {"exec.approval.list":{"forThisTask":0},…}
+B sessions.list row: {"status":"running","unread":true}
+```
+
+A reply that finished while B was away is in its history and marks the task unread; a question still pending is in B's question list; another device's approval is neither listed nor marked anywhere, and the task reads `running`. The gateway sends an event only to a socket that is open at that moment (`c.socket.readyState !== 1` skips it, `<openclaw>/dist/server-start-D6vaUNGz.mjs` line 4513). On every connect, and on the reconnect that follows an event gap (`onGap`), this project's client lists bots and tasks again, reloads open transcripts and reads the pending questions and the approvals it can see (`bootstrap`, `loadWaitingQuestions`, `loadWaitingApprovals`, `packages/core/src/client.ts`). **Read from source.**
+
+**An admin device sees others' approvals.** `probe.ts two --bot otto --directive "#approve"` with B replaced by X (admin): X received `exec.approval.requested` and listed the approval (`{"exec.approval.list":{"forThisTask":1}}`), as A did. **Tried.** `isApprovalRecordVisibleToClient` (`<openclaw>/dist/approval-record-lookup-o5fS3cNj.mjs` lines 42-63) shows the rule: admin sees every approval; a device listed in the record's `approvalReviewerDeviceIds` with the approvals scope sees it; otherwise only the requesting device or connection does. Configured reviewers were not tried. **Read from source.**
+
+**A task read by its key.** `probe.ts deleted` on X: `sessions.describe {key}` (`operator.read`, `<openclaw>/dist/core-method-policy-DkntKRY_.mjs` line 1219) returned the session before `sessions.delete` and `session: null` after it, while `chat.history` still answered with no messages. **Tried.** The handler also answers `session: null` when the connection's sharing rules hide the task (`<openclaw>/dist/sessions-read-CLHMalI8.mjs` lines 361-364), so `null` cannot tell a deleted task from one this connection may not see. **Read from source.** The rail's own list cannot settle it either: the client asks with `excludeCron` and `excludeSubagents` and keeps only the newest rows (`SESSION_LIST_PARAMS`, `newestRows`, `packages/core/src/client.ts`).
+
+**The room in one preference.** The gateway measures a value as the UTF-8 bytes of its JSON and refuses more than 4,096 (section 4, tried). The gateway accepts long task keys, so the number of task settings that fit depends on their keys: section 4's estimate of "a few dozen" assumed 57-character keys and does not hold for longer ones. The design therefore measures the encoded value before each write instead of bounding a count.
+
+**Routines.** A routine's own `cron` events, and runs in a routine's own task (a `cron` key, left out of the rail's list), are told apart by their key; a routine that runs in an ordinary task arrives as a run of that task. No origin field on a run's events was found here that names a routine (`isHeartbeat` is one of the gateway's internal routing fields, `AGENT_EVENT_ROUTING_FIELDS` in `<openclaw>/dist/agent-events-CJDT60f4.mjs` line 52, and was not seen on any event this note's probes received). **Read from source**; a routine was not run here.
+
+**Usage, for a held budget warning.** `UsageEngine.countBudgets` (`packages/core/src/usage-engine.ts`) counts each budget for its current `range` with `usage.cost` (a routine's with `sessions.usage`) into a `BudgetCount` with `used`, `counting` and `error`; `counting` comes from `stillCounting`, which reads any `cacheStatus` other than `fresh`, or pending or stale files, as still counting (`packages/core/src/usage.ts`). `currentCount` returns a count only for the range the budget is in now, and `budgetPercent` the share used. **Read from source.**
+
+## 11. What could not be proven here
 
 | What | Why | What the design does about it |
 |---|---|---|
 | That a notification appears, and what a click does, on macOS and Windows | No notification may be posted on this machine, and no packaged app launched | Every system behaviour is from Electron's documentation and marked so; the app reports what it can observe (`failed`) and claims nothing else |
-| Whether the default ad hoc signature is enough for macOS notifications | Not stated by the documentation; not tried | The Notifications section says when the system refused one; it never says notifications are working |
+| Whether the default ad hoc signature is enough for macOS notifications | Not stated by the documentation; not tried | The Notifications section says when Clawtrate couldn't post one; it never says notifications are working |
 | Whether a Windows toast from the NSIS install activates without a ToastActivatorCLSID | Not tried on Windows | Named for builders as a check to make first |
 | A second person's preferences | The development gateway has one profile | Settings are described as "yours", kept with your profile |
 | `no_durable_identity` | Every development device has the owner's profile | Designed from source: the settings are this device's and the screen says so |
-| The system's lock-screen behaviour | System settings may not be read or changed here | The default text carries no message or command; more is the person's choice |
+| The system's lock-screen behaviour | System settings may not be read or changed here | No notification carries a message's text, a task's title, a command or a question; a bot's name only while the person keeps "Show bot names in notifications" on |
 
 ## Files
 
 | File | What it is |
 |---|---|
-| `notifications/probe.ts` | The probes: `pair` and `upgrade` for each device; `two` (a run started by A with every device logging what it receives, the lists on each, an answer from B then A; `--leave` disconnects A while the run waits; `--stop` stops it); `prefs` (`users.prefs` across three devices, its conflict and size bounds); `deleted` (a task deleted, then read and listed). Acts only on a named instance; runs `openclaw` only through the development tool's guarded runner; redacts every token and name it prints. |
+| `notifications/probe.ts` | The probes: `pair` and `upgrade` for each device; `two` (a run started by A with every device logging what it receives, the lists on each, an answer from B then A; `--leave` disconnects A while the run waits; `--stop` stops it); `prefs` (`users.prefs` across three devices, its conflict and size bounds); `deleted` (a task deleted, then read by key, read and listed); `missed` (a device that was away while a run happened, connecting afterwards). Acts only on a named instance; runs `openclaw` only through the development tool's guarded runner; redacts every token and name it prints. |
