@@ -21,8 +21,10 @@ import { isNamedInstancePort, validateInstanceName } from "./instance.ts";
 export const MARKER_FILE = ".clawtrate-dev-gateway";
 const CREATED_BY = "clawtrate tools/dev-gateway";
 
-export type ProcessRole = "start" | "provider" | "gateway";
-export const PROCESS_ROLES: readonly ProcessRole[] = ["start", "provider", "gateway"];
+export type ProcessRole = "start" | "provider" | "gateway" | "image";
+export const PROCESS_ROLES: readonly ProcessRole[] = ["start", "provider", "gateway", "image"];
+/** The processes a start spawns and records. `image` only with `--with-images`. */
+export type SpawnedRole = Exclude<ProcessRole, "start">;
 
 /** What a start records about itself when it creates the folder. */
 export type MarkerOrigin = {
@@ -45,10 +47,14 @@ export type Marker = MarkerOrigin & {
   /** Written before the process is spawned; replaced by its PID and identity after. */
   providerPending?: true;
   gatewayPending?: true;
+  imagePending?: true;
   providerPid?: number;
   providerIdentity?: string;
   gatewayPid?: number;
   gatewayIdentity?: string;
+  /** The stand-in image provider (`--with-images`), when there is one. */
+  imagePid?: number;
+  imageIdentity?: string;
 };
 
 /**
@@ -427,7 +433,7 @@ function markerOfRun(stateDir: string, runId: string): Marker {
 }
 
 /** Record, before spawning it, that this start is about to spawn a process. */
-export function recordPending(stateDir: string, runId: string, role: "provider" | "gateway"): void {
+export function recordPending(stateDir: string, runId: string, role: SpawnedRole): void {
   writeMarker(stateDir, { ...markerOfRun(stateDir, runId), [`${role}Pending`]: true });
 }
 
@@ -435,7 +441,7 @@ export function recordPending(stateDir: string, runId: string, role: "provider" 
 export function recordProcess(
   stateDir: string,
   runId: string,
-  role: "provider" | "gateway",
+  role: SpawnedRole,
   pid: number | undefined,
   identify: Identify = processIdentity,
 ): void {
