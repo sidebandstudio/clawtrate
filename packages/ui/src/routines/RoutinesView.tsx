@@ -40,6 +40,7 @@ import {
   fullWhen,
   ownerOf,
   routineZone,
+  runKey,
   runOutcome,
   scheduleWords,
   triggerWords,
@@ -521,7 +522,7 @@ function Page({
               const outcome = runOutcome(run);
               const at = when(run.runAt, now, viewer);
               return (
-                <li key={`${run.runId ?? ""}:${run.runAt}`}>
+                <li key={runKey(run.jobId, run.runId, run.runAt)}>
                   <button
                     type="button"
                     className="r-run"
@@ -615,6 +616,11 @@ function RunView({
               <ClockIcon /> Scheduled message, as the gateway recorded it
             </div>
             <p>{read.value.message}</p>
+            {read.value.messageCut && (
+              <p className="r-hint" data-testid="scheduled-message-cut">
+                The rest of this message is longer than Clawtrate shows.
+              </p>
+            )}
           </div>
           {read.value.items.map((item) =>
             item.blocks.map((block, index) =>
@@ -929,7 +935,7 @@ export function RoutinesView({
           nav.run ? (
             run ? (
               <RunView
-                key={`${run.runId ?? ""}:${run.runAt}`}
+                key={runKey(run.jobId, run.runId, run.runAt)}
                 gateway={gateway}
                 routine={shown.routine}
                 run={run}

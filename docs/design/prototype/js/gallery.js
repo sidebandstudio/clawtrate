@@ -48,6 +48,129 @@
   const queuedRow = (kind = "Queued", actions = CT.button("Send now") + CT.button("Cancel", 'data-variant="quiet"')) =>
     CT.shelfRow({ lead: glyph("queued"), text: `<b>${kind}</b> <span>Then check the certificate warning too.</span>`, actions });
 
+  // Every state of controls.html (docs/design/controls.md, section 23), for the Controls section.
+  const tab = "bot=otto&panel=open&tab=settings";
+  const controlStates = [
+    [`${tab}`, "A bot's settings, with Tools, Memory, Usage and Runs on"],
+    [`${tab}&bview=rules`, "What Otto may do: the glance, the rules plugin running"],
+    [`${tab}&bview=rules&rules=noplugin`, "Rules methods unavailable: not being enforced right now"],
+    [`${tab}&bview=rules&rules=stopped`, "The rules plugin stopped"],
+    [`${tab}&bview=rules&rules=old`, "The rules plugin too old"],
+    [`${tab}&bview=rules&rules=unchecked`, "The rules plugin not checked yet"],
+    [`${tab}&bview=rules&rules=stopped&held=1`, "Denied in Otto's settings"],
+    [`${tab}&bview=rules&held=1`, "The plugin running again, the hold still in place"],
+    [`${tab}&bview=rules&rules=stopped&read=none`, "This device never read the plugin's rules"],
+    [`${tab}&bview=rules&rules=stopped&width=phone`, "The phone: the plugin stopped"],
+    [`${tab}&bview=rules&msg=gateway`, "The gateway's pairs leave Otto no bot to message"],
+    [`${tab}&bview=rules&machine=gatewayhost&cmdpolicy=allowlist`, "Creating a bot: a policy that isn't Ask"],
+    [`${tab}&bview=rules&machine=gatewayhost`, "Commands on the gateway's machine: plugin rules are advice"],
+    [`${tab}&bview=rules&rules=loading`, "Loading"],
+    [`${tab}&bview=rules&rules=error`, "Couldn't load"],
+    [`${tab}&bview=rules&rules=fresh`, "Before the bot's first task"],
+    [`${tab}&bview=rules&rules=stale`, "The listing is old"],
+    [`${tab}&bview=rules&override=1`, "The gateway's settings override the bot's"],
+    [`${tab}&bview=rules&access=read`, "Read-only"],
+    [`bot=pip&panel=open&tab=settings&bview=rules&newbot=step2`, "A new bot whose restrictive write failed"],
+    [`bot=pip&panel=open&tab=settings&newbot=step3`, "A new bot whose defaults write failed"],
+    [`${tab}&bview=rule&line=files`, "One line: Change files, Limited"],
+    [`${tab}&bview=rule&line=exec`, "One line: Run commands, with its four facts"],
+    [`${tab}&bview=rule&line=exec&rules=stopped`, "Run commands while the rules plugin is stopped"],
+    [`${tab}&bview=rule&line=exec&rules=stopped&held=1`, "Run commands in the hold"],
+    [`${tab}&bview=rule&line=exec&override=1`, "Run commands when media-box's file asks every time"],
+    [`${tab}&bview=rule&line=exec&cmdpolicy=allowlist`, "A command policy set outside Clawtrate: only listed commands"],
+    [`${tab}&bview=rule&line=exec&cmdpolicy=legacy`, "A legacy command policy"],
+    ["bot=otto&task=o1&rules=stopped&held=1", "Clawtrate's hold, as a line in the task"],
+    [`${tab}&bview=rule&line=browser`, "One line, set on the gateway"],
+    [`${tab}&bview=rule&line=web&override=1`, "A bot's allow overridden by the gateway"],
+    [`${tab}&bview=rule&line=files&waiting=1`, "Saving while a request waits"],
+    [`${tab}&bview=rule&line=files&write=refused`, "A save refused"],
+    [`${tab}&bview=rule&line=files&write=conflict`, "A save crossed by another change"],
+    [`${tab}&bview=rule&line=files&write=timeout`, "A save with no answer"],
+    [`${tab}&bview=rule&line=files&form=open`, "The rule form"],
+    [`${tab}&bview=rule&line=files&form=open&pattern=long`, "A pattern of 1,001 characters"],
+    [`${tab}&bview=rule&line=files&form=open&limit=allow`, "20 allow rules already"],
+    [`${tab}&bview=rule&line=files&form=open&limit=ask`, "20 ask rules already"],
+    [`${tab}&bview=rule&line=files&form=open&limit=never`, "Near 50 never rules"],
+    [`${tab}&bview=rule&line=files&form=fromcard`, "The rule form from an expired request: an Ask rule still applies"],
+    [`${tab}&bview=rule&line=files&form=fromcard&asker=fallback`, "The rule form from an expired request: only the catch-all asked"],
+    [`${tab}&bview=rule&line=files&form=fromcard&access=write`, "An expired request's rule, below admin"],
+    [`bot=pip&panel=open&tab=settings&bview=rule&line=message`, "A line for a bot with no routines"],
+    [`${tab}&bview=rule&line=files&rules=stopped`, "One line while the rules plugin is stopped"],
+    [`${tab}&bview=messaging`, "Messaging other bots"],
+    [`${tab}&bview=messaging&msg=some`, "Only these bots"],
+    [`${tab}&bview=messaging&msg=none`, "No bot"],
+    [`${tab}&bview=messaging&msg=gateway`, "The gateway's pair setting decides"],
+    [`${tab}&bview=messaging&rules=noplugin`, "Messaging without the rules plugin"],
+    ["open=settings&section=permissions", "Settings, Permissions: rules"],
+    ["open=settings&section=permissions&rules=stopped", "Rules while the plugin is stopped"],
+    ["open=settings&section=permissions&access=write", "Rules below admin"],
+    ["open=settings&section=permissions&part=saved", "Saved approvals"],
+    ["open=settings&section=permissions&part=saved&saved=revoked", "A routine's grant revoked"],
+    ["open=settings&section=permissions&part=saved&saved=empty", "No saved approvals"],
+    ["open=settings&section=permissions&part=saved&saved=error", "Saved approvals couldn't load"],
+    ["open=settings&section=permissions&part=saved&access=read", "Saved approvals, read-only"],
+    ["open=settings&section=permissions&part=saved&access=write", "Saved approvals below admin"],
+    ["open=settings&section=permissions&part=activity", "Activity"],
+    ["open=settings&section=permissions&part=activity&audit=loading", "Activity loading"],
+    ["open=settings&section=permissions&part=activity&audit=partial", "Activity with expired records"],
+    ["open=settings&section=permissions&part=activity&audit=empty", "No activity"],
+    ["open=settings&section=permissions&part=activity&audit=off", "The gateway records no activity"],
+    ["open=settings&section=permissions&part=activity&audit=error", "Activity couldn't load"],
+    ["open=settings&section=permissions&part=activity&access=read", "Activity, read-only"],
+    [`${tab}&bview=memory`, "What Otto remembers: stored, loads, searchable"],
+    [`${tab}&bview=memory&mem=over`, "Root memory past its budget"],
+    [`${tab}&bview=memory&mem=empty`, "Nothing stored yet"],
+    [`${tab}&bview=memory&mem=loading`, "Memory loading"],
+    [`${tab}&bview=memory&mem=error`, "Memory couldn't load"],
+    [`${tab}&bview=memory&mem=noplugin`, "Memory without the memory plugin"],
+    [`${tab}&bview=memory&mem=nosearch`, "No memory search on the gateway"],
+    [`${tab}&bview=memory&mem=searchoff`, "Search off for this bot"],
+    [`${tab}&bview=memory&mem=unsearchable`, "A note not yet confirmed searchable"],
+    [`${tab}&bview=memory&mem=add`, "Adding to memory"],
+    [`${tab}&bview=memory&mem=import`, "Reviewing an import"],
+    [`${tab}&bview=memory&access=read`, "Memory, read-only"],
+    [`${tab}&bview=memitem&item=m1`, "A root memory item"],
+    [`${tab}&bview=memitem&item=n1`, "A note"],
+    [`${tab}&bview=memitem&item=n1&mem=noplugin`, "A note without the memory plugin"],
+    [`${tab}&bview=memitem&item=m1&mem=edit`, "Editing an item"],
+    [`${tab}&bview=memitem&item=m1&mem=conflict`, "An edit crossed by another change"],
+    ["open=settings&section=memory", "Settings, Memory: shared memory and who searches it"],
+    ["open=settings&section=memory&shared=none", "No shared memory"],
+    ["open=settings&section=memory&shared=noplugin", "Shared memory without the plugin"],
+    [`${tab}&bview=machine`, "Where Otto runs: three places"],
+    [`${tab}&bview=machine&machine=shared`, "A workspace shared with another bot"],
+    [`${tab}&bview=machine&machine=offline`, "Its command machine not connected"],
+    [`${tab}&bview=machine&machine=ownbrowser`, "A browser of its own"],
+    [`bot=pip&panel=open&tab=settings&bview=machine`, "Pip, on the gateway's machine"],
+    [`${tab}&bview=machine&access=read`, "Where Otto runs, read-only"],
+    ["open=settings&section=machines", "Settings, Machines: approvals files"],
+    ["open=settings&section=machines&access=write", "Machines below admin"],
+    ["open=settings&section=machines&devices=noscope", "Paired devices below device access"],
+    [`${tab}&bview=usage`, "Usage, with its budget first"],
+    [`${tab}&bview=usage&usage=loading`, "Usage loading"],
+    [`${tab}&bview=usage&usage=error`, "Usage couldn't load"],
+    [`${tab}&bview=usage&usage=computing`, "Usage still being counted"],
+    [`${tab}&bview=usage&usage=nocost`, "No price configured"],
+    [`${tab}&bview=usage&usage=partial`, "A partial cost"],
+    [`${tab}&bview=usage&budget=none`, "No budget"],
+    [`${tab}&bview=usage&budget=warn`, "A warning budget at 82 percent"],
+    [`${tab}&bview=usage&budget=reached`, "A warning budget used up"],
+    [`${tab}&bview=usage&budget=daily`, "A Daily budget, counted today"],
+    [`${tab}&bview=usage&budget=invalid`, "A budget form with an invalid number"],
+    ["open=settings&section=usage", "Settings, Usage"],
+    ["open=settings&section=usage&usage=nolimits", "No provider limits reported"],
+    ["bot=otto&task=o3&budget=warn", "The 80 percent line in a task"],
+    ["bot=otto&budget=reached", "The composer held back by a warning budget"],
+    ["bot=otto&plimit=near", "A provider's limit near"],
+    ["bot=otto&plimit=reached", "A provider's limit reached"],
+    ["bot=otto&task=o1&saveline=1", "Saved to memory, in a task"],
+    ["bot=otto&task=o1&ask=full", "A rules-plugin card at the allow limit, answered live"],
+    ["bot=pip&task=p1&cmd=create", "Example: a command missing the machine allowlist"],
+    [`${tab}&width=phone`, "The phone: a bot's settings"],
+    [`${tab}&bview=rules&width=phone`, "The phone: what Otto may do"],
+    ["open=settings&section=permissions&part=activity&width=phone", "The phone: Activity"],
+  ];
+
   const sections = [
     {
       id: "access",
@@ -1120,6 +1243,127 @@
           html:
             A({ ...C.server, id: "call_7c01", name: "gmail__search_messages", args: { query: "from:venue newer_than:7d" }, mcp: { server: "gmail", tool: "search_messages" }, details: { mcpServer: "gmail", mcpTool: "search_messages" }, status: "failed", isError: true, text: "401 Unauthorized: the token has been expired or revoked.", took: "0.4s" }) +
             CT.msg({ html: "Gmail signed me out, so I couldn't look for the venue's reply. If you reconnect Gmail on the gateway, I'll check again." }),
+        },
+      ],
+    },
+    {
+      id: "controls",
+      title: "Controls",
+      note: "What docs/design/controls.md adds to the conversation, and a link to every state of its pages. A refused call says what decided it, recorded, inferred or not recorded; an ask says who asks and offers what it can complete; an answer and what then happened are two lines; only a gateway setting is called enforced without qualification.",
+      specimens: [
+        ...[
+          ["gateway", "The gateway's settings for every bot", "Tool exec not found. Inferred: the gateway's settings for every bot denied this tool when Clawtrate read them at 5:41 PM. Set on the gateway.", JSON.stringify({ result: "Tool exec not found", details: {} })],
+          ["bot", "The bot's own deny list", "Tool exec not found. Inferred: Otto's settings denied this tool when Clawtrate read them at 5:41 PM. The gateway enforces this.", JSON.stringify({ result: "Tool exec not found", details: {} })],
+          ["inferred", "A not-found call no read explains", "Cause not recorded. The gateway answered 'Tool exec not found'.", JSON.stringify({ result: "Tool exec not found", details: {} })],
+          ["plugin", "A rule of Clawtrate's rules plugin", "Clawtrate's rules plugin: Otto's rule 'never matching rm -rf *', version 1.", JSON.stringify({ details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason: "Otto's rule: never run commands matching rm -rf *" } })],
+          ["person", "A person, on the card", "You denied it at 5:43 PM.", JSON.stringify({ details: { status: "error", error: "Denied by user. The tool call did not run." } })],
+          ["expired", "No answer in time", "No one answered within 10 minutes.", JSON.stringify({ details: { status: "error", error: "Approval timed out" } })],
+          ["nobody", "Nobody could be asked", "No one could be asked: a routine's run has no place to ask.", JSON.stringify({ details: { status: "error", error: "Plugin approval unavailable: cron runs have no approval-capable initiating surface." } })],
+          ["changed", "The gateway couldn't take the ask", "Cause not recorded. The gateway answered 'Plugin approval required (gateway unavailable)'.", JSON.stringify({ details: { status: "error", error: "Plugin approval required (gateway unavailable)" } })],
+        ].map(([key, name, decided, raw]) => ({
+          name: `Refused by: ${name}`,
+          html: A(
+            {
+              ...C.rm,
+              id: `call_ctl_${key}`,
+              ...({ person: { status: "denied", deniedWord: "Denied" }, expired: { status: "denied", deniedWord: "Expired" }, nobody: { status: "denied", deniedWord: "Not run" }, changed: { status: "denied", deniedWord: "Not run" }, inferred: { status: "failed" }, gateway: { status: "failed" }, bot: { status: "failed" } }[key] || { blockedBy: "policy" }),
+              body: CT.stepBody({
+                readable: CT.fields([
+                  ["Command", "rm -rf /srv/media/transcode-cache", { mono: true }],
+                  ["Decided by", decided],
+                ]) + CT.note("The command was not run."),
+                raw: { tool: "exec", args: JSON.stringify({ command: "rm -rf /srv/media/transcode-cache" }), error: raw, ids: S.ids(`call_ctl_${key}`) },
+              }),
+            },
+            {},
+            { open: true },
+          ),
+        })),
+        {
+          name: "An ask from a rule",
+          note: "Who asks and its 10-minute wait. Allow once and Deny only: the gateway tells the plugin the decision alone, so no card makes a standing permission. For admin, Make a rule… opens the rule form filled in from the request.",
+          still: true,
+          html:
+            `<section class="card request" data-kind="approval" data-state="pending" role="region" aria-label="Otto wants to change a file. Needs approval.">` +
+            `<header class="request-head"><h3 class="request-title">Otto wants to change a file</h3><span class="tag" data-tone="warn">Needs approval</span></header>` +
+            `<p class="request-summary">Write notes/disk-2026-11-16.md in Otto's workspace.</p>` +
+            `<p class="request-asker">Asked by Clawtrate's rules plugin: Otto's rule 'Ask first · notes/**', version 1.</p>` +
+            `<div class="request-actions"><button type="button" class="button" data-variant="primary">Allow once</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet">Deny</button></div>` +
+            `<p class="c-sentence"><button type="button" class="link-button">Make a rule…</button></p>` +
+            `<p class="request-foot">The rules plugin asks for a 10-minute wait.</p></section>`,
+        },
+        {
+          name: "A messaging ask",
+          note: "Each message is its own decision: Allow once and Deny.",
+          still: true,
+          html:
+            `<section class="card request" data-kind="approval" data-state="pending" role="region" aria-label="Otto wants to message Pip. Needs approval.">` +
+            `<header class="request-head"><h3 class="request-title">Otto wants to message Pip</h3><span class="tag" data-tone="warn">Needs approval</span></header>` +
+            `<p class="request-summary">Send Pip: "Could you look over the plan?"</p>` +
+            `<p class="request-asker">Asked by Clawtrate's rules plugin: Otto's messaging settings. Each message is asked about.</p>` +
+            `<div class="request-actions"><button type="button" class="button" data-variant="primary">Allow once</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet">Deny</button></div>` +
+            `<p class="request-foot">The rules plugin asks for a 10-minute wait.</p></section>`,
+        },
+        {
+          name: "An ask at the allow limit",
+          note: `Nothing is removed by itself. The card offers Allow once and Deny, and in place of Make a rule… says the limit, with the way to <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files">the rules list</a>. Allow once answers this request. The call's result shows what happened. <a href="controls.html?bot=otto&amp;task=o1&amp;ask=full">Answer it live</a>.`,
+          still: true,
+          html:
+            `<section class="card request" data-kind="approval" data-state="pending" role="region" aria-label="Otto wants to change a file. Needs approval.">` +
+            `<header class="request-head"><h3 class="request-title">Otto wants to change a file</h3><span class="tag" data-tone="warn">Needs approval</span></header>` +
+            `<p class="request-summary">Write notes/disk-2026-11-18.md in Otto's workspace.</p>` +
+            `<p class="request-asker">Asked by Clawtrate's rules plugin: Otto's rule 'Ask first · notes/**', version 1.</p>` +
+            `<div class="request-actions"><button type="button" class="button" data-variant="primary">Allow once</button><span class="spacer"></span><button type="button" class="button" data-variant="quiet">Deny</button></div>` +
+            `<p class="c-sentence">Otto has 20 allow rules, the most a scope can hold. <a class="link-button" href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files">Open the rules list</a></p></section>` +
+            `<section class="card request" data-kind="approval" data-state="resolved" role="region" aria-label="Otto wanted to change a file. Allowed once."><header class="request-head"><h3 class="request-title">Otto wanted to change a file</h3><span class="tag">Allowed once</span></header>` +
+            `<p class="c-outcome">Your answer: Allowed once, 5:44 PM.</p><p class="c-outcome">Then: Ran.</p><p class="c-outcome">Nothing was saved and no rule was removed.</p></section>`,
+        },
+        {
+          name: "An answer, and what then happened",
+          note: "The gateway acknowledged the answer; the call is its own fact. When it was tried, a settings change while the card waited ended the call with this answer; the answer alone doesn't say why.",
+          still: true,
+          html:
+            `<section class="card request" data-kind="approval" data-state="resolved" role="region" aria-label="Otto wanted to run a command. Answered."><header class="request-head"><h3 class="request-title">Otto wanted to run a command</h3><span class="tag">Allowed once</span></header>` +
+            `<p class="c-outcome">Your answer: Allowed once, 5:44 PM.</p><p class="c-outcome">Then: Didn't run. The gateway answered 'Plugin approval required (gateway unavailable)'.</p></section>`,
+        },
+        {
+          name: "An expired ask",
+          note: `Make a rule… (admin; below admin it is absent) opens <a href="controls.html?bot=otto&amp;panel=open&amp;tab=settings&amp;bview=rule&amp;line=files&amp;form=fromcard">the rule form filled in from the request</a>, which, for the request's exact value, says what the new Allow does given the rules already there. It saves only when the person adds the rule, and the expired call never runs.`,
+          still: true,
+          html: `<section class="card request" data-kind="approval" data-state="resolved" role="region" aria-label="Otto wanted to change a file. Expired."><header class="request-head"><h3 class="request-title">Otto wanted to change a file</h3><span class="tag">Expired</span></header><p class="c-outcome">Expired. Nothing ran.</p><div class="request-actions"><button type="button" class="button">Make a rule…</button></div></section>`,
+        },
+        {
+          name: "The Messaged card's policy states",
+          note: "Blocked by the sender's own list, by the gateway's pairs, and not sent after a denied card.",
+          html:
+            messaged({ target: "marlow", first, state: "blocked", open: true, body: CT.note("Otto may not message Marlow: Otto's messaging settings. The gateway enforces this. Nothing was sent.") + CT.cardFoot("", S.marlowRaw("blocked")) }) +
+            messaged({ target: "marlow", first, state: "blocked", body: CT.note("Bots may not message each other on this gateway, or not these two. Set on the gateway. Nothing was sent.") + CT.cardFoot("", S.marlowRaw("blocked")) }) +
+            messaged({ target: "marlow", first, state: "not-sent", body: CT.note("You denied the approval. Nothing was sent.") + CT.cardFoot("", S.marlowRaw("not-sent")) }),
+        },
+        {
+          name: "Saved to memory",
+          still: true,
+          html: `<button type="button" class="event-line link-button" data-side="center">Saved to memory: memory/2026-11-17.md</button>`,
+        },
+        {
+          name: "Budget lines",
+          note: "A budget is a warning, and says so: Clawtrate holds back only its own sends.",
+          still: true,
+          html:
+            `<div class="event-line" data-side="center">Otto has used 82% of its weekly budget: 1.64M of 2M tokens.</div>` +
+            `<div class="c-composer-note"><p>Otto has reached its weekly warning budget. This is shown only: other apps, channels and Otto's routines aren't stopped.</p><button type="button" class="button" data-size="sm">Raise budget</button></div>`,
+        },
+        {
+          name: "A provider's limit",
+          still: true,
+          html:
+            `<div class="c-composer-note" data-tone="neutral"><p>OpenAI reports 92% of a weekly limit used, as of 5:40 PM. It doesn't say which of your OpenAI accounts.</p></div>` +
+            `<div class="c-composer-note"><p>OpenAI reports a weekly limit reached, as of 5:40 PM. It resets Nov 20.</p></div>`,
+        },
+        {
+          name: "Every state of the controls pages",
+          note: "Each link opens controls.html in that state, as section 23 of controls.md lists them.",
+          html: `<ul class="c-state-links">${controlStates.map(([q, label]) => `<li><a href="controls.html?${q}">${label}</a></li>`).join("")}</ul>`,
         },
       ],
     },

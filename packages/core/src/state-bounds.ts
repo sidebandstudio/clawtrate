@@ -890,6 +890,7 @@ const routine = object<Routine>()({
   deliveryChannel: NAME,
   nextRunAt: NUMBER,
   lastRunAt: NUMBER,
+  lastEndedAt: NUMBER,
   lastStatus: ENUM,
   lastError: text(MAX_ROUTINE_RUN_TEXT_CHARS),
   runningAt: NUMBER,

@@ -1,8 +1,9 @@
 // Starts the packaged app for the launch check and returns the teardown that
 // quits it and removes everything this run created.
 //
-// The app is the one `pnpm package:mac` or `pnpm package:win` built, never the
-// source tree. It runs
+// The app is the one `pnpm package:mac` or `pnpm package:win` built, or a copy
+// installed from it that `CLAWTRATE_PACKAGED_APP` names, never the source
+// tree. It runs
 // with a temporary data folder (`--user-data-dir`, which also holds its device
 // key and tokens), so it never reads or writes the data folder of a Clawtrate
 // someone uses on this machine; the teardown checks that folder did not change.
@@ -57,8 +58,14 @@ const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
 const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
 
-/** The packaged app for this machine: the macOS bundle for its architecture, or the unpacked Windows folder. */
+/**
+ * The packaged app to check: `CLAWTRATE_PACKAGED_APP` when it names one, such
+ * as the folder the Windows installer installed into, else the one this
+ * machine built: the macOS bundle for its architecture, or the unpacked
+ * Windows folder.
+ */
 export function packagedApp(): string {
+  if (process.env.CLAWTRATE_PACKAGED_APP) return process.env.CLAWTRATE_PACKAGED_APP;
   if (process.platform === "win32") return join(ROOT, "apps/desktop/dist/win-unpacked");
   const folder = process.arch === "arm64" ? "mac-arm64" : "mac";
   return join(ROOT, "apps/desktop/dist", folder, "Clawtrate.app");

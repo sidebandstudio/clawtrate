@@ -13,6 +13,7 @@ import {
   MAX_CALENDAR_RUNS,
   MAX_ROUTINE_RUNS,
   MAX_ROUTINES,
+  MAX_RUN_MESSAGE_CHARS,
   parseRoutine,
   patchOf,
   RETRY_MS,
@@ -250,6 +251,107 @@ describe("F-024: the list stays true when events and reads cross", () => {
     expect(stale[0]!.runningAt).toBeNull();
   });
 
+  it("a finish never brings back a routine removed while it ran, and an older start or finish replaces nothing newer", () => {
+    const listed = [parseRoutine(job({}, { runningAtMs: 20, lastRunAtMs: 10 }))!];
+    const gone = applyCronEvent(listed, { jobId: JOB, action: "removed" });
+    // OpenClaw finishes a run whose job was removed while it ran, with that job's snapshot.
+    expect(
+      applyCronEvent(gone, {
+        jobId: JOB,
+        action: "finished",
+        job: job({}, { lastRunAtMs: 20, lastRunStatus: "ok" }),
+        runAtMs: 20,
+        status: "ok",
+      }),
+    ).toEqual([]);
+    const done = [parseRoutine(job({}, { lastRunAtMs: 30, lastRunStatus: "ok" }))!];
+    expect(
+      applyCronEvent(done, {
+        jobId: JOB,
+        action: "finished",
+        job: job({}, { lastRunAtMs: 20, lastRunStatus: "error" }),
+        runAtMs: 20,
+        status: "error",
+      }),
+    ).toBe(done);
+    const running = [parseRoutine(job({}, { runningAtMs: 40, lastRunAtMs: 30 }))!];
+    expect(
+      applyCronEvent(running, {
+        jobId: JOB,
+        action: "started",
+        job: job({}, { runningAtMs: 35, lastRunAtMs: 30 }),
+        runAtMs: 35,
+      }),
+    ).toBe(running);
+  });
+
+  it("a finish for a routine not listed reads the list again, and a check-in's does not", async () => {
+    let reads = 0;
+    const { routines, state } = engine(
+      {
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => {
+          reads += 1;
+          return { jobs: [], hasMore: false };
+        },
+      },
+      { ...initialRoutinesState, status: "loaded" },
+    );
+    routines.onEvent({ jobId: heartbeat.id, action: "finished", job: heartbeat, runAtMs: 5 });
+    routines.onEvent({ jobId: JOB, action: "finished", job: job(), runAtMs: 5, status: "ok" });
+    expect(state().routines).toEqual([]);
+    await until(() => reads === 1);
+    expect(state().routines).toEqual([]);
+    routines.onClose();
+  });
+
+  it("keeps one list read in flight: a refresh asked for meanwhile reads again after it", async () => {
+    let answer: (value: unknown) => void = () => {};
+    let reads = 0;
+    const { routines } = engine({
+      "cron.status": () => ({ enabled: true }),
+      "cron.list": () => {
+        reads += 1;
+        if (reads === 1) return new Promise((resolve) => (answer = resolve));
+        return { jobs: [], hasMore: false };
+      },
+    });
+    const first = routines.load();
+    await until(() => reads === 1);
+    const second = routines.load();
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(reads).toBe(1);
+    answer({ jobs: [], hasMore: false });
+    await Promise.all([first, second]);
+    expect(reads).toBe(2);
+    routines.onClose();
+  });
+
+  it("does not try again a refusal another try would get: a missing scope, an unknown method, no connection", async () => {
+    vi.useFakeTimers();
+    const refusals = [
+      Object.assign(new Error("missing scope: operator.read"), {
+        details: { code: "MISSING_SCOPE" },
+      }),
+      new Error("unknown method: cron.list"),
+      Object.assign(new Error("not connected"), { name: "NotSentError" }),
+    ];
+    for (const refusal of refusals) {
+      let reads = 0;
+      const { routines, state } = engine({
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => {
+          reads += 1;
+          throw refusal;
+        },
+      });
+      await routines.load();
+      expect(state()).toMatchObject({ status: "error", error: refusal.message });
+      await vi.advanceTimersByTimeAsync(RETRY_MS * 2);
+      expect(reads).toBe(1);
+    }
+  });
+
   it("a dropped finished is found by reading the list again while a routine is marked running", async () => {
     vi.useFakeTimers();
     let running = true;
@@ -303,11 +405,13 @@ describe("F-024: the list stays true when events and reads cross", () => {
     const once = parseRoutine(oneShot())!;
     const start = { ...initialRoutinesState, status: "loaded" as const, routines: [once] };
     const self = engine({}, start);
+    // The gateway clears a consumed one-shot's next run in the snapshot it finishes with.
     self.routines.onEvent({
       jobId: JOB,
       action: "finished",
-      job: oneShot(),
+      job: { ...oneShot(), state: { lastRunAtMs: 7, lastRunStatus: "ok" } },
       status: "ok",
+      completionStatus: "succeeded",
       runAtMs: 7,
     });
     self.routines.onEvent({ jobId: JOB, action: "removed" });
@@ -335,6 +439,19 @@ describe("F-024: the list stays true when events and reads cross", () => {
     });
     cancelled.routines.onEvent({ jobId: JOB, action: "removed" });
     expect(cancelled.state().removed).toMatchObject({ ranOnce: false });
+    // Run now before its time succeeds and keeps the schedule; a deletion after it is someone's.
+    const forced = engine({}, start);
+    forced.routines.onEvent({
+      jobId: JOB,
+      action: "finished",
+      job: oneShot(),
+      status: "ok",
+      completionStatus: "succeeded",
+      runAtMs: 7,
+      nextRunAtMs: 1_795_093_200_000,
+    });
+    forced.routines.onEvent({ jobId: JOB, action: "removed" });
+    expect(forced.state().removed).toEqual({ id: JOB, ranOnce: false, runAt: 7 });
   });
 });
 
@@ -513,6 +630,24 @@ describe("F-193: a run's conversation", () => {
     expect(conversation.status === "kept" && conversation.items[0]!.blocks).toEqual([
       { kind: "text", text: "Three notes from yesterday." },
     ]);
+  });
+
+  it("returns a long recorded instruction with the gateway's footer whole, and says when one is cut", async () => {
+    const footer =
+      "\n\nThis is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have.";
+    const long = `${"a".repeat(4_096)}${footer}`;
+    const { routines } = engine({ "cron.history": () => recorded(long) });
+    expect(await routines.conversation(JOB, RUN)).toMatchObject({
+      status: "kept",
+      message: long,
+      messageCut: false,
+    });
+    const huge = engine({
+      "cron.history": () => recorded("b".repeat(MAX_RUN_MESSAGE_CHARS + 10)),
+    });
+    const cut = await huge.routines.conversation(JOB, RUN);
+    expect(cut).toMatchObject({ status: "kept", messageCut: true });
+    expect(cut.status === "kept" && cut.message.length).toBeLessThanOrEqual(MAX_RUN_MESSAGE_CHARS);
   });
 
   it("is not kept without positive evidence: another run's session, no scheduler row, or a refusal", async () => {

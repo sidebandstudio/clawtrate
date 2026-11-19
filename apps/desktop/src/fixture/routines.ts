@@ -114,6 +114,7 @@ const base = (over: Partial<Routine> & Pick<Routine, "id" | "botId" | "name">): 
   deliveryChannel: null,
   nextRunAt: null,
   lastRunAt: null,
+  lastEndedAt: null,
   lastStatus: null,
   lastError: null,
   runningAt: null,
@@ -400,6 +401,7 @@ function conversation(routine: Routine, runs: RoutineRun[], runId: string): RunC
   return {
     status: "kept",
     message: `${routine.text}\nCurrent time: Monday, November 16th, 2026 - 8:00 AM (America/New_York)\n\nThis is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have.`,
+    messageCut: false,
     items: [
       {
         id: "convo-1",

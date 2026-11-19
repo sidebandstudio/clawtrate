@@ -245,6 +245,25 @@ test.describe("1440", () => {
     await expect(when).toHaveText("Marlow · Today 8:00 AM");
   });
 
+  test("F-193: a routine's row stays for a day from when its latest run finished, not from when it started", async ({
+    page,
+  }) => {
+    await openFixture(page, ROUTINES, "light");
+    const hour = 3_600_000;
+    const ran = (startedAgo: number, endedAgo: number) =>
+      change(
+        page,
+        `(store) => ({ ...store, routines: store.routines.map((each) =>
+          each.id === "routine-digest"
+            ? { ...each, lastRunAt: Date.now() - ${startedAgo}, lastEndedAt: Date.now() - ${endedAgo} }
+            : each) })`,
+      );
+    await ran(25 * hour, 23 * hour);
+    await expect(rail(page, "Marlow")).toHaveCount(1);
+    await ran(26 * hour, 25 * hour);
+    await expect(rail(page, "Marlow")).toHaveCount(0);
+  });
+
   test("F-193: a running row opens the routine with its run in progress", async ({ page }) => {
     await openFixture(page, "scene=main&routines=running", "light");
     await rail(page, "Marlow").click();
@@ -323,21 +342,21 @@ test.describe("1440", () => {
     await view(page).getByRole("radio", { name: "Week" }).click();
     const range = page.getByTestId("calendar-range");
     expect(await dayHeads(page)).toHaveLength(7);
-    expect((await dayHeads(page))[0]).toBe("TodayNov 16");
+    expect((await dayHeads(page))[0]).toBe("Today Nov 16");
     await expect(range).toHaveText("Today Nov 16 to Sun Nov 22");
     await expect(range).toHaveRole("status");
     const next = page.getByRole("button", { name: "Next 7 days" });
     await next.click();
-    expect((await dayHeads(page))[0]).toBe("MonNov 23");
+    expect((await dayHeads(page))[0]).toBe("Mon Nov 23");
     await expect(next).toBeFocused();
     const previous = page.getByRole("button", { name: "Previous 7 days" });
     await previous.click();
     await previous.click();
-    expect((await dayHeads(page))[0]).toBe("MonNov 9");
+    expect((await dayHeads(page))[0]).toBe("Mon Nov 9");
     await expect(previous).toBeFocused();
     const today = page.getByRole("button", { name: "Today" });
     await today.click();
-    expect((await dayHeads(page))[0]).toBe("TodayNov 16");
+    expect((await dayHeads(page))[0]).toBe("Today Nov 16");
     await expect(today).toBeFocused();
     await view(page).getByRole("radio", { name: "3 days" }).click();
     expect(await dayHeads(page)).toHaveLength(3);
@@ -366,7 +385,7 @@ test.describe("1440", () => {
     const group = page.getByRole("group", { name: "Routines by day" });
     const days = group.getByRole("list");
     await expect(days).toHaveCount(7);
-    await expect(days.first()).toHaveAccessibleName("Mon Nov 16");
+    await expect(days.first()).toHaveAccessibleName("Today Nov 16");
     // A frequent routine is a band each day, named with its date, and its recorded runs stay chips.
     await expect(page.locator(".r-cal-band", { hasText: "Disk space watch" })).toHaveCount(7);
     await expect(
@@ -389,6 +408,56 @@ test.describe("1440", () => {
     await expect(
       page.locator(".r-occ:not([data-past])", { hasText: "Morning digest" }),
     ).toHaveCount(4);
+  });
+
+  test("F-197: a frequent routine's band is only on the coming days it runs, and chips under an hour apart sit side by side", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByRole("radio", { name: "Week" }).click();
+    await change(
+      page,
+      `(routines) => {
+          const base = routines.routines.find((each) => each.id === "routine-digest");
+          const tue = (hour, minute) => Date.UTC(2026, 10, 17, hour + 5, minute);
+          const make = (id, name, expr, next) => ({ ...base, id, name, nextRunAt: next,
+            schedule: { ...base.schedule, kind: "cron", expr, tz: "America/New_York" } });
+          return { ...routines, routines: [...routines.routines,
+            make("sweep", "Inbox sweep", "0 8-12 * * 1-5", tue(8, 0)),
+            make("standup", "Standup notes", "0,30 9 * * *", tue(9, 0)),
+            make("ten", "Ten o'clock check", "0 10 * * *", tue(10, 0))] };
+        }`,
+    );
+    // Hourly from 8 AM to noon on weekdays: nothing is left of it today at 5:40 PM, and none at the weekend.
+    const sweep = page.locator(".r-cal-band", { hasText: "Inbox sweep" });
+    await expect(sweep).toHaveCount(4);
+    await expect(page.getByRole("button", { name: /Inbox sweep, Sat Nov 21$/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "Previous 7 days" }).click();
+    await expect(sweep).toHaveCount(0);
+    await page.getByRole("button", { name: "Today" }).click();
+    const chips = [
+      "Standup notes, Marlow, Tue Nov 17 9:00 AM",
+      "Standup notes, Marlow, Tue Nov 17 9:30 AM",
+      "Ten o'clock check, Marlow, Tue Nov 17 10:00 AM",
+    ].map((name) => page.getByRole("button", { name, exact: true }));
+    const boxes = await Promise.all(chips.map((chip) => chip.boundingBox()));
+    for (const [i, a] of boxes.entries())
+      for (const b of boxes.slice(i + 1))
+        expect(
+          a!.x < b!.x + b!.width &&
+            b!.x < a!.x + a!.width &&
+            a!.y < b!.y + b!.height &&
+            b!.y < a!.y + a!.height,
+        ).toBe(false);
+    // A day with only a band is not announced as empty; one with nothing is.
+    await change(
+      page,
+      `(routines) => ({ ...routines, routines: routines.routines.filter((each) => each.id === "sweep") })`,
+    );
+    const days = page.getByRole("group", { name: "Routines by day" }).getByRole("list");
+    await expect(days.nth(3)).toHaveAccessibleName("Thu Nov 19");
+    await expect(days.nth(3)).toHaveAccessibleDescription("");
+    await expect(days.nth(5)).toHaveAccessibleDescription("Nothing scheduled");
   });
 
   test("F-197: a failed read of the days' runs says so with Try again, and a partial one says so", async ({

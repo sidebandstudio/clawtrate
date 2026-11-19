@@ -163,9 +163,19 @@
       html = `<div aria-busy="true" aria-label="Loading settings"><div class="skeleton" style="height:42px;width:100%;margin-top:18px"></div><div class="skeleton" style="height:96px;width:100%"></div><div class="skeleton" style="height:52px;width:100%"></div></div>`;
     else if (S.state === "error")
       html = `<div class="work-empty"><span class="empty-mark">${icon("warning")}</span><h4>Couldn't load ${esc(botName(id))}'s settings</h4><p>The gateway did not answer.</p><div style="margin-top:10px">${button("Try again", 'data-bs="reload" data-size="sm"')}</div></div>`;
-    else html = S.view === "account" ? accountView(id) : S.view === "change" ? changeView(id) : (CT.botsT3View && S.view === "t3" ? CT.botsT3View(id) : mainView(id));
+    else
+      html =
+        S.view === "account"
+          ? accountView(id)
+          : S.view === "change"
+            ? changeView(id)
+            : CT.botsPageViews?.[S.view]
+              ? CT.botsPageViews[S.view](id)
+              : CT.botsT3View && S.view === "t3"
+                ? CT.botsT3View(id)
+                : mainView(id);
     const paint = () => {
-      panel.innerHTML = html + (isAdmin() || S.state !== "ready" ? "" : `<div class="b-panel-foot">${adminBar(`Changing ${esc(botName(id))}'s settings needs admin access.`)}</div>`);
+      panel.innerHTML = html + (isAdmin() || S.state !== "ready" ? "" : `<div class="b-panel-foot">${adminBar(CT.botsPageNeeds?.[S.view]?.(esc(botName(id))) || `Changing ${esc(botName(id))}'s settings needs admin access.`)}</div>`);
       CT.hydrate(panel);
     };
     // A re-render keeps focus where it was; a change of page moves it on purpose:
@@ -190,6 +200,7 @@
     const tools = listed.map(([label, tool]) => row(`<span title="${tool}">${label}</span>`, (b.deny || []).includes(tool) ? "Denied" : "Allowed")).join("");
     const lastTask = bot.tasks.find((t) => !t.fresh);
     return (
+      (CT.botsSettingsLead ? CT.botsSettingsLead(id) : "") +
       `<h3 class="b-tabgroup">About</h3><dl class="facts">` +
       row("Description", `<span class="b-faint">None</span>`) +
       row("Instructions", "From AGENTS.md, 42 lines") +
@@ -209,7 +220,8 @@
       (b.served ? note(`<p>The gateway tried another ${esc(providerName(provider))} account in ${name}'s last run with a notice. See Account.</p>`, "warn") : "") +
       (b.failed ? note(`<p>${b.failed}</p>`, "danger") : "") +
       `<h3 class="b-tabgroup">Tools</h3><dl class="facts">` +
-      row("Permissions", "Ask before running commands") +
+      // controls.html fills the Tools group's first rows (docs/design/controls.md, section 4).
+      (CT.botsToolsRows ? CT.botsToolsRows(id) : row("Permissions", "Ask before running commands")) +
       `</dl>` +
       (tools
         ? `<h4 class="b-group">From xAI</h4><dl class="facts">${tools}</dl>` +
@@ -218,7 +230,8 @@
           ? `<p class="b-hint">Tools that come with a provider appear here after ${name}'s first task.</p>`
           : "") +
       (CT.botsT3Row ? CT.botsT3Row(id) : "") +
-      `<h3 class="b-tabgroup">Runs on</h3><dl class="facts">${row("Machine", "Gateway host")}</dl>`
+      (CT.botsExtraGroups ? CT.botsExtraGroups(id) : "") +
+      `<h3 class="b-tabgroup">Runs on</h3><dl class="facts">${CT.botsRunsOn ? CT.botsRunsOn(id) : row("Machine", "Gateway host")}</dl>`
     );
   }
 
@@ -518,7 +531,7 @@
     if (raw) return;
     const action = t.closest("[data-bs]")?.dataset.bs;
     if (!action) return;
-    if (action === "main" || action === "account" || action === "change" || action === "t3") {
+    if (action === "main" || action === "account" || action === "change" || action === "t3" || CT.botsPageViews?.[action]) {
       if (S.view === "main" && action !== "main") S.from = action;
       if (action === "change") {
         S.pick = null;
