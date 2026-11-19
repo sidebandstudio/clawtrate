@@ -92,6 +92,8 @@ const ALLOWED: Record<string, string> = {
     "static, an empty list copied on write",
   "packages/core/src/task-models.ts:emptyTaskModel.models": "static, an empty list copied on write",
   "packages/core/src/task-models.ts:emptyTaskModel.events": "static, an empty list copied on write",
+  "packages/core/src/task-models.ts:<anonymous>>lines":
+    "one save's lines, at most two, merged into the view's bounded events when it ends",
   "packages/core/src/task-models.ts:emptyTaskModel.requested":
     "static, an empty list copied on write",
   // Values that go into the bounded state, captured only by an update that runs at once.
