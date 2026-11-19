@@ -10,6 +10,7 @@
 // four-line count (`#count`), neither of which any other check saves a rule for.
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -200,6 +201,16 @@ async function pendingRequest(key: string): Promise<void> {
   await expect(approvalCard(page)).toHaveCount(1, { timeout: 30_000 });
 }
 
+/** Every warning a request record carries, as the gateway words them: its warning text, then its analysis. */
+function gatewayWarnings(request: Record<string, unknown>): string[] {
+  const analysis = request.commandAnalysis as { warningLines?: unknown[] } | null | undefined;
+  const lines = [
+    ...String(request.warningText ?? "").split("\n"),
+    ...(analysis?.warningLines ?? []).map(String),
+  ];
+  return [...new Set(lines.map((line) => line.trim()).filter((line) => line !== ""))];
+}
+
 async function shot(target: Page | ReturnType<Page["locator"]>, name: string): Promise<void> {
   if (!SHOTS) return;
   await target.screenshot({ path: join(SHOTS, `real-${name}.png`) });
@@ -251,17 +262,23 @@ test.afterAll(async () => {
 const approvalCard = (on: Page) => on.getByTestId("approval-card");
 const transcript = (on: Page) => on.getByTestId("transcript");
 
-test("F-171 F-164 F-432: a command the gateway warns about: the warning on the card, the full request with the exact command to copy and why the gateway asked, then its output while it streams", async () => {
+test("F-171 F-164 F-432: a command the gateway warns about: its warnings on the card in its words, the full request with the exact command to copy and the host's policy as policy, then its output while it streams", async () => {
   test.setTimeout(300_000);
   const { title, key } = await hostTask("otto", "Count", "#count");
   await openTask(page, "Otto", title);
   const card = approvalCard(page);
   await pendingRequest(key);
-  // The gateway's own warning, from its analysis of the command, on a line of its own.
+  // Every warning the gateway attached to the request, in its words, each on a line of its own
+  // with the warning mark, and none of Clawtrate's own.
   const command = SHELL_COMMANDS.count;
+  const pending = await (
+    await adminClient()
+  ).request<Array<{ id: string; request: Record<string, unknown> }>>("exec.approval.list", {});
+  const request = pending.find((each) => each.request.sessionKey === key)!.request;
   const warnings = card.locator(".request-warnings li");
-  await expect(warnings).toHaveText(["Contains inline-eval: perl -e"]);
-  await expect(warnings.first().locator("svg")).toHaveCount(1);
+  await expect(warnings).toHaveText(gatewayWarnings(request));
+  expect(gatewayWarnings(request)).toContain("Contains inline-eval: perl -e");
+  for (const line of await warnings.all()) await expect(line.locator("svg")).toHaveCount(1);
   await shot(card, "approval-warning");
 
   // The full request: the exact command in mono, its copy button, why the gateway asked.
@@ -271,24 +288,16 @@ test("F-171 F-164 F-432: a command the gateway warns about: the warning on the c
   await expect(full.locator(".command-line code")).toHaveText(command);
   await full.getByRole("button", { name: "Copy command" }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(command);
+  // The host's policy, from the request's own fields, as policy: the gateway records no cause.
+  expect([request.host, request.security, request.ask]).toEqual([
+    "gateway",
+    "allowlist",
+    "on-miss",
+  ]);
   await expect(full.locator(".request-why")).toHaveText(
-    "The gateway asked because this command is not on the gateway's allowlist. Manage settings",
+    "The gateway's machine asks before commands that are not on its allowlist.",
   );
-  // The request itself says so: the policy for Otto there asks on a miss of its allowlist.
-  const pending = await (
-    await adminClient()
-  ).request<Array<{ id: string; request: Record<string, unknown> }>>("exec.approval.list", {});
-  const request = pending.find((each) => each.request.sessionKey === key)!.request;
-  expect([request.security, request.ask]).toEqual(["allowlist", "on-miss"]);
-  // Manage settings opens Settings on Permissions; closing it puts focus back on the link.
-  const manage = full.getByRole("button", { name: "Manage settings" });
-  await manage.click();
-  const settings = page.getByRole("dialog", { name: "Settings" });
-  await expect(settings.getByRole("heading", { name: "Permissions" })).toBeVisible();
-  await expect(settings.getByTestId("permissions")).toContainText("needs admin access");
-  await page.keyboard.press("Escape");
-  await expect(settings).toHaveCount(0);
-  await expect(manage).toBeFocused();
+  await expect(full.getByRole("button", { name: "Manage settings" })).toHaveCount(0);
   await shot(card, "approval-full-request");
   await full.locator("summary").click();
   await expect(full.locator("summary")).toHaveText(/Show full request/);
@@ -328,10 +337,16 @@ test("F-325: Allow once runs the command exactly once and saves no rule; the sam
   await card.getByRole("button", { name: "Allow once" }).click();
   await expect(card.locator(".tag")).toHaveText("Allowed once", { timeout: 30_000 });
   await card.locator("summary").first().click();
+  // What was answered and by whom, as the gateway recorded it; what became of the command only
+  // from the call's own result, and no forecast.
   await expect(card.locator(".request-resolved-body > p").first()).toHaveText(
-    "Allowed once. The command can run now. Otto will ask again next time.",
+    /^Allowed once( by .+)? at \d+:\d\d [AP]M\.$/,
   );
+  await expect(card).not.toContainText(/can run now|will ask again|next time/);
   await expect(transcript(page)).toContainText("The slow command finished.", { timeout: 60_000 });
+  await expect(card.getByTestId("approval-then")).toHaveText(
+    "The command ran. Its result is on its card above.",
+  );
   // It ran exactly once: one call, one result, the command's own.
   const rows = await historyOf(first.key);
   const calls = rows.flatMap((row) =>
@@ -504,12 +519,38 @@ test("F-112: a question record outside the ordinary subset is shown readable, wi
   await expect(card).not.toHaveAttribute("data-state", "unanswerable", { timeout: 30_000 });
 });
 
-test("F-169: a message sent while an approval is pending joins the run and leaves the card pending; Stop cancels the run, and the card closes as Cancelled once the gateway says so", async () => {
+test("F-169: a message sent while an approval is pending is accepted as a steer into the run and leaves the card pending; Stop aborts that run, and the card closes as Cancelled once the gateway cancels that run's request", async () => {
   test.setTimeout(300_000);
   const { title, key } = await hostTask("otto", "Steer and stop", "#sleep 9");
+  const op = await adminClient();
+  await op.request("sessions.messages.subscribe", { key });
+  const from = op.lastSeq;
   await openTask(page, "Otto", title);
   const card = approvalCard(page);
   await pendingRequest(key);
+  const asked = (
+    await op.request<Array<{ id: string; request: { sessionKey?: string; runId?: string } }>>(
+      "exec.approval.list",
+      {},
+    )
+  ).find((each) => each.request.sessionKey === key)!;
+  const runId = asked.request.runId!;
+  expect(runId).toBeTruthy();
+  const lifecycle = (phase: string) =>
+    op.events.filter((event) => {
+      const payload = event.payload as {
+        stream?: string;
+        runId?: string;
+        data?: { phase?: string };
+      };
+      return (
+        event.seq > from &&
+        event.event === "agent" &&
+        payload.stream === "lifecycle" &&
+        payload.data?.phase === phase &&
+        (payload as { sessionKey?: string }).sessionKey === key
+      );
+    });
   const composer = page.getByTestId("composer-input");
   await composer.fill("Keep going once you can.");
   await page.keyboard.press("Enter");
@@ -524,23 +565,43 @@ test("F-169: a message sent while an approval is pending joins the run and leave
     ).find((each) => each.request.sessionKey === key)?.id ?? null;
   const id = await listed();
   expect(id).not.toBeNull();
-  // Stop: the card closes only when the gateway has cancelled the request.
+  // The steer was accepted into the run that asked: the gateway started no run of its own for it.
+  expect(
+    new Set(lifecycle("start").map((event) => (event.payload as { runId?: string }).runId)),
+  ).toEqual(new Set([runId]));
+  // Stop: the abort names that run, and the card closes only when the gateway has cancelled
+  // that same run's request.
   await page.getByRole("button", { name: "Stop Otto" }).click();
   await expect(card.locator(".tag")).toHaveText("Cancelled", { timeout: 60_000 });
+  const ended = lifecycle("end").concat(lifecycle("error"));
+  expect(ended.map((event) => (event.payload as { runId?: string }).runId)).toEqual([runId]);
+  expect((ended[0]!.payload as { data?: { aborted?: boolean } }).data?.aborted).toBe(true);
   await card.locator("summary").first().click();
   await expect(card.locator(".request-resolved-body > p").first()).toHaveText(
-    "You stopped the run before answering. The command was not run.",
+    /^The gateway cancelled it at \d+:\d\d [AP]M, when its run was stopped\.$/,
   );
-  const snapshot = await (
-    await adminClient()
-  ).request<{ approval?: { status?: string } }>("approval.get", { id });
-  expect(snapshot.approval?.status ?? (snapshot as { status?: string }).status).toBe("cancelled");
+  await expect(card).not.toContainText(/can run now|was not run|You stopped/);
+  // The request the gateway cancelled is the one it listed for that run (its snapshot names
+  // the session, not the run).
+  expect(id).toBe(asked.id);
+  const snapshot = await op.request<Record<string, unknown>>("approval.get", { id });
+  const record = (snapshot.approval ?? snapshot) as {
+    status?: string;
+    reason?: string;
+    source?: { sessionKey?: string };
+  };
+  expect([record.status, record.reason, record.source?.sessionKey]).toEqual([
+    "cancelled",
+    "run-aborted",
+    key,
+  ]);
   await expect.poll(listed).toBeNull();
-  // The stop note's Raw holds the run's own events: its end, aborted, among them.
+  // The stop note's Raw holds the frame that ended the run, as the engine took it: the chat's
+  // abort or the lifecycle end, whichever came first.
   const note = page.getByTestId("stop-note").last();
   await note.getByRole("button", { name: "Raw" }).click();
   await expect(note.getByRole("region", { name: "What the gateway sent" })).toContainText(
-    "(agent (lifecycle end))",
+    /The event, as the gateway sent it \((agent \(lifecycle end\)|chat \(aborted\))\)/,
   );
 });
 
@@ -562,6 +623,18 @@ test("F-094: a failed turn's card, its run line and a line the gateway wrote its
   await expect(raw(line)).toContainText("(agent (lifecycle start))");
   await expect(raw(line)).toContainText(key);
   await shot(page.getByTestId("transcript"), "raw-run-line");
+  // Read anew from history once the page reloads: the run line shows the history row its end
+  // was read from, said to be that, and no event this host did not receive again.
+  await page.reload();
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+  await openTask(page, "Pip", title);
+  const reread = page.getByTestId("run-line").last();
+  await reread.locator("summary").click();
+  await reread.getByRole("button", { name: "Raw" }).click();
+  await expect(raw(reread)).toContainText(
+    "The row its end was read from, as the gateway's history keeps it (chat.history)",
+  );
+  await expect(raw(reread)).not.toContainText("(agent (lifecycle");
   // The gateway's own boundary row after a reset is a line of its own, with that row in Raw.
   await (await adminClient()).request("sessions.reset", { key });
   await page.reload();
@@ -572,4 +645,238 @@ test("F-094: a failed turn's card, its run line and a line the gateway wrote its
   await system.getByRole("button", { name: "Raw" }).click();
   await expect(raw(system)).toContainText("The history row, as the gateway sent it (chat.history)");
   await expect(raw(system)).toContainText('"reset"');
+});
+
+/**
+ * Admin access for a page's device: only an admin connection sees a request another client
+ * registered (`exec.approval.request`), as these last checks do. Asked once per device, after
+ * every check that relies on the approvals tier alone.
+ */
+async function adminAccess(on: Page): Promise<void> {
+  await on.evaluate(() => {
+    const socket = new WebSocket(`ws://${location.host}/bridge`);
+    (window as unknown as { adminSocket?: WebSocket }).adminSocket = socket;
+    socket.onmessage = (event) => {
+      if ((JSON.parse(String(event.data)) as { type: string }).type === "hello")
+        socket.send(
+          JSON.stringify({
+            type: "command",
+            id: "admin",
+            command: { type: "requestAccess", tier: "admin" },
+          }),
+        );
+    };
+  });
+  await expect
+    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
+    .toMatch(/^Approved /m);
+  await on.keyboard.press("ControlOrMeta+,");
+  const dialog = on.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("button", { name: "Gateway", exact: true }).click();
+  await expect(dialog.getByTestId("granted-scopes")).toContainText("operator.admin", {
+    timeout: 30_000,
+  });
+  await on.keyboard.press("Escape");
+  await on.evaluate(() => (window as unknown as { adminSocket?: WebSocket }).adminSocket?.close());
+}
+let pageIsAdmin = false;
+
+/** A `#slow` run started by the admin client in a task, followed by its events; its run id. */
+async function slowRun(key: string, seconds: number): Promise<string> {
+  const op = await adminClient();
+  await op.request("sessions.messages.subscribe", { key });
+  const runId = randomUUID();
+  await op.request("chat.send", {
+    sessionKey: key,
+    message: `#slow ${seconds}`,
+    idempotencyKey: runId,
+  });
+  await op.waitFor("the slow run's start", (event) => isLifecycle(event, runId, "start"), 60_000);
+  return runId;
+}
+
+function isLifecycle(event: { event: string; payload: unknown }, runId: string, phase: string) {
+  const payload = event.payload as { stream?: string; runId?: string; data?: { phase?: string } };
+  return (
+    event.event === "agent" &&
+    payload.stream === "lifecycle" &&
+    payload.runId === runId &&
+    payload.data?.phase === phase
+  );
+}
+
+/** A request the gateway registers and analyses itself, bound to a run; it starts no program. */
+async function registerRequest(
+  key: string,
+  runId: string,
+  command: string,
+  extra: Record<string, unknown> = {},
+): Promise<string> {
+  const registered = await (
+    await adminClient()
+  ).request<{ id: string }>("exec.approval.request", {
+    command,
+    host: "gateway",
+    sessionKey: key,
+    agentId: "otto",
+    runId,
+    timeoutMs: 120_000,
+    twoPhase: true,
+    security: "allowlist",
+    ask: "on-miss",
+    ...extra,
+  });
+  return registered.id;
+}
+
+/** The gateway's record of a request: its status, decision and who decided. */
+async function approvalRecord(id: string): Promise<Record<string, unknown>> {
+  const answer = await (
+    await adminClient()
+  ).request<Record<string, unknown>>("approval.get", {
+    id,
+  });
+  return (answer.approval ?? answer) as Record<string, unknown>;
+}
+
+const clockPattern = String.raw`\d+:\d\d [AP]M`;
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+test("F-418: a run that ends while its approval is pending: the card says so and stays answerable; it closes only with the gateway's own outcome and who decided, the same after a reload and on another device, and Clawtrate answers nothing", async ({
+  browser,
+}) => {
+  test.setTimeout(420_000);
+  if (!pageIsAdmin) await adminAccess(page);
+  pageIsAdmin = true;
+  const { title, key } = await hostTask("otto", "Run end", "reply with a note");
+  await openTask(page, "Otto", title);
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
+  const runId = await slowRun(key, 14);
+  const id = await registerRequest(key, runId, "sleep 2");
+  const card = approvalCard(page);
+  await expect(card).toHaveAttribute("data-state", "pending", { timeout: 30_000 });
+  await expect(card.locator(".request-ended")).toHaveCount(0);
+  // The run ends on its own; the gateway still holds the request.
+  await (
+    await adminClient()
+  ).waitFor("the run's end", (event) => isLifecycle(event, runId, "end"), 60_000);
+  await expect(card.locator(".request-ended")).toHaveText(
+    "Otto's run has ended. This request is still open, and you can still answer it.",
+    { timeout: 30_000 },
+  );
+  for (const name of ["Allow once", "Deny"])
+    await expect(card.getByRole("button", { name, exact: true })).toBeVisible();
+  expect((await approvalRecord(id)).status).toBe("pending");
+  await shot(card, "approval-run-ended");
+
+  // Another device opens the task while the gateway holds the request: the same.
+  const other = await pairedPage(browser, await startOwnHost());
+  try {
+    await requestAccess(other);
+    await adminAccess(other);
+    await openTask(other, "Otto", title);
+    await expect(approvalCard(other)).toHaveAttribute("data-state", "pending", { timeout: 30_000 });
+
+    // Decided by another client: both devices close the card with the gateway's own outcome
+    // and the decider the gateway names, and nothing of Clawtrate's is sent.
+    await (await adminClient()).request("exec.approval.resolve", { id, decision: "deny" });
+    const settled = await approvalRecord(id);
+    expect([settled.status, settled.decision]).toEqual(["denied", "deny"]);
+    const decider =
+      (settled.resolvedBy as string | undefined) ??
+      ((settled.resolver as { id?: string } | undefined)?.id as string | undefined);
+    const sentence = new RegExp(
+      `^Denied${decider ? ` by ${escaped(decider)}` : ""} at ${clockPattern}\\.$`,
+    );
+    for (const on of [page, other]) {
+      const settledCard = approvalCard(on);
+      await expect(settledCard.locator(".tag")).toHaveText("Denied", { timeout: 30_000 });
+      await settledCard.locator("summary").first().click();
+      await expect(settledCard.locator(".request-resolved-body > p").first()).toHaveText(sentence);
+    }
+    // The same once the page reloads and the task is read again.
+    await page.reload();
+    await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+    await openTask(page, "Otto", title);
+    await expect(approvalCard(page).locator(".tag")).toHaveText("Denied", { timeout: 30_000 });
+    await approvalCard(page).locator("summary").first().click();
+    await expect(approvalCard(page).locator(".request-resolved-body > p").first()).toHaveText(
+      sentence,
+    );
+  } finally {
+    await other.context().close();
+  }
+});
+
+test("F-171: every kind of warning the gateway's analysis attaches reaches the card in its words, with the warning mark, and a request's warning text before them", async () => {
+  test.setTimeout(420_000);
+  if (!pageIsAdmin) await adminAccess(page);
+  pageIsAdmin = true;
+  const { title, key } = await hostTask("otto", "Warnings", "reply with a note");
+  await openTask(page, "Otto", title);
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
+  const runId = await slowRun(key, 90);
+  // One command for each kind OpenClaw 2026.10.6's analysis can find in a gateway request.
+  const commands: Array<[string, string, Record<string, unknown>?]> = [
+    ["inline-eval", "python3 -c 'print(1)'"],
+    ["shell-wrapper", "bash -c 'ls'"],
+    ["command-carrier", "sudo ls"],
+    ["dynamic-argument", "ls $HOME"],
+    ["eval", "eval ls"],
+    ["source", "source ./env.sh"],
+    ["alias", "alias ll=ls"],
+    ["shell-wrapper-through-carrier", "env bash -c 'ls'"],
+    ["line-continuation", "ls \\\n -la"],
+    ["function-definition", "f() { ls; }"],
+    ["command-substitution", "echo $(date)"],
+    ["process-substitution", "diff <(ls a) <(ls b)"],
+    ["here-string", "cat <<< hi"],
+    ["redirect", "ls > out.txt"],
+    ["syntax-error", "ls ("],
+    ["dynamic-executable", "$CMD ls"],
+    [
+      "heredoc",
+      "cat <<EOF\nhi\nEOF",
+      {
+        warningText:
+          "Warning: heredoc execution requires reviewer or explicit approval in allowlist mode.",
+      },
+    ],
+  ];
+  const ids: string[] = [];
+  try {
+    for (const [kind, command, extra] of commands) {
+      const id = await registerRequest(key, runId, command, extra);
+      ids.push(id);
+      // One pending at a time: each is settled once checked, under the task's pending bound.
+      const pendingCards = page.locator("[data-testid='approval-card'][data-state='pending']");
+      await expect(pendingCards).toHaveCount(1, { timeout: 30_000 });
+      const listed = (
+        await (
+          await adminClient()
+        ).request<Array<{ id: string; request: Record<string, unknown> }>>("exec.approval.list", {})
+      ).find((each) => each.id === id)!;
+      const expected = gatewayWarnings(listed.request);
+      // The gateway found the kind, and says so in its own words.
+      expect(
+        (listed.request.commandAnalysis as { riskKinds?: string[] }).riskKinds,
+        kind,
+      ).toContain(kind);
+      const card = pendingCards.first();
+      const lines = card.locator(".request-warnings li");
+      await expect(lines, kind).toHaveText(expected);
+      for (const line of await lines.all()) await expect(line.locator("svg")).toHaveCount(1);
+      if (extra?.warningText) {
+        expect(expected[0]).toBe(extra.warningText);
+        await shot(card, "approval-warning-text");
+      }
+      await (await adminClient()).request("exec.approval.resolve", { id, decision: "deny" });
+      await expect(pendingCards).toHaveCount(0, { timeout: 30_000 });
+    }
+  } finally {
+    const op = await adminClient();
+    for (const id of ids)
+      await op.request("exec.approval.resolve", { id, decision: "deny" }).catch(() => undefined);
+    await op.request("chat.abort", { sessionKey: key, runId }).catch(() => undefined);
+  }
 });
