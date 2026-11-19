@@ -39,9 +39,20 @@ macOS, notarizing, which runs only when signing is on, one of:
 - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`;
 - `APPLE_KEYCHAIN_PROFILE` (a `notarytool store-credentials` profile), optionally with `APPLE_KEYCHAIN`.
 
-Signing turns on the hardened runtime with electron-builder's default entitlements.
+Signing turns on the hardened runtime with electron-builder's default entitlements. Notarizing runs only with one complete set; a partial set (an `APPLE_ID` without its password, say), or notarizing credentials without a signing identity, stops `pnpm package:mac` before it builds, naming the variables and never their values.
 
 Windows: `WIN_CSC_LINK` (a `.pfx` file's path, or its base64) and `WIN_CSC_KEY_PASSWORD`. `CSC_LINK` and `CSC_KEY_PASSWORD` also work when the build runs on Windows.
+
+Every build prints one line saying which signing it does, such as `Signing: none. The macOS app is signed ad hoc and not notarized.`, and a macOS build then reads each app's signature back with `codesign --display` and prints `ad hoc` or `certificate`. It fails if that is not what the variables asked for: electron-builder skips signing in a pull request's CI run even with an identity set.
+
+## The update feed
+
+Nothing in the app reads a feed yet; the update screens are later work. The build fixes two things for them:
+
+- `CLAWTRATE_UPDATE_FEED_URL`: the feed's `https` address, written into the main process when it is built. Without it the build has no feed and makes no update request. The packaged app cannot change it.
+- `SOURCE_DATE_EPOCH`: the build's own release date, in seconds; the time of the build without it. "Update required" counts 14 days from this date.
+
+After packaging, `node packaging/feed.ts <https address of the folder>` in `apps/desktop` writes `dist/update-feed.json`, naming each artifact of this version in `dist` with its size and SHA-512. Run it with the build's `SOURCE_DATE_EPOCH`. It uploads nothing: publish the feed at the build's address and the files in that folder, on the same host, served directly, since the app follows no redirect. [docs/decisions.md](../decisions.md#updates-and-release-signing) has the format and what is checked before an install.
 
 ## Opening an unsigned build
 
