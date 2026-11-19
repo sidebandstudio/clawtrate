@@ -11,8 +11,8 @@ Five facts from the research shape the design:
 - **The catalog is ClawHub's.** Categories, Recommended, search and everything that can be added come from ClawHub, fetched by the gateway. When the gateway cannot reach it, the catalog shows only what is already on the gateway, and a full-catalog request takes about 14 seconds to say so (R§2).
 - **Adding a connector installs code on the gateway's machine.** It downloads a package, installs its dependencies there and runs it inside the gateway, without a restart. It needs admin, and it can stop first to ask for a review of what the plugin may do (R§3).
 - **A tool server's tools are known only after a bot's next run.** A save is confirmed by reading the gateway's settings back; whether the server answers shows up in that run's tool list (R§5).
-- **A sign-in needs admin and a connection that comes from a browser.** Clawtrate's connection today does not qualify, so the page gives the gateway's own command instead; where a connection does qualify, the gateway runs the whole sign-in, waits 10 minutes and keeps the tokens (R§7).
-- **What the gateway keeps is kept in plain text.** A header's value goes into the gateway's settings file and a sign-in's tokens into its state database, and a removed server's sign-in stays there (R§6).
+- **A sign-in from a page needs admin and a connection that comes from a browser.** Clawtrate does not present its connection as a browser, so the desktop app gives the gateway's own command-line sign-in in full; the web preview, which is a browser, shows the browser sign-in when the gateway gives it one, and then the gateway runs the whole sign-in, waits 10 minutes and keeps the tokens (R§7).
+- **What the gateway keeps, it does not encrypt.** A header's value is kept by the gateway in its settings file, and a sign-in's tokens in its state, not encrypted there; a removed server's sign-in stays (R§6).
 
 The prototype walks every path to its outcome: `prototype/connectors.html`, with the state in the address (`prototype/README.md`). The styles are in `prototype/css/connectors.css`, the behaviour in `prototype/js/connectors.js`, and `prototype/tools/checks/connectors.mjs` clicks through every walk and asserts each state's words and structure.
 
@@ -48,7 +48,7 @@ rail footer, "Connect apps" (F-030)   the Connect apps window, on Browse
   On this gateway                       every plugin the gateway lists, and every tool server
     a connector's page                    state, apps, accounts and their sign-in, Turn off, Remove
     a tool server's page                  address or command, what the last run found, sign-in "Not reported", Remove
-  Add a tool server                     by address (Remote) or as a command (Command)
+  Add a custom connector                by URL (Remote HTTPS) or as a command (Command)
 the conversation                      a connect card when a bot asks you to sign in to a server
 first run, once                       "What do you use every day?": tick apps; nothing is connected
 iPhone, the avatar menu               "Plugins": the same window as one pane at a time
@@ -103,7 +103,7 @@ A connector is shown by its name and its initial, never by a picture. The catalo
 | Open a sign-in page from a connect card                                           | Any tier that sees the conversation    | The bot asked; opening a page writes nothing to the gateway                                                                                |
 | Tick apps in "What do you use every day?"                                         | Any                                    | Kept on this device                                                                                                                        |
 
-Admin is asked for only when the person chooses an action that needs it, never on opening the window. On the read and interactive tiers the action's place holds the access bar of `bots.md` §2: "**Read-only.**" (read) or "**Admin access needed.**" (interactive), then the screen's words, and "Request admin access". The words: "Adding apps needs admin access." (Browse, a catalog page), "Changing connectors needs admin access." (a connector's page), "Changing tool servers needs admin access." (a server's page), "Adding a tool server needs admin access." (the form). The request, its waiting, denied, expired and granted states are that bar's, unchanged. What the screen held (a typed address, the arguments) is kept through the request. Values are shown at every tier; controls that change them are absent, not disabled, below admin.
+Admin is asked for only when the person chooses an action that needs it, never on opening the window. On the read and interactive tiers the action's place holds the access bar of `bots.md` §2: "**Read-only.**" (read) or "**Admin access needed.**" (interactive), then the screen's words, and "Request admin access". The words: "Adding apps needs admin access." (Browse, a catalog page), "Changing connectors needs admin access." (a connector's page), "Changing tool servers needs admin access." (a server's page), "Adding a custom connector needs admin access." (the form). The request, its waiting, denied, expired and granted states are that bar's, unchanged. What the screen held (a typed address, the arguments) is kept through the request. Values are shown at every tier; controls that change them are absent, not disabled, below admin.
 
 ### Writing and reading back
 
@@ -130,11 +130,11 @@ One polite live region for the window announces, each only once it is read back:
 
 The rail footer's "Connect apps" (F-030, built in #16) opens it on Browse. The window is the Settings frame of `bots.md` §7, 800 × 640: the list of sections on the rail's surface, and the section.
 
-| Section           | Holds                                                                    |
-| ----------------- | ------------------------------------------------------------------------ |
-| Browse            | Search, categories, Recommended, and every catalog row (sections 4 to 6) |
-| On this gateway   | Every plugin the gateway lists, then every tool server (section 7)       |
-| Add a tool server | The form of sections 12 and 13                                           |
+| Section                | Holds                                                                    |
+| ---------------------- | ------------------------------------------------------------------------ |
+| Browse                 | Search, categories, Recommended, and every catalog row (sections 4 to 6) |
+| On this gateway        | Every plugin the gateway lists, then every tool server (section 7)       |
+| Add a custom connector | The form of sections 12 and 13                                           |
 
 The window's title is "Connect apps". On the phone it is a sheet, one pane at a time (section 16).
 
@@ -226,13 +226,13 @@ Every plugin `plugins.list` returns as installed, then every entry of `config.ge
 
 - **Plugins**, in two groups, "Turned on" and "Turned off", each row with the initial, the name, its description and its state pill. Plugins that come with OpenClaw are many (64 on a fresh gateway of this version), so they are folded behind one more group, "Comes with OpenClaw (64)", which opens in place.
 - **Tool servers**, under that word, each row with the server's name in mono, its address or its command, and "Added by address" or "Runs a command". There is no state pill: the gateway reports none (section 9).
-- "Add a tool server" at the foot opens section 12.
+- "Add a custom connector" at the foot opens section 12.
 
 ## 8. A connector's page
 
-A plugin's page: the initial at 56 px, the name, "by <author>" or "Comes with OpenClaw", the version, the state in words, the description; then "Apps", "Accounts", and the actions. It reads `plugins.list` (the row), `plugins.inspect {pluginId}` and, when it came from the catalog, `plugins.catalog.get` (R§8).
+A plugin's page: the initial at 56 px, the name, "by <author>" or "Comes with OpenClaw", the version, the state in words, the description; then "Tools", "Accounts", and the actions. It reads `plugins.list` (the row), `plugins.inspect {pluginId}` and, when it came from the catalog, `plugins.catalog.get` (R§8).
 
-**Apps** lists what the plugin gives, from `inspect`'s `components`: each server ("quillnote, a tool server"), each skill, each command. Under the list: "Which bots may use these is in each bot's settings." linking to `controls.md` §4.
+**Tools** lists what the plugin gives, from `inspect`'s `components`: each server ("quillnote, a tool server"), each skill, each command. Under the list: "Which bots may use these is in each bot's settings." linking to `controls.md` §4.
 
 **The state**, from `plugins.list` and `inspect`:
 
@@ -268,15 +268,15 @@ A server from `mcp.servers` has no catalog entry and no plugin state. Its page s
 
 **Facts** (`.facts`):
 
-| Row                 | Value                                                                                                  |
-| ------------------- | ------------------------------------------------------------------------------------------------------ |
-| Name on the gateway | `notes-work` (mono)                                                                                    |
-| Kind                | "Added by address" or "Runs a command"                                                                 |
-| Address             | `https://notes.example/mcp` (remote)                                                                   |
-| Headers             | each header's name, and "Hidden: the gateway doesn't show saved values." (remote)                      |
-| Sign-in             | "Signs in with OAuth" when `auth: "oauth"`; "Each person signs in" for per-requester; otherwise "None" |
-| Command             | the command and each argument, in mono, as saved (command)                                             |
-| Runs in             | the working folder, when set (command)                                                                 |
+| Row                 | Value                                                                                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Name on the gateway | `notes-work` (mono)                                                                                                                              |
+| Kind                | "Added by address" or "Runs a command"                                                                                                           |
+| Address             | `https://notes.example/mcp` (remote)                                                                                                             |
+| Headers             | each header's name, and "Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there." (remote) |
+| Sign-in             | "Signs in with OAuth" when `auth: "oauth"`; "Each person signs in" for per-requester; otherwise "None"                                           |
+| Command             | the command and each argument, in mono, as saved (command)                                                                                       |
+| Runs in             | the working folder, when set (command)                                                                                                           |
 
 **What the last run found**, from `tools.effective` for the most recent task of each bot that has run since the server was added (R§5):
 
@@ -297,66 +297,71 @@ What the page can never say: that the server is signed in, for whom, until when,
 
 "Sign in" on a connector's account row or a server's page. It needs admin; below admin the access bar takes its place (section 2).
 
-**Clawtrate asks the gateway** with `mcp.authLogin {sessionId, serverName}`. What happens next depends on the connection, and the gateway's answer decides it, not a guess (R§7):
+**The rule.** The gateway starts a browser sign-in (`mcp.authLogin`) only for a connection that comes from a browser (R§7). Clawtrate never presents a connection as a browser to be given what the gateway withholds from its own kind of connection. So:
 
-| The gateway's answer                                                                                                                     | The section shows                                                                                                       |
-| ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| A wizard step with `externalUrl`                                                                                                         | The browser sign-in, below                                                                                              |
-| "Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal." (no browser origin; Clawtrate's connection today) | The command-line sign-in, below                                                                                         |
-| "This connector cannot use operator browser sign-in. …"                                                                                  | "**The gateway can't start this sign-in from here.**" and the message as given. For a per-requester server: section 11. |
-| "missing scope: operator.admin"                                                                                                          | the access bar                                                                                                          |
+- **The desktop app** shows the gateway's command-line sign-in in full, as the account sign-ins of `bots.md` §16 do, and does not call `mcp.authLogin`.
+- **The web preview**, which is a browser, asks the gateway with `mcp.authLogin {sessionId, serverName}`, and the gateway's answer decides what it shows:
 
-**The browser sign-in.**
+| The gateway's answer                                                                   | The section shows                                                                                                       |
+| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| A wizard step with `externalUrl`                                                       | The browser sign-in, below                                                                                              |
+| "Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal." | The command-line sign-in, below                                                                                         |
+| "This connector cannot use operator browser sign-in. …"                                | "**The gateway can't start this sign-in from here.**" and the message as given. For a per-requester server: section 11. |
+| "missing scope: operator.admin"                                                        | the access bar                                                                                                          |
 
-| Stage                      | It shows                                                                                                                                                                                                                                                                                                                                                                                                         |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Starting                   | "Asking the gateway to start the sign-in…", Cancel                                                                                                                                                                                                                                                                                                                                                               |
-| Waiting                    | "Sign in on Quillnote's page." and "Open the sign-in page" with the page's host beside it, `auth.quillnote.example`; under it, with the waiting dot, "Waiting for the sign-in. This works for 10 minutes." and Cancel. The page opens in the system browser only when chosen (`docs/decisions.md`, in review: "A sign-in page … only when the person chooses its button … The host is shown beside the button"). |
-| Signed in (`done`)         | "**Signed in to Quillnote.** The gateway keeps the sign-in." For a plugin, the account row then reads `inspect` again; for a tool server, the page adds "Last signed in from Clawtrate: Nov 19, 5:12 PM", which is a record of what Clawtrate saw, not a state the gateway reports.                                                                                                                              |
-| Failed (`status: "error"`) | "**Sign-in didn't finish.**" and the gateway's message as given, with "Try again"                                                                                                                                                                                                                                                                                                                                |
-| Expired (10 minutes)       | "**The sign-in expired** before it finished." with "Try again"                                                                                                                                                                                                                                                                                                                                                   |
-| Cancelled                  | "Sign-in cancelled."                                                                                                                                                                                                                                                                                                                                                                                             |
-| The connection dropped     | "**The sign-in ended with the connection.**" A sign-in belongs to the connection that started it; "Try again" starts a new one once connected.                                                                                                                                                                                                                                                                   |
-
-The page the browser lands on is the gateway's, not Clawtrate's: "Sign-in response received. Return to OpenClaw for the sign-in result." (R§7). Clawtrate learns the outcome from the gateway's answer, on the connection that started the sign-in, and says it in the window.
-
-**The command-line sign-in** (the connection does not come from a browser), as the gateway itself gives it (R§7):
+**The command-line sign-in**, as the gateway itself gives it (R§7):
 
 1. "On the gateway's machine, run:" and `openclaw mcp login quillnote` in the command block, with the gateway's profile option when the host knows the gateway runs under a named profile.
 2. "It prints an address. Open it in a browser and sign in to Quillnote."
 3. "If that browser is on the gateway's machine, the command finishes by itself within 5 minutes and prints "MCP OAuth credentials saved". If it is on another computer, copy the code from the address the page returns to (the part after `code=`) and run:" and `openclaw mcp login quillnote --code <code>`.
 
-Under the steps: "Or sign in from Settings on the gateway's own web page." Clawtrate sees the result only as the account row's next reading (a plugin) or, for a tool server, not at all.
+Under the steps: "Or sign in from Settings on the gateway's own web page." Clawtrate sees the result only as the account row's next reading (a plugin) or, for a tool server, not at all: the page keeps saying "Not reported".
 
-**In the web preview** the browser that opens the sign-in page is the viewer's. When the return address is on the gateway's own machine (loopback), the page adds: "The sign-in page returns to the gateway's own address, which only a browser on the gateway's machine can reach." The command-line steps follow.
+**The browser sign-in** (the web preview, when the gateway gives it a sign-in page):
+
+| Stage                      | It shows                                                                                                                                                                                                                                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Starting                   | "Asking the gateway to start the sign-in…", Cancel                                                                                                                                                                                                                                               |
+| Waiting                    | "Sign in on Quillnote's page.", then the sign-in address (below), then "Open in your browser"; under it, with the waiting dot, "Waiting for the sign-in. This works for 10 minutes." and Cancel                                                                                                  |
+| Signed in (`done`)         | "**Signed in to Quillnote.** The gateway keeps the sign-in." For a plugin, the account row then reads `inspect` again and shows what it reports; for a tool server, the page still says "Not reported" and adds "Last signed in from Clawtrate: Nov 19, 5:12 PM", a record of what Clawtrate saw |
+| Failed (`status: "error"`) | "**Sign-in didn't finish.**" and the gateway's message as given, with "Try again"                                                                                                                                                                                                                |
+| Expired (10 minutes)       | "**The sign-in expired** before it finished." with "Try again"                                                                                                                                                                                                                                   |
+| Cancelled                  | "Sign-in cancelled."                                                                                                                                                                                                                                                                             |
+| The connection dropped     | "**The sign-in ended with the connection.**" A sign-in belongs to the connection that started it; "Try again" starts a new one once connected.                                                                                                                                                   |
+
+The page the browser lands on is the gateway's own, not Clawtrate's: "Sign-in response received. Return to OpenClaw for the sign-in result." (R§7). Clawtrate learns the outcome from the gateway's answer, on the connection that started the sign-in, and never says "Connected".
+
+When the return address is on the gateway's own machine (loopback), the waiting stage adds: "The sign-in page returns to the gateway's own address, which only a browser on the gateway's machine can reach." and the command-line steps follow.
+
+**A sign-in address** (here and in section 11) follows the rule for addresses the gateway hands the client (`docs/decisions.md`, in review on `e3-remote-content-rule`): it opens only when the person chooses "Open in your browser", in the system browser (in the web preview, a new tab of the viewer's browser), and the full address is shown first, its host in medium weight on the first line and the whole address under it in mono, with a copy button.
 
 ## 11. A sign-in in the conversation
 
 **Only a per-requester server asks in the conversation.** For a server set to "Each person signs in", the gateway gives the bot a tool `<server>__connect` until the person has connected (R§7). When the bot calls it, the action card (`conversation.md` §8.3) becomes a connect card, read from the call's result:
 
-| The result                                                        | The card                                                                                                                                                                                                                         |
-| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `details.mcpConnect {serverName, authorizationUrl}`               | Initial, "**Connect your team-notes account**", "Pip asked to use team-notes for you. After you sign in, its tools reach Pip from your next message.", "Open the sign-in page" with the host beside it, `auth.teamnotes.example` |
-| "… is connected. Its tools become available on the next message." | The ordinary card line: "Connected team-notes. Its tools reach Pip from your next message."                                                                                                                                      |
-| `details.status: "error"` (no public address)                     | "**team-notes can't ask you to sign in here:**" and the message as given ("… gateway.publicOrigin is not configured. Ask the operator to set the public Gateway HTTP(S) origin.")                                                |
+| The result                                                        | The card                                                                                                                                                                                                                    |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `details.mcpConnect {serverName, authorizationUrl}`               | Initial, "**Connect your team-notes account**", "Pip asked to use team-notes for you. After you sign in, its tools reach Pip from your next message.", the sign-in address in full (section 10), and "Open in your browser" |
+| "… is connected. Its tools become available on the next message." | The ordinary card line: "Connected team-notes. Its tools reach Pip from your next message."                                                                                                                                 |
+| `details.status: "error"` (no public address)                     | "**team-notes can't ask you to sign in here:**" and the message as given ("… gateway.publicOrigin is not configured. Ask the operator to set the public Gateway HTTP(S) origin.")                                           |
 
-- After "Open the sign-in page", the card reads "Opened at 5:12 PM. If the page didn't finish, open it again." and the button becomes "Reopen". It opens the same link. The gateway tells the client nothing when the sign-in finishes, so the card never says it did; the bot's next use of the server shows it.
+- After "Open in your browser", the card reads "Opened at 5:12 PM. If the page didn't finish, open it again." and the button becomes "Reopen". It opens the same address. The gateway tells the client nothing when the sign-in finishes, so the card never says it did; the bot's next use of the server shows it.
 - The link is single use and expires. A link already used or expired lands on the gateway's page "This sign-in link expired or was already used. Ask the bot to connect again." The card cannot know that in advance and does not guess.
 - **Anyone who opens the link connects their own account for the person it was made for** (R§7). The card says, under its button: "Anyone who opens this link signs in for you." In a task more than one person can read, the card shows that line in `--warn`.
-- The card is drawn wherever the call appears, on every tier: opening a page writes nothing to the gateway.
+- The card is drawn wherever the call appears, on every tier and in both apps: the bot asked, and opening a page writes nothing to the gateway.
 
 **A shared server says nothing in the conversation.** A shared OAuth server that is not signed in is left out of the bot's tools; the bot gets no connect tool and the gateway sends no card (R§7). The server's page (section 9) is where its sign-in starts.
 
 ## 12. Adding a server by address
 
-"Add a tool server", Type "Remote". It needs admin.
+"Add a custom connector", Type "Remote HTTPS". It needs admin.
 
-| Field          | Rule                                                                                                                                                                                                                                                                                                                                                                                       |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Name           | Required. Letters, digits, hyphens and underscores. The name bots see in tool names (`notes-work__…`). A name already on the gateway: "There's already a server named notes-work."                                                                                                                                                                                                         |
-| Server address | Required. "Enter the server's address." when empty. Not an address: "Enter an address that starts with https://." `http://` is accepted only for `localhost` or `127.0.0.1`, "on the gateway's machine": otherwise "Use the server's https:// address. Plain http is accepted only for a server on the gateway's machine." (Clawtrate's rule; the gateway itself accepts any `http`, R§5.) |
-| Headers        | Optional, name and value rows, "Add a header". The value field is a password field. Under them: "Saved in the gateway's settings file on its machine, in plain text. Clawtrate can't read a value back once it's saved."                                                                                                                                                                   |
-| Sign-in        | A radio group: "None", "Sign in with OAuth" and, under it, "Each person signs in". With "Each person signs in": "Needs the gateway's public address (`gateway.publicOrigin`). Without it, a bot can't ask anyone to sign in."                                                                                                                                                              |
+| Field      | Rule                                                                                                                                                                                                                                                              |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Name       | Required. Letters, digits, hyphens and underscores. The name bots see in tool names (`notes-work__…`). A name already on the gateway: "There's already a server named notes-work."                                                                                |
+| Server URL | Required. "Enter the server's URL." when empty. Not a URL: "Enter a URL that starts with https://." A URL that is not `https`: "Use the server's https:// URL." Nothing is saved until it is `https`. (Clawtrate's rule; the gateway itself accepts `http`, R§5.) |
+| Headers    | Optional, name and value rows, "Add a header". The value field is a password field. Under them: "Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved."                                               |
+| Sign-in    | A radio group: "None", "Sign in with OAuth" and, under it, "Each person signs in". With "Each person signs in": "Needs the gateway's public address (`gateway.publicOrigin`). Without it, a bot can't ask anyone to sign in."                                     |
 
 There is no Client ID and no Client Secret: the gateway has no field for either and refuses them (R§5). OpenClaw registers itself with the server when it signs in.
 
@@ -372,7 +377,7 @@ Whether the server answers is not known at this point; the result says only what
 
 ## 13. Adding a server started by a command
 
-Type "Command". It needs admin.
+"Add a custom connector", Type "Command". Only an admin connection reaches it; below admin the access bar takes the form's place.
 
 | Field          | Rule                                                                                                                          |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -405,7 +410,7 @@ Every removal is a confirmation that says exactly what goes and what stays, then
 
 > **Remove Quillnote from the gateway?**
 > Goes: Quillnote's files on the gateway's machine; its settings on the gateway; its tools, from every bot that has them: Juniper, Pip.
-> Stays: its sign-in, in the gateway's state database; a note on the gateway that Quillnote is off, so nothing turns it back on by itself.
+> Stays: its sign-in, kept by the gateway in its state, not encrypted there; a note on the gateway that Quillnote is off, so nothing turns it back on by itself.
 > [Cancel] [Remove]
 
 The bots named are those whose last tool list had its tools; when none has run since it was added, the line reads "its tools, from every bot that doesn't deny them". After the removal, `plugins.list` is read: "Removed Quillnote. The gateway no longer lists it." A connector that comes with OpenClaw has no Remove (section 8).
@@ -414,7 +419,7 @@ The bots named are those whose last tool list had its tools; when none has run s
 
 > **Remove notes-work from the gateway?**
 > Goes: the server's entry in the gateway's settings, with its headers; its tools, from every bot that has them.
-> Stays: its sign-in, in the gateway's state database. The gateway finds it again if a server with the same name and address is added. To delete it, run `openclaw mcp logout notes-work` on the gateway's machine before removing the server.
+> Stays: its sign-in, kept by the gateway in its state, not encrypted there. Removing the server does not delete it, and the gateway finds it again if a server with the same name and URL is added. To sign out first, run `openclaw mcp logout notes-work` on the gateway's machine before removing the server.
 > [Cancel] [Remove]
 
 The `logout` line appears only for a server with "Sign in with OAuth". Then `config.get` is read: "Removed notes-work. The gateway's settings no longer list it." When the read-back still lists it: "notes-work is still listed: <the gateway's reason>." with "Try again".
@@ -435,7 +440,7 @@ What the tiles cannot do: shape which bots are suggested, as Grok Bot's do. Claw
 
 - **1440, 1100 and 800**: the window is 800 × 640 (at 800, the window's width less 48 px). The section list is 208 px; a catalog row's summary wraps at two lines.
 - **390, the one-pane layout**: a sheet the height of the screen less 8 px. The section list is one pane; a section another, with Back. The chips scroll sideways inside their row; rows are 72 px. A confirmation is a card at the foot.
-- **iPhone (F-380)**: from the avatar menu, "Connect apps" opens the same sheet, titled "Plugins" on Browse, with "Search plugins", the category chips, "Featured" for Recommended, and rows with "Added" or "Add". Add a tool server is desktop only (F-221, F-381); a server's page is read-only on the iPhone and says "Change it from Clawtrate on your computer."
+- **iPhone (F-380)**: from the avatar menu, "Connect apps" opens the same sheet, titled "Plugins" on Browse, with "Search plugins", the category chips, "Featured" for Recommended, and rows with "Added" or "Add". Add a custom connector is desktop only (F-221, F-381); a server's page is read-only on the iPhone and says "Change it from Clawtrate on your computer."
 - **Themes**: every surface is a token; nothing is drawn in a fixed colour.
 - **Read-only**: everything reads; the actions' places hold the access bar.
 - **Keyboard**: everything is reachable in reading order; the chip row and the sign-in radio group have one tab stop each.
@@ -444,27 +449,27 @@ What the tiles cannot do: shape which bots are suggested, as Grok Bot's do. Claw
 
 ## 17. What the gateway's facts drive
 
-| #   | Fact                                                                                                                                                            | Where                                       | Drives                                      |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
-| 1   | The catalog and its categories come from ClawHub, joined with the gateway's own plugins                                                                         | R§2, source                                 | Browse, chips, Recommended (sections 4, 15) |
-| 2   | Without ClawHub, `browse` answers with the gateway's plugins and `remoteError`, after about 14 s; `categories`, `featured`, `search`, `skills.search` fail      | R§2, tried                                  | Section 5; the picker not asked             |
-| 3   | `plugins.install` is admin, downloads and runs code on the gateway's machine, without a restart, with progress stages                                           | R§3, source; refused at the download, tried | Section 6                                   |
-| 4   | A capability review or install-policy warning can come first; a failure after writing carries `persistence`                                                     | R§3, source                                 | Section 6's second confirmation and results |
-| 5   | `plugins.setEnabled` and `uninstall` answer with the new state; a bundled plugin can't be removed; a change can be refused as busy                              | R§4, tried                                  | Sections 2, 8                               |
-| 6   | Uninstall keeps an `enabled: false` marker and the stored sign-in                                                                                               | R§4, docs and source                        | Section 14                                  |
-| 7   | `plugins.list`: `state`, `runtime.state`, `removable`                                                                                                           | R§8, tried                                  | Section 8's states                          |
-| 8   | `plugins.inspect` `mcpAuth` for a plugin's own OAuth servers                                                                                                    | R§8, source                                 | Section 8's Accounts                        |
-| 9   | `config.patch` on `mcp.servers`, read back through `config.get`; headers redacted; command and arguments in plain text; removal needs `replacePaths` for `args` | R§5, tried                                  | Sections 9, 12 to 14                        |
-| 10  | The gateway refuses a bad or non-http(s) address and a client ID or secret; accepts an empty command                                                            | R§5, tried                                  | Sections 12, 13 (Clawtrate's own checks)    |
-| 11  | A server's tools, or its failure, show in a task's tool list only after a run                                                                                   | R§5, tried                                  | Section 9                                   |
-| 12  | A header and a command are kept in plain text in the settings file; a sign-in's tokens in plain text in the state database, kept after the server is removed    | R§6, tried                                  | Sections 12, 14                             |
-| 13  | `mcp.authLogin` needs admin and a browser origin, publishes an https page and returns to the gateway's callback; 10 minutes                                     | R§7, tried                                  | Section 10                                  |
-| 14  | Clawtrate's connection is refused with "Open Settings on this Gateway…"                                                                                         | R§7, tried                                  | Section 10's command-line sign-in           |
-| 15  | A per-requester server gives the bot `<server>__connect`, whose result carries the sign-in page; the link is single use and opens for whoever holds it          | R§7, source                                 | Section 11                                  |
-| 16  | A server added by address or command has no sign-in state and no accounts                                                                                       | R§8, tried                                  | Section 9's "Not reported"                  |
-| 17  | One shared sign-in per server name and address                                                                                                                  | R§6, source                                 | Section 9's "Add another account"           |
-| 18  | `openclaw mcp login`, `--code`, `logout` on the gateway's machine                                                                                               | R§7, docs                                   | Sections 10, 14                             |
-| 19  | The owner-only `plugins` tool can install a plugin from a conversation                                                                                          | R§3, docs                                   | Row F-383                                   |
+| #   | Fact                                                                                                                                                                                 | Where                                       | Drives                                                                                              |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| 1   | The catalog and its categories come from ClawHub, joined with the gateway's own plugins                                                                                              | R§2, source                                 | Browse, chips, Recommended (sections 4, 15)                                                         |
+| 2   | Without ClawHub, `browse` answers with the gateway's plugins and `remoteError`, after about 14 s; `categories`, `featured`, `search`, `skills.search` fail                           | R§2, tried                                  | Section 5; the picker not asked                                                                     |
+| 3   | `plugins.install` is admin, downloads and runs code on the gateway's machine, without a restart, with progress stages                                                                | R§3, source; refused at the download, tried | Section 6                                                                                           |
+| 4   | A capability review or install-policy warning can come first; a failure after writing carries `persistence`                                                                          | R§3, source                                 | Section 6's second confirmation and results                                                         |
+| 5   | `plugins.setEnabled` and `uninstall` answer with the new state; a bundled plugin can't be removed; a change can be refused as busy                                                   | R§4, tried                                  | Sections 2, 8                                                                                       |
+| 6   | Uninstall keeps an `enabled: false` marker and the stored sign-in                                                                                                                    | R§4, docs and source                        | Section 14                                                                                          |
+| 7   | `plugins.list`: `state`, `runtime.state`, `removable`                                                                                                                                | R§8, tried                                  | Section 8's states                                                                                  |
+| 8   | `plugins.inspect` `mcpAuth` for a plugin's own OAuth servers                                                                                                                         | R§8, source                                 | Section 8's Accounts                                                                                |
+| 9   | `config.patch` on `mcp.servers`, read back through `config.get`; headers redacted; command and arguments read back as saved; removal needs `replacePaths` for `args`                 | R§5, tried                                  | Sections 9, 12 to 14                                                                                |
+| 10  | The gateway refuses a bad or non-http(s) address and a client ID or secret; accepts an empty command                                                                                 | R§5, tried                                  | Sections 12, 13 (Clawtrate's own checks)                                                            |
+| 11  | A server's tools, or its failure, show in a task's tool list only after a run                                                                                                        | R§5, tried                                  | Section 9                                                                                           |
+| 12  | A header and a command are kept by the gateway in its settings file, not encrypted there; a sign-in's tokens in its state, not encrypted there, and kept after the server is removed | R§6, tried                                  | Sections 9, 12, 14                                                                                  |
+| 13  | `mcp.authLogin` needs admin and a browser origin, publishes an https page and returns to the gateway's callback; 10 minutes                                                          | R§7, tried                                  | Section 10: the browser form in the web preview; the desktop app never presents itself as a browser |
+| 14  | Clawtrate's connection is refused with "Open Settings on this Gateway…"                                                                                                              | R§7, tried                                  | Section 10: the desktop app's command-line sign-in                                                  |
+| 15  | A per-requester server gives the bot `<server>__connect`, whose result carries the sign-in page; the link is single use and opens for whoever holds it                               | R§7, source                                 | Section 11                                                                                          |
+| 16  | A server added by address or command has no sign-in state and no accounts                                                                                                            | R§8, tried                                  | Section 9's "Not reported"                                                                          |
+| 17  | One shared sign-in per server name and address                                                                                                                                       | R§6, source                                 | Section 9's "Add another account"                                                                   |
+| 18  | `openclaw mcp login`, `--code`, `logout` on the gateway's machine                                                                                                                    | R§7, docs                                   | Sections 10, 14                                                                                     |
+| 19  | The owner-only `plugins` tool can install a plugin from a conversation                                                                                                               | R§3, docs                                   | Row F-383                                                                                           |
 
 ## 18. Parity rows
 
@@ -477,22 +482,24 @@ The rows' targets and statuses stay as they are. The gateway dependency cells ar
 | F-218 | partial: plugins report `state` (`enabled`, `disabled`, `needs-setup`, `not-installed`, `error`) and `runtime.state` in `plugins.list` (tried), and, for their own OAuth servers, `plugins.inspect` `mcpAuth` `authorized`, `requires-authorization`, `pending-authorization` or `unauthenticated`, read from stored tokens (source); `authorized` says tokens are stored, not that they work. Raw MCP servers report no sign-in state; a task's `tools.effective` lists their tools or a failure only after a run (tried).                                                                                                                                                                                                                        |
 | F-219 | partial: a plugin's server has one shared sign-in (`plugins.inspect` `mcpAuth`); a raw server's sign-in is kept per server name and address, so a second shared account is a second entry under another name; `oauth.identity: "per-requester"` keeps one per sender. No method lists accounts (`mcp.*`, `plugins.*`).                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | F-220 | partial: only a per-requester server asks in the conversation: the bot gets `<server>__connect`, whose result carries `details.mcpConnect {serverName, authorizationUrl}`, returning through `<gateway.publicOrigin>/oauth/mcp/callback`; the link is single use, and the gateway does not tell the client when it finishes (source). A shared server's sign-in is `mcp.authLogin {sessionId, serverName}` (`operator.admin`, a connection with a browser origin), which publishes an https page, returns to `/oauth/provider/callback` and waits 10 minutes (tried end to end on loopback); Clawtrate's present connection is refused ("Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal.").                   |
-| F-221 | partial: `config.patch` on `mcp.servers.<name>` with `{url, transport, headers?, auth?: "oauth", oauth?}` (`operator.admin`), read back with `config.get` (headers `__OPENCLAW_REDACTED__`; kept in plain text in the settings file); the gateway refuses a non-http(s) address and has no client ID or secret (`oauth` takes only `identity`, `authProfileId`, `scope`, `redirectUrl`, `clientMetadataUrl`; tried).                                                                                                                                                                                                                                                                                                                               |
+| F-221 | partial: `config.patch` on `mcp.servers.<name>` with `{url, transport, headers?, auth?: "oauth", oauth?}` (`operator.admin`), read back with `config.get` (headers `__OPENCLAW_REDACTED__`; kept by the gateway in its settings file, not encrypted there); the gateway refuses a non-http(s) address and has no client ID or secret (`oauth` takes only `identity`, `authProfileId`, `scope`, `redirectUrl`, `clientMetadataUrl`; tried).                                                                                                                                                                                                                                                                                                         |
 | F-380 | partial: as F-217.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | F-381 | available: `config.patch` on `mcp.servers.<name>` with `{command, args, cwd?}` (`operator.admin`), read back with `config.get`; the gateway accepts an empty command, so the client refuses it; removing one needs `replacePaths` for `args` (tried).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | F-382 | partial: as F-220; the shared flow's return page is the gateway's own, "Sign-in response received. Return to OpenClaw for the sign-in result." (tried); the result reaches the client as the wizard's `done`. "Connected" is not reported for raw MCP servers (F-218).                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | F-383 | partial: the gateway's owner-only `plugins` tool can install an official or ClawHub plugin from a conversation (docs); no Bot tool adds a raw server. A server added with `config.patch` (`operator.admin`) is usable on the next turn without a restart (live).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
-**Rows where the design differs, left as they are for a decision:**
+**Targets reworded** (round 1 decisions), statuses unchanged:
 
-| Row   | The row says                                                                                          | The design                                                                                                                                                               | Why                                                                                   |
-| ----- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| F-004 | A short intro ends on the picker                                                                      | One dialog after the app first opens; not asked when the catalog can't be reached                                                                                        | Setup has no intro (`setup.md` §7), and with no catalog there is nothing true to pick |
-| F-218 | "Connected" (green), "Disconnected", "Disabled by team admin"                                         | "Signed in" with its expiry and "Whether it still works shows when a bot next uses …"; "Not working" with the gateway's error; "Turned off"; no team admin               | The gateway reports stored tokens, not a live connection; there are no teams          |
-| F-219 | Per-account status and "Add Another Account" with a label                                             | One shared account for a plugin; for a server added by address, "Add another account" is a second entry, the label being its name; per-requester accounts are not listed | No method lists accounts; the sign-in is kept per name and address                    |
-| F-221 | Client ID and a Client Secret after a Client ID                                                       | No such fields                                                                                                                                                           | The gateway refuses them (R§5)                                                        |
-| F-381 | "Add plugin"                                                                                          | "Add to gateway", then a confirmation with the exact command, arguments and machine                                                                                      | A command runs a program on the gateway's machine as its user                         |
-| F-382 | The browser page says "Authorization complete! You can close this tab." and the app shows "Connected" | The page is the gateway's ("Sign-in response received. Return to OpenClaw for the sign-in result."); the app shows "Signed in to <app>"                                  | Clawtrate does not serve that page; see F-218 for "Connected"                         |
+| Row   | Clawtrate target                                                                                                                                                                                                                                                                                                                                      |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-004 | better: after the first connection, Clawtrate offers "What do you use every day?" once: a search box and the catalog's recommended apps to tick, with Next and Skip. Ticking connects nothing. It is not offered when the gateway's catalog cannot be reached.                                                                                        |
+| F-218 | better: a connector's state says only what the gateway reports: Added, Needs sign-in, Signed in (tokens are stored; Clawtrate does not claim a working connection), Turned off, and Not reported for a tool server; with Sign in, Sign in again and Remove. There is no team admin.                                                                   |
+| F-219 | better: a connector's page shows its description, its tools and its sign-in as the gateway reports it: one shared sign-in for a plugin; for a tool server, "Add another account" adds a second entry under a label.                                                                                                                                   |
+| F-221 | better: "Add a custom connector" with Type "Remote HTTPS": Server URL and optional HTTP headers, then "Add to gateway". There is no Client ID or Client Secret: the gateway does not accept them. Saving with an empty or non-HTTPS URL shows an error and saves nothing, and the form says that a header's value is kept by the gateway unencrypted. |
+| F-381 | better: "Add a custom connector" with Type "Command": Command and Arguments, then a confirmation that shows the exact command and arguments and says it runs on the gateway's machine as the gateway's user, for an admin connection only. Saving with an empty command shows an error and saves nothing.                                             |
+| F-382 | better: finishing an app's sign-in in the browser ends on the gateway's own page; back in Clawtrate the connector shows what the gateway then reports (Signed in, or Not reported for a tool server) and never "Connected" on its own word.                                                                                                           |
+
+Beside the states F-218 names, a connector's page also shows two more the gateway reports: "Needs setup" (`needs-setup`) and "Not working" (`error`, or `runtime.state: "service-failed"`), section 8.
 
 ## 19. For builders
 
@@ -522,7 +529,7 @@ The rows' targets and statuses stay as they are. The gateway dependency cells ar
 2. Browse, its states without ClawHub first (F-217, F-380).
 3. A tool server's page and adding one by address and by command (F-221, F-381).
 4. Add, with its confirmations and results (F-217).
-5. Sign-in from a page, the command-line form first, since Clawtrate's connection gets that answer today (F-220, F-382).
+5. Sign-in from a page: the command-line form for the desktop app, then the browser form for the web preview (F-220, F-382).
 6. The connect card (F-220).
 7. The picker (F-004).
 
