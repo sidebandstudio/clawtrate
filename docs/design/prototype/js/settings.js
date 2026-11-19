@@ -48,6 +48,7 @@
     added: null, // how adding ended: added, same, noid, nothing
     removal: null, // { id, outcome, items }
     os: ["mac", "windows", "linux"].includes(p("os")) ? p("os") : "mac",
+    web: p("host") === "web", // the web preview host: one host, shared by every browser that uses it
     dev: p("build") === "dev",
     feed: p("feed") === "1",
     upd: p("upd") || "idle",
@@ -369,29 +370,35 @@
     }
 
     // Removing (section 7) -------------------------------------------------------------------------------
+    // Each local record is named; a step is reported once it is on disk. The gateway's record is
+    // "removed" only after a successful answer naming this device; any unclear answer stays unclear.
 
     const RMFAIL = p("rmfail");
     function removalItems(id) {
       const g = gw(id);
       const other = S.order.find((x) => x !== id);
       const removed = [
-        ["token", "Its pairing: the device token Clawtrate keeps for its route"],
-        ["route", g.kind === "ssh" ? `Its route: ${g.route}, with the key Clawtrate pinned for it` : `Its address: ${g.route}`],
+        ["connection", g.kind === "ssh" ? `Its saved connection: its route, ${g.route}, with the key Clawtrate pinned for it and its SSH settings` : `Its saved connection: the address ${g.route}`],
+        ["token", "Its route's device token and the access it holds"],
         ...(g.drafts ? [["drafts", `Drafts in ${g.drafts} tasks`]] : []),
         ...(id === S.inUse && S.waiting ? [["waiting", `${S.waiting} message to Otto that hasn't been sent yet`]] : []),
-        ["arrangement", "How you arranged its bots in the rail, and the task last open"],
+        ["prefs", "Its preferences on this device: how its bots are arranged, the open bot and task, what you read, and the bots you unfolded"],
+        ...(id === S.inUse ? [["state", "Its connection on this device, open or waiting"]] : []),
       ];
       const stays = [
         ["gateway", `On ${g.name}: its bots, tasks, accounts and settings. Nothing there changes.`],
         ["key", other ? `This device's key. ${gw(other).name} knows this device by it too.` : "This device's key, for a gateway you add later."],
+        ["app", "Clawtrate's own settings on this device: Appearance, System and Updates."],
       ];
       return { removed, stays };
     }
     const canRemoveRecord = (id) => id === S.inUse && S.conn === "connected" && isAdmin();
-    function goesList(id, marks) {
+    // rec: what the result says of the gateway's record: removed, unconfirmed, refused or notasked.
+    function goesList(id, marks, rec) {
       const { removed, stays } = removalItems(id);
       const g = gw(id);
       const command = `openclaw devices remove ${DEVICE}`;
+      const cmd = `<span class="command-line"><code>${command}</code>${D.copy("remove command", command)}</span>`;
       const mark = (key) => (marks ? marks[key] || "done" : null);
       const item = (key, text, kind) => {
         const m = mark(key);
@@ -399,49 +406,58 @@
         const after = m === "left" ? "<small>Still on this device</small>" : m === "untried" ? "<small>Not tried</small>" : marks && kind !== "stays" ? "<small>Removed</small>" : "";
         return `<li data-kind="${kind}"${m && kind !== "stays" ? ` data-done="${m}"` : ""}>${icon(ic)}<span>${esc(text)}${after}</span></li>`;
       };
-      const record =
-        marks?.record === "done"
-          ? `<li data-kind="removed" data-done="done">${icon("x")}<span>This device's record on ${esc(g.name)}<small>${esc(g.name)} removed it</small></span></li>`
-          : canRemoveRecord(id) && !marks
-            ? ""
-            : `<li data-kind="stays">${icon("check")}<span>On ${esc(g.name)}: this device's record, device ${DEVICE.slice(0, 6)}. To remove it, run this on the gateway's computer:` +
-              `<span class="command-line"><code>${command}</code>${D.copy("remove command", command)}</span></span></li>`;
+      const record = {
+        removed: `<li data-kind="removed" data-done="done" data-testid="record-line">${icon("x")}<span>Gateway removed this device's record. That ends this device's access to ${esc(g.name)} through every route.</span></li>`,
+        unconfirmed: `<li data-kind="unclear" data-testid="record-line">${icon("warning")}<span>Gateway record could not be confirmed. Look for this device, ${DEVICE.slice(0, 6)}, in ${esc(g.name)}'s device list on the gateway's computer; this removes it if it is there:${cmd}</span></li>`,
+        refused: `<li data-kind="stays" data-testid="record-line">${icon("check")}<span>On ${esc(g.name)}: this device's record, device ${DEVICE.slice(0, 6)}. ${esc(g.name)} refused to remove it. To remove it, run this on the gateway's computer:${cmd}</span></li>`,
+        notasked: `<li data-kind="stays" data-testid="record-line">${icon("check")}<span>On ${esc(g.name)}: this device's record, device ${DEVICE.slice(0, 6)}. Clawtrate did not ask the gateway to remove this device's record. To remove it, run this on the gateway's computer:${cmd}</span></li>`,
+      };
+      const confirmRecord = canRemoveRecord(id)
+        ? ""
+        : `<li data-kind="stays" data-testid="record-line">${icon("check")}<span>On ${esc(g.name)}: this device's record, device ${DEVICE.slice(0, 6)}. Clawtrate doesn't ask the gateway to remove it. To remove it, run this on the gateway's computer:${cmd}</span></li>`;
+      const recLine = marks ? record[rec || "notasked"] : confirmRecord;
       return (
         `<div class="s-goes" data-testid="removal-list"><h3>Removed from this device</h3><ul>` +
-        (marks?.record === "done" ? record : "") +
+        (rec === "removed" ? recLine : "") +
         removed.map(([k, t]) => item(k, t, "removed")).join("") +
-        `</ul><h3>Stays</h3><ul>${stays.slice(0, 1).map(([k, t]) => item(k, t, "stays")).join("")}${marks?.record === "done" ? "" : record}${stays.slice(1).map(([k, t]) => item(k, t, "stays")).join("")}</ul></div>`
+        `</ul><h3>Stays</h3><ul>${stays.slice(0, 1).map(([k, t]) => item(k, t, "stays")).join("")}${rec === "removed" ? "" : recLine}${stays.slice(1).map(([k, t]) => item(k, t, "stays")).join("")}</ul></div>`
       );
     }
     function openRemove(id) {
       const g = gw(id);
       const box = canRemoveRecord(id)
-        ? `<label class="s-check"><input type="checkbox" data-s-record /> <span>Also remove this device's record from ${esc(g.name)}</span></label>`
+        ? `<label class="s-check"><input type="checkbox" data-s-record /> <span>Also remove this device's record from ${esc(g.name)}. That ends this device's access to ${esc(g.name)} through every route.</span></label>`
         : "";
       const ssh = g.kind === "ssh" ? `<p style="margin-top:12px">Clawtrate stops its forward to devbox. OpenClaw on devbox keeps running.</p>` : "";
+      const web = S.web ? `<p style="margin-top:12px">This preview's host is shared: removing it here removes it for every browser that uses this host. Drafts kept in other browsers stay there.</p>` : "";
       confirmBox({
         title: `Remove ${esc(g.name)} from this device?`,
         text: canRemoveRecord(id) ? "Nothing on the gateway changes unless you tick the box below." : "Nothing on the gateway changes.",
-        body: goesList(id) + box + ssh,
+        body: goesList(id) + box + ssh + web,
         label: "Remove",
         tone: "danger",
-        run: () => runRemoval(id, Boolean($("[data-s-record]", confirmDialog)?.checked)),
+        run: () => runRemoval(id, Boolean($("[data-s-record]", confirmDialog)?.checked) ? "ask" : "notasked"),
       });
       S.removing = id;
     }
-    function runRemoval(id, record, attempt = 1) {
+    // rec: "ask" (ask the gateway first), or what to say of the record when it isn't asked.
+    function runRemoval(id, rec, attempt = 1) {
       const g = gw(id);
-      // Only a result that names this device's id counts as removed (settings.md section 7).
-      if (record && (RMFAIL === "remote" || RMFAIL === "unknown")) {
-        S.removal = { id, outcome: RMFAIL };
+      if (rec === "ask" && RMFAIL === "remote") {
+        S.removal = { id, outcome: "refused" };
         return showRemoval();
       }
+      if (rec === "ask" && RMFAIL === "unknown") {
+        S.removal = { id, outcome: "unknown" };
+        return showRemoval();
+      }
+      const said = rec === "ask" ? "removed" : rec;
       if (RMFAIL === "local" && attempt === 1 && !S.localRetried) {
-        S.removal = { id, outcome: "local", marks: { token: "done", route: "done", drafts: "left", waiting: "left", arrangement: "untried", ...(record ? { record: "done" } : {}) }, record };
+        S.removal = { id, outcome: "local", marks: { connection: "done", token: "done", drafts: "left", waiting: "left", prefs: "untried", state: "untried" }, rec: said };
         return showRemoval();
       }
-      // Done: the gateway is gone from this device.
-      S.removal = { id, outcome: "done", marks: record ? { record: "done" } : {}, record };
+      // Every step on disk: the gateway is gone from this device.
+      S.removal = { id, outcome: "done", marks: {}, rec: said };
       S.order = S.order.filter((x) => x !== id);
       if (S.page === id) S.page = null;
       if (id === S.inUse) {
@@ -471,27 +487,18 @@
       const r = S.removal;
       if (!r) return "";
       const g = gw(r.id);
-      if (r.outcome === "remote")
-        return (
-          `<div class="s-result" data-testid="removal-result">${D.result("danger", "warning", `${esc(g.name)} didn't remove this device's record`, `Nothing was removed. ${esc(g.name)} said: the request was refused.`)}` +
-          `<div class="b-actions" style="justify-content:center">${button("Cancel", 'data-s="rm-cancel"', "quiet")}${button("Remove from this device only", `data-s="rm-local" data-gw="${r.id}"`)}</div></div>`
-        );
+      const choices = (rec) => `<div class="b-actions" style="justify-content:center">${button("Cancel", 'data-s="rm-cancel"', "quiet")}${button("Remove from this device only", `data-s="rm-local" data-gw="${r.id}" data-rec="${rec}"`)}</div>`;
+      if (r.outcome === "refused")
+        return `<div class="s-result" data-testid="removal-result">${D.result("danger", "warning", `${esc(g.name)} refused to remove this device's record`, `Nothing was removed. ${esc(g.name)} said: the request was refused.`)}${choices("refused")}</div>`;
       if (r.outcome === "unknown")
-        return (
-          `<div class="s-result" data-testid="removal-result">${D.result("warn", "warning", `Clawtrate can't tell whether ${esc(g.name)} removed this device's record`, `Nothing else was removed. Look for this device in ${esc(g.name)}'s device list on the gateway's computer.`)}` +
-          `<div class="b-actions" style="justify-content:center">${button("Cancel", 'data-s="rm-cancel"', "quiet")}${button("Remove from this device only", `data-s="rm-local" data-gw="${r.id}"`)}</div></div>`
-        );
+        return `<div class="s-result" data-testid="removal-result">${D.result("warn", "warning", "Gateway record could not be confirmed", `Clawtrate asked ${esc(g.name)} to remove this device's record and got no answer it can read. The record may be gone, and this device's access with it. Nothing else was removed.`)}${choices("unconfirmed")}</div>`;
       if (r.outcome === "local")
         return (
-          `<div class="s-result" data-testid="removal-result">${D.result("danger", "warning", "Couldn't remove everything", "Some of it is still on this device. Try again removes only what is left.")}` +
-          goesList(r.id, r.marks) +
+          `<div class="s-result" data-testid="removal-result">${D.result("danger", "warning", "Couldn't remove everything", "Some of it is still on this device. Try again checks what is left and removes only that.")}` +
+          goesList(r.id, r.marks, r.rec) +
           `<div class="b-actions" style="justify-content:center;margin-top:14px">${button("Try again", `data-s="rm-retry" data-gw="${r.id}"`, "primary")}</div></div>`
         );
-      return (
-        `<div class="s-result" data-testid="removal-result">${D.result("ok", "check", `${esc(g.name)} is removed from this device`, "What was removed, and what stays:")}` +
-        goesList(r.id, { ...r.marks }) +
-        `</div>`
-      );
+      return `<div class="s-result" data-testid="removal-result">${D.result("ok", "check", `${esc(g.name)} is removed from this device`, "What was removed, and what stays:")}${goesList(r.id, { ...r.marks }, r.rec)}</div>`;
     }
 
     // Settings: the Gateway pane, as built, with "Other gateways" and Remove (section 3) -------------------
@@ -564,7 +571,7 @@
     function gatewayPage(g) {
       const body =
         `<dl class="facts" data-testid="gateway-page"><div><dt>Route</dt><dd>${esc(g.route)}</dd></div><div><dt>Last used</dt><dd>${esc(g.last === "Just now" ? "Just now" : g.last)}</dd></div>` +
-        `<div><dt>This device there</dt><dd>Paired, device ${DEVICE.slice(0, 6)} · ${esc(g.access || "Admin")}</dd></div>` +
+        `<div><dt>This device there</dt><dd>Last paired here · ${esc(g.last === "Just now" ? "Just now" : g.last)}</dd></div>` +
         `<div><dt>Identity</dt><dd class="mono">${g.identity ? esc(g.identity) : "Not read"}</dd></div></dl>` +
         `<p class="b-hint">What Clawtrate recorded at its last connection. Nothing is read from a gateway that isn't in use.</p>` +
         `<div class="b-actions" style="margin-top:16px">${button(`Switch to ${esc(g.name)}`, `data-s="switch" data-gw="${g.id}" data-size="sm"`, "primary")}` +
@@ -841,10 +848,10 @@
           S.removal = null;
           return rs(true);
         case "rm-local":
-          return runRemoval(id, false);
+          return runRemoval(id, el.dataset.rec || "notasked");
         case "rm-retry":
           S.localRetried = true;
-          return runRemoval(id, S.removal?.record, 2);
+          return runRemoval(id, S.removal?.rec, 2);
         case "theme":
           CT.setTheme(el.dataset.value);
           S.unsaved = S.saveFail;

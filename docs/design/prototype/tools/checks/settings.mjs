@@ -108,7 +108,7 @@ await stateWords("A gateway's page: what was recorded, Switch and Remove", "open
   "Last used",
   "Nov 18, 4:02 PM",
   "This device there",
-  "Paired, device 9c2e41 · Read-only",
+  "Last paired here · Nov 18, 4:02 PM",
   "Identity",
   "7be0c914a2f1",
   "Nothing is read from a gateway that isn't in use.",
@@ -209,42 +209,45 @@ const REMOVED_WORDS = [
   "Remove Studio gateway from this device?",
   "Nothing on the gateway changes.",
   "Removed from this device",
-  "Its pairing: the device token Clawtrate keeps for its route",
-  "Its route: devbox, over SSH, with the key Clawtrate pinned for it",
+  "Its saved connection: its route, devbox, over SSH, with the key Clawtrate pinned for it and its SSH settings",
+  "Its route's device token and the access it holds",
   "Drafts in 2 tasks",
-  "How you arranged its bots in the rail, and the task last open",
+  "Its preferences on this device: how its bots are arranged, the open bot and task, what you read, and the bots you unfolded",
   "Stays",
   "On Studio gateway: its bots, tasks, accounts and settings. Nothing there changes.",
-  "On Studio gateway: this device's record, device 9c2e41. To remove it, run this on the gateway's computer:",
+  "On Studio gateway: this device's record, device 9c2e41. Clawtrate doesn't ask the gateway to remove it. To remove it, run this on the gateway's computer:",
   "openclaw devices remove 9c2e41d07a3b5f18",
   "This device's key. Home gateway knows this device by it too.",
+  "Clawtrate's own settings on this device: Appearance, System and Updates.",
   "Clawtrate stops its forward to devbox. OpenClaw on devbox keeps running.",
 ];
+const recordLine = (p) => text(p, '#settings-dialog [data-testid="record-line"]');
 {
   const p = await open("open=settings&section=gateways&gw=studio");
   await press(p, "button", "Remove…");
   const [ok, miss] = await has(p, confirm, REMOVED_WORDS);
-  check("walk: remove another gateway: the confirmation lists what goes and what stays", ok, miss);
+  check("walk: remove another gateway: the confirmation names each record that goes and what stays", ok, miss);
   check("walk: remove another gateway: no record checkbox for a gateway not in use", (await p.locator("#confirm-dialog [data-s-record]").count()) === 0);
   check("walk: remove: focus on Cancel", (await p.evaluate(() => document.activeElement?.textContent.trim())) === "Cancel");
   check("walk: remove: the dialog is modal", await p.evaluate(() => document.querySelector("#confirm-dialog").matches(":modal")));
   await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
-  const [ok2, miss2] = await has(p, settings, ["Studio gateway is removed from this device", "Its pairing: the device token Clawtrate keeps for its route", "Removed", "Stays"]);
+  const [ok2, miss2] = await has(p, settings, ["Studio gateway is removed from this device", "Its route's device token and the access it holds", "Removed", "Stays"]);
   const rows = await p.evaluate(() => document.querySelectorAll('[data-testid="gateway-list"] > li').length);
   check("walk: remove another gateway: the result, one gateway left", ok2 && rows === 1, `missing ${miss2}; rows ${rows}`);
+  check("walk: remove another gateway: the gateway was not asked, and says so", (await recordLine(p)).includes("Clawtrate did not ask the gateway to remove this device's record."));
   check("walk: remove another gateway: announced", (await announced(p)) === "Studio gateway is removed from this device");
   await p.close();
 }
 {
   const p = await open("open=settings&section=gateway");
   await press(p, "button", "Remove this gateway…");
-  const [ok, miss] = await has(p, confirm, ["Remove Home gateway from this device?", "Nothing on the gateway changes unless you tick the box below.", "Also remove this device's record from Home gateway", "This device's key. Studio gateway knows this device by it too."]);
+  const [ok, miss] = await has(p, confirm, ["Remove Home gateway from this device?", "Nothing on the gateway changes unless you tick the box below.", "Also remove this device's record from Home gateway. That ends this device's access to Home gateway through every route.", "Its connection on this device, open or waiting", "This device's key. Studio gateway knows this device by it too."]);
   check("walk: remove the gateway in use, with admin: the record checkbox", ok, miss);
   check("walk: remove the gateway in use, with admin: unticked", !(await p.locator("#confirm-dialog [data-s-record]").isChecked()));
   await p.locator("#confirm-dialog [data-s-record]").check();
   await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
-  const [ok2, miss2] = await has(p, settings, ["Home gateway is removed from this device", "This device's record on Home gateway", "Home gateway removed it", "Not connected. Choose a gateway to use.", "Studio gateway"]);
-  check("walk: remove the gateway in use: removed, not connected, choose", ok2, miss2);
+  const [ok2, miss2] = await has(p, settings, ["Home gateway is removed from this device", "Gateway removed this device's record. That ends this device's access to Home gateway through every route.", "Not connected. Choose a gateway to use.", "Studio gateway"]);
+  check("walk: remove the gateway in use, a matching answer: the record removed, not connected, choose", ok2, miss2);
   check("walk: remove the gateway in use: the rail says not connected", (await rail(p)).includes("Not connected"));
   await press(p, "button", "Switch to Studio gateway", 1200);
   check("walk: remove the gateway in use: then Switch leads to Studio", (await rail(p)).includes("Marlow"));
@@ -257,35 +260,40 @@ const REMOVED_WORDS = [
   await p.close();
 }
 {
+  const p = await open("remove=home&host=web");
+  check("remove on the web preview: every browser of that host is named", (await text(p, confirm)).includes("This preview's host is shared: removing it here removes it for every browser that uses this host."));
+  await p.close();
+}
+{
   const p = await open("remove=home&rmfail=remote&waiting=1");
   const [ok0] = await has(p, confirm, ["1 message to Otto that hasn't been sent yet"]);
   check("remove with a message waiting: the confirmation names it", ok0);
   await p.locator("#confirm-dialog [data-s-record]").check();
   await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
-  const [ok, miss] = await has(p, settings, ["Home gateway didn't remove this device's record", "Nothing was removed. Home gateway said: the request was refused.", "Remove from this device only", "Cancel"]);
+  const [ok, miss] = await has(p, settings, ["Home gateway refused to remove this device's record", "Nothing was removed. Home gateway said: the request was refused.", "Remove from this device only", "Cancel"]);
   check("walk: remove, the gateway refuses: nothing removed", ok, miss);
   check("walk: remove, the gateway refuses: Home still in use", (await rail(p)).includes("Otto"));
   await press(p, "button", "Remove from this device only", 200);
-  const [ok2, miss2] = await has(p, settings, ["Home gateway is removed from this device", "On Home gateway: this device's record, device 9c2e41."]);
-  check("walk: remove, the gateway refuses: from this device only, the record stays", ok2, miss2);
+  const r = await recordLine(p);
+  check("walk: remove, the gateway refuses: from this device only, the record stays, refused", (await text(p, settings)).includes("Home gateway is removed from this device") && r.includes("Home gateway refused to remove it."), r);
   await p.close();
 }
 {
   const p = await open("remove=home&rmfail=unknown");
   await p.locator("#confirm-dialog [data-s-record]").check();
   await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
-  const [ok, miss] = await has(p, settings, ["Clawtrate can't tell whether Home gateway removed this device's record", "Nothing else was removed. Look for this device in Home gateway's device list on the gateway's computer.", "Remove from this device only"]);
-  check("walk: remove, no answer from the gateway: not claimed as removed, nothing else removed", ok && (await rail(p)).includes("Otto") && !(await text(p, settings)).includes("Home gateway removed it"), miss);
+  const [ok, miss] = await has(p, settings, ["Gateway record could not be confirmed", "Clawtrate asked Home gateway to remove this device's record and got no answer it can read.", "Nothing else was removed.", "Remove from this device only"]);
+  check("walk: remove, an unclear answer: neither removed nor kept is claimed", ok && (await rail(p)).includes("Otto") && !(await text(p, settings)).includes("Gateway removed this device's record"), miss);
   await press(p, "button", "Remove from this device only", 200);
-  const [ok2, miss2] = await has(p, settings, ["Home gateway is removed from this device", "On Home gateway: this device's record, device 9c2e41."]);
-  check("walk: remove, no answer, from this device only: the record is listed as staying", ok2 && !(await text(p, settings)).includes("Home gateway removed it"), miss2);
+  const r = await recordLine(p);
+  check("walk: remove, an unclear answer, then this device only: still could not be confirmed, to the end", r.includes("Gateway record could not be confirmed.") && !r.includes("this device's record, device 9c2e41.") && !(await text(p, settings)).includes("Gateway removed this device's record"), r);
   await p.close();
 }
 {
   const p = await open("remove=home");
   await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
-  const t = await text(p, settings);
-  check("walk: remove the gateway in use without the box: the record is listed as staying, never as removed", t.includes("On Home gateway: this device's record, device 9c2e41.") && !t.includes("Home gateway removed it"));
+  const r = await recordLine(p);
+  check("walk: remove the gateway in use without the box: the gateway wasn't asked, never removed", r.includes("Clawtrate did not ask the gateway to remove this device's record.") && !(await text(p, settings)).includes("Gateway removed this device's record"), r);
   await p.close();
 }
 {
