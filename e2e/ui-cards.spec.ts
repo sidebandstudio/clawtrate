@@ -392,7 +392,7 @@ test.describe("approval cards on a real gateway", () => {
     await fresh.context().close();
   });
 
-  test("F-163 F-165: denied: the card says the command was not run", async () => {
+  test("F-163 F-165: denied: the card says who denied it; the call's result stays on its own card", async () => {
     const { title } = await hostTask("otto", "Approve deny", "#sleep 3");
     await openTask(page, "Otto", title);
     const approval = card(page, "approval-card");
@@ -400,15 +400,12 @@ test.describe("approval cards on a real gateway", () => {
     await approval.getByRole("button", { name: "Deny" }).click();
     await expect(approval.locator(".tag")).toHaveText("Denied", { timeout: 30_000 });
     await approval.locator("summary").first().click();
-    // The gateway's decision and who made it, then what became of the command, from the call's
-    // own result.
+    // The gateway's decision and who made it. Once the call's own result arrives, the card says
+    // nothing more of it: the result is on the call's own card.
     await expect(approval.locator(".request-resolved-body > p").first()).toHaveText(
       /^Denied( by .+)? at \d+:\d\d [AP]M\.$/,
     );
-    await expect(approval.getByTestId("approval-then")).toHaveText(
-      "The gateway reported that it did not run the command.",
-      { timeout: 30_000 },
-    );
+    await expect(approval.getByTestId("approval-then")).toHaveCount(0, { timeout: 30_000 });
     await shot(approval, "approval-denied");
   });
 

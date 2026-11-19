@@ -253,7 +253,7 @@ test.describe("approval cards", () => {
     ]);
     await expect(form.locator("dd").last()).toHaveText("Otto");
     await expect(form.locator(".standing-outcome")).toHaveText(
-      "The gateway will add this to media-box's allowlist, so Otto is not asked again for commands it matches. The gateway decides what that covers; it can be wider than this exact command.",
+      "This asks the gateway to keep an approval for future matching requests.",
     );
     await expect(form.getByLabel("Number of days")).toHaveCount(0);
     await expect(form.getByRole("button", { name: "Allow and save" })).toBeFocused();
@@ -286,7 +286,7 @@ test.describe("approval cards", () => {
     const form = card.getByRole("group", { name: "Always allow" });
     await expect(form.locator("dt").last()).toHaveText("For");
     await expect(form.locator(".standing-outcome")).toHaveText(
-      "The routine Weekly cleanup may run this command without asking.",
+      "This asks the gateway to keep an approval for future matching requests.",
     );
     const days = form.getByLabel("Number of days");
     // It starts from the lifetime the gateway gives the grant (`scope.expiresInDays`).

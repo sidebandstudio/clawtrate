@@ -223,13 +223,13 @@ describe("approval cards from the engine's state", () => {
     ]);
     expect(ordinary.form.days).toBe(false);
     expect(ordinary.form.sentence).toBe(
-      "The gateway will add this to media-box's allowlist, so Otto is not asked again for commands it matches. The gateway decides what that covers; it can be wider than this exact command.",
+      "This asks the gateway to keep an approval for future matching requests.",
     );
     const routine = approvalView(approval("approval-routine").card, bots, otto);
     expect(routine.form.days).toBe(true);
     expect(routine.form.rows.at(-1)).toEqual({ label: "For", value: "The routine Weekly cleanup" });
     expect(routine.form.sentence).toBe(
-      "The routine Weekly cleanup may run this command without asking.",
+      "This asks the gateway to keep an approval for future matching requests.",
     );
     // The field starts from the gateway's default lifetime, when it is whole days from 1 to 3650.
     expect(routine.form.defaultDays).toBe(7);
@@ -356,26 +356,31 @@ describe("approval cards from the engine's state", () => {
     }
   });
 
-  it("F-325 F-168: what became of the call is said only from the call's own result", () => {
+  it("F-325 F-168: the approval says only that the call's result has not been reported; a reported result stays on its own action card", () => {
     const { card } = approval("approval-allowed-once");
-    expect(thenLine(card, undefined)).toBe("This command's result has not been reported here.");
-    expect(thenLine(card, { status: "running" })).toBe("The command is running.");
-    expect(thenLine(card, { status: "done", result: { text: "(no output)" } })).toBe(
-      "The command ran. Its result is on its card above.",
-    );
+    const none = "This command's result has not been reported here.";
+    expect(thenLine(card, undefined)).toBe(none);
+    // A step released to wait or run with no result yet: nothing says it is running.
+    expect(thenLine(card, { status: "waiting" })).toBe(none);
+    expect(thenLine(card, { status: "running" })).toBe(none);
+    // A call stopped or cut off has no result: nothing says it ran or can run.
+    expect(thenLine(card, { status: "stopped" })).toBe(none);
+    expect(thenLine(card, { status: "unknown" })).toBe(none);
+    // With a result, the approval says nothing of it: a tool return that only reports the
+    // approval pending, ordinary stderr that says "denied", and a completed result.
+    expect(
+      thenLine(card, {
+        status: "done",
+        result: { text: "Approval pending (id=ap-1). Waiting for the decision." },
+      }),
+    ).toBeNull();
     expect(
       thenLine(card, {
         status: "failed",
-        result: { text: "Exec denied (gateway id=x, user-denied): ls" },
+        result: { text: "cp: /srv/media/x: Permission denied" },
       }),
-    ).toBe("The gateway reported that it did not run the command.");
-    // A call stopped or cut off has no result: nothing says it ran or can run.
-    expect(thenLine(card, { status: "stopped" })).toBe(
-      "This command's result has not been reported.",
-    );
-    expect(thenLine(card, { status: "unknown" })).toBe(
-      "This command's result has not been reported.",
-    );
+    ).toBeNull();
+    expect(thenLine(card, { status: "done", result: { text: "(no output)" } })).toBeNull();
   });
 
   it("F-164: the policy line says the host's policy from the request's own fields, never a cause", () => {

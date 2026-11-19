@@ -344,9 +344,7 @@ test("F-325: Allow once runs the command exactly once and saves no rule; the sam
   );
   await expect(card).not.toContainText(/can run now|will ask again|next time/);
   await expect(transcript(page)).toContainText("The slow command finished.", { timeout: 60_000 });
-  await expect(card.getByTestId("approval-then")).toHaveText(
-    "The command ran. Its result is on its card above.",
-  );
+  await expect(card.getByTestId("approval-then")).toHaveCount(0);
   // It ran exactly once: one call, one result, the command's own.
   const rows = await historyOf(first.key);
   const calls = rows.flatMap((row) =>

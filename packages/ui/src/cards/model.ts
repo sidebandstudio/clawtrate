@@ -218,11 +218,7 @@ export function approvalView(
       value: grant.routine ? `The routine ${grant.routine}` : "The routine that asked",
     });
   }
-  const sentence = grant
-    ? `${grant.routine ? `The routine ${grant.routine}` : "The routine"} may run this command without asking.`
-    : card.kind === "exec"
-      ? `The gateway will add this to ${machine ? `${possessive(machine)} allowlist` : "the host's allowlist"}, so ${asker} is not asked again for commands it matches. The gateway decides what that covers; it can be wider than this exact command.`
-      : "The gateway will remember this decision for requests it treats as the same.";
+  const sentence = "This asks the gateway to keep an approval for future matching requests.";
 
   return {
     title,
@@ -247,11 +243,6 @@ export function approvalView(
 
 function what(card: ApprovalCard): string {
   return card.kind === "exec" ? "run a command" : "change the gateway";
-}
-
-/** "media-box's"; the gateway's own machine keeps "the gateway's" list. */
-function possessive(name: string): string {
-  return name === "the gateway's machine" ? "the gateway's" : `${name}'s`;
 }
 
 /**
@@ -324,8 +315,8 @@ function deciderOf(card: ApprovalCard): string | null {
 }
 
 /**
- * The call's outcome after the answer, said only from the call's own result:
- * the step the approval waits on, as the engine holds it.
+ * After the answer, only that the call's own result has not been reported
+ * here; a reported result stays on its own action card.
  */
 export function thenLine(
   card: ApprovalCard,
@@ -333,15 +324,7 @@ export function thenLine(
 ): string | null {
   if (!card.stepId || card.status === "pending") return null;
   const noun = card.kind === "exec" ? "command" : "action";
-  if (!step) return `This ${noun}'s result has not been reported here.`;
-  if (step.status === "running" || step.status === "waiting") return `The ${noun} is running.`;
-  if (step.status === "done") return `The ${noun} ran. Its result is on its card above.`;
-  if (step.status === "failed") {
-    return /denied/i.test(step.result?.text ?? "")
-      ? `The gateway reported that it did not run the ${noun}.`
-      : `The ${noun} failed. Its result is on its card above.`;
-  }
-  return `This ${noun}'s result has not been reported.`;
+  return step?.result == null ? `This ${noun}'s result has not been reported here.` : null;
 }
 
 /**
