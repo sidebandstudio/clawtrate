@@ -11,6 +11,7 @@
 // record kept.
 //
 // Set CLAWTRATE_IOS_SHOTS=<folder> to also save each screen in light and dark.
+// Arguments after the command go to Vitest (`pnpm mobile:check --bail=1`).
 
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readdirSync, rmSync } from "node:fs";
@@ -232,7 +233,8 @@ async function main(): Promise<number> {
 
     child = spawn(
       join(REPO, "node_modules/.bin/vitest"),
-      ["run", "--root", join(import.meta.dirname, "../simulator")],
+      // Anything after the command goes to Vitest: `pnpm mobile:check --bail=1`.
+      ["run", "--root", join(import.meta.dirname, "../simulator"), ...process.argv.slice(2)],
       {
         cwd: REPO,
         stdio: "inherit",
@@ -244,6 +246,7 @@ async function main(): Promise<number> {
           CLAWTRATE_IOS_MAESTRO: maestro,
           CLAWTRATE_IOS_DEVICE: record.device,
           CLAWTRATE_IOS_BUNDLE: BUNDLE_ID,
+          CLAWTRATE_IOS_APP: APP_PATH,
           CLAWTRATE_IOS_INSTANCE: record.instance,
           CLAWTRATE_IOS_GATEWAY: gateway.url,
           CLAWTRATE_IOS_TOKEN: gateway.token,

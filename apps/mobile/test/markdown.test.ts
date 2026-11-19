@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openableUrl, parseMarkdown } from "../src/markdown.ts";
+import { columnWidths, COLUMN_WIDTH, openableUrl, parseMarkdown } from "../src/markdown.ts";
 
 describe("the bot's markdown on iOS", () => {
   it("reads paragraphs, emphasis, strong, inline code and links", () => {
@@ -135,5 +135,18 @@ describe("the bot's markdown on iOS", () => {
         { t: "link", url: "https://b.example/", plain: true },
       ],
     });
+  });
+
+  it("gives each table column one width in every row, from its longest cell, within the bounds", () => {
+    const [table] = parseMarkdown(
+      [
+        "| A | Medium heading | x |",
+        "| --- | --- | --- |",
+        `| short | b | ${"wide ".repeat(40)} |`,
+      ].join("\n"),
+    );
+    if (table?.t !== "table") throw new Error("not a table");
+    // 15-point text: "short" is narrow, "Medium heading" is 14 × 15 × 0.55 + 16, and 200 characters are capped.
+    expect(columnWidths(table, 15)).toEqual([COLUMN_WIDTH.min, 132, COLUMN_WIDTH.max]);
   });
 });

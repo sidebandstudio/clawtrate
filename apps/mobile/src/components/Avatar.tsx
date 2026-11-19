@@ -16,7 +16,8 @@ import {
   type FaceState,
   type Shape,
 } from "@clawtrate/ui/character";
-import { Image, View } from "react-native";
+import { useEffect, useState } from "react";
+import { AccessibilityInfo, Animated, Easing, Image, View } from "react-native";
 import Svg, { Circle, Ellipse, G, Path, Rect } from "react-native-svg";
 import { useTheme } from "../theme/index.ts";
 import { StarIcon } from "./icons.tsx";
@@ -68,6 +69,52 @@ export function Character({
   );
 }
 
+/** Whether the person asked the system to reduce motion; it can change while the app runs. */
+export function useReduceMotion(): boolean {
+  const [reduce, setReduce] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((value) => {
+      if (live) setReduce(value);
+    });
+    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", setReduce);
+    return () => {
+      live = false;
+      subscription.remove();
+    };
+  }, []);
+  return reduce;
+}
+
+/** A working bot's body bobs on the working loop (`--loop-work`, 1200 ms); it holds still with reduced motion. */
+const LOOP_WORK_MS = 1200;
+
+function useBob(active: boolean): Animated.AnimatedInterpolation<number> {
+  const [value] = useState(() => new Animated.Value(0));
+  const reduce = useReduceMotion();
+  useEffect(() => {
+    if (!active || reduce) {
+      value.setValue(0);
+      return;
+    }
+    const half = {
+      duration: LOOP_WORK_MS / 2,
+      easing: Easing.inOut(Easing.ease),
+      useNativeDriver: true,
+    };
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(value, { toValue: 1, ...half }),
+        Animated.timing(value, { toValue: 0, ...half }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [active, reduce, value]);
+  const [bob] = useState(() => value.interpolate({ inputRange: [0, 1], outputRange: [0, -3] }));
+  return bob;
+}
+
 export function Avatar({
   bot,
   size,
@@ -80,17 +127,23 @@ export function Avatar({
   state?: FaceState;
 }) {
   const { c } = useTheme();
+  const bob = useBob(state === "working");
   return (
     <View style={{ width: size, height: size }}>
-      {bot.avatarUrl ? (
-        <Image
-          source={{ uri: bot.avatarUrl }}
-          style={{ width: size, height: size, borderRadius: size / 2 }}
-          accessibilityIgnoresInvertColors
-        />
-      ) : (
-        <Character id={bot.id} size={size} state={state} />
-      )}
+      <Animated.View
+        testID={state === "working" ? "avatar-working" : undefined}
+        style={{ transform: [{ translateY: bob }] }}
+      >
+        {bot.avatarUrl ? (
+          <Image
+            source={{ uri: bot.avatarUrl }}
+            style={{ width: size, height: size, borderRadius: size / 2 }}
+            accessibilityIgnoresInvertColors
+          />
+        ) : (
+          <Character id={bot.id} size={size} state={state} />
+        )}
+      </Animated.View>
       {primary && (
         <View
           testID="primary-star"

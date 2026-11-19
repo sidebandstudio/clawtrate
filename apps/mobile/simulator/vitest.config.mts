@@ -8,7 +8,8 @@ export default defineConfig({
   test: {
     include: ["*.test.ts"],
     fileParallelism: false,
-    testTimeout: 15 * 60_000,
+    // A pairing request left to expire, or a run, can take long on a loaded machine.
+    testTimeout: 45 * 60_000,
     hookTimeout: 5 * 60_000,
     bail: 1,
   },

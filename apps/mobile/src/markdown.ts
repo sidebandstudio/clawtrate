@@ -160,6 +160,25 @@ export function parseMarkdown(text: string): Block[] {
   return blocks(tree.children);
 }
 
+/** A table column's width bounds, in points: a narrow column still reads, a wide one wraps. */
+export const COLUMN_WIDTH = { min: 72, max: 240 } as const;
+
+/**
+ * Each column's width, the same in every row: its longest cell's text at an
+ * average glyph width of the font size's 0.55, plus the cell's 16 points of
+ * padding, within COLUMN_WIDTH. Every cell of a column gets that width, so
+ * the columns line up and nothing is measured against an unbounded width.
+ */
+export function columnWidths(table: Extract<Block, { t: "table" }>, fontSize: number): number[] {
+  const rows = [table.header, ...table.rows];
+  const columns = Math.max(0, ...rows.map((row) => row.length));
+  return Array.from({ length: columns }, (_, k) => {
+    const longest = Math.max(0, ...rows.map((row) => inlineText(row[k] ?? []).length));
+    const width = Math.ceil(longest * fontSize * 0.55) + 16;
+    return Math.min(COLUMN_WIDTH.max, Math.max(COLUMN_WIDTH.min, width));
+  });
+}
+
 /** What the app asks before it leaves for a link whose text is not its address. */
 export const LINK_WORDS = {
   ask: "Open this link in your browser?",

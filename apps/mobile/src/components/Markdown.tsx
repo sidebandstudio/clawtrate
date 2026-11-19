@@ -5,7 +5,14 @@
 
 import { Fragment, useMemo } from "react";
 import { Alert, Linking, ScrollView, View } from "react-native";
-import { inlineText, LINK_WORDS, parseMarkdown, type Block, type Inline } from "../markdown.ts";
+import {
+  columnWidths,
+  inlineText,
+  LINK_WORDS,
+  parseMarkdown,
+  type Block,
+  type Inline,
+} from "../markdown.ts";
 import { FONTS, S, TOUCH, useTheme } from "../theme/index.ts";
 import { Txt } from "./ui.tsx";
 
@@ -145,7 +152,8 @@ function Blocks({ blocks }: { blocks: Block[] }) {
             );
           case "rule":
             return <View key={index} style={{ height: 1, backgroundColor: c.border }} />;
-          case "table":
+          case "table": {
+            const widths = columnWidths(block, S["text-base"]);
             return (
               <ScrollView key={index} horizontal testID="md-table">
                 <View>
@@ -162,8 +170,7 @@ function Blocks({ blocks }: { blocks: Block[] }) {
                         <View
                           key={k}
                           style={{
-                            minWidth: 72,
-                            maxWidth: 240,
+                            width: widths[k],
                             paddingVertical: 6,
                             paddingRight: S["space-4"],
                           }}
@@ -178,6 +185,7 @@ function Blocks({ blocks }: { blocks: Block[] }) {
                 </View>
               </ScrollView>
             );
+          }
         }
       })}
     </View>

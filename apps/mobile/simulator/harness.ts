@@ -4,7 +4,14 @@
 // checks can cut and restore, and a gateway that speaks another protocol.
 
 import { execFile, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+  type Dirent,
+} from "node:fs";
 import { createServer, Socket, type Server } from "node:net";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -50,27 +57,64 @@ export type Step = Record<string, unknown> | string;
  * condition (`extendedWaitUntil`, Maestro's own retrying assertions), never a
  * fixed sleep.
  */
-export async function steps(name: string, commands: Step[]): Promise<void> {
+export async function steps(
+  name: string,
+  commands: Step[],
+  options: {
+    /** The app the steps look at: Clawtrate unless another one has come forward (Safari). */
+    appId?: string;
+    /** The whole run's bound, past which the driver is stopped and the steps fail. */
+    timeoutMs?: number;
+  } = {},
+): Promise<void> {
   const dir = join(OUTPUT, name);
   mkdirSync(dir, { recursive: true });
   const file = join(dir, "flow.yaml");
   writeFileSync(
     file,
-    `appId: ${env.bundle}\n---\n${commands.map((c) => `- ${JSON.stringify(c)}`).join("\n")}\n`,
+    `appId: ${options.appId ?? env.bundle}\n---\n${commands.map((c) => `- ${JSON.stringify(c)}`).join("\n")}\n`,
+    { mode: 0o600 },
   );
-  try {
-    await run(
-      need("CLAWTRATE_IOS_MAESTRO"),
-      ["--device", env.device, "test", "--debug-output", dir, file],
-      {
-        maxBuffer: 16 * 1024 * 1024,
-        timeout: 10 * 60_000,
-      },
-    );
-  } catch (error) {
-    const { stdout = "", stderr = "" } = error as { stdout?: string; stderr?: string };
-    throw new Error(`Steps "${name}" failed:\n${stdout}${stderr}`, { cause: error });
+  // The driver's runner is installed once and kept between flows. When it
+  // does not start (a loaded machine), that is no result of the app's: the
+  // flow is run once more, with the runner installed afresh.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await run(
+        need("CLAWTRATE_IOS_MAESTRO"),
+        [
+          "--device",
+          env.device,
+          "test",
+          attempt === 1 ? "--no-reinstall-driver" : "--reinstall-driver",
+          "--debug-output",
+          dir,
+          file,
+        ],
+        {
+          maxBuffer: 16 * 1024 * 1024,
+          // Ten minutes for the driver to start on a loaded machine, and the steps themselves.
+          timeout: options.timeoutMs ?? 25 * 60_000,
+          killSignal: "SIGKILL",
+        },
+      );
+      return;
+    } catch (error) {
+      const { stdout = "", stderr = "" } = error as { stdout?: string; stderr?: string };
+      const output = `${stdout}${stderr}`;
+      if (attempt === 1 && DRIVER_DID_NOT_START.test(output)) continue;
+      throw new Error(`Steps "${name}" failed:\n${output}`, { cause: error });
+    }
   }
+}
+
+/** What Maestro says when its runner on the device did not start, before any step ran. */
+const DRIVER_DID_NOT_START =
+  /iOS driver not ready in time|operation never finished bootstrapping|IOSDriverTimeoutException/;
+
+/** A server's close, bounded: a socket that lingers does not hold the checks. */
+export function closeWithin(close: Promise<void>, ms = 5_000): Promise<void> {
+  return Promise.race([close, new Promise<void>((resolve) => setTimeout(resolve, ms))]);
 }
 
 export type Selector = { id?: string; text?: string; [key: string]: unknown };
@@ -99,7 +143,7 @@ export async function layout(): Promise<
 > {
   const { stdout } = await run(
     need("CLAWTRATE_IOS_MAESTRO"),
-    ["--device", env.device, "hierarchy"],
+    ["--device", env.device, "hierarchy", "--no-reinstall-driver"],
     {
       maxBuffer: 64 * 1024 * 1024,
     },
@@ -122,6 +166,31 @@ export async function layout(): Promise<
         text: a.accessibilityText ?? "",
       });
       found.set(a["resource-id"], list);
+    }
+    for (const child of node.children ?? []) walk(child);
+  };
+  walk(tree);
+  return found;
+}
+
+/** Where the first element whose text matches is on screen, in points, from Maestro's view of the app. */
+export async function boundsOf(
+  pattern: RegExp,
+): Promise<{ x1: number; y1: number; x2: number; y2: number } | null> {
+  const { stdout } = await run(
+    need("CLAWTRATE_IOS_MAESTRO"),
+    ["--device", env.device, "hierarchy", "--no-reinstall-driver"],
+    { maxBuffer: 64 * 1024 * 1024 },
+  );
+  const tree = JSON.parse(stdout.slice(stdout.indexOf("{"))) as Node;
+  let found: { x1: number; y1: number; x2: number; y2: number } | null = null;
+  const walk = (node: Node) => {
+    if (found) return;
+    const a = node.attributes ?? {};
+    const m = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/.exec(a.bounds ?? "");
+    if (m && (pattern.test(a.accessibilityText ?? "") || pattern.test(a.text ?? ""))) {
+      found = { x1: +m[1]!, y1: +m[2]!, x2: +m[3]!, y2: +m[4]! };
+      return;
     }
     for (const child of node.children ?? []) walk(child);
   };
@@ -178,6 +247,119 @@ export function launch(options: { fresh?: boolean; devGateway: string }) {
     "-ClawtrateDevGatewayInstance",
     env.instance,
   );
+}
+
+/** Bring the app, still running, back to the front, as tapping it again would. */
+export function activate() {
+  simctl("launch", env.device, env.bundle);
+}
+
+/** Delete the app and install it again: iOS removes its data with it, not its Keychain items. */
+export function reinstall() {
+  quit();
+  simctl("uninstall", env.device, env.bundle);
+  simctl("install", env.device, need("CLAWTRATE_IOS_APP"));
+}
+
+/** What the device's pasteboard holds. */
+export function pasteboard(): string {
+  return simctl("pbpaste", env.device);
+}
+
+/** The system's text size, as Settings, Accessibility, Larger Text sets it. */
+export function textSize(size: "large" | "accessibility-extra-extra-extra-large") {
+  simctl("ui", env.device, "content_size", size);
+}
+
+/** The built app's Info.plist value for a key. */
+export function infoPlist(key: string): string {
+  const result = spawnSync(
+    "plutil",
+    ["-extract", key, "raw", "-o", "-", join(need("CLAWTRATE_IOS_APP"), "Info.plist")],
+    {
+      encoding: "utf8",
+    },
+  );
+  if (result.status !== 0) throw new Error(`Info.plist has no ${key}`);
+  return result.stdout.trim();
+}
+
+/**
+ * The newest app-switcher snapshot iOS saved in the app's container, as pixels,
+ * once one newer than `after` exists. iOS writes it as the app leaves the front.
+ */
+export async function switcherSnapshot(after: number) {
+  const container = simctl("get_app_container", env.device, env.bundle, "data").trim();
+  const root = join(container, "Library/SplashBoard/Snapshots");
+  const newest = () => {
+    const found: Array<{ path: string; time: number }> = [];
+    const walk = (dir: string) => {
+      let entries: Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (entry.name.endsWith(".ktx")) found.push({ path, time: statSync(path).mtimeMs });
+      }
+    };
+    walk(root);
+    return found.sort((a, b) => b.time - a.time)[0];
+  };
+  const snapshot = await until("the switcher's snapshot", async () => {
+    const latest = newest();
+    return latest && latest.time > after ? latest : null;
+  });
+  const png = join(OUTPUT, "switcher.png");
+  const converted = spawnSync("sips", ["-s", "format", "png", snapshot.path, "--out", png], {
+    encoding: "utf8",
+  });
+  if (converted.status !== 0) throw new Error(`Could not read the snapshot: ${converted.stderr}`);
+  return decodePng(readFileSync(png));
+}
+
+/** The screen now, whole, as pixels. */
+export function frame(): { width: number; data: Uint8Array } {
+  const file = join(OUTPUT, "frame.png");
+  simctl("io", env.device, "screenshot", file);
+  const image = decodePng(readFileSync(file));
+  return { width: image.width, data: image.data };
+}
+
+/**
+ * Whether a region of the screen changes from frame to frame: frames are taken
+ * until one differs from the first within the region, or eight seconds pass.
+ * `region` is in points, and `pointsWide` is the screen's width in points.
+ */
+export async function moves(
+  region: { x1: number; y1: number; x2: number; y2: number },
+  pointsWide: number,
+): Promise<boolean> {
+  const crop = ({ width, data }: { width: number; data: Uint8Array }) => {
+    const scale = width / pointsWide;
+    const out: number[] = [];
+    for (let y = Math.round(region.y1 * scale); y < Math.round(region.y2 * scale); y += 1)
+      for (let x = Math.round(region.x1 * scale); x < Math.round(region.x2 * scale); x += 1) {
+        const i = (y * width + x) * 4;
+        out.push(data[i]!, data[i + 1]!, data[i + 2]!);
+      }
+    return out;
+  };
+  const first = crop(frame());
+  const end = Date.now() + 8_000;
+  while (Date.now() < end) {
+    const next = crop(frame());
+    if (next.some((value, i) => Math.abs(value - first[i]!) > 24)) return true;
+  }
+  return false;
+}
+
+/** A message the gateway adds to a task as the bot's, with no run (`chat.inject`). */
+export async function inject(sessionKey: string, message: string): Promise<void> {
+  await gatewayCall("chat.inject", { sessionKey, message });
 }
 
 /** Close the app, as the person would. */
@@ -292,7 +474,7 @@ export class Proxy {
     const server = this.server;
     this.server = null;
     for (const socket of this.sockets) socket.destroy();
-    if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+    if (server) await closeWithin(new Promise<void>((resolve) => server.close(() => resolve())));
   }
 
   async restore() {
@@ -348,7 +530,13 @@ export async function realMismatchReply(): Promise<{
  * connect with the real gateway's mismatch reply, naming protocol 5, then
  * closes the socket as the real one does (1002).
  */
-export async function protocolFiveGateway(): Promise<{ url: string; close: () => Promise<void> }> {
+export async function protocolFiveGateway(): Promise<{
+  url: string;
+  /** Every request method the app sent, in order: only connects may come. */
+  methods: string[];
+  close: () => Promise<void>;
+}> {
+  const methods: string[] = [];
   const { challenge, reply } = await realMismatchReply();
   const details = {
     ...reply.error?.details,
@@ -361,7 +549,8 @@ export async function protocolFiveGateway(): Promise<{ url: string; close: () =>
   server.on("connection", (socket) => {
     socket.send(JSON.stringify(challenge));
     socket.on("message", (data) => {
-      const frame = JSON.parse(String(data)) as { id?: string; method?: string };
+      const frame = JSON.parse(String(data)) as { id?: string; method?: string; type?: string };
+      if (frame.type === "req" && frame.method) methods.push(frame.method);
       if (frame.method !== "connect") return;
       socket.send(JSON.stringify({ ...reply, id: frame.id, error: { ...reply.error, details } }));
       socket.close(1002);
@@ -370,8 +559,73 @@ export async function protocolFiveGateway(): Promise<{ url: string; close: () =>
   const port = (server.address() as { port: number }).port;
   return {
     url: `ws://127.0.0.1:${port}`,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    methods,
+    close: () => {
+      for (const client of server.clients) client.terminate();
+      return closeWithin(new Promise<void>((resolve) => server.close(() => resolve())));
+    },
   };
+}
+
+/**
+ * A gateway that refuses every connect with an error whose message repeats
+ * everything the app sent, its credential included, as a hostile or broken
+ * gateway could.
+ */
+export async function echoingGateway(): Promise<{ url: string; close: () => Promise<void> }> {
+  const { challenge } = await realMismatchReply();
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await new Promise((resolve) => server.once("listening", resolve));
+  server.on("connection", (socket) => {
+    socket.send(JSON.stringify(challenge));
+    socket.on("message", (data) => {
+      const frame = JSON.parse(String(data)) as { id?: string; method?: string; params?: unknown };
+      if (frame.method !== "connect") return;
+      socket.send(
+        JSON.stringify({
+          type: "res",
+          id: frame.id,
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            message: `Refused connect ${JSON.stringify(frame.params)}`,
+          },
+        }),
+      );
+      socket.close(1008);
+    });
+  });
+  const port = (server.address() as { port: number }).port;
+  return {
+    url: `ws://127.0.0.1:${port}`,
+    close: () => {
+      for (const client of server.clients) client.terminate();
+      return closeWithin(new Promise<void>((resolve) => server.close(() => resolve())));
+    },
+  };
+}
+
+/** The app's own log lines since a time, from the device's unified log. */
+export function appLog(sinceSeconds: number): string {
+  const result = spawnSync(
+    "xcrun",
+    [
+      "simctl",
+      "spawn",
+      env.device,
+      "log",
+      "show",
+      "--last",
+      `${sinceSeconds}s`,
+      "--style",
+      "compact",
+      "--predicate",
+      'process == "Clawtrate"',
+    ],
+    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  if (result.status !== 0) throw new Error(`log show: ${result.stderr}`);
+  return result.stdout;
 }
 
 /** A loopback port nothing listens on. */
