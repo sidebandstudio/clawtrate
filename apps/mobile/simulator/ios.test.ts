@@ -6,6 +6,7 @@
 // Each title starts with the parity rows it proves on iOS.
 
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -176,7 +177,15 @@ const LONG_MESSAGE = "This line repeats to make a message longer than a block ma
 const HIDDEN_LINK_TEXT = "the quarterly report on heating costs";
 const HIDDEN_LINK = `[${HIDDEN_LINK_TEXT}](https://example.com/report)`;
 const MAIL_LINE = "Write [to the team](mailto:someone@example.com) for a copy.";
-const AUTOLINK = "https://example.com/";
+let browserUrl = "";
+let browserGet = false;
+const browser = createServer((req, res) => {
+  if (req.method === "GET" && req.url === "/clawtrate-link-check") {
+    browserGet = req.headers.authorization === undefined && req.headers.cookie === undefined;
+  }
+  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("Clawtrate link check");
+});
 const SAFARI = "com.apple.mobilesafari";
 
 beforeAll(async () => {
@@ -185,6 +194,13 @@ beforeAll(async () => {
   gateway = await proxy.start();
   five = await protocolFiveGateway();
   echo = await echoingGateway();
+  await new Promise<void>((resolve, reject) => {
+    browser.once("error", reject);
+    browser.listen(0, "127.0.0.1", resolve);
+  });
+  const address = browser.address();
+  if (!address || typeof address === "string") throw new Error("No browser fixture address");
+  browserUrl = `http://127.0.0.1:${address.port}/clawtrate-link-check`;
   // The reading check needs a stamp ten minutes after its first message: the
   // first is stored now, and the rest after the pairing checks.
   reading = await gatewayTask("main", "Reading check");
@@ -197,6 +213,8 @@ afterAll(async () => {
   await proxy?.stop();
   await five?.close();
   await echo?.close();
+  browser.closeAllConnections();
+  await new Promise<void>((resolve) => browser.close(() => resolve()));
 });
 
 describe("the iOS app", () => {
@@ -614,7 +632,7 @@ describe("the iOS app", () => {
       HIDDEN_LINK,
       MAIL_LINE,
       `The setup token was ${env.token}.`,
-      AUTOLINK,
+      browserUrl,
     ])
       await inject(reading.key, message);
     const laterAt = await storedAt(reading.key, LATER_NOTE);
@@ -628,7 +646,7 @@ describe("the iOS app", () => {
       see(lit(FIRST_NOTE)),
       // Jump to latest goes to the end, and goes.
       tap({ id: "jump-to-latest", text: `${lit(CONVERSATION_WORDS.jumpToLatest)}.*` }),
-      waitFor(lit(AUTOLINK), 20_000),
+      waitFor(lit(browserUrl), 20_000),
       waitGone({ id: "jump-to-latest" }, 20_000),
       scrollTo({ text: lit(LATER_NOTE) }, "UP"),
       see({ id: "stamp", text: stampPattern(laterAt) }),
@@ -682,20 +700,21 @@ describe("the iOS app", () => {
       // The token the bot repeated is not shown.
       scrollTo({ text: lit("The setup token was •••.") }, "DOWN"),
       notSee(`.*${lit(env.token)}.*`),
-      scrollTo({ text: lit(AUTOLINK) }, "DOWN"),
+      scrollTo({ text: lit(browserUrl) }, "DOWN"),
     ]);
     // An address written as itself opens in the system browser without asking:
     // the system starts Safari, which was not running before. The system says
     // so; the driver is not asked about a screen while Safari starts.
     expect(running(SAFARI)).toBe(false);
-    await steps("open-link", [tap(lit(AUTOLINK))]);
+    await steps("open-link", [tap(lit(browserUrl))]);
+    await until("Safari's loopback GET", async () => browserGet || null, 30_000);
     await until("the browser to open the link", async () => running(SAFARI) || null, 30_000);
     // Back from the browser, the app is where it was.
     activate();
     await steps("back-from-browser", [
       waitFor({ id: "transcript" }, 30_000),
       // Where it was: at the end of the task, the link it opened in view.
-      see(lit(AUTOLINK)),
+      see(lit(browserUrl)),
       tap({ id: "back" }),
       waitFor({ id: "bot-tasks-main" }, 20_000),
       tap({ id: "back" }),
