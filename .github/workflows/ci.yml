@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -77,3 +78,126 @@ jobs:
           retention-days: 3
       # Unsigned: no signing variables are set, so the app is signed ad hoc and not notarized.
       - run: pnpm package:mac
+
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      # The repository's line endings, as on macOS and Linux.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Unsigned: no signing variables are set.
+      - run: pnpm package:win
+      # For inspection only: unsigned, and never a release.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: apps/desktop/dist/Clawtrate-*-win-x64.exe
+          if-no-files-found: error
+          retention-days: 3
+      - name: Install for the current user, silently, into a folder of its own
+        id: install
+        run: |
+          $installer = @(Get-ChildItem apps/desktop/dist/Clawtrate-*-win-x64.exe)
+          if ($installer.Count -ne 1) { throw "expected one installer, found $($installer.Count)" }
+          # A space in the path, as a folder a person picks may have. NSIS takes /D= last and unquoted.
+          $dir = Join-Path $env:RUNNER_TEMP "Clawtrate install"
+          $run = Start-Process $installer[0].FullName -ArgumentList '/S', '/currentuser', "/D=$dir" -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "the installer exited with $($run.ExitCode)" }
+          foreach ($file in 'Clawtrate.exe', 'resources\app.asar', 'Uninstall Clawtrate.exe') {
+            if (-not (Test-Path -LiteralPath (Join-Path $dir $file))) { throw "the installer did not write $file" }
+          }
+          # Its uninstall entry and its own key, both named by the GUID electron-builder derives from the app id.
+          $entry = @(Get-ChildItem HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall |
+            Get-ItemProperty | Where-Object { $_.DisplayName -like 'Clawtrate*' })
+          if ($entry.Count -ne 1) { throw "expected one uninstall entry for Clawtrate, found $($entry.Count)" }
+          $entry | Select-Object PSChildName, DisplayName, DisplayVersion, Publisher | Format-List
+          $guid = $entry[0].PSChildName
+          $own = Get-ItemProperty -LiteralPath "HKCU:\Software\$guid"
+          if ($own.InstallLocation -ne $dir) { throw "the installer's key names $($own.InstallLocation), not $dir" }
+          # The copy of itself it keeps for an updater, in a folder of the user's local application data.
+          $hash = (Get-FileHash -LiteralPath $installer[0].FullName).Hash
+          $cache = @(Get-ChildItem -LiteralPath $env:LOCALAPPDATA -Directory -Filter '*-updater' |
+            Where-Object { (Test-Path -LiteralPath "$($_.FullName)\installer.exe") -and (Get-FileHash -LiteralPath "$($_.FullName)\installer.exe").Hash -eq $hash })
+          if ($cache.Count -ne 1) { throw "expected one copy of the installer under $env:LOCALAPPDATA, found $($cache.Count)" }
+          "installer's copy: $($cache[0].FullName)"
+          $startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'Clawtrate.lnk'
+          $desktop = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Clawtrate.lnk'
+          foreach ($link in $startMenu, $desktop) {
+            if (-not (Test-Path -LiteralPath $link)) { throw "the installer did not make $link" }
+          }
+          # The silent install must not start the app; the check starts its own.
+          $running = Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "$dir\*" }
+          if ($running) { throw "the installer left the app running: $($running.ProcessId -join ', ')" }
+          "dir=$dir" >> $env:GITHUB_OUTPUT
+          "guid=$guid" >> $env:GITHUB_OUTPUT
+          "cache=$($cache[0].FullName)" >> $env:GITHUB_OUTPUT
+          "start-menu=$startMenu" >> $env:GITHUB_OUTPUT
+          "desktop=$desktop" >> $env:GITHUB_OUTPUT
+      - name: Check the Start menu shortcut opens the installed app under the app's own id
+        env:
+          DIR: ${{ steps.install.outputs.dir }}
+          LINK: ${{ steps.install.outputs.start-menu }}
+        run: |
+          $appId = node --input-type=module -e "const m = await import('./apps/desktop/src/main/identity.ts'); console.log(m.APP_ID)"
+          if (-not $appId) { throw "could not read the app id" }
+          if (-not (Test-Path -LiteralPath $env:LINK)) { throw "there is no Start menu shortcut at $env:LINK" }
+          $target = (New-Object -ComObject WScript.Shell).CreateShortcut($env:LINK).TargetPath
+          $exe = Join-Path $env:DIR 'Clawtrate.exe'
+          if ($target -ne $exe) { throw "the Start menu shortcut opens '$target', not '$exe'" }
+          $item = (New-Object -ComObject Shell.Application).Namespace((Split-Path $env:LINK)).ParseName((Split-Path $env:LINK -Leaf))
+          $linkId = $item.ExtendedProperty('System.AppUserModel.ID')
+          if ($linkId -ne $appId) { throw "the Start menu shortcut's AppUserModelID is '$linkId', not the app's '$appId'" }
+          "$env:LINK opens $target as $linkId"
+      - name: Run the launch check against the installed app
+        env:
+          CLAWTRATE_PACKAGED_APP: ${{ steps.install.outputs.dir }}
+        run: pnpm check:packaged
+      # Also after a failed check, so the uninstall is exercised whenever something was installed.
+      - name: Uninstall silently and check nothing of the installer's is left
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          DIR: ${{ steps.install.outputs.dir }}
+          GUID: ${{ steps.install.outputs.guid }}
+          CACHE: ${{ steps.install.outputs.cache }}
+          START_MENU: ${{ steps.install.outputs.start-menu }}
+          DESKTOP: ${{ steps.install.outputs.desktop }}
+        run: |
+          $run = Start-Process (Join-Path $env:DIR 'Uninstall Clawtrate.exe') -ArgumentList '/S' -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "the uninstaller exited with $($run.ExitCode)" }
+          # Everything the installer made: the app's folder, the copy of itself, its shortcuts and its two keys.
+          $owned = @(
+            $env:DIR, $env:CACHE, $env:START_MENU, $env:DESKTOP,
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$env:GUID",
+            "HKCU:\Software\$env:GUID"
+          )
+          # The uninstaller carries on from a copy of itself in the temporary folder, so wait for it.
+          $deadline = (Get-Date).AddSeconds(60)
+          do {
+            $left = @($owned | Where-Object { Test-Path -LiteralPath $_ })
+            if ($left.Count -eq 0) { break }
+            Start-Sleep -Seconds 1
+          } while ((Get-Date) -lt $deadline)
+          if ($left.Count -gt 0) {
+            foreach ($path in $left) {
+              $path
+              if (-not $path.StartsWith('HKCU:') -and (Test-Path -LiteralPath $path -PathType Container)) {
+                Get-ChildItem -LiteralPath $path -Force -Recurse | ForEach-Object { "  $($_.FullName)" }
+              }
+            }
+            throw "the uninstaller left $($left.Count) of the installer's paths behind"
+          }
+          "removed: $($owned -join '; ')"
+      # What a failed check saw: Playwright's error context for each failed test.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-results
+          path: test-results/
+          retention-days: 3
