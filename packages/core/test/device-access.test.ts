@@ -3,7 +3,7 @@
 // holds, never by itself, and held once granted.
 import { describe, expect, it } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
-import type { ClawtrateClient } from "../src/client.ts";
+import { ClawtrateClient } from "../src/client.ts";
 import {
   ADMIN_SCOPES,
   INTERACTIVE_SCOPES,
@@ -12,8 +12,8 @@ import {
   READ_SCOPES,
 } from "../src/scopes.ts";
 import { AccountsGateway, accountsClient } from "./accounts-fake.ts";
-import { URL_A } from "./client-harness.ts";
-import { deferred, tokenKey, until } from "./fake-gateway.ts";
+import { FAST, URL_A } from "./client-harness.ts";
+import { deferred, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 describe("device access", () => {
   it("F-157: is asked for only by an explicit request, with the scopes already held, and held once granted", async () => {
@@ -86,6 +86,40 @@ describe("device access", () => {
     expect(fake.gateway.calls("device.scopes.requestUpgrade")[1]).toEqual({
       scopes: [...ADMIN_SCOPES, PAIRING_SCOPE],
     });
+    client.stop();
+  });
+
+  it("F-157: device access asked for while the connection is being set up asks with the scopes it holds once up", async () => {
+    const fake = new AccountsGateway();
+    const wait = deferred<unknown>();
+    fake.gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-9" });
+    fake.gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: READ_SCOPES,
+        heldScopes: READ_SCOPES,
+      }),
+    });
+    const client = new ClawtrateClient(testHost(fake.gateway, storage), FAST);
+    // Asked for when the connect request reaches the gateway, before its hello: nothing is held yet.
+    const reply = fake.gateway.connectReply;
+    let asked: Promise<void> | null = null;
+    fake.gateway.connectReply = (params, url) => {
+      if (!asked) {
+        expect(client.state.connection.status).not.toBe("connected");
+        asked = client.requestAccess("pairing");
+      }
+      return reply(params, url);
+    };
+    await client.start();
+    await until(() => asked !== null);
+    await asked;
+    await until(() => client.state.connection.upgrade.status === "pending");
+    expect(fake.gateway.calls("device.scopes.requestUpgrade")).toEqual([
+      { scopes: [READ_SCOPE, PAIRING_SCOPE] },
+    ]);
     client.stop();
   });
 

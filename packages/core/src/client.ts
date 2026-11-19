@@ -4471,6 +4471,9 @@ export class ClawtrateClient {
       connectedAt: this.now(),
       paired: true,
     });
+    // Device access asked for before this hello asks with what this connection holds, and no more.
+    if (this.upgradeWanted && this.upgradeTier === "held" && !this.scopeUpgrade)
+      this.heldBase = ADMIN_SCOPES.filter((scope) => scopes.includes(scope));
     if (
       this.tierScopes(this.upgradeTier).every((scope) => scopeSatisfied(scopes, scope)) &&
       (!this.pairingWanted || scopes.includes(PAIRING_SCOPE))
