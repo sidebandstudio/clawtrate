@@ -11,14 +11,16 @@
 // scenario checks, with an admin client and a read-only one of their own.
 // Then the computer checks (computer-checks.ts) run on a second instance,
 // `e2e-<run>-computer`, started with `--with-plugin clawtrate-computer`,
-// whose bots Marlow and Pip have browsers of their own; it is recorded and
-// reset the same way.
+// whose bots Marlow and Pip have browsers of their own, and with
+// `--with-images`, so the image checks (image-checks.ts) run there after them;
+// it is recorded and reset the same way.
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import {
   browserPorts,
+  imagesPort,
   instancePorts,
   lockOrder,
   openInstance,
@@ -31,6 +33,7 @@ import {
   type ComputerClient,
 } from "../tools/dev-gateway/src/computer-checks.ts";
 import { loadDevPlugin } from "../tools/dev-gateway/src/dev-plugins.ts";
+import { runImageChecks } from "../tools/dev-gateway/src/image-checks.ts";
 import { PLUGIN_RULE } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import {
@@ -185,11 +188,12 @@ async function computerChecks(
   const declaration = loadDevPlugin("clawtrate-computer", ROOT, PLUGIN_RULE).botBrowsers;
   if (!declaration) throw new Error("clawtrate-computer declares no bot browsers");
   console.log(`Starting instance ${name} for the computer checks`);
-  await startInstance(name, runId, ["--with-plugin", "clawtrate-computer"]);
+  await startInstance(name, runId, ["--with-plugin", "clawtrate-computer", "--with-images"]);
   const inst = openInstance(name);
   const ports = instancePorts(inst);
   const { pagesPort, botCdpPorts } = browserPorts(ports, declaration.bots);
-  for (const port of [ports.gatewayPort, ports.providerPort, pagesPort, ...botCdpPorts]) {
+  const standIn = imagesPort(ports);
+  for (const port of [ports.gatewayPort, ports.providerPort, pagesPort, ...botCdpPorts, standIn]) {
     if (FORBIDDEN_PORTS.includes(port)) {
       throw new Error(`instance ${name} is on port ${port}, which the check never uses`);
     }
@@ -218,7 +222,15 @@ async function computerChecks(
       drainTimeoutMs: declaration.drainTimeoutMs,
     });
     console.log(`${passed} of ${passed + failed} computer checks passed`);
-    return failed;
+    const images = await runImageChecks({
+      writer: clients.holder!,
+      reader: clients.reader!,
+      gatewayOrigin: `http://127.0.0.1:${ports.gatewayPort}`,
+      imagesOrigin: `http://127.0.0.1:${standIn}`,
+      stamp: Date.now().toString(36),
+    });
+    console.log(`${images.passed} of ${images.passed + images.failed} image checks passed`);
+    return failed + images.failed;
   } finally {
     for (const op of Object.values(clients)) await op.close();
   }
