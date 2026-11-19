@@ -333,6 +333,21 @@ describe("a running forward's error output", () => {
     expect(output.held).toBe(0);
   });
 
+  it("drops a line longer than its limit whether it comes in one chunk or split before its end", () => {
+    const line = "Connection refused " + "x".repeat(MAX_PENDING_LINE) + "\n";
+    const whole = new ForwardOutput(54000);
+    whole.push(line);
+    const split = new ForwardOutput(54000);
+    split.push(line.slice(0, -1));
+    split.push("\n");
+    expect(failureFromFacts(whole.facts, 255)).toEqual({ kind: "ssh-stopped", exit: 255 });
+    expect(failureFromFacts(split.facts, 255)).toEqual({ kind: "ssh-stopped", exit: 255 });
+    // A line within the limit is read either way.
+    const short = new ForwardOutput(54000);
+    short.push("ssh: connect to host 127.0.0.1 port 1: Connection refused\n");
+    expect(failureFromFacts(short.facts, 255)).toMatchObject({ kind: "unreachable" });
+  });
+
   it.each(RECORDED)(
     "classifies as the whole output does: %s, %s",
     (_client, _case, stderr, expected) => {

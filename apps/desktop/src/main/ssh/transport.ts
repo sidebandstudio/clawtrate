@@ -734,7 +734,9 @@ export class SshTransport {
       "--",
       route.alias,
     ]);
-    // Its error output is read into facts as it arrives; none of it is kept.
+    // The reader keeps at most 1,024 characters of the current unfinished stderr line so it
+    // can classify it across chunks. It discards each complete line after classification
+    // and exposes only typed facts.
     const output = new ForwardOutput(localPort);
     const listening: Array<() => void> = [];
     const exits: Array<(failure: SshFailure) => void> = [];

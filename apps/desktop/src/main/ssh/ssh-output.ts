@@ -115,7 +115,10 @@ export class ForwardOutput {
     const parts = chunk.split("\n");
     const last = parts.pop() ?? "";
     for (const part of parts) {
-      const line = this.overlong ? "" : this.pending + part;
+      const line =
+        this.overlong || this.pending.length + part.length > MAX_PENDING_LINE
+          ? ""
+          : this.pending + part;
       this.pending = "";
       this.overlong = false;
       this.read(line);
