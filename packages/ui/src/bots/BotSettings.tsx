@@ -363,7 +363,16 @@ export function BotSettings({
         {binding.mode === "default-model" && (
           <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
         )}
-        <RunsOnRow botName={name} read={placement.read} nameOf={nameOf} onOpen={() => go("runs")} />
+        <RunsOnRow
+          botName={name}
+          read={placement.read}
+          nameOf={nameOf}
+          onOpen={() => {
+            // The page reads the gateway each time it opens.
+            placement.reload();
+            go("runs");
+          }}
+        />
         {foot}
       </div>
     );
