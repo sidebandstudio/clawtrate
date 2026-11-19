@@ -1330,13 +1330,15 @@ describe("the usage engine", () => {
   it("F-237: sources that can't be reconciled with the gateway's total are not shown, and the rest of a total still being counted is no figure", async () => {
     const gateway = fakeGateway();
     // The review's case: a 50-token total, while sessions.usage, read apart and still counting,
-    // already lists 60 tokens of a routine's.
+    // already lists 60 tokens of a routine's. Its aggregate agrees with the headline, so it is
+    // the parts that come to more than the total that keep the sources from being shown.
     const apart: typeof gateway.request = async (method, raw) => {
       if (method === "usage.cost")
         return { updatedAt: 1, totals: totals(30, 20), cacheStatus: fresh };
       if (method === "sessions.usage")
         return {
           updatedAt: 1,
+          totals: totals(30, 20),
           sessions: [{ key: "agent:otto:cron:job1", usage: totals(36, 24) }],
           cacheStatus: { status: "refreshing", pendingFiles: 1 },
         };
@@ -1352,7 +1354,9 @@ describe("the usage engine", () => {
     });
     expect(report.detailCounting).toBe(true);
     expect(report.sources).toBeNull();
-    expect(report.detailError).toMatch(/don't agree yet/);
+    expect(report.detailError).toBe(
+      "The tasks' records and the gateway's total don't agree yet, so where the tokens came from isn't shown.",
+    );
     one.engine.onClose();
     // A total still being counted: the named parts are shown as partial, the rest is not a figure.
     const two = engineOn(fakeGateway({ counting: true }));
