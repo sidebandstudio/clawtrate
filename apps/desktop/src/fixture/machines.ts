@@ -143,7 +143,8 @@ function world(now: number, params: MachineParams) {
       entries: params.override
         ? [{ botId: "otto", levels: { security: null, ask: "always" }, allowlist: 3 }]
         : [],
-      entriesOmitted: 0,
+      // The file's `*` entry, which names no listed bot.
+      entriesOmitted: 1,
     },
   };
   const devices: DeviceRow[] = [

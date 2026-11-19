@@ -425,7 +425,7 @@ export function useMachinesSection({
       inner = (
         <>
           <p className="m-subgroup" id={titleId}>
-            Defaults, for bots with no entry of their own
+            File defaults
           </p>
           <DefaultsChoices
             labelledBy={titleId}
@@ -463,9 +463,7 @@ export function useMachinesSection({
             })}
           </dl>
           {file.entriesOmitted > 0 && (
-            <p className="b-hint">
-              {file.entriesOmitted} more entries name agents the gateway doesn't list.
-            </p>
+            <p className="b-hint">Other file entries: {file.entriesOmitted}.</p>
           )}
           <p className="b-hint">
             The file's settings, as stored. <Mark kind="set" />

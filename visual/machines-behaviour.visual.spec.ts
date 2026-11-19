@@ -303,6 +303,9 @@ test("F-156: a machine's defaults are one radio group: one tab stop, arrows move
   await openMachines(page);
   const file = page.locator('[data-testid="approvals-file"][data-machine="media-box"]');
   const group = file.getByRole("radiogroup");
+  await expect(group).toHaveAccessibleName("File defaults");
+  // The `*` entry is counted as what it is: another entry of the file.
+  await expect(file).toContainText("Other file entries: 1.");
   await expect(group.getByRole("radio", { checked: true })).toHaveAccessibleName(
     "Ask for commands not on the allowlist",
   );
