@@ -284,24 +284,28 @@ export function Calendar({
             const mine = chips.filter((chip) => chip.at >= day && chip.at < addDays(day, 1));
             const label = dayLabel(day);
             const empty = mine.length === 0 && bands[dayIndex]!.length === 0;
-            // Chips that start less than an hour apart share the row side by side, in time order.
-            const groups: Chip[][] = [];
+            // Chips that start less than an hour apart share the row side by side, in time order:
+            // each takes the first column with no chip in the hour before it.
+            const place = new Map<string, { index: number; of: number }>();
+            let columns: number[] = [];
+            let cluster: Array<{ key: string; index: number }> = [];
+            const close = () => {
+              for (const each of cluster) place.set(each.key, { ...each, of: columns.length });
+            };
             for (const chip of mine) {
-              const group = groups.at(-1);
-              const last = group?.at(-1);
-              if (
-                group &&
-                last &&
-                Math.abs(wallMinutes(chip.at, viewer) - wallMinutes(last.at, viewer)) < 60
-              )
-                group.push(chip);
-              else groups.push([chip]);
+              const minute = wallMinutes(chip.at, viewer);
+              const free = (last: number) => Math.abs(minute - last) >= 60;
+              if (columns.every(free)) {
+                close();
+                columns = [];
+                cluster = [];
+              }
+              let index = columns.findIndex(free);
+              if (index < 0) index = columns.push(minute) - 1;
+              else columns[index] = minute;
+              cluster.push({ key: chip.key, index });
             }
-            const place = new Map(
-              groups.flatMap((group) =>
-                group.map((chip, index) => [chip.key, { index, of: group.length }] as const),
-              ),
-            );
+            close();
             return (
               <ul
                 key={`day:${day}`}
