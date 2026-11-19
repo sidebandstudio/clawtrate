@@ -157,7 +157,7 @@ An Ask is the gateway's own plugin approval: `plugin.approval.requested`, answer
 | `"full"`           | anything                                                                      | full                                                                                                                                                                                                  | `{mode: "full", because: "setting"}`                   |
 | `"redacted"`       | anything                                                                      | redacted                                                                                                                                                                                              | `{mode: "redacted", because: "setting"}`               |
 
-The plugin reads the gateway's current config for each card. A redacted card still carries the tool's name, and a forwarded one the bot's id, which the gateway adds and the plugin cannot remove. A full card can reach a forwarding destination only with `cardDetails: "full"`. The path and command a Never refuses are in the call's own result, which the gateway shows only to those who can read the task.
+The plugin reads the gateway's current config for each card. A redacted card still carries the tool's name, and a forwarded one the bot's id, which the gateway adds and the plugin cannot remove. A full card can reach a forwarding destination only with `cardDetails: "full"`. A refused call's result identifies the matching rule. The gateway controls access to that result and to the original call arguments.
 
 What the gateway does with it (OpenClaw 2026.10.6, seen on a development gateway):
 

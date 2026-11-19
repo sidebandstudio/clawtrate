@@ -789,7 +789,7 @@ export const RULES_CHECKS: RulesCheck[] = [
     },
   },
   {
-    name: "with approval forwarding configured a card names no path, command or bot; a setting forces the details back",
+    name: "with forwarding configured the plugin's approval text omits the path and bot id; full text restores the path",
     covers: ["#write"],
     async run(ctx, world) {
       same(
