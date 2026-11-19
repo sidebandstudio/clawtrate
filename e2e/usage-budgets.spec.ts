@@ -778,6 +778,14 @@ test("F-234: a routine's budget counts that routine's runs, from its own tasks",
 });
 
 test("F-234: a Daily and a Weekly budget are each counted over their own days, as the gateway counts them", async () => {
+  test.setTimeout(240_000);
+  // Not in a day's last two minutes: the days worked out here and the budget's are the same days.
+  const [hour, minute, second] = new Date()
+    .toLocaleTimeString("en-GB", { timeZone, hourCycle: "h23" })
+    .split(":")
+    .map(Number) as [number, number, number];
+  const toMidnight = ((23 - hour) * 3600 + (59 - minute) * 60 + (60 - second)) * 1000;
+  if (toMidnight < 120_000) await new Promise((resolve) => setTimeout(resolve, toMidnight + 1_000));
   // The days are worked out here, apart from the app's date code, and the gateway is asked for
   // its own total over them.
   const daily = ownDays("daily", timeZone);
