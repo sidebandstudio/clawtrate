@@ -289,7 +289,7 @@ A server from `mcp.servers` has no catalog entry and no plugin state. Its page s
 
 **Sign-in: "Not reported."** Under it, always: "The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work." For a shared OAuth server the page offers "Sign in" (section 10). For an existing per-requester entry: "Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender." Clawtrate offers no sign-in for it (section 11).
 
-**Accounts.** The gateway keeps one shared sign-in per server name and address (R§6). So a second account at the same address is a second server under another name: "Add another account" opens section 12 with the address and headers filled in and the name empty, and its line says "A second name for the same server, with its own sign-in. Bots tell them apart by name." The label a person types is that name.
+**Accounts.** The gateway keeps one shared sign-in per server name and address (R§6). So a second account at the same address is a second server under another name. "Add another account" is offered only for a shared OAuth server ("Sign in with OAuth"); its line says "A second name for the same server, with its own sign-in. Bots tell them apart by name." It opens section 12 with the address and the header names filled in, the header values and the name left empty, and under the headers: "Enter any header values this server needs. Saved values are hidden." The label a person types is the name.
 
 What the page can never say: that the server is signed in, for whom, until when, or that it works now.
 
@@ -381,7 +381,7 @@ There is no Client ID and no Client Secret: the gateway has no field for either 
 | Arguments      | One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay part of that argument, and a line left empty is dropped. Nothing goes through a shell. |
 | Working folder | Optional. Spaces at its start and end are removed; left empty, the entry has no `cwd`.                                                                                                         |
 
-Under the fields: "The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can." "Continue" opens the confirmation.
+Under the fields: "The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can." and "The gateway can show saved commands and arguments to operators who can read its settings." (a command and its arguments are read back in full, R§6; no secret belongs in them). "Continue" opens the confirmation.
 
 **The confirmation**, before anything is written (role `alertdialog`, focus on Cancel). It shows the reviewed values, and those same values, no others, are what the write sends (section 12's contract):
 
@@ -406,7 +406,7 @@ Every removal is a confirmation that says exactly what goes and what stays, then
 
 > **Remove Quillnote from the gateway?**
 > Goes: Quillnote's files on the gateway's machine; its settings on the gateway; its tools, from every bot that has them: Juniper, Pip.
-> Stays: its sign-in, kept by the gateway in its state, not encrypted there; a note on the gateway that Quillnote is off, so nothing turns it back on by itself.
+> Stays: any saved sign-ins, kept by the gateway in its state, not encrypted there; a note on the gateway that Quillnote is off, so nothing turns it back on by itself.
 > [Cancel] [Remove]
 
 The bots named are those whose last tool list had its tools; when none has run since it was added, the line reads "its tools, from every bot that doesn't deny them". After the removal, `plugins.list` is read: "Removed Quillnote. The gateway no longer lists it." A connector that comes with OpenClaw has no Remove (section 8).
@@ -414,11 +414,12 @@ The bots named are those whose last tool list had its tools; when none has run s
 **A tool server** (section 12's contract: `null`, with `replacePaths` for a command's arguments, and the `hash` read when the confirmation opened, R§5):
 
 > **Remove notes-work from the gateway?**
-> Goes: the server's entry in the gateway's settings, with its headers; its tools, from every bot that has them.
-> Stays: its sign-in, kept by the gateway in its state, not encrypted there. Removing the server does not delete it, and the gateway finds it again if a server with the same name and URL is added. To sign out first, run `openclaw mcp logout notes-work` on the gateway's machine before removing the server.
+> Goes: the server's entry in the gateway's settings, with its headers; its tools.
+> Stays: "Removing this entry leaves any saved sign-ins in the gateway's state. The gateway keeps them unencrypted." The gateway finds them again if a server with the same name and URL is added.
+> To clear them, run `openclaw mcp logout notes-work` on the gateway's machine before removing the entry, or remove it there with `openclaw mcp unset notes-work`, which clears them too.
 > [Cancel] [Remove]
 
-The `logout` line appears only for a server with "Sign in with OAuth". Then `config.get` is read, and "Removed notes-work. The gateway's settings no longer have it." is said only when that read has no such entry. When the read still has it: "notes-work is still there: <the gateway's reason>." with "Try again". When the settings changed since the confirmation opened: "The gateway's settings changed. Review the current entry before trying again." When the read fails: "Couldn't confirm the change."
+The sign-in lines are for an OAuth entry only, and the commands carry the gateway's profile option when the host knows it. For an existing per-requester entry `logout` refuses, so the line is: "To remove it and clear them, run `openclaw mcp unset team-notes` on the gateway's machine instead." (R§6). An entry without OAuth has no sign-in line. Then `config.get` is read, and "Removed notes-work. The gateway's settings no longer have it." is said only when that read has no such entry. When the read still has it: "notes-work is still there: <the gateway's reason>." with "Try again". When the settings changed since the confirmation opened: "The gateway's settings changed. Review the current entry before trying again." When the read fails: "Couldn't confirm the change."
 
 ## 15. What do you use every day? (F-004)
 

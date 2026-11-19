@@ -92,7 +92,7 @@ const STATES = [
   ["screen=connector&id=linkpeek", ["Comes with OpenClaw", "Added. Not loaded yet: it loads when a bot first needs it.", "Comes with OpenClaw, so it can be turned off but not removed."]],
   ["screen=connector&id=tasktide&access=read", ["Read-only.", "Changing connectors needs admin access.", "Request admin access"]],
   ["screen=turnoff-confirm&id=tasktide", ["Turn off Tasktide?", "Its tools stop reaching every bot on this gateway. Its settings and its sign-in stay."]],
-  ["screen=remove-confirm&id=tasktide", ["Remove Tasktide from the gateway?", "Goes", "Tasktide's files on the gateway's machine", "its settings on the gateway", "its tools, from every bot that has them: Juniper, Pip", "Stays", "its sign-in, kept by the gateway in its state, not encrypted there", "a note on the gateway that Tasktide is off, so nothing turns it back on by itself"]],
+  ["screen=remove-confirm&id=tasktide", ["Remove Tasktide from the gateway?", "Goes", "Tasktide's files on the gateway's machine", "its settings on the gateway", "its tools, from every bot that has them: Juniper, Pip", "Stays", "any saved sign-ins, kept by the gateway in its state, not encrypted there", "a note on the gateway that Tasktide is off, so nothing turns it back on by itself"]],
   ["screen=removed&id=tasktide", ["Removed Tasktide.", "The gateway no longer lists it."]],
   ["screen=server&id=notes-work", ["notes-work", "Name on the gateway", "Added by address", "https://notes.example/mcp", "Authorization", "Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.", "Signs in with OAuth", "What the last run found", "8 tools, at Pip's run at 5:12 PM", "Sign-in", "Not reported.", "The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.", "Sign in", "Accounts", "A second name for the same server, with its own sign-in. Bots tell them apart by name.", "Add another account", "Remove…"]],
   ["screen=server&id=notes-work&last=notyet", ["No bot has run since this was added. Its tools show after the next run."]],
@@ -101,8 +101,9 @@ const STATES = [
   ["screen=server&id=search-index", ["Runs a command", "/opt/example/bin/search-server --stdio --index ./notes", "spawn /opt/example/bin/search-server ENOENT"]],
   ["screen=server&id=team-notes", ["Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender.", "Clawtrate offers no sign-in for it."]],
   ["screen=server&id=notes-work&device=iphone", ["Change it from Clawtrate on your computer."]],
-  ["screen=server-remove-confirm&id=notes-work", ["Remove notes-work from the gateway?", "the server's entry in the gateway's settings, with its headers", "its tools, from every bot that has them", "its sign-in, kept by the gateway in its state, not encrypted there. Removing the server does not delete it, and the gateway finds it again if a server with the same name and URL is added.", "To sign out first, run this on the gateway's machine before removing the server:", "openclaw mcp logout notes-work"]],
-  ["screen=server-remove-confirm&id=search-index", ["Remove search-index from the gateway?", "nothing else: it has no sign-in the gateway keeps"]],
+  ["screen=server-remove-confirm&id=notes-work", ["Remove notes-work from the gateway?", "the server's entry in the gateway's settings, with its headers", "its tools", "Removing this entry leaves any saved sign-ins in the gateway's state. The gateway keeps them unencrypted.", "To clear them, run this on the gateway's machine before removing the entry:", "openclaw mcp logout notes-work", "openclaw mcp unset notes-work"]],
+  ["screen=server-remove-confirm&id=team-notes", ["Removing this entry leaves any saved sign-ins in the gateway's state. The gateway keeps them unencrypted.", "To remove it and clear them, run this on the gateway's machine instead:", "openclaw mcp unset team-notes"]],
+  ["screen=server-remove-confirm&id=search-index", ["Remove search-index from the gateway?", "nothing else: an entry without OAuth has no sign-in the gateway keeps"]],
   ["screen=server-removed&id=notes-work", ["Removed notes-work.", "The gateway's settings no longer have it."]],
   ["screen=server-remove-failed&id=notes-work", ["notes-work is still there:", "Try again"]],
   ["screen=server-changed&id=notes-work", ["The gateway's settings changed.", "Review the current entry before trying again."]],
@@ -111,7 +112,7 @@ const STATES = [
   ["screen=add-server-unconfirmed&name=notes-home", ["Couldn't confirm the change.", "Check again"]],
   ["screen=add-server-changed&name=notes-home", ["The gateway's settings changed.", "Review the current entry before trying again."]],
   ["screen=add-server", ["Add a custom connector", "Type", "Remote HTTPS", "Command", "Name", "Server URL", "Headers", "Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved.", "Sign-in", "None", "Sign in with OAuth", "OpenClaw registers itself with the server when it signs in.", "Add to gateway"]],
-  ["screen=add-server&type=command", ["Command", "Arguments", "One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay, and an empty line is dropped. Nothing goes through a shell.", "Working folder", "The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can.", "Continue"]],
+  ["screen=add-server&type=command", ["Command", "Arguments", "One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay, and an empty line is dropped. Nothing goes through a shell.", "Working folder", "The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can.", "The gateway can show saved commands and arguments to operators who can read its settings.", "Continue"]],
   ["screen=add-server&access=read", ["Read-only.", "Adding a custom connector needs admin access."]],
   ["screen=command-confirm&name=search-index&cmd=/opt/example/bin/search-server&args=%5B%22--stdio%22%5D", ["Run this command on the gateway's machine?", "Home gateway will run, on its own machine (studio.example), as the user it runs as:", "Program", "/opt/example/bin/search-server", "Arguments", "--stdio", "with that user's access to files, programs and the network.", "Add command server"]],
   ["screen=command-confirm&name=search-index&cmd=/opt/example/bin/search-server&args=%5B%5D", ["No arguments"]],
@@ -269,7 +270,12 @@ await walk("add another account to a tool server", "screen=server&id=notes-work"
   const p = await open("screen=server&id=notes-work");
   await link("Add another account")(p);
   await at(p, "add-server");
-  check("Add another account keeps the address and leaves the name empty", (await p.inputValue("#c-url")) === "https://notes.example/mcp" && (await p.inputValue("#c-name")) === "");
+  check("Add another account fills in the address and header names, leaves the name and every value empty", (await p.inputValue("#c-url")) === "https://notes.example/mcp" && (await p.inputValue("#c-name")) === "" && (await p.inputValue("#c-h-name")) === "Authorization" && (await p.inputValue("#c-h-value")) === "" && (await text(p)).includes("Enter any header values this server needs. Saved values are hidden."));
+  const each = await open("screen=server&id=team-notes");
+  const cmd = await open("screen=server&id=search-index");
+  check("Add another account only for a shared OAuth server", (await each.getByRole("link", { name: "Add another account" }).count()) === 0 && (await cmd.getByRole("link", { name: "Add another account" }).count()) === 0);
+  await each.close();
+  await cmd.close();
   await p.close();
 }
 await walk("sign in to a tool server: the gateway's own steps, then back", "screen=server&id=notes-work", [[link("Sign in"), "signin-cli"], [link("Back to notes-work"), "server"]], ["Not reported."]);

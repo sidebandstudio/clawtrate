@@ -324,7 +324,7 @@
         `<p class="c-line">The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.</p>` +
         (s.signin === "each" ? `<p class="c-line">Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender. Clawtrate offers no sign-in for it.</p>` : "") +
         (s.signin === "oauth" && admin ? `<div class="c-actions">${link("Sign in", "signin-cli", { id: name, server: "1" })}</div>` : "") +
-        (s.kind === "remote"
+        (s.kind === "remote" && s.signin === "oauth"
           ? group("Accounts") +
             `<p class="c-line">A second name for the same server, with its own sign-in. Bots tell them apart by name.</p>` +
             (admin ? `<div class="c-actions">${link("Add another account", "add-server", { type: "remote", from: name })}</div>` : "")
@@ -353,7 +353,8 @@
             field("c-name", "Name", remote ? "" : reviewed().name, "Letters, digits, hyphens and underscores. Bots see it in tool names.", "notes-work") +
             (remote
               ? field("c-url", "Server URL", base ? base.url : "", "", "https://") +
-                `<fieldset class="c-headers"><legend>Headers</legend><div class="c-header-row"><input class="input" id="c-h-name" aria-label="Header name" placeholder="Name" value="${base ? "Authorization" : ""}" /><input class="input" id="c-h-value" type="password" aria-label="Header value" placeholder="Value" /></div>` +
+                `<fieldset class="c-headers"><legend>Headers</legend><div class="c-header-row"><input class="input" id="c-h-name" aria-label="Header name" placeholder="Name" value="${base ? esc(base.headers[0] || "") : ""}" /><input class="input" id="c-h-value" type="password" aria-label="Header value" placeholder="Value" /></div>` +
+                (base ? `<p class="c-line" data-c="values">Enter any header values this server needs. Saved values are hidden.</p>` : "") +
                 `<p class="c-line">Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved.</p></fieldset>` +
                 `<fieldset class="c-signin"><legend>Sign-in</legend>` +
                 radio("signin", "none", "None", !base) +
@@ -362,7 +363,8 @@
               : field("c-command", "Command", reviewed().command, "", "/path/to/server") +
                 `<label class="c-field"><span>Arguments</span><textarea class="input" id="c-args" rows="3" aria-describedby="c-args-hint" placeholder="One per line">${esc(reviewed().args.join("\n"))}</textarea><span class="c-line" id="c-args-hint">One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay, and an empty line is dropped. Nothing goes through a shell.</span></label>` +
                 field("c-cwd", "Working folder", reviewed().cwd, "Optional.", "") +
-                `<p class="c-line">The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can.</p>`) +
+                `<p class="c-line">The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can.</p>` +
+                `<p class="c-line">The gateway can show saved commands and arguments to operators who can read its settings.</p>`) +
             `<div class="c-actions"><button type="submit" class="button" id="c-submit" data-variant="primary" data-size="sm">${remote ? "Add to gateway" : "Continue"}</button></div>` +
             `</form>`
           : `<p class="c-line">Adding a custom connector writes the gateway's settings.</p>`) +
@@ -571,7 +573,7 @@
         windowHtml(connectorPage()) +
         confirm(
           `Remove ${a.name} from the gateway?`,
-          goes([`${a.name}'s files on the gateway's machine`, "its settings on the gateway", params.get("bots") === "none" ? "its tools, from every bot that doesn't deny them" : "its tools, from every bot that has them: Juniper, Pip"], ["its sign-in, kept by the gateway in its state, not encrypted there", `a note on the gateway that ${a.name} is off, so nothing turns it back on by itself`]),
+          goes([`${a.name}'s files on the gateway's machine`, "its settings on the gateway", params.get("bots") === "none" ? "its tools, from every bot that doesn't deny them" : "its tools, from every bot that has them: Juniper, Pip"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", `a note on the gateway that ${a.name} is off, so nothing turns it back on by itself`]),
           [link("Cancel", "connector", { id: a.id }, { variant: "quiet" }), link("Remove", "removed", { id: a.id }, { variant: "primary" })],
           proto("the bots", [link("None has run since it was added", "remove-confirm", { id: a.id, bots: "none" }, { variant: "quiet" })]),
         )
@@ -579,7 +581,7 @@
     },
     removed: () => {
       const a = app(params.get("id") || "tasktide");
-      return windowHtml({ title: a.name, back: go("installed"), body: result("", "check", `Removed ${a.name}.`, "The gateway no longer lists it.") + goes([`${a.name}'s files`, "its settings", "its tools"], ["its sign-in, kept by the gateway in its state, not encrypted there", "the note that it is off"], "done") + `<div class="c-actions">${link("Back to the list", "installed")}</div>` });
+      return windowHtml({ title: a.name, back: go("installed"), body: result("", "check", `Removed ${a.name}.`, "The gateway no longer lists it.") + goes([`${a.name}'s files`, "its settings", "its tools"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", "the note that it is off"], "done") + `<div class="c-actions">${link("Back to the list", "installed")}</div>` });
     },
     server: () => windowHtml(serverPage()),
     "server-remove-confirm": () => {
@@ -589,8 +591,9 @@
         windowHtml(serverPage()) +
         confirm(
           `Remove ${name} from the gateway?`,
-          goes([`the server's entry in the gateway's settings${s.kind === "remote" ? ", with its headers" : ""}`, "its tools, from every bot that has them"], [s.signin === "oauth" ? "its sign-in, kept by the gateway in its state, not encrypted there. Removing the server does not delete it, and the gateway finds it again if a server with the same name and URL is added." : "nothing else: it has no sign-in the gateway keeps"]) +
-            (s.signin === "oauth" ? `<p>To sign out first, run this on the gateway's machine before removing the server:</p>${command(`openclaw mcp logout ${name}`, "sign-out command")}` : ""),
+          goes([`the server's entry in the gateway's settings${s.kind === "remote" ? ", with its headers" : ""}`, "its tools"], [s.signin ? "Removing this entry leaves any saved sign-ins in the gateway's state. The gateway keeps them unencrypted. The gateway finds them again if a server with the same name and URL is added." : "nothing else: an entry without OAuth has no sign-in the gateway keeps"]) +
+            (s.signin === "oauth" ? `<p>To clear them, run this on the gateway's machine before removing the entry:</p>${command(`openclaw mcp logout ${name}`, "sign-out command")}<p>or remove it there with this, which clears them too:</p>${command(`openclaw mcp unset ${name}`, "removal command")}` : "") +
+            (s.signin === "each" ? `<p>To remove it and clear them, run this on the gateway's machine instead:</p>${command(`openclaw mcp unset ${name}`, "removal command")}` : ""),
           [link("Cancel", "server", { id: name }, { variant: "quiet" }), link("Remove", "server-removed", { id: name }, { variant: "primary" })],
           proto("the gateway", [link("Still has it", "server-remove-failed", { id: name }, { variant: "quiet" }), link("Settings changed", "server-changed", { id: name }, { variant: "quiet" }), link("The read fails", "server-unconfirmed", { id: name }, { variant: "quiet" })]),
         )
