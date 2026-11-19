@@ -296,10 +296,10 @@
     const s = SERVERS[name];
     const last = params.get("last") || s.last;
     const lastRun = {
-      tools: `<p class="c-state">8 tools, at Pip's run at 5:12 PM</p><details class="c-details"><summary>The tools</summary><p class="mono c-faint">${name}__search, ${name}__read_page, ${name}__add_page, …</p></details>`,
-      notyet: `<p class="c-state">No bot has run since this was added. Its tools show after the next run.</p>`,
-      unavailable: `<p class="c-state" data-tone="warn">Unavailable at Pip's run at 5:12 PM:</p><p class="mono c-warn">MCP server "${name}": ${s.kind === "command" ? `spawn ${s.command} ENOENT` : "fetch failed | connect ECONNREFUSED"}; server unavailable.</p>`,
-      none: `<p class="c-state">Not reported: the gateway's tool list doesn't mention this server.</p>`,
+      tools: `<p class="c-state">Gateway tool listing for Pip's task, read at 5:12 PM: 8 tools</p><details class="c-details"><summary>The tools</summary><p class="mono c-faint">${name}__search, ${name}__read_page, ${name}__add_page, …</p></details>`,
+      notyet: `<p class="c-state">The gateway hasn't listed this server's tools for this task.</p><details class="c-details"><summary>The gateway's notice</summary><p class="c-faint">MCP servers "${name}" are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.</p></details>`,
+      unavailable: `<p class="c-state" data-tone="warn">Gateway tool listing for Pip's task, read at 5:12 PM:</p><p class="mono c-warn">MCP server "${name}": ${s.kind === "command" ? `spawn ${s.command} ENOENT` : "fetch failed | connect ECONNREFUSED"}; server unavailable.</p>`,
+      none: `<p class="c-state">Not reported: the gateway's tool listing for this task doesn't mention this server.</p>`,
     }[last];
     const rowsList = [
       ["Name on the gateway", `<span class="mono">${name}</span>`],
@@ -317,8 +317,10 @@
       back: go("installed"),
       body:
         facts(rowsList) +
-        group("What the last run found") +
+        group("Gateway tool listing") +
+        `<p class="c-line">For Pip's task "Errands", the most recent task of the bot you last opened.</p>` +
         lastRun +
+        `<p class="c-line">A listing shows what the gateway has discovered for this task. A bot's tool rules still decide what it is offered.</p>` +
         group("Sign-in") +
         `<p class="c-state" data-c="signin">Not reported.</p>` +
         `<p class="c-line">The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.</p>` +
@@ -531,7 +533,7 @@
             link("No answer", "add-checking", { id: A().id }, { variant: "quiet" }),
           ]),
       }),
-    "add-done": () => windowHtml({ title: `Adding ${A().name}`, body: result("ok", "check", `Added ${A().name}.`, "It's turned on. Its tools reach bots from their next message.", link(`Open ${A().name}`, "connector", { id: A().id, auth: "unauthenticated" }, { variant: "primary" })) }),
+    "add-done": () => windowHtml({ title: `Adding ${A().name}`, body: result("ok", "check", `Added ${A().name}.`, "The gateway lists it as installed and turned on.", link(`Open ${A().name}`, "connector", { id: A().id, auth: "unauthenticated" }, { variant: "primary" })) }),
     "add-restart": () => windowHtml({ title: `Adding ${A().name}`, body: result("", "warning", `Added ${A().name}.`, `The gateway says it needs a restart before ${A().name} works. Clawtrate doesn't restart the gateway.`) }),
     "add-refused": () => windowHtml({ title: `Adding ${A().name}`, body: result("danger", "x", `Couldn't add ${A().name}:`, "fetch failed. The gateway lists nothing new.", link("Try again", "add-confirm", { id: A().id })) }),
     "add-partial": () => windowHtml({ title: `Adding ${A().name}`, body: result("danger", "warning", `${A().name} was installed but didn't start:`, "quillnote: the module could not be loaded.", link(`Open ${A().name}`, "connector", { id: "boxwharf" })) }),
@@ -561,7 +563,7 @@
         windowHtml(connectorPage()) +
         confirm(
           `Turn off ${a.name}?`,
-          `<p>Its tools stop reaching every bot on this gateway. Its settings and its sign-in stay.</p>`,
+          `<p>The gateway stops offering its tools. Its settings and any saved sign-ins stay.</p>`,
           [link("Cancel", "connector", { id: a.id }, { variant: "quiet" }), link("Turn off", "connector", params.get("busy") ? { id: a.id, busy: "1" } : { id: a.id, now: "off", said: "off" }, { variant: "primary" })],
           proto("the gateway is", [link("Busy with another change", "turnoff-confirm", { id: a.id, busy: "1" }, { variant: "quiet" })]),
         )
@@ -573,9 +575,8 @@
         windowHtml(connectorPage()) +
         confirm(
           `Remove ${a.name} from the gateway?`,
-          goes([`${a.name}'s files on the gateway's machine`, "its settings on the gateway", params.get("bots") === "none" ? "its tools, from every bot that doesn't deny them" : "its tools, from every bot that has them: Juniper, Pip"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", `a note on the gateway that ${a.name} is off, so nothing turns it back on by itself`]),
+          goes([`${a.name}'s files on the gateway's machine`, "its settings on the gateway", "its tools"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", `a note on the gateway that ${a.name} is off, so nothing turns it back on by itself`]),
           [link("Cancel", "connector", { id: a.id }, { variant: "quiet" }), link("Remove", "removed", { id: a.id }, { variant: "primary" })],
-          proto("the bots", [link("None has run since it was added", "remove-confirm", { id: a.id, bots: "none" }, { variant: "quiet" })]),
         )
       );
     },
@@ -639,7 +640,7 @@
       return windowHtml({
         title: "Add a custom connector",
         body:
-          result("ok", "check", `Added ${esc(name)}.`, cmd ? `The gateway will run it at a bot's next run.${params.get("cmd") ? ` Read back: <span class="mono">${esc([reviewed().command, ...reviewed().args].join(" "))}</span>${reviewed().cwd ? `, in <span class="mono">${esc(reviewed().cwd)}</span>` : ""}.` : ""}` : "The gateway lists it. Its tools reach bots from their next run, unless a bot's settings deny them.", link(`Open ${esc(name)}`, "server", { id: cmd ? "search-index" : "notes-work", last: "notyet" }, { variant: "primary" }) + (params.get("signin") === "oauth" ? link("Sign in", "signin-cli", { id: "notes-work", server: "1" }) : "")) +
+          result("ok", "check", `Added ${esc(name)}.`, cmd ? `The gateway lists this server. The gateway can start this program when it needs this server.${params.get("cmd") ? ` Read back: <span class="mono">${esc([reviewed().command, ...reviewed().args].join(" "))}</span>${reviewed().cwd ? `, in <span class="mono">${esc(reviewed().cwd)}</span>` : ""}.` : ""}` : "The gateway lists this server.", link(`Open ${esc(name)}`, "server", { id: cmd ? "search-index" : "notes-work", last: "notyet" }, { variant: "primary" }) + (params.get("signin") === "oauth" ? link("Sign in", "signin-cli", { id: "notes-work", server: "1" }) : "")) +
           proto("the write", [link("Refused", "add-server-refused", { name }, { variant: "quiet" }), link("No answer", "add-server-checking", { name }, { variant: "quiet" }), link("Settings changed", "add-server-changed", { name }, { variant: "quiet" })]),
       });
     },

@@ -74,14 +74,13 @@ const STATES = [
   ["screen=add-consent&id=quillnote", ["Quillnote asks for more than the catalog listed.", "before_tool_call", "Add anyway"]],
   ["screen=add-warning&id=quillnote", ["The gateway's install check found something.", "Warning:", "line 12", "Add anyway"]],
   ["screen=add-progress&id=quillnote", ["Adding Quillnote", "Finding the release", "Downloading", "Unpacking", "Writing files", "Installing what it needs", "Starting it on the gateway"]],
-  ["screen=add-done&id=quillnote", ["Added Quillnote.", "It's turned on. Its tools reach bots from their next message.", "Open Quillnote"]],
+  ["screen=add-done&id=quillnote", ["Added Quillnote.", "The gateway lists it as installed and turned on.", "Open Quillnote"]],
   ["screen=add-restart&id=quillnote", ["The gateway says it needs a restart before Quillnote works. Clawtrate doesn't restart the gateway."]],
   ["screen=add-refused&id=quillnote", ["Couldn't add Quillnote:", "The gateway lists nothing new.", "Try again"]],
   ["screen=add-partial&id=quillnote", ["Quillnote was installed but didn't start:"]],
   ["screen=add-checking&id=quillnote", ["Checking what the gateway has…"]],
   ["screen=installed", ["Turned on", "Turned off", "Comes with OpenClaw (3)", "Tool servers", "notes-work", "Added by address", "search-index", "Runs a command", "Add a custom connector"]],
   ["screen=connector&id=tasktide&busy=1", ["The gateway is busy with another change.", "Try again in a moment.", "Try again"]],
-  ["screen=remove-confirm&id=tasktide&bots=none", ["its tools, from every bot that doesn't deny them"]],
   ["screen=connector&id=tasktide", ["Tasktide", "Added", "Tools", "tasktide, a tool server", "Which bots may use these is in each bot's settings.", "Accounts", "Shared by everyone on this gateway", "Signed in.", "The gateway holds this sign-in until Dec 17, 5:12 PM.", "Whether it still works shows when a bot next uses Tasktide.", "Turn off", "Remove…"]],
   ["screen=connector&id=calendrop", ["Needs sign-in"]],
   ["screen=connector&id=calendrop&auth=requires-authorization", ["Needs sign-in again", "The server asked for more access."]],
@@ -91,13 +90,13 @@ const STATES = [
   ["screen=connector&id=boxwharf", ["Not working: boxwharf-sync: the token store couldn't be read"]],
   ["screen=connector&id=linkpeek", ["Comes with OpenClaw", "Added. Not loaded yet: it loads when a bot first needs it.", "Comes with OpenClaw, so it can be turned off but not removed."]],
   ["screen=connector&id=tasktide&access=read", ["Read-only.", "Changing connectors needs admin access.", "Request admin access"]],
-  ["screen=turnoff-confirm&id=tasktide", ["Turn off Tasktide?", "Its tools stop reaching every bot on this gateway. Its settings and its sign-in stay."]],
-  ["screen=remove-confirm&id=tasktide", ["Remove Tasktide from the gateway?", "Goes", "Tasktide's files on the gateway's machine", "its settings on the gateway", "its tools, from every bot that has them: Juniper, Pip", "Stays", "any saved sign-ins, kept by the gateway in its state, not encrypted there", "a note on the gateway that Tasktide is off, so nothing turns it back on by itself"]],
+  ["screen=turnoff-confirm&id=tasktide", ["Turn off Tasktide?", "The gateway stops offering its tools. Its settings and any saved sign-ins stay."]],
+  ["screen=remove-confirm&id=tasktide", ["Remove Tasktide from the gateway?", "Goes", "Tasktide's files on the gateway's machine", "its settings on the gateway", "its tools", "Stays", "any saved sign-ins, kept by the gateway in its state, not encrypted there", "a note on the gateway that Tasktide is off, so nothing turns it back on by itself"]],
   ["screen=removed&id=tasktide", ["Removed Tasktide.", "The gateway no longer lists it."]],
-  ["screen=server&id=notes-work", ["notes-work", "Name on the gateway", "Added by address", "https://notes.example/mcp", "Authorization", "Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.", "Signs in with OAuth", "What the last run found", "8 tools, at Pip's run at 5:12 PM", "Sign-in", "Not reported.", "The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.", "Sign in", "Accounts", "A second name for the same server, with its own sign-in. Bots tell them apart by name.", "Add another account", "Remove…"]],
-  ["screen=server&id=notes-work&last=notyet", ["No bot has run since this was added. Its tools show after the next run."]],
-  ["screen=server&id=notes-work&last=unavailable", ["Unavailable at Pip's run at 5:12 PM:", "server unavailable"]],
-  ["screen=server&id=notes-work&last=none", ["Not reported: the gateway's tool list doesn't mention this server."]],
+  ["screen=server&id=notes-work", ["notes-work", "Name on the gateway", "Added by address", "https://notes.example/mcp", "Authorization", "Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.", "Signs in with OAuth", "Gateway tool listing", "Gateway tool listing for Pip's task, read at 5:12 PM: 8 tools", "A listing shows what the gateway has discovered for this task. A bot's tool rules still decide what it is offered.", "Sign-in", "Not reported.", "The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.", "Sign in", "Accounts", "A second name for the same server, with its own sign-in. Bots tell them apart by name.", "Add another account", "Remove…"]],
+  ["screen=server&id=notes-work&last=notyet", ["The gateway hasn't listed this server's tools for this task."]],
+  ["screen=server&id=notes-work&last=unavailable", ["Gateway tool listing for Pip's task, read at 5:12 PM:", "server unavailable"]],
+  ["screen=server&id=notes-work&last=none", ["Not reported: the gateway's tool listing for this task doesn't mention this server."]],
   ["screen=server&id=search-index", ["Runs a command", "/opt/example/bin/search-server --stdio --index ./notes", "spawn /opt/example/bin/search-server ENOENT"]],
   ["screen=server&id=team-notes", ["Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender.", "Clawtrate offers no sign-in for it."]],
   ["screen=server&id=notes-work&device=iphone", ["Change it from Clawtrate on your computer."]],
@@ -116,8 +115,8 @@ const STATES = [
   ["screen=add-server&access=read", ["Read-only.", "Adding a custom connector needs admin access."]],
   ["screen=command-confirm&name=search-index&cmd=/opt/example/bin/search-server&args=%5B%22--stdio%22%5D", ["Run this command on the gateway's machine?", "Home gateway will run, on its own machine (studio.example), as the user it runs as:", "Program", "/opt/example/bin/search-server", "Arguments", "--stdio", "with that user's access to files, programs and the network.", "Add command server"]],
   ["screen=command-confirm&name=search-index&cmd=/opt/example/bin/search-server&args=%5B%5D", ["No arguments"]],
-  ["screen=add-server-saved&name=notes-work", ["Added notes-work.", "The gateway lists it. Its tools reach bots from their next run, unless a bot's settings deny them."]],
-  ["screen=add-server-saved&name=search-index&type=command", ["Added search-index.", "The gateway will run it at a bot's next run."]],
+  ["screen=add-server-saved&name=notes-work", ["Added notes-work.", "The gateway lists this server."]],
+  ["screen=add-server-saved&name=search-index&type=command", ["Added search-index.", "The gateway lists this server. The gateway can start this program when it needs this server."]],
   ["screen=add-server-refused&name=notes-work", ["Couldn't add notes-work:", "Expected http:// or https:// URL", "Nothing saved."]],
   ["screen=add-server-checking&name=notes-work", ["Checking what the gateway has…"]],
   ["screen=signin-cli&id=notes-work&server=1", ["Sign in to notes-work", "On the gateway's machine, run:", "openclaw mcp login notes-work", "If it prints an address, open it in a browser and sign in.", "If the terminal is listening for the callback, it waits up to five minutes. Follow the terminal's instructions to finish with a code if the callback cannot reach it.", "It may also find a saved sign-in and say so without printing an address.", "Or sign in from Settings on the gateway's own web page.", "Afterwards this page still reads \"Not reported\"", "Back to notes-work"]],
@@ -164,6 +163,17 @@ for (const [query, words] of STATES) {
   const w = await open("screen=browse-offline");
   check("without the catalog nothing offers Add", (await w.locator(".c-row-end .button").count()) === 0 && (await w.locator(".c-chips").count()) === 0);
   await w.close();
+}
+
+// Ruling 7: no screen claims a run, a time of use or every bot that has something.
+{
+  const claims = [];
+  for (const q of ["screen=server&id=notes-work", "screen=server&id=notes-work&last=notyet", "screen=server&id=search-index", "screen=add-server-saved&name=notes-work", "screen=add-server-saved&name=search-index&type=command", "screen=add-done&id=quillnote", "screen=remove-confirm&id=tasktide", "screen=server-remove-confirm&id=notes-work", "screen=chat"]) {
+    const p = await open(q);
+    if (/has run|next run|'s run at|from their next|Juniper, Pip/.test(await text(p))) claims.push(q);
+    await p.close();
+  }
+  check("no screen claims a run, a time of use or every bot (ruling 7)", claims.length === 0, claims.join(" | "));
 }
 
 // Part 2: the walks, clicked through, each destination asserted -----------------------------------
