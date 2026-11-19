@@ -1,13 +1,6 @@
 // Usage, budgets, where a bot runs, and machines (docs/design/controls.md,
 // sections 14 to 17). Local fixtures only: no figure here came from a gateway.
-//
-// More address parameters:
-//   bview=usage|machine
-//   usage=loading|error|computing|nocost|nolimits
-//   budget=none|warn|reached|enforced|enforcedreached|invalid
-//   plimit=near|reached      a provider's limit, above the composer
-//   machine=shared|offline|nobrowser    devices=noscope
-//   section=usage|machines
+// The budget and the totals read the same records, so they show the same number.
 
 (function () {
   const CT = window.CT;
@@ -24,43 +17,48 @@
   const botName = (id) => app.bots.find((b) => b.id === id)?.name || id;
   const current = () => app.model.selectedBot;
   const fmt = (n) => n.toLocaleString("en-US");
-  const short = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(2).replace(/0$/, "")}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
+  const short = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(2).replace(/0$/, "").replace(/\.0$/, "")}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
 
   const USAGE = p("usage") || "";
   const BUDGET = p("budget") || "";
   const MACHINE = p("machine") || "";
   const U = { period: "week", form: BUDGET === "invalid" ? { value: "900", kind: "weekly" } : null };
 
-  // This week's figures for each bot, as usage.cost and sessions.usage would give them.
+  // This week's figures for each bot (usage.cost, sessions.usage). Otto's total is 1,640,000.
   const WEEK = {
-    otto: { input: 312400, output: 48900, cacheRead: 1204000, cacheWrite: 22100, cost: 3.18, sources: [["Your messages", 1201000], ["Routines", 302400], ["Messages from other bots", 41200], ["Not attributed", 42800]] },
+    otto: { input: 322000, output: 51000, cacheRead: 1244900, cacheWrite: 22100, cost: 3.29, sources: [["Your messages", 1240000], ["Routines", 312000], ["Messages from other bots", 41200], ["Not attributed", 46800]] },
     juniper: { input: 498000, output: 91000, cacheRead: 1610000, cacheWrite: 40000, cost: 5.92, sources: [["Your messages", 2239000]] },
     marlow: { input: 120000, output: 31000, cacheRead: 402000, cacheWrite: 9000, cost: 1.1, sources: [["Your messages", 520000], ["Messages from other bots", 42000]] },
     pip: { input: 90000, output: 22000, cacheRead: 260000, cacheWrite: 7000, cost: 0.74, sources: [["Your messages", 379000]] },
   };
   const scale = { today: 0.18, week: 1, month: 3.6 };
-  const fig = (bot) => {
+  const fig = (bot, period = U.period) => {
     const w = WEEK[bot] || WEEK.pip;
-    const k = scale[U.period];
+    const k = scale[period];
     const r = (n) => Math.round(n * k);
     const total = r(w.input) + r(w.output) + r(w.cacheRead) + r(w.cacheWrite);
     return { input: r(w.input), output: r(w.output), cacheRead: r(w.cacheRead), cacheWrite: r(w.cacheWrite), total, cost: w.cost * k, sources: w.sources.map(([n, v]) => [n, r(v)]) };
   };
+  const weekTotal = (bot) => fig(bot, "week").total;
 
-  // Budgets: the bot's own, kept as this person's preference or by the budget plugin.
-  const enforced = BUDGET.startsWith("enforced");
+  // Otto's budget: a warning by default; the budget plugin only when chosen and proven.
+  const enforcedKinds = ["enforced", "enforcedreached", "unconsented", "pluginstopped", "behind", "unenforced"];
+  const limitFor = { warn: 2000000, reached: 1600000, enforcedreached: 1600000, unenforced: 1600000 };
   const G = {
-    otto: BUDGET === "none" ? null : { kind: "weekly", limit: 2000000, used: BUDGET === "warn" ? 1640000 : BUDGET === "reached" || BUDGET === "enforcedreached" ? 2004000 : 1240000, enforced },
-    routine: { name: "Weekly cleanup", bot: "otto", kind: "daily", limit: 200000, used: 41000, enforced },
+    otto: BUDGET === "none" ? null : { kind: "weekly", limit: limitFor[BUDGET] || 2500000, stop: enforcedKinds.includes(BUDGET), plugin: BUDGET === "unconsented" ? "unconsented" : BUDGET === "pluginstopped" || BUDGET === "unenforced" ? "stopped" : BUDGET === "behind" ? "behind" : "running" },
+    routine: { name: "Weekly cleanup", bot: "otto", kind: "daily", limit: 200000, used: 41000 },
   };
-  const pctOf = (g) => Math.round((g.used / g.limit) * 100);
+  const usedOf = (bot) => weekTotal(bot);
+  const pctOf = (bot) => Math.round((usedOf(bot) / G[bot].limit) * 100);
+  const holds = (g) => g.stop && g.plugin === "running";
+  const COVERAGE = "Stops Otto at the limit for runs from apps and channels (the gateway's own runner) and from the command line. Not for runs on the Codex harness: those are warned only.";
 
-  function meter(used, limit, words, label) {
+  function meter(used, limit, words, label, right) {
     const pct = Math.min(100, Math.round((used / limit) * 100));
-    const tone = pct >= 100 ? "danger" : pct >= 80 ? "warn" : "";
+    const tone = used >= limit ? "danger" : pct >= 80 ? "warn" : "";
     return (
       `<div class="c-meter"${tone ? ` data-tone="${tone}"` : ""}><div class="c-meter-bar" role="meter" aria-valuemin="0" aria-valuemax="${limit}" aria-valuenow="${Math.min(used, limit)}" aria-label="${esc(label || words)}"><span style="width:${pct}%"></span></div>` +
-      `<div class="c-meter-text"><span>${words}</span><span>${pct}%</span></div></div>`
+      `<div class="c-meter-text"><span>${words}</span><span>${right ?? `${Math.round((used / limit) * 100)}%`}</span></div></div>`
     );
   }
   const periodSeg = () =>
@@ -71,7 +69,6 @@
     ]
       .map(([v, l]) => `<button type="button" role="radio" aria-checked="${U.period === v}" tabindex="${U.period === v ? 0 : -1}" data-c="period" data-value="${v}">${l}</button>`)
       .join("")}</div>`;
-  const periodWords = () => ({ today: "today", week: "this week", month: "in the last 30 days" })[U.period];
   const bars = (rows) => {
     const max = Math.max(...rows.map(([, v]) => v), 1);
     return `<ul class="c-bars">${rows.map(([n, v]) => `<li><span>${esc(n)}</span><span class="c-meter-bar" aria-hidden="true"><span style="width:${Math.round((v / max) * 100)}%"></span></span><span>${short(v)} tokens</span></li>`).join("")}</ul>`;
@@ -80,43 +77,42 @@
   // The Usage and Runs on groups in the bot's settings.
   const prevExtra = CT.botsExtraGroups;
   CT.botsExtraGroups = (id) => {
-    const f = fig(id);
-    const value = USAGE === "error" ? "Couldn't load" : `This week: ${short(f.total)} tokens · about $${f.cost.toFixed(2)}`;
+    const g = G[id];
+    let value = USAGE === "error" ? "Couldn't load" : `This week: ${short(weekTotal(id))} tokens · about $${fig(id, "week").cost.toFixed(2)}`;
+    if (g) value = `${g.stop && !holds(g) ? "Budget not being enforced now · " : ""}Budget ${short(usedOf(id))} of ${short(g.limit)} · ${value}`;
     return (prevExtra ? prevExtra(id) : "") + `<h3 class="b-tabgroup">Usage</h3><dl class="facts">${openRow("Usage", value, `data-bs="usage" aria-label="Usage: ${value}. Open."`)}</dl>`;
   };
   CT.botsRunsOn = (id) => {
     const shared = MACHINE === "shared" || id === "pip";
-    const value = `Commands on ${id === "otto" ? "media-box" : "the gateway's machine"}${shared ? "" : ""}`;
-    return (
-      `<div><button type="button" class="b-open" data-bs="machine" aria-label="Where ${esc(botName(id))} runs: ${value}${shared ? ", shared with " + (id === "pip" ? "Marlow" : "Pip") : ""}. Open."><span>Where ${esc(botName(id))} runs</span>` +
-      `<span class="b-open-value"><span>${value}</span>${shared ? `<span class="b-state" data-tone="warn">${icon("warning")}Shared with ${id === "pip" ? "Marlow" : "Pip"}</span>` : ""}</span>${icon("chevron")}</button></div>`
-    );
+    const where = id === "otto" && MACHINE !== "gatewayhost" ? "media-box" : "the gateway's machine";
+    const value = `Commands on ${where}${shared ? ` · Shared with ${id === "pip" ? "Marlow" : "Pip"}` : ""}`;
+    return openRow(`Where ${esc(botName(id))} runs`, value, `data-bs="machine" aria-label="Where ${esc(botName(id))} runs: ${value}. Open."`);
   };
 
-  // A bot's usage (section 16) and its budget (section 17).
+  // A bot's usage (section 16), with its budget first (section 17).
   function usageView(bot) {
     const name = esc(botName(bot));
     let html = sub("Usage", "main", "Back to settings");
     if (USAGE === "loading") return html + skeleton(`Loading ${name}'s usage`, 4);
     if (USAGE === "error") return html + failed(`Couldn't load ${name}'s usage`, "usage-retry");
+    html += budgetPart(bot);
     const f = fig(bot);
-    html += periodSeg();
-    html += `<p class="b-hint" style="margin-top:0">From the gateway's usage records, as of 5:41 PM.${USAGE === "computing" ? " Some of today's runs are still being counted." : ""}</p>`;
+    html += `<h4 class="b-group">Usage</h4>` + periodSeg();
+    html += `<p class="b-hint" style="margin-top:0">From the gateway's usage records for ${name}, as of 5:41 PM.${USAGE === "computing" ? " Some of today's runs are still being counted." : ""}</p>`;
     html +=
       `<dl class="facts">` +
       fact("Input", `${fmt(f.input)} tokens`) +
       fact("Output", `${fmt(f.output)} tokens`) +
       fact("Cache read", `${fmt(f.cacheRead)} tokens`) +
       fact("Cache write", USAGE === "computing" ? "Still being counted" : `${fmt(f.cacheWrite)} tokens`) +
-      fact("Total", `${fmt(f.total)} tokens`) +
-      fact("Cost", USAGE === "nocost" ? "Unavailable" : `About $${f.cost.toFixed(2)}`) +
+      fact("Total", `${fmt(f.total)} tokens${USAGE === "computing" ? " so far" : ""}`) +
+      fact("Cost", USAGE === "nocost" ? "Unavailable" : `About $${f.cost.toFixed(2)}${USAGE === "partial" ? " · Partial" : ""}`) +
       `</dl>` +
-      `<p class="b-hint">${USAGE === "nocost" ? "Cost unavailable for scripted/dev-1: the gateway has no price for it." : "Estimated by the gateway from its configured prices, in US dollars."}</p>`;
-    html += `<h4 class="b-group">By source</h4>${bars(f.sources)}<p class="b-hint">Routines from their runs; messages from other bots from the runs a send returned and the turns the gateway marks as coming from another bot. The rest is not attributed, never charged to one message.</p>`;
+      `<p class="b-hint">${USAGE === "nocost" ? "Cost unavailable for scripted/dev-1: the gateway has no price for it." : `The gateway's estimate from its configured prices, in US dollars, as of 5:41 PM.${USAGE === "partial" ? " Partial: 2 runs have no price configured." : ""}`}</p>`;
+    html += `<h4 class="b-group">By source</h4>${bars(f.sources)}<p class="b-hint">Routines: runs whose task is a routine's. Messages from other bots: runs a send's result names. The rest is not attributed, never charged to one message.</p>`;
     const tasks = app.bots.find((b) => b.id === bot).tasks.slice(0, 4);
     html += `<h4 class="b-group">By task</h4><dl class="facts">${tasks.map((t, i) => fact(esc(t.title), `${short(Math.round(f.total * [0.48, 0.22, 0.12, 0.05][i]))} tokens`)).join("")}</dl>`;
     html += `<h4 class="b-group">Context</h4><dl class="facts">${fact(`'${esc(tasks[0].title)}'`, "41,200 of 128,000 tokens")}</dl><p class="b-hint">What fills it isn't reported: the gateway counts input, output and cache, not history, memory or tools apart.</p>`;
-    html += budgetPart(bot);
     return html;
   }
 
@@ -124,26 +120,30 @@
     const name = esc(botName(bot));
     const g = G[bot];
     let html = `<h4 class="b-group">Budget</h4>`;
-    const markKind = g?.enforced ? "budget" : "shown";
     if (!g && !U.form)
-      return (
-        html +
-        `<p class="b-hint">No budget. A budget is a number of tokens ${name} may use in a day or a week.</p>` +
-        (B.access !== "read" ? `<div class="b-actions">${button("Set a budget", 'data-c="budget-new" data-size="sm"')}</div>` : "")
-      );
+      return html + `<p class="b-hint">No budget. A budget is a number of tokens ${name} may use in a day or a week. By default it is a warning.</p>` + (B.access !== "read" ? `<div class="b-actions">${button("Set a budget", 'data-c="budget-new" data-size="sm"')}</div>` : "");
     if (U.form) return html + budgetForm(bot);
-    const pct = pctOf(g);
-    html += meter(g.used, g.limit, `${short(g.used)} of ${short(g.limit)} tokens this week`, `${name}'s weekly budget: ${fmt(g.used)} of ${fmt(g.limit)} tokens`);
-    html += `<p class="c-sentence">${mark(markKind)}</p>`;
+    const used = usedOf(bot);
+    const pct = pctOf(bot);
+    if (g.stop && !holds(g)) html += note(`<p><b>${name}'s budget isn't being enforced now.</b> You chose to stop ${name} at the limit.</p>`, "danger");
+    html += meter(used, g.limit, `${short(used)} of ${short(g.limit)} tokens this week`, `${name}'s weekly budget: ${fmt(used)} of ${fmt(g.limit)} tokens`);
+    html += `<p class="c-sentence">${mark(holds(g) ? "budget" : "shown")}</p>`;
+    if (g.stop) {
+      const words = {
+        running: COVERAGE,
+        unconsented: `The budget plugin can't stop ${name}: the gateway's owner hasn't let it read conversations. This budget is a warning until they do.`,
+        stopped: `The budget plugin isn't running (or is older than this budget needs), so nothing stops ${name} at the limit. This budget is a warning until it runs.`,
+        behind: `${COVERAGE} The plugin's count is from 5:12 PM; runs since then may not be counted, so ${name} can pass the limit.`,
+      }[g.plugin];
+      html += `<p class="b-hint">${words}</p>`;
+    } else html += `<p class="b-hint">A warning: at 80% a line in ${name}'s task, at 100% Clawtrate stops sending from this device. Other apps, channels and routines aren't stopped. Stopping ${name} at the limit needs Clawtrate's budget plugin, with the gateway's owner's permission to read conversations.</p>`;
     if (pct >= 100)
-      html += g.enforced
-        ? note(`<p><b>${name}'s weekly budget is used up.</b> The gateway refuses new runs of ${name} from every app, channel and routine until Monday at 00:00. A run already going is not stopped.</p>`, "danger")
+      html += holds(g)
+        ? note(`<p><b>${name}'s weekly budget is used up.</b> On the routes above, the gateway refuses new runs of ${name} until Monday at 00:00. A run already going is not stopped.</p>`, "danger")
         : note(`<p><b>${name}'s weekly budget is used up, so Clawtrate won't send from here.</b> This is shown only: other apps, channels and ${name}'s routines aren't stopped.</p>`, "warn");
     else if (pct >= 80) html += note(`<p>${name} has used ${pct}% of its weekly budget.</p>`, "warn");
-    if (!g.enforced)
-      html += `<p class="b-hint">Enforcing budgets needs Clawtrate's budget plugin, with the gateway's owner's permission to read conversations. Until then this budget is shown only.</p>`;
-    html += `<p class="b-hint">Counts the total the gateway reports: input, output and cache. Resets Monday at 00:00, your time. Refused starts are not replayed.</p>`;
-    if (B.access !== "read") html += `<div class="b-actions">${button("Raise budget", 'data-c="budget-edit" data-size="sm"')}${pct >= 100 && !g.enforced && isAdmin() ? button("Pause Weekly cleanup", 'data-c="pause-routine" data-size="sm"', "quiet") : ""}</div>`;
+    html += `<p class="b-hint">Counts the total the gateway reports: input, output and cache, the same figure as Usage below. Resets Monday at 00:00, your time. Refused sends are not replayed.</p>`;
+    if (B.access !== "read") html += `<div class="b-actions">${button("Raise budget", 'data-c="budget-edit" data-size="sm"')}${pct >= 100 && !holds(g) && isAdmin() ? button("Pause Weekly cleanup", 'data-c="pause-routine" data-size="sm"', "quiet") : ""}</div>`;
     return html;
   }
 
@@ -159,55 +159,44 @@
         .map(([v, l]) => `<button type="button" role="radio" aria-checked="${f.kind === v}" tabindex="${f.kind === v ? 0 : -1}" data-c="budget-kind" data-value="${v}">${l}</button>`)
         .join("")}</div>` +
       `<label>Tokens<input class="input" inputmode="numeric" data-c-budget value="${esc(f.value)}" aria-describedby="c-budget-help${bad && f.value ? " c-budget-error" : ""}"${bad && f.value ? ' aria-invalid="true"' : ""} /></label>` +
-      `<p class="b-hint" id="c-budget-help" style="margin:0">Counts the total the gateway reports: input, output and cache.</p>` +
+      `<p class="b-hint" id="c-budget-help" style="margin:0">Counts the total the gateway reports: input, output and cache. A warning unless you choose otherwise.</p>` +
       (bad && f.value ? `<p class="b-field-error" id="c-budget-error" role="alert" style="margin:0">Enter a whole number of 1,000 or more.</p>` : "") +
       `<div class="b-actions">${button("Save budget", `data-c="budget-save" data-size="sm"${bad ? " disabled" : ""}`, "primary")}${button("Cancel", 'data-c="budget-cancel" data-size="sm"', "quiet")}</div></div>`
     );
   }
 
-  // Where a bot runs (section 14).
+  // Where a bot runs (section 14): three places, and what its settings name.
   function machineView(bot) {
     const name = esc(botName(bot));
-    const node = bot === "otto";
+    const node = bot === "otto" && MACHINE !== "gatewayhost";
     const offline = MACHINE === "offline";
     const sharedWith = bot === "pip" ? "Marlow" : MACHINE === "shared" ? "Pip" : null;
-    let html = sub(`Where ${name} runs`, "main", "Back to settings");
-    if (sharedWith) html += note(`<p>${name} shares its workspace folder with ${sharedWith}.</p>`, "warn");
     const dis = isAdmin() ? "" : " disabled";
+    let html = sub(`Where ${name} runs`, "main", "Back to settings");
+    if (sharedWith) html += note(`<p>${name} shares its workspace folder with ${sharedWith}. Files one bot writes, the other can change.</p>`, "warn");
     html +=
       `<h4 class="b-group">Commands</h4>` +
       `<label class="b-hint" for="c-machine" style="display:block;margin:0 0 6px">Run ${name}'s commands on:</label>` +
       `<select class="input" id="c-machine" data-c-machine${dis}><option${node ? "" : " selected"}>The gateway's machine</option><option${node ? " selected" : ""}>media-box · ${offline ? "Not connected" : "Connected"}</option><option>studio-mac · Not connected</option></select>` +
-      `<p class="c-sentence">A setting for ${name}. A task can be sent to another machine. ${mark("gateway")}</p>` +
+      `<p class="c-sentence">A setting for ${name}. A task can be sent to another machine; where a command ran is in its own result. ${mark("gateway")}</p>` +
       (node ? `<p class="b-hint">Pip is also set to run commands here.${offline ? " media-box isn't connected: last seen 5:12 PM, while going to sleep." : ""}</p>` : "");
     html +=
-      `<h4 class="b-group">Browser</h4><dl class="facts">` +
-      fact(
-        "Browser",
-        node
-          ? "Not supported on this machine: Clawtrate's computer plugin runs browsers on the gateway's machine only."
-          : MACHINE === "nobrowser" || bot !== "marlow"
-            ? "The gateway's shared browser. Every bot that uses the browser shares it, with its sign-ins."
-            : `${name}'s own browser, on the gateway's machine`,
-      ) +
-      `</dl>` +
-      (node || bot === "marlow" ? "" : `<p class="b-hint">A browser of ${name}'s own needs Clawtrate's computer plugin.</p>`);
-    const ws = `workspaces/${bot}`;
-    html +=
       `<h4 class="b-group">Workspace</h4><dl class="facts">` +
-      fact("Folder", `<span class="mono">${ws}</span>${copy("folder", ws)}`) +
-      (sharedWith ? fact("Shared with", `${sharedWith}: the same workspace folder. Files one bot writes, the other can change.`) : "") +
-      `</dl>` +
-      (node ? `<p class="b-hint">On media-box, commands run in media-box's own folder unless a task names one.</p>` : "") +
-      (isAdmin() ? `<div class="b-actions">${button("Change…", 'data-c="ws-change" data-size="sm"')}</div><p class="b-hint">The folder must already exist; Clawtrate can't create one on another machine.</p>` : "");
+      fact("Folder", `<span class="mono">workspaces/${bot}</span>, on the gateway's machine${copy("folder", `workspaces/${bot}`)}`) +
+      `</dl><p class="b-hint">${name}'s file tools work here.${node ? " On media-box, commands run in media-box's own folder unless a task names one." : ""}</p>` +
+      (isAdmin() ? `<div class="b-actions">${button("Change…", 'data-c="ws-change" data-size="sm"')}</div><p class="b-hint">Takes a path on the gateway's machine; the gateway creates it if it doesn't exist.</p>` : "");
     html +=
-      `<h4 class="b-group">What ${name} can reach</h4><dl class="facts">` +
+      `<h4 class="b-group">Browser</h4><dl class="facts">` +
+      fact("Browser", MACHINE === "ownbrowser" ? `${name}'s own browser, on the gateway's machine (Clawtrate's computer plugin)` : "The gateway's shared browser, on the gateway's machine. Every bot that uses the browser shares it.") +
+      `</dl><p class="b-hint">${node ? "Commands running on media-box don't change where the browser is." : "Where commands run doesn't change where the browser is."}</p>`;
+    html +=
+      `<h4 class="b-group">What ${name}'s settings name</h4><p class="b-hint" style="margin-top:0">Inventory. Whether ${name} can use each isn't reported.</p><dl class="facts">` +
       fact("Accounts", bot === "otto" ? "OpenAI · Work (bound), OpenAI · Home" : "As its account page lists them") +
-      fact("Tool servers", "coder, t3code (off for this bot)") +
-      fact("Secrets", isAdmin() ? "The gateway's secret store, shared by every bot: 3 entries (router-admin, nas-backup, camera-feed)" : `<span class="b-faint">Needs admin access</span>`) +
+      fact("Tool servers", "coder (offered in the latest task); t3code (denied for this bot)") +
+      fact("Secrets", isAdmin() ? "Names in the gateway's secret store, shared by every bot: router-admin, nas-backup, camera-feed" : `<span class="b-faint">Needs admin access</span>`) +
       fact("Plugin sign-ins", isAdmin() ? "None" : `<span class="b-faint">Needs admin access</span>`) +
-      fact("Folders", "Its workspace. File tools stay inside a task's folder; commands can reach whatever the machine's user can.") +
-      `</dl><p class="b-hint">A workspace is ${name}'s starting folder, not a wall: commands reach what the machine allows.</p>`;
+      fact("Folders", "Its workspace. File tools stay inside a task's folder in the guarded modes; commands reach whatever the machine's user can.") +
+      `</dl>`;
     return html;
   }
 
@@ -217,18 +206,14 @@
   CT.botsSections.push(["usage", "Usage"]);
   CT.botsSectionViews.usage = ({ back }) => {
     if (USAGE === "error") return { title: "Usage", back, body: failed("Couldn't load usage", "usage-retry") };
-    let body = periodSeg() + `<p class="b-hint" style="margin-top:0">From the gateway's usage records, as of 5:41 PM.</p>`;
-    body += `<h4 class="b-group">Provider limits</h4>`;
-    body +=
-      USAGE === "nolimits"
-        ? `<p class="b-hint">No limits reported.</p>`
-        : meter(62, 100, "OpenAI · Weekly · 62% used · resets Nov 20", "OpenAI's weekly limit: 62% used") + `<p class="b-hint">xAI · No limits reported. xAI reports a balance of $12.40.</p>`;
-    body += `<h4 class="b-group">By bot</h4>${bars(app.bots.map((b) => [b.name, fig(b.id).total]))}`;
+    let body = `<h4 class="b-group">Provider limits</h4>`;
+    body += USAGE === "nolimits" ? `<p class="b-hint">No limits reported.</p>` : meter(62, 100, "OpenAI · Weekly · 62% used · resets Nov 20 · as of 5:40 PM", "OpenAI's weekly limit: 62% used, as of 5:40 PM", "") + `<p class="b-hint">xAI: no limits reported. xAI reports a balance of $12.40, as of 5:38 PM. Neither says which of your accounts it is about.</p>`;
     body += `<h4 class="b-group">Budgets</h4><dl class="facts">`;
     const g = G.otto;
-    if (g) body += `<div class="b-row"><span class="b-row-main"><span>Otto · weekly · ${short(g.used)} of ${short(g.limit)} tokens</span><small>${markWords(g.enforced ? "budget" : "shown")}</small></span></div>`;
-    body += `<div class="b-row"><span class="b-row-main"><span>Routine Weekly cleanup (Otto) · daily · ${short(G.routine.used)} of ${short(G.routine.limit)} tokens</span><small>${markWords(G.routine.enforced ? "budget" : "shown")}</small></span></div></dl>`;
+    if (g) body += `<div class="b-row"><span class="b-row-main"><span>Otto · weekly · ${short(usedOf("otto"))} of ${short(g.limit)} tokens</span><small>${holds(g) ? markWords("budget") : g.stop ? "Not being enforced now" : markWords("shown")}</small></span></div>`;
+    body += `<div class="b-row"><span class="b-row-main"><span>Routine Weekly cleanup (Otto) · daily · ${short(G.routine.used)} of ${short(G.routine.limit)} tokens</span><small>${markWords("shown")}</small></span></div></dl>`;
     if (B.access !== "read") body += `<div class="b-actions" style="margin-top:8px">${button("Add a budget", 'data-c="budget-add" data-size="sm"')}</div>`;
+    body += `<h4 class="b-group">By bot</h4>` + periodSeg() + `<p class="b-hint" style="margin-top:0">From the gateway's usage records, as of 5:41 PM.</p>${bars(app.bots.map((b) => [b.name, fig(b.id).total]))}`;
     return { title: "Usage", back, body };
   };
 
@@ -242,31 +227,34 @@
       fact("media-box", `${MACHINE === "offline" ? "Not connected · Last seen 5:12 PM, while going to sleep" : "Connected · Last seen 40 s ago"} · Bots set to run commands here: Otto, Pip`) +
       fact("studio-mac", "Not connected · Last seen Nov 16, 11:02 PM · No bots") +
       `</dl>`;
-    const dis = isAdmin() ? "" : " disabled";
-    body +=
-      `<h4 class="b-group" id="c-approvals-label">Command approvals on media-box</h4><dl class="facts" role="radiogroup" aria-labelledby="c-approvals-label">` +
-      [
-        ["ask", "Ask every time"],
-        ["allow", "Allow every command"],
-        ["never", "Never allow"],
-      ]
-        .map(([v, l]) => `<div><button type="button" class="b-open" role="radio" aria-checked="${v === "ask"}" tabindex="${v === "ask" ? 0 : -1}" data-c="node-approvals" data-value="${v}"${dis}><span>${l}</span>${v === "ask" ? icon("check") : ""}</button></div>`)
-        .join("") +
-      `</dl><p class="b-hint">Set on media-box: it applies to every bot that runs commands there, and a bot's own policy can't loosen it.</p>` +
-      `<div class="b-actions">${button("Rename", `data-c="node-rename" data-size="sm"${pairing ? "" : " disabled"}`)}${button("Remove studio-mac…", `data-c="node-remove" data-size="sm"${pairing ? "" : " disabled"}`, "quiet")}</div>`;
+    body += `<h4 class="b-group" id="c-approvals-label">media-box's approvals file</h4>`;
+    if (!isAdmin()) body += `<p class="b-hint">Seeing a machine's approvals needs admin access.</p>`;
+    else
+      body +=
+        `<p class="c-subgroup">Defaults, for bots with no entry of their own</p><dl class="facts" role="radiogroup" aria-labelledby="c-approvals-label">` +
+        [
+          ["always", "Ask every time"],
+          ["miss", "Ask for commands not on the allowlist"],
+          ["allow", "Allow every command"],
+          ["never", "Never allow"],
+        ]
+          .map(([v, l]) => `<div><button type="button" class="b-open" role="radio" aria-checked="${v === "miss"}" tabindex="${v === "miss" ? 0 : -1}" data-c="node-approvals" data-value="${v}"><span>${l}</span>${v === "miss" ? icon("check") : ""}</button></div>`)
+          .join("") +
+        `</dl><p class="c-subgroup">Entries</p><dl class="facts">${fact("Otto", "Its own entry: Ask on every command")}${fact("Pip", "No entry: the defaults")}</dl>` +
+        `<p class="c-subgroup">Effective, for the bots set to media-box</p><dl class="facts">${fact("Otto", "Review first (Otto's policy), then Ask every time (its entry here)")}${fact("Pip", "Never (Pip's policy): nothing runs")}</dl>` +
+        `<p class="b-hint">A machine's file can make a command ask or refuse; it adds to a bot's own policy. "Allow every command" still meets each bot's own policy. ${mark("set")}</p>`;
+    body += `<div class="b-actions">${button("Rename", `data-c="node-rename" data-size="sm"${pairing ? "" : " disabled"}`)}${button("Remove studio-mac…", `data-c="node-remove" data-size="sm"${pairing ? "" : " disabled"}`, "quiet")}</div>`;
     body += `<h4 class="b-group">Paired devices</h4>`;
-    body += pairing
-      ? `<dl class="facts">${fact("This device", "Clawtrate on this Mac · Connected")}${fact("Clawtrate on iPhone", "Last seen 4:58 PM")}</dl>`
-      : `<p class="b-hint">Seeing paired devices needs device access.</p>`;
+    body += pairing ? `<dl class="facts">${fact("This device", "Clawtrate on this Mac · Connected")}${fact("Clawtrate on iPhone", "Last seen 4:58 PM")}</dl>` : `<p class="b-hint">Seeing paired devices needs device access.</p>`;
     const foot = !pairing
       ? `<section class="access-bar" role="region" aria-label="Access"><div class="access-row">${icon("eye")}<span class="shelf-text"><b>Device access needed.</b> Managing paired devices needs device access.</span>${button("Request access", 'data-c="request-pairing" data-size="sm"', "primary")}</div></section>`
       : isAdmin()
         ? ""
-        : adminBar("Setting a machine's command approvals needs admin access.");
+        : adminBar("Setting a machine's approvals needs admin access.");
     return { title: "Machines", back, body, foot };
   };
 
-  // In the conversation: the budget lines and the provider limit banner (sections 16 to 18).
+  // In the conversation: budget lines and the provider note (sections 16 to 18).
   function composerNotes() {
     $$(".c-composer-note").forEach((n) => n.remove());
     const comp = $("#composer");
@@ -280,14 +268,12 @@
       d.innerHTML = html;
       comp.before(d);
     };
-    const banner = p("plimit");
-    if (banner === "near" && bot === "otto") add(`<p>OpenAI reports 92% of the weekly limit used on OpenAI · Work. It resets in 2 days.</p><button type="button" class="icon-button" data-variant="quiet" data-c="banner-close" aria-label="Close">${icon("x")}</button>`, "neutral");
-    if (banner === "reached" && bot === "otto") add(`<p>OpenAI's weekly limit is reached on OpenAI · Work. Otto's runs wait or fail until Nov 20.</p><button type="button" class="icon-button" data-variant="quiet" data-c="banner-close" aria-label="Close">${icon("x")}</button>`);
+    const lim = p("plimit");
+    if (lim === "near" && bot === "otto") add(`<p>OpenAI reports 92% of a weekly limit used, as of 5:40 PM. It doesn't say which of your OpenAI accounts.</p><button type="button" class="icon-button" data-variant="quiet" data-c="banner-close" aria-label="Close">${icon("x")}</button>`, "neutral");
+    if (lim === "reached" && bot === "otto") add(`<p>OpenAI reports a weekly limit reached, as of 5:40 PM. Runs that use it wait or fail until it resets, Nov 20.</p><button type="button" class="icon-button" data-variant="quiet" data-c="banner-close" aria-label="Close">${icon("x")}</button>`);
     const g = G[bot];
-    if (bot === "otto" && g && pctOf(g) >= 100 && !g.enforced)
-      add(`<p>Otto's weekly budget is used up, so Clawtrate won't send from here. This is shown only: other apps, channels and Otto's routines aren't stopped.</p>${button("Raise budget", 'data-c="raise-from-composer" data-size="sm"')}`);
+    if (bot === "otto" && g && pctOf(bot) >= 100 && !holds(g)) add(`<p>Otto's weekly budget is used up, so Clawtrate won't send from here. This is shown only: other apps, channels and Otto's routines aren't stopped.</p>${button("Raise budget", 'data-c="raise-from-composer" data-size="sm"')}`);
   }
-  // A task's transcript gains the 80% line, or the plugin's refusal at the limit.
   const otto = app.bots.find((b) => b.id === "otto");
   if (BUDGET === "warn" || BUDGET === "enforcedreached") {
     const t = otto.tasks.find((x) => x.id === "o3");
@@ -296,13 +282,10 @@
       `<div class="turn" data-role="user"><div class="msg" data-role="user"><div class="bubble">Did last night's backup finish?</div></div></div>` +
       (BUDGET === "warn"
         ? `<div class="event-line" data-side="center" data-testid="budget-line">Otto has used 82% of its weekly budget: 1.64M of 2M tokens.</div>`
-        : `<div class="card turn-error" role="alert" data-testid="budget-error">${icon("warning")}<p class="turn-error-title">Otto didn't start: its weekly budget is used up</p><p class="turn-error-reason">It resets Monday at 00:00. The gateway refused this run before the model was asked (Clawtrate's budget plugin enforces this).</p><div class="turn-error-actions">${button("Raise budget", 'data-c="raise-from-composer" data-size="sm"', "primary")}</div></div>`);
+        : `<div class="card turn-error" role="alert" data-testid="budget-error">${icon("warning")}<p class="turn-error-title">Otto didn't start: its weekly budget is used up</p><p class="turn-error-reason">It resets Monday at 00:00. The gateway refused this run before the model was asked; Clawtrate's budget plugin holds this budget for runs from apps, channels and the command line.</p><div class="turn-error-actions">${button("Raise budget", 'data-c="raise-from-composer" data-size="sm"', "primary")}</div></div>`);
   }
-  // Saved to memory, where the bot's file tool wrote a note (section 18).
   const diskTask = otto.tasks.find((x) => x.id === "o1");
   if (p("saveline") === "1" && diskTask && typeof diskTask.html === "string") diskTask.html += `<button type="button" class="event-line link-button" data-side="center" data-c="saved-to-memory" data-testid="memory-line">Saved to memory: memory/2026-11-17.md</button>`;
-
-  // The transcript was drawn before these fixtures: draw the open task again.
   if (BUDGET === "warn" || BUDGET === "enforcedreached" || p("saveline") === "1") app.openTask(app.model.selectedBot, app.model.selectedTask);
 
   // Wiring ---------------------------------------------------------------------------------------
@@ -330,7 +313,7 @@
         return BS.render();
       case "budget-save": {
         const n = Number(U.form.value.replace(/[, ]/g, ""));
-        G[bot] = { kind: U.form.kind, limit: n, used: G[bot]?.used || 0, enforced: G[bot]?.enforced || false };
+        G[bot] = { ...(G[bot] || { stop: false, plugin: "running" }), kind: U.form.kind, limit: n };
         U.form = null;
         BS.render();
         composerNotes();
@@ -354,7 +337,7 @@
         $("#tab-settings").click();
         return BS.render(true);
       case "node-approvals":
-        return announce(`Saved. media-box: ${t.textContent}`);
+        return announce(`Saved. media-box's defaults: ${t.textContent}`);
       case "node-rename":
       case "node-remove":
       case "ws-change":
@@ -379,7 +362,6 @@
     if (event.target.matches("[data-c-machine]")) announce(`Saved. ${botName(current())}'s commands run on ${event.target.value.split(" · ")[0]}`);
   });
 
-  // The composer notes follow the open task.
   new MutationObserver(() => {
     if (!$(".c-composer-note") || $(".c-composer-note").nextElementSibling?.id !== "composer") composerNotes();
   }).observe($("#composer"), { childList: true });
@@ -390,7 +372,6 @@
 
   window.controlsUsage = { U, G, composerNotes };
   BS.render();
-  // Settings opened from the address rendered before these sections were added.
   if ($("#settings-dialog").open) {
     D.renderSettings();
     D.focusFirst($("#settings-dialog"));
