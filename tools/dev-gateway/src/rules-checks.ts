@@ -13,7 +13,7 @@
 // asserts what it does and says so in its name (the plugin turned off in the
 // middle of a run, a run another bot's message started).
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OperatorSession } from "./operator.ts";
 import { drainSessions } from "./scenario-check.ts";
@@ -337,10 +337,23 @@ const statusOf = async (ctx: RulesContext) =>
   answered(await rules(ctx.clients.reader, "status"), "status");
 
 /** Wait until the gateway's log holds `text`, which the plugin writes as its state changes. */
-async function logged(ctx: RulesContext, text: string): Promise<void> {
+export const logSaysAfter = (log: Buffer, text: string, from: number) =>
+  log.subarray(from).toString("utf8").includes(text);
+
+/** Where the gateway's log ends now: take it before a transition, then look after it. */
+function logMark(ctx: RulesContext): number {
+  try {
+    return statSync(ctx.gatewayLog).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** Wait until the gateway's log says `text` after `from`, so an earlier line never counts. */
+async function logged(ctx: RulesContext, text: string, from: number): Promise<void> {
   const deadline = Date.now() + 10_000;
-  while (!readFileSync(ctx.gatewayLog, "utf8").includes(text)) {
-    expect(Date.now() < deadline, `the gateway's log never said: ${text}`);
+  while (!logSaysAfter(readFileSync(ctx.gatewayLog), text, from)) {
+    expect(Date.now() < deadline, `the gateway's log never said, after the change: ${text}`);
     await sleep(250);
   }
 }
@@ -361,6 +374,7 @@ export const RULES_CHECKS: RulesCheck[] = [
         "status before any rules file",
       );
       mkdirSync(join(ctx.stateDir, PLUGIN), { recursive: true });
+      const losing = logMark(ctx);
       writeFileSync(rulesFile(ctx), "{ not rules");
       try {
         const status = await statusOf(ctx);
@@ -373,7 +387,11 @@ export const RULES_CHECKS: RulesCheck[] = [
           ],
           "status with the rules lost",
         );
-        await logged(ctx, "Rules unavailable: the rules file is not JSON. No copy was read");
+        await logged(
+          ctx,
+          "Rules unavailable: the rules file is not JSON. No copy was read",
+          losing,
+        );
         const key = await task(ctx, world, BOT, "lost");
         const since = marks(ctx);
         const runId = await start(ctx, key, "#read");
@@ -705,6 +723,8 @@ export const RULES_CHECKS: RulesCheck[] = [
       same([rec(read.rules).state, read.enforcing], ["read", "rules"], "status with rules read");
       const readAt = rec(read.rules).readAt;
       const good = readFileSync(rulesFile(ctx), "utf8");
+      const losing = logMark(ctx);
+      let restoring: number;
       writeFileSync(rulesFile(ctx), JSON.stringify({ format: PLUGIN, schema: 1 }));
       try {
         const lost = await statusOf(ctx);
@@ -723,6 +743,7 @@ export const RULES_CHECKS: RulesCheck[] = [
         await logged(
           ctx,
           "Rules unavailable: the rules file is not a valid rules store. Enforcing the copy read at",
+          losing,
         );
         const key = await task(ctx, world, BOT, "kept");
         const run = await finish(ctx, await start(ctx, key, "#write"));
@@ -734,10 +755,11 @@ export const RULES_CHECKS: RulesCheck[] = [
         const [record] = await decisionsOf(ctx, { runId: run.runId });
         same([record?.rules, record?.decision], ["kept", "block"], "the decision record");
       } finally {
+        restoring = logMark(ctx);
         writeFileSync(rulesFile(ctx), good);
       }
       same((await statusOf(ctx)).enforcing, "rules", "status once the file is good again");
-      await logged(ctx, "Rules read; enforcing them.");
+      await logged(ctx, "Rules read; enforcing them.", restoring);
     },
   },
   {

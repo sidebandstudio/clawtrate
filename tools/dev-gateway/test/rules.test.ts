@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { devConfig, DENIED_TOOLS, loadPlugins, PLUGIN_RULE, sandboxProblems } from "../src/cli.ts";
 import { loadDevPlugin, pluginCopy } from "../src/dev-plugins.ts";
 import { CHECKOUT_DIR } from "../src/env.ts";
-import { RULES_CHECKS } from "../src/rules-checks.ts";
+import { RULES_CHECKS, logSaysAfter } from "../src/rules-checks.ts";
 import { SCENARIOS } from "../src/scenarios.ts";
 
 const PORTS = { gatewayPort: 19400, providerPort: 19410 };
@@ -93,5 +93,15 @@ describe("the rules checks", () => {
       for (const directive of check.covers) expect(directives, check.name).toContain(directive);
     }
     expect(RULES_CHECKS.flatMap((check) => check.covers)).toContain("#message-read");
+  });
+});
+
+describe("the rules checks' log reading", () => {
+  it("finds a line only after the position taken before the transition", () => {
+    const log = Buffer.from("x Rules read; enforcing them.\ny later lines\n");
+    expect(logSaysAfter(log, "Rules read; enforcing them.", 0)).toBe(true);
+    // An earlier recovery's line does not satisfy a later one.
+    expect(logSaysAfter(log, "Rules read; enforcing them.", 30)).toBe(false);
+    expect(logSaysAfter(log, "later lines", 30)).toBe(true);
   });
 });
