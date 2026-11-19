@@ -544,17 +544,23 @@ export function useConnect({
               }}
             />
           </label>
-          {shownError ? (
-            <p className="b-field-error" id="b-label-help" role="alert">
-              {shownError}
-            </p>
-          ) : (
-            <p className="b-hint" id="b-label-help">
+          {/* The error covers the hint in its place, so the dialog keeps its height as you type. */}
+          <div className="b-field-note">
+            <p
+              className="b-hint"
+              id={shownError ? undefined : "b-label-help"}
+              data-covered={shownError ? "" : undefined}
+            >
               {needed
                 ? `You have another ${who} account, ${accountName(others[0]!, accounts)}. A label tells them apart everywhere.`
                 : "Shown wherever this account is, so you can tell accounts apart."}
             </p>
-          )}
+            {shownError && (
+              <p className="b-field-error" id="b-label-help" role="alert">
+                {shownError}
+              </p>
+            )}
+          </div>
           {locks.map((lock) => {
             const name = bots.find((bot) => bot.id === lock.botId)?.name ?? lock.botId;
             const locked = accounts.accounts.find((each) => each.id === lock.account);
