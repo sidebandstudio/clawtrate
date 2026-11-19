@@ -811,46 +811,54 @@ describe("the iOS app", () => {
 
   it("on iPhone at the largest text size, a bot's name and a task's title stay whole, and the time moves to a line of its own", async () => {
     textSize("accessibility-extra-extra-extra-large");
-    await steps("largest-home", [waitFor({ id: "home" }), waitFor({ id: "bot-name-otto" })]);
-    // Wait for the rows to take the new size: Otto's time under its name.
-    await until("the rows at the largest size", async () => {
-      const at = await layout();
-      const name = at.get("bot-name-otto")?.[0];
-      const time = at.get("bot-time-otto")?.[0];
-      return name && time && time.y1 >= name.y2 - 1 ? true : null;
-    });
-    const home = await layout();
-    const ids = [...home.keys()].filter((id) => id.startsWith("bot-name-"));
-    let checked = 0;
-    for (const id of ids) {
-      const bot = id.slice("bot-name-".length);
-      const name = home.get(id)![0]!;
-      const time = home.get(`bot-time-${bot}`)?.[0];
-      if (!time) continue;
-      expect(time.y1).toBeGreaterThanOrEqual(name.y2 - 1);
-      checked += 1;
+    try {
+      await steps("largest-home", [
+        waitFor({ id: "home" }),
+        // At this size Otto's row may be below the fold.
+        scrollTo({ id: "bot-name-otto" }, "DOWN"),
+      ]);
+      // Wait for the rows to take the new size: Otto's time under its name.
+      await until("the rows at the largest size", async () => {
+        const at = await layout();
+        const name = at.get("bot-name-otto")?.[0];
+        const time = at.get("bot-time-otto")?.[0];
+        return name && time && time.y1 >= name.y2 - 1 ? true : null;
+      });
+      const home = await layout();
+      const ids = [...home.keys()].filter((id) => id.startsWith("bot-name-"));
+      let checked = 0;
+      for (const id of ids) {
+        const bot = id.slice("bot-name-".length);
+        const name = home.get(id)![0]!;
+        const time = home.get(`bot-time-${bot}`)?.[0];
+        if (!time) continue;
+        expect(time.y1).toBeGreaterThanOrEqual(name.y2 - 1);
+        checked += 1;
+      }
+      expect(checked).toBeGreaterThanOrEqual(2);
+      await shoot("home-largest");
+      await steps("largest-tasks", [
+        tap({ id: "bot-otto" }),
+        waitFor({ id: "bot-tasks-otto" }, 20_000),
+        waitFor({ id: `task-title-${lit("agent:otto:disk-space")}` }, 20_000),
+      ]);
+      const tasks = await layout();
+      const titles = [...tasks.keys()].filter((id) => id.startsWith("task-title-"));
+      checked = 0;
+      for (const id of titles) {
+        const title = tasks.get(id)![0]!;
+        const time = tasks.get(`task-time-${id.slice("task-title-".length)}`)?.[0];
+        if (!time) continue;
+        expect(time.y1).toBeGreaterThanOrEqual(title.y2 - 1);
+        checked += 1;
+      }
+      expect(checked).toBeGreaterThanOrEqual(2);
+      await shoot("bot-tasks-largest");
+      await steps("normal-size", [tap({ id: "back" }), waitFor({ id: "home" }, 20_000)]);
+    } finally {
+      // Whatever happened, the checks after this one see the usual size.
+      textSize("large");
     }
-    expect(checked).toBeGreaterThanOrEqual(2);
-    await shoot("home-largest");
-    await steps("largest-tasks", [
-      tap({ id: "bot-otto" }),
-      waitFor({ id: "bot-tasks-otto" }, 20_000),
-      waitFor({ id: `task-title-${lit("agent:otto:disk-space")}` }, 20_000),
-    ]);
-    const tasks = await layout();
-    const titles = [...tasks.keys()].filter((id) => id.startsWith("task-title-"));
-    checked = 0;
-    for (const id of titles) {
-      const title = tasks.get(id)![0]!;
-      const time = tasks.get(`task-time-${id.slice("task-title-".length)}`)?.[0];
-      if (!time) continue;
-      expect(time.y1).toBeGreaterThanOrEqual(title.y2 - 1);
-      checked += 1;
-    }
-    expect(checked).toBeGreaterThanOrEqual(2);
-    await shoot("bot-tasks-largest");
-    textSize("large");
-    await steps("normal-size", [tap({ id: "back" }), waitFor({ id: "home" }, 20_000)]);
   });
 
   it("on iPhone, Settings shows the gateway, this device and the read scope it holds, and the fonts' licenses; the app switcher sees a cover; a reinstall offers the old gateway as a choice; Disconnect keeps the pairing until Reconnect, and Use another gateway forgets the gateway but keeps the device", async () => {
