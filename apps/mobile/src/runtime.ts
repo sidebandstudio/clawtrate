@@ -34,8 +34,10 @@ let runtime: Runtime | null = null;
  */
 export function startRuntime(): Runtime {
   if (runtime) return runtime;
-  const { host, devGateway, secrets } = createIosHost();
-  const client = new ClawtrateClient(host, { readOnly: true });
+  const { host, devGateway, secrets, installedBefore, markInstalled } = createIosHost();
+  // A gateway saved by an earlier install of the app is kept, not reopened: the
+  // welcome screen offers it as a choice.
+  const client = new ClawtrateClient(host, { readOnly: true, resume: installedBefore });
   const session = createBridgeSession(client);
   runtime = {
     client,
@@ -44,11 +46,14 @@ export function startRuntime(): Runtime {
     send: (command) => session.apply(command),
     redact: secrets.redact,
   };
-  void client.start().catch((error: unknown) => {
-    console.error(
-      `[core] could not start: ${secrets.redact(error instanceof Error ? error.message : String(error))}`,
-    );
-  });
+  void client
+    .start()
+    .then(markInstalled)
+    .catch((error: unknown) => {
+      console.error(
+        `[core] could not start: ${secrets.redact(error instanceof Error ? error.message : String(error))}`,
+      );
+    });
   return runtime;
 }
 

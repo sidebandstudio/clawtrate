@@ -39,6 +39,8 @@ export const CONNECT_WORDS = {
   retrying: "Retrying…",
   chooseAnother: "Choose another gateway",
   preparingIdentity: "Preparing device identity…",
+  /** The welcome screen's choice for a gateway kept from before: never taken without asking. */
+  reconnectTo: (gateway: string) => `Reconnect to ${gateway}`,
 } as const;
 
 /**

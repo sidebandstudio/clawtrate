@@ -15,10 +15,20 @@ export const APP_VERSION = "0.1.0";
 /** The name this device gives the gateway when it pairs. */
 export const DEVICE_NAME = "Clawtrate iPhone";
 
+/**
+ * A mark in the app's user defaults, which iOS deletes with the app; the
+ * Keychain is not deleted with it. A saved gateway found without the mark was
+ * saved by an earlier install, so the app asks before it reconnects to it.
+ */
+export const INSTALL_MARK = "ClawtrateInstalled";
+
 export type IosHost = {
   host: ClawtrateHost;
   devGateway: DevGatewayHint | null;
   secrets: Secrets;
+  /** This install has run before: a saved gateway is its own choice. */
+  installedBefore: boolean;
+  markInstalled: () => void;
 };
 
 export function createIosHost(): IosHost {
@@ -28,6 +38,8 @@ export function createIosHost(): IosHost {
   return {
     devGateway,
     secrets,
+    installedBefore: Settings.get(INSTALL_MARK) === "1",
+    markInstalled: () => Settings.set({ [INSTALL_MARK]: "1" }),
     host: {
       createWebSocket: createSocketFactory(WebSocket as unknown as WebSocketConstructor),
       storage: learningStore(createKeychainStore(SecureStore, accessible), secrets),

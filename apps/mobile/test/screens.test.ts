@@ -78,6 +78,16 @@ describe("the iPhone app's screens", () => {
   it("chooses the welcome screen first, then the address, the steps, the pairing and the protocol notice", () => {
     const idle = { ...initialState };
     expect(connectView(idle, null, false)).toBe("welcome");
+    // A gateway kept but not reopened (an earlier install's, or after Disconnect) is a choice on the welcome screen.
+    const kept = state({
+      connection: {
+        ...initialState.connection,
+        status: "disconnected",
+        gatewayUrl: "ws://127.0.0.1:1",
+      },
+    });
+    expect(connectView(kept, null, false)).toBe("welcome");
+    expect(connectView(kept, null, true)).toBe("address");
     expect(connectView(idle, null, true)).toBe("address");
     const connecting = state({
       connection: {

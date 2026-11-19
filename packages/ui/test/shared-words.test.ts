@@ -16,7 +16,7 @@ import {
   scopesDifferWords,
 } from "../src/connect-words.ts";
 import { readOnlyWords } from "../src/conversation-words.ts";
-import { grantedWords } from "../src/gateway-state.ts";
+import { addressWords, forgetWords, grantedWords } from "../src/gateway-state.ts";
 import { statusLineFor } from "../src/live.ts";
 import { listNote } from "../src/summary.ts";
 
@@ -88,6 +88,20 @@ describe("what Settings says of the gateway", () => {
     );
     expect(grantedWords(connection({ status: "reconnecting", scopes: ["operator.read"] }))).toBe(
       "None while not connected",
+    );
+  });
+
+  it("shows the address without a user, a password, a query or a fragment", () => {
+    // A user name and password in the address, joined at run time.
+    const withUser = ["ws://user:secret", "gateway.example:18789/gw?token=abc#x"].join("@");
+    expect(addressWords(withUser)).toBe("ws://gateway.example:18789/gw");
+    expect(addressWords("wss://gateway.example")).toBe("wss://gateway.example");
+    expect(addressWords(null)).toBe("None yet");
+  });
+
+  it("says what stays when the person uses another gateway", () => {
+    expect(forgetWords("127.0.0.1:19201")).toBe(
+      "This device keeps its identity, and 127.0.0.1:19201 keeps this device's pairing until it is removed there.",
     );
   });
 });

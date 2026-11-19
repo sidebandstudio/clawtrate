@@ -8,6 +8,8 @@ import type { ConnectionState } from "@clawtrate/core";
 import { isCleartext, scopeWords } from "@clawtrate/ui/connect-words";
 import { gatewayLabel } from "@clawtrate/ui/format";
 import {
+  addressWords,
+  forgetWords,
   gatewayActions,
   gatewayDot,
   gatewayProblem,
@@ -146,7 +148,7 @@ export function Settings({
             >
               <Fact label={W.address}>
                 <Txt testID="gateway-address" selectable style={{ flexShrink: 1 }}>
-                  {connection.gatewayUrl ?? W.noAddress}
+                  {addressWords(connection.gatewayUrl)}
                 </Txt>
               </Fact>
               {isCleartext(connection.gatewayUrl) && (
@@ -229,6 +231,11 @@ export function Settings({
                     void send({ type: "disconnect" });
                   }}
                 />
+              )}
+              {actions.forget && (
+                <Txt testID="forget-keeps" size={S["text-sm"]} color="text-faint">
+                  {forgetWords(gatewayLabel(connection.gatewayUrl))}
+                </Txt>
               )}
             </View>
             {connection.gatewayUrl && (

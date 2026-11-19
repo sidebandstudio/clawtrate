@@ -109,6 +109,26 @@ export function grantedWords(connection: ConnectionState): string {
   return connection.scopes.length > 0 ? connection.scopes.join(", ") : SETTINGS_WORDS.noneGranted;
 }
 
+/**
+ * The gateway's address as Settings shows it: scheme, host, port and path, never
+ * a user name, a password, a query or a fragment someone put in the address.
+ */
+export function addressWords(url: string | null): string {
+  if (!url) return SETTINGS_WORDS.noAddress;
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname === "/" ? "" : parsed.pathname;
+    return `${parsed.protocol}//${parsed.host}${path}`;
+  } catch {
+    return url.replace(/[?#].*$/, "").replace(/\/\/[^/@]*@/, "//");
+  }
+}
+
+/** What stays when the person uses another gateway. */
+export function forgetWords(gateway: string): string {
+  return `This device keeps its identity, and ${gateway} keeps this device's pairing until it is removed there.`;
+}
+
 /** The pane's last line: the pairing is kept, and what this device may do. */
 export function pairingNote(
   gateway: string,

@@ -1,5 +1,6 @@
 // The connection screens (visual-language.md, section 10, at phone size): the
-// welcome screen with the mark and its one action, the gateway's address with the
+// welcome screen with the mark and its one action (and, for a gateway an earlier
+// install saved, the choice to reconnect to it), the gateway's address with the
 // notice for an unencrypted one, the step list while it connects and loads, the
 // pending approval with the scopes this device signed and its command to copy,
 // and the notice for a gateway on another protocol. The row of characters stands
@@ -24,6 +25,7 @@ import {
   setupSteps,
   SLOGAN,
 } from "@clawtrate/ui/connect-words";
+import { gatewayLabel } from "@clawtrate/ui/format";
 import * as Clipboard from "expo-clipboard";
 import { useEffect, useState, type ReactNode } from "react";
 import {
@@ -231,6 +233,9 @@ export function Welcome({
   onConnect: () => void;
   connection: ConnectionState;
 }) {
+  const { send } = useRuntime();
+  // A gateway kept from an earlier install, or after Disconnect, is a choice, never a default.
+  const saved = connection.status === "disconnected" ? connection.gatewayUrl : null;
   return (
     <Column testID="welcome">
       <Brand />
@@ -241,6 +246,14 @@ export function Welcome({
         onPress={onConnect}
         testID="connect-a-gateway"
       />
+      {saved && (
+        <Button
+          label={W.reconnectTo(gatewayLabel(saved))}
+          large
+          onPress={() => void send({ type: "retry" })}
+          testID="reconnect-saved"
+        />
+      )}
       <Txt size={S["text-sm"]} color="text-faint" style={{ textAlign: "center" }}>
         {W.hint}
       </Txt>

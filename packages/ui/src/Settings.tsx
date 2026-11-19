@@ -24,6 +24,7 @@ import { CopyValue } from "./AccessBar.tsx";
 import { CommandLine } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
 import {
+  addressWords,
   gatewayActions,
   gatewayDot,
   gatewayProblem,
@@ -157,7 +158,7 @@ export function Settings({
       <dl className="facts" data-testid="gateway-facts">
         <div>
           <dt>{W.address}</dt>
-          <dd title={connection.gatewayUrl ?? undefined}>{connection.gatewayUrl ?? W.noAddress}</dd>
+          <dd title={addressWords(connection.gatewayUrl)}>{addressWords(connection.gatewayUrl)}</dd>
         </div>
         <div>
           <dt>{W.state}</dt>

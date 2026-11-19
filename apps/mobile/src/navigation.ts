@@ -54,7 +54,11 @@ export function connectView(
   if (connection.status === "pairing" && connection.pairing) return "pairing";
   const loadingBots = connection.status === "connected" && discovery.status === "loading";
   if (loadingBots || connection.status === "connecting") return "setup";
-  if (addressOpen || connection.error || connection.gatewayUrl) return "address";
+  if (addressOpen || connection.error) return "address";
+  // A gateway kept but not connected (from an earlier install, or after
+  // Disconnect) is offered on the welcome screen, never reopened by itself.
+  if (connection.status === "disconnected") return "welcome";
+  if (connection.gatewayUrl) return "address";
   return "welcome";
 }
 
