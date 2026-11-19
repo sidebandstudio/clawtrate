@@ -313,9 +313,9 @@ Runs 44432670957 and 44433669562 (macOS arm64 and Ubuntu x64), workflow `setup-o
 | Version missing | `error` "npm install did not produce a usable OpenClaw package" | Delete the prefix |
 | Not enough disk | `disk-space` step `warn` or a failing npm step (`preflight_fresh_git_disk_space`, git method only) | Delete the prefix |
 | Node cannot be provisioned | `node` step fails, or "Private Node.js recovery is unavailable on musl Linux" | Nothing written but the prefix |
-| Onboarding cannot install the service | onboarding JSON `ok:false`, `daemonInstall.skippedReason` | `openclaw uninstall --state --workspace --yes --non-interactive` |
-| The gateway does not come up | onboarding JSON `ok:false` with `classification` | `openclaw gateway status --json`, then uninstall |
-| Cancelled midway | the process is stopped by its PID; npm may leave a partial package, which `install-cli.sh` detects on the next run (`.openclaw-lifecycle-pending`, retried once) | Delete the prefix, and `~/.openclaw` if onboarding had begun |
+| Onboarding cannot install the service | onboarding JSON `ok:false`, `daemonInstall.skippedReason` | `<prefix>/bin/openclaw --profile clawtrate uninstall --service --state --workspace --yes --non-interactive` (in §6.8 it stopped and removed only the profile's service and state), then delete the prefix |
+| The gateway does not come up | onboarding JSON `ok:false` with `classification` | `<prefix>/bin/openclaw --profile clawtrate gateway status --json`, then the same uninstall and the prefix |
+| Cancelled midway | the process is stopped by its PID; npm may leave a partial package, which `install-cli.sh` detects on the next run (`.openclaw-lifecycle-pending`, retried once) | If onboarding had begun, the same uninstall; then delete the prefix. Only the prefix and the `clawtrate` profile (`~/.openclaw-clawtrate`, its service) are the install's; `~/.openclaw` is never touched |
 
 ## 7. SSH from a shipped desktop app
 
