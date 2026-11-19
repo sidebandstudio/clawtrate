@@ -151,7 +151,12 @@ function Tile({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
       })}
     >
       <View>
-        <Avatar bot={row.bot} size={S["avatar-pin"]} primary={row.primary} />
+        <Avatar
+          bot={row.bot}
+          size={S["avatar-pin"]}
+          primary={row.primary}
+          state={row.state === "working" ? "working" : "idle"}
+        />
         {row.state && (
           <View
             style={{
