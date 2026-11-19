@@ -129,7 +129,7 @@ function Blocks({ blocks }: { blocks: Block[] }) {
               <ScrollView
                 key={index}
                 horizontal
-                style={{ backgroundColor: c.bg, borderRadius: S["radius-sm"] }}
+                style={{ flexGrow: 0, backgroundColor: c.bg, borderRadius: S["radius-sm"] }}
                 contentContainerStyle={{ padding: S["space-3"] }}
               >
                 <Txt size={S["text-sm"]} style={{ fontFamily: FONTS.mono }} selectable>
@@ -155,7 +155,9 @@ function Blocks({ blocks }: { blocks: Block[] }) {
           case "table": {
             const widths = columnWidths(block, S["text-base"]);
             return (
-              <ScrollView key={index} horizontal testID="md-table">
+              // A horizontal scroller keeps the base style's flexGrow, which lets it grow
+              // down the bubble; it is as tall as its rows.
+              <ScrollView key={index} horizontal testID="md-table" style={{ flexGrow: 0 }}>
                 <View>
                   {[block.header, ...block.rows].map((row, r) => (
                     <View

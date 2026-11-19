@@ -622,7 +622,8 @@ describe("the iOS app", () => {
       {
         repeat: {
           while: { notVisible: lit(FAR_CELL) },
-          times: 8,
+          // A swipe moves the table about a column; the far cell is in the ninth.
+          times: 20,
           commands: [{ swipe: { from: { id: "md-table" }, direction: "LEFT", duration: 600 } }],
         },
       },
