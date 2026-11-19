@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { lstatSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -7,6 +8,10 @@ import type { OperatorSession } from "../../../tools/dev-gateway/src/operator.ts
 import { sha256 } from "../lib/files.js";
 
 const instance = openInstance("memplugin");
+const path = join(instance.stateDir, "shared-memory-check");
+const freshInstance =
+  "The memory check needs a fresh memplugin instance. Reset your test instance with pnpm dev-gateway reset --instance memplugin and start it again.";
+assert.equal(lstatSync(path, { throwIfNoEntry: false }), undefined, freshInstance);
 const change = "plugin.clawtrate-memory.changed";
 const agentId = "main";
 const note = { agentId, path: "memory/plugin-check/note.md" };
@@ -48,7 +53,7 @@ try {
   ] as const) {
     await assert.rejects(request(approvals, method, params), /missing scope: operator.read/);
   }
-  assert.deepEqual((await request(reader, "list", { agentId })).files, []);
+  assert.deepEqual((await request(reader, "list", { agentId })).files, [], freshInstance);
   const task = await admin.request<{ key: string }>("sessions.create", { agentId });
   const firstTurn = await admin.send(task.key, "#text");
   assert.equal((await admin.terminal(String(firstTurn.runId))).state, "final");
@@ -79,7 +84,6 @@ try {
     },
   ]);
 
-  const path = join(instance.stateDir, "shared-memory-check");
   await mkdir(path);
   const { hash: baseHash } = await admin.request("config.get", {});
   await admin.request("config.patch", {
