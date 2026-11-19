@@ -73,6 +73,16 @@ pnpm dev-gateway start --instance pairing --default-local-pairing
 
 Every instance sets `gateway.nodes.pairing.autoApproveLocal` to `false`, so a device's first pairing waits for approval even on loopback. `--default-local-pairing` leaves that one setting out of a named instance's config, at the gateway's own default, for research into what a first pairing on the gateway's own computer does when nobody has changed it ([`docs/research/setup-flow.md`](../research/setup-flow.md)). The contract follows: such an instance refuses the setting, and an ordinary instance still requires it. The default instance refuses the option.
 
+## A stand-in image provider
+
+```bash
+pnpm dev-gateway start --instance pictures --with-images
+```
+
+`--with-images` gives a named instance an image provider, so a bot's `image_generate` tool can be tried. The stand-in (`tools/dev-gateway/src/scripted-images.ts`) is a third process of the instance, beside the gateway and the scripted model. It listens on `127.0.0.1` on the last port of the instance's block, the gateway's port plus 19. It is recorded in the instance's marker as its `image` process, and `stop` and `reset` stop it like the others. Its log is `image.log` in the instance's run folder. It answers the OpenAI-style image endpoint that the gateway's bundled LiteLLM image provider calls (`POST /v1/images/generations` with a bearer key), always with the same picture. That picture is a 1024 × 1024 PNG of a sun over a hill in solid colours, drawn by the stand-in's own code. `GET /scripted/images/requests` lists every request it received and what it answered.
+
+The option adds three things to the config, and the contract holds each one exactly. It adds `models.providers.litellm` (the stand-in's address on loopback, the made-up key `example-image-key` and no models), and `agents.defaults.mediaModels.image.primary: "litellm/scripted-image-1"`. It also moves `image_generate` from `tools.deny` to `tools.allow`, for every bot. Use the `#image` directives below with it. A marker in the picture's prompt (`[scripted: refuse]`, `[scripted: fail]`, `[scripted: hang]`) makes the stand-in refuse with a content-policy error (400), fail (500) or never answer. The default instance refuses the option, and only `start` and `up` take it. [`docs/research/image-generation.md`](../research/image-generation.md) records what the gateway did with it.
+
 ## Migrating from an older version
 
 Earlier versions of the tool recorded no process start times, so this version cannot prove anything about the state they left and refuses it for good: it never signals its processes, starts it over or deletes it. Move it aside once, by hand, from the checkout that started it. For the default instance:
@@ -137,6 +147,10 @@ The scripted model can put a run into every situation the live conversation has 
 | `#browse-slow`     | open the slow scripted page            | Navigates the current tab to a scripted page that takes eight seconds to load.                                                                                                                                                  | a bot with a browser of its own |
 | `#browse-download` | download the scripted file             | Navigates the current tab to a scripted file that downloads slowly, over eight seconds.                                                                                                                                         | a bot with a browser of its own |
 | `#browse-outside`  | open an outside address                | Navigates to an address outside loopback, then to another loopback port, and reads what the tab shows; both are refused.                                                                                                        | a bot with a browser of its own |
+| `#image`           | draw a picture                         | Asks the image tool for a picture. The tool starts a background task, and the picture arrives in a later turn of the same task.                                                                                                 | any bot, with `--with-images`   |
+| `#image-refuse`    | draw a picture the provider refuses    | Asks for a picture the stand-in image provider refuses (400, content policy).                                                                                                                                                   | any bot, with `--with-images`   |
+| `#image-fail`      | draw a picture that fails              | Asks for a picture the stand-in image provider fails to make (500).                                                                                                                                                             | any bot, with `--with-images`   |
+| `#image-hang`      | draw a picture that never comes        | Asks for a picture the stand-in image provider never answers; the call gives up after 5 seconds.                                                                                                                                | any bot, with `--with-images`   |
 
 Where it matters which bot you ask:
 
@@ -145,6 +159,7 @@ Where it matters which bot you ask:
 - **Files** stay in the bot's own workspace: the gateway is configured to refuse file tools outside it.
 - **Web search** goes to the scripted model server on loopback, through the gateway's bundled Ollama search provider, and returns three fixed results on the reserved `search.example` domain. Bots are offered only the tools these scenarios use; fetching web pages, the browser, tools that manage the gateway or its installation, and tools that reach the network or another device are switched off for every bot.
 - **Browsers** (`#browse` and the others): only on an instance started with `--with-plugin clawtrate-computer`, and only for Marlow and Pip, each in a browser of its own that reaches nothing but the scripted pages. Elsewhere the browser tool is off and these directives answer that the instance has no scripted pages.
+- **Pictures** (`#image` and the others): only on an instance started with `--with-images`. Elsewhere `image_generate` is denied, and the bot answers that it has no image tool. When a picture is ready, the gateway starts a turn of its own in the task. The scripted model answers that turn with a caption and the picture's `MEDIA:` line, and on a failure with a short sentence.
 - **Routines** (`#schedule`): the gateway offers its `automations` tool only in runs started as its owner, which the scenario check does through the CLI. Sent from a paired client, the run reports "Tool automations not found".
 - **Questions and approvals** need a client with the right scopes. The read-only preview does not show them yet; answer from a client with `operator.questions` or `operator.approvals`.
 
