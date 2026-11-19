@@ -377,10 +377,12 @@ function zoned(routine: Routine): boolean {
  */
 export function TimeZoneLine({
   routines,
+  botId,
   botName,
   admin,
 }: {
   routines: Routine[];
+  botId: string;
   botName: string;
   admin: boolean;
 }) {
@@ -401,7 +403,12 @@ export function TimeZoneLine({
         </button>
       )}
       {open && admin && (
-        <ZoneDialog routines={routines} botName={botName} onClose={() => setOpen(false)} />
+        <ZoneDialog
+          routines={routines}
+          botId={botId}
+          botName={botName}
+          onClose={() => setOpen(false)}
+        />
       )}
     </div>
   );
@@ -409,10 +416,12 @@ export function TimeZoneLine({
 
 function ZoneDialog({
   routines,
+  botId,
   botName,
   onClose,
 }: {
   routines: Routine[];
+  botId: string;
   botName: string;
   onClose: () => void;
 }) {
@@ -420,14 +429,36 @@ function ZoneDialog({
   const [zone, setZone] = useState("auto");
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string[] | null>(null);
-  const changes = routines.filter(zoned);
-  const left = routines.filter((each) => !zoned(each));
+  const [shown, setShown] = useState(routines);
+  const [reconfirm, setReconfirm] = useState(false);
   const tz = zone === "auto" ? viewerZone() : zone;
+  const willChange = (routine: Routine) => zoned(routine) && routine.schedule.tz !== tz;
+  const changes = shown.filter(willChange);
+  const left = shown.filter((each) => !zoned(each));
   const save = async () => {
     setBusy(true);
+    setFailed(null);
+    let fresh: Routine[];
+    try {
+      fresh = (await bridge.invoke({ type: "readBotRoutines", botId })).routines;
+    } catch (error) {
+      setFailed([errorText(error)]);
+      setBusy(false);
+      return;
+    }
+    const next = fresh.filter(willChange);
+    if (
+      next.length !== changes.length ||
+      next.some((job) => !changes.some((each) => each.id === job.id))
+    ) {
+      setShown(fresh);
+      setReconfirm(true);
+      setBusy(false);
+      return;
+    }
+    setReconfirm(false);
     const failures: string[] = [];
-    for (const routine of changes) {
-      if (routine.schedule.tz === tz) continue;
+    for (const routine of next) {
       const original = fieldsOf(routine);
       try {
         const result = await bridge.invoke({
@@ -435,6 +466,7 @@ function ZoneDialog({
           id: routine.id,
           original,
           edit: { ...original, schedule: { ...original.schedule, tz } },
+          expected: { ...original, updatedAt: routine.updatedAt },
         });
         if (result.status !== "saved")
           failures.push(
@@ -468,6 +500,13 @@ function ZoneDialog({
           </h2>
         </header>
         <div className="b-body">
+          {reconfirm && (
+            <Note tone="warn" testId="zone-reconfirm">
+              <p role="status">
+                The list of routines to change has changed. Check the list and confirm again.
+              </p>
+            </Note>
+          )}
           {failed && (
             <Note tone="danger" testId="zone-failed">
               <p role="alert">
@@ -482,6 +521,7 @@ function ZoneDialog({
               id="r-zone"
               data-b-focus=""
               value={zone}
+              disabled={busy}
               onChange={(event) => setZone(event.target.value)}
             >
               <option value="auto">Auto-detect ({zoneCity(viewerZone())})</option>
@@ -495,7 +535,7 @@ function ZoneDialog({
           <p className="r-hint">
             {changes.length > 0
               ? `Changes ${changes.map((each) => each.name).join(", ")}.`
-              : "None of these routines has a schedule Clawtrate can change."}
+              : "No routines would change to this time zone."}
             {left.length > 0 &&
               ` Leaves ${left.map((each) => each.name).join(", ")} as they are: their schedule has no zone or was set on the gateway.`}
           </p>

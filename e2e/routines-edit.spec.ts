@@ -328,6 +328,72 @@ test("F-189: another client's change while the editor is open is shown before sa
   });
 });
 
+test("F-189: accepting a conflict saves only fields edited from the original", async () => {
+  const job = await add(scriptedRoutine(`Overwrite ${STAMP}`));
+  const name = `My name ${STAMP}`;
+  await openPage(job.name);
+  await view().getByRole("button", { name: "Edit", exact: true }).click();
+  await editor().getByLabel("Name").fill(name);
+  await call("cron.update", {
+    id: job.id,
+    patch: { payload: { kind: "agentTurn", message: "Their new instruction." } },
+  });
+  await editor().getByRole("button", { name: "Save mine anyway" }).click();
+  await expect(editor()).toHaveCount(0);
+  expect(await get(job.id)).toMatchObject({ name, payload: { message: "Their new instruction." } });
+});
+
+test("F-189: a late save answer leaves a deleted routine's draft available as new", async () => {
+  const job = await add(scriptedRoutine(`Delete during save ${STAMP}`));
+  const name = `Keep this draft ${STAMP}`;
+  await openPage(job.name);
+  await view().getByRole("button", { name: "Edit", exact: true }).click();
+  await editor().getByLabel("Name").fill(name);
+  const held = holdWrite("updateRoutine", true);
+  await save().click();
+  const reply = await held;
+  await call("cron.remove", { id: job.id });
+  await expect(editor().getByTestId("editor-deleted")).toBeVisible();
+  reply();
+  await editor().getByRole("button", { name: "Save as a new routine" }).click();
+  await expect(editor()).toHaveCount(0);
+  await expect(view().getByRole("heading", { name })).toBeVisible();
+  expect((await byName(name))?.id).not.toBe(job.id);
+  await expect(get(job.id)).rejects.toThrow(/not found/iu);
+});
+
+test("F-189: checking an unanswered edit shows a conflict only when the write differs", async () => {
+  for (const lands of [false, true]) {
+    const job = await add(scriptedRoutine(`Unanswered ${lands} ${STAMP}`));
+    const name = `My unanswered edit ${lands} ${STAMP}`;
+    await openPage(job.name);
+    await view().getByRole("button", { name: "Edit", exact: true }).click();
+    await editor().getByLabel("Name").fill(name);
+    const held = holdWrite("updateRoutine", lands);
+    await save().click();
+    const reply = await held;
+    const liveName = lands ? name : `Their edit ${STAMP}`;
+    if (!lands) await call("cron.update", { id: job.id, patch: { name: liveName } });
+    await expect(view().locator("h1")).toHaveText(liveName);
+    reply(unanswered);
+    const conflict = editor().getByTestId("editor-changed");
+    const unknown = editor().getByTestId("editor-unknown");
+    await expect(conflict).toHaveCount(0);
+    await unknown.getByRole("button", { name: "Check now" }).click();
+    if (lands) {
+      await expect(unknown).toContainText(`${name} now reads as you typed it.`);
+      await expect(conflict).toHaveCount(0);
+      await unknown.getByRole("button", { name: "Close" }).click();
+    } else {
+      await expect(conflict).toBeVisible();
+      await expect(unknown).toHaveCount(0);
+      await conflict.getByRole("button", { name: "Save mine anyway" }).click();
+      await expect(editor()).toHaveCount(0);
+    }
+    expect((await get(job.id)).name).toBe(name);
+  }
+});
+
 test("F-189: a reminder in the main conversation keeps its text: renaming it never sends its payload", async () => {
   const job = await add({
     ...scriptedRoutine(`Reminder ${STAMP}`, "main"),
@@ -446,7 +512,7 @@ test("F-195: the form keeps schedules five minutes apart, though the gateway its
   await editor().getByRole("button", { name: "Cancel" }).click();
 });
 
-test("F-196: changing a bot's routines' time zone rewrites each routine's own zone on the gateway", async () => {
+test("F-196: a time-zone change asks again when an unlisted routine would be changed", async () => {
   const one = await add({
     ...scriptedRoutine(`Zone a ${STAMP}`, "pip"),
     schedule: { kind: "cron", expr: "0 9 * * *", tz: NY },
@@ -462,7 +528,19 @@ test("F-196: changing a bot's routines' time zone rewrites each routine's own zo
   await line.getByRole("button", { name: "Change…" }).click();
   const dialog = page.getByTestId("routines-zone-dialog");
   await dialog.getByLabel("Time zone").selectOption("Asia/Tokyo");
-  await dialog.getByRole("button", { name: "Save" }).click();
+  const three = await add({
+    ...scriptedRoutine(`Zone c ${STAMP}`, "pip"),
+    schedule: { kind: "cron", expr: "0 7 * * *", tz: NY },
+  });
+  await expect(dialog).not.toContainText(three.name);
+  const confirm = dialog.getByRole("button", { name: "Save" });
+  await confirm.click();
+  await expect(dialog.getByTestId("zone-reconfirm")).toBeVisible();
+  await expect(dialog).toContainText(three.name);
+  expect((await get(one.id)).schedule.tz).toBe(NY);
+  expect((await get(two.id)).schedule.tz).toBe("Europe/London");
+  expect((await get(three.id)).schedule.tz).toBe(NY);
+  await confirm.click();
   await expect(dialog).toHaveCount(0, { timeout: 15_000 });
   expect((await get(one.id)).schedule).toEqual({
     kind: "cron",
@@ -474,6 +552,7 @@ test("F-196: changing a bot's routines' time zone rewrites each routine's own zo
     expr: "30 17 * * 1-5",
     tz: "Asia/Tokyo",
   });
+  expect((await get(three.id)).schedule.tz).toBe("Asia/Tokyo");
   await expect(line).toContainText("Routines' time zone: Tokyo");
 });
 

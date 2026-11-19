@@ -293,7 +293,9 @@ function List({
               </li>
             ))}
           </ul>
-          {bot !== null && <TimeZoneLine routines={rows} botName={each.name} admin={admin} />}
+          {bot !== null && (
+            <TimeZoneLine routines={rows} botId={each.id} botName={each.name} admin={admin} />
+          )}
           {bot !== null && create && (
             <button type="button" className="button r-new-for" onClick={() => create(each.id)}>
               New routine for {each.name}

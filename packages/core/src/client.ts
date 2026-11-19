@@ -24,6 +24,7 @@ import {
   type NewRoutine,
   type Routine,
   type RoutineFields,
+  type RoutineRevision,
   type RoutineRemove,
   type RoutineRun,
   type RoutineRunNow,
@@ -3490,9 +3491,15 @@ export class ClawtrateClient {
     return this.routines.findCreated(key);
   }
 
-  /** Write what changed from `original`, unless the routine no longer reads so. */
-  updateRoutine(id: string, original: RoutineFields, edit: RoutineFields): Promise<RoutineWrite> {
-    return this.routines.update(id, original, edit);
+  updateRoutine(
+    id: string,
+    original: RoutineFields,
+    edit: RoutineFields,
+    expected: RoutineRevision,
+  ): Promise<RoutineWrite> {
+    if (jsonTextLength(id) > MAX_ID_CHARS)
+      return Promise.resolve({ status: "refused", error: "That routine id is too long." });
+    return this.routines.update(id, original, edit, expected);
   }
 
   setRoutineEnabled(id: string, enabled: boolean): Promise<RoutineWrite> {

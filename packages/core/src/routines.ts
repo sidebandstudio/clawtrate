@@ -1,14 +1,12 @@
 // Routines: the gateway's scheduled jobs (`cron.*`), all read at
-// `operator.read` (automation.md sections 3 to 8). The engine keeps one thing,
-// the routine list in `ClawtrateState.routines`, from `cron.list` and the
+// `operator.read` (automation.md sections 3 to 8). The routine list in
+// `ClawtrateState.routines` comes from `cron.list` and the
 // `cron` event. A routine's runs, a run's conversation and the calendar's past
 // runs are read when a screen asks and returned to it, never kept here.
 //
 // Changing them (sections 9 and 10) needs `operator.admin`: every write checks
-// it here, just before it is sent, whatever asked for it. An update compares
-// the values the editor opened with against a fresh `cron.get` and writes only
-// what the person changed; nothing is called saved until the gateway's answer
-// shows it.
+// it here, just before it is sent, whatever asked for it. An update checks the
+// acknowledged revision and writes only what the person changed from the original.
 //
 // What the gateway returns was read on a development gateway (2026.10.6) and
 // is recorded in docs/decisions.md, "Routines: what the gateway returns" and
@@ -24,6 +22,7 @@ import type { TranscriptItem } from "./types.ts";
 
 /** Routines kept from `cron.list`; past it they are counted in `omitted`. */
 export const MAX_ROUTINES = 200;
+export const MAX_ROUTINE_UPDATES = 128;
 /** A routine's instruction or reminder text as kept and shown. */
 export const MAX_ROUTINE_TEXT_CHARS = 4_096;
 /** Runs read for a routine's page, newest first: older runs drop out of the list (F-355). */
@@ -383,6 +382,7 @@ export type RoutineFields = {
 };
 
 export type NewRoutine = RoutineFields & { botId: string };
+export type RoutineRevision = RoutineFields & { updatedAt: number | null };
 
 /** How a write ended. Only `saved` says the gateway shows the change. */
 export type RoutineWrite =
@@ -549,6 +549,7 @@ export class RoutinesEngine {
   private loading: Promise<void> | null = null;
   /** The connection a write was sent on: its answer is applied only while this holds. */
   private epoch = 0;
+  private readonly updates = new Set<{ id: string; removed: boolean }>();
 
   private readonly ctx: RoutinesContext;
 
@@ -677,6 +678,8 @@ export class RoutinesEngine {
     this.invalidated = true;
     const jobId = str(record.jobId);
     const action = str(record.action);
+    if (action === "removed")
+      for (const update of this.updates) if (update.id === jobId) update.removed = true;
     const before = this.ctx.get();
     const kept = before.routines.find((each) => each.id === jobId);
     const routines = applyCronEvent(before.routines, record);
@@ -815,41 +818,54 @@ export class RoutinesEngine {
     }
   }
 
-  /**
-   * Change a routine (`cron.update`). `original` is what the editor opened
-   * with: when the gateway's routine no longer reads so, nothing is written
-   * and the current one comes back. Only the fields that differ from
-   * `original` are sent, so a name-only change leaves the schedule as it is.
-   */
-  async update(id: string, original: RoutineFields, edit: RoutineFields): Promise<RoutineWrite> {
+  /** Check the acknowledged revision, then patch the fields changed from the original. */
+  async update(
+    id: string,
+    original: RoutineFields,
+    edit: RoutineFields,
+    expected: RoutineRevision,
+  ): Promise<RoutineWrite> {
     let blocked = this.blocked();
     if (blocked) return { status: "not-sent", reason: blocked };
+    if (this.updates.size >= MAX_ROUTINE_UPDATES)
+      return { status: "refused", error: "Too many routine changes are in flight." };
     const epoch = this.epoch;
-    let current: Routine | null;
+    const pending = { id, removed: false };
+    this.updates.add(pending);
     try {
-      current = parseRoutine(await this.ctx.request("cron.get", { id }));
-    } catch (error) {
-      const failed = this.failed(error);
-      // Only a read failed: nothing was written.
-      return failed.status === "unknown" ? { status: "not-sent", reason: "offline" } : failed;
-    }
-    if (!current) return { status: "deleted" };
-    if (changedFields(original, fieldsOf(current)).length > 0)
-      return { status: "conflict", current };
-    const patch = patchOf(original, edit, current.payload);
-    if (Object.keys(patch).length === 0) return { status: "saved", routine: current };
-    blocked = this.blocked();
-    if (blocked) return { status: "not-sent", reason: blocked };
-    if (epoch !== this.epoch) return { status: "not-sent", reason: "offline" };
-    try {
-      const routine = answeredJob(await this.ctx.request("cron.update", { id, patch }));
-      const wanted = changedFields(original, edit);
-      if (!routine || changedFields(edit, fieldsOf(routine)).some((key) => wanted.includes(key)))
-        return { status: "unknown", error: "The gateway answered, but doesn't show the change." };
-      this.keep(routine, epoch);
-      return { status: "saved", routine };
-    } catch (error) {
-      return this.failed(error);
+      let current: Routine | null;
+      try {
+        current = await this.readOne(id);
+      } catch (error) {
+        if (pending.removed) return { status: "deleted" };
+        const failed = this.failed(error);
+        // Only a read failed: nothing was written.
+        return failed.status === "unknown" ? { status: "not-sent", reason: "offline" } : failed;
+      }
+      if (!current || pending.removed) return { status: "deleted" };
+      if (
+        current.updatedAt !== expected.updatedAt ||
+        changedFields(expected, fieldsOf(current)).length > 0
+      )
+        return { status: "conflict", current };
+      const patch = patchOf(original, edit, current.payload);
+      if (Object.keys(patch).length === 0) return { status: "saved", routine: current };
+      blocked = this.blocked();
+      if (blocked) return { status: "not-sent", reason: blocked };
+      if (epoch !== this.epoch) return { status: "not-sent", reason: "offline" };
+      try {
+        const routine = answeredJob(await this.ctx.request("cron.update", { id, patch }));
+        if (pending.removed) return { status: "deleted" };
+        const wanted = changedFields(original, edit);
+        if (!routine || changedFields(edit, fieldsOf(routine)).some((key) => wanted.includes(key)))
+          return { status: "unknown", error: "The gateway answered, but doesn't show the change." };
+        this.keep(routine, epoch);
+        return { status: "saved", routine };
+      } catch (error) {
+        return pending.removed ? { status: "deleted" } : this.failed(error);
+      }
+    } finally {
+      this.updates.delete(pending);
     }
   }
 

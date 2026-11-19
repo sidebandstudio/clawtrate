@@ -29,6 +29,7 @@ import {
   type NewRoutine,
   type Routine,
   type RoutineFields,
+  type RoutineRevision,
   type RoutineRemove,
   type RoutineRun,
   type RoutineRunNow,
@@ -155,7 +156,13 @@ export type BridgeCommand =
   /** One routine as the gateway has it now; reads only. */
   | { type: "readRoutine"; id: string }
   /** `original` is what the editor opened with; only what differs from it is written. */
-  | { type: "updateRoutine"; id: string; original: RoutineFields; edit: RoutineFields }
+  | {
+      type: "updateRoutine";
+      id: string;
+      original: RoutineFields;
+      edit: RoutineFields;
+      expected: RoutineRevision;
+    }
   | { type: "setRoutineEnabled"; id: string; enabled: boolean }
   | { type: "runRoutineNow"; id: string }
   | { type: "removeRoutine"; id: string }
@@ -633,13 +640,19 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "findCreatedRoutine",
         key: shortText(command.key, MAX_DRAFT_KEY_CHARS, "draft key"),
       };
-    case "updateRoutine":
+    case "updateRoutine": {
+      const expected = record(command.expected, "routine revision");
+      const updatedAt = expected.updatedAt;
+      if (updatedAt !== null && (typeof updatedAt !== "number" || !Number.isFinite(updatedAt)))
+        throw new Error("invalid routine revision");
       return {
         type: "updateRoutine",
         id: id(command.id, "routine id"),
         original: routineFields(record(command.original, "routine")),
         edit: routineFields(record(command.edit, "routine")),
+        expected: { ...routineFields(expected), updatedAt },
       };
+    }
     case "setRoutineEnabled":
       return {
         type: "setRoutineEnabled",
@@ -1086,7 +1099,7 @@ class ViewerSession implements BridgeSession {
       case "readRoutine":
         return client.readRoutine(command.id);
       case "updateRoutine":
-        return client.updateRoutine(command.id, command.original, command.edit);
+        return client.updateRoutine(command.id, command.original, command.edit, command.expected);
       case "setRoutineEnabled":
         return client.setRoutineEnabled(command.id, command.enabled);
       case "runRoutineNow":

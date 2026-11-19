@@ -14,7 +14,14 @@ import {
   type RoutineFields,
   type RoutineWrite,
 } from "@clawtrate/core";
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useBridge } from "../bridge.tsx";
 import { CheckIcon, ChevronIcon, CloseIcon } from "../icons.tsx";
 import { Dialog } from "../bots/Dialog.tsx";
@@ -64,7 +71,6 @@ type Check =
   | { status: "missing" }
   /** The gateway's routine reads as this save sent it: maybe this save, maybe the same change made elsewhere. */
   | { status: "matches"; routine: Routine }
-  | { status: "differs"; routine: Routine }
   | { status: "failed"; error: string };
 
 type Save =
@@ -175,6 +181,7 @@ export function Editor({
   const [original, setOriginal] = useState<RoutineFields | null>(() =>
     live ? fieldsOf(live) : null,
   );
+  const [accepted, setAccepted] = useState(live);
   const [draft, setDraft] = useState<Draft>(() =>
     live
       ? draftOf(live, now)
@@ -216,13 +223,19 @@ export function Editor({
   const errors: Problems = tried ? problems(draft, now) : {};
   const bot = bots.find((each) => each.id === draft.botId);
   const botName = bot?.name ?? draft.botId;
-  const busy = save.status === "saving" || save.status === "unknown";
   const deleted = mode.mode === "edit" && (gone || (store.status === "loaded" && !live));
+  const saving = !deleted && save.status === "saving";
+  const busy = saving || (!deleted && save.status === "unknown");
+  useLayoutEffect(() => {
+    if (deleted) attempt.current += 1;
+  }, [deleted]);
   // Changed elsewhere: by the gateway's event while open, or found just before saving.
   const changed =
     save.status === "conflict"
-      ? (live ?? save.current)
-      : live && original && changedFields(original, fieldsOf(live)).length > 0 && !busy
+      ? live && (live.updatedAt ?? 0) > (save.current.updatedAt ?? 0)
+        ? live
+        : save.current
+      : live && accepted && changedFields(fieldsOf(accepted), fieldsOf(live)).length > 0 && !busy
         ? live
         : null;
   const set = (change: Partial<Draft>) => setDraft((each) => ({ ...each, ...change }));
@@ -239,8 +252,7 @@ export function Editor({
     );
   };
 
-  /** The one way to save: checked, then sent; `against` replaces what it is compared with. */
-  const submit = (against: RoutineFields | null = original, asNew = mode.mode === "new") => {
+  const submit = (against = accepted, asNew = mode.mode === "new") => {
     setTried(true);
     const found = problems(draft, Date.now());
     if (Object.keys(found).length > 0) {
@@ -248,6 +260,12 @@ export function Editor({
       return;
     }
     const fields = fieldsOfDraft(draft);
+    setAccepted(against);
+    if (asNew && mode.mode === "edit") {
+      setMode({ mode: "new", botId: draft.botId });
+      setGone(false);
+      setOriginal(null);
+    }
     const id = (attempt.current += 1);
     const sentOn = connection.gatewayId;
     setSave({ status: "saving" });
@@ -258,12 +276,16 @@ export function Editor({
         setSave({ status: "idle" });
         setGone(true);
       } else if (result.status === "unknown")
-        setSave({
-          status: "unknown",
-          error: result.error,
-          sent: fields,
-          check: { status: "idle" },
-        });
+        setSave((each) =>
+          each.status === "unknown"
+            ? each
+            : {
+                status: "unknown",
+                error: result.error,
+                sent: fields,
+                check: { status: "idle" },
+              },
+        );
       else setSave(result);
     };
     const timer = setTimeout(() => {
@@ -280,8 +302,14 @@ export function Editor({
         );
     }, ANSWER_MS);
     const request =
-      !asNew && mode.mode === "edit" && against
-        ? bridge.invoke({ type: "updateRoutine", id: mode.id, original: against, edit: fields })
+      !asNew && mode.mode === "edit" && original && against
+        ? bridge.invoke({
+            type: "updateRoutine",
+            id: mode.id,
+            original,
+            edit: fields,
+            expected: { ...fieldsOf(against), updatedAt: against.updatedAt },
+          })
         : bridge.invoke({ type: "createRoutine", input: { ...fields, botId: draft.botId }, key });
     void request
       .then(settle, (error: unknown) => settle({ status: "unknown", error: errorText(error) }))
@@ -292,25 +320,40 @@ export function Editor({
   const check = async () => {
     if (save.status !== "unknown") return;
     const { sent } = save;
+    const id = attempt.current;
     const at = (next: Check) =>
-      setSave((each) => (each.status === "unknown" ? { ...each, check: next } : each));
+      setSave((each) =>
+        id === attempt.current && each.status === "unknown" ? { ...each, check: next } : each,
+      );
     at({ status: "checking" });
     try {
       if (mode.mode === "new") {
         const found = await bridge.invoke({ type: "findCreatedRoutine", key });
+        if (id !== attempt.current) return;
         if (!found) return at({ status: "missing" });
         if (changedFields(sent, fieldsOf(found)).length === 0) return onSaved(found, true);
         // It landed, then changed: the editor now edits it.
         setMode({ mode: "edit", id: found.id });
+        setOriginal(fieldsOf(found));
+        attempt.current += 1;
         setSave({ status: "conflict", current: found });
         return;
       }
       const fresh = await bridge.invoke({ type: "readRoutine", id: mode.id });
-      if (!fresh) return setGone(true);
+      if (id !== attempt.current) return;
+      if (!fresh) {
+        setSave({ status: "idle" });
+        setGone(true);
+        return;
+      }
       // Each field this save sent, as it was sent, against the job read back.
       const wanted = original ? changedFields(original, sent) : [];
       const differ = changedFields(sent, fieldsOf(fresh)).filter((each) => wanted.includes(each));
-      at({ status: differ.length === 0 ? "matches" : "differs", routine: fresh });
+      if (differ.length === 0) at({ status: "matches", routine: fresh });
+      else {
+        attempt.current += 1;
+        setSave({ status: "conflict", current: fresh });
+      }
     } catch (error) {
       at({ status: "failed", error: errorText(error) });
     }
@@ -320,6 +363,7 @@ export function Editor({
     setMine(draft);
     setDraft(draftOf(current, now));
     setOriginal(fieldsOf(current));
+    setAccepted(current);
     setSave({ status: "idle" });
   };
 
@@ -341,7 +385,7 @@ export function Editor({
         </p>
       </Note>,
     );
-  if (save.status === "unknown") {
+  if (save.status === "unknown" && !deleted) {
     const c = save.check;
     notes.push(
       <Note tone="warn" key="unknown" testId="editor-unknown">
@@ -350,11 +394,6 @@ export function Editor({
             <>
               <strong>{c.routine.name} now reads as you typed it.</strong> That may be your save, or
               the same change made elsewhere.
-            </>
-          ) : c.status === "differs" ? (
-            <>
-              <strong>{c.routine.name} doesn&apos;t read as you typed it.</strong> The gateway has:{" "}
-              {c.routine.name}, {whenWords(fieldsOf(c.routine))}.
             </>
           ) : c.status === "missing" ? (
             <>
@@ -392,7 +431,7 @@ export function Editor({
               Close
             </button>
           )}
-          {(c.status === "missing" || c.status === "differs") && admin && (
+          {c.status === "missing" && admin && (
             <button
               type="button"
               className="button"
@@ -428,11 +467,7 @@ export function Editor({
               className="button"
               data-size="sm"
               data-variant="quiet"
-              onClick={() => {
-                setOriginal(fieldsOf(changed));
-                setSave({ status: "idle" });
-                submit(fieldsOf(changed));
-              }}
+              onClick={() => submit(changed)}
             >
               Save mine anyway
             </button>
@@ -452,13 +487,7 @@ export function Editor({
               type="button"
               className="button"
               data-size="sm"
-              onClick={() => {
-                setMode({ mode: "new", botId: draft.botId });
-                setGone(false);
-                setOriginal(null);
-                setSave({ status: "idle" });
-                submit(null, true);
-              }}
+              onClick={() => submit(undefined, true)}
             >
               Save as a new routine
             </button>
@@ -746,9 +775,8 @@ export function Editor({
   const textLabel = payload === "systemEvent" ? "Reminder" : "Instruction";
   // While a save is in flight its dialog stays: Cancel, Close and Escape wait for the answer.
   const close = () => {
-    if (save.status !== "saving") onClose();
+    if (!saving) onClose();
   };
-  const saving = save.status === "saving";
   return (
     <Dialog kind="create" labelledBy="r-edit-title" onClose={close} testId="routine-editor">
       <div className="b-sheet r-dialog">

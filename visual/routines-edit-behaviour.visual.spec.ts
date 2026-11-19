@@ -309,9 +309,10 @@ test.describe("1440", () => {
     await expect(line).toContainText("Routines' time zone: New York");
     await line.getByRole("button", { name: "Change…" }).click();
     const dialog = page.getByTestId("routines-zone-dialog");
-    await expect(dialog).toContainText("Changes Nightly backup check.");
+    await expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
     await expect(dialog).toContainText("Leaves Disk space watch, Certificate renewal as they are");
     await dialog.getByLabel("Time zone").selectOption("Europe/Berlin");
+    await expect(dialog).toContainText("Changes Nightly backup check.");
     await dialog.getByRole("button", { name: "Save" }).click();
     await expect(dialog).toHaveCount(0);
     await expect(line).toContainText("Routines' time zone: Berlin");

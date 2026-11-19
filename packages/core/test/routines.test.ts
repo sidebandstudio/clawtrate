@@ -734,12 +734,13 @@ const ADMIN = { admin: true, connected: true };
 describe("changing routines needs admin", () => {
   it("F-189 F-350 F-351 F-352: below admin nothing is sent, whatever asked for it", async () => {
     const { routines, requests } = engine({});
-    const fields = fieldsOf(parseRoutine(job())!);
+    const expected = parseRoutine(job())!;
+    const fields = fieldsOf(expected);
     expect(await routines.create({ ...fields, botId: "marlow" }, "k1")).toEqual({
       status: "not-sent",
       reason: "admin",
     });
-    expect(await routines.update(JOB, fields, { ...fields, name: "New" })).toMatchObject({
+    expect(await routines.update(JOB, fields, { ...fields, name: "New" }, expected)).toMatchObject({
       status: "not-sent",
     });
     expect(await routines.setEnabled(JOB, false)).toMatchObject({ status: "not-sent" });
@@ -862,7 +863,8 @@ describe("F-189: changing a routine", () => {
     schedule: { kind: "at", at: "2035-01-01T14:00:00.000Z" },
     deleteAfterRun: true,
   });
-  const original = fieldsOf(parseRoutine(once)!);
+  const expected = parseRoutine(once)!;
+  const original = fieldsOf(expected);
 
   it("writes only what changed: a new name leaves the saved time as it is", async () => {
     const { routines, requests } = engine(
@@ -879,7 +881,7 @@ describe("F-189: changing a routine", () => {
       name: "New year note",
       schedule: { ...original.schedule, at: "2035-01-01T09:00:00-05:00" },
     };
-    expect(await routines.update(JOB, original, edit)).toMatchObject({
+    expect(await routines.update(JOB, original, edit, expected)).toMatchObject({
       status: "saved",
       routine: { name: "New year note", schedule: { at: "2035-01-01T14:00:00.000Z" } },
     });
@@ -895,7 +897,9 @@ describe("F-189: changing a routine", () => {
       initialRoutinesState,
       ADMIN,
     );
-    expect(await routines.update(JOB, original, { ...original, name: "Mine" })).toMatchObject({
+    expect(
+      await routines.update(JOB, original, { ...original, name: "Mine" }, expected),
+    ).toMatchObject({
       status: "conflict",
       current: { text: "Theirs." },
     });
@@ -914,9 +918,11 @@ describe("F-189: changing a routine", () => {
       initialRoutinesState,
       ADMIN,
     );
-    expect(await gone.routines.update(JOB, original, { ...original, name: "x" })).toEqual({
-      status: "deleted",
-    });
+    expect(await gone.routines.update(JOB, original, { ...original, name: "x" }, expected)).toEqual(
+      {
+        status: "deleted",
+      },
+    );
     const bad = engine(
       {
         "cron.get": () => once,
@@ -928,10 +934,22 @@ describe("F-189: changing a routine", () => {
       ADMIN,
     );
     expect(
-      await bad.routines.update(JOB, original, {
-        ...original,
-        schedule: { kind: "cron", expr: "99 * * *", tz: null, everyMs: null, at: null, name: null },
-      }),
+      await bad.routines.update(
+        JOB,
+        original,
+        {
+          ...original,
+          schedule: {
+            kind: "cron",
+            expr: "99 * * *",
+            tz: null,
+            everyMs: null,
+            at: null,
+            name: null,
+          },
+        },
+        expected,
+      ),
     ).toEqual({
       status: "refused",
       error: "invalid cron.update params: CronPattern: invalid configuration format",
@@ -951,6 +969,46 @@ describe("F-189: changing a routine", () => {
     expect(patchOf(fieldsOf(reminder), { ...fieldsOf(reminder), text: "rm" }, "other")).toEqual({});
   });
 
+  it("checks for a newer revision after the person acknowledged a conflict", async () => {
+    const current = { ...once, updatedAtMs: 30, name: "Theirs" };
+    const { routines, requests } = engine(
+      { "cron.get": () => current },
+      initialRoutinesState,
+      ADMIN,
+    );
+    const acknowledged = { ...parseRoutine(current)!, updatedAt: 29 };
+    expect(
+      await routines.update(JOB, original, { ...original, name: "Mine" }, acknowledged),
+    ).toMatchObject({
+      status: "conflict",
+      current: { updatedAt: 30 },
+    });
+    expect(requests.map((request) => request.method)).toEqual(["cron.get"]);
+  });
+
+  it("does not restore a removed routine when its in-flight save answers", async () => {
+    const reply = Promise.withResolvers<unknown>();
+    const sent = Promise.withResolvers<void>();
+    const { routines, state } = engine(
+      {
+        "cron.get": () => once,
+        "cron.update": () => {
+          sent.resolve();
+          return reply.promise;
+        },
+      },
+      { ...initialRoutinesState, routines: [expected] },
+      ADMIN,
+    );
+    const pending = routines.update(JOB, original, { ...original, name: "Late" }, expected);
+    await sent.promise;
+    routines.onEvent({ action: "removed", jobId: JOB });
+    routines.onEvent({ action: "removed", jobId: "another-routine" });
+    reply.resolve({ ...once, name: "Late" });
+    expect(await pending).toEqual({ status: "deleted" });
+    expect(state().routines).toEqual([]);
+  });
+
   it("does not apply an answer from a connection that has since closed", async () => {
     let release: () => void = () => {};
     const { routines, state } = engine(
@@ -964,7 +1022,7 @@ describe("F-189: changing a routine", () => {
       initialRoutinesState,
       ADMIN,
     );
-    const pending = routines.update(JOB, original, { ...original, name: "Late" });
+    const pending = routines.update(JOB, original, { ...original, name: "Late" }, expected);
     // Once `cron.update` is under way.
     await new Promise<void>((resolve) => setTimeout(() => resolve(), 0));
     routines.onClose();
