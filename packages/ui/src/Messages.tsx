@@ -2,10 +2,10 @@
 // F-283): hovering, focusing or touching and holding a message shows react,
 // reply and more beside it; reactions show as small emoji badges under it; a
 // reply carries a line naming what it answers, and the thread view assembles
-// a message and the replies to it, since the gateway keeps a reply only as a
-// reference (`replyToId`) with no thread of its own.
+// a message and the replies to it from the gateway's own reply references,
+// since the gateway keeps a reply only as a reference with no thread of its own.
 
-import type { MessageReaction, Transcript, TranscriptItem } from "@clawtrate/core";
+import type { MessageReaction, OutgoingMessage, Transcript, TranscriptItem } from "@clawtrate/core";
 import {
   createContext,
   useCallback,
@@ -20,6 +20,9 @@ import {
 import { useBridge } from "./bridge.tsx";
 import { copyText } from "./clipboard.ts";
 import { ArrowUpIcon, CloseIcon, MoreIcon, ReplyIcon, SmileIcon } from "./icons.tsx";
+import { ShelfRow } from "./Composer.tsx";
+import { currentRun, questionPending, shelfMessages } from "./live.ts";
+import { OutgoingBubble } from "./LiveTurn.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { Menu, type MenuEntry } from "./Menu.tsx";
 
@@ -42,6 +45,8 @@ type MessageEnv = {
   botName: string;
   /** The connection may write: reacting and replying are offered. */
   canWrite: boolean;
+  /** Connected and caught up: a reply on its way is not waiting for a reconnect. */
+  connected: boolean;
   openThread: (messageId: string, from: HTMLElement | null) => void;
   announce: (text: string) => void;
 };
@@ -408,7 +413,14 @@ function Reactions({ message }: { message: MessageRef }) {
   );
 }
 
-/** The replies to a message, from history and on their way, in the order they were written. */
+/** Whether the gateway has an outgoing message: it answered that it took it. */
+const accepted = (message: OutgoingMessage) =>
+  message.status === "sent" || message.status === "unconfirmed";
+
+/**
+ * The replies to a message, in the order they were written: the rows history marks as replies to
+ * it, and yours on their way. Only what the gateway has counts as a reply (`count`).
+ */
 export function repliesTo(transcript: Transcript, messageId: string) {
   const history = transcript.items.filter((item) => item.replyTo?.id === messageId);
   const pending = transcript.outbox.filter(
@@ -417,7 +429,20 @@ export function repliesTo(transcript: Transcript, messageId: string) {
       message.status !== "cancelled" &&
       message.status !== "handled",
   );
-  return { history, pending, count: history.length + pending.length };
+  return { history, pending, count: history.length + pending.filter(accepted).length };
+}
+
+/** "1 reply", "3 replies". */
+const repliesWord = (count: number) => (count === 1 ? "1 reply" : `${count} replies`);
+
+/**
+ * The message a reply names, as a reply's reference gives it when the loaded history does not
+ * show it: the gateway's preview of its text and its sender.
+ */
+function referenced(transcript: Transcript, messageId: string) {
+  for (const item of transcript.items)
+    if (item.replyTo?.id === messageId && item.replyTo.text !== null) return item.replyTo;
+  return null;
 }
 
 /** Above a reply: what it answers. It opens the thread on that message. */
@@ -425,15 +450,17 @@ export function ReplyQuote({ item }: { item: TranscriptItem }) {
   const env = useMessages();
   if (!env || !item.replyTo) return null;
   const { id, text, sender } = item.replyTo;
-  const shown = messageOf(env.transcript, id) !== null;
+  // Open when the message is shown, or when the gateway gave its text with the reference.
+  const open = messageOf(env.transcript, id) !== null || text !== null;
   const words = `${sender ?? "A message"}: ${text ?? "a message no longer shown"}`;
   return (
     <button
       type="button"
       className="reply-quote"
+      data-side={item.role === "user" ? "user" : "bot"}
       data-testid="reply-quote"
-      disabled={!shown}
-      aria-label={`Replying to ${words}. ${shown ? "Open the thread" : "Not in the loaded history"}`}
+      disabled={!open}
+      aria-label={`Replying to ${words}. ${open ? "Open the thread" : "Not in the loaded history"}`}
       onClick={(event) => env.openThread(id, event.currentTarget)}
     >
       <ReplyIcon />
@@ -457,14 +484,17 @@ function RepliesLink({ message }: { message: MessageRef }) {
       data-testid="replies-link"
       onClick={(event) => env.openThread(messageId, event.currentTarget)}
     >
-      {count === 1 ? "1 reply" : `${count} replies`}
+      {repliesWord(count)}
     </button>
   );
 }
 
 /**
  * A message and its replies, with a field to reply from. The gateway keeps no thread, so it is
- * assembled here: the message, each reply to it, and the bot's answer to that reply.
+ * assembled here from its own reply references and nothing else: the message, then each row
+ * history marks as a reply to it (yours, or an answer the gateway delivered as one). A reply on
+ * its way shows as the main composer shows it: held, queued, not sent, failed or sent, with the
+ * same recovery.
  */
 export function ThreadView({ messageId, onClose }: { messageId: string; onClose: () => void }) {
   const env = useMessages();
@@ -473,26 +503,56 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
   const [error, setError] = useState<string | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
   const panel = useRef<HTMLDivElement>(null);
+  /** The replies sent from this thread, and what was last said of each. */
+  const sent = useRef(new Map<string, string>());
+  /** Raised when a reply is added to `sent`, so what it already became is said. */
+  const [added, setAdded] = useState(0);
   useEffect(() => {
     field.current?.focus();
   }, [messageId]);
+  const outbox = env?.transcript.outbox;
+  const announce = env?.announce;
+  // Say what became of each reply sent here, once each, as the gateway establishes it.
+  useEffect(() => {
+    if (!outbox || !announce) return;
+    for (const [id, said] of sent.current) {
+      const message = outbox.find((each) => each.id === id);
+      // Gone from the outbox without being cancelled: history holds it.
+      const now = message ? message.status : "in-history";
+      const words =
+        now === "sent" || now === "unconfirmed" || now === "in-history"
+          ? "Reply sent"
+          : now === "held"
+            ? "Held until you answer"
+            : now === "queued"
+              ? "Queued"
+              : now === "failed"
+                ? "Failed to send"
+                : now === "not-sent"
+                  ? "Not sent"
+                  : null;
+      if (words && words !== said) {
+        sent.current.set(id, words);
+        announce(words);
+      }
+      if (now === "in-history" || now === "cancelled") sent.current.delete(id);
+    }
+  }, [outbox, announce, added]);
   if (!env) return null;
-  const items = env.transcript.items;
-  const root = messageOf(env.transcript, messageId);
-  const { history, pending } = repliesTo(env.transcript, messageId);
-  // Each reply, then the bot's answer that follows it in the task, if it has one yet.
-  const answerAfter = (reply: TranscriptItem) => {
-    const at = items.indexOf(reply);
-    const next = items[at + 1];
-    return next && next.role === "assistant" ? next : null;
-  };
+  const transcript = env.transcript;
+  const root = messageOf(transcript, messageId);
+  const reference = root ? null : referenced(transcript, messageId);
+  const { history, pending, count } = repliesTo(transcript, messageId);
+  const run = currentRun(transcript);
+  const stopping = run?.state === "stopping";
+  const asking = run ? questionPending(transcript, run) : false;
   const send = async () => {
     const body = text.trim();
     if (!body) return;
     setText("");
     setError(null);
     try {
-      await bridge.invoke({
+      const answer = await bridge.invoke({
         type: "sendMessage",
         key: env.taskKey,
         text: body,
@@ -500,22 +560,27 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
         attachmentIds: [],
         replyToId: messageId,
       });
-      env.announce("Reply sent");
+      // Only the gateway's answer makes it sent; until then it is shown as it is.
+      sent.current.set(answer.messageId, "");
+      setAdded((n) => n + 1);
     } catch (failure) {
       setText(body);
       setError(failure instanceof Error ? failure.message : String(failure));
     }
   };
-  const line = (item: { role: string; text: string }, key: string) => (
+  const line = (item: { role: string; text: string; author?: string }, key: string) => (
     <div className="thread-msg" data-role={item.role} key={key} data-testid="thread-message">
-      <p className="thread-author">{item.role === "user" ? "You" : env.botName}</p>
+      <p className="thread-author">{item.author ?? (item.role === "user" ? "You" : env.botName)}</p>
       <div className="bubble">
         <Markdown text={item.text} />
       </div>
     </div>
   );
-  const lineOf = (item: TranscriptItem, key: string) =>
-    line({ role: item.role, text: itemText(item) }, key);
+  const act = (action: () => unknown) => {
+    const result = action();
+    if (result instanceof Promise) result.catch(() => {});
+    field.current?.focus();
+  };
   return (
     <div
       ref={panel}
@@ -545,36 +610,41 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
       <div className="thread-body" tabIndex={0} role="region" aria-label="Messages in the thread">
         {root ? (
           line(root, "root")
+        ) : reference ? (
+          line(
+            { role: "reference", text: reference.text!, author: reference.sender ?? "A message" },
+            "root",
+          )
         ) : (
           <p className="raw-state">This message is no longer in the loaded history.</p>
         )}
-        <p className="thread-count">
-          {history.length + pending.length === 0
-            ? "No replies yet"
-            : history.length + pending.length === 1
-              ? "1 reply"
-              : `${history.length + pending.length} replies`}
+        <p className="thread-count" data-testid="thread-count">
+          {count === 0 ? "No replies yet" : repliesWord(count)}
         </p>
-        {history.flatMap((reply) => {
-          const answer = answerAfter(reply);
-          return [
-            lineOf(reply, reply.id),
-            ...(answer ? [lineOf(answer, `${reply.id}:answer`)] : []),
-          ];
-        })}
-        {pending.map((message) => (
-          <div
-            className="thread-msg"
-            data-role="user"
-            key={message.id}
-            data-testid="thread-message"
-          >
-            <p className="thread-author">You</p>
-            <div className="bubble" data-pending="true">
-              <Markdown text={message.text} />
-            </div>
-          </div>
-        ))}
+        {history.map((reply) => line({ role: reply.role, text: itemText(reply) }, reply.id))}
+        {pending.map((message) =>
+          shelfMessages({ ...transcript, outbox: [message] }).length > 0 ? (
+            <ShelfRow
+              key={message.id}
+              message={message}
+              taskKey={env.taskKey}
+              stopping={stopping}
+              asking={asking}
+              act={act}
+              onTakenBack={(back) =>
+                setText((current) => (current.trim() ? `${current}\n${back.text}` : back.text))
+              }
+              onNotice={(notice) => setError(`${notice.title} ${notice.reason ?? ""}`.trim())}
+            />
+          ) : (
+            <OutgoingBubble
+              key={message.id}
+              message={message}
+              taskKey={env.taskKey}
+              connected={env.connected}
+            />
+          ),
+        )}
       </div>
       {env.canWrite && (
         <div className="thread-reply">

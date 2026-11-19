@@ -1683,9 +1683,9 @@ export class ClawtrateClient {
 
   /**
    * "Try again" on a turn that failed: the same words and files, sent now as
-   * a new message with its own key. The files must still be held for the
-   * message (until history holds it); otherwise it is refused, never sent
-   * without them.
+   * a new message with its own key, a reply to the same message when it was
+   * one. The files must still be held for the message (until history holds
+   * it); otherwise it is refused, never sent without them.
    */
   sendAgain(key: string, messageId: string): string {
     const message = this.outgoing(key, messageId);
@@ -1693,7 +1693,10 @@ export class ClawtrateClient {
     const files = this.attachmentContent.get(messageId)?.files ?? [];
     if (message.attachments.length > 0 && files.length === 0)
       throw new Error("Its files are no longer held; attach them again.");
-    return this.sendMessage(key, message.text, { attachments: [...files] });
+    return this.sendMessage(key, message.text, {
+      attachments: [...files],
+      ...(message.replyToId ? { replyToId: message.replyToId } : {}),
+    });
   }
 
   /** "Send now" on a queued message's chip: a steer into the running or waiting run. */

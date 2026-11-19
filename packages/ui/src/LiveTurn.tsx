@@ -210,6 +210,14 @@ export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => strin
 }
 
 /** The text of the message that started a run, for "Try again". */
+/** The message a run's own message replied to, from the outbox or from history's reference. */
+export function messageReplyOf(run: Run, transcript: Transcript): string | null {
+  const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
+  if (outgoing) return outgoing.replyToId ?? null;
+  const anchor = transcript.items.find((item) => item.id === run.anchorItemId);
+  return anchor?.replyTo?.id ?? null;
+}
+
 export function messageTextOf(run: Run, transcript: Transcript): string | null {
   const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
   if (outgoing) return outgoing.text;
@@ -372,8 +380,10 @@ export function RunEnding({
               onClick={() => {
                 setRetryError(null);
                 // The engine still holds the message: its words and files go again together.
-                // Otherwise only history has it, and history gives the words alone.
+                // Otherwise only history has it, and history gives the words alone. A reply
+                // goes again as a reply to the same message.
                 const held = transcript.outbox.some((message) => message.id === run.messageId);
+                const parent = messageReplyOf(run, transcript);
                 const again = held
                   ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: run.messageId! })
                   : bridge.invoke({
@@ -382,6 +392,7 @@ export function RunEnding({
                       text,
                       mode: "auto",
                       attachmentIds: [],
+                      ...(parent ? { replyToId: parent } : {}),
                     });
                 void again.catch((error: unknown) =>
                   setRetryError(error instanceof Error ? error.message : String(error)),

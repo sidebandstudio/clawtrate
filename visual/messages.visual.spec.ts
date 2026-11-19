@@ -228,7 +228,11 @@ test.describe("message actions", () => {
     await expect(thread.getByTestId("thread-input")).toBeFocused();
     await thread.getByTestId("thread-input").fill("Or ask me for a copy of it.");
     await page.keyboard.press("Enter");
-    await expect(messages.last()).toContainText("Or ask me for a copy of it.");
+    // On its way, shown as the transcript shows it; sent once the gateway answered.
+    const mine = thread.getByTestId("outgoing");
+    await expect(mine).toContainText("Or ask me for a copy of it.");
+    await expect(mine).toHaveAttribute("data-status", "sent");
+    await expect(page.getByTestId("announcer")).toHaveText("Reply sent");
     await expect(thread).toContainText("2 replies");
     expect((await sent(page)).at(-1)).toMatchObject({
       type: "sendMessage",
@@ -238,6 +242,65 @@ test.describe("message actions", () => {
     await page.keyboard.press("Escape");
     await expect(thread).toHaveCount(0);
     await expect(reply).toBeFocused();
+  });
+
+  test("F-067 F-468: a reply typed in a thread while a question is pending is held and shown as held, and is neither counted nor announced as sent", async ({
+    page,
+  }) => {
+    await open(page, "message-thread-question");
+    await record(page);
+    await page.getByTestId("reply-quote").click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    await expect(thread.getByTestId("thread-count")).toHaveText("1 reply");
+    await thread.getByTestId("thread-input").fill("And the backups?");
+    await page.keyboard.press("Enter");
+    expect((await sent(page)).at(-1)).toMatchObject({
+      type: "sendMessage",
+      text: "And the backups?",
+      replyToId: "row-2",
+    });
+    const row = thread.getByTestId("shelf-row");
+    await expect(row).toContainText("Held until you answer");
+    await expect(row).toContainText("And the backups?");
+    await expect(row.getByRole("button", { name: "Send now" })).toHaveCount(0);
+    await expect(thread.getByTestId("thread-count")).toHaveText("1 reply");
+    await expect(page.getByTestId("replies-link")).toHaveText("1 reply");
+    await expect(page.getByTestId("announcer")).toHaveText("Held until you answer");
+    await expect(page.getByTestId("announcer")).not.toHaveText("Reply sent");
+  });
+
+  test("F-067: a reply the gateway refused shows in its thread as failed, with Resend and Delete, and is not counted", async ({
+    page,
+  }) => {
+    await open(page, "message-thread-failed");
+    await record(page);
+    await expect(page.getByTestId("replies-link")).toHaveText("2 replies");
+    await page.getByTestId("reply-quote").first().click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    await expect(thread.getByTestId("thread-count")).toHaveText("2 replies");
+    const failed = thread.getByTestId("outgoing");
+    await expect(failed).toHaveAttribute("data-status", "failed");
+    await expect(failed).toContainText("Failed to send");
+    await failed.getByRole("button", { name: "Resend" }).click();
+    expect((await sent(page)).at(-1)).toMatchObject({
+      type: "retryMessage",
+      messageId: "msg-reply",
+    });
+  });
+
+  test("F-067: a thread holds the message and the rows the gateway marks as replies to it, never the answer that merely follows", async ({
+    page,
+  }) => {
+    await open(page, "message-thread-failed");
+    await page.getByTestId("reply-quote").first().click();
+    const thread = page.getByRole("dialog", { name: "Thread" });
+    const messages = thread.getByTestId("thread-message");
+    await expect(messages).toHaveText([
+      /Nothing alarming that I can see from here\./,
+      /Could you read the system log another way\?/,
+      /I can read it through the journal instead\./,
+    ]);
+    await expect(thread).not.toContainText("Starting the nightly rotation now.");
   });
 
   test("F-067: a reply's line says what it answers, and opens the thread on that message", async ({

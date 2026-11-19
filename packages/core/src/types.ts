@@ -249,7 +249,10 @@ export type TranscriptItem = {
    * its last row with text): what a reaction or a reply to it names. Absent when the row has none.
    */
   messageId?: string;
-  /** The message this one replies to (`__openclaw.replyToId`), with the gateway's preview of it. */
+  /**
+   * The message this one replies to, as the gateway's history says (a user row's
+   * `__openclaw.replyToId`, or an answer's `openclawDelivery.replyToId`), with its preview of it.
+   */
   replyTo?: ReplyReference;
   /** Paths of fields cut to their bound; `readHistoryItem` reads the item whole, keeping nothing. */
   cut?: string[];
@@ -259,7 +262,10 @@ export type TranscriptItem = {
 export type ReplyReference = {
   /** The gateway's id of the message replied to. */
   id: string;
-  /** The gateway's preview of its text (`replyToPreview.text`), or null. */
+  /**
+   * The gateway's preview of its text (`replyToPreview.text`, or else the message history
+   * attached, `replyToMessage.message`), or null.
+   */
   text: string | null;
   /** Who wrote it, as the gateway labels them (`replyToPreview.senderLabel`), or null. */
   sender: string | null;

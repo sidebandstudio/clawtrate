@@ -3,6 +3,7 @@ import {
   type AttachmentInfo,
   type Bot,
   type MenuRow,
+  type OutgoingMessage,
   type Run,
   type SendLimits,
   type Transcript,
@@ -571,152 +572,36 @@ export function Composer({
   const run = transcript?.runs.find((each) => each.id === runId) ?? null;
   const asking = run && transcript ? questionPending(transcript, run) : false;
   for (const message of shelfMessages(transcript)) {
-    const send = (type: "retryMessage" | "deleteMessage" | "cancelQueued" | "sendQueuedNow") =>
-      act(() => bridge.send({ type, key: taskKey, messageId: message.id }));
-    if (message.status === "not-sent") {
-      rows.push(
-        <div className="shelf-row" key={message.id} data-kind="not-sent" data-testid="shelf-row">
-          <span className="glyph" data-state="stopped" aria-hidden="true" />
-          <span className="shelf-text">
-            <b>Not sent</b> <span>{message.text}</span>
-          </span>
-          <button
-            type="button"
-            className="button"
-            data-size="sm"
-            onClick={() => send("retryMessage")}
-          >
-            Send
-          </button>
-          <button
-            type="button"
-            className="button"
-            data-size="sm"
-            data-variant="quiet"
-            onClick={() => send("deleteMessage")}
-          >
-            Remove
-          </button>
-        </div>,
-      );
-      continue;
-    }
-    if (couldNotStart(message)) {
-      rows.push(
-        <div
-          className="shelf-row"
-          key={message.id}
-          data-kind="could-not-start"
-          data-tone="danger"
-          data-testid="shelf-row"
-        >
-          <span className="shelf-text" title={message.error ?? undefined}>
-            <b>Couldn't start</b> {message.error && <span>{message.error}</span>}{" "}
-            <span>{message.text}</span>
-          </span>
-          <button
-            type="button"
-            className="button"
-            data-size="sm"
-            onClick={() => send("retryMessage")}
-          >
-            Try again
-          </button>
-          <button
-            type="button"
-            className="button"
-            data-size="sm"
-            data-variant="quiet"
-            onClick={() => send("deleteMessage")}
-          >
-            Delete
-          </button>
-        </div>,
-      );
-      continue;
-    }
-    const held = message.status === "held";
     rows.push(
-      <div
-        className="shelf-row"
+      <ShelfRow
         key={message.id}
-        data-kind={message.status}
-        data-testid="shelf-row"
-      >
-        <span className="glyph" data-state="queued" aria-hidden="true" />
-        <span className="shelf-text">
-          <b>{held ? "Held until you answer" : "Queued"}</b> <span>{message.text}</span>
-        </span>
-        {held ? (
-          <button
-            type="button"
-            className="button"
-            data-size="sm"
-            onClick={() => {
-              // The message comes back as one record: its words and its files.
-              void bridge
-                .invoke({ type: "takeBackMessage", key: taskKey, messageId: message.id })
-                .then(
-                  (back) => {
-                    // Unsent words are never lost: an existing draft keeps its place above them.
-                    setTextState((current) => {
-                      const next = current.trim() ? `${current}\n${back.text}` : back.text;
-                      writeDraft(draftKey, next);
-                      return next;
-                    });
-                    setFiles((current) => [
-                      ...current,
-                      ...back.attachments.map((info) => ({
-                        key: info.id,
-                        name: info.fileName,
-                        bytes: info.sizeBytes,
-                        image: info.mimeType.startsWith("image/"),
-                        info,
-                        refusal: null,
-                        uploading: false,
-                      })),
-                    ]);
-                  },
-                  (error: unknown) =>
-                    onNotice({
-                      title: "Couldn't take this message back.",
-                      reason: error instanceof Error ? error.message : String(error),
-                    }),
-                );
-              focusRef.current?.focus();
-            }}
-          >
-            Edit
-          </button>
-        ) : (
-          !view.stopping &&
-          !asking && (
-            <button
-              type="button"
-              className="button"
-              data-size="sm"
-              onClick={() =>
-                act(() =>
-                  bridge.send({ type: "sendQueuedNow", key: taskKey, messageId: message.id }),
-                )
-              }
-            >
-              Send now
-            </button>
-          )
-        )}
-        <button
-          type="button"
-          className="button"
-          data-size="sm"
-          data-variant="quiet"
-          onClick={() =>
-            act(() => bridge.send({ type: "cancelQueued", key: taskKey, messageId: message.id }))
-          }
-        >
-          Cancel
-        </button>
-      </div>,
+        message={message}
+        taskKey={taskKey}
+        stopping={view.stopping}
+        asking={asking}
+        act={act}
+        onTakenBack={(back) => {
+          // Unsent words are never lost: an existing draft keeps its place above them.
+          setTextState((current) => {
+            const next = current.trim() ? `${current}\n${back.text}` : back.text;
+            writeDraft(draftKey, next);
+            return next;
+          });
+          setFiles((current) => [
+            ...current,
+            ...back.attachments.map((info) => ({
+              key: info.id,
+              name: info.fileName,
+              bytes: info.sizeBytes,
+              image: info.mimeType.startsWith("image/"),
+              info,
+              refusal: null,
+              uploading: false,
+            })),
+          ]);
+        }}
+        onNotice={onNotice}
+      />,
     );
   }
   if (needsYou) {
@@ -1100,4 +985,144 @@ export function reachable(element: Element | null): boolean {
 
 function isLive(run: Run): boolean {
   return run.state === "running" || run.state === "waiting" || run.state === "stopping";
+}
+
+/**
+ * One unsent message on the shelf, in the same words and with the same recovery wherever it
+ * shows: "Not sent" (Send, Remove), "Couldn't start" (Try again, Delete), "Held until you answer"
+ * (Edit, Cancel) or "Queued" (Send now, Cancel) (conversation.md, section 15).
+ */
+export function ShelfRow({
+  message,
+  taskKey,
+  stopping,
+  asking,
+  act,
+  onTakenBack,
+  onNotice,
+}: {
+  message: OutgoingMessage;
+  taskKey: string;
+  stopping: boolean;
+  asking: boolean;
+  /** Runs an action whose control then goes away, keeping focus somewhere useful. */
+  act: (action: () => unknown) => void;
+  /** Edit: the held message's words and files, held again, back where it was written. */
+  onTakenBack: (back: { text: string; attachments: AttachmentInfo[] }) => void;
+  onNotice: (notice: Omit<Notice, "id">) => void;
+}) {
+  const bridge = useBridge();
+  const send = (type: "retryMessage" | "deleteMessage" | "cancelQueued" | "sendQueuedNow") =>
+    act(() => bridge.send({ type, key: taskKey, messageId: message.id }));
+  if (message.status === "not-sent") {
+    return (
+      <div className="shelf-row" data-kind="not-sent" data-testid="shelf-row">
+        <span className="glyph" data-state="stopped" aria-hidden="true" />
+        <span className="shelf-text">
+          <b>Not sent</b> <span>{message.text}</span>
+        </span>
+        <button
+          type="button"
+          className="button"
+          data-size="sm"
+          onClick={() => send("retryMessage")}
+        >
+          Send
+        </button>
+        <button
+          type="button"
+          className="button"
+          data-size="sm"
+          data-variant="quiet"
+          onClick={() => send("deleteMessage")}
+        >
+          Remove
+        </button>
+      </div>
+    );
+  }
+  if (couldNotStart(message)) {
+    return (
+      <div
+        className="shelf-row"
+        data-kind="could-not-start"
+        data-tone="danger"
+        data-testid="shelf-row"
+      >
+        <span className="shelf-text" title={message.error ?? undefined}>
+          <b>Couldn't start</b> {message.error && <span>{message.error}</span>}{" "}
+          <span>{message.text}</span>
+        </span>
+        <button
+          type="button"
+          className="button"
+          data-size="sm"
+          onClick={() => send("retryMessage")}
+        >
+          Try again
+        </button>
+        <button
+          type="button"
+          className="button"
+          data-size="sm"
+          data-variant="quiet"
+          onClick={() => send("deleteMessage")}
+        >
+          Delete
+        </button>
+      </div>
+    );
+  }
+  const held = message.status === "held";
+  return (
+    <div className="shelf-row" data-kind={message.status} data-testid="shelf-row">
+      <span className="glyph" data-state="queued" aria-hidden="true" />
+      <span className="shelf-text">
+        <b>{held ? "Held until you answer" : "Queued"}</b> <span>{message.text}</span>
+      </span>
+      {held ? (
+        <button
+          type="button"
+          className="button"
+          data-size="sm"
+          onClick={() =>
+            // The message comes back as one record: its words and its files.
+            act(() =>
+              bridge
+                .invoke({ type: "takeBackMessage", key: taskKey, messageId: message.id })
+                .then(onTakenBack, (error: unknown) =>
+                  onNotice({
+                    title: "Couldn't take this message back.",
+                    reason: error instanceof Error ? error.message : String(error),
+                  }),
+                ),
+            )
+          }
+        >
+          Edit
+        </button>
+      ) : (
+        !stopping &&
+        !asking && (
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            onClick={() => send("sendQueuedNow")}
+          >
+            Send now
+          </button>
+        )
+      )}
+      <button
+        type="button"
+        className="button"
+        data-size="sm"
+        data-variant="quiet"
+        onClick={() => send("cancelQueued")}
+      >
+        Cancel
+      </button>
+    </div>
+  );
 }

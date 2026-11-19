@@ -52,6 +52,8 @@ export const LIVE_SCENES = [
   "offline-send",
   "message-actions",
   "message-actions-read",
+  "message-thread-question",
+  "message-thread-failed",
   "run-stopped-with",
   "run-stopped-timeouts",
   "send-uploading",
@@ -368,6 +370,71 @@ export function liveScene(
       return { initial: interactive(withMessages(base)), steps: [] };
     case "message-actions-read":
       return { initial: withMessages(base), steps: [] };
+    case "message-thread-failed":
+      // A reply the gateway refused: in its thread as in the transcript, failed, with recovery.
+      return {
+        initial: withTranscript(interactive(withMessages(base)), (transcript) => ({
+          ...transcript,
+          // After the reply: an answer history does not mark as a reply, then one it does.
+          items: [
+            ...transcript.items,
+            {
+              id: "row-after:100",
+              role: "assistant",
+              timestamp: now - 50 * SECOND,
+              blocks: [
+                {
+                  kind: "text",
+                  text: "Starting the nightly rotation now.",
+                  messageId: "row-after",
+                },
+              ],
+              model: null,
+              messageId: "row-after",
+            },
+            {
+              id: "row-delivered:101",
+              role: "assistant",
+              timestamp: now - 40 * SECOND,
+              blocks: [
+                {
+                  kind: "text",
+                  text: "I can read it through the journal instead.",
+                  messageId: "row-delivered",
+                },
+              ],
+              model: null,
+              messageId: "row-delivered",
+              replyTo: { id: "row-2", text: "Nothing alarming that I can see…", sender: "Otto" },
+            },
+          ],
+          outbox: [
+            message("msg-reply", "Could you check the backups too?", now - 20 * SECOND, {
+              replyToId: "row-2",
+              status: "failed",
+              error: "The gateway refused the message.",
+              runId: null,
+            }),
+          ],
+        })),
+        steps: [],
+      };
+    case "message-thread-question":
+      // Replies in a thread while the run waits on a question: held, as any message is (F-468).
+      return {
+        initial: withMessages(
+          withRun(
+            base,
+            now,
+            {
+              state: "waiting",
+              pendingCards: [{ id: "question-1", kind: "question", since: now - 5 * SECOND }],
+            },
+            { questions: [question(now)] },
+          ),
+        ),
+        steps: [],
+      };
     case "run-thinking":
       return { initial: withRun(base, now, {}), steps: [] };
     case "run-working":

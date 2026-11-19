@@ -364,7 +364,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         }
         if (!text.trim()) return;
         const messageId = str(info.id);
-        const replyTo = replyReference(info);
+        const replyTo = replyReference(message, info);
         items.push({
           id,
           role: "user",
@@ -395,6 +395,9 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           items.push(item);
         }
         if (cutByGateway) item.truncated = true;
+        // An answer the gateway delivered as a reply says so itself (`openclawDelivery.replyToId`).
+        const answers = replyReference(message, info);
+        if (answers && !item.replyTo) item.replyTo = answers;
         // A reaction or a reply names the row whose text a bubble shows: each bubble its own row.
         const rowId = str(info.id);
         if (rowId) {
@@ -438,14 +441,21 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
 }
 
 /**
- * A user row's reply reference (OpenClaw 2026.10.6: `__openclaw.replyToId` and the preview it
- * stores beside it, `replyToPreview {text, senderLabel?}`). The preview is cut to its bound here.
+ * A row's reply reference, as OpenClaw 2026.10.6 reads one (`readChatHistoryReplyMessageId` in
+ * `chat-history-reply-messages`): a user row's `__openclaw.replyToId`, or an assistant row's
+ * `openclawDelivery.replyToId`. Its text is the preview stored beside it (`replyToPreview {text,
+ * senderLabel?}`), or else the message history attached at read time (`replyToMessage {ok,
+ * message}`). Cut to its bound here. Nothing else makes a row a reply.
  */
-function replyReference(info: RawRecord): TranscriptItem["replyTo"] | null {
-  const id = str(info.replyToId);
+function replyReference(message: RawRecord, info: RawRecord): TranscriptItem["replyTo"] | null {
+  const id =
+    str(info.replyToId) ??
+    (message.role === "assistant" ? str(asRecord(message.openclawDelivery)?.replyToId) : null);
   if (!id) return null;
   const preview = asRecord(info.replyToPreview);
-  const text = str(preview?.text);
+  const attached = asRecord(info.replyToMessage);
+  const original = attached?.ok === true ? asRecord(attached.message) : null;
+  const text = str(preview?.text) ?? (original ? textOf(original.content).trim() || null : null);
   return {
     id,
     text: text === null ? null : text.length > 480 ? `${text.slice(0, 479)}…` : text,

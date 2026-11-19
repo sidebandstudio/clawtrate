@@ -44,7 +44,7 @@ function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?:
   const time = item.timestamp === null ? undefined : fullDate(item.timestamp);
   return (
     <div className="turn" data-role={role} data-testid="transcript-turn">
-      {role === "user" && <ReplyQuote item={item} />}
+      <ReplyQuote item={item} />
       {role === "assistant" ? (
         <ItemFeed itemId={item.id} />
       ) : (
@@ -224,10 +224,11 @@ function TranscriptView({
       transcript,
       botName: bot.name,
       canWrite: liveOptions.interactive,
+      connected: liveOptions.connected,
       openThread: (messageId: string, from: HTMLElement | null) => setThread({ messageId, from }),
       announce: onAnnounce,
     }),
-    [task.key, transcript, bot.name, liveOptions.interactive, onAnnounce],
+    [task.key, transcript, bot.name, liveOptions.interactive, liveOptions.connected, onAnnounce],
   );
   const live = buildLive(bot, task, transcript, { ...liveOptions, reading });
   const scroller = useRef<HTMLDivElement>(null);
