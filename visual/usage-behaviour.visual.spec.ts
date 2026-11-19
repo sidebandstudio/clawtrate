@@ -276,7 +276,7 @@ test("S17 a saved budget's row in Settings opens its own form; Escape returns to
   const settings = await settingsUsage(page);
   const row = settings.locator('[data-budget="bot:otto"] button');
   await expect(row).toHaveAccessibleName(
-    /^Otto · weekly · .* tokens this week\. Shown only\. Change\.$/,
+    /^Otto · weekly · .* tokens this week · your time\. Shown only\. Change\.$/,
   );
   await row.click();
   const form = settings.getByTestId("budget-edit-form");
