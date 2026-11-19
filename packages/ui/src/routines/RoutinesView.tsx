@@ -764,11 +764,8 @@ export function RoutinesView({
   const edit = (target: EditorTarget) => admin && setEditor(target);
   const remove = (routine: Routine) => admin && setDeleting(routine);
   const closeEditor = () => setEditor(null);
-  // A delete or a menu asks nothing typed of the person: they close when admin goes.
-  if (!admin && (deleting || menu)) {
-    setDeleting(null);
-    setMenu(null);
-  }
+  // The delete confirmation holds nothing typed: it closes when admin goes.
+  if (!admin && deleting) setDeleting(null);
   const live = shown && !deleted ? shown.routine : null;
   const rowEntries = (routine: Routine): MenuEntry[] =>
     routineEntries(
@@ -1003,7 +1000,14 @@ export function RoutinesView({
         <Menu
           label={menu.routine.name}
           className="rail-menu r-menu"
-          style={{ left: menu.x, top: menu.y }}
+          // Kept inside the window: a menu at the last row opens upwards.
+          style={{
+            left: Math.max(8, Math.min(menu.x, innerWidth - 228)),
+            top: Math.max(
+              8,
+              Math.min(menu.y, innerHeight - 8 - 40 * rowEntries(menu.routine).length),
+            ),
+          }}
           entries={rowEntries(menu.routine)}
           onClose={() => setMenu(null)}
         />

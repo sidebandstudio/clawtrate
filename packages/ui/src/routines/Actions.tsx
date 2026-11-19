@@ -249,7 +249,7 @@ export function DeleteRoutine({
   const last =
     routine.lastRunAt === null
       ? "It hasn't run yet."
-      : `Its last run was ${when(routine.lastRunAt, now, routine.schedule.tz ?? viewerZone()).replace(/ (\d)/u, " at $1")}.`;
+      : `Its last run was ${when(routine.lastRunAt, now, routine.schedule.tz ?? viewerZone()).replace(/ (\d{1,2}:\d{2}\s[AP]M)$/u, " at $1")}.`;
   const remove = async () => {
     setBusy(true);
     setError(null);
