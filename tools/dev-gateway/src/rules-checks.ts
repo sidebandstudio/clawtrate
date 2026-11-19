@@ -182,24 +182,38 @@ async function finish(ctx: RulesContext, runId: string, timeoutMs = 120_000): Pr
   return { runId, state: String(end.state), calls: toolCallsOf(op.runEvents(runId)) };
 }
 
-/** A run's tool calls from its events: a start, then the result if it arrived. */
+/**
+ * A run's tool calls from its events, in the order they started: each result
+ * joined to its own start by the gateway's call id. A result whose start was
+ * not seen is ignored.
+ */
 export function toolCallsOf(events: GatewayEvent[]): ToolCall[] {
   const calls: ToolCall[] = [];
+  const byId = new Map<string, ToolCall>();
   for (const event of events) {
     const payload = rec(event.payload);
     if (event.event !== "agent" || payload.stream !== "tool") continue;
     const data = rec(payload.data);
+    const id = typeof data.toolCallId === "string" ? data.toolCallId : "";
     if (data.phase === "start") {
-      calls.push({ name: String(data.name), result: false, isError: false, text: "", details: {} });
+      const started = {
+        name: String(data.name),
+        result: false,
+        isError: false,
+        text: "",
+        details: {},
+      };
+      calls.push(started);
+      if (id) byId.set(id, started);
     } else if (data.phase === "result") {
-      const last = calls.at(-1);
-      if (!last) continue;
+      const matched = id ? byId.get(id) : undefined;
+      if (!matched) continue;
       const result = rec(data.result);
       const blocks = Array.isArray(result.content) ? (result.content as JsonRecord[]) : [];
-      last.result = true;
-      last.isError = data.isError === true;
-      last.text = blocks.map((block) => String(block.text ?? "")).join("\n");
-      last.details = rec(result.details);
+      matched.result = true;
+      matched.isError = data.isError === true;
+      matched.text = blocks.map((block) => String(block.text ?? "")).join("\n");
+      matched.details = rec(result.details);
     }
   }
   return calls;

@@ -130,22 +130,40 @@ describe("the rules checks' bounded wait", () => {
 });
 
 describe("the rules checks' tool calls", () => {
-  const tool = (phase: string, extra: Record<string, unknown> = {}) => ({
+  const tool = (phase: string, toolCallId: string, extra: Record<string, unknown> = {}) => ({
     at: 0,
     seq: 0,
     event: "agent",
-    payload: { stream: "tool", data: { phase, name: "write", ...extra } },
+    payload: { stream: "tool", data: { phase, name: "write", toolCallId, ...extra } },
   });
+  const ok = { isError: false, result: {} };
+  const error = { isError: true, result: {} };
 
   it("count a call as having run only once its result arrived without an error", () => {
-    const [started] = toolCallsOf([tool("start")]);
+    const [started] = toolCallsOf([tool("start", "a")]);
     expect(started).toMatchObject({ name: "write", result: false });
     expect(ranOk(started)).toBe(false);
-    const [done] = toolCallsOf([tool("start"), tool("result", { isError: false, result: {} })]);
+    const [done] = toolCallsOf([tool("start", "a"), tool("result", "a", ok)]);
     expect(ranOk(done)).toBe(true);
-    const [failed] = toolCallsOf([tool("start"), tool("result", { isError: true, result: {} })]);
+    const [failed] = toolCallsOf([tool("start", "a"), tool("result", "a", error)]);
     expect(ranOk(failed)).toBe(false);
     expect(ranOk(undefined)).toBe(false);
+  });
+
+  it("join each result to its own start, by call id", () => {
+    const starts = [tool("start", "a", { name: "read" }), tool("start", "b")];
+    const okA = toolCallsOf([...starts, tool("result", "a", ok)]);
+    expect(okA.map((call) => [call.name, call.result, ranOk(call)])).toEqual([
+      ["read", true, true],
+      ["write", false, false],
+    ]);
+    const failedA = toolCallsOf([...starts, tool("result", "a", error)]);
+    expect(failedA.map((call) => [call.name, call.result, ranOk(call)])).toEqual([
+      ["read", true, false],
+      ["write", false, false],
+    ]);
+    const unknown = toolCallsOf([...starts, tool("result", "c", ok)]);
+    expect(unknown.map((call) => call.result)).toEqual([false, false]);
   });
 });
 
