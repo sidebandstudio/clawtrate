@@ -13,6 +13,7 @@
 //   &files=loaded          the Work pane's Files states (files.ts), with &checkout=1, &fileload=failed
 //   &tab=files             the Work pane's tab
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
+//   &checkins=off, &scheduler=off, &cisave=fail …    check-ins (check-ins.ts)
 
 import { App, BridgeProvider, rosterKey, rosterScope } from "@clawtrate/ui";
 import { StrictMode } from "react";
@@ -22,6 +23,7 @@ import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
 import { accountParams } from "./accounts.ts";
+import { checkInParams } from "./check-ins.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -76,6 +78,7 @@ const sceneName = params.get("scene");
 const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   files: fileParams(params),
   accounts: accountParams(params),
+  checkIns: checkInParams(params),
 });
 // For tests and manual checks: change the state from the console.
 Object.assign(window, { clawtrateFixture: bridge });

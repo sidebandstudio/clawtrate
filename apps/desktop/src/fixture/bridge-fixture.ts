@@ -55,6 +55,7 @@ import {
 import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { checkInCommand, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -457,7 +458,7 @@ function answerStrings(
 
 export function createFixtureBridge(
   name: SceneName,
-  options: { files?: FileParams; accounts?: AccountParams } = {},
+  options: { files?: FileParams; accounts?: AccountParams; checkIns?: CheckInParams } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   /** Every command the interface sent, for tests that check what was asked of the host. */
@@ -489,6 +490,8 @@ export function createFixtureBridge(
   // Every scene with bots has the gateway's accounts; the address can give it more access.
   if (state.bots.length > 0)
     state = withAccess({ ...state, accounts: fixtureAccounts(now, accountParams) }, accountParams);
+  const checkInParams = options.checkIns ?? { checkins: null, scheduler: true, save: null };
+  if (state.bots.length > 0) state = { ...state, checkIns: fixtureCheckIns(now, checkInParams) };
   const listeners = new Set<(state: ClawtrateState) => void>();
   const set = (next: ClawtrateState) => {
     state = next;
@@ -526,6 +529,11 @@ export function createFixtureBridge(
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
   async function apply(command: BridgeCommand): Promise<unknown> {
+    const checkIn = checkInCommand(command, () => state, set, checkInParams);
+    if (checkIn) {
+      sent.push(command);
+      return checkIn;
+    }
     const account = accountCommand(command, () => state, set, accountParams);
     if (account) {
       sent.push(command);
