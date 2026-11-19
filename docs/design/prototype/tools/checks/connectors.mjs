@@ -82,8 +82,8 @@ const STATES = [
   ["screen=installed", ["Turned on", "Turned off", "Comes with OpenClaw (3)", "Tool servers", "notes-work", "Added by address", "search-index", "Runs a command", "Add a custom connector"]],
   ["screen=connector&id=tasktide&busy=1", ["The gateway is busy with another change.", "Try again in a moment.", "Try again"]],
   ["screen=remove-confirm&id=tasktide&bots=none", ["its tools, from every bot that doesn't deny them"]],
-  ["screen=connector&id=tasktide", ["Tasktide", "Added", "Tools", "tasktide, a tool server", "Which bots may use these is in each bot's settings.", "Accounts", "Shared by everyone on this gateway", "Signed in.", "The gateway holds this sign-in until Dec 17, 5:12 PM.", "Whether it still works shows when a bot next uses Tasktide.", "Sign in again", "Turn off", "Remove…"]],
-  ["screen=connector&id=calendrop", ["Needs sign-in", "Sign in"]],
+  ["screen=connector&id=tasktide", ["Tasktide", "Added", "Tools", "tasktide, a tool server", "Which bots may use these is in each bot's settings.", "Accounts", "Shared by everyone on this gateway", "Signed in.", "The gateway holds this sign-in until Dec 17, 5:12 PM.", "Whether it still works shows when a bot next uses Tasktide.", "Turn off", "Remove…"]],
+  ["screen=connector&id=calendrop", ["Needs sign-in"]],
   ["screen=connector&id=calendrop&auth=requires-authorization", ["Needs sign-in again", "The server asked for more access."]],
   ["screen=connector&id=calendrop&auth=pending-authorization", ["A sign-in was started and didn't finish."]],
   ["screen=connector&id=ledgerkin", ["Turned off. Its tools aren't offered to any bot.", "Turn on", "The gateway reports sign-ins only while Ledgerkin is turned on."]],
@@ -113,8 +113,9 @@ const STATES = [
   ["screen=add-server-saved&name=search-index&type=command", ["Added search-index.", "The gateway will run it at a bot's next run."]],
   ["screen=add-server-refused&name=notes-work", ["Couldn't add notes-work:", "Expected http:// or https:// URL", "Nothing saved."]],
   ["screen=add-server-checking&name=notes-work", ["Checking what the gateway has…"]],
-  ["screen=signin-cli&id=notes-work&server=1", ["Sign in to notes-work", "openclaw mcp login notes-work", "Back to notes-work"]],
-  ["screen=signin-cli&id=calendrop", ["The gateway starts this sign-in from its own command line or its own settings page.", "On the gateway's machine, run:", "openclaw mcp login calendrop", "It prints an address. Open it in a browser and sign in to Calendrop.", "MCP OAuth credentials saved", "openclaw mcp login calendrop --code <code>", "Or sign in from Settings on the gateway's own web page."]],
+  ["screen=signin-cli&id=notes-work&server=1", ["Sign in to notes-work", "On the gateway's machine, run:", "openclaw mcp login notes-work", "If it prints an address, open it in a browser and sign in.", "If the terminal is listening for the callback, it waits up to five minutes. Follow the terminal's instructions to finish with a code if the callback cannot reach it.", "It may also find a saved sign-in and say so without printing an address.", "Or sign in from Settings on the gateway's own web page.", "Afterwards this page still reads \"Not reported\"", "Back to notes-work"]],
+  ["screen=connector&id=calendrop", ["Open Settings on your OpenClaw gateway to sign in to calendrop.", "Check again"]],
+  ["screen=connector&id=calendrop&checked=1", ["Read again at 5:12 PM."]],
   ["screen=chat", ["Add today's standup to team-notes.", "team-notes asks for a sign-in", "The gateway sees every device using Clawtrate as one sender, so this sign-in is shared by everyone who uses this gateway from Clawtrate.", "After you sign in, ask Pip again.", "auth.teamnotes.example", "https://auth.teamnotes.example/authorize?response_type=code", "Open in your browser", "Anyone who opens this link completes this sign-in."]],
   ["screen=chat&card=opened", ["Opened at 5:12 PM. If the page didn't finish, open it again.", "Reopen"]],
   ["screen=chat&card=connected", ["MCP server \"team-notes\" is connected. Its tools become available on the next message."]],
@@ -191,14 +192,17 @@ await walk("Connect apps, add a connector, sign in, signed in", "screen=home", [
   [link("Add"), "add-progress"],
   [link("Added"), "add-done"],
   [link("Open Quillnote"), "connector"],
-  [link("Sign in"), "signin-cli"],
-], ["openclaw mcp login quillnote", "openclaw mcp login quillnote --code <code>"]);
+  [link("Check again"), "connector"],
+], ["Open Settings on your OpenClaw gateway to sign in to quillnote.", "Read again at 5:12 PM."]);
 {
   const p = await open("screen=connector&id=calendrop");
-  await link("Sign in")(p);
-  await at(p, "signin-cli");
-  check("neither app offers a browser sign-in (ruling 2)", !(await text(p)).includes("Open in your browser") && !(await text(p)).includes("Asking the gateway"));
+  check("a plugin's server gives no terminal command and no Sign in (ruling 3)", (await p.getByRole("link", { name: "Sign in", exact: true }).count()) === 0 && !(await text(p)).includes("openclaw mcp login"));
   await p.close();
+  const s2 = await open("screen=server&id=notes-work");
+  await link("Sign in")(s2);
+  await at(s2, "signin-cli");
+  check("neither app offers a browser sign-in (ruling 2)", !(await text(s2)).includes("Open in your browser") && !(await text(s2)).includes("Asking the gateway"));
+  await s2.close();
   const q = await open("screen=chat");
   const order = await q.evaluate(() => {
     const addr = document.querySelector(".c-address");

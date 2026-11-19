@@ -248,7 +248,10 @@
     return (
       group("Accounts") +
       `<ul class="c-rows"><li class="c-account"><span class="c-row-text"><span class="c-row-name">Shared by everyone on this gateway</span><span class="c-row-sub c-account-state">${words[0]}</span></span>` +
-      `<span class="c-row-end">${admin ? link(words[1], "signin-cli", { id: a.id }, { variant: state === "authorized" ? "quiet" : "" }) : ""}</span></li></ul>`
+      `<span class="c-row-end"></span></li></ul>` +
+      `<p class="c-line" data-c="settings">Open Settings on your OpenClaw gateway to sign in to ${a.servers.find(([, o]) => o)[0]}.</p>` +
+      `<div class="c-actions">${link("Check again", "connector", { id: a.id, checked: "1", ...(params.get("auth") ? { auth: params.get("auth") } : {}) })}</div>` +
+      (params.get("checked") ? `<p class="c-line">Read again at 5:12 PM.</p>` : "")
     );
   };
   const connectorPage = () => {
@@ -372,19 +375,20 @@
   };
   const signin = () => {
     const t = signinTarget();
-    const keep = { id: params.get("id") || "calendrop", ...(t.isServer ? { server: "1" } : {}) };
     return {
       title: `Sign in to ${t.name}`,
       back: t.back,
-      body: `<p class="c-text">The gateway starts this sign-in from its own command line or its own settings page.</p>` + cliSteps(t, keep) + `<div class="c-actions"><a class="button" data-size="sm" href="${t.back}">Back to ${t.name}</a></div>`,
+      body: `<p class="c-text">The gateway starts this sign-in from its own command line or its own settings page.</p>` + cliSteps(t) + `<div class="c-actions"><a class="button" data-size="sm" href="${t.back}">Back to ${t.name}</a></div>`,
     };
   };
   // The gateway's command-line sign-in, in full (section 10).
-  const cliSteps = (t, keep) =>
-    `<ol class="b-steps c-steps"><li><p>On the gateway's machine, run:</p>${command(`openclaw mcp login ${t.isServer ? t.name : keep.id}`, "sign-in command")}</li>` +
-    `<li><p>It prints an address. Open it in a browser and sign in to ${t.name}.</p></li>` +
-    `<li><p>If that browser is on the gateway's machine, the command finishes by itself within 5 minutes and prints "MCP OAuth credentials saved". If it is on another computer, copy the code from the address the page returns to (the part after <code>code=</code>) and run:</p>${command(`openclaw mcp login ${t.isServer ? t.name : keep.id} --code <code>`, "finishing command")}</li></ol>` +
-    `<p class="c-line">Or sign in from Settings on the gateway's own web page.</p>`;
+  const cliSteps = (t) =>
+    `<ol class="b-steps c-steps"><li><p>On the gateway's machine, run:</p>${command(`openclaw mcp login ${t.name}`, "sign-in command")}</li>` +
+    `<li><p>If it prints an address, open it in a browser and sign in.</p></li>` +
+    `<li><p>If the terminal is listening for the callback, it waits up to five minutes. Follow the terminal's instructions to finish with a code if the callback cannot reach it.</p></li>` +
+    `<li><p>It may also find a saved sign-in and say so without printing an address.</p></li></ol>` +
+    `<p class="c-line">Or sign in from Settings on the gateway's own web page.</p>` +
+    `<p class="c-line">Afterwards this page still reads "Not reported": the gateway reports no sign-in state for an entry of its settings.</p>`;
   // A sign-in address, shown in full before it is opened: its host first, then the whole address.
   const address = (host) => {
     const full = `https://${host}/authorize?response_type=code&client_id=example-registered-client&state=example-state-7f3a`;

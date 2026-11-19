@@ -249,14 +249,14 @@ Editing a plugin's settings is not designed here (section 20); "Needs setup" nam
 
 **Accounts.** One row per server the plugin declares with a sign-in (`inspect` `mcpAuth`), each "Shared by everyone on this gateway", since one sign-in per server is what the gateway keeps (R§8):
 
-| `mcpAuth.state`          | The row says                                                                                                                                                                        | Its action              |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
-| `unauthenticated`        | "Needs sign-in" (warn)                                                                                                                                                              | "Sign in"               |
-| `requires-authorization` | "Needs sign-in again: the server asked for more access."                                                                                                                            | "Sign in"               |
-| `pending-authorization`  | "A sign-in was started and didn't finish."                                                                                                                                          | "Sign in"               |
-| `authorized`             | "Signed in. The gateway holds this sign-in until Dec 17, 5:12 PM." (from its expiry, when it has one) and, under it, "Whether it still works shows when a bot next uses Quillnote." | "Sign in again" (quiet) |
+| `mcpAuth.state`          | The row says                                                                                                                                                                        |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unauthenticated`        | "Needs sign-in" (warn)                                                                                                                                                              |
+| `requires-authorization` | "Needs sign-in again: the server asked for more access."                                                                                                                            |
+| `pending-authorization`  | "A sign-in was started and didn't finish."                                                                                                                                          |
+| `authorized`             | "Signed in. The gateway holds this sign-in until Dec 17, 5:12 PM." (from its expiry, when it has one) and, under it, "Whether it still works shows when a bot next uses Quillnote." |
 
-There is no "Connected": `authorized` means the gateway holds tokens, not that they work (R§8). A plugin with no sign-in has no Accounts group. When the plugin is turned off, `inspect` reports no sign-in, and the group says "The gateway reports sign-ins only while Quillnote is turned on."
+Under the rows: "Open Settings on your OpenClaw gateway to sign in to <server>." and "Check again" (section 10). The gateway's terminal command cannot find a plugin's own server, so it is not offered here (R§7). There is no "Connected": `authorized` means the gateway holds tokens, not that they work (R§8). A plugin with no sign-in has no Accounts group. When the plugin is turned off, `inspect` reports no sign-in, and the group says "The gateway reports sign-ins only while Quillnote is turned on."
 
 "Add another account" is not offered for a plugin: the gateway keeps one sign-in per declared server, and no method adds a second (R§8). For a server added by address it is section 9's.
 
@@ -299,13 +299,22 @@ What the page can never say: that the server is signed in, for whom, until when,
 
 **The rule.** The gateway starts a browser sign-in (`mcp.authLogin`) only for a connection that comes from a browser (R§7). Clawtrate never presents a connection as a browser to be given what the gateway withholds from its own kind of connection. Both apps reach the gateway through their host, the desktop app's main process or the web preview's host, as the same client: `gateway-client` in `ui` mode, with no `Origin` (R§7). In the web preview the viewer's browser shows Clawtrate's page, but it is not the gateway's client. So both apps sign in the same way: neither calls `mcp.authLogin`, and both give the gateway's own sign-in steps.
 
-**The command-line sign-in**, as the gateway itself gives it (R§7):
+**Which sign-in a page gives** depends on where the server is defined, because the gateway's terminal command reads only its own settings (R§7):
 
-1. "On the gateway's machine, run:" and `openclaw mcp login notes-work` in the command block, with the gateway's profile option when the host knows the gateway runs under a named profile.
-2. "It prints an address. Open it in a browser and sign in to notes-work."
-3. "If that browser is on the gateway's machine, the command finishes by itself within 5 minutes and prints "MCP OAuth credentials saved". If it is on another computer, copy the code from the address the page returns to (the part after `code=`) and run:" and `openclaw mcp login notes-work --code <code>`.
+| The server                                                                                                                                                              | The page gives                                                                                                                                                                         |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| An entry in the gateway's settings (`mcp.servers`) that is enabled, has an HTTP URL and `auth: "oauth"`, is shared (not per-requester) and has no `oauth.authProfileId` | The command-line sign-in, below, with the entry's exact configured name                                                                                                                |
+| A plugin's own server (an account row of section 8, named by the gateway's `mcpAuth[].serverName`)                                                                      | "Open Settings on your OpenClaw gateway to sign in to calendrop." and "Check again", which reads `plugins.inspect` again; it is read again too when the window comes back to the front |
+| Any other entry (per-requester, an auth-profile override, not OAuth, turned off)                                                                                        | No sign-in from Clawtrate                                                                                                                                                              |
 
-Under the steps: "Or sign in from Settings on the gateway's own web page." The page the browser lands on is the gateway's own, not Clawtrate's ("Sign-in response received. Return to OpenClaw for the sign-in result.", R§7). Clawtrate sees the result only as the account row's next reading (a plugin) or, for a tool server, not at all: the page keeps saying "Not reported".
+**The command-line sign-in:**
+
+1. "On the gateway's machine, run:" and `openclaw mcp login notes-work` in the command block, the entry's exact name, with the gateway's profile option when the host knows the gateway runs under a named profile.
+2. "If it prints an address, open it in a browser and sign in."
+3. "If the terminal is listening for the callback, it waits up to five minutes. Follow the terminal's instructions to finish with a code if the callback cannot reach it."
+4. "It may also find a saved sign-in and say so without printing an address."
+
+Under the steps: "Or sign in from Settings on the gateway's own web page." The page the browser lands on is the gateway's own, not Clawtrate's ("Sign-in response received. Return to OpenClaw for the sign-in result.", R§7). Afterwards the server's page reads what it read before, "Not reported": the gateway reports no sign-in state for an entry of its settings, so Clawtrate cannot see whether the command signed in.
 
 ## 11. A sign-in in the conversation
 
