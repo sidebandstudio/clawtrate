@@ -165,7 +165,8 @@ describe("the LOOK's output, parsed in memory", () => {
       bindMode: null,
       version: null,
       rpcOk: null,
-      listenerPids: [77],
+      // One listener it can't read makes the list unknown, not shorter.
+      listenerPids: [],
     });
     expect(
       parseGatewayStatus("default", 0, JSON.stringify({ gateway: { port: 80 } }))?.port,
@@ -251,6 +252,23 @@ describe("a LOOK that is incomplete or inconsistent", () => {
     if (!parsed.ok) throw new Error(parsed.reason);
     expect(serviceOnPort(parsed.facts, 18789)).toEqual({ ok: false, reason: "cant-tell" });
   });
+
+  it("can't tell from a status that exited 0 but didn't parse, empty included", () => {
+    for (const text of ["", "{", "Error"]) {
+      const parsed = parseLookOutput(
+        wellFormed().replace(
+          `{"k":"status-default","exit":0,"v":"${b64(status_())}"}`,
+          `{"k":"status-default","exit":0,"v":"${b64(text)}"}`,
+        ),
+        ID,
+      );
+      if (!parsed.ok) throw new Error(parsed.reason);
+      expect(serviceOnPort(parsed.facts, 18789), JSON.stringify(text)).toEqual({
+        ok: false,
+        reason: "cant-tell",
+      });
+    }
+  });
 });
 
 describe("the gateway service on a port", () => {
@@ -286,6 +304,23 @@ describe("the gateway service on a port", () => {
     expect(serviceOnPort(facts({ rpc: { ok: false } }), 18789)).toEqual({
       ok: false,
       reason: "not-running",
+    });
+  });
+
+  it("can't tell from a partial list of listeners: past sixteen, or one without a process", () => {
+    const sixteen = Array.from({ length: 16 }, () => ({ pid: 4242 }));
+    expect(serviceOnPort(facts({ port: { listeners: sixteen } }), 18789)).toMatchObject({
+      ok: true,
+      holdsPort: true,
+    });
+    // The seventeenth listener is another process.
+    expect(
+      serviceOnPort(facts({ port: { listeners: [...sixteen, { pid: 5151 }] } }), 18789),
+    ).toEqual({ ok: false, reason: "cant-tell" });
+    // A listener without a process: the service's own beside it proves nothing.
+    expect(serviceOnPort(facts({ port: { listeners: [{ pid: 4242 }, {}] } }), 18789)).toEqual({
+      ok: false,
+      reason: "cant-tell",
     });
   });
 

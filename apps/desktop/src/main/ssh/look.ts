@@ -178,6 +178,11 @@ export function parseGatewayStatus(
   const path =
     typeof daemon?.path === "string" && CONFIG_PATH.test(daemon.path) ? daemon.path : null;
   const status = typeof runtime?.status === "string" ? runtime.status : null;
+  const listeners: unknown = portStatus?.listeners;
+  const listenerPids =
+    Array.isArray(listeners) && listeners.length <= 16
+      ? listeners.map((listener) => pid(record(listener)?.pid))
+      : [];
   return {
     profile,
     exit,
@@ -217,11 +222,8 @@ export function parseGatewayStatus(
         }
       : null,
     rpcOk: bool(rpc?.ok),
-    listenerPids: Array.isArray(portStatus?.listeners)
-      ? portStatus.listeners
-          .slice(0, 16)
-          .map((listener) => pid(record(listener)?.pid))
-          .filter((value): value is number => value !== null)
+    listenerPids: listenerPids.every((value): value is number => value !== null)
+      ? listenerPids
       : [],
   };
 }
@@ -363,10 +365,7 @@ export function serviceOnPort(
   port: number,
 ): FoundService | { ok: false; reason: "none" | "not-running" | "cant-tell" } {
   for (const gateway of facts.gateways) {
-    if ("unreadable" in gateway) {
-      if (gateway.exit !== 0) return { ok: false, reason: "cant-tell" };
-      continue;
-    }
+    if ("unreadable" in gateway) return { ok: false, reason: "cant-tell" };
     if (gateway.port !== port) continue;
     const service = gateway.service;
     if (gateway.exit !== 0 || !service || !gateway.configPath || service.label === "other") {
