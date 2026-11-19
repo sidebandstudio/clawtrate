@@ -132,6 +132,7 @@ export function startHost(
       staticDir,
       "--data-dir",
       dataDir,
+      // A host pinned to the read tier: it never asks for more access.
       ...(options.readOnly ? ["--read-only"] : []),
     ],
     // The instance is named by the flag alone, never inherited from the environment.

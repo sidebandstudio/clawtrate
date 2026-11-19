@@ -96,6 +96,15 @@ const ALLOWED: Record<string, string> = {
     "static, an empty list copied on write",
   "packages/core/src/accounts.ts:initialAccountsState.bindings":
     "static, an empty list copied on write",
+  "packages/core/src/usage.ts:initialUsage.budgets": "static, an empty list copied on write",
+  "packages/core/src/usage.ts:initialUsage.counts": "static, an empty list copied on write",
+  "packages/core/src/usage.ts:initialUsage.limits.providers":
+    "static, an empty list copied on write",
+  // One read: what a usage report or a count gathers while it is read, returned and dropped.
+  "packages/core/src/usage-engine.ts:inTurn>out":
+    "one read: the answers of one batch of usage requests, returned to its caller",
+  "packages/core/src/usage-engine.ts:sources>named":
+    "one read: the runs the sending tasks' results name, dropped when the report is answered",
   // Values that go into the bounded state, captured only by an update that runs at once.
   "packages/core/src/client.ts:completeCreation>message.attachments":
     "the new outgoing message's files, empty; kept only in the outbox, under its bound",

@@ -216,6 +216,13 @@ import {
   type SidebarState,
 } from "./sidebar.ts";
 import {
+  UsageEngine,
+  type UsageBusy,
+  type UsageReport,
+  type UsageReportRequest,
+} from "./usage-engine.ts";
+import { initialUsage, type BudgetChange, type Routine } from "./usage.ts";
+import {
   archiveTask,
   deleteTask,
   listArchived,
@@ -833,6 +840,16 @@ export class ClawtrateClient {
     },
     now: () => this.now(),
     randomId: () => this.randomId(),
+    log: (message) => this.log("warn", message),
+  });
+  /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
+  private readonly usage = new UsageEngine({
+    request: (method, params) => this.request(method, params),
+    get: () => this.state.usage ?? initialUsage,
+    update: (change) =>
+      this.store.update((state) => ({ ...state, usage: change(state.usage ?? initialUsage) })),
+    connected: () => this.state.connection.status === "connected",
+    now: () => this.now(),
     log: (message) => this.log("warn", message),
   });
   /**
@@ -4243,6 +4260,7 @@ export class ClawtrateClient {
         if (generation !== this.generation) return;
         this.streams.clear();
         this.accounts.onClose();
+        this.usage.onClose();
         const status = this.state.connection.status;
         if (status !== "pairing" && status !== "error") {
           // Once this gateway has answered, every later drop is a reconnect, not a first connect.
@@ -4307,6 +4325,7 @@ export class ClawtrateClient {
   /** What one gateway reported that must never be read against another. */
   private forgetGatewayState(): void {
     this.accounts.reset();
+    this.store.update((state) => ({ ...state, usage: initialUsage }));
     // A creation belongs to the gateway it was asked of; it is never asked of another.
     for (const timer of this.creationTimers.values()) clearTimeout(timer);
     this.creationTimers.clear();
@@ -4333,6 +4352,7 @@ export class ClawtrateClient {
   private close(): void {
     this.generation += 1;
     this.accounts.onClose();
+    this.usage.onClose();
     this.protocol?.stop();
     this.protocol = null;
     this.streams.clear();
@@ -4496,7 +4516,10 @@ export class ClawtrateClient {
     this.pendingResync = null;
     this.quietReconnect = false;
     void this.bootstrap(generation, reason).then(() => {
-      if (generation === this.generation) this.accounts.onHello();
+      if (generation === this.generation) {
+        this.accounts.onHello();
+        this.usage.onHello();
+      }
     });
   }
 
@@ -5002,6 +5025,10 @@ export class ClawtrateClient {
     const runId = typeof payload?.runId === "string" ? payload.runId : null;
     if (!payload || !key || !runId) return;
     this.noteSpawnedBy(payload);
+    if (payload.state === "final" || payload.state === "error" || payload.state === "aborted") {
+      const botId = botIdFromSessionKey(key);
+      if (botId) this.usage.onRunEnded(botId);
+    }
     if (!this.tracked(key)) {
       this.updateForeign(key, (activity, ctx) => applyChatEvent(activity, payload, null, ctx));
       return;
@@ -5082,6 +5109,7 @@ export class ClawtrateClient {
         const keys = asRecord(event.payload)?.keys;
         if (Array.isArray(keys) && keys.includes(SIDEBAR_PREF_KEY))
           void this.loadSidebar(this.generation);
+        this.usage.onPrefsChanged(keys);
         return;
       }
       case "question.requested": {
@@ -5309,6 +5337,41 @@ export class ClawtrateClient {
     const next = await changeSidebar(this.actionContext(options.owner ?? null), change, base);
     // Shown only if nothing newer, by the arrangement's own revision, is shown already.
     if (generation === this.generation) this.setSidebar(next, issued);
+  }
+
+  // Usage and warning budgets (`usage.ts`, `usage-engine.ts`; controls.md sections 16, 17) ------
+
+  /** A page's usage figures, read now and not kept; `busy` while the host reads as many as it reads at once. */
+  readUsage(request: Omit<UsageReportRequest, "bots">): Promise<UsageReport | UsageBusy> {
+    if (this.state.connection.status !== "connected")
+      return Promise.reject(new Error("Not connected to the gateway."));
+    return this.usage.readReport({ ...request, bots: this.state.bots.map((bot) => bot.id) });
+  }
+
+  /** Set or remove a warning budget, kept with the gateway as this person's preference. */
+  async changeBudget(change: BudgetChange, options: { owner?: object } = {}): Promise<void> {
+    if (this.options.readOnly) throw new Error("This host only reads; it does not change budgets.");
+    const owner = options.owner ?? null;
+    const url = this.settings?.url;
+    await this.actionContext(owner).ensureWrite();
+    // A grant of write access reconnects to the same gateway, so the write is bound to the
+    // connection that holds it now. A switch to another gateway is never written to.
+    if (this.settings?.url !== url) throw new Error("Switched to another gateway.");
+    // Every request of the write is the viewer's: none is sent once that viewer has gone.
+    await this.usage.changeBudget(change, this.actionContext(owner).request);
+  }
+
+  /** The routines a budget can be set for, read now and not kept. */
+  listRoutines(): Promise<Routine[]> {
+    if (this.state.connection.status !== "connected")
+      return Promise.reject(new Error("Not connected to the gateway."));
+    return this.usage.listRoutines();
+  }
+
+  /** Count every budget, and read the providers' limits, again now. */
+  async refreshUsage(): Promise<void> {
+    if (this.state.connection.status !== "connected") return;
+    await Promise.all([this.usage.countBudgets(), this.usage.refreshLimits()]);
   }
 
   /**

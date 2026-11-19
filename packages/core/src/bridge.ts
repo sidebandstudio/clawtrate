@@ -20,6 +20,14 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
+import type { UsageBusy, UsageReport } from "./usage-engine.ts";
+import {
+  MAX_ROUTINE_NAME_CHARS,
+  validTimeZone,
+  type BudgetChange,
+  type Routine,
+  type UsagePeriod,
+} from "./usage.ts";
 import {
   DEFAULTS_CHOICES,
   MAX_MACHINE_NAME_CHARS,
@@ -188,6 +196,20 @@ export type BridgeCommand =
   | { type: "listArchived"; botId: string }
   /** Change the rail's arrangement on the gateway; `base` is this device's, used when the gateway holds none. */
   | { type: "changeSidebar"; change: SidebarChange; base: SidebarPrefs | null }
+  /** A bot's usage, or every bot's (`botId` null), for a period in this person's time zone; read now. */
+  | {
+      type: "readUsage";
+      botId: string | null;
+      period: UsagePeriod;
+      timeZone: string;
+      detail: boolean;
+    }
+  /** Set or remove a warning budget, kept with the gateway. */
+  | { type: "changeBudget"; change: BudgetChange }
+  /** Count the budgets and read the providers' limits again now. */
+  | { type: "refreshUsage" }
+  /** The routines a budget can be set for, read now. */
+  | { type: "listRoutines" }
   // Where a bot runs and Machines (controls.md sections 14 and 15). Read now, never kept;
   // writes are read back before they answer, and need admin (or pairing for names and removals).
   | { type: "readPlacement"; botId: string }
@@ -253,17 +275,21 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                       ? ArchiveResult
                                       : C extends { type: "listArchived" }
                                         ? ArchivedList
-                                        : C extends { type: "readPlacement" }
-                                          ? BotPlacement
-                                          : C extends { type: "readMachines" }
-                                            ? MachinesView
-                                            : C extends { type: "setCommandMachine" }
-                                              ? ConfigSave
-                                              : C extends { type: "setBotWorkspace" }
-                                                ? { workspace: string | null; asTyped: boolean }
-                                                : C extends { type: "setMachineDefaults" }
-                                                  ? ApprovalsFile
-                                                  : void;
+                                        : C extends { type: "readUsage" }
+                                          ? UsageReport | UsageBusy
+                                          : C extends { type: "listRoutines" }
+                                            ? Routine[]
+                                            : C extends { type: "readPlacement" }
+                                              ? BotPlacement
+                                              : C extends { type: "readMachines" }
+                                                ? MachinesView
+                                                : C extends { type: "setCommandMachine" }
+                                                  ? ConfigSave
+                                                  : C extends { type: "setBotWorkspace" }
+                                                    ? { workspace: string | null; asTyped: boolean }
+                                                    : C extends { type: "setMachineDefaults" }
+                                                      ? ApprovalsFile
+                                                      : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -396,6 +422,46 @@ function botId(value: unknown): string {
 function flag(value: unknown): boolean {
   if (typeof value !== "boolean") throw new Error("invalid flag");
   return value;
+}
+
+/** One change to the budgets, checked field by field. */
+function budgetChange(value: unknown): BudgetChange {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error("invalid budget change");
+  const change = value as Record<string, unknown>;
+  if (change.op === "remove") {
+    if (typeof change.id !== "string" || !/^(bot|routine):[\w.-]{1,128}$/.test(change.id))
+      throw new Error("invalid budget id");
+    return { op: "remove", id: change.id };
+  }
+  if (change.op !== "set") throw new Error("invalid budget change");
+  const budget = change.budget as Record<string, unknown> | null;
+  if (budget === null || typeof budget !== "object") throw new Error("invalid budget");
+  const routineId =
+    budget.routineId === null || budget.routineId === undefined ? null : botId(budget.routineId);
+  const routineName = budget.routineName;
+  if (
+    routineName !== null &&
+    routineName !== undefined &&
+    (typeof routineName !== "string" || routineName.length > MAX_ROUTINE_NAME_CHARS)
+  )
+    throw new Error("invalid routine name");
+  if (budget.period !== "daily" && budget.period !== "weekly") throw new Error("invalid period");
+  if (typeof budget.tokens !== "number" || !Number.isSafeInteger(budget.tokens))
+    throw new Error("invalid tokens");
+  const timeZone = validTimeZone(budget.timeZone);
+  if (!timeZone) throw new Error("invalid time zone");
+  return {
+    op: "set",
+    budget: {
+      botId: botId(budget.botId),
+      routineId,
+      routineName: routineId ? ((routineName as string | null | undefined) ?? null) : null,
+      period: budget.period,
+      tokens: budget.tokens,
+      timeZone,
+    },
+  };
 }
 
 /** One change to the rail's arrangement, checked field by field. */
@@ -814,6 +880,25 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         base:
           command.base === null || command.base === undefined ? null : parseSidebar(command.base),
       };
+    case "readUsage": {
+      const period = command.period;
+      if (period !== "today" && period !== "week" && period !== "month")
+        throw new Error("invalid period");
+      const timeZone = validTimeZone(command.timeZone);
+      if (!timeZone) throw new Error("invalid time zone");
+      return {
+        type: "readUsage",
+        botId: command.botId === null ? null : botId(command.botId),
+        period,
+        timeZone,
+        detail: flag(command.detail),
+      };
+    }
+    case "changeBudget":
+      return { type: "changeBudget", change: budgetChange(command.change) };
+    case "refreshUsage":
+    case "listRoutines":
+      return { type: command.type };
     case "readPlacement":
       return { type: "readPlacement", botId: botId(command.botId) };
     case "readMachines":
@@ -1177,6 +1262,19 @@ class ViewerSession implements BridgeSession {
         return client.listArchived(command.botId);
       case "changeSidebar":
         return client.changeSidebar(command.change, command.base, { owner });
+      case "readUsage":
+        return client.readUsage({
+          botId: command.botId,
+          period: command.period,
+          timeZone: command.timeZone,
+          detail: command.detail,
+        });
+      case "changeBudget":
+        return client.changeBudget(command.change, { owner });
+      case "refreshUsage":
+        return client.refreshUsage();
+      case "listRoutines":
+        return client.listRoutines();
       case "readPlacement":
         return client.readPlacement(command.botId);
       case "readMachines":
