@@ -290,7 +290,7 @@ await offers("screen=connecting-here", "connecting here: says nothing about SSH 
 await offers("screen=there", "there, first visit: no remembered computers", () => !document.querySelector(".s-remembered"));
 await offers("screen=there&returning=1", "there, return visit: the remembered computer, by its full destination", () => document.querySelector(".s-remembered")?.textContent.includes("you@devbox.example"));
 await offers("screen=hostkey-changed", "changed key: no way to trust it without the host's dialog", () => !document.querySelector('a[href*="found-there"]') && document.querySelector('[data-host="replaceKey"]') !== null);
-await offers("screen=unreachable", "SSH refusal: Try again asks the host again, and Advanced is a direct link", () => document.querySelector('[data-host="sshAccount"]') !== null && [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html"));
+await offers("screen=unreachable", "SSH refusal: Try again submits the field, and Advanced is a direct link", () => document.querySelector('#ssh-form button[type="submit"]')?.textContent === "Try again" && [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html"));
 await offers("screen=refused", "sign-in refused: a direct Advanced link", () => [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html"));
 await offers("screen=there-config", "a refused setting: a direct Advanced link", () => [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html"));
 await offers("screen=approve", "approve: no automatic approval, the profile named", () => !document.querySelector("[data-host]") && document.body.textContent.includes("for the default profile"));
@@ -344,6 +344,15 @@ await at(p, "looking-there");
 await click(p, "[data-back]");
 check("Back from the look keeps the typed host", (await at(p, "there")) && (await p.inputValue("#ssh-host")) === "devbox");
 await p.close();
+
+for (const screen of ["unreachable", "refused"]) {
+  p = await open(`screen=${screen}&name=oldbox`);
+  await p.fill("#ssh-host", "otherbox");
+  await btn("Try again")(p);
+  await p.waitForSelector('[data-host-dialog="sshAccount"]', { timeout: 5000 });
+  check(`${screen}: Try again asks the host for the destination now in the field`, (await text(p, "[data-host-dialog]")).includes("you@otherbox.example") && !(await text(p, "[data-host-dialog]")).includes("oldbox"));
+  await p.close();
+}
 
 p = await open(`screen=looking-there&name=${encodeURIComponent('<img src=x onerror="window.hacked=1">')}`);
 check("a destination from the address is shown as text, never as markup", await p.evaluate(() => !document.querySelector("#setup-root img:not(.s-mark)") && !window.hacked && document.body.textContent.includes("<img src=x")));

@@ -406,23 +406,25 @@
       back("there", { keep: typedRaw }) +
       mark() +
       title("Another computer") +
-      sshField(typedRaw) +
+      `<form id="ssh-form" novalidate>${sshField(typedRaw)}` +
       note("danger", `Can't reach ${full}`, `Nothing answered at ${esc(resolvedRaw.split("@").pop())}, port 22 (connection refused).`, `<p>Check the name and that the computer is on.</p>`) +
-      actions(button("Try again", { variant: "primary", host: "sshAccount" })) +
+      actions(`<button type="submit" class="button" data-variant="primary" data-size="lg">Try again</button>`) +
+      `</form>` +
       `<p class="s-links"><a class="button" data-variant="quiet" data-size="sm" href="${ADVANCED}">Advanced</a></p>`,
 
     refused: () =>
       back("there", { keep: typedRaw }) +
       mark() +
       title("Another computer") +
-      sshField(typedRaw) +
+      `<form id="ssh-form" novalidate>${sshField(typedRaw)}` +
       note(
         "danger",
         `${full} didn't accept your key`,
         `The SSH sign-in for ${full} was refused.`,
         `<p>Check that your key is on that computer. A key with a passphrase has to be in your SSH agent first.</p>`,
       ) +
-      actions(button("Try again", { variant: "primary", host: "sshAccount" })) +
+      actions(`<button type="submit" class="button" data-variant="primary" data-size="lg">Try again</button>`) +
+      `</form>` +
       `<p class="s-links"><a class="button" data-variant="quiet" data-size="sm" href="${ADVANCED}">Advanced</a></p>`,
 
     hostkey: () =>
@@ -741,7 +743,8 @@
   }
 
   // The SSH field: a value that is not an SSH destination is refused before
-  // anything runs (setup.md section 19). The samples choose the walk.
+  // anything runs (setup.md section 19). The samples choose the walk. After a
+  // failure, Try again submits the field as it stands now.
   const form = document.getElementById("ssh-form");
   if (form) {
     const DESTINATION = /^(?:[A-Za-z0-9_][A-Za-z0-9._-]{0,63}@)?[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/;
