@@ -28,6 +28,7 @@ const APP = process.env.CLAWTRATE_PACKAGED_APP!;
 const USER_DATA = process.env.CLAWTRATE_PACKAGED_USER_DATA!;
 const APP_PID = Number(process.env.CLAWTRATE_PACKAGED_PID);
 const APP_LOG = process.env.CLAWTRATE_PACKAGED_LOG ?? "";
+const SANDBOX = process.env.CLAWTRATE_PACKAGED_SANDBOX!;
 /** A made-up key for the scripted API-key sign-in: its account is `acme:packaged`. */
 const TYPED_KEY = "clawtrate-dev-key.acme.packaged";
 
@@ -195,10 +196,15 @@ test("shows unread tasks as an overlay on its taskbar button, and clears it at z
 test("hands a second launch to the running app instead of starting another", async () => {
   // The same data folder, so the same single-instance lock. The second process
   // must exit by itself, successfully, and leave the first one and its one window.
-  const second = spawn(packagedExecutable(APP), [`--user-data-dir=${USER_DATA}`], {
-    env: appEnv(),
-    stdio: "ignore",
-  });
+  // Never a packaged app without a sandbox, even one that only hands over to the running app.
+  const second = spawn(
+    packagedExecutable(APP),
+    [`--user-data-dir=${USER_DATA}`, `--clawtrate-setup-sandbox=${SANDBOX}`],
+    {
+      env: appEnv(),
+      stdio: "ignore",
+    },
+  );
   const exited = new Promise<number | null>((resolve) => second.once("exit", resolve));
   const code = await Promise.race([
     exited,

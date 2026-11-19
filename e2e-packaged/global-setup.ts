@@ -43,7 +43,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
-import { stateDirFor } from "../tools/dev-gateway/src/instance.ts";
+import { writeSandbox } from "../e2e/setup-sandbox.ts";
 import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { FORBIDDEN_PORTS, listInstances, runningOthers } from "../e2e/global-setup.ts";
 import { askToClose, forceEnd, windowsProcesses } from "./windows.ts";
@@ -248,27 +248,26 @@ export function appEnv(): NodeJS.ProcessEnv {
 }
 
 /**
- * The sandbox the app's look on this computer is given (docs/development/setup.md):
- * a temporary home, the `openclaw` program, and this run's instance as the only
- * profile. Without it the automated app refuses to look at all.
+ * The packaged app's launch arguments: its own data folder, the debugging
+ * port this check drives it over, and always a sandbox. Nothing may automate
+ * a packaged app without one: such an app would be a person's, and look at
+ * the real computer.
  */
-function writeSandbox(dir: string, instance: string): string {
-  const home = join(dir, "setup-home");
-  mkdirSync(home);
-  let openclaw = join(dir, "no-openclaw");
-  if (process.platform !== "win32") {
-    try {
-      openclaw = execFileSync("/usr/bin/which", ["openclaw"], { encoding: "utf8" }).trim();
-    } catch {
-      // not installed: the look finds nothing
-    }
-  }
-  const path = join(dir, "setup-sandbox.json");
-  writeFileSync(
-    path,
-    JSON.stringify({ home, openclaw, instance, stateDir: stateDirFor(instance, homedir()) }),
-  );
-  return path;
+export function launchArgs(userData: string, sandbox: string): string[] {
+  return [
+    `--user-data-dir=${userData}`,
+    "--remote-debugging-port=0",
+    `--clawtrate-setup-sandbox=${sandbox}`,
+  ];
+}
+
+/**
+ * The sandbox the app's look on this computer is given (docs/development/setup.md):
+ * a temporary home, the repository's stand-in for `openclaw`, and this run's
+ * instance as the only profile. On Windows the look runs nothing.
+ */
+function setupSandbox(dir: string, instance: string): string {
+  return writeSandbox({ dir: join(dir, "setup"), instance }).file;
 }
 
 export default async function globalSetup() {
@@ -421,16 +420,13 @@ export default async function globalSetup() {
     const logFd = openSync(log, "a", 0o600);
     record.hostPending = true;
     saveRecord(RECORDS, record);
-    const gated = gatedSpawn(
-      spawn,
-      packagedExecutable(app),
-      [
-        `--user-data-dir=${userData}`,
-        "--remote-debugging-port=0",
-        `--clawtrate-setup-sandbox=${writeSandbox(dir, name)}`,
-      ],
-      { cwd: dir, env: appEnv(), stdio: ["ignore", logFd, logFd] },
-    );
+    const sandbox = setupSandbox(dir, name);
+    process.env.CLAWTRATE_PACKAGED_SANDBOX = sandbox;
+    const gated = gatedSpawn(spawn, packagedExecutable(app), launchArgs(userData, sandbox), {
+      cwd: dir,
+      env: appEnv(),
+      stdio: ["ignore", logFd, logFd],
+    });
     appProcess = gated.child;
     const found = processIdentity(appProcess.pid!);
     if (found.state !== "alive") {
@@ -532,20 +528,13 @@ async function windowsSetup() {
   };
 
   try {
-    const sandbox = writeSandbox(dir, `e2e-${randomBytes(4).toString("hex")}`);
-    appProcess = spawn(
-      exe,
-      [
-        `--user-data-dir=${userData}`,
-        "--remote-debugging-port=0",
-        `--clawtrate-setup-sandbox=${sandbox}`,
-      ],
-      {
-        cwd: dirname(userData),
-        env: appEnv(),
-        stdio: ["ignore", "ignore", "inherit"],
-      },
-    );
+    const sandbox = setupSandbox(dir, `e2e-${randomBytes(4).toString("hex")}`);
+    process.env.CLAWTRATE_PACKAGED_SANDBOX = sandbox;
+    appProcess = spawn(exe, launchArgs(userData, sandbox), {
+      cwd: dirname(userData),
+      env: appEnv(),
+      stdio: ["ignore", "ignore", "inherit"],
+    });
     const port = await debuggingPort(userData, appProcess);
     process.env.CLAWTRATE_PACKAGED_CDP = `http://127.0.0.1:${port}`;
     process.env.CLAWTRATE_PACKAGED_APP = app;
