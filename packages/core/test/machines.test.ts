@@ -170,10 +170,10 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
       return { deviceId: params.deviceId, label: params.label };
     },
     "device.pair.remove": (params) => {
-      devices.splice(
-        devices.findIndex((each) => each.deviceId === params.deviceId),
-        1,
-      );
+      // As the gateway: an id it doesn't hold is refused, and nothing else is touched.
+      const at = devices.findIndex((each) => each.deviceId === params.deviceId);
+      if (at < 0) throw new Error("unknown deviceId");
+      devices.splice(at, 1);
       return { ok: true };
     },
     "node.rename": (params) => {
@@ -181,10 +181,9 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
       return params;
     },
     "node.pair.remove": (params) => {
-      nodes.splice(
-        nodes.findIndex((n) => n.nodeId === params.nodeId),
-        1,
-      );
+      const at = nodes.findIndex((n) => n.nodeId === params.nodeId);
+      if (at < 0) throw new Error("unknown nodeId");
+      nodes.splice(at, 1);
       return { ok: true };
     },
   };
@@ -806,6 +805,11 @@ describe("Settings, Machines: the engine", () => {
     await expect(e.removeDevice("dev-self")).rejects.toThrow(/itself/);
     await e.removeDevice("dev-phone");
     expect(gw.devices.map((d) => d.deviceId)).not.toContain("dev-phone");
+    // Again: the gateway refuses an id it no longer holds, and the other records stay.
+    await expect(e.removeDevice("dev-phone")).rejects.toThrow(
+      "Couldn't save the removal. The gateway answered: unknown deviceId",
+    );
+    expect(gw.devices.map((d) => d.deviceId)).toEqual(["dev-self", NODE]);
   });
 
   it("F-157: below admin, this device's own record is renamed only when every role it holds is operator", async () => {
@@ -829,6 +833,9 @@ describe("Settings, Machines: the engine", () => {
 
   it("F-157: a removal is not confirmed from a read-back that holds no pairing list", async () => {
     const gw = gateway();
+    // What is checked here is the read-back: each removal is answered.
+    gw.handlers["node.pair.remove"] = () => ({ ok: true });
+    gw.handlers["device.pair.remove"] = () => ({ ok: true });
     gw.handlers["node.list"] = () => ({});
     await expect(engine(gw, { admin: true }).removeMachine(NODE)).rejects.toThrow(
       "The gateway did not return the pairing list. Removal could not be confirmed.",
