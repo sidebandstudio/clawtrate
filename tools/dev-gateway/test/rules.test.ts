@@ -168,10 +168,15 @@ describe("the rules checks' tool calls", () => {
 });
 
 describe("the rules checks' temporary settings", () => {
+  const context = () =>
+    ({ clients: {}, gatewayLog: "", stateDir: "" }) as unknown as Parameters<typeof withConfig>[0];
+
   it("are restored when the check's assertion fails, and when the change itself fails", async () => {
     const steps: string[] = [];
+    const ctx = context();
     await expect(
       withConfig(
+        ctx,
         async () => void steps.push("apply"),
         async () => void steps.push("restore"),
         async () => {
@@ -181,10 +186,12 @@ describe("the rules checks' temporary settings", () => {
       ),
     ).rejects.toThrow("assertion");
     expect(steps).toEqual(["apply", "body", "restore"]);
+    expect(ctx.restoreSettings).toBeUndefined();
     steps.length = 0;
     // The gateway took the change but the wait for it timed out.
     await expect(
       withConfig(
+        ctx,
         async () => {
           steps.push("apply");
           throw new Error("not applied within 30 seconds");
@@ -194,6 +201,104 @@ describe("the rules checks' temporary settings", () => {
       ),
     ).rejects.toThrow("not applied");
     expect(steps).toEqual(["apply", "restore"]);
+  });
+
+  /**
+   * The check that turns the plugin off, on a fake gateway whose rollback
+   * (`enabled: true`) is refused `refusals` times, then a check that notes
+   * whether the plugin was on when it started.
+   */
+  const drive = async (refusals: number) => {
+    let enabled = true;
+    let revision = 1;
+    let left = refusals;
+    const seenAtNext: boolean[] = [];
+    const answer = async (method: string, params: Record<string, unknown> = {}) => {
+      switch (method) {
+        case "config.get":
+          return {
+            hash: `h${revision}`,
+            configRevisionHash: `r${revision}`,
+            appliedConfigHash: `r${revision}`,
+            config: { plugins: { entries: { "clawtrate-tool-rules": { enabled } } } },
+          };
+        case "config.patch": {
+          const raw = JSON.parse(String(params.raw)) as {
+            plugins: { entries: Record<string, { enabled: boolean }> };
+          };
+          const next = raw.plugins.entries["clawtrate-tool-rules"]!.enabled;
+          if (next && left > 0) {
+            left -= 1;
+            throw new Error("config.patch refused");
+          }
+          enabled = next;
+          revision += 1;
+          return { ok: true };
+        }
+        case "clawtrate-tool-rules.status":
+          if (!enabled) throw new Error("unknown method");
+          return { hook: { registered: true } };
+        case "clawtrate-tool-rules.get":
+          return { scopes: {} };
+        case "plugin.approval.list":
+          return [];
+        case "chat.send":
+          return { runId: "run-1" };
+        default:
+          return {};
+      }
+    };
+    const op = {
+      events: [],
+      lastSeq: 0,
+      request: answer,
+      send: () => answer("chat.send"),
+      // The slow tool started; the card never comes, so the check fails with the plugin off.
+      waitFor: async (label: string) => {
+        if (label === "the slow tool") return { seq: 1, event: "agent", payload: {} };
+        throw new Error(`timed out waiting for ${label}`);
+      },
+    } as unknown as OperatorSession;
+    const off = RULES_CHECKS.find((c) => c.name.startsWith("the plugin turned off mid-run"))!;
+    const held = RULES_CHECKS.splice(0);
+    RULES_CHECKS.push(off, {
+      name: "the next check",
+      covers: [],
+      run: async () => void seenAtNext.push(enabled),
+    });
+    const lines: string[] = [];
+    vi.useFakeTimers();
+    try {
+      const outcome = runRulesChecks(
+        {
+          clients: { admin: op, interactive: op, approver: op, writer: op, reader: op },
+          gatewayLog: "",
+          stateDir: "",
+        },
+        (line) => lines.push(line),
+      );
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      return { result: await outcome, lines, seenAtNext, enabled };
+    } finally {
+      vi.useRealTimers();
+      RULES_CHECKS.splice(0, RULES_CHECKS.length, ...held);
+    }
+  };
+
+  it("are restored by settling when the check's own rollback was refused, before the next check", async () => {
+    const run = await drive(1);
+    expect(run.lines[0]).toMatch(/^FAIL {2}the plugin turned off mid-run.*config\.patch refused/);
+    expect(run.seenAtNext).toEqual([true]);
+    expect(run.result).toEqual({ passed: 1, failed: 1 });
+  });
+
+  it("keep the next check unstarted, and fail the final clean-up, while the rollback is refused", async () => {
+    const run = await drive(Number.POSITIVE_INFINITY);
+    expect(run.seenAtNext).toEqual([]);
+    expect(run.enabled).toBe(false);
+    expect(run.lines[1]).toMatch(/^FAIL {2}the next check: not started/);
+    expect(run.lines.at(-1)).toMatch(/^FAIL {2}the final clean-up/);
+    expect(run.result).toEqual({ passed: 0, failed: 3 });
   });
 });
 

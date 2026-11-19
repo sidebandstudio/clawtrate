@@ -58,6 +58,8 @@ export type RulesContext = {
   gatewayLog: string;
   /** The instance's state folder, which holds the plugin's rules file. */
   stateDir: string;
+  /** A temporary setting's rollback that has not succeeded yet: settling retries it. */
+  restoreSettings?: () => Promise<void>;
 };
 
 const PLUGIN = "clawtrate-tool-rules";
@@ -336,20 +338,38 @@ async function patchConfig(
 /**
  * Run `body` with a temporary setting: `apply` inside the try, so a change the
  * gateway took but did not confirm in time is undone too, and `restore` in
- * the finally, whether the body passed or not.
+ * the finally, whether the body passed or not. A rollback that fails stays
+ * pending on `ctx` until settling retries it successfully.
  */
 export async function withConfig<T>(
+  ctx: RulesContext,
   apply: () => Promise<void>,
   restore: () => Promise<void>,
   body: () => Promise<T>,
 ): Promise<T> {
+  ctx.restoreSettings = restore;
   try {
     await apply();
     return await body();
   } finally {
     await restore();
+    delete ctx.restoreSettings;
   }
 }
+
+/**
+ * Whether the config holds what `holds` looks for and the gateway runs with
+ * it: a rollback already in place needs no new revision.
+ */
+async function configHolds(
+  ctx: RulesContext,
+  holds: (config: JsonRecord) => boolean,
+): Promise<boolean> {
+  const now = await ctx.clients.admin.request<Revision & { config?: unknown }>("config.get", {});
+  return holds(rec(now.config)) && now.appliedConfigHash === now.configRevisionHash;
+}
+const entryOf = (config: JsonRecord, bot: string) => rec(rec(rec(config.agents).entries)[bot]);
+const pluginEntryOf = (config: JsonRecord) => rec(rec(rec(config.plugins).entries)[PLUGIN]);
 
 const botEntry = async (ctx: RulesContext, bot: string) =>
   rec(rec(rec(rec(await ctx.clients.admin.request("config.get", {})).config).agents).entries)[bot];
@@ -912,17 +932,26 @@ export const RULES_CHECKS: RulesCheck[] = [
         return `${String(card.request.title)}\n${String(card.request.description)}`;
       };
       const restore = async () => {
-        await patchConfig(
+        const restored = await configHolds(
           ctx,
-          {
-            approvals: null,
-            plugins: { entries: { [PLUGIN]: { config: { cardDetails: null } } } },
-          },
-          ["approvals.plugin.targets"],
+          (config) =>
+            config.approvals === undefined &&
+            rec(pluginEntryOf(config).config).cardDetails === undefined,
         );
+        if (!restored) {
+          await patchConfig(
+            ctx,
+            {
+              approvals: null,
+              plugins: { entries: { [PLUGIN]: { config: { cardDetails: null } } } },
+            },
+            ["approvals.plugin.targets"],
+          );
+        }
         await pluginRunning(ctx);
       };
       await withConfig(
+        ctx,
         () => patchConfig(ctx, FORWARD_NOWHERE),
         restore,
         async () => {
@@ -1034,14 +1063,21 @@ export const RULES_CHECKS: RulesCheck[] = [
         }
         // The deny is undone however the check ends.
         const run = await withConfig(
+          ctx,
           () =>
             patchConfig(ctx, {
               agents: { entries: { [BOT]: { tools: { deny: ["web_search"] } } } },
             }),
-          () =>
-            patchConfig(ctx, { agents: { entries: { [BOT]: { tools: { deny: null } } } } }, [
+          async () => {
+            if (
+              await configHolds(ctx, (config) => rec(entryOf(config, BOT).tools).deny === undefined)
+            ) {
+              return;
+            }
+            await patchConfig(ctx, { agents: { entries: { [BOT]: { tools: { deny: null } } } } }, [
               `agents.entries.${BOT}.tools.deny`,
-            ]),
+            ]);
+          },
           answer,
         );
         const write = run.calls[0];
@@ -1074,7 +1110,11 @@ export const RULES_CHECKS: RulesCheck[] = [
       );
       const plugin = (enabled: boolean) => () =>
         patchConfig(ctx, { plugins: { entries: { [PLUGIN]: { enabled } } } });
-      await withConfig(plugin(false), plugin(true), async () => {
+      const pluginBackOn = async () => {
+        if (await configHolds(ctx, (config) => pluginEntryOf(config).enabled === true)) return;
+        await plugin(true)();
+      };
+      await withConfig(ctx, plugin(false), pluginBackOn, async () => {
         const off = await rules(ctx.clients.reader, "status");
         expect(!off.ok, `status still answered with the plugin off: ${show(off)}`);
         // The run that started with the plugin keeps its hook: its write is asked.
@@ -1186,6 +1226,9 @@ async function settle(ctx: RulesContext, world: World): Promise<boolean> {
   }
   if (!(await drainSessions(admin, world.keys))) return false;
   try {
+    // A check's rollback that failed is retried first; until it succeeds, nothing more starts.
+    await ctx.restoreSettings?.();
+    delete ctx.restoreSettings;
     await pluginRunning(ctx);
     await clearRules(ctx);
     return true;
