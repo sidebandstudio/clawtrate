@@ -1,17 +1,24 @@
-// A task's chat (visual-language.md, sections 8 and 12), for reading: the
-// task's title first, the stamps, your messages and the bot's as bubbles, the
-// bot's markdown rendered, and each of its actions as one quiet line in the
-// engine's words. A run that goes on while the task is open is said in the
-// status line's words, and its history shows when it ends. Sending belongs
-// to a later build, so there is no composer.
+// A task's chat (visual-language.md, sections 8 and 12; conversation.md,
+// section 18), for reading. The floating controls sit in a band over the
+// transcript and the status strip overlays it under them, so nothing moves when
+// the strip comes or goes. A task opens at its start, its title first; the
+// stamps, your messages and the bot's as bubbles, the bot's markdown, each of
+// its actions as one quiet line in the engine's words, and what a running task
+// is doing follow. Jump to latest takes a reader who is not at the end there,
+// and where the composer will be is the read-only explanation.
 
 import type { Bot, ClawtrateState, Task } from "@clawtrate/core";
-import { CONVERSATION_WORDS as W, emptyBody } from "@clawtrate/ui/conversation-words";
-import { useEffect, useRef, type ComponentRef, type ReactNode } from "react";
-import { ScrollView, View } from "react-native";
+import {
+  CONVERSATION_WORDS as W,
+  emptyBody,
+  readOnlyWords,
+} from "@clawtrate/ui/conversation-words";
+import { useEffect, useRef, useState, type ComponentRef, type ReactNode } from "react";
+import { Pressable, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Markdown } from "../components/Markdown.tsx";
-import { BackButton, Top } from "../components/Top.tsx";
+import { EyeIcon } from "../components/icons.tsx";
+import { BackButton, PROTECTED_BAND, Top } from "../components/Top.tsx";
 import { Button, Dot, Txt } from "../components/ui.tsx";
 import { useRuntime } from "../runtime.ts";
 import { S, TOUCH, useTheme } from "../theme/index.ts";
@@ -153,6 +160,75 @@ function Empty({
   );
 }
 
+/** The read-only explanation, in the composer's place at the foot (visual-language.md, section 8). */
+function ReadOnly({ botName }: { botName: string }) {
+  const { c } = useTheme();
+  const words = readOnlyWords(botName);
+  return (
+    <View
+      testID="read-only"
+      accessible
+      accessibilityLabel={`${words.lead}${words.rest}`}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: S["space-2"],
+        marginHorizontal: S["space-4"],
+        marginBottom: S["space-2"],
+        paddingHorizontal: S["space-4"],
+        paddingVertical: S["space-3"],
+        borderRadius: 24,
+        backgroundColor: c["bg-bubble"],
+      }}
+    >
+      <EyeIcon color={c["text-muted"]} />
+      <Txt size={S["text-sm"]} color="text-muted" style={{ flex: 1 }}>
+        <Txt size={S["text-sm"]} weight="medium">
+          {words.lead}
+        </Txt>
+        {words.rest}
+      </Txt>
+    </View>
+  );
+}
+
+/** Jump to latest (conversation.md, section 18): while a run goes on, its phrase; else the words. */
+function JumpToLatest({ phrase, onPress }: { phrase: string | null; onPress: () => void }) {
+  const { c, scheme } = useTheme();
+  const label = phrase ?? W.jumpToLatest;
+  return (
+    <View
+      pointerEvents="box-none"
+      style={{ position: "absolute", left: 0, right: 0, bottom: 10, alignItems: "center" }}
+    >
+      <Pressable
+        testID="jump-to-latest"
+        accessibilityRole="button"
+        accessibilityLabel={phrase ? `${phrase}. ${W.jumpToLatest}` : W.jumpToLatest}
+        onPress={onPress}
+        style={{
+          minHeight: TOUCH.taskRow,
+          maxWidth: 380,
+          paddingHorizontal: S["space-4"],
+          borderRadius: 999,
+          justifyContent: "center",
+          backgroundColor: c["bg-raised"],
+          borderWidth: 1,
+          borderColor: scheme === "dark" ? "rgba(255, 255, 255, 0.07)" : "rgba(17, 18, 19, 0.06)",
+          shadowColor: "#111213",
+          shadowOpacity: scheme === "dark" ? 0.6 : 0.16,
+          shadowRadius: 18,
+          shadowOffset: { width: 0, height: 12 },
+        }}
+      >
+        <Txt size={S["text-md"]} weight="medium" numberOfLines={1}>
+          {`${label} ↓`}
+        </Txt>
+      </Pressable>
+    </View>
+  );
+}
+
 export function Chat({
   state,
   bot,
@@ -174,7 +250,12 @@ export function Chat({
   const transcript = state.transcripts[task.key];
   const online = state.connection.status === "connected";
   const scroller = useRef<ComponentRef<typeof ScrollView>>(null);
-  const atEnd = useRef(true);
+  // A task opens at its start, its title in view; the reader follows the end
+  // once they reach it, as section 18 has it.
+  const following = useRef(false);
+  const [atEnd, setAtEnd] = useState(false);
+  const [contentHeight, setContentHeight] = useState(0);
+  const [viewHeight, setViewHeight] = useState(0);
 
   // The task is open while its chat is on screen.
   useEffect(() => {
@@ -197,6 +278,13 @@ export function Chat({
   };
 
   const items = transcript?.items.length ?? 0;
+  const rows =
+    transcript &&
+    !(transcript.status === "loading" && items === 0) &&
+    !(transcript.status === "error" && items === 0)
+      ? chatRows(task, transcript, bot.name, now, online)
+      : [];
+  const running = rows.find((row) => row.kind === "running");
   let body: ReactNode;
   if (!online && (!transcript || items === 0)) {
     body = <Empty title={W.waitingTitle} body={W.waitingBody} />;
@@ -240,72 +328,93 @@ export function Chat({
         <Button label={W.tryAgain} onPress={reload} testID="chat-try-again" />
       </Empty>
     );
+  } else if (rows.length === 0) {
+    body = <Empty title={W.emptyTitle} body={emptyBody(bot.name)} />;
   } else {
-    const rows = chatRows(task, transcript, bot.name, now, online);
-    body =
-      rows.length === 0 ? (
-        <Empty title={W.emptyTitle} body={emptyBody(bot.name)} />
-      ) : (
-        <View style={{ gap: 4 }}>
-          {transcript.status === "error" && (
-            <View
-              accessibilityRole="alert"
-              style={{
-                backgroundColor: c["danger-soft"],
-                borderRadius: S["radius-md"],
-                padding: S["space-3"],
-                gap: S["space-2"],
-              }}
-            >
-              <Txt size={S["text-sm"]}>{W.refreshFailed}</Txt>
-              <Button label={W.tryAgain} onPress={reload} />
+    body = (
+      <View style={{ gap: 4 }}>
+        {transcript.status === "error" && (
+          <View
+            accessibilityRole="alert"
+            style={{
+              backgroundColor: c["danger-soft"],
+              borderRadius: S["radius-md"],
+              padding: S["space-3"],
+              gap: S["space-2"],
+            }}
+          >
+            <Txt size={S["text-sm"]}>{W.refreshFailed}</Txt>
+            <Button label={W.tryAgain} onPress={reload} />
+          </View>
+        )}
+        {rows.map((row, index) => {
+          const previous = rows[index - 1];
+          // 16 points when the sender changes, 4 within one sender.
+          const changes =
+            previous !== undefined &&
+            previous.kind !== "stamp" &&
+            (previous.kind === "user") !== (row.kind === "user");
+          return (
+            <View key={`${row.kind}:${row.id}`} style={{ marginTop: changes ? 12 : 0 }}>
+              <RowView row={row} />
             </View>
-          )}
-          {rows.map((row, index) => {
-            const previous = rows[index - 1];
-            // 16 points when the sender changes, 4 within one sender.
-            const changes =
-              previous !== undefined &&
-              previous.kind !== "stamp" &&
-              (previous.kind === "user") !== (row.kind === "user");
-            return (
-              <View key={`${row.kind}:${row.id}`} style={{ marginTop: changes ? 12 : 0 }}>
-                <RowView row={row} />
-              </View>
-            );
-          })}
-        </View>
-      );
+          );
+        })}
+      </View>
+    );
   }
+
+  const toEnd = () => {
+    following.current = true;
+    scroller.current?.scrollToEnd({ animated: true });
+  };
 
   return (
     <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1, backgroundColor: c.bg }}>
-      <Top
-        state={state}
-        taskKey={task.key}
-        bot={bot}
-        left={<BackButton label={`Back to ${bot.name}'s tasks`} onPress={onBack} />}
-      />
-      <ScrollView
-        ref={scroller}
-        testID="transcript"
-        accessibilityLabel="Conversation"
-        contentContainerStyle={{ paddingHorizontal: S["space-4"], paddingBottom: S["space-6"] }}
-        scrollEventThrottle={64}
-        onScroll={({ nativeEvent }) => {
-          const { contentOffset, contentSize, layoutMeasurement } = nativeEvent;
-          // Before the view has its height, nothing says where the reader is.
-          if (layoutMeasurement.height === 0) return;
-          atEnd.current =
-            contentSize.height - (contentOffset.y + layoutMeasurement.height) < NEAR_END;
-        }}
-        onContentSizeChange={() => {
-          if (atEnd.current) scroller.current?.scrollToEnd({ animated: false });
-        }}
-      >
-        <TaskLine task={task} />
-        {body}
-      </ScrollView>
+      <View style={{ flex: 1 }}>
+        <ScrollView
+          ref={scroller}
+          testID="transcript"
+          accessibilityLabel="Conversation"
+          contentContainerStyle={{
+            paddingTop: PROTECTED_BAND,
+            paddingHorizontal: S["space-4"],
+            paddingBottom: S["space-6"],
+          }}
+          scrollEventThrottle={64}
+          onScroll={({ nativeEvent }) => {
+            const { contentOffset, contentSize, layoutMeasurement } = nativeEvent;
+            // Before the view has its height, nothing says where the reader is.
+            if (layoutMeasurement.height === 0) return;
+            const end =
+              contentSize.height - (contentOffset.y + layoutMeasurement.height) < NEAR_END;
+            following.current = end;
+            setAtEnd(end);
+          }}
+          onLayout={({ nativeEvent }) => setViewHeight(nativeEvent.layout.height)}
+          onContentSizeChange={(_width, height) => {
+            setContentHeight(height);
+            if (following.current) scroller.current?.scrollToEnd({ animated: false });
+          }}
+        >
+          <TaskLine task={task} />
+          {body}
+        </ScrollView>
+        {!atEnd && contentHeight > viewHeight && (
+          <JumpToLatest
+            phrase={running?.kind === "running" ? running.text : null}
+            onPress={toEnd}
+          />
+        )}
+        <Top
+          overlay
+          state={state}
+          taskKey={task.key}
+          bot={bot}
+          left={<BackButton label={`Back to ${bot.name}'s tasks`} onPress={onBack} />}
+        />
+      </View>
+      <ReadOnly botName={bot.name} />
     </SafeAreaView>
   );
 }

@@ -28,9 +28,18 @@ export const CONVERSATION_WORDS = {
   emptyTitle: "Nothing here yet",
   refreshFailed: "Couldn't refresh this conversation. Showing what was loaded before.",
   loading: "Loading conversation",
+  jumpToLatest: "Jump to latest",
 } as const;
 
 /** A task with no messages yet, on a connection that reads. */
 export function emptyBody(botName: string): string {
   return `Messages between you and ${botName} in this task will appear here.`;
+}
+
+/** The read-only explanation where the composer goes, on a host that only reads. */
+export function readOnlyWords(botName: string): { lead: string; rest: string } {
+  return {
+    lead: "Read-only.",
+    rest: ` You can follow ${botName}'s work here. Approvals and questions aren't shown on this connection.`,
+  };
 }
