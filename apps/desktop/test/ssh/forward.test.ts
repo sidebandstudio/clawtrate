@@ -488,6 +488,19 @@ describe("the forward's attempts", () => {
     }
   });
 
+  it("keeps only the order of its retirements, not what each one ended with", async () => {
+    const h = harness([], ["no-answer", "no-answer", "no-answer", "http"]);
+    h.forward.open();
+    for (const wait of [1000, 2000, 4000]) {
+      await h.up();
+      await h.advance(wait);
+    }
+    // The barrier the next attempt waits on holds nothing of the processes retired before.
+    const barrier = (h.forward as unknown as { retiring: Promise<unknown> }).retiring;
+    expect(await barrier).toBeUndefined();
+    await h.forward.close();
+  });
+
   it("starts nothing after the old ssh ends when it was closed meanwhile", async () => {
     const { h, release } = await retiringSlowly();
     await h.advance(1000);

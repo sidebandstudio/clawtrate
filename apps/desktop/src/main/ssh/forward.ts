@@ -117,7 +117,7 @@ export class ForwardSupervisor {
   /** Everything this forward started that may still be running: retiring processes, probes, LOOKs. */
   private work: Promise<unknown> = Promise.resolve();
   /** The ending of a process this forward retired; the next attempt starts only after it. */
-  private retiring: Promise<unknown> = Promise.resolve();
+  private retiring: Promise<void> = Promise.resolve();
 
   private readonly deps: ForwardDeps;
 
@@ -300,7 +300,8 @@ export class ForwardSupervisor {
     this.generation++;
     if (process) {
       const ended = process.end();
-      this.retiring = Promise.allSettled([this.retiring, ended]);
+      // Only the order is kept: each barrier resolves to nothing, holding no earlier results.
+      this.retiring = Promise.allSettled([this.retiring, ended]).then(() => {});
       this.track(ended);
     }
     this.fail(cause);
