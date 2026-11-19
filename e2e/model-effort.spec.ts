@@ -7,7 +7,9 @@
 // model's record of which model and account each request asked for.
 //
 // The checks make a bot of their own, Quill, on `acme:work`, and remove it at
-// the end, so nothing they change reaches the bots of any other check.
+// the end, so nothing they change reaches the bots of any other check. The
+// task's checks come before the bot's: a write to a bot's entry makes the
+// gateway reload once its running turns end, which would cut into a turn.
 //
 // With CLAWTRATE_MODEL_SHOTS=<folder outside the repository>, it also saves
 // screenshots of what it checked there, at 1440 in both themes and 390 light.
@@ -178,57 +180,6 @@ test.afterAll(async () => {
   }
 });
 
-test("F-042 F-043: a bot's model and effort chosen in its settings are saved on its account and seen by a second connection", async () => {
-  test.setTimeout(180_000);
-  await page.getByRole("button", { name: "Show work panel" }).click();
-  await page.getByRole("tab", { name: "Settings" }).click();
-  const settings = page.getByTestId("bot-settings");
-  // Below admin the values are shown and the selects are disabled; admin is asked for, never taken.
-  await expect(settings.getByTestId("model-select")).toBeDisabled({ timeout: 30_000 });
-  await expect(settings.getByTestId("model-select")).toHaveAccessibleName("Model: dev-1");
-  await settings.getByRole("button", { name: "Request admin access" }).click();
-  await approve();
-  await expect(settings.getByTestId("model-select")).toBeEnabled({ timeout: 30_000 });
-  await expect(settings).toContainText("Acme's models, as the gateway lists them.");
-  await settings.getByTestId("model-select").click();
-  await page.getByRole("menuitemradio", { name: "dev-2" }).click();
-  await expect(page.getByTestId("work-announcer")).toHaveText("Model saved", { timeout: 30_000 });
-  await expect(settings.getByTestId("model-select")).toHaveAccessibleName("Model: dev-2");
-  // A write to a bot's entry can make the gateway reload: the next choice waits for the connection.
-  await expect(settings.getByTestId("effort-select")).toBeEnabled({ timeout: 60_000 });
-  await settings.getByTestId("effort-select").click();
-  await page.getByRole("menuitemradio", { name: "High" }).click();
-  await expect(page.getByTestId("work-announcer")).toHaveText("Effort saved", { timeout: 30_000 });
-  await shots(page, "bot-model-effort", DESKTOP_AND_PHONE);
-
-  // Written with its account and the empty fallback list, and read so by a second connection.
-  const config = (await admin.request<{ config: Json }>("config.get", {})).config;
-  const entry = ((config.agents as Json).entries as Json)[BOT] as Json;
-  expect(entry.model).toEqual({ primary: "acme/dev-2@acme:work", fallbacks: [] });
-  expect(entry.thinkingDefault).toBe("high");
-  const listed = await reader.request<{ agents: Json[] }>("agents.list", {});
-  const quill = listed.agents.find((each) => each.id === BOT)!;
-  // `agents.list` names a bot's model without its account (observed on 2026.10.6).
-  expect((quill.model as Json).primary).toBe("acme/dev-2");
-  expect(quill.thinkingDefault).toBe("high");
-
-  // Put back as the task checks below expect it: dev-1 and Low, the gateway's default effort.
-  await expect(settings.getByTestId("model-select")).toBeEnabled({ timeout: 60_000 });
-  await settings.getByTestId("model-select").click();
-  await page.getByRole("menuitemradio", { name: "dev-1" }).click();
-  await expect(settings.getByTestId("model-select")).toHaveAccessibleName("Model: dev-1", {
-    timeout: 30_000,
-  });
-  await expect(settings.getByTestId("effort-select")).toBeEnabled({ timeout: 60_000 });
-  await settings.getByTestId("effort-select").click();
-  await page.getByRole("menuitemradio", { name: "Low" }).click();
-  await expect(settings.getByTestId("effort-select")).toHaveAccessibleName("Effort: Low", {
-    timeout: 30_000,
-  });
-  await page.getByRole("tab", { name: "Details" }).click();
-  await page.getByRole("button", { name: "Hide work panel" }).click();
-});
-
 test("F-042 F-044 F-045: a task's model changed during a turn is held, saved when the turn ends, and the next turn runs on it; the line is there live and after a reload", async () => {
   test.setTimeout(240_000);
   await expect(chip(page)).toHaveAccessibleName(/^Model for this task: acme\/dev-1, /, {
@@ -242,7 +193,7 @@ test("F-042 F-044 F-045: a task's model changed during a turn is held, saved whe
   // Not written while the turn runs: the gateway still has dev-1, and the turn asks for dev-1 only.
   expect((await row()).model).toBe("dev-1");
   await expect.poll(async () => (await row()).status, { timeout: 90_000 }).not.toBe("running");
-  await expect.poll(async () => (await row()).model, { timeout: 30_000 }).toBe("dev-2");
+  await expect.poll(async () => (await row()).model, { timeout: 90_000 }).toBe("dev-2");
   const first = await requestsFor(TASK);
   expect(first.length).toBeGreaterThan(0);
   expect(first.every((each) => each.model === "dev-1")).toBe(true);
@@ -329,6 +280,70 @@ test("F-043 F-045: a held change of effort that the gateway refuses says why, an
   await page.getByRole("button", { name: "Hide work panel" }).click();
   // Put back for any later check: dev-1, as the bot has it.
   await admin.request("sessions.patch", { key: TASK, model: "acme/dev-1@acme:work" });
+});
+
+test("F-042 F-043: a bot's model and effort chosen in its settings are saved on its account and seen by a second connection", async () => {
+  test.setTimeout(180_000);
+  await page.getByRole("button", { name: "Show work panel" }).click();
+  await page.getByRole("tab", { name: "Settings" }).click();
+  const settings = page.getByTestId("bot-settings");
+  // Below admin the values are shown and the selects are disabled; admin is asked for, never taken.
+  await expect(settings.getByTestId("model-select")).toBeDisabled({ timeout: 30_000 });
+  await expect(settings.getByTestId("model-select")).toHaveAccessibleName("Model: dev-1");
+  await settings.getByRole("button", { name: "Request admin access" }).click();
+  await approve();
+  await expect(settings.getByTestId("model-select")).toBeEnabled({ timeout: 30_000 });
+  await expect(settings).toContainText("Acme's models, as the gateway lists them.");
+  await settings.getByTestId("model-select").click();
+  await page.getByRole("menuitemradio", { name: "dev-2" }).click();
+  await expect(page.getByTestId("work-announcer")).toHaveText("Model saved", { timeout: 30_000 });
+  await expect(settings.getByTestId("model-select")).toHaveAccessibleName("Model: dev-2");
+  // A write to a bot's entry can make the gateway reload: the next choice waits for the connection.
+  await expect(settings.getByTestId("effort-select")).toBeEnabled({ timeout: 60_000 });
+  await settings.getByTestId("effort-select").click();
+  await page.getByRole("menuitemradio", { name: "High" }).click();
+  await expect(page.getByTestId("work-announcer")).toHaveText("Effort saved", { timeout: 30_000 });
+  await shots(page, "bot-model-effort", DESKTOP_AND_PHONE);
+
+  // Written with its account and the empty fallback list, and read so by a second connection.
+  const config = (await admin.request<{ config: Json }>("config.get", {})).config;
+  const entry = ((config.agents as Json).entries as Json)[BOT] as Json;
+  expect(entry.model).toEqual({ primary: "acme/dev-2@acme:work", fallbacks: [] });
+  expect(entry.thinkingDefault).toBe("high");
+  const listed = await reader.request<{ agents: Json[] }>("agents.list", {});
+  const quill = listed.agents.find((each) => each.id === BOT)!;
+  // `agents.list` names a bot's model without its account (observed on 2026.10.6).
+  expect((quill.model as Json).primary).toBe("acme/dev-2");
+  expect(quill.thinkingDefault).toBe("high");
+
+  // Put back as the task checks below expect it: dev-1 and Low, the gateway's default effort.
+  await expect(settings.getByTestId("model-select")).toBeEnabled({ timeout: 60_000 });
+  await settings.getByTestId("model-select").click();
+  await page.getByRole("menuitemradio", { name: "dev-1" }).click();
+  await expect(settings.getByTestId("model-select")).toHaveAccessibleName("Model: dev-1", {
+    timeout: 30_000,
+  });
+  await expect(settings.getByTestId("effort-select")).toBeEnabled({ timeout: 60_000 });
+  await settings.getByTestId("effort-select").click();
+  await page.getByRole("menuitemradio", { name: "Low" }).click();
+  await expect(settings.getByTestId("effort-select")).toHaveAccessibleName("Effort: Low", {
+    timeout: 30_000,
+  });
+  await page.getByRole("tab", { name: "Details" }).click();
+  await page.getByRole("button", { name: "Hide work panel" }).click();
+  // The writes make the gateway reload: the next check starts once it answers again.
+  await expect
+    .poll(
+      () =>
+        reader.request("agents.list", {}).then(
+          () => true,
+          () => false,
+        ),
+      {
+        timeout: 120_000,
+      },
+    )
+    .toBe(true);
 });
 
 test("F-042 F-043: a read-only connection sees the task's model and effort, and no control", async ({
