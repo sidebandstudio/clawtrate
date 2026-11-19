@@ -48,6 +48,58 @@
   const queuedRow = (kind = "Queued", actions = CT.button("Send now") + CT.button("Cancel", 'data-variant="quiet"')) =>
     CT.shelfRow({ lead: glyph("queued"), text: `<b>${kind}</b> <span>Then check the certificate warning too.</span>`, actions });
 
+  // Every state of lifecycle.html (docs/design/bots-lifecycle.md, section 14), for the Bot lifecycle section.
+  const st = "panel=open&tab=settings";
+  const lifecycleStates = [
+    ["lc=intro", "Introducing the primary bot"],
+    ["lc=choose", "Choose a primary bot"],
+    ["lc=choose&prefs=device", "Choose a primary bot: this device only"],
+    ["lc=choose&primfail=1", "Choose a primary bot: saving fails (choose one, Confirm)"],
+    ["lc=choose&primconflict=1", "Choose a primary bot: another device chose first (choose one, Confirm)"],
+    ["lc=choose&access=read", "Choose a primary bot on a read-only connection"],
+    ["primary=pip&bot=pip&" + st, "Pip as the primary bot, its Manage group"],
+    ["bot=juniper&" + st, "Juniper's settings: About, Manage, the hero editable"],
+    ["bot=juniper&" + st + "&access=read", "Juniper's settings, read-only"],
+    ["bot=juniper&" + st + "&lc=picture", "The picture editor: Bot"],
+    ["bot=juniper&" + st + "&lc=picture&picfail=1", "The picture editor: refused (pick, Set picture)"],
+    ["bot=juniper&" + st + "&lc=picture&picfail=dropped", "The picture editor: taken but not shown (pick, Set picture)"],
+    ["bot=juniper&" + st + "&lc=picture&ptab=generate", "Generate: no image tool"],
+    ["bot=juniper&" + st + "&lc=picture&ptab=generate&imagetool=1", "Generate: the tool offered"],
+    ["bot=juniper&" + st + "&lc=picture&ptab=generate&imagetool=unknown", "Generate: not known yet"],
+    ["bot=juniper&" + st + "&lc=picture&ptab=upload", "Upload"],
+    ["bot=juniper&" + st + "&lc=picture&ptab=upload&upload=crop", "Upload: cropping"],
+    ["bot=juniper&" + st + "&lc=picture&ptab=upload&upload=toolarge", "Upload: too large"],
+    ["bot=juniper&" + st + "&lc=picture&ptab=upload&upload=notimage", "Upload: not an image"],
+    ["bot=juniper&" + st + "&edit=name", "The name in place"],
+    ["bot=otto&" + st + "&edit=name&namefail=1", "The name in place: refused (type, Enter)"],
+    ["bot=juniper&" + st + "&edit=label", "The label in place"],
+    ["bot=juniper&" + st + "&bview=instructions", "Instructions"],
+    ["bot=juniper&" + st + "&bview=instructions&instr=conflict", "Instructions: changed on the gateway meanwhile"],
+    ["bot=juniper&" + st + "&bview=instructions&instrfail=1", "Instructions: the save fails (edit, Save)"],
+    ["bot=juniper&" + st + "&bview=instructions&access=read", "Instructions, read-only"],
+    ["bot=juniper&task=j1&rolechange=1", "A change to the instructions, in the conversation"],
+    ["bot=juniper&task=j1&rolechange=1&undo=conflict", "... its Undo refused"],
+    ["bot=juniper&task=j1&rolechange=1&rolediff=nocopy", "... with no earlier copy"],
+    ["bot=juniper&task=j1&rolechange=1&access=read", "... on a read-only connection"],
+    ["lc=duplicate&delbot=pip", "Duplicate Pip"],
+    ["lc=duplicate&delbot=pip&dupacct=own", "Duplicate Pip: its account is its own"],
+    ["lc=duplicate&delbot=pip&dup=partial", "Duplicate Pip: made without its instructions (Duplicate)"],
+    ["lc=duplicate&delbot=pip&dup=refused", "Duplicate Pip: the gateway refuses (Duplicate)"],
+    ["lc=export&delbot=marlow", "Export a bot installed from a package"],
+    ["lc=export&delbot=pip", "Export a bot made by the create method"],
+    ["lc=export&delbot=otto", "Export a bot with no record"],
+    ["lc=import", "Import a bot"],
+    ["lc=delete&delbot=pip&delread=loading", "Delete: reading"],
+    ["lc=delete&delbot=pip&delread=failed", "Delete: the read failed"],
+    ["lc=delete&delbot=pip", "Delete Pip"],
+    ["lc=delete&delbot=pip&files=1", "Delete Pip, with its folders"],
+    ["lc=delete&delbot=pip&shared=1&files=1", "Delete Pip, its workspace shared with Juniper"],
+    ["lc=delete&delbot=pip&files=1&delresult=partial", "Delete: one folder left (Delete Pip)"],
+    ["lc=delete&delbot=pip&delresult=uncertain", "Delete: the answer lost (Delete Pip)"],
+    ["lc=delete&delbot=pip&delresult=refused", "Delete: refused (Delete Pip)"],
+    ["bot=otto&" + st + "&onlybot=1", "The gateway's only bot"],
+  ];
+
   // Every state of controls.html (docs/design/controls.md, section 23), for the Controls section.
   const tab = "bot=otto&panel=open&tab=settings";
   const controlStates = [
@@ -1345,6 +1397,17 @@
           name: "Every state of the controls pages",
           note: "Each link opens controls.html in that state, as section 23 of controls.md lists them.",
           html: `<ul class="c-state-links">${controlStates.map(([q, label]) => `<li><a href="controls.html?${q}">${label}</a></li>`).join("")}</ul>`,
+        },
+      ],
+    },
+    {
+      id: "lifecycle",
+      title: "Bot lifecycle",
+      note: "The primary bot, editing a bot, a change to its instructions, and duplicate, export, import and delete, from docs/design/bots-lifecycle.md. Each link opens lifecycle.html in that state, as section 14 lists them.",
+      specimens: [
+        {
+          name: "Every state of the lifecycle page",
+          html: `<ul class="c-state-links">${lifecycleStates.map(([q, label]) => `<li><a href="lifecycle.html?${q}">${label}</a></li>`).join("")}</ul>`,
         },
       ],
     },
