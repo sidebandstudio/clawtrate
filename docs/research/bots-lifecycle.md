@@ -8,7 +8,7 @@ How to read the citations, as in `gateway-capabilities.md` and `setup-flow.md`:
 - `schema` is `protocol.schema.json` in `@openclaw/gateway-protocol@2026.10.6`.
 - **Live** means it was run on a development instance, and the result is quoted. **Source** means it was read in shipped code or bundled docs only, and is marked read-only-from-source where a design state rests on it.
 
-Where things were run: one named development instance of this checkout, `pnpm dev-gateway start --instance d6life`, with its scripted model and its four seeded bots (Juniper, whose id is `main`, Marlow, Otto and Pip), reset afterwards. The probes are in `bots-lifecycle/probe.ts`. They connect through the development tool's own paired operator (`openOperator` in `tools/dev-gateway/src/cli.ts`), make their own scratch bots named "Probe …", and put back what they change. Two commands need the gateway's experimental package commands, which the tool's runner does not switch on; the probe runs those with that instance's own profile, state folder and environment, after the runner's guard has accepted the instance. Paths below are relative to the instance's state folder (`<state>`) or the home folder (`~`). No real provider, account or network was used.
+Where things were run: one named development instance of this checkout, `pnpm dev-gateway start --instance d6life` (started twice, the second time for sections 10 and 11), with its scripted model and its four seeded bots (Juniper, whose id is `main`, Marlow, Otto and Pip), reset afterwards. The probes are in `bots-lifecycle/probe.ts`. They connect through the development tool's own paired operator (`openOperator` in `tools/dev-gateway/src/cli.ts`), make their own scratch bots named "Probe …", and put back what they change. Two commands need the gateway's experimental package commands, which the tool's runner does not switch on; the probe runs those with that instance's own profile, state folder and environment, after the runner's guard has accepted the instance. Paths below are relative to the instance's state folder (`<state>`) or the home folder (`~`). No real provider, account or network was used.
 
 ## Summary
 
@@ -22,9 +22,11 @@ Where things were run: one named development instance of this checkout, `pnpm de
 | 6   | Instructions, separate from memory                               | `agents.files.get`/`set` cover exactly AGENTS.md, SOUL.md, IDENTITY.md, USER.md, BOOTSTRAP.md and MEMORY.md; anything else is refused. `set` with a stale `expectedHash` is refused with the current hash; a read-only connection can read and not write. **Live.** Instructions are AGENTS.md and SOUL.md; memory is MEMORY.md, USER.md and `memory/`. **Source.**                                                                                                                                             | 5       |
 | 7   | What is a role change "from chat" on this gateway?              | A run's file tool writing to the bot's AGENTS.md or SOUL.md. The tool events carry the tool's name and its path. **Live** (with a write to another file: no scenario writes AGENTS.md). Nothing announces a change to these files: a write by another client produced no event on a second connection. **Live.**                                                                                                                                                                                                  | 6       |
 | 8   | Duplicate                                                         | No method. A copy is `agents.create` (a new id from the name; a taken id is refused), then `agents.files.set` with the new bot's hash, then `config.patch` for its settings; each read back. **Live.** Not atomic. Memory, tasks, routines, channel routes, other workspace files and the bot's own sign-ins are not carried by these calls.                                                                                                                                                                    | 7       |
-| 9   | Export and import                                                | The gateway knows one format, the experimental Claw package, made and read only by its command line. It exports only a bot installed from a package (`createdVia: "claw"` in `agents.list`); a bot made with `agents.create` cannot be put in one (`agentDir` is not representable), and the seeded bots could not either. A package is added with a dry run that prints the plan and a digest, then an apply with that digest; connected clients get `config.changed` and the bot is listed. **Live.**        | 8       |
+| 9   | Export and import                                                | The gateway knows one format, the experimental Claw package, made and read only by its command line. It exports only a bot installed from a package (`createdVia: "claw"` in `agents.list`); a bot made with `agents.create` cannot be put in one (`agentDir` is not representable), and the seeded bots could not either. A package is added with a dry run that prints the plan and a digest, then an apply with that digest; connected clients get `config.changed` and the bot is listed. **Live.** Clawtrate's own file, with Duplicate's reads and writes, carries what Duplicate does (section 10).        | 8       |
 | 10  | What `agents.delete` removes, and what it can leave half done    | It removes the bot's settings, channel routes, routines and saved command approvals, and drops its tasks from every list, with or without files. With `deleteFiles` it moves the workspace, the bot's own folder and the transcripts to the gateway user's Trash, except a folder another bot still uses. Omitting `deleteFiles` means `true`. A folder it cannot move comes back in `failed[]` inside an `ok` answer; calling it again finishes the same delete. **Live.**                                   | 9       |
 | 11  | When does `agents.delete` refuse?                                 | For the bot that holds the gateway's shared sign-ins (`main` here), the only bot, and the owner of inherited sign-ins: before anything changes. **Live** for the first, **source** for the others.                                                                                                                                                                                                                                                                                                           | 9       |
+| 12  | Does a bot written to a Clawtrate file and read back into a new bot come out the same? | Yes, by the gateway's reads: AGENTS.md and SOUL.md (equal hashes), label, picture, model, effort, tools and skills. A file of an unknown version, a field of the wrong type and a file over 5 MiB are refused before anything is read as a bot. **Live.** | 10 |
+| 13  | What does the gateway do with an instruction file at and over its size limit? | It takes 2,097,152 bytes of UTF-8. One byte more, in ASCII or in three-byte characters, is refused with `UNAVAILABLE` "Workspace document exceeds its write bound", and the file is left as it was. **Live.** | 11 |
 
 ## 1. The primary bot
 
@@ -226,7 +228,7 @@ claws export probe-imported: exit 0   exported files: [ 'CLAW.md', 'package.json
 
 ### For the design
 
-Clawtrate cannot export or import a bot itself, and a file format of its own would be one the gateway does not know. Export shows the gateway's command for a bot with `createdVia: "claw"`; for a bot made by `agents.create` it says the gateway cannot export it; for a bot with no record it shows the gateway's own check (`claws migrate <id> --dry-run`). Import shows the dry run and the apply; the gateway's printed plan is the review, and the new bot appears when `agents.list` lists it. F-049's export of a Clawtrate-made bot and F-265's in-app review are not possible on this gateway.
+The gateway's package cannot hold a bot Clawtrate makes. So Clawtrate has a file of its own (section 10), the reading and writing halves of a copy (section 7), and it says that the gateway does not know that format. The package stays as a second way: export shows the gateway's command for a bot with `createdVia: "claw"`; for a bot made by `agents.create` it says the gateway cannot export it; for a bot with no record it shows the gateway's own check (`claws migrate <id> --dry-run`). Import shows the dry run and the apply; the gateway's printed plan is the review, and the new bot appears when `agents.list` lists it. Through the package alone, F-049's export of a Clawtrate-made bot and F-265's in-app review are not possible on this gateway; through Clawtrate's file they are (section 10).
 
 ## 9. Delete
 
@@ -260,8 +262,61 @@ And the shared sign-ins' bot:
 agents.delete main {deleteFiles:false}: refused: Agent "main" owns the legacy shared auth store and cannot be deleted. Run openclaw doctor --fix to migrate shared auth, then retry. INVALID_REQUEST
 ```
 
-A delete with files moved the probe's folders into the Trash of the user the gateway runs as; nothing else in that folder was touched.
+A delete with files moved the probe's folders into the Trash of the user the gateway runs as (`~/.Trash` on macOS, `movePathToTrash` in `@openclaw/fs-safe`), which is where they stay. A person should know this: **a deleted bot's folders, its workspace and memory among them, can be restored from the Trash on the gateway's machine until that Trash is emptied**, and until then they still take their space there. The probe's folders were left in that Trash; nothing in it was touched.
 
 ### For the design
 
-The confirmation names, from reads made when it opens, what goes at once (settings and routes, the tasks from every list, each routine, saved approvals) and what goes only with the folder option (the workspace with its memory, the bot's own folder, the transcripts), and says which folder stays because another bot uses it. Clawtrate always sends `deleteFiles` explicitly. Afterwards it reads `agents.list`, `sessions.list` and `cron.list` again and shows those with the answer's `removed` and `failed`; a folder in `failed` is named with its reason, and "Try again" repeats the delete, which the gateway resumes from its journal. A refusal is quoted and nothing is said to have changed. Not observed: `purgeFailed`, and an answer lost mid-delete; for the second, the design reads `agents.list` and offers the same retry.
+The confirmation says the folders can be restored from that Trash until it is emptied, and names, from reads made when it opens, what goes at once (settings and routes, the tasks from every list, each routine, saved approvals) and what goes only with the folder option (the workspace with its memory, the bot's own folder, the transcripts), and says which folder stays because another bot uses it. Clawtrate always sends `deleteFiles` explicitly. Afterwards it reads `agents.list`, `sessions.list` and `cron.list` again and shows those with the answer's `removed` and `failed`; a folder in `failed` is named with its reason, and "Try again" repeats the delete, which the gateway resumes from its journal. A refusal is quoted and nothing is said to have changed. Not observed: `purgeFailed`, and an answer lost mid-delete; for the second, the design reads `agents.list` and offers the same retry.
+
+## 10. A Clawtrate bot file, written and read back
+
+### What was asked
+
+Whether Duplicate's reads, written to a file, and Duplicate's writes, read from one, give a new bot equal to the first in everything the file carries (`docs/design/bots-lifecycle.md` §9): the picture and label, the model and effort by name, AGENTS.md and SOUL.md, and the tools and skills settings.
+
+### Live
+
+`probe.ts file`. A scratch source bot is given a known value for every field; the file is written from what the gateway returns for it (`agents.list`, `config.get`, `agents.files.get`), read back and checked (the probe's `parseBotFile`, the design's checks in their order), what this gateway offers is read (`models.list`, `tools.catalog`, `skills.status`, all `operator.read`), and a new bot is made with `agents.create {name, model, avatar}`, `agents.files.set` for each file with the new bot's hash, and one `config.patch` for the label, effort, tools and skills. Then both bots are read again the same way:
+
+```
+skills.status lists: 51 skills, first: ["1password","apple-notes","apple-reminders"]
+source settings written: ok
+file written: {"bytes":16543,"keys":["name","label","picture","model","effort","instructions","tools","skills"],"model":"scripted/dev-1","effort":"high","label":"Planning","pictureChars":16022,"skills":["1password","apple-notes"],"tools":{"deny":["browser"]}}
+offered here: {"model":true,"deniedToolsKnown":[["browser",true]],"skills":[["1password",true],["apple-notes",true]]}
+a name already taken, agents.create {name: "Probe Source"}: refused
+agents.create {"name":"Probe Imported","model":"scripted/dev-1","avatar":"data:image/png;base64,… (16022 characters)"}: {"ok":true,"agentId":"probe-imported",…}
+agents.files.set AGENTS.md: true
+agents.files.set SOUL.md: true
+settings written: ok
+by the reads, the new bot's fields equal the source's: {"AGENTS.md":["753a804de42c","753a804de42c",true],"SOUL.md":["51ed00f66ab4","51ed00f66ab4",true],"label":["Planning","Planning"],"picture":[16022,16022,true],"model":["scripted/dev-1","scripted/dev-1"],"effort":["high","high"],"tools":true,"skills":true}
+format version 2: refused, format version 2 is not one this version reads
+a label that is a number: refused, label is not text of at most 256 characters
+a file over 5 MiB: refused, the file is 5242881 bytes; at most 5242880
+```
+
+The skills used are among the 51 the gateway's skill list returned; the file's model is the source's without an account suffix (the development gateway's scripted model has none). The development gateway offers one model, so a file naming a model it does not offer was not run; the review leaves such a model out (`agents.create` without `model`), which the design says rather than guesses.
+
+### For the design
+
+A Clawtrate file is as strong as Duplicate and no stronger: separate writes, each read back, no atomic creation. The limits it checks before reading anything as a bot are the host's save limit for the whole file (5 MiB, `MAX_SAVE_BYTES`), the engine's name cap for text fields (256), what Clawtrate keeps of a picture (32,768 characters; section 3), and the gateway's bound for each instruction file (section 11).
+
+## 11. An instruction file at its size bound
+
+### What the gateway does
+
+`agents.files.set` refuses content over 2,097,152 bytes, by `Buffer.byteLength` of the UTF-8 text, before it writes (`<openclaw>/dist/agents-DAPW-UCQ.mjs` line 478). The check throws instead of answering with an error shape, so it reaches the client as `UNAVAILABLE`.
+
+### Live
+
+`probe.ts limits`, on a scratch bot:
+
+```
+agents.files.set 2,097,152 bytes of ASCII (the bound): ok file now: {"size":2097152,"changed":true}
+agents.files.set 2,097,153 bytes of ASCII (one over): {"message":"Error: Workspace document exceeds its write bound","code":"UNAVAILABLE"} file now: {"size":2097152,"changed":false}
+agents.files.set 699,051 euro signs: 699,051 characters, 2,097,153 bytes: {"message":"Error: Workspace document exceeds its write bound","code":"UNAVAILABLE"} file now: {"size":2097152,"changed":false}
+```
+
+### For the design
+
+The bound is in bytes, not characters, and a refused write leaves the file as it was. Clawtrate checks the byte length itself before sending, in the Instructions page and in an import, so this refusal is never the way a person learns of the limit. `UNAVAILABLE` here is not an unknown outcome: the read after it shows the file unchanged. A file this size is also far past what the gateway loads into a task (20,000 characters, section 5).
+

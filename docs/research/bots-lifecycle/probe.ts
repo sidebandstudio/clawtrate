@@ -24,9 +24,13 @@
 //   delete   delete with and without files, a shared workspace, a routine and a
 //            task, a refusal, a partial failure and its retry
 //   claws    the gateway's own package format: export, then a dry-run add
+//   file     a bot written to Clawtrate's own file and read back into a new bot,
+//            compared field by field by the gateway's reads
+//   limits   an instruction file at, and one byte over, the gateway's bound
 
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -85,7 +89,8 @@ const pngDataUrl = (bytes: number) => {
 };
 async function create(o: Op, name: string, extra: Record<string, unknown> = {}) {
   const r = await call(o, "agents.create", { name, ...extra });
-  say(`agents.create ${JSON.stringify({ name, ...extra })}:`, r.ok ? r.value : r.error);
+  const shown = Object.fromEntries(Object.entries({ name, ...extra }).map(([k, v]) => [k, typeof v === "string" && v.length > 80 ? `${v.slice(0, 22)}… (${v.length} characters)` : v]));
+  say(`agents.create ${JSON.stringify(shown)}:`, r.ok ? r.value : r.error);
   return r.ok ? String(r.value.agentId) : null;
 }
 async function removeQuietly(o: Op, id: string | null) {
@@ -405,7 +410,159 @@ async function claws() {
   }
 }
 
-const experiments: Record<string, () => Promise<unknown>> = { list, primary, edit, chat, image, copy, delete: remove, claws };
+// Clawtrate's own bot file (docs/design/bots-lifecycle.md, section 9): what
+// Duplicate reads, written to a file; what Duplicate writes, read from one.
+const FILE_LIMITS = { file: 5 * 1024 * 1024, text: 256, picture: 32_768, instruction: 2_097_152, settings: 65_536, skills: 256 };
+type BotFile = {
+  format: "clawtrate.bot";
+  formatVersion: 1;
+  writtenBy: string;
+  bot: { name: string; label: string | null; picture: string | null; model: string | null; effort: string | null; instructions: { "AGENTS.md": string; "SOUL.md": string }; tools: Record<string, unknown> | null; skills: string[] | null };
+};
+async function readBot(o: Op, id: string): Promise<BotFile> {
+  const a = (await agent(o, id))!;
+  const entry = (await configOf(o)).config.agents?.entries?.[id] ?? {};
+  const file = async (name: string) => ((await must(o, "agents.files.get", { agentId: id, name })).file as { content?: string }).content ?? "";
+  const model = (a.model as { primary?: string } | undefined)?.primary ?? null;
+  return {
+    format: "clawtrate.bot",
+    formatVersion: 1,
+    writtenBy: "Clawtrate 0.0.0-research",
+    bot: {
+      name: String(a.name ?? id),
+      label: (a.identity?.theme as string | undefined) ?? null,
+      picture: (a.identity?.avatarUrl as string | undefined) || null,
+      model: model ? model.replace(/@.*$/, "") : null, // by name: never the account
+      effort: entry.thinkingDefault ?? null,
+      instructions: { "AGENTS.md": await file("AGENTS.md"), "SOUL.md": await file("SOUL.md") },
+      tools: entry.tools ?? null,
+      skills: entry.skills ?? null,
+    },
+  };
+}
+/** Refuses with a reason before anything is read as a bot. */
+function parseBotFile(raw: Buffer): BotFile {
+  if (raw.length > FILE_LIMITS.file) throw new Error(`the file is ${raw.length} bytes; at most ${FILE_LIMITS.file}`);
+  const v = JSON.parse(raw.toString("utf8")) as Record<string, any>;
+  if (v.format !== "clawtrate.bot") throw new Error("not a Clawtrate bot file");
+  if (v.formatVersion !== 1) throw new Error(`format version ${v.formatVersion} is not one this version reads`);
+  const b = v.bot ?? {};
+  const str = (x: unknown, max: number, what: string, nullable = true) => {
+    if (x === null && nullable) return;
+    if (typeof x !== "string" || x.length > max) throw new Error(`${what} is not text of at most ${max} characters`);
+  };
+  str(b.name, FILE_LIMITS.text, "name", false);
+  str(b.label, FILE_LIMITS.text, "label");
+  str(b.model, FILE_LIMITS.text, "model");
+  str(b.effort, FILE_LIMITS.text, "effort");
+  str(b.picture, FILE_LIMITS.picture, "picture");
+  if (b.picture && !/^data:image\/(png|jpeg|webp|gif);base64,/.test(b.picture)) throw new Error("picture is not an image");
+  for (const f of ["AGENTS.md", "SOUL.md"]) {
+    if (typeof b.instructions?.[f] !== "string" || Buffer.byteLength(b.instructions[f]) > FILE_LIMITS.instruction) throw new Error(`${f} is not text of at most ${FILE_LIMITS.instruction} bytes`);
+  }
+  if (b.tools !== null && (typeof b.tools !== "object" || Array.isArray(b.tools) || JSON.stringify(b.tools).length > FILE_LIMITS.settings)) throw new Error("tools is not a settings object");
+  if (b.skills !== null && (!Array.isArray(b.skills) || b.skills.length > FILE_LIMITS.skills || b.skills.some((x: unknown) => typeof x !== "string" || x.length > FILE_LIMITS.text))) throw new Error("skills is not a list of names");
+  return v as BotFile;
+}
+const hash = (t: string) => createHash("sha256").update(t).digest("hex").slice(0, 12);
+
+async function file() {
+  const o = await op("file");
+  const dir = mkdtempSync(join(tmpdir(), "bot-file-"));
+  const made: (string | null)[] = [];
+  try {
+    // A source bot with every field the file carries set to a known value.
+    const picture = pngDataUrl(12_000);
+    const src = await create(o, "Probe Source", { avatar: picture });
+    made.push(src);
+    if (!src) return;
+    const skillsRead = await must(o, "skills.status", { agentId: src });
+    const skillNames = ((skillsRead.skills as { name?: string; skillKey?: string }[] | undefined) ?? []).map((x) => x.name ?? x.skillKey).filter(Boolean) as string[];
+    say("skills.status lists:", skillNames.length, "skills, first:", skillNames.slice(0, 3));
+    const fresh = async (id: string, name: string) => ((await must(o, "agents.files.get", { agentId: id, name })).file as { hash: string }).hash;
+    await must(o, "agents.files.set", { agentId: src, name: "AGENTS.md", content: "# Probe Source\n\nPlan the week.\nKeep Thursday clear — always.\n", expectedHash: await fresh(src, "AGENTS.md") });
+    await must(o, "agents.files.set", { agentId: src, name: "SOUL.md", content: "Calm, brief, kind.\n", expectedHash: await fresh(src, "SOUL.md") });
+    const tools = { deny: ["browser"] };
+    const set = await patch(o, { agents: { entries: { [src]: { identity: { theme: "Planning" }, thinkingDefault: "high", tools, skills: skillNames.slice(0, 2) } } } });
+    say("source settings written:", set.ok ? "ok" : set.error);
+
+    // Export: read, then write the file.
+    const out = await readBot(o, src);
+    const path = join(dir, "probe-source.clawtrate-bot.json");
+    writeFileSync(path, JSON.stringify(out, null, 2));
+    say("file written:", { bytes: statSync(path).size, keys: Object.keys(out.bot), model: out.bot.model, effort: out.bot.effort, label: out.bot.label, pictureChars: out.bot.picture?.length, skills: out.bot.skills, tools: out.bot.tools });
+
+    // Import: read and check the file, check what this gateway offers, then Duplicate's writing half.
+    const back = parseBotFile(readFileSync(path));
+    const models = ((await must(o, "models.list", {})).models as { provider: string; id: string }[]).map((m) => `${m.provider}/${m.id}`);
+    const catalog = JSON.stringify(await must(o, "tools.catalog", { agentId: src }));
+    say("offered here:", { model: models.includes(back.bot.model!), deniedToolsKnown: (back.bot.tools?.deny as string[]).map((t) => [t, catalog.includes(`"id":"${t}"`)]), skills: back.bot.skills!.map((x) => [x, skillNames.includes(x)]) });
+    say("a name already taken, agents.create {name: \"Probe Source\"}:", (await call(o, "agents.create", { name: back.bot.name })).ok ? "made" : "refused");
+    const id = await create(o, "Probe Imported", { model: back.bot.model, avatar: back.bot.picture });
+    made.push(id);
+    if (!id) return;
+    for (const f of ["AGENTS.md", "SOUL.md"] as const)
+      say(`agents.files.set ${f}:`, (await call(o, "agents.files.set", { agentId: id, name: f, content: back.bot.instructions[f], expectedHash: await fresh(id, f) })).ok);
+    const wrote = await patch(o, { agents: { entries: { [id]: { identity: { theme: back.bot.label }, thinkingDefault: back.bot.effort, tools: back.bot.tools, skills: back.bot.skills } } } });
+    say("settings written:", wrote.ok ? "ok" : wrote.error);
+
+    // Read both bots again and compare what the file carries.
+    const a = await readBot(o, src);
+    const b = await readBot(o, id);
+    const same = (x: unknown, y: unknown) => JSON.stringify(x) === JSON.stringify(y);
+    say("by the reads, the new bot's fields equal the source's:", {
+      "AGENTS.md": [hash(a.bot.instructions["AGENTS.md"]), hash(b.bot.instructions["AGENTS.md"]), a.bot.instructions["AGENTS.md"] === b.bot.instructions["AGENTS.md"]],
+      "SOUL.md": [hash(a.bot.instructions["SOUL.md"]), hash(b.bot.instructions["SOUL.md"]), a.bot.instructions["SOUL.md"] === b.bot.instructions["SOUL.md"]],
+      label: [a.bot.label, b.bot.label],
+      picture: [a.bot.picture?.length, b.bot.picture?.length, a.bot.picture === b.bot.picture],
+      model: [a.bot.model, b.bot.model],
+      effort: [a.bot.effort, b.bot.effort],
+      tools: same(a.bot.tools, b.bot.tools),
+      skills: same(a.bot.skills, b.bot.skills),
+    });
+
+    // Refusals before anything is read as a bot.
+    const tryParse = (what: string, raw: Buffer) => {
+      try {
+        parseBotFile(raw);
+        say(`${what}: accepted`);
+      } catch (e) {
+        say(`${what}: refused, ${(e as Error).message}`);
+      }
+    };
+    tryParse("format version 2", Buffer.from(JSON.stringify({ ...out, formatVersion: 2 })));
+    tryParse("a label that is a number", Buffer.from(JSON.stringify({ ...out, bot: { ...out.bot, label: 7 } })));
+    tryParse("a file over 5 MiB", Buffer.alloc(FILE_LIMITS.file + 1, 32));
+  } finally {
+    for (const x of made) await removeQuietly(o, x);
+    rmSync(dir, { recursive: true, force: true });
+    await o.close();
+  }
+}
+
+async function limits() {
+  const o = await op("limits");
+  const id = await create(o, "Probe Limits");
+  try {
+    if (!id) return;
+    const get = async () => (await must(o, "agents.files.get", { agentId: id, name: "AGENTS.md" })).file as { hash: string; size: number };
+    for (const [what, content] of [
+      ["2,097,152 bytes of ASCII (the bound)", "a".repeat(2_097_152)],
+      ["2,097,153 bytes of ASCII (one over)", "a".repeat(2_097_153)],
+      ["699,051 euro signs: 699,051 characters, 2,097,153 bytes", "€".repeat(699_051)],
+    ] as const) {
+      const before = await get();
+      const r = await call(o, "agents.files.set", { agentId: id, name: "AGENTS.md", content, expectedHash: before.hash });
+      const after = await get();
+      say(`agents.files.set ${what}:`, r.ok ? "ok" : r.error, "file now:", { size: after.size, changed: after.hash !== before.hash });
+    }
+  } finally {
+    await removeQuietly(o, id);
+    await o.close();
+  }
+}
+
+const experiments: Record<string, () => Promise<unknown>> = { list, primary, edit, chat, image, copy, delete: remove, claws, file, limits };
 if (!experiment || !experiments[experiment]) {
   console.log(`usage: probe.ts <${Object.keys(experiments).join("|")}> --instance <name>`);
   process.exit(1);
