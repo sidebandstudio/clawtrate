@@ -240,7 +240,16 @@ export function stillCounting(cacheStatus: unknown): boolean {
  */
 export function figureOf(result: unknown): UsageFigure {
   const record = asRecord(result) ?? {};
-  if (!asRecord(record.totals)) throw new Error("The gateway's answer had no totals.");
+  const totals = asRecord(record.totals);
+  if (!totals) throw new Error("The gateway's answer had no totals.");
+  // A total the gateway gave, or every part of one: an empty totals record is no zero.
+  const given = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0;
+  if (
+    !given(totals.totalTokens) &&
+    !["input", "output", "cacheRead", "cacheWrite"].every((part) => given(totals[part]))
+  )
+    throw new Error("The gateway's answer had no token totals.");
   return {
     tokens: tokensOf(record.totals),
     cost: costOf(record.totals),

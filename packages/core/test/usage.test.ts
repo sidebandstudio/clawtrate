@@ -195,6 +195,16 @@ describe("the gateway's figures", () => {
   it("F-232: an answer without totals is a failed read, never zero tokens and an estimate of $0.00", async () => {
     expect(() => figureOf({ updatedAt: 1, cacheStatus: fresh })).toThrow("had no totals");
     expect(() => figureOf(null)).toThrow("had no totals");
+    // Totals with no token count in them are no zero either; a reported zero is one.
+    expect(() => figureOf({ totals: {}, cacheStatus: fresh })).toThrow("had no token totals");
+    expect(() => figureOf({ totals: { input: 5 }, cacheStatus: fresh })).toThrow(
+      "had no token totals",
+    );
+    expect(figureOf({ totals: { totalTokens: 0 }, cacheStatus: fresh }).tokens.total).toBe(0);
+    expect(
+      figureOf({ totals: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0 }, cacheStatus: fresh })
+        .tokens.total,
+    ).toBe(5);
     // In a report: the bot whose answer had none is unavailable, the others are read.
     const gateway = fakeGateway();
     const empty: typeof gateway.request = async (method, raw) =>
