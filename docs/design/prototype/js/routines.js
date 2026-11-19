@@ -304,6 +304,8 @@
   }
   if (S.view === "checkins") S.bot ||= "juniper";
   const isAdmin = () => S.access === "admin";
+  // live=0: the check-in's reply was read from history, without its run seen live.
+  const liveCheckin = P.get("live") !== "0";
   const schedulerOff = () => S.state === "scheduler-off";
   let lastFocus = null;
 
@@ -352,7 +354,8 @@
         const busy = running && running.bot === b.id;
         // checkin=running: a run whose agent events carry isHeartbeat is in progress.
         const checking = P.get("checkin") === "running" && b.id === "juniper";
-        const line = busy ? `${glyph("working")}<span class="bot-preview">Running ${esc(running.name)}</span>` : checking ? `${glyph("working")}<span class="bot-preview">Checking in</span>` : `<span class="bot-preview">${esc(b.preview)}</span>`;
+        const preview = S.view === "convo" && b.id === "juniper" ? `${liveCheckin ? "Checked in: " : ""}The rebate form is due in three days and still needs the model number.` : b.preview;
+        const line = busy ? `${glyph("working")}<span class="bot-preview">Running ${esc(running.name)}</span>` : checking ? `${glyph("working")}<span class="bot-preview">Checking in</span>` : `<span class="bot-preview">${esc(preview)}</span>`;
         const open = runRow.length > 0;
         const tasks = open
           ? `<ul class="task-list" aria-label="${b.name}'s tasks">` +
@@ -366,7 +369,7 @@
             `</ul>`
           : "";
         return (
-          `<li class="bot-group"${open ? ' data-open="true"' : ""}><button type="button" class="bot" data-bot-row="${b.id}" data-r="open-bot" data-id="${b.id}" aria-label="${esc(`${b.name}, ${busy ? `running ${running.name}` : checking ? "checking in" : b.preview}`)}" data-testid="bot">` +
+          `<li class="bot-group"${open ? ' data-open="true"' : ""}><button type="button" class="bot" data-bot-row="${b.id}" data-r="open-bot" data-id="${b.id}" aria-label="${esc(`${b.name}, ${busy ? `running ${running.name}` : checking ? "checking in" : preview}`)}" data-testid="bot">` +
           `<span class="avatar" data-bot="${b.id}"></span><span class="bot-text"><span class="bot-line"><span class="bot-name">${b.name}</span><time class="bot-time">${b.time}</time></span>` +
           `<span class="bot-line">${line}</span></span></button>${tasks}</li>`
         );
@@ -452,8 +455,7 @@
     let text;
     if (!c || !c.every) text = c ? `${name} doesn't check in on a schedule.` : `${name} doesn't check in. Without a setting of its own, only the gateway's default bot checks in.`;
     else if (c.every === DAY) text = `Once a day, ${name} looks for anything that needs you.`;
-    else if (c.every === 30 * MIN) text = `Every 30 minutes, ${name} looks for anything that needs you, and stays quiet when nothing does.`;
-    else text = `${everyWords(c.every)}, ${name} looks for anything that needs you, and stays quiet when nothing does.`;
+    else text = `${everyWords(c.every)}, ${name} looks for anything that needs you. Its prompt asks it to stay quiet when nothing does.`;
     const next = c && c.every ? (schedulerOff() ? "The gateway's scheduler is off, so scheduled check-ins don't run." : `Next check-in ${clock(at(0, 10, 30))} · In ${name}'s main conversation`) : "";
     const zones = [...new Set(routines.filter((r) => r.bot === b && r.schedule.tz).map((r) => city(r.schedule.tz)))];
     return (
@@ -683,8 +685,10 @@
       `<div class="r-convo transcript-inner" data-testid="convo">` +
       `<div class="turn" data-role="user"><div class="msg" data-role="user"><div class="bubble">What should I ask an installer before signing anything?</div></div></div>` +
       `<div class="turn" data-role="assistant"><div class="msg" data-role="assistant"><div class="bubble">Ask these five, and get the answers in writing.</div></div></div>` +
-      `<div class="turn" data-role="assistant" data-testid="from-history"><p class="event-line">${icon("clock")} Juniper wrote this on its own · 6:00 AM</p><div class="msg" data-role="assistant"><div class="bubble">The installer's quote you saved expires on Friday.</div></div></div>` +
-      `<div class="turn" data-role="assistant" data-testid="checkin"><p class="event-line">${icon("clock")} Checked in · 9:30 AM</p><div class="msg" data-role="assistant"><div class="bubble">The rebate form is due in three days and still needs the model number.</div></div></div>` +
+      // From history with no live record of its run: an ordinary reply, labelled nothing.
+      `<div class="turn" data-role="assistant" data-testid="from-history"><div class="msg" data-role="assistant"><div class="bubble">The installer's quote you saved expires on Friday.</div></div></div>` +
+      // "Checked in" only for a run whose agent events carried isHeartbeat while Clawtrate watched.
+      `<div class="turn" data-role="assistant" data-testid="checkin">${liveCheckin ? `<p class="event-line">${icon("clock")} Checked in · 9:30 AM</p>` : ""}<div class="msg" data-role="assistant"><div class="bubble">The rebate form is due in three days and still needs the model number.</div></div></div>` +
       `<div class="turn" data-role="assistant" data-testid="created-card"><p class="event-line">${icon("clock")} Created routine <a class="r-link" data-r="open" data-id="digest" tabindex="0" role="link">Morning digest</a></p></div>` +
       `<div class="turn" data-role="assistant" data-testid="changed-card"><p class="event-line">${icon("clock")} Changed routine <a class="r-link" data-r="open" data-id="backup" tabindex="0" role="link">Nightly backup check</a></p></div>` +
       `</div>`;
@@ -1135,8 +1139,8 @@
     const sub = {
       off: `${name} doesn't check in on a schedule.`,
       daily: `Once a day, ${name} looks for anything that needs you.`,
-      asneeded: `Every 30 minutes, ${name} looks for anything that needs you, and stays quiet when nothing does. Most check-ins say nothing.`,
-      every: `${name} looks for anything that needs you as often as you choose, and stays quiet when nothing does.`,
+      asneeded: `Every 30 minutes, ${name} looks for anything that needs you. Its prompt asks it to stay quiet when nothing does.`,
+      every: `${name} looks for anything that needs you as often as you choose. Its prompt asks it to stay quiet when nothing does.`,
     };
     const defaultBots = Object.entries(checkins).filter(([, c]) => c && c.source === "default" && c.every).map(([b]) => b);
     let catchNote = "";
@@ -1146,7 +1150,7 @@
         : note(`<p>${defaultBots.map(botName).join(" and ")} checks in now through the gateway's default. Saving also gives ${defaultBots.map(botName).join(" and ")} a setting of its own with the same cadence, so it keeps checking in.</p>`);
     }
     const promptNote = C.prompt.trim() && !/NO_REPLY/.test(C.prompt)
-      ? `<p class="r-error" id="ci-prompt-note" data-testid="prompt-note">Without "If nothing needs attention, reply NO_REPLY", every check-in will post a message.</p>` : "";
+      ? `<p class="r-error" id="ci-prompt-note" data-testid="prompt-note">This prompt doesn't ask ${esc(name)} to reply NO_REPLY when nothing needs attention, as the gateway's own prompt does, so ${esc(name)} may answer every check-in.</p>` : "";
     const saving = C.status === "saving";
     const dis = saving ? " disabled" : "";
     ciDialog.innerHTML =
