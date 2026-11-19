@@ -1182,6 +1182,8 @@ class ViewerSession implements BridgeSession {
       case "readMachines":
         return client.readMachines();
       case "setCommandMachine":
+        // A machine without its id is refused, never read as the gateway's machine.
+        if (command.host === "node" && !command.nodeId) throw new Error("invalid machine");
         return client.setCommandMachine(
           command.botId,
           command.host === "node" && command.nodeId

@@ -2,7 +2,8 @@
 // (controls.md section 15): asked for only by name, on top of what the device
 // holds, never by itself, and held once granted.
 import { describe, expect, it } from "vitest";
-import { parseBridgeCommand } from "../src/bridge.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
+import type { ClawtrateClient } from "../src/client.ts";
 import {
   ADMIN_SCOPES,
   INTERACTIVE_SCOPES,
@@ -125,6 +126,37 @@ describe("device access", () => {
       client.stop();
     });
   }
+
+  it("F-046: a session refuses a node choice that names no machine, and sends nothing", async () => {
+    const sent: unknown[] = [];
+    const client = {
+      setCommandMachine: (...args: unknown[]) => {
+        sent.push(args);
+        return Promise.resolve();
+      },
+      withdraw: () => {},
+    } as unknown as ClawtrateClient;
+    const session = createBridgeSession(client);
+    await expect(
+      session.apply({
+        type: "setCommandMachine",
+        botId: "otto",
+        host: "node",
+        nodeId: null,
+        baseHash: "c1",
+      }),
+    ).rejects.toThrow("invalid machine");
+    expect(sent).toEqual([]);
+    await session.apply({
+      type: "setCommandMachine",
+      botId: "otto",
+      host: "gateway",
+      nodeId: null,
+      baseHash: "c1",
+    });
+    expect(sent).toEqual([["otto", { host: "gateway" }, "c1"]]);
+    session.dispose();
+  });
 
   it("F-157: the bridge takes the request by name and nothing else", () => {
     expect(parseBridgeCommand({ type: "requestAccess", tier: "pairing" })).toEqual({
