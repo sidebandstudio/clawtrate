@@ -4,27 +4,37 @@
 // starts a named development gateway instance of its own, and runs the checks
 // in `simulator/` (Vitest driving Maestro flows). Afterwards it shuts down and
 // deletes its device and resets its instance, also when a check fails or the
-// run is interrupted. A run killed outright leaves its record in
-// `build/check-run.json`, and the next run removes what that record names.
+// run is interrupted; a termination stops the driver with the checks. A run
+// killed outright leaves its record in `build/check-run.json`, and the next run
+// removes what that record names, once it has proved each is that run's own
+// (check-run.ts). A device or an instance it cannot remove is reported, and the
+// record kept.
 //
 // Set CLAWTRATE_IOS_SHOTS=<folder> to also save each screen in light and dark.
 
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readDevConnection } from "../../desktop/src/host/runtime.ts";
 import { APP_PATH, BUILD_DIR, BUNDLE_ID } from "./build.ts";
+import {
+  deviceName,
+  instanceName,
+  newRun,
+  ownsDevice,
+  readRecord,
+  runnerAlive,
+  startTime,
+  writeRecord,
+  type CheckRecord,
+} from "./check-run.ts";
 import { findDeveloperDir } from "./xcode.ts";
 
 const REPO = join(import.meta.dirname, "../../..");
 const RECORD = join(BUILD_DIR, "check-run.json");
-const DEVICE_PREFIX = "Clawtrate checks ";
 /** iPhone sizes the checks prefer, in order. */
 const DEVICE_TYPES = ["iPhone 17", "iPhone 16", "iPhone 17 Pro", "iPhone 18 Pro"];
-
-type Record = { pid: number; device: string | null; instance: string | null };
 
 /** The newest file or folder under ~/.local/share matching a name, for a tool installed there. */
 function local(pattern: RegExp, inner: string): string | null {
@@ -87,28 +97,6 @@ function chooseDevice(env: NodeJS.ProcessEnv): { runtime: string; type: string; 
   throw new Error(`No installed iOS Simulator runtime supports ${wanted.join(" or ")}.`);
 }
 
-/** Whether a process runs: signal 0 reaches it, or it exists under another user. */
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-function readRecord(): Record | null {
-  try {
-    return JSON.parse(readFileSync(RECORD, "utf8")) as Record;
-  } catch {
-    return null;
-  }
-}
-
-function writeRecord(record: Record) {
-  writeFileSync(RECORD, `${JSON.stringify(record, null, 2)}\n`);
-}
-
 function devGateway(...args: string[]): number {
   return (
     spawnSync(process.execPath, [join(REPO, "tools/dev-gateway/src/cli.ts"), ...args], {
@@ -118,29 +106,52 @@ function devGateway(...args: string[]): number {
   );
 }
 
-/** Remove what a record names: its device, only if it is still one of these checks' own, and its instance. */
-function clean(record: Record, env: NodeJS.ProcessEnv) {
+/**
+ * Remove what a record names, each only once it is proven the run's own: the
+ * device by the identifier and name the run recorded, the instance through the
+ * dev tool with the run's id. A step that fails is reported and the record kept.
+ */
+function clean(record: CheckRecord, env: NodeJS.ProcessEnv): boolean {
+  let ok = true;
   if (record.device) {
     const devices = JSON.parse(simctl(env, "list", "devices", "-j")) as {
       devices: { [runtime: string]: Array<{ udid: string; name: string; state: string }> };
     };
-    const mine = Object.values(devices.devices)
+    const found = Object.values(devices.devices)
       .flat()
       .find((d) => d.udid === record.device);
-    if (mine && mine.name.startsWith(DEVICE_PREFIX)) {
-      if (mine.state !== "Shutdown")
-        spawnSync("xcrun", ["simctl", "shutdown", mine.udid], { env, stdio: "ignore" });
-      spawnSync("xcrun", ["simctl", "delete", mine.udid], { env, stdio: "ignore" });
-      console.log(`Removed the Simulator device ${mine.name}.`);
+    if (found && !ownsDevice(record, found)) {
+      console.error(
+        `The device ${found.udid} is named "${found.name}", not this run's; it was left alone.`,
+      );
+      ok = false;
+    } else if (found) {
+      if (found.state !== "Shutdown") {
+        const shut = spawnSync("xcrun", ["simctl", "shutdown", found.udid], {
+          env,
+          encoding: "utf8",
+        });
+        if (shut.status !== 0) {
+          console.error(`Could not shut down ${found.name}: ${shut.stderr.trim()}`);
+          ok = false;
+        }
+      }
+      const gone = spawnSync("xcrun", ["simctl", "delete", found.udid], { env, encoding: "utf8" });
+      if (gone.status !== 0) {
+        console.error(`Could not delete ${found.name} (${found.udid}): ${gone.stderr.trim()}`);
+        ok = false;
+      } else console.log(`Removed the Simulator device ${found.name}.`);
     }
   }
-  if (record.instance) {
-    if (devGateway("reset", "--instance", record.instance) !== 0)
-      throw new Error(
-        `Could not reset the development gateway instance ${record.instance}; reset it by hand.`,
-      );
+  if (devGateway("reset", "--instance", record.instance, "--run-id", record.run) !== 0) {
+    console.error(
+      `Could not reset the development gateway instance ${record.instance}; it was left as it is.`,
+    );
+    ok = false;
   }
-  rmSync(RECORD, { force: true });
+  if (ok) rmSync(RECORD, { force: true });
+  else console.error(`The record ${RECORD} is kept, so a later run can try again.`);
+  return ok;
 }
 
 async function main(): Promise<number> {
@@ -150,34 +161,49 @@ async function main(): Promise<number> {
   const env: NodeJS.ProcessEnv = { ...process.env, DEVELOPER_DIR: developerDir };
   const { maestro, javaHome } = tools(env);
 
-  const previous = readRecord();
-  if (previous && previous.pid !== process.pid && alive(previous.pid))
+  const previous = readRecord(RECORD);
+  if (previous && runnerAlive(previous))
     throw new Error(`Another pnpm mobile:check (PID ${previous.pid}) is running in this checkout.`);
   if (previous) {
     console.log("Cleaning up after an earlier run that did not finish…");
-    clean(previous, env);
+    if (!clean(previous, env))
+      throw new Error("An earlier run's device or instance could not be removed.");
   }
 
-  const run = randomBytes(3).toString("hex");
-  const record: Record = { pid: process.pid, device: null, instance: `ios-${run}` };
+  const run = newRun();
+  const record: CheckRecord = {
+    run,
+    pid: process.pid,
+    started: startTime(process.pid) ?? "",
+    device: null,
+    instance: instanceName(run),
+  };
   let child: ChildProcess | null = null;
   let stopping = false;
   const stop = (signal: NodeJS.Signals) => {
     if (stopping) return;
     stopping = true;
     console.log(`\n${signal}: stopping the checks and cleaning up…`);
-    if (child?.pid) child.kill("SIGTERM");
+    // The checks run in a process group of their own, Vitest and the Maestro
+    // driver it starts: the group this run made is stopped, and nothing else.
+    if (child?.pid) {
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {
+        // Already gone.
+      }
+    }
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  // Recorded before it exists, so a killed run's instance is reset by the next.
-  writeRecord(record);
+  // Recorded before either exists, so a killed run's device and instance are found by the next.
+  writeRecord(RECORD, record);
   try {
     const choice = chooseDevice(env);
-    const name = `${DEVICE_PREFIX}${run}`;
+    const name = deviceName(run);
     record.device = simctl(env, "create", name, choice.type, choice.runtime).trim();
-    writeRecord(record);
+    writeRecord(RECORD, record);
     console.log(`Device: ${name} (${choice.label}), ${record.device}`);
     simctl(env, "boot", record.device);
     simctl(env, "bootstatus", record.device, "-b");
@@ -187,7 +213,7 @@ async function main(): Promise<number> {
     console.log(
       `Starting the development gateway instance ${record.instance} (it seeds its bots; a few minutes)…`,
     );
-    if (devGateway("start", "--instance", record.instance!) !== 0)
+    if (devGateway("start", "--instance", record.instance, "--run-id", run) !== 0)
       throw new Error("The development gateway did not start.");
     const gateway = readDevConnection(REPO, { instance: record.instance });
     if (!gateway) throw new Error(`The instance ${record.instance} is not running.`);
@@ -199,6 +225,7 @@ async function main(): Promise<number> {
       {
         cwd: REPO,
         stdio: "inherit",
+        detached: true,
         env: {
           ...env,
           JAVA_HOME: javaHome,
@@ -207,7 +234,7 @@ async function main(): Promise<number> {
           CLAWTRATE_IOS_MAESTRO: maestro,
           CLAWTRATE_IOS_DEVICE: record.device,
           CLAWTRATE_IOS_BUNDLE: BUNDLE_ID,
-          CLAWTRATE_IOS_INSTANCE: record.instance!,
+          CLAWTRATE_IOS_INSTANCE: record.instance,
           CLAWTRATE_IOS_GATEWAY: gateway.url,
           CLAWTRATE_IOS_TOKEN: gateway.token,
         },
@@ -218,16 +245,18 @@ async function main(): Promise<number> {
     );
     return stopping ? 130 : code;
   } finally {
-    clean(record, env);
+    if (!clean(record, env)) process.exitCode = 1;
   }
 }
 
-main().then(
-  (code) => {
-    process.exitCode = code;
-  },
-  (error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exitCode = 1;
-  },
-);
+if (process.argv[1] === import.meta.filename) {
+  main().then(
+    (code) => {
+      process.exitCode = process.exitCode || code;
+    },
+    (error: unknown) => {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    },
+  );
+}
