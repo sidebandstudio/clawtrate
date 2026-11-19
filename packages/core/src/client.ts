@@ -4951,10 +4951,14 @@ export class ClawtrateClient {
     // Only tasks this client follows keep a stream baseline: the text, never the message.
     const projected = this.streams.project(payload);
     const text = payload.state === "delta" ? projected : null;
-    const before = payload.state === "error" ? this.runShape(key, runId) : null;
+    // A chat frame that ends the run (an error, an abort, a final reply) is kept when the engine
+    // took it: on a Stop it is often the event behind the stop, before the lifecycle end.
+    const ends =
+      payload.state === "error" || payload.state === "aborted" || payload.state === "final";
+    const before = ends ? this.runShape(key, runId) : null;
     this.updateActivity(key, (activity, ctx) => applyChatEvent(activity, payload, text, ctx));
-    if (payload.state === "error" && this.runShape(key, runId) !== before)
-      this.noteLifecycle(key, runId, "chat (error)", payload);
+    if (ends && this.runShape(key, runId) !== before)
+      this.noteLifecycle(key, runId, `chat (${String(payload.state)})`, payload);
     // final, aborted or error: the durable transcript now owns the text.
     if (payload.state !== "delta" && payload.state !== "status") this.scheduleHistory(key);
   }

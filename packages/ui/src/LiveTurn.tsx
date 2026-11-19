@@ -318,9 +318,12 @@ export function RunEnding({
   );
 }
 
+/** The kept frames that end a run; a retried attempt's error ends nothing. */
+const ENDED_BY = /^(agent \(lifecycle (end|error)\)|chat \((error|aborted|final)\))$/;
+
 /** A failed turn's Raw: the event that ended it, as the gateway sent it, else what started it. */
 function turnErrorRaw(run: Run) {
-  const ended = (run.lifecycle ?? []).filter((each) => /error|end/.test(each.via));
+  const ended = (run.lifecycle ?? []).filter((each) => ENDED_BY.test(each.via));
   return runRaw(run.id, ended.length > 0 ? ended : (run.lifecycle ?? null));
 }
 

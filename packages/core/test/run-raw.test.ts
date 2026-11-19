@@ -4,7 +4,7 @@
 // the row its end was read from.
 
 import { describe, expect, it } from "vitest";
-import { agentEvent, grantingGateway, openTask } from "./client-harness.ts";
+import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { sleep, until } from "./fake-gateway.ts";
 
 describe("F-094: a run's own events, for its Raw", () => {
@@ -87,6 +87,32 @@ describe("F-094: Raw holds only what the engine took, and says where it came fro
     const { client, transcript } = await openTask({ gateway });
     const run = transcript().runs.find((each) => each.id === "run-h");
     expect(run?.lifecycle).toEqual([{ via: "chat.history (the run's last row)", record: row }]);
+    client.stop();
+  });
+  it("a run stopped by the chat's abort keeps that frame; the lifecycle end after it, which the engine does not take, is not kept as its end", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.emit("agent", agentEvent("run-5", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.id === "run-5"));
+    const aborted = {
+      runId: "run-5",
+      sessionKey: KEY,
+      seq: 2,
+      state: "aborted",
+      stopReason: "rpc",
+    };
+    gateway.emit("chat", aborted);
+    await until(() => transcript().runs.find((run) => run.id === "run-5")?.state === "stopped");
+    gateway.emit(
+      "agent",
+      agentEvent("run-5", 3, "lifecycle", { phase: "end", aborted: true, stopReason: "rpc" }),
+    );
+    await sleep(30);
+    const run = transcript().runs.find((each) => each.id === "run-5")!;
+    expect(run.lifecycle?.map((each) => each.via)).toEqual([
+      "agent (lifecycle start)",
+      "chat (aborted)",
+    ]);
+    expect(run.lifecycle?.at(-1)?.record).toEqual(aborted);
     client.stop();
   });
 });
