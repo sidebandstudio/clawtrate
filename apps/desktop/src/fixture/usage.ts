@@ -8,6 +8,7 @@
 //   &usage=periodfail                                         reading Today fails
 //   &usage=retargeted                                         the routine now runs in a shared task
 //   &usage=ages                                               Pip's figure is an hour older; the routine's budget is in Tokyo
+//   &usage=routinesfail                                       the first read of the routines fails
 //   &budget=none|warn|reached|daily|invalid                   Otto's budget
 //   &plimit=near|reached                                      a provider's reported limit
 //   &uview=usage                                              open Otto's Usage page
@@ -39,6 +40,7 @@ export type UsageParams = {
     | "periodfail"
     | "retargeted"
     | "ages"
+    | "routinesfail"
     | null;
   budget: "none" | "warn" | "reached" | "daily" | "invalid" | null;
   plimit: "near" | "reached" | null;
@@ -64,6 +66,7 @@ export function usageParams(params: URLSearchParams): UsageParams {
       "periodfail",
       "retargeted",
       "ages",
+      "routinesfail",
     ]),
     budget: pick("budget", ["none", "warn", "reached", "daily", "invalid"]),
     plimit: pick("plimit", ["near", "reached"]),
@@ -295,6 +298,9 @@ function report(
  * The usage commands, answered on the fixture's state. Returns undefined for
  * a command that is not one of them.
  */
+/** How many times the routines were read, for `usage=routinesfail`. */
+let routineReads = 0;
+
 export function usageCommand(
   command: BridgeCommand,
   get: () => ClawtrateState,
@@ -325,6 +331,9 @@ export function usageCommand(
     case "refreshUsage":
       return Promise.resolve();
     case "listRoutines":
+      routineReads += 1;
+      if (params.usage === "routinesfail" && routineReads === 1)
+        return Promise.reject(new Error("cron.list timed out after 60 seconds."));
       return Promise.resolve([{ id: "weekly-cleanup", name: "Weekly cleanup", botId: "otto" }]);
     case "changeBudget": {
       const state = get();

@@ -127,17 +127,22 @@ function Budgets({
   const [editing, setEditing] = useState<string | null>(null);
   const [target, setTarget] = useState<string>("");
   const [routines, setRoutines] = useState<Routine[] | null>(null);
+  // A failed read of the routines is said, and asked again with Try again: never an empty list.
+  const [routinesError, setRoutinesError] = useState<string | null>(null);
   useEffect(() => {
-    if (!adding || routines) return;
+    if (!adding || routines || routinesError) return;
     let live = true;
     bridge
       .invoke({ type: "listRoutines" })
       .then((list) => live && setRoutines(list))
-      .catch(() => live && setRoutines([]));
+      .catch(
+        (failure: unknown) =>
+          live && setRoutinesError(failure instanceof Error ? failure.message : String(failure)),
+      );
     return () => {
       live = false;
     };
-  }, [adding, routines, bridge]);
+  }, [adding, routines, routinesError, bridge]);
   const name = (botId: string) => bots.find((bot) => bot.id === botId)?.name ?? botId;
   if (usage?.budgetsStatus === "unavailable")
     return (
@@ -287,9 +292,17 @@ function Budgets({
               ))}
             </select>
           </label>
-          {routines === null && (
+          {routines === null && !routinesError && (
             <p className="b-hint" style={{ margin: 0 }}>
               Reading the routines…
+            </p>
+          )}
+          {routinesError && (
+            <p className="b-hint" style={{ margin: 0 }} data-testid="routines-error">
+              Couldn't read the routines: {routinesError}{" "}
+              <button type="button" className="link-button" onClick={() => setRoutinesError(null)}>
+                Try again
+              </button>
             </p>
           )}
           {chosen ? (

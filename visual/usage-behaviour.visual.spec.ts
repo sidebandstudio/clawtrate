@@ -351,6 +351,23 @@ test("F-237: each settled bar names its own time, and each saved budget its own 
   );
 });
 
+test("F-234: a failed read of the routines is said and can be tried again, never shown as no routines (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write&usage=routinesfail`, "light");
+  const settings = await settingsUsage(page);
+  await settings.getByTestId("budget-add").click();
+  const error = settings.getByTestId("routines-error");
+  await expect(error).toContainText(
+    "Couldn't read the routines: cron.list timed out after 60 seconds.",
+  );
+  await error.getByRole("button", { name: "Try again" }).click();
+  await expect(
+    settings.getByTestId("budget-target").locator("option", { hasText: "Weekly cleanup" }),
+  ).toHaveCount(1);
+  await expect(settings.getByTestId("routines-error")).toHaveCount(0);
+});
+
 test("F-235: provider limits carry their window, reset, the gateway's time and no account (fixture)", async ({
   page,
 }) => {
