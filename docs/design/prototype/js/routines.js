@@ -184,6 +184,11 @@
   const botName = (id) => bots.find((b) => b.id === id)?.name ?? id;
 
   const run = (daysAgo, h, min, extra = {}) => ({ at: at(daysAgo, h, min), status: "ok", completion: "succeeded", dur: 2.6, tokens: 200, inT: 120, outT: 80, manual: false, ...extra });
+  const PREAMBLE =
+    "This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly NO_REPLY.";
+  // A run's `history` is what cron.history returned for its runId: the first message as
+  // the gateway recorded it, and the reply. Runs without it returned no messages.
+  const recorded = (instruction, reply) => ({ message: `${instruction}\n\n${PREAMBLE}`, reply });
   const DIGEST_SUMMARY =
     "Three notes from yesterday. The draft for Sam is ready to send. Two emails need an answer today: the venue's question about numbers and the printer's quote.";
   let routines = [
@@ -193,8 +198,9 @@
       payload: { kind: "agentTurn", message: "Summarise the notes I added yesterday, and list anything I need to answer today." },
       sessionTarget: "isolated", delivery: "none", updatedAtMs: NOW - 3 * DAY,
       runs: [
-        run(0, 8, 0, { summary: DIGEST_SUMMARY }),
-        run(1, 11, 40, { manual: true, dur: 3.1, tokens: 214 }),
+        run(0, 8, 0, { summary: DIGEST_SUMMARY, history: recorded("Summarise the notes I added yesterday, and list anything I need to answer today.", DIGEST_SUMMARY) }),
+        // Recorded before the instruction was last edited: the run shows what it was sent.
+        run(1, 11, 40, { manual: true, dur: 3.1, tokens: 214, summary: "Two notes from yesterday, both about the venue.", history: recorded("Summarise the notes I added yesterday.", "Two notes from yesterday, both about the venue.") }),
         run(1, 8, 0, { completion: "failed", delivery: "No channel is set up to deliver to." }),
         run(2, 8, 0, { status: "error", completion: "failed", error: "The model didn't answer within 120 seconds.\nThe gateway will try again at the next run." }),
         run(5, 8, 0, { status: "skipped", completion: "unknown" }),
@@ -282,6 +288,12 @@
   if (S.state === "paused") r0().enabled = false;
   if (S.state === "noruns") r0().runs = [];
   if (S.state === "deleted") S.deleted = true;
+  // A successful one-shot: the gateway sends finished, then removed, and keeps nothing of it.
+  if (S.state === "ran-once") {
+    r0().runs = [run(0, 9, 0, { summary: "Posted the reminder in Marlow's main conversation.", dur: 0.4, tokens: 0 })];
+    r0().gone = true;
+    S.deleted = "once";
+  }
   if (S.state === "failed") r0().runs.unshift(run(0, 9, 0, { status: "error", completion: "failed", error: "The model didn't answer within 120 seconds." }));
   const ci = P.get("checkins");
   if (ci) {
@@ -333,7 +345,8 @@
     const running = routines.find((r) => r.running);
     $("#bot-list").innerHTML = bots
       .map((b) => {
-        const runRow = routines.filter((r) => r.bot === b.id && r.runs.length && r.runs[0].at > NOW - DAY);
+        // An isolated agent routine's latest run of the last 24 hours (Clawtrate's choice).
+        const runRow = routines.filter((r) => !r.gone && r.bot === b.id && r.sessionTarget === "isolated" && r.payload.kind === "agentTurn" && r.runs.length && r.runs[0].at > NOW - DAY);
         const busy = running && running.bot === b.id;
         const line = busy ? `${glyph("working")}<span class="bot-preview">Running ${esc(running.name)}</span>` : `<span class="bot-preview">${esc(b.preview)}</span>`;
         const open = runRow.length > 0;
@@ -413,7 +426,7 @@
 
   // The list --------------------------------------------------------------------------------------------
 
-  const visibleRoutines = () => routines.filter((r) => !S.bot || r.bot === S.bot);
+  const visibleRoutines = () => routines.filter((r) => !r.gone && (!S.bot || r.bot === S.bot));
   function botSelect() {
     return `<button type="button" class="b-select" data-r="bot-menu" aria-haspopup="menu" aria-expanded="false" aria-label="Bots: ${S.bot ? botName(S.bot) : "All bots"}">` +
       `<span>${S.bot ? botName(S.bot) : "All bots"}</span>${icon("chevron")}</button>`;
@@ -568,7 +581,9 @@
     else if (!r.enabled) state = `<span>Paused. It won't run until resumed.</span>`;
     else if (lastRun(r) && outcome(lastRun(r)).mark === "failed") state = `${glyph("failed")}<span>The last run failed.</span>`;
     else state = `<span>Runs ${esc(wordsText(r.schedule)).replace(/^./, (c) => c.toLowerCase())}.</span>`;
-    let body = S.deleted ? note(`<p><b>This routine was deleted.</b> It won't run again.</p><div class="b-actions">${button("Back to routines", 'data-r="back"')}</div>`, "warn") : "";
+    let body = S.deleted === "once"
+      ? note(`<p><b>This routine ran once, and the gateway removed it.</b> Its run succeeded ${esc(when(lastRun(r).at))}. The gateway keeps nothing more of it, so once you leave this page it isn't shown again.</p><div class="b-actions">${button("Back to routines", 'data-r="back"')}</div>`)
+      : S.deleted ? note(`<p><b>This routine was deleted.</b> It won't run again.</p><div class="b-actions">${button("Back to routines", 'data-r="back"')}</div>`, "warn") : "";
     body += `<p class="r-state" role="status" data-testid="state-line">${state}${S.already ? `<span class="r-already">It's already running.</span>` : ""}</p>`;
     // Instruction
     let instruction;
@@ -608,8 +623,6 @@
 
   // A run --------------------------------------------------------------------------------------------------
 
-  const PREAMBLE =
-    "This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly NO_REPLY.";
   function renderRun() {
     const r = r0();
     const i = S.run ?? 0;
@@ -617,22 +630,27 @@
     const head =
       `<header class="r-head">${backButton("Back to the routine", "back-to-routine")}<div class="r-titles"><h1 id="view-title">${esc(`${r.name} · ${when(x.at, VIEWER, true)}`)}</h1>` +
       `<p><span class="avatar" data-bot="${r.bot}"></span>${botName(r.bot)}</p></div><span class="spacer"></span>${button("All runs", 'data-size="sm" data-r="back-to-routine"', "quiet")}</header>`;
-    const kept = i === 0 || x.running;
-    const rs = S.runstate || (x.running ? "running" : kept ? "" : "pruned");
-    const message = r.payload.message || r.payload.text;
+    // A transcript is shown only when cron.history returned this run's messages. A run in a
+    // shared conversation, or a job that is not an agent turn, has no conversation of its own.
+    const where = r.payload.kind === "command" ? "command" : r.payload.kind !== "agentTurn" || r.sessionTarget !== "isolated" ? "main" : "";
+    const rs = S.runstate || (x.running ? "running" : where || (x.history ? "" : "none"));
+    const returned = () => `<p class="r-returned-head">What the run returned:</p><p data-testid="returned">${esc(x.summary || outcome(x).text)}</p>`;
     let body = "";
     if (rs === "loading") body = `<div class="r-convo" aria-busy="true"><span class="skeleton" style="display:block;width:70%;height:16px;margin:24px 0"></span><span class="skeleton" style="display:block;width:50%;height:16px"></span></div>`;
     else if (rs === "error") body = `<div class="work-empty" data-testid="run-error"><span class="empty-mark">${icon("warning")}</span><h4>Couldn't load this run.</h4><p>The gateway didn't answer in time.</p>${button("Try again")}</div>`;
     else {
-      body += `<div class="r-sched" data-testid="scheduled-message"><div class="r-sched-head">${icon("clock")}<span>Scheduled message${rs === "pruned" ? " (as it reads now)" : ""}</span></div><p>${esc(message)}</p>` +
-        (rs === "pruned" ? "" : `<details><summary>What the gateway added</summary><p>${esc(PREAMBLE)}</p></details>`) + `</div>`;
-      if (rs === "pruned") {
-        body += note(`<p><b>The gateway no longer keeps this run's conversation.</b> It keeps them 24 hours unless set to keep them longer. What the run returned:</p><p>${esc(x.summary || outcome(x).text)}</p>`) ;
-      } else if (rs === "running") {
-        body += `<div class="turn" data-role="assistant"><details class="steps"><summary class="event-line">${glyph("working")} Reading notes ${icon("chevron")}</summary></details></div>`;
-      } else {
-        body += `<div class="turn" data-role="assistant"><details class="steps"><summary class="event-line">Read 3 files ${icon("chevron")}</summary></details>` +
-          `<div class="msg" data-role="assistant"><div class="bubble">${esc(x.summary || DIGEST_SUMMARY)}</div></div></div>`;
+      if (rs === "none")
+        body += note(`<p><b>Clawtrate can't show this run's conversation.</b> The gateway returned none for it. It keeps a run's conversation for 24 hours unless it is set to keep them longer, so an older one may have been removed.</p>${returned()}`);
+      else if (rs === "main")
+        body += note(`<p><b>This run happened in ${botName(r.bot)}'s main conversation.</b> Its turn is there among the others; the gateway doesn't keep it apart.</p>${returned()}<div class="b-actions">${button(`Open ${botName(r.bot)}'s main conversation`, 'data-size="sm" data-r="open-bot"')}</div>`);
+      else if (rs === "command") body += note(`<p><b>A command runs on the gateway, not a bot,</b> so this run has no conversation.</p>${returned()}`);
+      else {
+        // While it runs, the message shows only once cron.history returns it.
+        if (x.history) body += `<div class="r-sched" data-testid="scheduled-message"><div class="r-sched-head">${icon("clock")}<span>Scheduled message, as the gateway recorded it</span></div><p>${esc(x.history.message)}</p></div>`;
+        body += rs === "running"
+          ? `<div class="turn" data-role="assistant"><details class="steps"><summary class="event-line">${glyph("working")} Reading notes ${icon("chevron")}</summary></details></div>`
+          : `<div class="turn" data-role="assistant"><details class="steps"><summary class="event-line">Read 3 files ${icon("chevron")}</summary></details>` +
+            `<div class="msg" data-role="assistant"><div class="bubble">${esc(x.history.reply)}</div></div></div>`;
       }
       const o = outcome(x);
       body += `<div class="r-run-foot" data-testid="run-foot">` +
@@ -743,7 +761,7 @@
       paint(S.view === "routine" ? '[data-r="run-now"]' : null);
       setTimeout(() => {
         r.running = null;
-        r.runs.unshift(run(0, 10, 12, { manual: true, dur: 2.4, tokens: 204, summary: DIGEST_SUMMARY }));
+        r.runs.unshift(run(0, 10, 12, { manual: true, dur: 2.4, tokens: 204, summary: DIGEST_SUMMARY, history: r.payload.kind === "agentTurn" ? recorded(r.payload.message, DIGEST_SUMMARY) : undefined }));
         announce(`${r.name} finished`);
         paint(S.view === "routine" ? '[data-r="run-now"]' : null);
       }, 1800);
@@ -791,6 +809,8 @@
       d.days = c.dows;
     } else d.locked = true;
     if (r.trigger) d.locked = true;
+    // A reminder or a command keeps its payload: the form edits only an agent turn's message.
+    if (r.payload.kind !== "agentTurn") Object.assign(d, { payload: r.payload, instruction: "" });
     d.opened = whenKey(d);
     return d;
   }
@@ -839,7 +859,7 @@
   function validate(d) {
     const e = {};
     if (!d.name.trim()) e.name = "Give it a name.";
-    if (!d.instruction.trim()) e.instruction = "Say what the bot should do.";
+    if (!d.payload && !d.instruction.trim()) e.instruction = "Say what the bot should do.";
     if (!d.locked && (!d.id || whenKey(d) !== d.opened)) {
       if (d.kind === "every" && d.n * (d.unit === "hours" ? 60 : 1) < 5) e.when = "Routines run at least 5 minutes apart.";
       if (d.kind === "days" && !d.days.length) e.when = "Choose at least one day.";
@@ -900,7 +920,10 @@
       `<header class="b-head"><h2 id="edit-title" tabindex="-1">${d.id ? "Edit routine" : "New routine"}</h2><button type="button" class="icon-button b-close" data-r="edit-close" aria-label="Close">${icon("x")}</button></header>` +
       `<div class="b-body">${notes}${botField}` +
       field("e-name", "Name", `<input class="input" id="e-name" data-e="name" maxlength="80" autocomplete="off" value="${esc(d.name)}"${err("name")}${dis} />`, d.errors.name) +
-      field("e-instr", "Instruction", `<textarea class="input" id="e-instr" data-e="instruction" placeholder="What should ${botName(d.bot)} do each time? For example: Summarise yesterday's notes and list anything I need to answer."${err("instruction")}${dis}>${esc(d.instruction)}</textarea>`, d.errors.instruction) +
+      (d.payload
+        ? `<div class="r-field"><span class="r-label">${d.payload.kind === "systemEvent" ? "Reminder" : "Command"}</span><div class="r-locked" data-testid="payload-locked">${esc(d.payload.text || d.payload.argv.join(" "))}<br />` +
+          `This ${d.payload.kind === "systemEvent" ? "reminder's text" : "command"} was set on the gateway. You can rename the routine and change when it runs here; change ${d.payload.kind === "systemEvent" ? "its text" : "it"} on the gateway.</div></div>`
+        : field("e-instr", "Instruction", `<textarea class="input" id="e-instr" data-e="instruction" placeholder="What should ${botName(d.bot)} do each time? For example: Summarise yesterday's notes and list anything I need to answer."${err("instruction")}${dis}>${esc(d.instruction)}</textarea>`, d.errors.instruction)) +
       when + more + (d.id ? "" : `<p class="r-hint">It runs first at its next time; creating it doesn't run it.</p>`) +
       `</div><footer class="b-foot"><div class="b-actions">${button("Cancel", 'data-r="edit-close"', "quiet")}${button(saving ? "Saving…" : "Save", `data-r="save"${dis}`, "primary")}</div></footer>`;
     if (!editDialog.open) {
@@ -935,7 +958,7 @@
   // What Save sends: cron.add with every field, or cron.update with only what changed.
   function request(d) {
     const r = d.id && routines.find((x) => x.id === d.id);
-    const payload = { kind: "agentTurn", message: d.instruction.trim() };
+    const payload = d.payload || { kind: "agentTurn", message: d.instruction.trim() };
     const all = { name: d.name.trim(), payload, sessionTarget: d.runsIn, delivery: d.results };
     if (!d.locked) all.schedule = draftSchedule(d);
     if (!r) return { method: "cron.add", params: { ...all, agentId: d.bot, wakeMode: "now" } };
