@@ -925,26 +925,27 @@ function assertNotInUse(inst: DevInstance): void {
 function instancePortsToCheck(inst: DevInstance): number[] {
   if (inst.name === null) return [GATEWAY_PORT, PROVIDER_PORT];
   const marker = readMarker(inst.stateDir);
-  const ports = [marker?.gatewayPort, marker?.providerPort].filter(isNamedInstancePort);
-  // The stand-in image provider's port, when one was recorded.
-  if (marker?.imagePid !== undefined || marker?.imagePending === true) {
-    if (isNamedInstancePort(marker.gatewayPort)) {
-      ports.push(imagesPort({ gatewayPort: marker.gatewayPort, providerPort: 0 }));
-    }
-  }
+  const gatewayPort = isNamedInstancePort(marker?.gatewayPort) ? marker.gatewayPort : null;
+  const providerPort = isNamedInstancePort(marker?.providerPort) ? marker.providerPort : null;
+  const ports = [gatewayPort, providerPort].filter((port): port is number => port !== null);
   // A browser left running on the instance's ports also means it is in use.
+  // Its ports come from the marker's two ports alone, whatever else is recorded.
   let bots: string[] = [];
   try {
     bots = recordedPlugins(inst).find((plugin) => plugin.botBrowsers)?.botBrowsers?.bots ?? [];
   } catch {
     // An unreadable record adds nothing; the processes are checked anyway.
   }
-  if (bots.length > 0 && ports.length === 2) {
+  if (bots.length > 0 && gatewayPort !== null && providerPort !== null) {
     const { pagesPort, defaultCdpPort, botCdpPorts } = browserPorts(
-      { gatewayPort: ports[0]!, providerPort: ports[1]! },
+      { gatewayPort, providerPort },
       bots,
     );
     ports.push(pagesPort, defaultCdpPort, ...botCdpPorts);
+  }
+  // The stand-in image provider's port, when one was recorded.
+  if ((marker?.imagePid !== undefined || marker?.imagePending === true) && gatewayPort !== null) {
+    ports.push(imagesPort({ gatewayPort, providerPort: 0 }));
   }
   return ports;
 }

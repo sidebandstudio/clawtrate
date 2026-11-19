@@ -3,21 +3,34 @@
 // contract, where the option is refused, and the scripted model's image
 // directives and its answer to the gateway's completion turn. No gateway is
 // started; the stand-in listens on a free loopback port.
-import { mkdtempSync, readdirSync, realpathSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  browserPorts,
   devConfig,
   imagesPort,
   main,
   openInstance,
+  PLUGIN_RULE,
   recordedStartOptions,
+  reset,
   sandboxProblems,
   start,
 } from "../src/cli.ts";
+import { copyPlugin, loadDevPlugin } from "../src/dev-plugins.ts";
+import { CHECKOUT_DIR } from "../src/env.ts";
 import { IMAGES_PORT_OFFSET, NAMED_PORT_BLOCK } from "../src/instance.ts";
 import type { InstancePorts } from "../src/registry.ts";
 import {
@@ -40,7 +53,7 @@ import {
   type ChatMessage,
 } from "../src/scripts.ts";
 import { activityRefusal, markerProblems } from "../src/state-guard.ts";
-import { deadProcess, liveProcess, seedInstance, stopChildren } from "./fixtures.ts";
+import { deadProcess, liveProcess, seedInstance, stopChildren, testInstance } from "./fixtures.ts";
 
 const temps: string[] = [];
 const servers: Server[] = [];
@@ -272,6 +285,37 @@ describe("what --with-images adds to the config", () => {
 });
 
 describe("the image process is a recorded process of the instance", () => {
+  it("leaves the browser and scripted pages ports checked before a reset", async () => {
+    const computer = loadDevPlugin("clawtrate-computer", CHECKOUT_DIR, PLUGIN_RULE);
+    const bots = computer.botBrowsers!.bots;
+    for (const image of [false, true]) {
+      const home = temp();
+      const runRoot = join(home, "run");
+      const gone = deadProcess();
+      const { stateDir } = seedInstance(home, "alpha", {
+        gateway: deadProcess(),
+        provider: deadProcess(),
+        runRoot,
+        ...(image ? { marker: { imagePid: gone.pid, imageIdentity: gone.identity } } : {}),
+      });
+      copyPlugin(computer, stateDir, PLUGIN_RULE);
+      const { pagesPort } = browserPorts({ gatewayPort: 19240, providerPort: 19250 }, bots);
+      // Every recorded process has exited, but the scripted pages still listen.
+      const inst = testInstance(home, runRoot, "alpha", {
+        listening: async (port) => port === pagesPort,
+      });
+      mkdirSync(inst.runDir, { recursive: true });
+      writeFileSync(
+        join(inst.runDir, "plugins.json"),
+        JSON.stringify([{ name: computer.name, digest: computer.digest }]),
+      );
+      await expect(reset(inst), `with an image process recorded: ${image}`).rejects.toThrow(
+        `something is listening on its port ${pagesPort}`,
+      );
+      expect(existsSync(stateDir)).toBe(true);
+    }
+  });
+
   it("keeps the folder in use while it lives, and its record must be whole", () => {
     const image = liveProcess();
     const { stateDir, marker } = seedInstance(temp(), "alpha", {
