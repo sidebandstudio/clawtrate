@@ -6,8 +6,8 @@
 // its main process. The look never sees this computer's own OpenClaw: every
 // launch here is automated, and the guard refuses a look without a sandbox.
 //
-// Electron must be installed: CI's Linux e2e job skips its download, and
-// these checks with it.
+// Electron must be installed. On Linux the app runs without Chromium's
+// sandbox (CI's runners refuse its namespaces) and needs a display (CI uses xvfb).
 import { _electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -37,7 +37,6 @@ function electronBinary(): string | null {
 const ELECTRON = electronBinary();
 
 test.describe.configure({ mode: "serial" });
-test.skip(ELECTRON === null, "Electron is not installed here (CI's Linux e2e job skips it)");
 
 /** The `openclaw` this machine runs, found on PATH as the dev-gateway tool finds it. */
 const OPENCLAW = (() => {
@@ -95,6 +94,7 @@ async function launch(
   const dir = folder("app");
   const data = join(dir, "user-data");
   const args = [DESKTOP, `--user-data-dir=${data}`];
+  if (process.platform === "linux") args.push("--no-sandbox");
   if (options.sandbox !== null)
     args.push(`--clawtrate-setup-sandbox=${options.sandbox ?? writeSandbox(dir)}`);
   const app = await _electron.launch({ executablePath: ELECTRON!, args, env: appEnv(), cwd: dir });
@@ -145,7 +145,7 @@ const thisComputer = (page: Page) =>
     .getByRole("button", { name: /This computer/ });
 
 test.beforeAll(() => {
-  test.skip(ELECTRON === null, "Electron is not installed here");
+  if (ELECTRON === null) throw new Error("Electron's binary is missing: run pnpm install with it");
   expect(OPENCLAW).not.toBe("");
   // The development build of the desktop app, into its own output folder.
   execFileSync("pnpm", ["--filter", "@clawtrate/desktop", "exec", "electron-vite", "build"], {
@@ -263,10 +263,18 @@ test("F-516: another profile and another service are named and not connected to"
 </dict></plist>
 `,
   );
+  // The same service as a systemd user unit, for the look on Linux.
+  mkdirSync(join(home, ".config/systemd/user"), { recursive: true });
+  writeFileSync(
+    join(home, ".config/systemd/user/openclaw@work.service"),
+    "[Service]\nExecStart=/usr/local/bin/openclaw --profile work gateway run\n",
+  );
+  const service =
+    process.platform === "linux" ? "openclaw@work.service" : "com.example.openclaw-gateway";
   const launched = await launch({ sandbox });
   await thisComputer(launched.page).click();
   await expect(launched.page.getByRole("status").filter({ hasText: "also saw" })).toHaveText(
-    "Clawtrate also saw other OpenClaw services here (service com.example.openclaw-gateway, profile work). It connects only to the default gateway and its own; use Advanced for others.",
+    `Clawtrate also saw other OpenClaw services here (service ${service}, profile work). It connects only to the default gateway and its own; use Advanced for others.`,
     { timeout: 60_000 },
   );
   // What the card offers to connect to is this run's instance, by its profile.
