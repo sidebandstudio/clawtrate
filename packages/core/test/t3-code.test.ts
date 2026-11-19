@@ -1061,3 +1061,14 @@ describe("a reload keeps a call in a thread only on the stored result's own attr
     expect(t3(fromHistory("t3_thread_read", args, read).alone)).toBeNull();
   });
 });
+
+it("F-313: an unreturned call can link to the named thread card later in the column", () => {
+  const open = live("t3_thread_wait", { threadId: THREAD }, null, { open: true });
+  const ended = t3({ ...open, status: "stopped", runStopped: true })!;
+  const later = t3(live("t3_thread_read", { threadId: THREAD }, readResult([])))!;
+  const placement = placeT3([
+    { type: "t3", call: ended },
+    { type: "t3", call: later },
+  ]);
+  expect(placement.get(ended.id)).toMatchObject({ type: "own", head: later.id });
+});

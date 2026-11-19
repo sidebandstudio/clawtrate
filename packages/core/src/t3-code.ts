@@ -257,7 +257,7 @@ export function placeT3(
         out.set(c.id, {
           type: "own",
           asked: c.asked,
-          head: (c.asked && heads.get(c.asked.key)) ?? null,
+          head: null,
         });
       above = null;
       continue;
@@ -277,6 +277,12 @@ export function placeT3(
     }
     out.set(c.id, { type: "line", thread: c.thread, head });
     above = null;
+  }
+  // A call of its own finds its asked thread's card wherever that card is in the column.
+  for (const [id, at] of out) {
+    if (at.type !== "own" || !at.asked) continue;
+    const head = heads.get(at.asked.key);
+    if (head) out.set(id, { ...at, head });
   }
   return out;
 }
