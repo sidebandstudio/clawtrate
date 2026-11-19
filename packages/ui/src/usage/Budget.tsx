@@ -44,6 +44,7 @@ export function BudgetForm({
   name,
   announce,
   onDone,
+  canSave = true,
 }: {
   target: BudgetTarget;
   existing: Budget | null;
@@ -51,6 +52,8 @@ export function BudgetForm({
   name: string;
   announce: (text: string) => void;
   onDone: (saved: boolean) => void;
+  /** False when the budget can't be kept as it is: a routine whose use can't be counted apart. */
+  canSave?: boolean;
 }) {
   const bridge = useBridge();
   const [period, setPeriod] = useState<BudgetPeriod>(existing?.period ?? "weekly");
@@ -67,7 +70,7 @@ export function BudgetForm({
   const invalid = typeof tokens === "string";
   const shownError = invalid && value.trim() !== "" ? tokens : null;
   const save = async () => {
-    if (typeof tokens !== "number" || saving) return;
+    if (!canSave || typeof tokens !== "number" || saving) return;
     setSaving(true);
     setFailure(null);
     try {
@@ -159,7 +162,7 @@ export function BudgetForm({
           data-variant="primary"
           data-size="sm"
           data-testid="budget-save"
-          disabled={invalid || saving}
+          disabled={!canSave || invalid || saving}
           onClick={() => void save()}
         >
           Save budget

@@ -230,6 +230,7 @@ function Budgets({
               routineName: edited.routineName,
             }}
             existing={edited}
+            canSave={!edited.routineId || !currentCount(usage, edited, now)?.error}
             name={
               edited.routineId ? `routine ${edited.routineName ?? edited.routineId}` : who(edited)
             }

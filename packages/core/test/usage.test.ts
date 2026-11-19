@@ -522,6 +522,7 @@ describe("budgets kept with the gateway", () => {
 function fakeGateway(options: { identity?: boolean; meddle?: number; counting?: boolean } = {}) {
   let prefs: unknown = undefined;
   let meddle = options.meddle ?? 0;
+  let routineTarget = "isolated";
   const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   const T = Date.UTC(2026, 10, 19, 6);
   const histories: Record<string, unknown[]> = {
@@ -651,11 +652,28 @@ function fakeGateway(options: { identity?: boolean; meddle?: number; counting?: 
         return { messages: histories[params.sessionKey as string] ?? [], hasMore: false };
       case "usage.status":
         return { updatedAt: 77, providers: [] };
+      case "cron.get":
+        // A routine as `cron.get` gives it: running in tasks of its own, unless moved.
+        return {
+          id: params.id,
+          name: "Weekly cleanup",
+          agentId: "otto",
+          sessionTarget: routineTarget,
+          payload: { kind: "agentTurn" },
+        };
       default:
         throw new Error(`unexpected ${method}`);
     }
   };
-  return { request, calls, prefs: () => prefs };
+  return {
+    request,
+    calls,
+    prefs: () => prefs,
+    /** Move the routine's runs to another session target, as `cron.update` does. */
+    retarget: (target: string) => {
+      routineTarget = target;
+    },
+  };
 }
 
 function engineOn(gateway: ReturnType<typeof fakeGateway>, now = () => NOW) {
@@ -976,6 +994,41 @@ describe("the usage engine", () => {
     expect(usage().counts).toMatchObject([
       { budgetId: "routine:job1", used: 200, asOf: 4343, partial: false },
     ]);
+    engine.onClose();
+  });
+
+  it("F-234: a routine moved into a shared task is no longer counted, can't be saved again, and can be removed", async () => {
+    const gateway = fakeGateway();
+    const { engine, usage } = engineOn(gateway);
+    const budget: BudgetInput = {
+      botId: "otto",
+      routineId: "job1",
+      routineName: "Weekly cleanup",
+      period: "daily",
+      tokens: 1_000,
+      timeZone: NY,
+    };
+    await engine.changeBudget({ op: "set", budget });
+    await engine.countBudgets();
+    expect(usage().counts).toMatchObject([{ budgetId: "routine:job1", used: 200, error: null }]);
+    // Moved into the bot's main task: its use can't be told apart.
+    gateway.retarget("session:agent:otto:main");
+    await engine.countBudgets();
+    expect(usage().counts).toMatchObject([
+      {
+        budgetId: "routine:job1",
+        used: null,
+        counting: false,
+        error: "Usage for this routine can't be counted separately.",
+      },
+    ]);
+    // No sessions.usage read followed the eligibility read that said so.
+    expect(gateway.calls.at(-1)?.method).toBe("cron.get");
+    await expect(engine.changeBudget({ op: "set", budget })).rejects.toThrow(
+      "Usage for this routine can't be counted separately.",
+    );
+    await engine.changeBudget({ op: "remove", id: "routine:job1" });
+    expect(usage().budgets).toEqual([]);
     engine.onClose();
   });
 

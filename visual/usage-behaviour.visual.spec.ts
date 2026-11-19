@@ -301,6 +301,23 @@ test("S17 a saved budget's row in Settings opens its own form; Escape returns to
   await expect(settings.getByTestId("budget-add")).toBeFocused();
 });
 
+test("F-234: a saved routine budget whose routine now shares a task says its count is unavailable, can't be saved again, and can be removed (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write&usage=retargeted`, "light");
+  const settings = await settingsUsage(page);
+  const row = settings.locator('[data-budget="routine:weekly-cleanup"]');
+  await expect(row).toContainText(
+    "Routine Weekly cleanup (Otto) · daily · 200,000 tokens today, count unavailable",
+  );
+  await row.getByRole("button").click();
+  const form = settings.getByTestId("budget-edit-form");
+  await form.getByTestId("budget-tokens").fill("300,000");
+  await expect(form.getByTestId("budget-save")).toBeDisabled();
+  await form.getByTestId("budget-remove").click();
+  await expect(row).toHaveCount(0);
+});
+
 test("F-235: provider limits carry their window, reset, the gateway's time and no account (fixture)", async ({
   page,
 }) => {

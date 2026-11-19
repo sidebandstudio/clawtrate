@@ -280,7 +280,7 @@ export function budgetOf(
 export function budgetLine(budget: Budget, count: BudgetCount | null): string {
   const used = count?.used ?? null;
   return used === null
-    ? `${full(budget.tokens)} tokens ${periodWord(budget.period)}, not counted yet`
+    ? `${full(budget.tokens)} tokens ${periodWord(budget.period)}, ${count?.error ? "count unavailable" : "not counted yet"}`
     : `${full(used)} of ${full(budget.tokens)} tokens ${periodWord(budget.period)}${count?.counting ? " so far" : ""}${count?.partial ? ", partial" : ""}${count?.error ? ", refresh failed" : ""}`;
 }
 

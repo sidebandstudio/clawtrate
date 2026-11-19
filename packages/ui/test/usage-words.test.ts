@@ -55,6 +55,13 @@ const count = (change: Partial<BudgetCount>): BudgetCount => ({
 describe("a budget's count", () => {
   it("F-234: a count read from a capped list says it is partial", () => {
     expect(budgetLine(routine, count({ partial: true }))).toMatch(/, partial$/);
+    // A routine that can't be counted apart any more: no number, said as unavailable.
+    expect(
+      budgetLine(
+        routine,
+        count({ used: null, error: "Usage for this routine can't be counted separately." }),
+      ),
+    ).toBe("1,000 tokens today, count unavailable");
     expect(budgetLine(routine, count({}))).not.toMatch(/partial/);
   });
 });

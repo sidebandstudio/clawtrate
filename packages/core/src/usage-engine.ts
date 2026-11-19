@@ -101,6 +101,9 @@ export type UsageReport = {
 /** The answer while the host already reads `MAX_USAGE_REPORTS` reports: ask again later. */
 export type UsageBusy = { busy: true };
 
+/** A routine whose runs share a task: its use can't be told apart from the task's. */
+const ROUTINE_NOT_SEPARATE = "Usage for this routine can't be counted separately.";
+
 /** A report ends with the connection it started on: no request of it goes to another gateway. */
 const CLOSED = "The connection to the gateway closed while its usage was being read.";
 
@@ -256,6 +259,13 @@ export class UsageEngine {
       if (generation !== this.generation)
         throw new BudgetError(`${BUDGET_UNCONFIRMED}: the connection to the gateway closed.`);
     };
+    if (change.op === "set" && change.budget.routineId) {
+      const { botId, routineId } = change.budget;
+      const job = await this.ctx.request("cron.get", { id: routineId });
+      assertSameConnection();
+      if (!routinesOf({ jobs: [job] }).some((routine) => routine.botId === botId))
+        throw new BudgetError(ROUTINE_NOT_SEPARATE);
+    }
     for (let attempt = 0; attempt < BUDGET_WRITE_ATTEMPTS; attempt += 1) {
       assertSameConnection();
       const read = await this.readRaw();
@@ -370,7 +380,7 @@ export class UsageEngine {
           this.countAgain = false;
           const budgets = this.ctx.get().budgets;
           const counts = await inTurn(budgets, USAGE_REQUESTS_AT_ONCE, (budget) =>
-            generation === this.generation ? this.count(budget) : Promise.resolve(null),
+            generation === this.generation ? this.count(budget, generation) : Promise.resolve(null),
           );
           if (generation !== this.generation) return;
           this.ctx.update((usage) => ({
@@ -396,10 +406,29 @@ export class UsageEngine {
   }
 
   /** One budget's count: the figure the Usage page shows for the same bot (or routine) and days. */
-  private async count(budget: Budget): Promise<BudgetCount> {
+  private async count(budget: Budget, generation: number): Promise<BudgetCount> {
     const range = rangeFor(budget.period, this.ctx.now(), budget.timeZone);
     try {
       if (budget.routineId) {
+        // The routine may have moved into a shared task since its budget was set.
+        const unavailable: BudgetCount = {
+          budgetId: budget.id,
+          range,
+          used: null,
+          asOf: null,
+          counting: false,
+          partial: false,
+          error: ROUTINE_NOT_SEPARATE,
+        };
+        let job: unknown;
+        try {
+          job = await this.ctx.request("cron.get", { id: budget.routineId });
+        } catch {
+          return unavailable;
+        }
+        if (generation !== this.generation) throw new Error(CLOSED);
+        if (!routinesOf({ jobs: [job] }).some((routine) => routine.botId === budget.botId))
+          return unavailable;
         const result = await this.ctx.request("sessions.usage", {
           agentId: budget.botId,
           ...rangeParams(range),

@@ -6,6 +6,7 @@
 //   &usage=botfail                                            Otto's own figure couldn't be read
 //   &usage=busy                                               the host is reading other reports
 //   &usage=periodfail                                         reading Today fails
+//   &usage=retargeted                                         the routine now runs in a shared task
 //   &budget=none|warn|reached|daily|invalid                   Otto's budget
 //   &plimit=near|reached                                      a provider's reported limit
 //   &uview=usage                                              open Otto's Usage page
@@ -35,6 +36,7 @@ export type UsageParams = {
     | "botfail"
     | "busy"
     | "periodfail"
+    | "retargeted"
     | null;
   budget: "none" | "warn" | "reached" | "daily" | "invalid" | null;
   plimit: "near" | "reached" | null;
@@ -58,6 +60,7 @@ export function usageParams(params: URLSearchParams): UsageParams {
       "botfail",
       "busy",
       "periodfail",
+      "retargeted",
     ]),
     budget: pick("budget", ["none", "warn", "reached", "daily", "invalid"]),
     plimit: pick("plimit", ["near", "reached"]),
@@ -155,17 +158,30 @@ export function fixtureUsage(now: number, params: UsageParams): UsageState {
     timeZone,
     setAt: now - 86_400_000,
   });
-  const counts: BudgetCount[] = budgets.map((budget) => ({
-    budgetId: budget.id,
-    range: rangeFor(budget.period, now, budget.timeZone),
-    used: budget.routineId
-      ? 41_000
-      : figure("otto", budget.period === "daily" ? "today" : "week", params, at).tokens.total,
-    asOf: at,
-    counting: params.usage === "computing",
-    partial: false,
-    error: null,
-  }));
+  const counts: BudgetCount[] = budgets.map((budget) =>
+    // As the engine counts a routine that moved into a shared task: no number.
+    budget.routineId && params.usage === "retargeted"
+      ? {
+          budgetId: budget.id,
+          range: rangeFor(budget.period, now, budget.timeZone),
+          used: null,
+          asOf: null,
+          counting: false,
+          partial: false,
+          error: "Usage for this routine can't be counted separately.",
+        }
+      : {
+          budgetId: budget.id,
+          range: rangeFor(budget.period, now, budget.timeZone),
+          used: budget.routineId
+            ? 41_000
+            : figure("otto", budget.period === "daily" ? "today" : "week", params, at).tokens.total,
+          asOf: at,
+          counting: params.usage === "computing",
+          partial: false,
+          error: null,
+        },
+  );
   const windows = params.plimit
     ? [
         {
