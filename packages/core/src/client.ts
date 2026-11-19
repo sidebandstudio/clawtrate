@@ -739,8 +739,13 @@ export class ClawtrateClient {
   private quietReconnect = false;
   /** The user asked for write access and it is not settled yet. */
   private upgradeWanted = false;
-  /** What the request under way asks for: the interactive tier, or admin with it. */
-  private upgradeTier: "interactive" | "admin" = "interactive";
+  /**
+   * What the request under way asks for: the interactive tier, admin with it, or
+   * (`held`) the scopes the connection held when device access was asked for.
+   */
+  private upgradeTier: "interactive" | "admin" | "held" = "interactive";
+  /** The scopes a `held` request keeps, as the connection held them when it was made. */
+  private heldBase: readonly string[] = [];
   /** The access request under way also asks for device access (`operator.pairing`). */
   private pairingWanted = false;
   private scopeUpgrade: GatewayScopeUpgrade | null = null;
@@ -1098,14 +1103,18 @@ export class ClawtrateClient {
     if (this.options.readOnly)
       throw new Error("This host only reads; it does not ask for more access.");
     // A request for admin is never narrowed by a later one for less, and device access
-    // (`operator.pairing`) is asked for only by name, on top of whatever the device holds.
+    // (`operator.pairing`) is asked for only by name, added to the scopes the connection
+    // holds and nothing else: from a read connection it asks for no power to send or answer.
     const pairing = tier === "pairing" || (this.upgradeWanted && this.pairingWanted);
+    const waiting = this.upgradeWanted ? this.upgradeTier : null;
     const wanted =
-      tier === "admin" ||
-      (this.upgradeWanted && this.upgradeTier === "admin") ||
-      (tier === "pairing" && this.holds(ADMIN_SCOPE))
+      tier === "admin" || waiting === "admin"
         ? "admin"
-        : "interactive";
+        : tier === "interactive" || waiting === "interactive"
+          ? "interactive"
+          : "held";
+    if (wanted === "held" && waiting !== "held")
+      this.heldBase = ADMIN_SCOPES.filter((scope) => this.state.connection.scopes.includes(scope));
     const target = [...this.tierScopes(wanted), ...(pairing ? [PAIRING_SCOPE] : [])];
     if (target.every((scope) => this.holdsExactly(scope))) return;
     if (!this.settings) throw new Error("Connect to a gateway first.");
@@ -1123,8 +1132,8 @@ export class ClawtrateClient {
     if (this.state.connection.status === "connected") this.startUpgrade();
   }
 
-  private tierScopes(tier: "interactive" | "admin"): readonly string[] {
-    return tier === "admin" ? ADMIN_SCOPES : INTERACTIVE_SCOPES;
+  private tierScopes(tier: "interactive" | "admin" | "held"): readonly string[] {
+    return tier === "admin" ? ADMIN_SCOPES : tier === "held" ? this.heldBase : INTERACTIVE_SCOPES;
   }
 
   /** What an access request asks for: its tier, device access when asked for or held. */
@@ -1174,7 +1183,7 @@ export class ClawtrateClient {
           if (generation !== this.generation || this.settings?.url !== url) {
             throw new Error("The gateway changed while access was being approved.");
           }
-          const admin = tier === "admin" && scopeSatisfied(scopes, ADMIN_SCOPE);
+          const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(scopes, ADMIN_SCOPE);
           const pairing = askedPairing && scopes.includes(PAIRING_SCOPE);
           await this.writeToken(url, deviceId, role, {
             token,
@@ -1223,7 +1232,8 @@ export class ClawtrateClient {
           if (this.scopeUpgrade === upgrade) this.scopeUpgrade = null;
           if (outcome.status === "approved") {
             if (
-              !scopeSatisfied(outcome.scopes, tier === "admin" ? ADMIN_SCOPE : WRITE_SCOPE) ||
+              (tier !== "held" &&
+                !scopeSatisfied(outcome.scopes, tier === "admin" ? ADMIN_SCOPE : WRITE_SCOPE)) ||
               (askedPairing && !outcome.scopes.includes(PAIRING_SCOPE))
             ) {
               this.failAccess(

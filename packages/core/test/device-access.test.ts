@@ -3,7 +3,13 @@
 // holds, never by itself, and held once granted.
 import { describe, expect, it } from "vitest";
 import { parseBridgeCommand } from "../src/bridge.ts";
-import { INTERACTIVE_SCOPES, PAIRING_SCOPE } from "../src/scopes.ts";
+import {
+  ADMIN_SCOPES,
+  INTERACTIVE_SCOPES,
+  PAIRING_SCOPE,
+  READ_SCOPE,
+  READ_SCOPES,
+} from "../src/scopes.ts";
 import { AccountsGateway, accountsClient } from "./accounts-fake.ts";
 import { URL_A } from "./client-harness.ts";
 import { deferred, tokenKey, until } from "./fake-gateway.ts";
@@ -50,6 +56,34 @@ describe("device access", () => {
     );
     const connects = fake.gateway.connects as Array<{ scopes: string[] }>;
     expect(connects.at(-1)!.scopes).toEqual(wanted);
+    client.stop();
+  });
+
+  it("F-157: from a read connection, device access asks for the pairing scope with read and nothing else", async () => {
+    const fake = new AccountsGateway();
+    const wait = deferred<unknown>();
+    fake.gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-8" });
+    fake.gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
+    const { client, storage } = await accountsClient({ gateway: fake, scopes: READ_SCOPES });
+    await client.requestAccess("pairing");
+    await until(() => client.state.connection.upgrade.status === "pending");
+    const wanted = [READ_SCOPE, PAIRING_SCOPE];
+    expect(fake.gateway.calls("device.scopes.requestUpgrade")).toEqual([{ scopes: wanted }]);
+    wait.resolve({ status: "approved", requestId: "up-8", deviceToken: "rotated", scopes: wanted });
+    await until(() => client.state.connection.scopes.includes(PAIRING_SCOPE));
+    expect(JSON.parse(storage.data.get(tokenKey(URL_A))!)).toMatchObject({
+      pairingHeld: true,
+      heldScopes: wanted,
+    });
+    expect(client.state.connection.canWrite).toBe(false);
+    const connects = fake.gateway.connects as Array<{ scopes: string[] }>;
+    expect(connects.at(-1)!.scopes).toEqual(wanted);
+    // The admin request stays its own: it asks for admin with the interactive tier.
+    await client.requestAccess("admin");
+    await until(() => fake.gateway.calls("device.scopes.requestUpgrade").length === 2);
+    expect(fake.gateway.calls("device.scopes.requestUpgrade")[1]).toEqual({
+      scopes: [...ADMIN_SCOPES, PAIRING_SCOPE],
+    });
     client.stop();
   });
 

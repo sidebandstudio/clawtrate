@@ -38,6 +38,7 @@ import {
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
 import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
+import { ADMIN_SCOPES } from "./scopes.ts";
 import {
   MAX_FILE_TRANSFERS,
   MAX_PENDING_SAVES,
@@ -210,6 +211,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "creationWaiters.*": { max: MAX_ACCESS_WAITERS, each: 0, row: null },
   checkingSlots: { max: MAX_CREATIONS, each: ID, row: "bookkeeping" },
   accessWaiters: { max: MAX_ACCESS_WAITERS, each: SHORT, row: "bookkeeping" },
+  // The scopes a device-access request keeps: those of the admin tier the connection held.
+  heldBase: { max: ADMIN_SCOPES.length, each: SHORT, row: "bookkeeping" },
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
   attachmentContent: {
     max: T * MAX_OUTBOX,
