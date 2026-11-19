@@ -1,5 +1,5 @@
 <!--
-The title and this body become the commit on main, so write them for someone reading the history later.
+The title, with this pull request's number, becomes the whole commit message on main, so it has to make sense on its own. This body stays on the pull request.
 
 Title: "type: what changes for the person using Clawtrate", under 72 characters.
 Types: feat, fix, docs, test, ci, refactor, chore.
