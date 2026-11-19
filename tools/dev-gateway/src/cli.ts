@@ -153,6 +153,8 @@ export type DevInstance = InstancePaths & {
   runner: OpenclawRunner;
   identify: Identify;
   listening: (port: number) => Promise<boolean>;
+  /** How long a stopped process's port may stay open after its PID is gone (`portReleased`). */
+  portReleaseMs: number;
   /** Spawns the scripted model (the gateway goes through the runner). */
   spawn: typeof spawn;
 };
@@ -166,6 +168,7 @@ export function openInstance(
     checkout?: string;
     identify?: Identify;
     listening?: (port: number) => Promise<boolean>;
+    portReleaseMs?: number;
     spawn?: typeof spawn;
   } = {},
 ): DevInstance {
@@ -192,6 +195,7 @@ export function openInstance(
     runner,
     identify,
     listening: options.listening ?? portOpen,
+    portReleaseMs: options.portReleaseMs ?? PORT_RELEASE_MS,
     spawn: options.spawn ?? spawn,
   };
 }
@@ -896,30 +900,17 @@ function instancePortsToCheck(inst: DevInstance): number[] {
 }
 
 /**
- * How long a reset that has just stopped the instance's processes waits for
- * their ports to be let go: a gateway's process can still hold its listener a
- * moment after the process the tool recorded has exited. Nothing is signalled
- * while it waits.
- */
-export const PORT_RELEASE_MS = 15_000;
-
-/**
  * Why the instance's folder must not be deleted, or null. Deleting needs proof
  * that nothing is running: a valid marker naming this instance, every recorded
- * process proven gone, and nothing listening on the instance's ports, checked
- * again until `waitMs` has passed.
+ * process proven gone, and nothing listening on the instance's ports.
  */
-async function deletionRefusal(inst: DevInstance, waitMs = 0): Promise<string | null> {
+async function deletionRefusal(inst: DevInstance): Promise<string | null> {
   if (ownership(inst.stateDir) !== "owned") return null;
   const busy = activityRefusal(inst.stateDir, inst.name, inst.identify);
   if (busy) return busy;
-  const deadline = Date.now() + waitMs;
   for (const port of instancePortsToCheck(inst)) {
-    while (await inst.listening(port)) {
-      if (Date.now() >= deadline) {
-        return `${label(inst)} (${inst.stateDir}) may still be in use: something is listening on its port ${port}. Nothing was changed.`;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+    if (await inst.listening(port)) {
+      return `${label(inst)} (${inst.stateDir}) may still be in use: something is listening on its port ${port}. Nothing was changed.`;
     }
   }
   return null;
@@ -1169,7 +1160,29 @@ function childProcesses(pid: number, identify: Identify): { pid: number; identit
     });
 }
 
-type StopTarget = { role: string; pid: number; identity: string };
+type StopTarget = { role: string; pid: number; identity: string; port?: number };
+
+/** How long a stopped process's port may stay open once its PID is gone. */
+export const PORT_RELEASE_MS = 10_000;
+
+/**
+ * Wait until nothing listens on the port a stopped process held. Its PID can
+ * look gone before its sockets are closed: a gateway killed while its threads
+ * are busy can show as a zombie while its last threads still hold its
+ * listening socket. Null once the port is closed; what is wrong, naming the
+ * process and the port, when it is still open after `inst.portReleaseMs`.
+ */
+async function portReleased(inst: DevInstance, target: StopTarget): Promise<string | null> {
+  if (target.port === undefined) return null;
+  const deadline = Date.now() + inst.portReleaseMs;
+  while (await inst.listening(target.port)) {
+    if (Date.now() >= deadline) {
+      return `the ${target.role} (pid ${target.pid}) has exited, but its port ${target.port} is still open after ${inst.portReleaseMs / 1000} s`;
+    }
+    await sleep(100);
+  }
+  return null;
+}
 
 /**
  * The development browser's processes on an instance: Chromium and its
@@ -1324,13 +1337,12 @@ async function stopProcess(target: StopTarget, identify: Identify): Promise<bool
  * start time the marker recorded at spawn. Anything else is refused, says what
  * disagrees, and signals nothing.
  */
-/** Stops what this checkout started for the instance; true when it signalled any process. */
-async function stopLocked(inst: DevInstance): Promise<boolean> {
+async function stopLocked(inst: DevInstance): Promise<void> {
   if (!lstatOrNull(inst.runFile)) {
     console.log(
       `Nothing to stop: this checkout has no running processes on record for ${label(inst)}.`,
     );
-    return false;
+    return;
   }
   const refuse = (why: string): never => {
     throw new StateInUseError(`Not stopping ${label(inst)}: ${why}. Nothing was signalled.`);
@@ -1353,7 +1365,7 @@ async function stopLocked(inst: DevInstance): Promise<boolean> {
       `Discarded this checkout's stale run file for ${label(inst)}: ` +
         `${marker ? "its folder now holds another run" : "its folder is gone"}. Nothing was signalled.`,
     );
-    return false;
+    return;
   }
   const problems = markerProblems(marker, inst.name);
   if (problems.length > 0) refuse(`its marker cannot be trusted: ${problems.join("; ")}`);
@@ -1365,6 +1377,8 @@ async function stopLocked(inst: DevInstance): Promise<boolean> {
     );
   }
   const targets: StopTarget[] = [];
+  /** Recorded processes already gone, perhaps ended by an earlier stop: only their ports are checked. */
+  const exited: StopTarget[] = [];
   for (const role of ["gateway", "provider"] as const) {
     const pid = marker[`${role}Pid`];
     const identity = marker[`${role}Identity`];
@@ -1374,19 +1388,33 @@ async function stopLocked(inst: DevInstance): Promise<boolean> {
         `could not determine whether its ${role} (pid ${String(pid)}) is running: ${verdict.reason}`,
       );
     }
-    if (verdict.state === "alive") targets.push({ role, pid: pid!, identity: identity! });
+    if (verdict.state !== "alive" && verdict.state !== "dead") continue;
+    const port = marker[`${role}Port`];
+    const target = { role, pid: pid!, identity: identity!, ...(port ? { port } : {}) };
+    (verdict.state === "alive" ? targets : exited).push(target);
   }
   let confirmed = true;
-  for (const target of targets) confirmed = (await stopProcess(target, inst.identify)) && confirmed;
+  const openPorts: string[] = [];
+  // Stopped means its PID is gone and so is its listener: a reset checks the port next.
+  // Only a process proven alive is signalled; one already gone has only its port waited for.
+  for (const target of [...targets, ...exited]) {
+    if (targets.includes(target) && !(await stopProcess(target, inst.identify))) {
+      confirmed = false;
+      continue;
+    }
+    const open = await portReleased(inst, target);
+    if (open) openPorts.push(open);
+  }
+  if (openPorts.length > 0) confirmed = false;
   // The gateway's browser and its helpers go with it, but not always at once.
   if (confirmed) confirmed = await settleBrowserProcesses(inst);
   if (!confirmed) {
     throw new StateInUseError(
-      `${label(inst)}: could not confirm that every process stopped; its records are kept.`,
+      `${label(inst)}: could not confirm that every process stopped; its records are kept.` +
+        (openPorts.length > 0 ? ` ${openPorts.join("; ")}.` : ""),
     );
   }
   rmSync(inst.runFile, { force: true });
-  return targets.length > 0;
 }
 
 function lstatOrNull(path: string) {
@@ -1399,9 +1427,7 @@ function lstatOrNull(path: string) {
 
 /** Stop the processes this checkout started for the instance, once proven. Nothing else. */
 export async function stop(inst: DevInstance): Promise<void> {
-  await withInstanceLock(inst, async () => {
-    await stopLocked(inst);
-  });
+  await withInstanceLock(inst, () => stopLocked(inst));
 }
 
 /**
@@ -1427,7 +1453,7 @@ export async function reset(inst: DevInstance, options: { runId?: string } = {})
       }
     }
     assertNotInUse(inst);
-    const stopped = await stopLocked(inst);
+    await stopLocked(inst);
     if (ownership(inst.stateDir) === "owned") {
       // Also a browser left by a gateway that is gone: nothing of it may outlive its folder.
       if (!(await settleBrowserProcesses(inst))) {
@@ -1435,8 +1461,7 @@ export async function reset(inst: DevInstance, options: { runId?: string } = {})
           `${label(inst)} (${inst.stateDir}): its browser's processes are still running. Nothing was deleted.`,
         );
       }
-      // When it has just stopped its own processes, their ports get a moment to be let go.
-      const blocked = await deletionRefusal(inst, stopped ? PORT_RELEASE_MS : 0);
+      const blocked = await deletionRefusal(inst);
       if (blocked) throw new StateInUseError(blocked);
       rmSync(inst.stateDir, { recursive: true });
       console.log(`Removed ${inst.stateDir}`);

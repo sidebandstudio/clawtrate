@@ -387,10 +387,20 @@ describe("a start holds the instance's lock until it is finished (B4)", () => {
     const runRoot = tempDir("clawtrate-run-");
     const faked = fakedInstance(home, runRoot, "alpha");
     let healthy = false;
+    // The gateway's port is open once it is healthy, and closes when its process exits.
+    const gatewayListening = () => {
+      const marker = readMarker(faked.stateDir);
+      return (
+        healthy &&
+        processState(marker?.gatewayPid, marker?.gatewayIdentity, processIdentity) === "alive"
+      );
+    };
     const inst = {
       ...faked,
       listening: async (port: number) =>
-        port === readMarker(faked.stateDir)?.gatewayPort ? healthy : faked.listening(port),
+        port === readMarker(faked.stateDir)?.gatewayPort
+          ? gatewayListening()
+          : faked.listening(port),
     };
     const events: string[] = [];
     const starting = start(inst, { seed: false }).then(() => events.push("started"));
@@ -407,40 +417,81 @@ describe("a start holds the instance's lock until it is finished (B4)", () => {
   }, 20_000);
 });
 
-describe("a reset waits a moment for the ports its stopped processes held", () => {
-  /** An instance whose gateway port answers while it runs, and for `lingerMs` after it is stopped. */
-  function lingering(lingerMs: number) {
+describe("a stopped process is stopped once its port is closed too", () => {
+  // A gateway killed while busy can show as exited while its socket is still open (issue #153).
+  it("a reset waits for a stopped gateway's port to close, then removes the folder", async () => {
     const home = tempDir("clawtrate-home-");
     const runRoot = tempDir("clawtrate-run-");
-    const faked = fakedInstance(home, runRoot, "linger");
-    let releasedAt: number | null = null;
-    const inst = {
-      ...faked,
-      listening: async (port: number) =>
-        port === readMarker(faked.stateDir)?.gatewayPort
-          ? releasedAt === null || Date.now() < releasedAt
-          : faked.listening(port),
+    const gateway = liveProcess();
+    const { stateDir, marker } = seedInstance(home, "alpha", {
+      runRoot,
+      gateway,
+      provider: liveProcess(),
+    });
+    // The gateway's port answers for five more probes after its PID is gone.
+    let openAfterExit = 5;
+    const listening = async (port: number) => {
+      if (port !== marker.gatewayPort) return false;
+      if (processState(gateway.pid, gateway.identity, processIdentity) === "alive") return true;
+      if (openAfterExit === 0) return false;
+      openAfterExit -= 1;
+      return true;
     };
-    return { inst, stop: () => (releasedAt = Date.now() + lingerMs) };
+    await reset(testInstance(home, runRoot, "alpha", { listening }));
+    expect(openAfterExit).toBe(0);
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("a port still open after the wait fails the stop, naming the process and port, and the reset deletes nothing", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const gateway = liveProcess();
+    const { stateDir, marker } = seedInstance(home, "alpha", { runRoot, gateway });
+    const before = snapshot(stateDir);
+    const inst = testInstance(home, runRoot, "alpha", {
+      listening: async (port) => port === marker.gatewayPort,
+      portReleaseMs: 300,
+    });
+    await expect(reset(inst)).rejects.toThrow(
+      `could not confirm that every process stopped; its records are kept. ` +
+        `the gateway (pid ${gateway.pid}) has exited, but its port ${marker.gatewayPort} is still open`,
+    );
+    expect(processState(gateway.pid, gateway.identity, processIdentity)).toBe("dead");
+    expect(snapshot(stateDir)).toEqual(before);
+  });
+
+  /** An instance whose gateway's port stays open while `open.value` is true; its first stop times out. */
+  async function timedOutStop() {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const gateway = liveProcess();
+    const { marker } = seedInstance(home, "alpha", { runRoot, gateway });
+    const open = { value: true };
+    const inst = testInstance(home, runRoot, "alpha", {
+      listening: async (port) => open.value && port === marker.gatewayPort,
+      portReleaseMs: 300,
+    });
+    await expect(stop(inst)).rejects.toThrow(`its port ${marker.gatewayPort} is still open`);
+    expect(processState(gateway.pid, gateway.identity, processIdentity)).toBe("dead");
+    expect(existsSync(inst.runFile)).toBe(true);
+    return { inst, gateway, marker, open };
   }
 
-  it("removes the instance once a port let go late is free", async () => {
-    const { inst, stop: stopping } = lingering(1500);
-    await start(inst, { seed: false });
-    const marker = readMarker(inst.stateDir)!;
-    stopping();
-    await reset(inst, { runId: marker.runId });
-    expect(existsSync(inst.stateDir)).toBe(false);
-    expect(processState(marker.gatewayPid, marker.gatewayIdentity, processIdentity)).toBe("dead");
-  }, 30_000);
+  it("a stop run again while the port of a gateway an earlier stop ended stays open keeps the run file and names the port", async () => {
+    const { inst, gateway, marker } = await timedOutStop();
+    // The gateway is gone, so this stop signals nothing, but its port still counts.
+    await expect(stop(inst)).rejects.toThrow(
+      `the gateway (pid ${gateway.pid}) has exited, but its port ${marker.gatewayPort} is still open`,
+    );
+    expect(existsSync(inst.runFile)).toBe(true);
+  });
 
-  it("still refuses, and keeps the folder, when something keeps listening", async () => {
-    const { inst, stop: stopping } = lingering(Number.POSITIVE_INFINITY);
-    await start(inst, { seed: false });
-    stopping();
-    await expect(reset(inst)).rejects.toThrow(/may still be in use: something is listening/);
-    expect(existsSync(inst.stateDir)).toBe(true);
-  }, 40_000);
+  it("a stop run again once that port has closed succeeds and removes the run file", async () => {
+    const { inst, open } = await timedOutStop();
+    open.value = false;
+    await stop(inst);
+    expect(existsSync(inst.runFile)).toBe(false);
+  });
 });
 
 describe("lock files are used only through real directories (B4)", () => {
