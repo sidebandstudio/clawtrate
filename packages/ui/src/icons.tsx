@@ -257,3 +257,9 @@ export const MoreIcon = (props: IconProps) => (
     <circle cx="12.5" cy="8" r="0.6" fill="currentColor" />
   </Icon>
 );
+
+export const PlugIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M6 2.75v2.5M10 2.75v2.5M4.25 5.25h7.5v2.5a3.75 3.75 0 0 1-7.5 0v-2.5ZM8 11.5v1.75" />
+  </Icon>
+);

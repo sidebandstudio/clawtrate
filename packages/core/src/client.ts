@@ -17,6 +17,12 @@ import { isRefusedDecision } from "./approval-refusals.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
 import {
+  PermissionsEngine,
+  type PermissionBase,
+  type PermissionWrite,
+} from "./permissions-engine.ts";
+import { RULES_STATUS_METHOD, type BotPermissions, type PermissionChoice } from "./permissions.ts";
+import {
   admitApproval,
   applyApprovalRequested,
   applyApprovalResolved,
@@ -818,6 +824,30 @@ export class ClawtrateClient {
     log: (message) => this.log("warn", message),
   });
   /**
+   * Whether the gateway's method list named the rules plugin's status method
+   * at the latest hello; null before one.
+   */
+  private rulesMethodsListed: boolean | null = null;
+  /** What a bot may do (`permissions-engine.ts`): reads answered and kept nowhere. */
+  private readonly permissions = new PermissionsEngine({
+    request: (method, params, options) => {
+      if (!this.protocol) return Promise.reject(new NotSentError());
+      return this.protocol.request(method, params, options);
+    },
+    connected: () => this.state.connection.status === "connected",
+    admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
+    rulesMethods: () => this.rulesMethodsListed,
+    latestTask: (botId) => {
+      let latest: { key: string; at: number } | null = null;
+      for (const task of this.state.tasksByBot[botId] ?? []) {
+        const at = task.updatedAt ?? 0;
+        if (!latest || at > latest.at) latest = { key: task.key, at };
+      }
+      return latest?.key ?? null;
+    },
+    now: () => this.now(),
+  });
+  /**
    * Task lists being read, each its rows so far, already bounded: at most two,
    * a hello's and one refresh (refreshes run one at a time; a changed
    * connection's read ends when its requests are flushed).
@@ -1102,7 +1132,11 @@ export class ClawtrateClient {
     if (this.scopeUpgrade || !protocol || !identity || !url || !auth || auth.url !== url) return;
     const generation = this.generation;
     const tier = this.upgradeTier;
-    const target = [...this.tierScopes(tier)];
+    // Admin adds exactly `operator.admin` to the interactive scopes held now, and nothing else.
+    const target =
+      tier === "admin"
+        ? [...INTERACTIVE_SCOPES.filter((scope) => this.holds(scope)), ADMIN_SCOPE]
+        : [...INTERACTIVE_SCOPES];
     const upgrade = new GatewayScopeUpgrade({
       request: (method, params, options) => protocol.request(method, params, options),
       tokenStore: {
@@ -4166,6 +4200,8 @@ export class ClawtrateClient {
   /** What one gateway reported that must never be read against another. */
   private forgetGatewayState(): void {
     this.accounts.reset();
+    this.permissions.reset();
+    this.rulesMethodsListed = null;
     // A creation belongs to the gateway it was asked of; it is never asked of another.
     for (const timer of this.creationTimers.values()) clearTimeout(timer);
     this.creationTimers.clear();
@@ -4319,6 +4355,8 @@ export class ClawtrateClient {
       maxPayload: number(policy?.maxPayload),
       maxImageBytes: number(asRecord(policy?.attachments)?.maxImageBytes),
     };
+    const methods = asRecord(hello.features)?.methods;
+    this.rulesMethodsListed = Array.isArray(methods) && methods.includes(RULES_STATUS_METHOD);
     this.setConnection({
       status: "connected",
       serverVersion: hello.server.version,
@@ -5147,6 +5185,23 @@ export class ClawtrateClient {
     if (this.state.connection.status !== "connected")
       throw new Error("Not connected to the gateway.");
     return listArchived(this.actionContext(null), botId);
+  }
+
+  // What a bot may do (`permissions.ts`, `permissions-engine.ts`; controls.md sections 2 to 5) ----
+
+  /** One bot's permissions, read now and not kept (`operator.read`). */
+  readPermissions(botId: string): Promise<BotPermissions> {
+    return this.permissions.read(botId);
+  }
+
+  /** A line's choice, written (`operator.admin`) and read back. */
+  setPermission(
+    botId: string,
+    line: string,
+    choice: PermissionChoice,
+    base: PermissionBase,
+  ): Promise<PermissionWrite> {
+    return this.permissions.choose(botId, line, choice, base);
   }
 
   /** Change the rail's arrangement on the gateway; `base` is this device's, for the first change. */

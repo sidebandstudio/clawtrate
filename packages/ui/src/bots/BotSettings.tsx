@@ -31,6 +31,7 @@ import {
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
 import { Connect } from "./Connect.tsx";
 import { ModelPair } from "./ModelPair.tsx";
+import { Permissions, PermissionsRow } from "./Permissions.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
 import {
   accountName,
@@ -54,7 +55,7 @@ import {
 export const WATCH_MS = 4_000;
 export const CHECK_MS = 30_000;
 
-type View = "main" | "account" | "change" | "connect";
+type View = "main" | "account" | "change" | "connect" | "permissions";
 
 export function BotSettings({
   bot,
@@ -336,8 +337,29 @@ export function BotSettings({
         {binding.mode === "default-model" && (
           <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
         )}
+        <h3 className="b-tabgroup">Tools</h3>
+        <PermissionsRow
+          bot={bot}
+          connection={connection}
+          visible={visible}
+          onOpen={() => go("permissions")}
+        />
         {foot}
       </div>
+    );
+  }
+
+  // --- What the bot may do (controls.md sections 4 and 5) ----------------------------------------
+  if (view === "permissions") {
+    return (
+      <Permissions
+        bot={bot}
+        connection={connection}
+        info={info}
+        visible={visible}
+        announce={announce}
+        onBack={() => go("main", "[data-bs='permissions']")}
+      />
     );
   }
 

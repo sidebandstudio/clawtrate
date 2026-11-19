@@ -20,6 +20,8 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
+import { PERMISSION_CHOICES, type BotPermissions, type PermissionChoice } from "./permissions.ts";
+import type { PermissionWrite } from "./permissions-engine.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -177,7 +179,19 @@ export type BridgeCommand =
   /** A bot's archived tasks, read now. */
   | { type: "listArchived"; botId: string }
   /** Change the rail's arrangement on the gateway; `base` is this device's, used when the gateway holds none. */
-  | { type: "changeSidebar"; change: SidebarChange; base: SidebarPrefs | null };
+  | { type: "changeSidebar"; change: SidebarChange; base: SidebarPrefs | null }
+  // What a bot may do (controls.md sections 4 and 5). A read is kept nowhere; writes need admin.
+  /** One bot's permissions, read now. */
+  | { type: "readPermissions"; botId: string }
+  /** A line's choice, against the settings hash and the rules version the page read. */
+  | {
+      type: "setPermission";
+      botId: string;
+      line: string;
+      choice: PermissionChoice;
+      configHash: string | null;
+      rulesVersion: number | null;
+    };
 
 /** What each command answers with. */
 export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
@@ -220,7 +234,11 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                       ? ArchiveResult
                                       : C extends { type: "listArchived" }
                                         ? ArchivedList
-                                        : void;
+                                        : C extends { type: "readPermissions" }
+                                          ? BotPermissions
+                                          : C extends { type: "setPermission" }
+                                            ? PermissionWrite
+                                            : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -745,7 +763,30 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     }
     case "newMainTask":
     case "listArchived":
+    case "readPermissions":
       return { type: command.type, botId: botId(command.botId) };
+    case "setPermission": {
+      const choice = command.choice;
+      if (typeof choice !== "string" || !(PERMISSION_CHOICES as readonly string[]).includes(choice))
+        throw new Error("invalid choice");
+      const hash = command.configHash;
+      if (hash !== null && (typeof hash !== "string" || hash.length > 256))
+        throw new Error("invalid settings hash");
+      const version = command.rulesVersion;
+      if (
+        version !== null &&
+        (typeof version !== "number" || !Number.isSafeInteger(version) || version < 0)
+      )
+        throw new Error("invalid rules version");
+      return {
+        type: "setPermission",
+        botId: botId(command.botId),
+        line: shortText(command.line, 160, "line"),
+        choice: choice as PermissionChoice,
+        configHash: hash,
+        rulesVersion: version,
+      };
+    }
     case "renameTask":
       if (typeof command.label !== "string" || command.label.length > MAX_TASK_LABEL_CHARS)
         throw new Error("invalid label");
@@ -1080,6 +1121,13 @@ class ViewerSession implements BridgeSession {
         return client.deleteTask(command.key, { owner });
       case "listArchived":
         return client.listArchived(command.botId);
+      case "readPermissions":
+        return client.readPermissions(command.botId);
+      case "setPermission":
+        return client.setPermission(command.botId, command.line, command.choice, {
+          configHash: command.configHash,
+          rulesVersion: command.rulesVersion,
+        });
       case "changeSidebar":
         return client.changeSidebar(command.change, command.base, { owner });
     }

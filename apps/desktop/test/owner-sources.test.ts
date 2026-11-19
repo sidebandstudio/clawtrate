@@ -55,6 +55,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/scopes.ts:ADMIN_SCOPES": "static, five scopes",
   "packages/core/src/accounts-engine.ts:CERTAIN_REFUSALS": "static, seven error codes",
   "packages/core/src/accounts.ts:KIND_RECORDS": "static, the four kinds Clawtrate records",
+  "packages/core/src/permissions.ts:LINE_DEFS": "static, the design's eleven lines",
+  "packages/core/src/permissions.ts:PERMISSION_CHOICES": "static, seven choices",
+  "packages/core/src/permissions.ts:lineOf>open":
+    "one line's tools that nothing removes, gone when the line is read",
   "packages/core/src/accounts-engine.ts:complete>missing":
     "one creation's steps that did not land, at most four, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>errors":

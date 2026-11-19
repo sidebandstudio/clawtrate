@@ -12,6 +12,13 @@ export * as actionWords from "./action-words.ts";
 export * from "./attachments.ts";
 export * from "./files.ts";
 export * from "./accounts.ts";
+export * from "./permissions.ts";
+export {
+  MAX_KEPT_RULE_SCOPES,
+  MAX_PERMISSION_READS,
+  type PermissionBase,
+  type PermissionWrite,
+} from "./permissions-engine.ts";
 export {
   AdminNeededError,
   isActive as isSignInActive,
