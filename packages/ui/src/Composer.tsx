@@ -10,6 +10,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -205,6 +206,13 @@ export function Composer({
     error: string | null;
   } | null>(null);
   const [active, setActive] = useState(0);
+  /** Where the caret goes once the field shows the text just set, if somewhere. */
+  const caretAt = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (caretAt.current === null) return;
+    focusRef.current?.setSelectionRange(caretAt.current, caretAt.current);
+    caretAt.current = null;
+  });
   const [menu, setMenuState] = useState<null | "mode" | "send">(null);
   const [trigger, setTrigger] = useState<HTMLElement | null>(null);
   /** Open a menu; focus returns to `from` when it closes (Send, for a long press). */
@@ -432,8 +440,8 @@ export function Composer({
       const inserted = `${row.insert} `;
       const next = text.slice(0, picker.start) + inserted + text.slice(caret).replace(/^\s+/, "");
       setText(next);
-      const at = picker.start + inserted.length;
-      requestAnimationFrame(() => focusRef.current?.setSelectionRange(at, at));
+      // The caret goes after the name as the new text is drawn, before any later key lands.
+      caretAt.current = picker.start + inserted.length;
     } else {
       // The typed trigger and query leave the words; the skill or action becomes a chip.
       setText((text.slice(0, picker.start) + text.slice(caret)).replace(/^\s+/, ""));
