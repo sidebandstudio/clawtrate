@@ -99,11 +99,16 @@ test("F-201: Every… sends the cadence chosen and the prompt that was edited, i
   await page.getByRole("menuitemradio", { name: "4 hours" }).click();
   await pip.getByText("What to check").click();
   await pip.getByRole("textbox", { name: "Prompt" }).fill("Look at the calendar for tomorrow.");
-  await expect(pip.getByTestId("prompt-note")).toContainText("may answer every check-in");
+  const note = pip.getByTestId("prompt-note");
+  await expect(note).toContainText("Whether Pip stays quiet depends on what this prompt asks.");
+  // Naming NO_REPLY is not asking for quiet: any prompt typed gets the same note.
   await pip
     .getByRole("textbox", { name: "Prompt" })
     .fill("Look at the calendar. If nothing needs attention, reply NO_REPLY.");
-  await expect(pip.getByTestId("prompt-note")).toHaveCount(0);
+  await expect(note).toContainText("Whether Pip stays quiet depends on what this prompt asks.");
+  await expect(pip.getByRole("radio", { name: /^Every…/ })).toContainText(
+    "As often as you choose, Pip checks in with a prompt of its own.",
+  );
   await pip.getByRole("button", { name: "Save", exact: true }).click();
   await expect(pip).toHaveCount(0);
   expect(await saves(page)).toEqual([
@@ -434,14 +439,19 @@ test("F-201: an inherited custom prompt is what an empty prompt means, and no wo
   await checkIns(page);
   await page.getByRole("button", { name: "Change Juniper's check-ins" }).click();
   const juniper = dialog(page, "Juniper");
-  await expect(juniper.getByRole("radio", { name: /^As needed/ })).not.toContainText("stay quiet");
+  await expect(juniper.getByRole("radio", { name: /^As needed/ })).toContainText(
+    "Every 30 minutes, Juniper checks in with the prompt the gateway sets for every bot.",
+  );
   await juniper.getByText("What to check").click();
   await expect(juniper.getByRole("textbox", { name: "Prompt" })).toHaveAttribute(
     "placeholder",
     "Look over my inbox and tell me what's new.",
   );
-  await expect(juniper).toContainText("Empty uses the prompt set as the gateway's default");
-  await expect(juniper.getByTestId("prompt-note")).toContainText("may answer every check-in");
+  await expect(juniper).toContainText("Empty uses the prompt the gateway sets for every bot.");
+  await expect(juniper.getByTestId("prompt-note")).toHaveCount(0);
+  await expect(block(page, "main")).toContainText(
+    "Every 30 minutes, Juniper checks in with the prompt the gateway sets for every bot.",
+  );
 });
 
 test("F-201: As needed says the prompt asks for quiet only for the gateway's own prompt, not for a custom one that names NO_REPLY", async ({
@@ -455,5 +465,5 @@ test("F-201: As needed says the prompt asks for quiet only for the gateway's own
   await expect(asNeeded).toContainText("stay quiet");
   await pip.getByText("What to check").click();
   await pip.getByRole("textbox", { name: "Prompt" }).fill("Always answer; never reply NO_REPLY.");
-  await expect(asNeeded).not.toContainText("quiet");
+  await expect(asNeeded).toHaveText(/Every 30 minutes, Pip checks in with a prompt of its own\.$/);
 });

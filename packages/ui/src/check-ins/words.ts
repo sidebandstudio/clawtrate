@@ -4,7 +4,12 @@
 // not something the gateway guarantees, so no sentence here promises it; and
 // the gateway can skip a scheduled attempt, so none promises a run either.
 
-import { everyText, type CheckInJob, type CheckInSetting } from "@clawtrate/core";
+import {
+  everyText,
+  type CheckInDefaults,
+  type CheckInJob,
+  type CheckInSetting,
+} from "@clawtrate/core";
 
 export type Choice = "off" | "daily" | "asneeded" | "every";
 
@@ -50,6 +55,7 @@ export function sentence(
   name: string,
   job: CheckInJob | undefined,
   settings: readonly CheckInSetting[] | null,
+  defaults: CheckInDefaults | null,
 ): string {
   const background = `It still reports when a command it started in the background finishes.`;
   if (job && !job.enabled) return `${name} doesn't check in on a schedule. ${background}`;
@@ -59,9 +65,13 @@ export function sentence(
       ? `${name} doesn't check in. Once any bot has a check-in setting of its own, only those bots check in.`
       : `${name} doesn't check in. The gateway's default for check-ins doesn't cover it.`;
   }
-  return job.everyMs === DAY
-    ? `Once a day, ${name} looks for anything that needs you.`
-    : `Every ${cadence(job.everyMs)}, ${name} looks for anything that needs you.`;
+  const own = settings?.find((each) => each.botId === job.botId)?.prompt ?? null;
+  const kind = settings === null ? "unknown" : promptKind(own, defaults);
+  return withPrompt(
+    job.everyMs === DAY ? "Once a day" : `Every ${cadence(job.everyMs)}`,
+    name,
+    kind,
+  );
 }
 
 /** The choice a job stands for, and the Every… value when it is one. */
@@ -84,36 +94,49 @@ export function everyFor(choice: Choice, every: string): string {
 }
 
 /**
- * What the prompt in effect asks, as far as words can say: `asks` for the
- * gateway's own, which asks for NO_REPLY when nothing needs attention;
- * `unasked` for one that never mentions NO_REPLY; `unknown` for a custom one
- * that does, since mentioning it is not asking for it.
+ * What Clawtrate knows of the prompt in effect, never read from its wording:
+ * the gateway's built-in one (an empty own prompt and no default of the
+ * gateway's), the bot's own, the gateway's custom default, or one it can't read.
  */
-export type Quiet = "asks" | "unasked" | "unknown";
+export type PromptKind = "builtin" | "own" | "default" | "unknown";
 
-const QUIET: Record<Quiet, string> = {
-  asks: " Its prompt asks it to stay quiet when nothing does.",
-  unasked: " Its prompt doesn't ask it to reply NO_REPLY, so it may answer every check-in.",
-  unknown: "",
-};
+/** The kind of prompt a bot gets from its own prompt (null or "" for none) and the gateway's default. */
+export function promptKind(
+  own: string | null,
+  defaults: Pick<CheckInDefaults, "prompt"> | null,
+): PromptKind {
+  if (own) return "own";
+  if (!defaults) return "unknown";
+  return defaults.prompt === null ? "builtin" : "default";
+}
 
-/** The words under a choice; every choice that checks in ends with what its prompt asks. */
-export function choiceWords(choice: Choice, name: string, quiet: Quiet): string {
+/** "<Cadence>, Juniper …": what is said after a cadence, by the kind of prompt (automation.md section 13). */
+function withPrompt(lead: string, name: string, kind: PromptKind): string {
+  switch (kind) {
+    case "builtin":
+      return `${lead}, ${name} looks for anything that needs you. Its prompt asks it to stay quiet when nothing does.`;
+    case "own":
+      return `${lead}, ${name} checks in with a prompt of its own.`;
+    case "default":
+      return `${lead}, ${name} checks in with the prompt the gateway sets for every bot.`;
+    case "unknown":
+      return `${lead}, ${name} checks in. Clawtrate can't read its prompt.`;
+  }
+}
+
+/** The words under a choice. */
+export function choiceWords(choice: Choice, name: string, kind: PromptKind): string {
   switch (choice) {
     case "off":
       return `${name} doesn't check in on a schedule.`;
     case "daily":
-      return `Once a day, ${name} looks for anything that needs you.${QUIET[quiet]}`;
+      return withPrompt("Once a day", name, kind);
     case "asneeded":
-      return `Every 30 minutes, ${name} looks for anything that needs you.${QUIET[quiet]}`;
+      return withPrompt("Every 30 minutes", name, kind);
     case "every":
-      return `${name} looks for anything that needs you as often as you choose.${QUIET[quiet]}`;
+      return withPrompt("As often as you choose", name, kind);
   }
 }
-
-/** Whether a prompt keeps the gateway's way of saying nothing; "" is the built-in prompt, which does. */
-export const asksForSilence = (prompt: string) =>
-  prompt.trim() === "" || prompt.includes("NO_REPLY");
 
 /** The gateway's own prompt, as OpenClaw 2026.10.6 documents it (`docs/gateway/heartbeat.md`). */
 export const DEFAULT_PROMPT =

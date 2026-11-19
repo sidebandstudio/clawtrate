@@ -28,8 +28,8 @@ import { clock } from "../bots/words.ts";
 import type { SectionView } from "../bots/AccountsSection.tsx";
 import { draftToSave, openDraft, rebase, type Draft } from "./draft.ts";
 import {
-  asksForSilence,
   choiceWords,
+  promptKind,
   DEFAULT_PROMPT,
   EVERY_CHOICES,
   sentence,
@@ -161,7 +161,9 @@ export function useCheckInsSection({
                     </button>
                   )}
                 </div>
-                <p data-testid="check-in-text">{sentence(bot.name, job, checkIns.settings)}</p>
+                <p data-testid="check-in-text">
+                  {sentence(bot.name, job, checkIns.settings, checkIns.defaults)}
+                </p>
                 {next && <p className="ci-faint">{next}</p>}
               </section>
             );
@@ -313,13 +315,9 @@ function CheckInsDialog({
     ? EVERY_CHOICES
     : [...EVERY_CHOICES, { value: every, label: `${every} (as set now)` }];
   const inheritedPrompt = checkIns.defaults?.prompt ?? null;
-  const empty = prompt.trim() === "";
-  // Only the gateway's own prompt is known to ask for quiet; a custom one says what it says.
-  const builtIn = empty && inheritedPrompt === null;
-  // A prompt shown cut may ask for NO_REPLY past where it is cut.
-  const shownWhole = empty ? !checkIns.defaults?.promptCut : !base.promptCut;
-  const promptWarning = shownWhole && !asksForSilence(empty ? (inheritedPrompt ?? "") : prompt);
-  const quiet = builtIn ? "asks" : promptWarning ? "unasked" : "unknown";
+  // Said from what is known of the prompt in effect, never from its wording.
+  const kind = promptKind(prompt.trim() === "" ? null : prompt, checkIns.defaults);
+  const typed = kind === "own";
   const checkedHere = save?.status === "unknown" && draft.rebased === save.id;
   const title = `${bot.name}'s check-ins`;
 
@@ -357,7 +355,7 @@ function CheckInsDialog({
                 >
                   <span className="b-choice-text">
                     <span className="b-choice-title">{label}</span>
-                    <span className="b-choice-sub">{choiceWords(value, bot.name, quiet)}</span>
+                    <span className="b-choice-sub">{choiceWords(value, bot.name, kind)}</span>
                   </span>
                   <CheckIcon className="b-tick" />
                 </button>
@@ -396,22 +394,23 @@ function CheckInsDialog({
               readOnly={base.promptCut || saving}
               maxLength={MAX_CHECKIN_PROMPT_CHARS}
               placeholder={inheritedPrompt ?? DEFAULT_PROMPT}
-              aria-describedby={promptWarning ? "ci-prompt-note ci-prompt-hint" : "ci-prompt-hint"}
+              aria-describedby={typed ? "ci-prompt-note ci-prompt-hint" : "ci-prompt-hint"}
               onChange={(event) =>
                 change({ prompt: event.target.value, touched: { ...touched, prompt: true } })
               }
             />
-            {promptWarning && (
+            {typed && (
               <p className="ci-hint" id="ci-prompt-note" data-testid="prompt-note">
-                This prompt doesn't ask {bot.name} to reply NO_REPLY when nothing needs attention,
-                as the gateway's own prompt does, so {bot.name} may answer every check-in.
+                This prompt replaces the gateway's own, which asks {bot.name} to reply NO_REPLY when
+                nothing needs attention. Whether {bot.name} stays quiet depends on what this prompt
+                asks.
               </p>
             )}
             <p className="ci-hint" id="ci-prompt-hint">
               {base.promptCut
                 ? "This prompt is longer than Clawtrate edits. Saving leaves it as it is."
                 : inheritedPrompt !== null
-                  ? `Empty uses the prompt set as the gateway's default for every bot, shown faint above. Up to ${MAX_CHECKIN_PROMPT_CHARS.toLocaleString("en-US")} characters.`
+                  ? `Empty uses the prompt the gateway sets for every bot. Up to ${MAX_CHECKIN_PROMPT_CHARS.toLocaleString("en-US")} characters.`
                   : `Empty uses the gateway's built-in prompt, which asks the bot to reply NO_REPLY when nothing needs attention. Up to ${MAX_CHECKIN_PROMPT_CHARS.toLocaleString("en-US")} characters.`}
             </p>
           </details>

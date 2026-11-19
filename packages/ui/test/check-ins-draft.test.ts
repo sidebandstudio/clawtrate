@@ -6,7 +6,7 @@
 import type { CheckInsState } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 import { draftToSave, openDraft, rebase, type Draft } from "../src/check-ins/draft.ts";
-import { cadence, choiceWords } from "../src/check-ins/words.ts";
+import { cadence, choiceWords, promptKind, type PromptKind } from "../src/check-ins/words.ts";
 
 const state = (main: { every: string; prompt: string | null }, kept = false): CheckInsState => ({
   status: "ready",
@@ -102,16 +102,26 @@ describe("F-201 check-in words", () => {
     expect(cadence(1_500)).toBe("1,500 milliseconds");
   });
 
-  it("F-201: each choice that checks in says its prompt asks for quiet only for the gateway's own prompt, and that one never mentioning NO_REPLY may answer every check-in", () => {
-    for (const choice of ["daily", "asneeded", "every"] as const) {
-      expect(choiceWords(choice, "Juniper", "asks")).toMatch(
-        /Its prompt asks it to stay quiet when nothing does\.$/,
-      );
-      expect(choiceWords(choice, "Juniper", "unasked")).toMatch(
-        /so it may answer every check-in\.$/,
-      );
-      expect(choiceWords(choice, "Juniper", "unknown")).not.toMatch(/quiet|NO_REPLY/);
-    }
-    expect(choiceWords("off", "Juniper", "asks")).toBe("Juniper doesn't check in on a schedule.");
+  it("F-201: the words after a cadence say what is known of the prompt, and claim quiet only for the built-in one", () => {
+    const words = (kind: PromptKind) => choiceWords("asneeded", "Juniper", kind);
+    expect(words("builtin")).toBe(
+      "Every 30 minutes, Juniper looks for anything that needs you. Its prompt asks it to stay quiet when nothing does.",
+    );
+    expect(words("own")).toBe("Every 30 minutes, Juniper checks in with a prompt of its own.");
+    expect(words("default")).toBe(
+      "Every 30 minutes, Juniper checks in with the prompt the gateway sets for every bot.",
+    );
+    expect(words("unknown")).toBe(
+      "Every 30 minutes, Juniper checks in. Clawtrate can't read its prompt.",
+    );
+    expect(choiceWords("every", "Juniper", "own")).toMatch(/^As often as you choose, /);
+    expect(choiceWords("off", "Juniper", "builtin")).toBe(
+      "Juniper doesn't check in on a schedule.",
+    );
+    // Mentioning NO_REPLY is not asking for quiet: a prompt of the bot's own is its own.
+    expect(promptKind("Always answer; never reply NO_REPLY.", { prompt: null })).toBe("own");
+    expect(promptKind("", { prompt: null })).toBe("builtin");
+    expect(promptKind(null, { prompt: "Look at my inbox." })).toBe("default");
+    expect(promptKind(null, null)).toBe("unknown");
   });
 });
