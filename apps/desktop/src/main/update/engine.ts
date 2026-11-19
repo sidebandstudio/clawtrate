@@ -157,10 +157,15 @@ export class UpdateEngine {
 
   private exclusive(work: () => Promise<UpdateState>): Promise<UpdateState> {
     if (this.busy) return this.busy;
-    this.busy = work().finally(() => {
-      this.busy = null;
-    });
-    return this.busy;
+    // The work starts a microtask later, after `busy` is set, so an observer
+    // that asks for a check from inside `onState` gets this same promise.
+    const run: Promise<UpdateState> = Promise.resolve()
+      .then(work)
+      .finally(() => {
+        if (this.busy === run) this.busy = null;
+      });
+    this.busy = run;
+    return run;
   }
 
   private report(state: UpdateState): UpdateState {

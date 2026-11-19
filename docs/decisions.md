@@ -250,6 +250,7 @@ The release side of the updater (issue #68): the feed, what is verified before a
   - every file's address has the feed's own origin;
   - no redirect is followed, to any host: a 3xx answer is `redirect-refused`. Releases served through a redirect (a release host that sends you to a storage host) therefore do not work; the owner serves the files directly;
   - only a version greater than the running one becomes `available`; the same or an older one is `up-to-date`, and a download starts only from `available`;
+  - one check or download runs at a time: one asked for while another runs, from an observer told `checking` included, gets that one's promise and makes no request;
   - a check first forgets the last check's offer: while it runs and after it fails, `newer` is null, so nothing is "required" from an earlier answer and `download()` starts nothing;
   - a download is written to a `.partial` file created exclusively with mode `0600`, counted and hashed as it arrives, stopped as soon as it passes the feed's size, and kept only when its size and SHA-512 are the feed's; otherwise it is deleted and reported `size-mismatch` or `hash-mismatch`. The kept file's name is built from the checked version and the platform, never from the feed's address;
   - bounds: the feed at 64 KiB and 15 seconds (`FEED_TIMEOUT_MS`); a file at 512 MiB (`MAX_DOWNLOAD_BYTES`, refused as `too-large` from the feed's own `size`, or from `Content-Length`, before any byte is written), 30 minutes in all (`DOWNLOAD_TIMEOUT_MS`) and 60 seconds without a byte (`IDLE_TIMEOUT_MS`);
