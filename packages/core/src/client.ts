@@ -217,6 +217,7 @@ import {
   type ActivityQuery,
   type AllowlistRemoveResult,
   type GrantRevokeResult,
+  type LoadedCall,
   type PermissionsContext,
   type RulesPluginState,
   type SavedApprovals,
@@ -5421,19 +5422,24 @@ export class ClawtrateClient {
   /** One page of the audit log's tool actions with their recorded causes (`operator.read`). */
   async readActivity(query: ActivityQuery): Promise<ActivityPage> {
     const ctx = this.permissionsContext();
-    // The calls of every task this host follows, by the audit log's hash of their id.
-    const loaded = new Map<string, { key: string; callId: string }>();
+    // The calls of every task this host follows, by the audit log's hash of their id, with
+    // their task and, for a live run's step, its run: a history item names no run.
+    const loaded = new Map<string, LoadedCall[]>();
+    const add = (call: LoadedCall) => {
+      const hash = auditCallId(call.callId);
+      loaded.set(hash, [...(loaded.get(hash) ?? []), call]);
+    };
     for (const [key, transcript] of Object.entries(this.state.transcripts)) {
       for (const item of transcript.items) {
         for (const block of item.blocks) {
           if (block.kind === "tool-call" && block.callId)
-            loaded.set(auditCallId(block.callId), { key, callId: block.callId });
+            add({ key, callId: block.callId, runId: null });
         }
       }
       for (const run of transcript.runs) {
         for (const step of run.steps) {
           if (step.toolCallId)
-            loaded.set(auditCallId(step.toolCallId), { key, callId: step.toolCallId });
+            add({ key, callId: step.toolCallId, runId: run.bound ? run.id : null });
         }
       }
     }

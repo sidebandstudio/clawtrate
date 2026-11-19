@@ -706,7 +706,10 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
       {
         rulesListed: false,
         loaded: new Map([
-          [BLOCKED_CALL, { key: "agent:otto:dashboard:3e1273ad", callId: "call_read_agents" }],
+          [
+            BLOCKED_CALL,
+            [{ key: "agent:otto:dashboard:3e1273ad", callId: "call_read_agents", runId: null }],
+          ],
         ]),
       },
     );
@@ -714,6 +717,46 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
       { key: "agent:otto:dashboard:3e1273ad", callId: "call_read_agents" },
       null,
     ]);
+  });
+
+  it("Show in chat opens the row's own call: matched by its task and run, and withheld when that can't be told apart", async () => {
+    const TASK_A = "agent:otto:task-a";
+    const TASK_B = "agent:otto:task-b";
+    const read = (
+      loaded: Map<string, Array<{ key: string; callId: string; runId: string | null }>>,
+    ) =>
+      readActivity(
+        fake({
+          "audit.activity.list": () => ({
+            events: [event({ toolCallId: BLOCKED_CALL, sessionKey: TASK_A, runId: "run-a" })],
+          }),
+          "config.get": () => ({ config: {} }),
+        }).ctx,
+        { cursor: null, agentId: null, status: null },
+        { rulesListed: false, loaded },
+      ).then((page) => page.rows[0]!.inChat);
+    const call = (key: string, runId: string | null) => ({ key, callId: "call_1", runId });
+    // The same call id in another task is never this row's call.
+    expect(await read(new Map([[BLOCKED_CALL, [call(TASK_B, null)]]]))).toBeNull();
+    expect(await read(new Map([[BLOCKED_CALL, [call(TASK_B, null), call(TASK_A, null)]]]))).toEqual(
+      {
+        key: TASK_A,
+        callId: "call_1",
+      },
+    );
+    // In its own task, a step of another run is not it either.
+    expect(await read(new Map([[BLOCKED_CALL, [call(TASK_A, "run-b")]]]))).toBeNull();
+    expect(await read(new Map([[BLOCKED_CALL, [call(TASK_A, "run-a")]]]))).toEqual({
+      key: TASK_A,
+      callId: "call_1",
+    });
+    // Two drawings of that call id in its task, which the run can't tell apart: no link.
+    expect(
+      await read(new Map([[BLOCKED_CALL, [call(TASK_A, null), call(TASK_A, null)]]])),
+    ).toBeNull();
+    expect(
+      await read(new Map([[BLOCKED_CALL, [call(TASK_A, "run-a"), call(TASK_A, null)]]])),
+    ).toBeNull();
   });
 
   it("a page is bounded where it enters and fits one result frame", async () => {

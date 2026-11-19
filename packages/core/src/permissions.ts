@@ -695,14 +695,45 @@ function causeOf(decision: Decision | undefined, rules: CurrentRules | null): Ac
 }
 
 /**
+ * A call as a task this host has loaded draws it: the task, the call's own id,
+ * and its run where the transcript gives it (a live run's step does; a history
+ * item does not).
+ */
+export type LoadedCall = { key: string; callId: string; runId: string | null };
+
+/**
+ * The call in a loaded task that is this row's: in the row's own task, and in
+ * its run. A call drawn with no run is taken only when it is the task's one
+ * drawing of that call; anything that cannot be told apart gives no link.
+ */
+function chatTarget(
+  row: Omit<ActivityRow, "cause" | "inChat">,
+  loaded: Map<string, LoadedCall[]>,
+): ActivityRow["inChat"] {
+  if (!row.callId || !row.sessionKey) return null;
+  const drawn = (loaded.get(row.callId) ?? []).filter((each) => each.key === row.sessionKey);
+  const ofRun = drawn.filter((each) => each.runId === row.runId);
+  const pick =
+    ofRun.length > 0 && ofRun.length === drawn.length
+      ? ofRun[0]
+      : drawn.length === 1 && drawn[0]!.runId === null
+        ? drawn[0]
+        : undefined;
+  return pick && pick.key.length <= MAX_ACTIVITY_ID && pick.callId.length <= MAX_ACTIVITY_ID
+    ? { key: pick.key, callId: pick.callId }
+    : null;
+}
+
+/**
  * One page of the audit log's tool actions, newest first, each joined to the
- * rules plugin's decision record by its run and hashed call id, and to a step
- * of a task this host has loaded by the same hash (`loaded`).
+ * rules plugin's decision record by its run and hashed call id, and to the
+ * same call in a task this host has loaded (`loaded`, by that hash) by its
+ * task and run as well.
  */
 export async function readActivity(
   ctx: PermissionsContext,
   query: ActivityQuery,
-  options: { rulesListed: boolean; loaded: Map<string, { key: string; callId: string }> },
+  options: { rulesListed: boolean; loaded: Map<string, LoadedCall[]> },
 ): Promise<ActivityPage> {
   const [answer, config] = await Promise.all([
     ctx.request("audit.activity.list", {
@@ -747,12 +778,7 @@ export async function readActivity(
                 };
         }
       }
-      const found = row.callId ? options.loaded.get(row.callId) : undefined;
-      const inChat =
-        found && found.key.length <= MAX_ACTIVITY_ID && found.callId.length <= MAX_ACTIVITY_ID
-          ? found
-          : null;
-      return { ...row, cause, inChat };
+      return { ...row, cause, inChat: chatTarget(row, options.loaded) };
     }),
   };
 }
