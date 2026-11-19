@@ -126,6 +126,7 @@ const STATES = [
   ["screen=chat", ["Add today's standup to team-notes.", "team-notes asks for a sign-in", "The gateway sees every device using Clawtrate as one sender, so this sign-in is shared by everyone who uses this gateway from Clawtrate.", "After you sign in, ask Pip again.", "auth.teamnotes.example", "https://auth.teamnotes.example/authorize?response_type=code", "Open in your browser", "Anyone who opens this link completes this sign-in."]],
   ["screen=chat&card=opened", ["Opened at 5:12 PM. If the page didn't finish, open it again.", "Reopen"]],
   ["screen=chat&card=connected", ["MCP server \"team-notes\" is connected. Its tools become available on the next message."]],
+  ["screen=chat&card=history", ["Used team-notes connect", "team-notes__connect", "Connect MCP server \"team-notes\" at", "https://auth.teamnotes.example/authorize?state=example-state-2c41"]],
   ["screen=chat&card=error", ["team-notes can't ask for a sign-in here:", "gateway.publicOrigin is not configured"]],
   ["screen=picker", ["What do you use every day?", "Pick the apps you use. Nothing is connected now; they come first in Connect apps.", "Search apps", "Quillnote", "Huddlewick", "Skip", "Next"]],
 ];
@@ -377,6 +378,12 @@ await walk("the connect card in a shared task", "screen=chat", [[link("In a shar
 {
   const p = await open("screen=chat&shared=1");
   check("in a shared task, the warning line is in --warn", (await p.locator(".c-card .c-line[data-tone]").last().getAttribute("data-tone")) === "warn");
+  await p.close();
+}
+await walk("a connect call read from history is the ordinary card", "screen=chat", [[link("Read from history"), "chat"]], ["team-notes__connect"]);
+{
+  const p = await open("screen=chat&card=history");
+  check("from history: no connect card, no button, the address only as text (ruling 9)", (await p.locator(".c-card .c-open, .c-card .c-address").count()) === 0 && !(await text(p)).includes("Open in your browser") && (await p.locator(".c-card a").count()) === 0);
   await p.close();
 }
 await walk("the connect card: no public address", "screen=chat", [[link("No public address"), "chat"]], ["gateway.publicOrigin is not configured"]);

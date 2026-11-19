@@ -429,6 +429,7 @@
         `<p class="c-line">After you sign in, ask Pip again.</p>` +
         `<p class="c-line">Anyone who opens this link completes this sign-in.</p>`,
       connected: `<p class="c-card-title">Used team-notes connect</p><p class="c-card-text">MCP server "team-notes" is connected. Its tools become available on the next message.</p>`,
+      history: `<p class="c-card-title">Used team-notes connect</p><p class="c-card-text mono" data-c="tool">team-notes__connect</p><p class="c-card-text">Connect MCP server "team-notes" at <span class="mono">https://auth.teamnotes.example/authorize?state=example-state-2c41</span>. After sign-in completes, the server's tools become available on the next message.</p>`,
       error: `<p class="c-card-title"><b>team-notes can't ask for a sign-in here:</b></p><p class="c-card-text mono">MCP server "team-notes" needs requester sign-in, but gateway.publicOrigin is not configured. Ask the operator to set the public Gateway HTTP(S) origin.</p>`,
     }[card];
     return (
@@ -441,6 +442,7 @@
         link("Already connected", "chat", { card: "connected" }, { variant: "quiet" }),
         link("No public address", "chat", { card: "error" }, { variant: "quiet" }),
         link("In a shared task", "chat", { card: "open", shared: "1" }, { variant: "quiet" }),
+        link("Read from history", "chat", { card: "history" }, { variant: "quiet" }),
       ]) +
       `</div>`
     );

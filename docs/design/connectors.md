@@ -188,7 +188,7 @@ When `browse` comes back with `remoteError`, or `categories` and `featured` fail
 - "About": the readme as plain text (the first 12 lines, "Show all" for the rest), its version, and the verification and security summary as given.
 - At the foot, "Add" (primary), or the access bar below admin.
 
-Links in the readme follow the rule for links (`docs/decisions.md`, in review): shown as text with their full address, opened only when chosen.
+Everything the catalog and a plugin give (a name, a summary, an author, the readme) is text, escaped, never markup. Links in a readme or in a tool's result follow the project's rule for addresses a gateway hands the client (`docs/decisions.md`, on `e3-remote-content-rule`, being corrected): shown as text with their full address, opened only when chosen. A connector's resources, pictures and app views (`mcp.app.*`) never load by themselves.
 
 **The confirmation** (role `alertdialog`, focus on Cancel):
 
@@ -335,6 +335,8 @@ Under the steps: "Or sign in from Settings on the gateway's own web page." The p
 - The link is single use and expires. A link already used or expired lands on the gateway's page "This sign-in link expired or was already used. Ask the bot to connect again." The card cannot know that in advance and does not guess.
 - **Anyone who opens the link completes the sign-in** (R§7). Under its button: "Anyone who opens this link completes this sign-in." In a task more than one person can read, that line is in `--warn`.
 - **A sign-in address** follows the rule for addresses the gateway hands the client (`docs/decisions.md`, in review on `e3-remote-content-rule`): it opens only when the person chooses "Open in your browser", in the system browser, and the full address is shown first, its host in medium weight on the first line and the whole address under it in mono, with a copy button.
+
+**From history, never a connect card.** `chat.history` keeps a call's tool name and its result text, not its `details` (R§7). A call read back from history is therefore the ordinary action card, with the tool name as recorded (`team-notes__connect`) and its result as text; an address in that text is shown in full and follows the rule for addresses, like any other result. Nothing is inferred from a tool name's prefix, from the tools the gateway lists today or from the result's words: a card made that way could name the wrong server or offer an old link again.
 
 **A shared server says nothing in the conversation.** A shared OAuth server that is not signed in is left out of the bot's tools; the bot gets no connect tool and the gateway sends no card (R§7). The server's page (section 9) is where its sign-in starts.
 
