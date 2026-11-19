@@ -106,6 +106,9 @@ export function BudgetForm({
       data-testid="budget-form"
       onKeyDown={(event) => {
         if (event.key === "Escape") {
+          // Only the form closes: not the Settings dialog it may be in, whose cancel is
+          // Escape's default action.
+          event.preventDefault();
           event.stopPropagation();
           onDone(false);
         }
