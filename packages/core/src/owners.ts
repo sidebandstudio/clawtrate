@@ -37,6 +37,7 @@ import {
   MAX_SPAWN_LINKS,
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
+import { MAX_WAITING_USAGE_REPORTS } from "./usage-engine.ts";
 import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
 import {
   MAX_FILE_TRANSFERS,
@@ -236,6 +237,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   "accounts.unwritten": { max: MAX_ACCOUNTS, each: ID, row: "bookkeeping" },
+  // Usage reports waiting for one of the two in flight to end: a function each, no data.
+  "usage.waiting": { max: MAX_WAITING_USAGE_REPORTS, each: 0, row: null },
   // The bots there before the first Create of the bot being made, while its answer is in doubt.
   "accounts.before": { max: MAX_BOTS, each: ID, row: "bookkeeping" },
   // What the person typed into the one sign-in under way, in the forms it may come back in, while

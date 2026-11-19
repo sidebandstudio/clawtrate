@@ -54,6 +54,12 @@ export type UsageContext = {
 
 /** Reports read at once; one more is refused with a reason to show. */
 export const MAX_USAGE_REPORTS = 2;
+/**
+ * Reports that wait for one of those to finish, in the order asked; one more
+ * is refused. A host that is only busy is not a failure: a page keeps showing
+ * that it is loading until its turn comes.
+ */
+export const MAX_WAITING_USAGE_REPORTS = 8;
 /** Requests one report or count sends at once. */
 export const USAGE_REQUESTS_AT_ONCE = 4;
 /** How often budgets are counted again while there are any. */
@@ -162,6 +168,8 @@ export class UsageEngine {
   private counting: Promise<void> | null = null;
   private countAgain = false;
   private reports = 0;
+  /** Reports waiting for a slot, each woken in turn when one ends (`MAX_WAITING_USAGE_REPORTS`). */
+  private readonly waiting: Array<() => void> = [];
   /** Budget reads and writes issued, and the newest one shown, to order their answers. */
   private issued = 0;
   private shown = 0;
@@ -424,15 +432,21 @@ export class UsageEngine {
 
   // Reports --------------------------------------------------------------------------------------
 
-  /** A page's figures: read now, not kept. At most `MAX_USAGE_REPORTS` at once. */
+  /** A page's figures: read now, not kept. At most `MAX_USAGE_REPORTS` at once; the rest wait their turn. */
   async readReport(request: UsageReportRequest): Promise<UsageReport> {
-    if (this.reports >= MAX_USAGE_REPORTS)
-      throw new Error("Usage is already being read. Try again in a moment.");
-    this.reports += 1;
+    if (this.reports < MAX_USAGE_REPORTS) this.reports += 1;
+    else {
+      if (this.waiting.length >= MAX_WAITING_USAGE_REPORTS)
+        throw new Error("Usage is already being read. Try again in a moment.");
+      // The slot of the report that ends next is handed to this one.
+      await new Promise<void>((resolve) => this.waiting.push(resolve));
+    }
     try {
       return await this.report(request);
     } finally {
-      this.reports -= 1;
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.reports -= 1;
     }
   }
 

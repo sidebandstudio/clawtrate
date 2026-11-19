@@ -9,6 +9,7 @@ import {
   COUNT_COUNTING_MS,
   COUNT_EVERY_MS,
   MAX_USAGE_REPORTS,
+  MAX_WAITING_USAGE_REPORTS,
   rangeSpan,
   startOfDate,
   UsageEngine,
@@ -838,13 +839,56 @@ describe("the usage engine", () => {
     engine.onClose();
   });
 
-  it("reads at most two reports at once, and says so", async () => {
-    const { engine } = engineOn(fakeGateway());
-    const reads = Array.from({ length: MAX_USAGE_REPORTS + 1 }, () =>
+  it("F-234: reads at most two reports at once; a third waits its turn and is answered, not refused", async () => {
+    const gateway = fakeGateway();
+    // The gateway answers usage.cost only when told, so the first two reads stay in flight.
+    const held: Array<() => void> = [];
+    let inFlight = 0;
+    let most = 0;
+    const slow: typeof gateway.request = async (method, params) => {
+      if (method !== "usage.cost") return gateway.request(method, params);
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise<void>((resolve) => held.push(resolve));
+      inFlight -= 1;
+      return gateway.request(method, params);
+    };
+    const { engine } = engineOn({ ...gateway, request: slow });
+    const read = () =>
+      engine.readReport({ botId: "otto", period: "today", timeZone: NY, detail: false, bots: [] });
+    const reads = [read(), read(), read()];
+    await flush();
+    expect(held).toHaveLength(MAX_USAGE_REPORTS);
+    while (held.length > 0) {
+      held.shift()!();
+      await flush();
+    }
+    const settled = await Promise.allSettled(reads);
+    expect(settled.map((s) => s.status)).toEqual(["fulfilled", "fulfilled", "fulfilled"]);
+    expect(most).toBe(MAX_USAGE_REPORTS);
+    engine.onClose();
+  });
+
+  it("refuses a report only when the line of waiting reports is full", async () => {
+    const gateway = fakeGateway();
+    const held: Array<() => void> = [];
+    const slow: typeof gateway.request = async (method, params) => {
+      if (method === "usage.cost") await new Promise<void>((resolve) => held.push(resolve));
+      return gateway.request(method, params);
+    };
+    const { engine } = engineOn({ ...gateway, request: slow });
+    const reads = Array.from({ length: MAX_USAGE_REPORTS + MAX_WAITING_USAGE_REPORTS + 1 }, () =>
       engine.readReport({ botId: "otto", period: "today", timeZone: NY, detail: false, bots: [] }),
     );
-    const settled = await Promise.allSettled(reads);
-    expect(settled.filter((s) => s.status === "rejected")).toHaveLength(1);
+    await flush();
+    // The two in flight and the eight waiting are answered in turn; the eleventh was refused.
+    await expect(reads.at(-1)).rejects.toThrow("Usage is already being read");
+    for (let turn = 0; turn < MAX_USAGE_REPORTS + MAX_WAITING_USAGE_REPORTS; turn += 1) {
+      while (held.length > 0) held.shift()!();
+      await flush();
+    }
+    const settled = await Promise.allSettled(reads.slice(0, -1));
+    expect(settled.every((s) => s.status === "fulfilled")).toBe(true);
     engine.onClose();
   });
 
