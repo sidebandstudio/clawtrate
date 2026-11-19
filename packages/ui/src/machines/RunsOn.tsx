@@ -6,7 +6,7 @@
 // Nothing is kept: the page reads the gateway when it opens and after a save.
 
 import type { BotPlacement, ConnectionState, HostInfo } from "@clawtrate/core";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { CopyValue } from "../AccessBar.tsx";
 import { clockTime } from "../format.ts";
@@ -28,6 +28,16 @@ type Read =
   | { status: "error"; message: string }
   | { status: "ready"; placement: BotPlacement };
 
+/** The connection and the access a read or a form belongs to. */
+export const connectionKey = (connection: ConnectionState) =>
+  [
+    connection.status,
+    connection.gatewayUrl ?? "",
+    connection.deviceId ?? "",
+    connection.connectedAt ?? "",
+    connection.scopes.join(" "),
+  ].join("\n");
+
 /**
  * A bot's placement, read when shown and again on `reload()`. A read belongs to
  * the bot and the connection's access it was made for: while another bot's, an
@@ -39,8 +49,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   const [tick, setTick] = useState(0);
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
-  const scopesKey = connection.scopes.join(" ");
-  const key = `${botId}\n${connection.connectedAt ?? ""}\n${scopesKey}`;
+  const key = `${botId}\n${connectionKey(connection)}`;
   useEffect(() => {
     if (!active || !connected) return;
     let live = true;
@@ -61,6 +70,8 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     };
   }, [bridge, botId, active, connected, key, tick]);
   const reload = useCallback(() => setTick((n) => n + 1), []);
+  // On a disconnect or another key, what was read is dropped before anything is derived.
+  if (held && (!connected || held.key !== key)) setHeld(null);
   const read: Read = !connected
     ? { status: "error", message: "Not connected to the gateway." }
     : held && held.key === key
@@ -181,6 +192,14 @@ export function RunsOnPage({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // A write that completes after this page went away (another bot, connection or access) changes nothing.
+  const mounted = useRef(false);
+  useLayoutEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [editing, setEditing] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -267,6 +286,7 @@ export function RunsOnPage({
         nodeId: value === "gateway" ? null : value,
         baseHash: placement.configHash,
       });
+      if (!mounted.current) return;
       const where = `${botName}'s command machine setting: ${hostWords(saved.place)}`;
       if (saved.active !== "failed" && saved.message)
         setNote(`The gateway answered: ${saved.message}`);
@@ -278,12 +298,15 @@ export function RunsOnPage({
         announce("Saved, not applied");
       }
     } catch (failure) {
+      if (!mounted.current) return;
       setError(failure instanceof Error ? failure.message : String(failure));
       announce("Couldn't save");
     } finally {
-      setSaving(false);
-      // Whatever the outcome, the page shows the gateway as it is now.
-      reload();
+      if (mounted.current) {
+        setSaving(false);
+        // Whatever the outcome, the page shows the gateway as it is now.
+        reload();
+      }
     }
   };
 
@@ -436,6 +459,7 @@ export function RunsOnPage({
           initial={editing}
           current={placement.workspace}
           onDone={(saved) => {
+            if (!mounted.current) return;
             setEditing(null);
             if (saved) {
               announce(
@@ -448,7 +472,9 @@ export function RunsOnPage({
               reload();
             }
           }}
-          onFailed={reload}
+          onFailed={() => {
+            if (mounted.current) reload();
+          }}
         />
       )}
 

@@ -31,7 +31,7 @@ import {
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
 import { Connect } from "./Connect.tsx";
 import { ModelPair } from "./ModelPair.tsx";
-import { RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
+import { connectionKey, RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
 import {
   accountName,
@@ -187,6 +187,8 @@ export function BotSettings({
     return (
       <div ref={rootRef}>
         <RunsOnPage
+          // Another bot, connection or access: the old page and any form on it go.
+          key={`${bot.id}\n${connectionKey(connection)}`}
           botId={bot.id}
           botName={name}
           read={placement.read}

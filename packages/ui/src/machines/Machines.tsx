@@ -18,14 +18,14 @@ import {
   type MachineRow,
   type MachinesView,
 } from "@clawtrate/core";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge, useCommand } from "../bridge.tsx";
 import { CopyValue } from "../AccessBar.tsx";
 import { clockTime } from "../format.ts";
 import { CheckIcon, EyeIcon, WarnIcon } from "../icons.tsx";
 import { AdminBar, CommandBlock, GrantedBar, useGranted } from "../bots/parts.tsx";
 import { Confirm } from "../bots/Dialog.tsx";
-import { Mark } from "./RunsOn.tsx";
+import { connectionKey, Mark } from "./RunsOn.tsx";
 import { CHOICE_WORDS, lastSeen, levelsWords, names, nodeState } from "./words.ts";
 import "./machines.css";
 
@@ -296,16 +296,21 @@ export function useMachinesSection({
   const granted = useGranted(connection);
   const connected = connection.status === "connected";
   // Read again when the granted scopes change, not when a snapshot brings an equal list.
-  const scopesKey = connection.scopes.join(" ");
   // A read belongs to the connection and the access it was made with: nothing of another is drawn.
-  const key = `${connection.connectedAt ?? ""}\n${scopesKey}`;
+  const key = connectionKey(connection);
   const [forKey, setForKey] = useState(key);
   if (forKey !== key) {
     setForKey(key);
     setErrors({});
     setRenaming(null);
     setRemoving(null);
+    setBusy(false);
   }
+  // The key now shown: a write that completes under another one changes nothing.
+  const currentKey = useRef(key);
+  useLayoutEffect(() => {
+    currentKey.current = key;
+  }, [key]);
   const now = Date.now();
   useEffect(() => {
     if (!active || !connected) return;
@@ -327,6 +332,7 @@ export function useMachinesSection({
     };
   }, [bridge, active, connected, key, tick]);
   const reload = useCallback(() => setTick((n) => n + 1), []);
+  if (held && (!connected || held.key !== key)) setHeld(null);
   const read: Read = !connected
     ? { status: "error", message: "Not connected to the gateway." }
     : held && held.key === key
@@ -382,8 +388,10 @@ export function useMachinesSection({
         choice,
         expectedHash: file.hash,
       });
+      if (currentKey.current !== key) return;
       announce(`Saved. ${machine.name}: ${CHOICE_WORDS[choice]}`);
     } catch (failure) {
+      if (currentKey.current !== key) return;
       setErrors((all) => ({
         ...all,
         [machine.id]: failure instanceof Error ? failure.message : String(failure),
@@ -481,8 +489,8 @@ export function useMachinesSection({
   };
 
   const failed = (failure: unknown) => {
-    // Whatever the outcome, the page shows the gateway as it is now.
-    reload();
+    // Whatever the outcome, the page shows the gateway as it is now, if it is still this one.
+    if (currentKey.current === key) reload();
     throw failure;
   };
 
@@ -495,6 +503,7 @@ export function useMachinesSection({
           onCancel={() => setRenaming(null)}
           onSave={async (name) => {
             await bridge.invoke({ type: "renameMachine", nodeId: machine.id, name }).catch(failed);
+            if (currentKey.current !== key) return;
             setRenaming(null);
             announce("Renamed");
             reload();
@@ -546,6 +555,7 @@ export function useMachinesSection({
               await bridge
                 .invoke({ type: "renameDevice", deviceId: device.id, name })
                 .catch(failed);
+              if (currentKey.current !== key) return;
               setRenaming(null);
               announce("Renamed");
               reload();
@@ -662,12 +672,14 @@ export function useMachinesSection({
                 : bridge.invoke({ type: "removeDevice", deviceId: removing.id });
             done.then(
               () => {
+                if (currentKey.current !== key) return;
                 announce("Removed");
                 setRemoving(null);
                 setBusy(false);
                 reload();
               },
               (failure: unknown) => {
+                if (currentKey.current !== key) return;
                 setBusy(false);
                 setRemoving(null);
                 setErrors((all) => ({

@@ -6,6 +6,7 @@
 // name, another record changed only with admin, the read-only connection, and
 // Back returning to the row that opened it.
 import { expect, test, type Page } from "@playwright/test";
+import type { ClawtrateState } from "../packages/core/src/types.ts";
 import { contextFor, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
@@ -121,6 +122,78 @@ test("F-046: switching bots never draws the previous bot's place while the new o
   await page.getByRole("tab", { name: "Settings" }).click();
   await expect(page.getByRole("button", { name: /^Where Pip runs: / })).toBeVisible();
   await expect(page.getByTestId("runs-on-value")).toHaveText("Reading…");
+});
+
+type Fixture = {
+  invoke: (command: { type: string }) => Promise<unknown>;
+  setState: (change: (state: ClawtrateState) => ClawtrateState) => void;
+};
+/** The connection again, with other scopes: a reconnect at another tier. */
+const reconnect = (page: Page, admin: boolean) =>
+  page.evaluate((admin) => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      connection: {
+        ...state.connection,
+        scopes: admin ? ["operator.read", "operator.admin"] : ["operator.read"],
+        canAdmin: admin,
+        canWrite: admin,
+        connectedAt: (state.connection.connectedAt ?? 0) + 1,
+      },
+    }));
+  }, admin);
+
+test("F-157: a removal that completes after the connection's access changed leaves nothing behind", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openMachines(page);
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    fixture.invoke = (command) =>
+      command.type === "removeMachine"
+        ? new Promise((_resolve, reject) => {
+            (window as unknown as { finishRemove: () => void }).finishRemove = () =>
+              reject(new Error("Details from the old admin connection"));
+          })
+        : original(command);
+  });
+  await page.getByRole("button", { name: "Remove media-box…" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Remove", exact: true }).click();
+  await reconnect(page, false);
+  await expect(page.getByTestId("devices-unavailable")).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await page.evaluate(() => (window as unknown as { finishRemove: () => void }).finishRemove());
+  await page.waitForTimeout(300);
+  await expect(page.getByText("Details from the old admin connection")).toHaveCount(0);
+});
+
+test("F-274: after the connection's access changes, the workspace page shows no old form", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openRunsOn(page);
+  await page.getByRole("button", { name: "Change…" }).click();
+  await expect(page.getByRole("button", { name: "Save folder" })).toBeVisible();
+  await reconnect(page, false);
+  await expect(page.getByTestId("inventory-secrets")).toHaveText("Needs admin access");
+  await expect(page.getByRole("button", { name: "Save folder" })).toHaveCount(0);
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    fixture.invoke = async (command) => {
+      const result = await original(command);
+      return command.type === "readPlacement"
+        ? { ...(result as object), workspace: "/workspace-of-other-gateway" }
+        : result;
+    };
+  });
+  await reconnect(page, true);
+  await expect(page.getByTestId("runs-on-workspace")).toContainText("/workspace-of-other-gateway");
+  await expect(page.getByRole("button", { name: "Change…" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: /path on the gateway's machine/ })).toHaveCount(0);
 });
 
 test("F-046: the Runs on row is drawn from its own read while the account read has failed", async ({
