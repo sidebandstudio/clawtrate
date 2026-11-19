@@ -1,0 +1,144 @@
+# Addresses a gateway hands the client: what they are and what each app does
+
+Every address an OpenClaw gateway can put in front of Clawtrate, who writes it, what the desktop app, the web preview and the iPhone app do with it today, and what Electron, the browser and iOS can enforce. It is the evidence behind the rule in `docs/decisions.md` ("Addresses a gateway hands the client", issue #70); enforcing the rule is #71.
+
+How to read the citations, as in `gateway-capabilities.md` and `setup-flow.md`:
+
+- `<openclaw>/…` is a path inside the installed `openclaw` 2026.10.6 npm package, the one the `openclaw` wrapper script runs. Bundled chunk names carry a build hash that changes with every release; search by the `//#region <source path>` marker at the top of each chunk instead. Line numbers are of the 2026.10.6 chunks.
+- A path with no prefix is in this repository on `main` (`0882ea0b`). A path after a branch name, as in `m42-artifacts:packages/core/src/artifacts.ts`, is read with `git show` on that branch's tip: `m42-artifacts` `617b7884`, `m310-t3-thread-card` `6b46b01b`, `m61-ios-foundation` `6caf8044`, `m511b-accounts-b` `8d4ebd68`, `d6-bots-lifecycle-design` `cc39b52f`. None was checked out.
+- **Tried** means it was run here and the output is quoted. **Source** means it was read in shipped code only. **Docs** means it was read in a platform's documentation: Electron's comes from the `electron.d.ts` that ships with Electron 45.3.2, Node's from the `@types/node` the workspace installs (24.19.2; the project runs Node 26), React Native's and Apple's from their published pages, read through a search for this note. **Not established** marks what could not be settled here, with the reason.
+
+Where things were run: two probes, both offline. One ran the `m42-artifacts` link previewer under Node 26.0.0 with a stand-in `fetch` that records the address and answers itself, so nothing left the machine. The other ran Electron 45.3.2, unpacked from the release archive already in the machine's Electron download cache, with a temporary profile, a `file://` page and an HTTP server of its own on loopback. No gateway was started: every gateway fact here is read from source or from the capability map, which marks its own live results.
+
+## Summary
+
+| # | Question | Answer | Section |
+| --- | --- | --- | --- |
+| 1 | Which addresses can a gateway hand a client? | A bot's picture; media and files a reply hands over; pages; links in a reply and in a tool's result; sign-in pages; the canvas surface address in the handshake; a Web Push target. Only the media and artifact addresses under `/api/` and the canvas address are minted by the gateway's own code for the gateway's own origin. Everything a bot writes, or a tool returns, can be any scheme and any host. **Source.** | 1 |
+| 2 | Can a bot choose its own picture's address? | Through `agents.list`, only by changing the gateway's configuration: an admin connection, or a bot holding the `gateway` tool. `agent.identity.get` also reads the bot's own `IDENTITY.md`, which a bot that can write its workspace can change. Either can name any `http` or `https` address. **Source.** | 1.1 |
+| 3 | Can the gateway fetch a remote picture for the client? | No. Its avatar route serves only a file in the bot's workspace, and only to the Control UI; for a remote picture it hands back the address. A workspace file reaches every other client inlined as a `data:` image. **Source.** | 1.1 |
+| 4 | What does the desktop app do with a bot's `https` picture today? | Loads it at once, in the renderer, from the person's machine: the page allows `img-src https:` and the request filter lets `https` images through. **Source.** | 2 |
+| 5 | Does the desktop's request filter see each redirect hop of a picture, and does a picture carry a referrer? | Yes, each hop is filtered and can be cancelled; no `Referer` is sent from the app's `file://` page. **Tried.** | 4.2 |
+| 6 | Does the link previewer on `m42-artifacts` keep links off the person's own network? | Not fully. An IPv4-mapped IPv6 loopback address, `http://[::ffff:127.0.0.1]/`, passes its check and is fetched. **Tried.** It also checks a name with a lookup made before the request, which the request does not reuse. **Source.** | 4.1 |
+| 7 | What can each platform hold? | Electron: the page's policy, a request filter that sees every renderer request and its redirects, the navigation and new-window handlers, and a scheme check before the system browser. Node: a connect-time `lookup`. The web preview: the page's policy and the browser, with no filter. iOS: App Transport Security, and the app's own checks; no way was found to check the address an iOS request connects to. | 3 |
+
+## 1. Every kind of address
+
+| Kind | Where it arrives | Who writes it | Scheme and host | Evidence |
+| --- | --- | --- | --- | --- |
+| A bot's picture | `agents.list` `agents[].identity.avatarUrl` | The gateway's configuration, `agents.entries.<id>.identity.avatar`, written by `agents.update {avatar}` or `config.patch` (admin), or by a bot whose tools include `gateway` (`docs/design/controls.md`, row 37). A path in the workspace is read by the gateway and sent as a `data:` image. | `http` or `https`, any host, passed through as written; a renderable image `data:` address up to the gateway's limit; nothing else | §1.1. **Source** |
+| The same, by the identity method | `agent.identity.get` `avatar`, `avatarSource`, `avatarStatus` (`none`, `local`, `remote`, `data`), `avatarReason` | As above, falling back to `IDENTITY.md` in the bot's workspace, which the bot itself can write | As above | §1.1. **Source** |
+| A picture in a reply | Markdown `![alt](address)` in the reply text | The bot | Any | `packages/ui/src/Markdown.tsx` line 19. **Source** |
+| A link in a reply | Markdown links and autolinks in the reply text | The bot, from whatever it read | Any | **Source** |
+| A link card and its preview | A link the reply ends with (`m42-artifacts`); the preview is the page's title, description and `og:image` | The bot; the preview by whoever runs the linked page | Any | `m42-artifacts:packages/ui/src/artifacts/cards.tsx` lines 418-461. **Source** |
+| Media or a file a reply hands over | A `MEDIA:` line becomes a transcript block `{type: "image" \| "audio" \| "video" \| "attachment", artifactId, url, openUrl?}`; `artifacts.download` answers `{url, expiresAt}` with or without `transport: "http"`, and `…/thumbnail` | The gateway's code mints the address (`/api/chat/media/outgoing/…?mediaTicket=…`, a bearer ticket good for five minutes); the bot chooses what is handed over | A path on the gateway's own origin for a local file. A `MEDIA:` line may also name "a public HTTPS URL without credentials" (`<openclaw>/dist/reply-payload-BOcGzEWl.mjs` line 47). | `m42-artifacts:docs/decisions.md`, "How a bot hands something over" and "`artifacts.download`" (live there); §1.2. |
+| A page | A tool result that is a canvas preview becomes `{type: "canvas", preview: {url, viewId, …}}`; `canvas.document.view {docId}` answers `{html, sandboxUrl, sandboxPort}` | The bot or the tool that made the page; the HTML is the bot's | `url` and `sandboxUrl` are the gateway's; the HTML can name anything | `m42-artifacts:docs/decisions.md`, "Pages". **Source** there |
+| The canvas surface | `hello-ok.pluginSurfaceUrls.canvas` | The gateway's code, from its own surface base address and a freshly minted capability token | The gateway's surface host, which need not be the connection's origin | `<openclaw>/dist/message-handler-CRCo2VX0.mjs` lines 3064-3074. **Source** |
+| A link in a tool's result | Web search results `details.results[].url`; an MCP `resource_link` `uri`; a T3 Code result's `link` | The tool or the tool server; a search result's address was written by a third party | Any | `packages/core/src/actions.ts` lines 2714-2718; `packages/core/src/cards.ts` lines 545-546; `m310-t3-thread-card:packages/core/src/t3-code.ts` lines 466-483. **Source** |
+| A provider sign-in page | `models.authLogin`, then `wizard.next`: a step's `externalUrl` | The gateway's code or a provider plugin, through the wizard's `openUrl`, for a sign-in the person started | The shared browser sign-in refuses anything but `https` without a user name (`<openclaw>/dist/provider-browser-auth-BOjjbaDz.mjs` lines 77-78). A device-code page is whatever the plugin passes: the development gateway's is plain `http` on loopback (`tools/dev-gateway/src/scripted-accounts.ts` line 432). | `<openclaw>/dist/session-BSFDGdC9.mjs` lines 157-158 and 351-358. **Source** |
+| A tool server's sign-in | `mcp.authLogin {sessionId, serverName}`: the same wizard step | The gateway, from the server's OAuth metadata | As the shared browser sign-in (`<openclaw>/dist/mcp-auth-login-DAnddU_m.mjs` lines 62-67). It needs `operator.admin` and a connection from a browser origin, so Clawtrate's connections are refused it today. | `gateway-capabilities.md`, "Signing in". **Source** |
+| A notification's target | A Web Push payload `{title, body, tag, renotify, url}` | The gateway's code: `url` is its Control UI address for the event's `path` | The gateway's Control UI origin | `gateway-capabilities.md`, "What a notification names". **Source** |
+| An update notice | `update.available` `{currentVersion, latestVersion, channel}`, with more for a connection allowed detailed metadata | The gateway's update check | Whether the detailed form carries an address: **not established** (its projection is in `<openclaw>/dist/events-ds0bML-H.mjs` lines 17-24) | **Source** |
+| A step's own arguments | A browser target, a fetched page's address | The bot | Any | Shown as text rows, not links (`packages/core/src/actions.ts`, `LABELS.address`, `LABELS.target`). **Source** |
+
+Clawtrate itself publishes no update feed (`docs/decisions.md`, "Packaging": `publish` is off and no feed is written), and the connect handshake carries no other address than the canvas surface.
+
+### 1.1 A bot's picture
+
+- `agents.list` on a connection that is not the Control UI builds each identity from the configured entry only, `entry.identity?.avatar` (`<openclaw>/dist/session-utils-store-C-0MBZ3E.mjs` lines 213-235). The gateway's own avatar route is used only when `client.id` is the Control UI's (`<openclaw>/dist/agents-DAPW-UCQ.mjs` line 584).
+- The value becomes `avatarUrl` by `resolveAgentAvatarUrlFromSource` (`<openclaw>/dist/identity-avatar-file-B7GwXSk3.mjs` lines 143-155): an address matching `/^https?:\/\//i` (`<openclaw>/dist/avatar-policy-DiIdI6oM.mjs` line 32) is returned as written, with no host check; a renderable image `data:` address is returned; any other scheme is dropped; a path is read inside the workspace, up to 2 MB, and returned as `data:<type>;base64,…`, including `image/svg+xml`. The bundled docs agree: "`identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI" (`<openclaw>/docs/gateway/config-agents/entries-and-multi-agent.md` line 87).
+- `agent.identity.get` resolves the configured avatar, else the one in the workspace's `IDENTITY.md` (`<openclaw>/dist/identity-avatar-ItnIZk3C.mjs` line 32; `<openclaw>/dist/assistant-avatar-Br9YHCxQ.mjs` line 96). It answers `avatarStatus` with the kind of source: `remote` for an address, `local` for a workspace file, `data`, or `none` with `avatarReason` (`missing`, `outside_workspace`, `unsupported_extension`, `too_large`, `unreadable`) (`<openclaw>/dist/agent-identity-BjpSY6Dp.mjs` lines 33-50). For a remote picture `avatar` is the address itself, and `avatarSource` says only "remote URL".
+- The Control UI's avatar route (`<openclaw>/dist/control-ui-DtLaS2Te.mjs` lines 679-711) serves a workspace file. For a remote picture it answers the address, `resolved.url`; it fetches nothing.
+- Clawtrate keeps an `avatarUrl` only if it is a PNG, JPEG, WebP or GIF `data:` address or starts with `https://` (`packages/core/src/mapping.ts` lines 36-42). It does not call `agent.identity.get`. The bot lifecycle design writes pictures only as PNG `data:` addresses (`d6-bots-lifecycle-design:docs/design/bots-lifecycle.md` line 135).
+
+### 1.2 Media a reply hands over from elsewhere
+
+The reply directive accepts a public `https` address in a `MEDIA:` line, and refuses others as `invalid-reference` (`<openclaw>/dist/reply-payload-BOcGzEWl.mjs` line 47; `<openclaw>/dist/reply-directives-s-Q6bOJ0.mjs` lines 33-42). Whether such an address reaches the transcript as a block whose `url` is elsewhere, or is copied into the gateway's media store first, is **not established**: trying it would fetch from the network. The artifacts branch already sorts any address into "on the gateway" or "elsewhere" (`m42-artifacts:packages/core/src/artifacts.ts` lines 172-192), so the rule does not depend on the answer.
+
+## 2. What each app does today
+
+Desktop is the Electron app on `main`; web preview is the same renderer in a browser, served by `apps/desktop/src/web-host`; iOS is `m61-ios-foundation`. All **source** unless marked.
+
+| Kind | Desktop app | Web preview | iOS |
+| --- | --- | --- | --- |
+| A bot's `https` picture | Loaded at once by the renderer's `<img>` (`packages/ui/src/Avatar.tsx` lines 147-148 and 194-195), allowed by `img-src 'self' data: https:` (`apps/desktop/src/renderer/index.html` line 8) and by the request filter's exception for `https` images (`apps/desktop/src/main/index.ts` lines 149-158) | Loaded at once by the viewer's browser under the same policy; there is no request filter | Loaded at once by `<Image source={{uri}}>` (`m61-ios-foundation:apps/mobile/src/components/Avatar.tsx` lines 138-142) |
+| A bot's `data:` picture | Drawn | Drawn | Drawn |
+| Any other picture value | Dropped by `safeAvatarUrl`; the character is drawn | Same | Same (the shared core) |
+| A picture in a reply | Never loaded: `[image: alt]` (`packages/ui/src/Markdown.tsx` line 19) | Same | Never loaded: its alt text (`m61-ios-foundation:apps/mobile/src/markdown.ts` lines 111-112) |
+| A link in a reply | Opens on click, the destination not shown (`Markdown.tsx` lines 7-11, `target="_blank"`). react-markdown 10.1.0 keeps `http`, `https`, `irc`, `ircs`, `mailto`, `xmpp` and relative addresses (`defaultUrlTransform`, `safeProtocol`); React 19.3 replaces a `javascript:` address. The main process then opens only `http` and `https` (`apps/desktop/src/main/index.ts` lines 67-75 and 134-141): a `mailto:` link looks live and does nothing. | Opens in a new tab of the viewer's browser for any address react-markdown keeps, `mailto:` included; `rel="noreferrer"` | Only `http` and `https` addresses with a host become links. A link whose text is its own address opens on tap; any other asks first with the full address and Cancel or Open (`m61-ios-foundation:apps/mobile/src/components/Markdown.tsx` lines 22-30; `markdown.ts` lines 40-61) |
+| A link card and its preview | `m42-artifacts`: the card opens on click, its text and host shown; its preview is fetched by the host process after a 500 ms hover or a touch and hold (`cards.tsx` lines 418-461) by `link-preview.ts`: `http` or `https`, no credentials, `redirect: "manual"`, at most three hops each checked again, private ranges refused, 512 KB of page, a 512 KB PNG, JPEG, GIF or WebP picture, 8 s | Same; the fetch is made by the web host's machine, not the viewer's (`m42-artifacts:packages/core/src/node/index.ts` line 142) | None |
+| A handed-over item on the gateway | `m42-artifacts`: fetched without asking by the host process, only on the gateway's own origin, with no cookies, `redirect: "error"`, 30 s, at most 5 MiB (2 MiB for a preview); the ticketed address never reaches the renderer (`artifacts.ts` lines 159-192 and 312-332). A picture's card fetches when it comes into view. | Same, from the web host's machine | None |
+| An item elsewhere | `m42-artifacts`: never fetched; "Open in your browser" with a note naming the host (`cards.tsx` lines 83-91) | Same | None |
+| A page | `m42-artifacts`: the HTML is read over the socket and shown in a `sandbox=""` frame, scripts removed, `default-src 'none'` put first in its head; `url` and `sandboxUrl` are not loaded | Same | None |
+| The canvas surface | Not read | Not read | Not read |
+| A tool's links | Web search results open on click, title and host shown, no scheme check (`packages/ui/src/actions/ActionCards.tsx` lines 364-372). A T3 Code `resource_link` is put in an `href` with no scheme check; a structured `link` must be `http` or `https` (`packages/ui/src/cards/model.ts` lines 719-723; `MessagedCard.tsx` lines 581-592). `m310-t3-thread-card`: "Open thread" only for `http` or `https`, loopback included, its host shown beside it (`t3-code.ts` lines 466-483; `T3Thread.tsx` lines 477-492). | Same, opened by the browser | None |
+| A sign-in page | "Open <provider>'s page" opens it (`packages/ui/src/bots/Connect.tsx` lines 680-689). The host is shown under the device-code variant only (lines 801-805), not where the sign-in finishes on the gateway's machine (line 790) or where a code is pasted back (line 840). `m511b-accounts-b` adds the host to the browser variant whose callback the gateway takes (`Connect.tsx` lines 832-836) and still opens the other two without it (lines 814, 818 and 891). | Same, in the viewer's browser | None |
+| A notification's target | No Web Push subscription exists | Same | Same |
+
+What ties the desktop together: every web contents refuses navigation and `<webview>`, every new window is refused and its address handed to `openExternally`, which opens only `http` and `https` (`apps/desktop/src/main/index.ts` lines 134-141); every request that is not the app's own file, `devtools:` or `data:` is cancelled, except an image whose address starts with `https://` (lines 151-158). The web preview has none of this: its page sends `x-content-type-options: nosniff`, `referrer-policy: no-referrer` and `x-frame-options: DENY` (`apps/desktop/src/web-host/server.ts` lines 206-210), and otherwise the viewer's browser decides.
+
+## 3. What the platforms can enforce
+
+Versions from the `package.json` files: Electron 45.3.2 and React 19.3.1 (`apps/desktop/package.json`), react-markdown 10.1.0 (`packages/ui/package.json`); on `m61-ios-foundation`, Expo 58.0.25 and React Native 0.88.1 (`apps/mobile/package.json`).
+
+### 3.1 Electron 45.3.2
+
+- **The page's content security policy** limits what the renderer loads by kind: `img-src`, `media-src`, `connect-src`, `frame-src` (from `default-src`). It holds a scheme or a host, not a person's choice. **Source** (`index.html`).
+- **The request filter**, `session.webRequest.onBeforeRequest`, is called "when a request is about to occur" with its address and `resourceType`, and can cancel it (**docs**). It is called again for each redirect hop of an image, and cancelling a hop stops the load (**tried**, §4.2). It covers the renderer's requests through the session; it does not see Node's `fetch` in the main process, which does not use Chromium's network stack (**not established** by a run; the filter's documentation names only the session's requests).
+- **Headers.** `onBeforeSendHeaders` can replace a request's headers and `onHeadersReceived` a response's (`BeforeSendResponse.requestHeaders`, `HeadersReceivedResponse.responseHeaders`) (**docs**). Whether `Cookie` is visible there to remove is **not established**: the cookie half of the probe did not run (§4.2).
+- **Navigation.** `will-navigate` covers the main frame and `will-frame-navigate` every frame; `preventDefault()` stops either (**docs**). Only `will-navigate` is handled today; a subframe's load is a request the filter cancels.
+- **New windows.** `setWindowOpenHandler` is called for `window.open()`, a `target="_blank"` link, a shift-click and a form with `target="_blank"` (**docs**). Today it hands the address to `openExternally` and denies the window.
+- **The system browser.** `shell.openExternal(url)` opens "the given external protocol URL in the desktop's default manner" (**docs**): any scheme, so the scheme check is the app's, in `openExternally`.
+
+### 3.2 Node, for fetches the host process makes
+
+`net` and `http` connection options take a `lookup` function (`@types/node` `net.d.ts` line 60, `http.d.ts` line 223) (**docs**). A check made there sees the address the connection actually uses; a `dns.lookup` before `fetch`, as `link-preview.ts` does, sees an address the later connection may not use.
+
+### 3.3 The web preview
+
+The viewer's browser applies the page's policy and the web host's headers, and opens a `target="_blank"` link itself. The page can choose what it renders, and nothing else: no request filter, and the browser's own cookies for a picture's host go with the picture unless the image element is `crossorigin="anonymous"`, which also makes a picture without CORS headers fail. The web host sends `referrer-policy: no-referrer` for its page. **Source** for the headers; the rest is the browser's documented behavior and was **not tried** here.
+
+### 3.4 iOS (React Native 0.88.1, Expo 58)
+
+- **App Transport Security** applies to URLSession and the APIs built on it, and requires TLS for public host names. `NSAllowsLocalNetworking` (set on `m61-ios-foundation`, `apps/mobile/app.json`) lifts that for unqualified names and `.local` hosts; Apple's pages and its forum answers disagree about IP addresses. **Docs** (Apple's `NSAllowsLocalNetworking` and "Preventing insecure network connections"). So a plain-`http` picture on a public host fails on iOS whatever the app does, and one on a local name loads.
+- **Images.** `Image` takes `source {uri, method, headers, body, cache}`; `cache` is iOS only (**docs**, React Native's Image page). Whether it sends or stores cookies is **not established**.
+- **Links.** `Linking.openURL(url)` hands any address to the system, whatever app handles it (**docs**, React Native's Linking page). The scheme check is the app's, as `openableUrl` does.
+- **Fetch.** No option that checks the address a request connects to was found for React Native's `fetch`, and its redirect handling was not established.
+
+## 4. Tried
+
+### 4.1 The link previewer and an IPv4-mapped address
+
+`m42-artifacts:packages/core/src/node/link-preview.ts`, run as it is under Node 26.0.0. `isPrivateAddress` is called with the host the WHATWG parser leaves, and the previewer is given a stand-in `fetch` that records the address and answers a page, and a `lookup` that fails if called:
+
+```
+http://[::ffff:127.0.0.1]/ -> ::ffff:7f00:1 private: false
+http://127.0.0.1/ -> 127.0.0.1 private: true
+http://0x7f.1/ -> 127.0.0.1 private: true
+{ status: 'ok', url: 'http://[::ffff:127.0.0.1]:9/', title: 'x', description: null, image: null } fetched: [ 'http://[::ffff:7f00:1]:9/' ]
+```
+
+The parser rewrites `::ffff:127.0.0.1` to `::ffff:7f00:1`; the check looks for the dotted form only (lines 36-37), finds none, and calls the address public. A bot's link to an IPv4-mapped loopback, private or link-local address is fetched from the person's machine. The NAT64 prefix `64:ff9b::/96` is not refused either. Separately, `publicTarget` resolves a name with `dns.lookup` (lines 63-70) and `fetch` then resolves it again (lines 104-113); a name that answers a public address to the first and a private one to the second passes (**source**; not tried, since it needs a name server).
+
+### 4.2 Electron's request filter and a picture's redirect
+
+A `file://` page under `img-src 'self' data: http:`, two `<img>` elements on a loopback server of the probe's own: `/redirect.png` answers `302` to `/target.png`; `/cookie.png` sets a cookie. A filter on the default session logs every request and allows only the two first addresses. The log, with the port and the folder replaced:
+
+```
+{ filter: "file://<probe folder>/page.html", type: "mainFrame" }
+{ filter: "<loopback>/redirect.png", type: "image" }
+{ filter: "<loopback>/cookie.png", type: "image" }
+{ server: "/redirect.png", cookie: null, referer: null, origin: null }
+{ server: "/cookie.png", cookie: null, referer: null, origin: null }
+{ filter: "<loopback>/target.png", type: "image" }
+```
+
+The redirect's target came back to the filter as an image request, and once cancelled it never reached the server. Neither picture carried a `Referer` or an `Origin`. The third image, meant to show whether the cookie is sent back, was started from an inline `onload`, which the page's own policy blocked, so whether the session sends cookies with a picture is **not established**.
+
+## 5. What could not be established
+
+- Whether a `MEDIA:` line with a remote `https` address reaches the transcript as an address elsewhere (§1.2): trying it fetches from the network.
+- Whether Electron's session sends a cookie it holds with a picture, and whether `onBeforeSendHeaders` sees the `Cookie` header (§4.2).
+- On iOS: whether `Image` sends or keeps cookies, whether `fetch` follows redirects and can be told not to, and whether anything checks the address a request connects to (§3.4). The iPhone app was not built or run for this note.
+- Whether `update.available`'s detailed form carries an address.
+- Electron's filter and Node's `fetch` in the main process: read, not run.
