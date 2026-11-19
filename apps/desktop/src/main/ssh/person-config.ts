@@ -156,14 +156,34 @@ function refusal(category: RefusalCategory, setting: string, name: string): Conf
   return { ok: false, kind: "refused", category, setting, title, sentence };
 }
 
-/** OpenSSH's host pattern: `*` and `?`, compared without case. */
+/**
+ * OpenSSH's host pattern: `*` and `?`, compared without case. It walks the
+ * name once, going back only to just after the last `*` it passed, so its work
+ * is at most the pattern's length times the name's, whatever the wildcards.
+ */
 function globMatch(pattern: string, value: string): boolean {
-  const source = pattern
-    .toLowerCase()
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replaceAll("*", ".*")
-    .replaceAll("?", ".");
-  return new RegExp(`^${source}$`).test(value.toLowerCase());
+  const p = pattern.toLowerCase();
+  const v = value.toLowerCase();
+  let i = 0;
+  let j = 0;
+  let star = -1;
+  let resume = 0;
+  while (j < v.length) {
+    if (i < p.length && p[i] !== "*" && (p[i] === "?" || p[i] === v[j])) {
+      i++;
+      j++;
+    } else if (i < p.length && p[i] === "*") {
+      star = i++;
+      resume = j;
+    } else if (star !== -1) {
+      i = star + 1;
+      j = ++resume;
+    } else {
+      return false;
+    }
+  }
+  while (i < p.length && p[i] === "*") i++;
+  return i === p.length;
 }
 
 /** Whether a `Host` line's patterns apply to `name`: one positive match and no negated one. */

@@ -176,6 +176,28 @@ describe("the person's SSH configuration", () => {
     expect(hostLineMatches(["other", "devbox"], "devbox")).toBe(true);
   });
 
+  it("matches a pattern of several wildcards in bounded time, with the same answers", () => {
+    // A pattern that does not match, whose wildcards a backtracking match would try every way to place.
+    const started = Date.now();
+    expect(hostLineMatches(["*a*a*a*a*a*b"], "a".repeat(80))).toBe(false);
+    expect(hostLineMatches(["!*a*a*a*a*a*b", "*"], "a".repeat(80))).toBe(true);
+    expect(Date.now() - started).toBeLessThan(200);
+    for (const [pattern, name, matches] of [
+      ["*a*a*a*a*a*b", "a".repeat(80) + "b", true],
+      ["*box", "devbox", true],
+      ["*box", "devboxes", false],
+      ["d*v*x", "devbox", true],
+      ["d*v*x?", "devbox", false],
+      ["??????", "devbox", true],
+      ["?????", "devbox", false],
+      ["**", "", true],
+      ["Dev*.EXAMPLE", "devbox.example", true],
+      ["dev*.example", "devbox.example.org", false],
+    ] as const) {
+      expect(hostLineMatches([pattern], name), `${pattern} ${name}`).toBe(matches);
+    }
+  });
+
   it("accepts the Key=Value form and quoted values", () => {
     expect(
       resolveWith('Host devbox\n  HostName=devbox.example\n  IdentityFile "~/.ssh/my key"\n'),
