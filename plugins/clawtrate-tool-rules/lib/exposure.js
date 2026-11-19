@@ -196,7 +196,7 @@ const WORDS = {
 const REMEDY = {
   "manages-gateway": "Deny it the gateway and plugins tools.",
   "commands-on-gateway-host":
-    "Deny it exec and process, or run its commands on another machine or in a sandbox.",
+    'Deny it exec and process. Or run its commands on another machine (tools.exec.host "node"), or in a sandbox with tools.exec.host not "gateway" and elevated commands turned off for it (tools.elevated.enabled false).',
   "files-outside-workspace":
     "Set tools.fs.workspaceOnly to true, or deny it write, edit and apply_patch.",
   "store-in-workspace":

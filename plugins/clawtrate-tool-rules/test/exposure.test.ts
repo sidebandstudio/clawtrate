@@ -229,3 +229,12 @@ describe("the remedy for a workspace that holds the store", () => {
     expect(line).not.toMatch(/outside the gateway's state folder/);
   });
 });
+
+describe("the remedy for commands on the gateway's host", () => {
+  it("keeps denying the tools apart, and says a sandbox needs elevated exec off and the host off the gateway", () => {
+    const [line] = exposureWarnings(withAgent(SAFE, { tools: { exec: { mode: "ask" } } }));
+    expect(line).toMatch(/Deny it exec and process\./);
+    expect(line).toMatch(/tools\.elevated\.enabled/);
+    expect(line).toMatch(/tools\.exec\.host.*not "gateway"/);
+  });
+});

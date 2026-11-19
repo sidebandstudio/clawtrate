@@ -588,7 +588,7 @@ describe("what a bot must be denied", () => {
       },
     });
     expect(h.warnings).toEqual([
-      "clawtrate-tool-rules: Bot otto may run commands on the gateway's machine outside a sandbox, as the gateway's user, which can edit the gateway's config and the rules plugin's store, so Clawtrate's rules are advice for it. Deny it exec and process, or run its commands on another machine or in a sandbox.",
+      "clawtrate-tool-rules: Bot otto may run commands on the gateway's machine outside a sandbox, as the gateway's user, which can edit the gateway's config and the rules plugin's store, so Clawtrate's rules are advice for it. Deny it exec and process. Or run its commands on another machine (tools.exec.host \"node\"), or in a sandbox with tools.exec.host not \"gateway\" and elevated commands turned off for it (tools.elevated.enabled false).",
     ]);
   });
 });
