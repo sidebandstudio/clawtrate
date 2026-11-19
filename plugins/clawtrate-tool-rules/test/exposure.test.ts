@@ -2,7 +2,10 @@
 // check is conservative, so a bot counts as able unless the config surely
 // keeps the tool from it.
 
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { exposures, surelyDenied } from "../lib/exposure.js";
 
 const SAFE = {
@@ -160,5 +163,34 @@ describe("a sandboxed bot and elevated exec", () => {
     // Nobody can qualify: no allowlist and no channel.
     expect(warned(config({}))).toBe(false);
     expect(warned(config({ elevated: { allowFrom: { discord: [] } } }))).toBe(false);
+  });
+});
+
+describe("a workspace that holds the rules store", () => {
+  const temps: string[] = [];
+  afterEach(() => temps.splice(0).forEach((dir) => rmSync(dir, { recursive: true, force: true })));
+  const temp = () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-exposure-")));
+    temps.push(dir);
+    return dir;
+  };
+
+  it("is warned about even with workspaceOnly, and a separate one is not", () => {
+    const state = temp();
+    const storeDir = join(state, "clawtrate-tool-rules");
+    mkdirSync(storeDir);
+    const separate = join(state, "workspaces", "otto");
+    mkdirSync(separate, { recursive: true });
+    const reasonsFor = (workspace: string) =>
+      exposures(withAgent(SAFE), { storeDir, workspaceOf: () => [workspace] })[0]?.reasons ?? [];
+    // The state folder itself as the workspace, and one named through a link to it.
+    expect(reasonsFor(state)).toEqual(["store-in-workspace"]);
+    const link = join(temp(), "ws");
+    symlinkSync(state, link);
+    expect(reasonsFor(link)).toEqual(["store-in-workspace"]);
+    expect(reasonsFor(separate)).toEqual([]);
+    // With the write tools denied it is not.
+    const denied = { ...SAFE, tools: { ...SAFE.tools, deny: [...SAFE.tools.deny, "group:fs"] } };
+    expect(exposures(withAgent(denied), { storeDir, workspaceOf: () => [state] })).toEqual([]);
   });
 });

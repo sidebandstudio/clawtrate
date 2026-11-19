@@ -541,7 +541,8 @@ export function createToolRules(api, options = {}) {
         // Said at every start; later changes are said as they happen.
         if (view.kind === "lost") logger.warn?.(`${PLUGIN_ID}: ${stateLine(view)}`);
         // What lets a bot change the rules, from the gateway's config, in its log.
-        for (const line of exposureWarnings(currentConfig()))
+        const where = { storeDir: dir, workspaceOf: (agentId) => workspaceOf(agentId)() };
+        for (const line of exposureWarnings(currentConfig(), where))
           logger.warn?.(`${PLUGIN_ID}: ${line}`);
       },
       stop() {
