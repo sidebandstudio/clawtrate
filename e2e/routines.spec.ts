@@ -291,11 +291,11 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
   const title = `Bound conversation ${STAMP}`;
   const key = `agent:marlow:dashboard:${STAMP}`;
   await call("sessions.create", { key, agentId: "marlow", label: title });
-  await call("sessions.create", { key: "agent:juniper:main", agentId: "juniper", label: "Main" });
+  await call("sessions.create", { key: "agent:main:main", agentId: "main", label: "Main" });
   for (const target of ["current", `session:${key}`, "main"]) {
     const name = `Shared ${target} ${STAMP}`;
     const job = await add({
-      ...scriptedRoutine(name, target === "main" ? "juniper" : "marlow", "Note the time."),
+      ...scriptedRoutine(name, target === "main" ? "main" : "marlow", "Note the time."),
       sessionTarget: target,
       ...(target === "current" ? { sessionKey: key } : {}),
       ...(target === "main" ? { payload: { kind: "systemEvent", text: "A reminder." } } : {}),
