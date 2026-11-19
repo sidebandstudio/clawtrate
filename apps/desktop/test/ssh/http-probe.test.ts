@@ -56,6 +56,37 @@ describe("the probe through a forward", () => {
     expect(await probeHttp(silent, 18789, quiet, 300)).toBe("no-answer");
   });
 
+  it("needs a whole status line within its read limit", async () => {
+    // A status line's start, then more than the limit with no line end.
+    const endless = await tcp((socket) =>
+      socket.once("data", () => socket.end("HTTP/1.1 200 " + "x".repeat(1100))),
+    );
+    expect(await probeHttp(endless, 18789, quiet)).toBe("no-answer");
+  });
+
+  it("is an answer when the status line and its CRLF arrive in separate pieces", async () => {
+    const pieces = (parts: string[]) =>
+      tcp((socket) => {
+        socket.setNoDelay(true);
+        socket.once("data", () => {
+          const send = (i: number) => {
+            if (i === parts.length) return socket.end();
+            socket.write(parts[i]!);
+            setTimeout(() => send(i + 1), 30);
+          };
+          send(0);
+        });
+      });
+    for (const parts of [
+      ["HTTP/1.1 200 OK\r", "\nContent-Length: 0\r\n\r\n"],
+      ["HTTP/1.1 2", "00 OK", "\r", "\n\r\n"],
+    ]) {
+      expect(await probeHttp(await pieces(parts), 18789, quiet), JSON.stringify(parts)).toBe(
+        "http",
+      );
+    }
+  });
+
   it("tells a refused forwarding and a closed gateway port by what the forward reported", async () => {
     const closing = await tcp((socket) => socket.destroy());
     expect(await probeHttp(closing, 18789, () => ({ refused: true, connectFailed: false }))).toBe(

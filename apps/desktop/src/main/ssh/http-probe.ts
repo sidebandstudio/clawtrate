@@ -15,7 +15,7 @@ export type ChannelFacts = {
 
 export type ProbeResult = "http" | "forwarding-refused" | "gateway-closed" | "no-answer";
 
-const STATUS_LINE = /^HTTP\/1\.[01] [1-5][0-9]{2}(?: |\r?$)/;
+const STATUS_LINE = /^HTTP\/1\.[01] [1-5][0-9]{2} [\t\x20-\x7e\x80-\xff]*\r$/;
 const MAX_READ = 1024;
 
 /**
@@ -51,11 +51,15 @@ export function probeHttp(
       );
     });
     socket.on("data", (chunk: Buffer) => {
-      received = Buffer.concat([received, chunk]).subarray(0, MAX_READ);
-      const end = received.indexOf("\n");
-      if (end !== -1 || received.length >= MAX_READ) {
-        const line = received.subarray(0, end === -1 ? received.length : end).toString("latin1");
-        finish(STATUS_LINE.test(line) ? "http" : "no-answer");
+      const part = chunk.subarray(0, MAX_READ - received.length);
+      received = Buffer.concat([received, part]);
+      const end = received.indexOf(0x0a);
+      if (end !== -1) {
+        finish(
+          STATUS_LINE.test(received.subarray(0, end).toString("latin1")) ? "http" : "no-answer",
+        );
+      } else if (received.length === MAX_READ) {
+        finish("no-answer");
       }
     });
     const closedWithout = () => {
