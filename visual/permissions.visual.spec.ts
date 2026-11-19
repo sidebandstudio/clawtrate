@@ -46,12 +46,37 @@ const SCENES: Scene[] = [
   {
     name: "rules-stopped",
     query: `${ADMIN}&rules=stopped`,
-    ready: permissions("Rules", pluginSays("Clawtrate's rules plugin isn't answering.")),
+    ready: permissions(
+      "Rules",
+      pluginSays(
+        /^Rules plugin answered at .+: it isn't enforcing rules, because its hook isn't registered or its service isn't running\.$/,
+      ),
+    ),
   },
   {
     name: "rules-unchecked",
     query: `${ADMIN}&rules=unchecked`,
     ready: permissions("Rules", pluginSays("Checking Clawtrate's rules plugin…")),
+  },
+  {
+    name: "rules-failed",
+    query: `${ADMIN}&rules=failed`,
+    ready: permissions(
+      "Rules",
+      pluginSays(
+        "Couldn't read Clawtrate's rules plugin's status. The gateway didn't answer within 60 seconds.",
+      ),
+    ),
+  },
+  {
+    name: "rules-lost",
+    query: `${ADMIN}&rules=lost`,
+    ready: permissions(
+      "Rules",
+      pluginSays(
+        /Its rules file can't be read and it holds no earlier copy, so it asks before every tool call it sees, other than ask_user\.$/,
+      ),
+    ),
   },
   // Saved approvals
   { name: "F-178-saved", query: ADMIN, ready: permissions("Saved approvals", grants) },

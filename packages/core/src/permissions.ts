@@ -92,15 +92,18 @@ export type PermissionsContext = {
 
 /**
  * What `clawtrate-tool-rules.status` established, as the design's states:
- * `unavailable` when the hello did not list its methods; `stopped` when they are
- * listed and status failed, or said its hook is not registered or nothing is
- * enforced; `old` below the version the decision record needs; else `running`,
- * with what it enforces for the next call (`enforcing`, apart from the hook).
+ * `unavailable` when the hello did not list its methods; `stopped` when status
+ * could not be read or named no version; `old` below the version the decision
+ * record needs; `not-enforcing` when it answered that it enforces nothing
+ * (`enforcing: "not-enforced"`: its hook is not registered, or its service is
+ * not running); else `running`, with what it enforces for the next call
+ * (`enforcing`, apart from the hook).
  */
 export type RulesPluginState =
   | { state: "unavailable" }
   | { state: "stopped"; reason: string }
   | { state: "old"; version: string }
+  | { state: "not-enforcing"; answeredAt: number; lastCallAt: number | null }
   | {
       state: "running";
       answeredAt: number;
@@ -139,9 +142,9 @@ export async function readRulesPlugin(
   if (!versionAtLeast(version, RULES_PLUGIN_MIN_VERSION)) return { state: "old", version };
   const hook = asRecord(answer?.hook);
   const enforcing = answer?.enforcing;
-  if (hook?.registered !== true || enforcing === "not-enforced") {
-    return { state: "stopped", reason: "Its hook is not registered." };
-  }
+  // An answer that it enforces nothing is an answer, not silence.
+  if (hook?.registered !== true || enforcing === "not-enforced")
+    return { state: "not-enforcing", answeredAt: ctx.now(), lastCallAt: time(hook?.lastCallAt) };
   const rules = asRecord(answer?.rules);
   return {
     state: "running",

@@ -5,7 +5,10 @@
 // command, path, id and record here is made up.
 //
 // Address parameters:
-//   rules=running|absent|stopped|old|unchecked   the rules plugin (default running)
+//   rules=running|absent|stopped|failed|lost|old|unchecked
+//                                                the rules plugin (default running; stopped: it
+//                                                answers that it enforces nothing; failed: its
+//                                                status fails; lost: its rules file is lost)
 //   saved=empty|error|loading|more|expiring      saved approvals (default: two grants and two entries;
 //                                                more: three more, one of a routine that is gone;
 //                                                expiring: the live grant ends a minute from now)
@@ -63,7 +66,24 @@ function plugin(now: number, params: PermissionParams): Promise<RulesPluginState
     case "absent":
       return Promise.resolve({ state: "unavailable" });
     case "stopped":
-      return Promise.resolve({ state: "stopped", reason: "Its hook is not registered." });
+      return Promise.resolve({
+        state: "not-enforcing",
+        answeredAt: now - MINUTE,
+        lastCallAt: null,
+      });
+    case "failed":
+      return Promise.resolve({
+        state: "stopped",
+        reason: "The gateway didn't answer within 60 seconds.",
+      });
+    case "lost":
+      return Promise.resolve({
+        state: "running",
+        answeredAt: now - MINUTE,
+        lastCallAt: now - 2 * MINUTE,
+        enforcing: "ask-every-call",
+        keptCopyReadAt: null,
+      });
     case "old":
       return Promise.resolve({ state: "old", version: "0.9.0" });
     case "unchecked":

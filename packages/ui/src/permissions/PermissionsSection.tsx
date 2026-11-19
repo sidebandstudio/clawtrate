@@ -64,7 +64,9 @@ export function pluginWords(plugin: RulesPluginState | "checking" | { failed: st
     case "unavailable":
       return "Rules methods unavailable on this gateway.";
     case "stopped":
-      return "Clawtrate's rules plugin isn't answering.";
+      return `Couldn't read Clawtrate's rules plugin's status. ${plugin.reason}`;
+    case "not-enforcing":
+      return `Rules plugin answered at ${clockTime(plugin.answeredAt)}: it isn't enforcing rules, because its hook isn't registered or its service isn't running.`;
     case "old":
       return `Clawtrate's rules plugin is version ${plugin.version}; these rules need 1.0.0 or newer.`;
     case "running": {
@@ -76,7 +78,7 @@ export function pluginWords(plugin: RulesPluginState | "checking" | { failed: st
         plugin.enforcing === "kept-copy"
           ? ` Its rules file can't be read; it enforces the copy it read${plugin.keptCopyReadAt === null ? "" : ` at ${clockTime(plugin.keptCopyReadAt)}`}.`
           : plugin.enforcing === "ask-every-call"
-            ? " Its rules file can't be read, so it asks before every call."
+            ? " Its rules file can't be read and it holds no earlier copy, so it asks before every tool call it sees, other than ask_user."
             : plugin.enforcing === "nothing"
               ? " No rules are saved in it."
               : "";

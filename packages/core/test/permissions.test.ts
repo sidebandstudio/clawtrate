@@ -139,17 +139,26 @@ describe("F-178: the rules plugin's state, from its status method", () => {
     expect(lost).toMatchObject({ state: "running", enforcing: "kept-copy", keptCopyReadAt: 7 });
   });
 
-  it("is stopped when its hook is not registered, nothing is enforced, or status fails", async () => {
+  it("an answer that it enforces nothing is that answer, not silence; only a failed status is stopped", async () => {
     for (const answer of [
-      () => status({ hook: { registered: false, lastCallAt: null } }),
+      () => status({ hook: { registered: false, lastCallAt: null }, enforcing: "not-enforced" }),
       () => status({ enforcing: "not-enforced" }),
-      () => {
-        throw new Error("unknown method: clawtrate-tool-rules.status");
-      },
     ]) {
       const read = await readRulesPlugin(fake({ "clawtrate-tool-rules.status": answer }).ctx, true);
-      expect(read.state).toBe("stopped");
+      expect(read).toMatchObject({ state: "not-enforcing", answeredAt: 1_795_098_000_000 });
     }
+    const failed = await readRulesPlugin(
+      fake({
+        "clawtrate-tool-rules.status": () => {
+          throw new Error("unknown method: clawtrate-tool-rules.status");
+        },
+      }).ctx,
+      true,
+    );
+    expect(failed).toEqual({
+      state: "stopped",
+      reason: "unknown method: clawtrate-tool-rules.status",
+    });
   });
 
   it("is old below 1.0.0", async () => {
