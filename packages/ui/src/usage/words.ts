@@ -10,6 +10,7 @@ import {
   type UsageCost,
   type UsageFigure,
   type UsagePeriod,
+  type UsageReport,
   type UsageState,
 } from "@clawtrate/core";
 import { clock } from "../bots/words.ts";
@@ -107,6 +108,23 @@ export function costHint(cost: UsageCost, at: number | null, counting = false): 
   return cost.status === "partial"
     ? `${base} Partial: ${records(cost.unpriced)} no price configured.`
     : base;
+}
+
+/** A bar: its name, its tokens (null when they couldn't be read), and what they are short of. */
+export type BarRow = { name: string; tokens: number | null; note?: string };
+
+/** A bar's figure in words: "1,800 tokens", "1,800 tokens so far", or "Unavailable". */
+export function barText(row: BarRow): string {
+  return row.tokens === null ? "Unavailable" : `${full(row.tokens)} tokens${row.note ?? ""}`;
+}
+
+/** Every bot's bar, each its own figure: "Unavailable" when its read failed, never a zero. */
+export function botBars(report: UsageReport, nameOf: (botId: string) => string): BarRow[] {
+  return (report.bots ?? []).map((each) => ({
+    name: nameOf(each.botId),
+    tokens: each.figure ? each.figure.tokens.total : null,
+    note: each.figure ? soFar(each.figure.counting) : "",
+  }));
 }
 
 /** A bot's or every bot's figure in a row's value: its total, its cost and when it is from. */

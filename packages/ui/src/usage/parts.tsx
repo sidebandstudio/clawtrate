@@ -6,7 +6,7 @@ import type { UsagePeriod, UsageReport } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useBridge } from "../bridge.tsx";
 import { EyeIcon } from "../icons.tsx";
-import { deviceTimeZone, full, PERIODS, short } from "./words.ts";
+import { barText, deviceTimeZone, PERIODS, short, type BarRow } from "./words.ts";
 
 /** A meter: a 6 px bar with its numbers in text beside it, never alone. */
 export function Meter({
@@ -47,19 +47,22 @@ export function Meter({
   );
 }
 
-/** Horizontal bars, one row each: the name, the bar, the figure in text. */
-export function Bars({ rows, testId }: { rows: Array<[string, number]>; testId?: string }) {
-  const max = Math.max(1, ...rows.map(([, value]) => value));
+/**
+ * Horizontal bars, one row each: the name, the bar, the figure in text. A
+ * figure that couldn't be read is "Unavailable", with no bar.
+ */
+export function Bars({ rows, testId }: { rows: BarRow[]; testId?: string }) {
+  const max = Math.max(1, ...rows.map((row) => row.tokens ?? 0));
   return (
     <ul className="c-bars" data-testid={testId}>
-      {rows.map(([name, value]) => (
-        <li key={name} aria-label={`${name}: ${full(value)} tokens`}>
-          <span>{name}</span>
+      {rows.map((row) => (
+        <li key={row.name} aria-label={`${row.name}: ${barText(row)}`}>
+          <span>{row.name}</span>
           <span className="c-meter-bar" aria-hidden="true">
-            <span style={{ width: `${(value / max) * 100}%` }} />
+            {row.tokens !== null && <span style={{ width: `${(row.tokens / max) * 100}%` }} />}
           </span>
-          <span aria-hidden="true" title={`${full(value)} tokens`}>
-            {short(value)} tokens
+          <span aria-hidden="true" title={barText(row)}>
+            {row.tokens === null ? "Unavailable" : `${short(row.tokens)} tokens${row.note ?? ""}`}
           </span>
         </li>
       ))}

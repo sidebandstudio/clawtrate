@@ -281,6 +281,17 @@ test("F-131 F-237: usage by source keeps Messages from other bots apart and char
   await expect(settings.getByTestId("usage-sources")).toBeVisible();
 });
 
+test("F-237: a bot whose own figure couldn't be read is Unavailable on its bar and to a screen reader, never a zero (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write&usage=botfail`, "light");
+  const settings = await settingsUsage(page);
+  const bots = settings.getByTestId("usage-bots");
+  await expect(bots.getByRole("listitem", { name: "Otto: Unavailable" })).toHaveCount(1);
+  await expect(bots.getByRole("listitem", { name: /^Otto: \d/ })).toHaveCount(0);
+  await expect(bots.getByRole("listitem", { name: "Marlow: 562,000 tokens" })).toHaveCount(1);
+});
+
 test("the Usage row's value wraps rather than shortening at phone width", async ({ browser }) => {
   const context = await browser.newContext(
     contextFor({ name: "phone", width: 390, height: 844, phone: true }, "light"),

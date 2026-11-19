@@ -205,7 +205,7 @@ export function BotUsagePage({
       {sources ? (
         <>
           <Bars
-            rows={SOURCE_NAMES.map(([key, words]) => [words, sources[key]])}
+            rows={SOURCE_NAMES.map(([key, words]) => ({ name: words, tokens: sources[key] }))}
             testId="usage-sources"
           />
           <p className="b-hint">

@@ -2,9 +2,17 @@
 // each figure is the gateway's for the period, zone and scope it names, or it
 // says what it is short of.
 
-import type { Budget, BudgetCount, UsageFigure } from "@clawtrate/core";
+import type { Budget, BudgetCount, UsageFigure, UsageReport } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { budgetLine, costHint, costValue, figureLine, warnedLine } from "../src/usage/words.ts";
+import {
+  barText,
+  botBars,
+  budgetLine,
+  costHint,
+  costValue,
+  figureLine,
+  warnedLine,
+} from "../src/usage/words.ts";
 
 const NY = "America/New_York";
 const routine: Budget = {
@@ -58,5 +66,29 @@ describe("a figure the gateway is still counting", () => {
     expect(warnedLine("Otto", routine, { ...count({ counting: true }), used: 900 }, 90)).toMatch(
       / so far\.$/,
     );
+  });
+});
+
+describe("every bot's bars", () => {
+  it("F-237: a bot whose read failed is Unavailable on its own bar, never a zero", () => {
+    const report: UsageReport = {
+      botId: null,
+      period: "week",
+      range: { startDate: "2026-11-16", endDate: "2026-11-19", timeZone: NY },
+      figure: figure({}),
+      bots: [
+        { botId: "marlow", figure: figure({ counting: true }), error: null },
+        { botId: "otto", figure: null, error: "usage.cost timed out after 60 seconds." },
+      ],
+      tasks: null,
+      tasksOmitted: 0,
+      sources: null,
+      detailError: null,
+    };
+    const bars = botBars(report, (id) => id[0]!.toUpperCase() + id.slice(1));
+    expect(bars.map((bar) => `${bar.name}: ${barText(bar)}`)).toEqual([
+      "Marlow: 1,800 tokens so far",
+      "Otto: Unavailable",
+    ]);
   });
 });

@@ -24,7 +24,7 @@ import {
   useNow,
   useUsageReport,
 } from "./parts.tsx";
-import { asOf, budgetLine, figureLine, kindWord, PARTIAL_COUNT } from "./words.ts";
+import { asOf, botBars, budgetLine, figureLine, kindWord, PARTIAL_COUNT } from "./words.ts";
 import "./usage.css";
 
 const SOURCES: Array<[keyof Omit<UsageSources, "partial">, string]> = [
@@ -279,23 +279,17 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
           </p>
           <Bars
             testId="usage-bots"
-            rows={(r.bots ?? []).map((each) => [
-              bots.find((bot) => bot.id === each.botId)?.name ?? each.botId,
-              each.figure?.tokens.total ?? 0,
-            ])}
+            rows={botBars(r, (id) => bots.find((bot) => bot.id === id)?.name ?? id)}
           />
           <p className="b-hint" data-testid="usage-all-total">
             Every bot: {figureLine(r.figure)}.
-            {(r.bots ?? []).some((each) => each.error)
-              ? " Some bots' figures couldn't be read."
-              : ""}
           </p>
           <h4 className="b-group">By source</h4>
           {r.sources ? (
             <>
               <Bars
                 testId="usage-sources"
-                rows={SOURCES.map(([key, words]) => [words, r.sources![key]])}
+                rows={SOURCES.map(([key, words]) => ({ name: words, tokens: r.sources![key] }))}
               />
               <p className="b-hint">
                 Messages from other bots counts only runs a send's result names. The rest is not
