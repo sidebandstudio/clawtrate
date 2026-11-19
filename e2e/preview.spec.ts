@@ -1821,6 +1821,157 @@ test("F-061: Queue after this turn holds a message on the shelf and runs it once
   expect(queued).toBeGreaterThan(first + 1);
 });
 
+/** A task's rows on the gateway: each row's role and visible text, in order. */
+async function historyRows(key: string): Promise<Array<{ role: string; text: string }>> {
+  const history = await gatewayCall<{
+    messages: Array<{ role: string; content?: unknown }>;
+  }>("chat.history", { sessionKey: key, limit: 60 });
+  const textOf = (content: unknown): string =>
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((part: { type?: string; text?: string }) =>
+              part.type === "text" ? (part.text ?? "") : "",
+            )
+            .join("")
+        : "";
+  return history.messages
+    .map((row) => ({ role: row.role, text: textOf(row.content).trim() }))
+    .filter((row) => (row.role === "user" || row.role === "assistant") && row.text !== "");
+}
+
+/** The transcript's turns as the page shows them: each one's role and text, in order. */
+async function shownTurns(page: Page): Promise<Array<{ role: string; text: string }>> {
+  return page.getByTestId("transcript-turn").evaluateAll((all) =>
+    all.map((turn) => ({
+      role: turn.getAttribute("data-role") ?? "",
+      text: (turn.textContent ?? "").trim(),
+    })),
+  );
+}
+
+/** Where each message is among a task's rows of that role: once, and in the order sent. */
+function placesOf(rows: Array<{ role: string; text: string }>, texts: string[]): number[] {
+  return texts.map((text) => {
+    const at = rows.flatMap((row, index) =>
+      row.role === "user" && row.text.includes(text) ? [index] : [],
+    );
+    expect(at, `"${text}" appears once`).toHaveLength(1);
+    return at[0]!;
+  });
+}
+
+const QUICK = ["Also the photos folder.", "And the music folder.", "Then send me a summary."];
+
+test("F-106: under Steer, a slow message and three quick ones each appear once, in order, and one continuation after the last answers them; again after a reload", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await openShell(page);
+  const { key, title } = await ownTask(page, "Quick messages, steered");
+  await composer(page).fill("Look at the disk use. #slow 15");
+  await page.keyboard.press("Enter");
+  // The run is under way on the gateway: the next three join it as steers, the default.
+  await inFlightRunId(key);
+  for (const text of QUICK) {
+    await composer(page).fill(text);
+    await expect(page.getByRole("button", { name: "How to send: Steer" })).toBeVisible();
+    await page.keyboard.press("Enter");
+  }
+  await expect.poll(() => gatewayIdle(key), { timeout: 120_000 }).toBe(true);
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
+  const check = (rows: Array<{ role: string; text: string }>) => {
+    const places = placesOf(rows, ["Look at the disk use.", ...QUICK]);
+    expect(places).toEqual([...places].sort((a, b) => a - b));
+    // The steers joined the turn: nothing answered between them, and the turn's one
+    // continuation after the last answers them together.
+    const afterFirstSteer = rows.slice(places[1]! + 1).filter((row) => row.role === "assistant");
+    expect(afterFirstSteer).toHaveLength(1);
+    expect(rows.lastIndexOf(afterFirstSteer[0]!)).toBeGreaterThan(places[3]!);
+  };
+  await expect
+    .poll(async () => (await historyRows(key)).length, { timeout: 30_000 })
+    .toBeGreaterThan(4);
+  check(await historyRows(key));
+  await expect
+    .poll(async () => (await shownTurns(page)).filter((t) => t.role === "user").length, {
+      timeout: 30_000,
+    })
+    .toBe(4);
+  check(await shownTurns(page));
+  // No message the gateway took is shown as not sent, and none is left on the shelf.
+  await expect(page.getByTestId("shelf-row")).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  await openTask(page, "Otto", title);
+  await expect
+    .poll(async () => (await shownTurns(page)).filter((t) => t.role === "user").length, {
+      timeout: 30_000,
+    })
+    .toBe(4);
+  check(await shownTurns(page));
+});
+
+test("F-106: under Queue, a slow message and three quick ones each start a turn of their own, in order, each with its own reply; again after a reload", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await openShell(page);
+  const { key, title } = await ownTask(page, "Quick messages, queued");
+  await composer(page).fill("Look at the disk use. #slow 15");
+  await page.keyboard.press("Enter");
+  await inFlightRunId(key);
+  await composer(page).fill(QUICK[0]!);
+  // The mode menu sets Queue for the rest of this run.
+  await page.getByRole("button", { name: "How to send: Steer" }).click();
+  await page.getByRole("menuitemradio", { name: /Queue after this turn/ }).click();
+  await expect(page.getByRole("button", { name: "How to send: Queue" })).toBeVisible();
+  await composer(page).focus();
+  await page.keyboard.press("Enter");
+  for (const text of QUICK.slice(1)) {
+    await composer(page).fill(text);
+    await page.keyboard.press("Enter");
+  }
+  await expect(page.getByTestId("shelf-row")).toHaveCount(0, { timeout: 180_000 });
+  await expect.poll(() => gatewayIdle(key), { timeout: 120_000 }).toBe(true);
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
+  const check = (rows: Array<{ role: string; text: string }>) => {
+    const places = placesOf(rows, ["Look at the disk use.", ...QUICK]);
+    expect(places).toEqual([...places].sort((a, b) => a - b));
+    // Four pairs in order: each message, then its own reply before the next message.
+    const bounds = [...places, rows.length];
+    for (let n = 0; n < 4; n += 1) {
+      const between = rows.slice(bounds[n]! + 1, bounds[n + 1]);
+      expect(
+        between.filter((row) => row.role === "assistant").length,
+        `reply to message ${n + 1}`,
+      ).toBeGreaterThan(0);
+    }
+  };
+  await expect
+    .poll(async () => (await historyRows(key)).filter((r) => r.role === "assistant").length, {
+      timeout: 30_000,
+    })
+    .toBeGreaterThanOrEqual(4);
+  check(await historyRows(key));
+  await expect
+    .poll(async () => (await shownTurns(page)).filter((t) => t.role === "user").length, {
+      timeout: 30_000,
+    })
+    .toBe(4);
+  check(await shownTurns(page));
+  await page.reload();
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  await openTask(page, "Otto", title);
+  await expect
+    .poll(async () => (await shownTurns(page)).filter((t) => t.role === "user").length, {
+      timeout: 30_000,
+    })
+    .toBe(4);
+  check(await shownTurns(page));
+});
+
 test("F-096: a message sent while the run works is steered into it and captioned Steer once accepted", async ({
   page,
 }) => {
