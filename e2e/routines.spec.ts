@@ -222,6 +222,12 @@ test("F-190 F-193: a run opens its conversation as the run recorded it, from the
   // The rail: the routine's latest run under Marlow opens the same run.
   await view().getByRole("button", { name: "Back to the routine" }).click();
   await view().getByRole("button", { name: "Back to routines" }).click();
+  // A bot's rows, its routine runs among them, show while it is unfolded.
+  const marlow = botRow("Marlow").first();
+  if ((await marlow.getAttribute("aria-expanded")) === "false") {
+    await marlow.focus();
+    await page.keyboard.press("ArrowRight");
+  }
   const task = page.getByTestId("routine-task").filter({ hasText: name });
   await expect(task).toBeVisible();
   await task.click();
