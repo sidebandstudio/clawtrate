@@ -51,7 +51,7 @@ export const DEFAULT_LIMITS: SendLimits = {
 /** The tag each kind of "/" or "@" row carries (F-071, F-070). */
 const TAG: Record<MenuRow["kind"], string> = {
   skill: "Skill",
-  action: "Action",
+  command: "Command",
   bot: "Bot",
   routine: "Routine",
 };
@@ -214,7 +214,7 @@ export function Composer({
     [draftKey],
   );
   const [files, setFiles] = useState<Attached[]>([]);
-  // Skills, actions, bots and routines chosen from the "/" and "@" menus: chips sent before the words.
+  // The skill or command chosen from the "/" menu: a chip sent before the words.
   const [tokens, setTokens] = useState<MenuRow[]>([]);
   /** The menu the words before the caret open: its trigger, what follows it, and where it starts. */
   const [picker, setPicker] = useState<{ trigger: "/" | "@"; query: string; start: number } | null>(
@@ -451,8 +451,13 @@ export function Composer({
       return;
     }
     const trigger = found[2] as "/" | "@";
-    // "/" opens the menu only at the start of the message, as a command is written.
-    if (trigger === "/" && before.slice(0, before.length - found[3]!.length - 1).trim() !== "") {
+    // "/" opens the menu only at the start of the message, as a command is written, and only
+    // while no skill or command is chosen: the gateway runs one per message, so a second is
+    // never offered.
+    if (
+      trigger === "/" &&
+      (before.slice(0, before.length - found[3]!.length - 1).trim() !== "" || tokens.length > 0)
+    ) {
       setPicker(null);
       return;
     }
@@ -483,7 +488,7 @@ export function Composer({
       // The caret goes after the name as the new text is drawn, before any later key lands.
       caretAt.current = picker.start + inserted.length;
     } else {
-      // The typed trigger and query leave the words; the skill or action becomes a chip.
+      // The typed trigger and query leave the words; the skill or command becomes a chip.
       setText((text.slice(0, picker.start) + text.slice(caret)).replace(/^\s+/, ""));
       setTokens((current) => [...current, row]);
     }
@@ -777,7 +782,7 @@ export function Composer({
               {menuRows?.trigger !== picker!.trigger || menuRows.rows === null ? (
                 <p className="composer-menu-note" aria-busy="true">
                   {picker!.trigger === "/"
-                    ? "Loading skills and actions…"
+                    ? "Loading skills and commands…"
                     : "Loading bots and routines…"}
                 </p>
               ) : menuRows.error ? (
@@ -789,7 +794,7 @@ export function Composer({
                   id="composer-menu"
                   role="listbox"
                   aria-label={
-                    picker!.trigger === "/" ? "Skills and actions" : "Mention a bot or routine"
+                    picker!.trigger === "/" ? "Skills and commands" : "Mention a bot or routine"
                   }
                 >
                   {shownRows.map((row, index) => (
@@ -800,6 +805,8 @@ export function Composer({
                       aria-selected={index === Math.min(active, shownRows.length - 1)}
                       className="composer-menu-row"
                       data-testid="composer-menu-row"
+                      data-kind={row.kind}
+                      data-name={row.name}
                       onPointerDown={(event) => event.preventDefault()}
                       onClick={() => choose(row)}
                     >

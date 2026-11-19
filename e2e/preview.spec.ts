@@ -1592,7 +1592,7 @@ test("F-066 F-283 F-067: on a real turn of a progress bubble and a final one, ea
   await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
 });
 
-test("F-071 F-070: / lists the bot's own skills and the gateway's actions, a chosen skill goes to the gateway with the words, and @ lists the bots", async ({
+test("F-071 F-070: / lists the bot's own skills by name and the gateway's commands, a chosen skill goes to the gateway with the words, and @ lists the bots", async ({
   page,
 }) => {
   await openShell(page);
@@ -1605,17 +1605,19 @@ test("F-071 F-070: / lists the bot's own skills and the gateway's actions, a cho
   expect(runnable).toContain("weather");
   await composer(page).click();
   await page.keyboard.type("/");
-  const rows = page.getByRole("listbox", { name: "Skills and actions" }).getByRole("option");
+  const rows = page.getByRole("listbox", { name: "Skills and commands" }).getByRole("option");
   await expect(rows.first()).toBeVisible({ timeout: 30_000 });
   const skills = await rows
-    .filter({ has: page.locator(".composer-menu-tag", { hasText: /^Skill$/ }) })
-    .locator(".composer-menu-name")
-    .allInnerTexts();
-  // Each skill this bot may run, and nothing else, is a Skill (the first 50 the list shows).
-  expect(skills.length).toBe(Math.min(50, runnable.length));
+    .and(page.locator('[data-kind="skill"]'))
+    .evaluateAll((all) => all.map((each) => each.getAttribute("data-name")));
+  // The skills this bot may run, by name and in the gateway's order, and nothing else, are
+  // the Skill rows (the first 50 the list shows).
+  expect(skills).toEqual(runnable.slice(0, Math.min(50, runnable.length)));
   await expect(rows.filter({ hasText: "/status" }).locator(".composer-menu-tag")).toHaveText(
-    "Action",
+    "Command",
   );
+  // No app's action is offered: the gateway lists none here, and the menu does not read them.
+  expect(await rows.locator(".composer-menu-tag", { hasText: "Action" }).count()).toBe(0);
   await page.keyboard.type("weath");
   await expect(rows).toHaveCount(1);
   await page.keyboard.press("Enter");

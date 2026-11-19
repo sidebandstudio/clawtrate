@@ -33,19 +33,19 @@ const sends = (page: Page) =>
 test.describe("the composer's menus", () => {
   test.use(contextFor(WIDE, "light"));
 
-  test("F-071: typing / lists the bot's skills and the gateway's actions, each tagged Skill or Action", async ({
+  test("F-071: typing / lists the bot's skills and the gateway's commands, each tagged Skill or Command", async ({
     page,
   }) => {
     await open(page);
     await field(page).click();
     await page.keyboard.type("/");
-    const list = page.getByRole("listbox", { name: "Skills and actions" });
+    const list = page.getByRole("listbox", { name: "Skills and commands" });
     const rows = list.getByRole("option");
     await expect(rows).toHaveCount(4);
     await expect(rows.nth(0)).toContainText("/healthcheck");
     await expect(rows.nth(0).locator(".composer-menu-tag")).toHaveText("Skill");
     await expect(rows.nth(2)).toContainText("/status");
-    await expect(rows.nth(2).locator(".composer-menu-tag")).toHaveText("Action");
+    await expect(rows.nth(2).locator(".composer-menu-tag")).toHaveText("Command");
     await expect(field(page)).toHaveAttribute("aria-expanded", "true");
     await expect(field(page)).toHaveAttribute("aria-activedescendant", "composer-menu-0");
     // What follows the trigger narrows the list.
@@ -75,6 +75,24 @@ test.describe("the composer's menus", () => {
     expect(await sends(page)).toMatchObject([{ text: "/weather for tomorrow in Lisbon" }]);
     await expect(chip).toHaveCount(0);
     await expect(page.getByTestId("outgoing")).toContainText("/weather for tomorrow in Lisbon");
+  });
+
+  test("F-071: with a skill or command chosen, / offers no second one: the gateway runs one per message", async ({
+    page,
+  }) => {
+    await open(page);
+    await record(page);
+    await field(page).click();
+    await page.keyboard.type("/");
+    await page.getByRole("option", { name: /\/weather/ }).click();
+    await expect(page.getByTestId("token-chip")).toHaveCount(1);
+    await page.keyboard.type("/");
+    await expect(page.getByRole("listbox")).toHaveCount(0);
+    await expect(field(page)).toHaveAttribute("aria-expanded", "false");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.type(" in Lisbon");
+    await page.keyboard.press("Enter");
+    expect(await sends(page)).toMatchObject([{ text: "/weather in Lisbon" }]);
   });
 
   test("F-071: Escape closes the menu and keeps the words; a chip is removed with its button or Backspace", async ({
@@ -130,11 +148,9 @@ for (const size of SIZES) {
   for (const theme of THEMES) {
     test.describe(`composer menu ${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
-      test("F-071: the / menu open over the composer, and a chip in it", async ({ page }) => {
+      test("F-071: the / menu open over the composer", async ({ page }) => {
         await open(page, theme);
         await field(page).click();
-        await page.keyboard.type("/");
-        await page.keyboard.press("Enter");
         await page.keyboard.type("/");
         await expect(page.getByRole("option")).toHaveCount(4);
         await settle(page);

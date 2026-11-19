@@ -998,13 +998,13 @@ export function liveCommand(
                 insert: "/weather",
               },
               {
-                kind: "action",
+                kind: "command",
                 name: "status",
                 description: "Show the session's status.",
                 insert: "/status",
               },
               {
-                kind: "action",
+                kind: "command",
                 name: "compact",
                 description: "Compact the session's context.",
                 insert: "/compact",

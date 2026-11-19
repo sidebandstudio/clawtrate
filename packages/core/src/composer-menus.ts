@@ -5,9 +5,10 @@
 // "/" lists the bot's skills a person may invoke (`skills.status {agentId}`,
 // `userInvocable` and `eligible`), tagged Skill, and the gateway's slash
 // commands that are not those skills (`chat.metadata` `commands`), tagged
-// Action. Choosing one inserts its text alias, sent with the message as
+// Command. Choosing one inserts its text alias, sent with the message as
 // `chat.send` `message` text: the gateway runs a command or skill named that
-// way (`/weather`, `/skill <name>`).
+// way (`/weather`, `/skill <name>`). No app's action is listed: the gateway
+// lists apps' actions separately (`mcp.app.discover`), which this does not read.
 //
 // "@" lists the gateway's bots (`agents.list`, already in the state) and its
 // routines (`cron.list`). OpenClaw's structured `chat.send` `mentions` are
@@ -17,7 +18,7 @@ import { asRecord, type RawRecord } from "./mapping.ts";
 
 /** One row of a composer menu. */
 export type MenuRow = {
-  kind: "skill" | "action" | "bot" | "routine";
+  kind: "skill" | "command" | "bot" | "routine";
   /** What the row shows. */
   name: string;
   description: string | null;
@@ -29,6 +30,8 @@ export type MenuRow = {
 export const MAX_MENU_ROWS = 200;
 const MAX_DESCRIPTION_CHARS = 160;
 const MAX_NAME_CHARS = 120;
+/** The longest text a row inserts. */
+const MAX_INSERT_CHARS = 256;
 
 const cut = (text: string | null, max: number) =>
   text === null ? null : text.length > max ? `${text.slice(0, max - 1)}…` : text;
@@ -63,6 +66,8 @@ export function slashRows(skillsAnswer: unknown, metadataAnswer: unknown): MenuR
     const commandName = name.replace(/-/g, "_");
     skillCommands.add(commandName);
     const insert = alias(commandOf.get(commandName)) ?? `/skill ${name}`;
+    // A row is chosen by its text: one too long to keep whole is left out, never cut.
+    if (insert.length > MAX_INSERT_CHARS) continue;
     rows.push({
       kind: "skill",
       name: cut(name, MAX_NAME_CHARS)!,
@@ -73,9 +78,9 @@ export function slashRows(skillsAnswer: unknown, metadataAnswer: unknown): MenuR
   for (const [name, command] of commandOf) {
     if (skillCommands.has(name)) continue;
     const insert = alias(command);
-    if (!insert) continue;
+    if (!insert || insert.length > MAX_INSERT_CHARS) continue;
     rows.push({
-      kind: "action",
+      kind: "command",
       name: cut(insert.slice(1), MAX_NAME_CHARS)!,
       description: cut(str(command.description), MAX_DESCRIPTION_CHARS),
       insert,
@@ -103,7 +108,7 @@ export function mentionRows(
     // The gateway's own heartbeat is not a routine anyone made.
     if (!job || asRecord(job.payload)?.kind === "heartbeat") continue;
     const name = str(job.displayName) ?? str(job.name);
-    if (!name) continue;
+    if (!name || name.length + 1 > MAX_INSERT_CHARS) continue;
     rows.push({
       kind: "routine",
       name: cut(name, MAX_NAME_CHARS)!,

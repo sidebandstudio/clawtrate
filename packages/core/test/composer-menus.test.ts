@@ -20,12 +20,15 @@ const metadata = {
 };
 
 describe("the composer's menus", () => {
-  it("F-071: / lists the skills a person may run as Skill, with their own command, then the other commands as Action", () => {
+  it("F-071: / lists the skills a person may run as Skill, with their own command, then the gateway's other commands as Command, and no app's action", () => {
     expect(slashRows(skills, metadata)).toEqual([
       { kind: "skill", name: "weather", description: "Get the weather.", insert: "/weather" },
       { kind: "skill", name: "gh-issues", description: "Work on issues.", insert: "/gh_issues" },
-      { kind: "action", name: "status", description: "Show status.", insert: "/status" },
+      { kind: "command", name: "status", description: "Show status.", insert: "/status" },
     ]);
+    // A row whose text is too long to keep whole is left out, never cut.
+    const long = { commands: [{ name: "x", textAliases: [`/${"x".repeat(300)}`] }] };
+    expect(slashRows(null, long)).toEqual([]);
     // A skill with no command of its own is asked for by name.
     expect(slashRows(skills, { commands: [] })[0]!.insert).toBe("/skill weather");
     const many = {
