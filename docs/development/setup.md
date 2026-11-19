@@ -17,7 +17,7 @@ A sandbox is a JSON file with four absolute paths and a name:
   "home": "/tmp/clawtrate-sandbox/home",
   "openclaw": "/path/to/openclaw",
   "instance": "look",
-  "stateDir": "/path/to/home/.openclaw-clawtrate-dev-look"
+  "stateDir": "<your home folder>/.openclaw-clawtrate-dev-look"
 }
 ```
 

@@ -25,7 +25,11 @@ const SETUP = process.env.CLAWTRATE_E2E_SETUP!;
 const DIR = process.env.CLAWTRATE_E2E_SETUP_DIR!;
 const PROFILE = `clawtrate-dev-${SETUP}`;
 
-/** Electron's binary, or null where it was never downloaded. */
+/**
+ * Electron's binary, or null where it was never downloaded. Asked only when
+ * the checks run: requiring `electron` without its binary starts a download,
+ * which must not happen while Playwright only lists the checks.
+ */
 function electronBinary(): string | null {
   try {
     const path = createRequire(join(DESKTOP, "package.json"))("electron") as string;
@@ -34,7 +38,7 @@ function electronBinary(): string | null {
     return null;
   }
 }
-const ELECTRON = electronBinary();
+let ELECTRON: string | null = null;
 
 test.describe.configure({ mode: "serial" });
 
@@ -145,6 +149,7 @@ const thisComputer = (page: Page) =>
     .getByRole("button", { name: /This computer/ });
 
 test.beforeAll(() => {
+  ELECTRON = electronBinary();
   if (ELECTRON === null) throw new Error("Electron's binary is missing: run pnpm install with it");
   expect(OPENCLAW).not.toBe("");
   // The development build of the desktop app, into its own output folder.
