@@ -54,9 +54,7 @@ function tools(env: NodeJS.ProcessEnv) {
   const maestro = env.MAESTRO ?? local(/^maestro-[\d.]+$/, "bin/maestro") ?? "maestro";
   const javaHome = env.JAVA_HOME ?? local(/^temurin-jre-[\d.]+$/, "Contents/Home");
   if (!javaHome)
-    throw new Error(
-      "Maestro needs Java 17 or later: set JAVA_HOME (CONTRIBUTING.md, Checking the iOS app).",
-    );
+    throw new Error("Maestro needs Java 17 or later: set JAVA_HOME (docs/development/ios.md).");
   return { maestro, javaHome };
 }
 
