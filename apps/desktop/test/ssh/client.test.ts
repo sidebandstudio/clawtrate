@@ -134,6 +134,54 @@ function heldSpawn(): {
   };
 }
 
+/**
+ * A spawn whose children write their error output one line per turn of the
+ * event loop, then exit. A child told to stop dies at once, before its next
+ * line or its own exit: as on Linux, where the reader woken by a line can run,
+ * and signal ssh, before ssh writes the line after it.
+ */
+function lineByLineSpawn(script: (args: readonly string[]) => { lines: string[]; exit: number }): {
+  spawn: Spawn;
+  killed: () => number;
+} {
+  let pid = 0;
+  let killed = 0;
+  const spawnLines: Spawn = (_file, args) => {
+    const child = new EventEmitter() as ChildProcess;
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    stdin.resume();
+    let closed = false;
+    const close = (code: number | null) => {
+      if (closed) return;
+      closed = true;
+      setImmediate(() => child.emit("close", code));
+    };
+    Object.assign(child, {
+      pid: ++pid,
+      stdin,
+      stdout,
+      stderr,
+      kill: () => {
+        killed++;
+        close(null);
+        return true;
+      },
+    });
+    const { lines, exit } = script(args);
+    const step = (i: number) => {
+      if (closed) return;
+      if (i === lines.length) return close(exit);
+      stderr.write(lines[i] + "\n");
+      setImmediate(() => step(i + 1));
+    };
+    setImmediate(() => step(0));
+    return child;
+  };
+  return { spawn: spawnLines, killed: () => killed };
+}
+
 describe.skipIf(process.platform === "win32")("the ssh client", () => {
   it.each([
     ["macOS's client", "OpenSSH_9.9p2, LibreSSL 3.3.6", "darwin", { ok: true }],
@@ -388,6 +436,96 @@ describe.skipIf(process.platform === "win32")("the ssh client", () => {
       expect(pins, later).toContain(first);
       expect(pins, later).not.toContain(keyOf(5));
     }
+  });
+
+  it("reads a host-key probe's answer whole, where a stopped ssh can die before its next line or its exit (as on Linux)", async () => {
+    const version = "OpenSSH_9.9p2, LibreSSL 3.3.6";
+    const keyOf = (fill: number) =>
+      Buffer.concat([
+        Buffer.from([0, 0, 0, 11]),
+        Buffer.from("ssh-ed25519"),
+        Buffer.from([0, 0, 0, 32]),
+        Buffer.alloc(32, fill),
+      ]).toString("base64");
+    const trusted = keyOf(6);
+    const presented = keyOf(7);
+    /** The capture's file, from the capture configuration it was started with. */
+    const captureFile = (args: readonly string[]) =>
+      /\/capture-[^/]+\.conf$/.test(args[1] ?? "")
+        ? (/UserKnownHostsFile "([^"]+)"/.exec(readFileSync(args[1]!, "utf8"))?.[1] ?? null)
+        : null;
+    const make = (
+      name: string,
+      answer: (args: readonly string[]) => { lines: string[]; exit: number },
+    ) => {
+      const world = worldWith(version, "darwin", name);
+      const fake = lineByLineSpawn((args) =>
+        args[0] === "-V" ? { lines: [version], exit: 0 } : answer(args),
+      );
+      const transport = new SshTransport(world, { spawn: fake.spawn });
+      writeFileSync(world.personConfig, "Host devbox\n  HostName devbox.example\n");
+      const route = transport.prepareRoute("1", "devbox");
+      if (!route.ok) throw new Error(JSON.stringify(route));
+      return { world, transport, route, fake };
+    };
+
+    // A key the person trusts: the match, then on the next turn the file and line it was found at.
+    const prior = make("linux-prior", (args) => {
+      const file = captureFile(args);
+      if (file) return { lines: [], exit: 255 };
+      return {
+        lines: [
+          `debug1: Server host key: ssh-ed25519 ${fingerprintOf(trusted)}`,
+          "debug1: Host 'devbox.example' is known and matches the ED25519 host key.",
+          `debug1: Found key in ${prior.world.personKnownHosts}:1`,
+          "debug1: Authentications that can continue: publickey",
+        ],
+        exit: 255,
+      };
+    });
+    writeFileSync(prior.world.personKnownHosts, `devbox.example ssh-ed25519 ${trusted}\n`);
+    expect(await prior.transport.checkHostKey(prior.route)).toMatchObject({
+      ok: true,
+      state: "pinned-from-known-hosts",
+      fingerprint: fingerprintOf(trusted),
+    });
+
+    // A changed key: the refusal, then on the next turn ssh's own exit 255.
+    const changed = make("linux-changed", (args) => {
+      const file = captureFile(args);
+      if (file) {
+        // The capture writes the presented key, then says so.
+        writeFileSync(file, `${changed.route.alias} ssh-ed25519 ${presented}\n`);
+        return {
+          lines: [
+            `Warning: Permanently added '${changed.route.alias}' (ED25519) to the list of known hosts.`,
+          ],
+          exit: 255,
+        };
+      }
+      return {
+        lines: [
+          "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@",
+          "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @",
+          "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@",
+          "Host key verification failed.",
+        ],
+        exit: 255,
+      };
+    });
+    new AppKnownHosts(join(changed.world.appDir, "known_hosts")).pin(
+      changed.route.alias,
+      { type: "ssh-ed25519", key: trusted, fingerprint: fingerprintOf(trusted) },
+      changed.route.endpoint,
+      new Date(0),
+      false,
+    );
+    expect(await changed.transport.checkHostKey(changed.route)).toMatchObject({
+      ok: true,
+      state: "changed",
+      trusted: { fingerprint: fingerprintOf(trusted) },
+      presented: { fingerprint: fingerprintOf(presented) },
+    });
   });
 
   it("turns a spawn that fails into a typed result, never an exception", async () => {

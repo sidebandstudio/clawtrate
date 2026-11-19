@@ -414,11 +414,14 @@ export class SshTransport {
       signal: this.signal(),
       timeoutMs: PROBE_TIMEOUT_MS,
       maxStdout: 4096,
-      // The key question is settled once the server's key was checked or written.
+      // The key question is settled once the server's key was checked or written. A match is
+      // whole only with the file and line it was found at, which ssh writes on the line after
+      // it; a refusal is left to end by itself, so that its exit status 255 is read. On Linux
+      // the reader can run, and stop ssh, before ssh writes that next line or exits.
       stopWhen: (stderr) =>
-        /is known and matches the|Permanently added|Authentications that can continue|Host key verification failed/.test(
-          stderr,
-        ),
+        (/is known and matches the/.test(stderr) &&
+          /debug1: Found key in [^\n]*:[0-9]+\r?\n/.test(stderr)) ||
+        /Permanently added|Authentications that can continue/.test(stderr),
     });
     return { run, lines: readProbeLines(run.stderr) };
   }
