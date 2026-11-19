@@ -661,8 +661,7 @@ function needsYouOf(bot: Bot, transcript: Transcript | undefined, interactive: b
 function lifecycleWords(bot: Bot, run: Run | undefined, last: Run | undefined): string | null {
   if (run) {
     if (run.state === "stopping") return "Stopping";
-    if (run.state === "waiting" || run.pendingCards.length > 0)
-      return `${bot.name} is waiting for you`;
+    if (run.state === "waiting" || run.pendingCards.length > 0) return `${bot.name} is waiting`;
     return `${bot.name} is working`;
   }
   // An ending nothing established is not announced as one.

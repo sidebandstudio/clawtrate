@@ -88,7 +88,7 @@ test("F-057: each task row shows its own state as a mark", async ({ page }) => {
   expect(await mark("Juniper", "Heat pump")).toEqual({
     mark: "waiting",
     dot: 0,
-    name: "Heat pump vs. gas furnace, needs you",
+    name: "Heat pump vs. gas furnace, waiting",
   });
   expect(await mark("Juniper", "Library e-book")).toMatchObject({ mark: "working" });
   expect(await mark("Pip", "Trip to the coast")).toMatchObject({

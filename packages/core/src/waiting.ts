@@ -31,17 +31,6 @@ import {
 } from "./runs.ts";
 
 export const MAX_WAITING_SESSIONS = 64;
-/**
- * The most tool calls of one run whose result is kept by call id, so a result
- * the gateway sends again or replaces for the same call is counted once.
- */
-export const MAX_COUNTED_CALLS = 64;
-/**
- * How much later than a run's end a task's row may be and still be that run's:
- * a row the gateway wrote well after the end belongs to newer activity, so the
- * end no longer describes the task.
- */
-export const ROW_AFTER_END_MS = 5_000;
 export const MAX_WAITING_MARKERS = 8;
 /** The longest key or id kept, in JSON characters (the state's id cap). */
 export const MAX_WAITING_ID_CHARS = 1_024;
@@ -50,41 +39,25 @@ const MARKER_PREFIX_CHARS = 13;
 /** JSON characters one kept marker can take: its id, and its kind, run id and time. */
 export const WAITING_MARKER_CHARS =
   MAX_WAITING_ID_CHARS + MARKER_PREFIX_CHARS + MAX_WAITING_ID_CHARS + 64;
-/**
- * JSON characters one entry of the latest-run map can take: its key, run id,
- * time and flags, and the outcome of each of its counted calls by call id.
- */
-export const WAITING_RUN_CHARS =
-  2 * MAX_WAITING_ID_CHARS + 96 + MAX_COUNTED_CALLS * (MAX_WAITING_ID_CHARS + 8);
+/** JSON characters one entry of the latest-run map can take: its key, run id, time and flags. */
+export const WAITING_RUN_CHARS = 2 * MAX_WAITING_ID_CHARS + 96;
 /** JSON characters one held task can take: its key, a waiting kind and two times. */
 export const WAITING_HELD_CHARS = MAX_WAITING_ID_CHARS + 96;
 
 export type WaitingKind = "approval" | "question";
 
-/** One marker: what is pending, of which run, since when. */
-type Marker = { kind: WaitingKind; runId: string | null; since: number };
+/**
+ * One marker: what is pending, of which run, since when. A recorded marker
+ * comes from the request's own scoped record and stays until its resolution;
+ * a lifecycle-only one can end with its run.
+ */
+type Marker = { kind: WaitingKind; runId: string | null; since: number; recorded?: boolean };
 
 /** What a task waits on, as the rail says it: the earliest marker. */
 export type Waiting = { kind: WaitingKind; since: number };
 
-/**
- * A task as its held runs describe it: what it waits on, when its latest run
- * was stopped, and whether a run is active. Failed actions and a blocked end
- * come from the gateway's events alone, so a task reads the same open or not.
- */
-export type HeldTask = {
-  waiting: Waiting | null;
-  stoppedAt: number | null;
-  active: boolean;
-};
-
-/** How the latest run of a task ended, as far as the rail tells it apart. */
-export type LatestEnd = {
-  stoppedAt: number | null;
-  /** Failed actions of a latest run that completed; 0 otherwise. */
-  failedActions: number;
-  blocked: boolean;
-};
+/** A task as its held runs describe it. */
+export type HeldTask = { waiting: Waiting | null; stoppedAt: number | null };
 
 const str = (value: unknown): string | null =>
   typeof value === "string" && value.length > 0 && jsonTextLength(value) <= MAX_WAITING_ID_CHARS
@@ -115,13 +88,12 @@ export function fromActivity(activity: Pick<TaskActivity, "runs">): HeldTask {
   }
   const stoppedAt =
     !active && latest?.state === "stopped" ? (latest.endedAt ?? latest.startedAt ?? 0) : null;
-  return { waiting, stoppedAt, active: active !== undefined };
+  return { waiting, stoppedAt };
 }
 
 const sameHeld = (a: HeldTask | undefined, b: HeldTask): boolean =>
   a !== undefined &&
   a.stoppedAt === b.stoppedAt &&
-  a.active === b.active &&
   a.waiting?.kind === b.waiting?.kind &&
   a.waiting?.since === b.waiting?.since;
 
@@ -133,12 +105,7 @@ function cap<V>(map: Map<string, V>, max: number): void {
 export class WaitingIndex {
   /** Session key to its markers by id, in the order tasks began waiting. */
   private readonly sessions = new Map<string, Map<string, Marker>>();
-  /**
-   * Each task's latest run as the events report it: its id, when, whether it
-   * was stopped, the latest result of each of its tool calls by call id (`tool`
-   * `result` `isError`; a later result for the same call replaces it), and how it ended: `completed`, `blocked`
-   * (the gateway's `livenessState`), or null while it runs or for other ends.
-   */
+  /** Each task's latest run as the events report it: its id, when, and whether it was stopped. */
   private readonly runs = new Map<
     string,
     {
@@ -148,9 +115,6 @@ export class WaitingIndex {
       /** Whether its end was seen, and whether that end named the gateway's archive as the stop. */
       ended: boolean;
       byArchive: boolean;
-      /** Each counted call's latest result: whether the gateway flagged it as an error. */
-      calls: Map<string, boolean>;
-      end: "completed" | "blocked" | null;
     }
   >();
   /** Tasks whose runs the engine holds, as those runs describe them; they win over the events. */
@@ -168,7 +132,8 @@ export class WaitingIndex {
       this.sessions.set(key, markers);
       cap(this.sessions, MAX_WAITING_SESSIONS);
     }
-    if (markers.has(id)) return false;
+    const previous = markers.get(id);
+    if (previous && (!marker.recorded || previous.recorded)) return false;
     markers.set(id, marker);
     cap(markers, MAX_WAITING_MARKERS);
     return true;
@@ -191,17 +156,6 @@ export class WaitingIndex {
     const runId = str(payload.runId);
     if (!key || !runId) return false;
     const data = asRecord(payload.data) ?? {};
-    if (payload.stream === "tool") {
-      // A failed action of the task's latest run, while it runs.
-      const latest = this.runs.get(key);
-      const callId = str(data.toolCallId);
-      if (data.phase === "result" && callId && latest?.runId === runId) {
-        // One entry per call: a result sent again, or replacing an earlier one, replaces it.
-        latest.calls.delete(callId);
-        if (latest.calls.size < MAX_COUNTED_CALLS) latest.calls.set(callId, data.isError === true);
-      }
-      return false;
-    }
     if (payload.stream !== "lifecycle") return false;
     const ts = time(payload.ts, at);
     switch (data.phase) {
@@ -215,11 +169,9 @@ export class WaitingIndex {
           stopped: false,
           ended: false,
           byArchive: false,
-          calls: new Map(),
-          end: null,
         });
         cap(this.runs, MAX_WAITING_SESSIONS);
-        return latest?.stopped === true || latest?.end !== null;
+        return latest?.stopped === true;
       }
       case "waiting-approval": {
         const id = str(data.approvalId) ?? str(data.id) ?? `run:${runId}`;
@@ -227,8 +179,13 @@ export class WaitingIndex {
       }
       case "approval-resolved": {
         const id = str(data.approvalId) ?? str(data.id);
-        return this.remove(key, (markerId, marker) =>
-          id ? markerId === `approval:${id}` : marker.kind === "approval" && marker.runId === runId,
+        return this.remove(
+          key,
+          (markerId, marker) =>
+            !marker.recorded &&
+            (id
+              ? markerId === `approval:${id}`
+              : marker.kind === "approval" && marker.runId === runId),
         );
       }
       case "end":
@@ -236,13 +193,12 @@ export class WaitingIndex {
         // An attempt that failed and is retried ends nothing: the run, and what it waits on, go on.
         if (data.phase === "error" && !isDefinitiveLifecycleError(data)) return false;
         // The run is over: nothing of it waits any more.
-        const changed = this.remove(key, (_, marker) => marker.runId === runId);
+        const changed = this.remove(key, (_, marker) => !marker.recorded && marker.runId === runId);
         const latest = this.runs.get(key);
         // An older run's end, arriving after a newer run started, says nothing of the task.
         if (latest && latest.runId !== runId) return changed;
         const reason = classifyLifecycleTerminal(data.phase, data);
         const stopped = reason === "aborted" || reason === "cancelled";
-        const end = reason === "completed" ? "completed" : reason === "blocked" ? "blocked" : null;
         this.runs.delete(key);
         this.runs.set(key, {
           runId,
@@ -251,12 +207,9 @@ export class WaitingIndex {
           ended: true,
           // The gateway's archive drains the task's runs as an abort named for it.
           byArchive: data.stopReason === "archive" && (stopped || data.aborted === true),
-          // Calls are counted for the run they came with; a run seen only from its end has none.
-          calls: latest?.runId === runId ? latest.calls : new Map(),
-          end,
         });
         cap(this.runs, MAX_WAITING_SESSIONS);
-        return changed || stopped || latest?.stopped === true || end !== null;
+        return changed || stopped || latest?.stopped === true;
       }
       default:
         return false;
@@ -272,6 +225,7 @@ export class WaitingIndex {
       kind: "question",
       runId: str(payload.runId),
       since: time(payload.createdAtMs, at),
+      recorded: true,
     });
   }
 
@@ -302,6 +256,7 @@ export class WaitingIndex {
       kind: "approval",
       runId: str(approval.runId),
       since: approval.createdAt ?? at,
+      recorded: true,
     });
   }
 
@@ -333,7 +288,7 @@ export class WaitingIndex {
    */
   settle(key: string, updatedAt: number | null): boolean {
     if (updatedAt === null) return false;
-    return this.remove(key, (_, marker) => marker.since <= updatedAt);
+    return this.remove(key, (_, marker) => !marker.recorded && marker.since <= updatedAt);
   }
 
   /** The engine holds this task's runs: they describe it. Returns whether that changed anything. */
@@ -361,11 +316,12 @@ export class WaitingIndex {
   /** What a task waits on: its held runs' word, else the earliest marker, a question over an approval when equal. */
   waitingFor(key: string): Waiting | null {
     const held = this.held.get(key);
-    if (held) return held.waiting;
+    if (held?.waiting) return held.waiting;
     const markers = this.sessions.get(key);
     if (!markers || markers.size === 0) return null;
     let first: Marker | null = null;
     for (const marker of markers.values()) {
+      if (held && !marker.recorded) continue;
       if (!first || marker.since < first.since) first = marker;
     }
     return first && { kind: first.kind, since: first.since };
@@ -386,31 +342,6 @@ export class WaitingIndex {
   /** The latest run the events reported for a task, by id; null when none was seen. */
   latestRunId(key: string): string | null {
     return this.runs.get(key)?.runId ?? null;
-  }
-
-  /**
-   * How the task's latest run ended, as far as the rail tells it apart. Stopped
-   * is its held runs' word, else the events'. Failed actions (each call once,
-   * by its latest result) and blocked (`livenessState: "blocked"`) come from
-   * the gateway's events alone, held or not, and only while the task's row is
-   * not newer than that end (`rowUpdatedAt`): an old end never overrides newer
-   * activity. A run seen only from its end has no failed actions known.
-   */
-  latestEnd(key: string, rowUpdatedAt: number | null = null): LatestEnd {
-    const held = this.held.get(key);
-    const latest = this.runs.get(key);
-    // An end describes the task only while the task's row is not newer than that end.
-    const current =
-      latest !== undefined &&
-      latest.end !== null &&
-      (rowUpdatedAt === null || rowUpdatedAt <= latest.at + ROW_AFTER_END_MS) &&
-      !held?.active;
-    const failed = current ? [...latest!.calls.values()].filter((isError) => isError).length : 0;
-    return {
-      stoppedAt: held ? held.stoppedAt : latest?.stopped ? latest.at : null,
-      failedActions: current && latest!.end === "completed" ? failed : 0,
-      blocked: current && latest!.end === "blocked",
-    };
   }
 
   /** When the task's latest run was stopped, or null when it was not (or a newer run started). */

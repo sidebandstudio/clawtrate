@@ -81,10 +81,11 @@ describe("the rail's sections and task states", () => {
         task("agent:o:a", { status: "waiting", waitingFor: "approval", waitingSince: 20 }),
         task("agent:o:b", { status: "waiting", waitingFor: "question", waitingSince: 10 }),
       ]),
-    ).toBe("Waiting for you: a question");
+    ).toBe("Waiting for an answer");
     expect(waitingWords([task("agent:o:a", { status: "waiting", waitingFor: "approval" })])).toBe(
-      "Waiting for you: approve a command",
+      "Waiting for an approval",
     );
+    expect(waitingWords([task("agent:o:a", { status: "waiting" })])).toBe("Waiting");
   });
 
   it("F-057: a stopped task shows its mark until it is opened; a queued one shows its own; the avatar takes stopped, not queued", () => {

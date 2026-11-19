@@ -681,8 +681,8 @@ test("F-021 F-057: a waiting bot says what it waits for in the warning colour, i
 }) => {
   await openFixture(page, `scene=rail-waiting&${OTTO}`, "light");
   const marlow = bot(page, "Marlow");
-  await expect(marlow.locator(".bot-preview")).toHaveText("Waiting for you: approve a command");
-  await expect(marlow).toHaveAccessibleName(/^Marlow, waiting for you/);
+  await expect(marlow.locator(".bot-preview")).toHaveText("Waiting for an approval");
+  await expect(marlow).toHaveAccessibleName(/^Marlow, waiting(,|$)/);
   await expect(marlow.locator(".presence")).toHaveAttribute("data-state", "waiting");
   await expect(marlow.locator(".presence > .glyph")).toHaveAttribute("data-state", "waiting");
   const warn = await page.evaluate(() => {
@@ -696,7 +696,7 @@ test("F-021 F-057: a waiting bot says what it waits for in the warning colour, i
   );
   // Since it began waiting, not its latest activity.
   await expect(marlow.locator(".bot-time")).toHaveText("5:34 PM");
-  await expect(bot(page, "Pip").locator(".bot-preview")).toHaveText("Waiting for you: a question");
+  await expect(bot(page, "Pip").locator(".bot-preview")).toHaveText("Waiting for an answer");
 
   await bot(page, "Pip").focus();
   await page.keyboard.press("ArrowRight");
@@ -706,7 +706,7 @@ test("F-021 F-057: a waiting bot says what it waits for in the warning colour, i
     "data-state",
     "stopped",
   );
-  await expect(pip.filter({ hasText: "Birthday" })).toHaveAccessibleName(/, needs you$/);
+  await expect(pip.filter({ hasText: "Birthday" })).toHaveAccessibleName(/, waiting$/);
   // A queued run: its own hollow ring and word; the bot's avatar counts it as idle.
   await bot(page, "Quartermaster").focus();
   await page.keyboard.press("ArrowRight");
@@ -745,7 +745,7 @@ test("F-021 F-057: a waiting bot says what it waits for in the warning colour, i
       };
     });
   });
-  await expect(marlow.locator(".bot-preview")).not.toContainText("Waiting for you");
+  await expect(marlow.locator(".bot-preview")).not.toContainText("Waiting");
   await expect(marlow.locator(".presence")).toHaveAttribute("data-state", "idle");
 });
 

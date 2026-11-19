@@ -620,7 +620,7 @@ test("F-426: a bot row shows the most urgent state of its tasks; opening a done-
   await settle(page);
   // Juniper: one task waiting for you and one working shows waiting.
   const juniper = bot(page, "Juniper");
-  await expect(juniper).toHaveAccessibleName(/^Juniper, waiting for you,/);
+  await expect(juniper).toHaveAccessibleName(/^Juniper, waiting,/);
   await expect(juniper.locator(".presence")).toHaveAttribute("data-state", "waiting");
   await expect(juniper.locator(".presence > .glyph")).toHaveAttribute("data-state", "waiting");
   // Otto: one done with failures and one working shows done with failures, with its failure marker.

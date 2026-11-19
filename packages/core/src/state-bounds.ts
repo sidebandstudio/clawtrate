@@ -611,7 +611,6 @@ const task = flagged<Task>()({
   pinned: FLAG,
   waitingFor: ENUM,
   waitingSince: NUMBER,
-  failedActions: NUMBER,
   unreadMarker: NUMBER,
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
   effort: NAME,

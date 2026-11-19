@@ -7,6 +7,7 @@ import {
   initialState,
   INTERACTIVE_SCOPES,
   newRun,
+  parseExecApproval,
   READ_SCOPES,
   type ConnectionState,
   type OutgoingMessage,
@@ -178,12 +179,23 @@ describe("the status line", () => {
       pendingCards: [{ id: "a-1", kind: "approval", since: NOW }],
       steps: [step("read", { path: "a.log" })],
     });
+    // A bare lifecycle wait: this transcript holds no request of the run's to answer.
     expect(statusLineFor(waiting, transcript([waiting]), live)).toMatchObject({
       state: "waiting",
       badge: "waiting",
-      phrase: "Waiting for you",
+      phrase: "Waiting for an answer",
       tone: "warn",
     });
+    // The run's own scoped approval is here: it is the person's to answer.
+    const card = parseExecApproval({
+      id: "a-1",
+      request: { command: "ls", runId: waiting.id },
+      createdAtMs: NOW,
+      expiresAtMs: NOW + 60_000,
+    })!;
+    expect(
+      statusLineFor(waiting, transcript([waiting], { approvals: [card] }), live),
+    ).toMatchObject({ state: "waiting", phrase: "Waiting for you" });
     const asked = run();
     expect(
       statusLineFor(asked, transcript([asked], { questions: [question()] }), live).phrase,

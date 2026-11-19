@@ -436,7 +436,7 @@ test("F-091: an approval is its action's waiting state and a card of its own aft
   await shot(approvalCard(page), "approval-kept");
 });
 
-test("F-057 F-295: a task whose run completed with a failed action shows the failed mark and says done with failures until it is opened", async () => {
+test("F-057: a task whose run had a failed action reads as the gateway's newer row says, Done, with no failed count in its name", async () => {
   test.setTimeout(300_000);
   const { title } = await hostTask("pip", "Fails", "#tool-fail");
   // Another task on screen, so the failing one is not opened when its run ends.
@@ -446,17 +446,13 @@ test("F-057 F-295: a task whose run completed with a failed action shows the fai
     .getByRole("list", { name: "Pip's tasks" })
     .getByTestId("task")
     .filter({ hasText: title });
-  await expect(row).toHaveAttribute("data-state", "done-with-failures", { timeout: 60_000 });
-  await expect(row.locator(".glyph")).toHaveAttribute("data-state", "failed");
-  await expect(row).toHaveAccessibleName(/, done with failures$/);
-  await shot(page.getByTestId("bot-list"), "rail-done-with-failures");
-  // Opened, the mark goes.
-  await row.click();
-  await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible({
-    timeout: 20_000,
-  });
+  await expect(row).toHaveAttribute("data-status", "done", { timeout: 60_000 });
+  await expect(row).not.toHaveAttribute("data-state");
   await expect(row.locator(".glyph")).toHaveCount(0);
-  await expect(row).toHaveAccessibleName(/, done$/);
+  await expect(row).toHaveAccessibleName(/, done(, unread)?$/);
+  await expect(row).not.toHaveAccessibleName(/fail/);
+  await expect(page.getByTestId("bot-list")).not.toContainText(/failed action/);
+  await shot(page.getByTestId("bot-list"), "rail-done");
 });
 
 /** A paired client that may raise and answer questions: the gateway sends questions to all such. */
@@ -515,6 +511,65 @@ test("F-112: a question record outside the ordinary subset is shown readable, wi
   expect(pending.questions.find((each) => each.id === id)?.status).toBe("pending");
   await op.request("question.resolve", { id, answers: { answers: { details: ["Home"] } } });
   await expect(card).not.toHaveAttribute("data-state", "unanswerable", { timeout: 30_000 });
+});
+
+test("F-021: an ordinary question cancelled elsewhere leaves the owner waiting on its still-pending approval, and the second device with no question to answer", async ({
+  browser,
+}) => {
+  test.setTimeout(300_000);
+  const { title, key } = await hostTask("otto", "Shared request", "#sleep 15");
+  await openTask(page, "Otto", title);
+  await pendingRequest(key);
+  await expect(approvalCard(page)).toHaveAttribute("data-state", "pending", { timeout: 30_000 });
+  const second = await pairedPage(browser, await startOwnHost());
+  try {
+    await requestAccess(second);
+    await openTask(second, "Otto", title);
+    // The approval is the originating device's: the second device has no card for it.
+    await expect(approvalCard(second)).toHaveCount(0);
+    // An ordinary question on the same task reaches both devices.
+    const op = await questionsClient();
+    const { id } = await op.request<{ id: string }>("question.request", {
+      sessionKey: key,
+      agentId: "otto",
+      timeoutMs: 120_000,
+      questions: [
+        {
+          questionId: "colour",
+          header: "Colour",
+          question: "Which colour?",
+          options: [{ label: "Blue" }, { label: "Green" }],
+        },
+      ],
+    });
+    const question = (on: Page) =>
+      on.getByTestId("question-card").filter({ hasText: "Which colour?" });
+    for (const on of [page, second])
+      await expect(question(on)).toHaveAttribute("data-state", "pending", { timeout: 30_000 });
+    // Cancelled by another client: neither device has a question to answer.
+    await op.request("question.resolve", { id, cancel: true });
+    for (const on of [page, second]) {
+      await expect(question(on)).toHaveAttribute("data-state", "dismissed", { timeout: 30_000 });
+      await expect(on.locator('[data-testid="question-card"][data-state="pending"]')).toHaveCount(
+        0,
+      );
+    }
+    // The approval is still pending on the gateway, and its owner still waits on it.
+    const listed = await (
+      await adminClient()
+    ).request<Array<{ request: { sessionKey?: string } }>>("exec.approval.list", {});
+    expect(listed.some((each) => each.request.sessionKey === key)).toBe(true);
+    await expect(approvalCard(page)).toHaveAttribute("data-state", "pending");
+    const otto = page
+      .getByTestId("bot-list")
+      .getByRole("button", { name: /^Otto\b/ })
+      .first();
+    await expect(otto).toHaveAccessibleName(/^Otto, waiting(,|$)/);
+    await approvalCard(page).getByRole("button", { name: "Deny" }).click();
+    await expect(approvalCard(page).locator(".tag")).toHaveText("Denied", { timeout: 30_000 });
+  } finally {
+    await second.context().close();
+  }
 });
 
 test("F-169: a message sent while an approval is pending is accepted as a steer into the run and leaves the card pending; Stop aborts that run, and the card closes as Cancelled once the gateway cancels that run's request", async () => {

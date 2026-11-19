@@ -2885,6 +2885,13 @@ export class ClawtrateClient {
         pendingBefore,
       );
     });
+    // A request this list no longer holds no longer waits on the rail either.
+    let unmarked = false;
+    for (const approval of this.state.transcripts[key]?.approvals ?? []) {
+      if (approval.inferred && approval.status !== "pending" && pendingNow.has(approval.id))
+        unmarked = this.waiting.onApprovalResolved(approval.id) || unmarked;
+    }
+    if (unmarked) this.publishTasks();
     this.lookUpInferred(key, pendingNow);
     // Another list may have been refused for the scope meanwhile: this one cannot be kept current then.
     this.setApprovalSource(key, source.kind, this.holds(APPROVALS_SCOPE) ? "ready" : "unavailable");
@@ -4581,22 +4588,12 @@ export class ClawtrateClient {
             waitingFor: waiting.kind,
             waitingSince: waiting.since,
           };
-        } else if (task.status === "idle" || task.status === "done" || task.status === "failed") {
-          const end = this.waiting.latestEnd(task.key, task.updatedAt);
-          if (end.stoppedAt !== null && task.status !== "failed") {
-            // A run stopped with `chat.abort` leaves the row no status: its runs or its end said so.
-            tasks[index] = { ...task, status: "stopped" };
-          } else if (end.blocked) {
-            // The gateway ended the run as blocked: it cannot go on until something changes.
-            tasks[index] = { ...task, status: "blocked" };
-          } else if (end.failedActions > 0 && task.status !== "failed") {
-            // The run completed, with failed actions: never a plain success (F-295).
-            tasks[index] = {
-              ...task,
-              status: "done-with-failures",
-              failedActions: end.failedActions,
-            };
-          }
+        } else if (
+          (task.status === "idle" || task.status === "done") &&
+          this.waiting.stoppedAt(task.key) !== null
+        ) {
+          // A run stopped with `chat.abort` leaves the row no status: its runs or its end said so.
+          tasks[index] = { ...task, status: "stopped" };
         }
       }
     }
@@ -5128,7 +5125,10 @@ export class ClawtrateClient {
             : event.event === "plugin.approval.requested"
               ? parsePluginApproval(event.payload)
               : parseSystemAgentApproval(event.payload);
-        if (card) this.routeApproval(admitApproval(card));
+        if (card) {
+          if (this.waiting.restoreApproval(card, this.now())) this.publishTasks();
+          this.routeApproval(admitApproval(card));
+        }
         return;
       }
       case "exec.approval.resolved":

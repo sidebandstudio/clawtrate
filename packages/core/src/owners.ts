@@ -48,7 +48,6 @@ import {
 import { emptyActivity } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
-  MAX_COUNTED_CALLS,
   MAX_WAITING_ID_CHARS,
   MAX_WAITING_MARKERS,
   MAX_WAITING_SESSIONS,
@@ -159,12 +158,6 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "waiting.sessions.*": { max: MAX_WAITING_MARKERS, each: WAITING_MARKER_CHARS, row: null },
   // Each task's latest run by id, and whether it was stopped.
   "waiting.runs": { max: MAX_WAITING_SESSIONS, each: WAITING_RUN_CHARS, row: "bookkeeping" },
-  // Each latest run's counted calls by call id, inside that run's entry and counted in its size.
-  "waiting.runs.*.calls": {
-    max: MAX_COUNTED_CALLS,
-    each: MAX_WAITING_ID_CHARS + 8,
-    row: null,
-  },
   // Tasks the engine follows, as their runs describe them.
   // A task's read on opening, while it is on its way.
   openedReads: { max: MAX_OPENED_READS, each: ID, row: "bookkeeping" },

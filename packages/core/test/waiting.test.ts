@@ -28,13 +28,15 @@ describe("which tasks wait for the person", () => {
     expect(index.waitingFor(KEY)).toBeNull();
   });
 
-  it("F-021: the run's end clears what it waited on; another run's end does not", () => {
+  it("F-021: the run's end clears the wait its lifecycle reported; a question's own record waits until it is resolved", () => {
     const index = new WaitingIndex();
     index.onAgent(lifecycle("waiting-approval", { approvalId: "a1" }), 100);
     index.onQuestionRequested({ id: "q1", sessionKey: KEY, runId: "r2" }, 150);
     index.onAgent(lifecycle("end"), 200);
     expect(index.waitingFor(KEY)).toEqual({ kind: "question", since: 150 });
     index.onAgent(lifecycle("error", { executionSettled: true }, "r2"), 300);
+    expect(index.waitingFor(KEY)).toEqual({ kind: "question", since: 150 });
+    index.onQuestionResolved("q1");
     expect(index.waitingFor(KEY)).toBeNull();
   });
 

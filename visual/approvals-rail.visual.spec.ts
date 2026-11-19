@@ -232,7 +232,7 @@ for (const size of SIZES) {
         await fitsWidth(page, error);
       });
 
-      test("F-057 F-295: a task whose run finished with a failed action shows the failed mark and says so, and its bot says Finished with 1 failed action until it is opened; a blocked task says blocked", async ({
+      test("F-057: a task done with failures shows the failed mark, and a blocked task says blocked", async ({
         page,
       }) => {
         await openFixture(page, "scene=task-states&bot=otto", theme);
@@ -246,22 +246,6 @@ for (const size of SIZES) {
           .getByRole("button", { name: /^Otto\b/ })
           .first();
         await expect(otto).toHaveAccessibleName(/^Otto, done with failures, /);
-        const line = otto.locator(".bot-preview");
-        await expect(line).toHaveText("Finished with 1 failed action");
-        await expect(line).toHaveAttribute("data-tone", "danger");
-        const danger = await page.evaluate(() =>
-          getComputedStyle(document.documentElement).getPropertyValue("--danger").trim(),
-        );
-        const color = await line.evaluate((element) => getComputedStyle(element).color);
-        const probe = await page.evaluate((value) => {
-          const el = document.createElement("span");
-          el.style.color = value;
-          document.body.append(el);
-          const resolved = getComputedStyle(el).color;
-          el.remove();
-          return resolved;
-        }, danger);
-        expect(color).toBe(probe);
         const tasks = page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task");
         const backup = tasks.filter({ hasText: "Weekly backup check" });
         await expect(backup.locator(".glyph")).toHaveAttribute("data-state", "failed");
@@ -275,11 +259,10 @@ for (const size of SIZES) {
         for (const name of names) expect(name).toMatch(/, (idle|done)(, unread)?$/);
         await settle(page);
         await fitsWidth(page, otto);
-        // Opened, the task's mark and the bot's line give way.
+        // Opened, the task's mark gives way.
         await backup.click();
         await back();
         await expect(backup.locator(".glyph")).toHaveCount(0);
-        await expect(otto.locator(".bot-preview")).not.toHaveText("Finished with 1 failed action");
         await expect(otto).not.toHaveAccessibleName(/done with failures/);
         // Marlow's only task is blocked: the bot and its state say so.
         await expect(

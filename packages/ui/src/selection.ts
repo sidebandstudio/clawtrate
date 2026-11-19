@@ -84,7 +84,7 @@ export function summarize(
 
 /** How a state is spoken in a row's name. */
 export const STATE_WORDS: Record<RunState, string> = {
-  waiting: "waiting for you",
+  waiting: "waiting",
   failed: "a run failed",
   blocked: "blocked",
   "done-with-failures": "done with failures",

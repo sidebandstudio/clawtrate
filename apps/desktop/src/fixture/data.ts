@@ -381,12 +381,7 @@ export function withTaskStates(byBot: Record<string, Task[]>): Record<string, Ta
   return Object.fromEntries(
     Object.entries(byBot).map(([bot, tasks]) => [
       bot,
-      tasks.map((task) => ({
-        ...task,
-        status: TASK_STATES[task.key] ?? task.status,
-        // The gateway's results counted one failed action in the latest run.
-        ...(TASK_STATES[task.key] === "done-with-failures" ? { failedActions: 1 } : {}),
-      })),
+      tasks.map((task) => ({ ...task, status: TASK_STATES[task.key] ?? task.status })),
     ]),
   );
 }

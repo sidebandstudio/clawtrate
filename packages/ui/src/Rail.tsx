@@ -159,7 +159,7 @@ function MoreButton({ label, onOpen }: { label: string; onOpen: (trigger: HTMLEl
 /** How a task's state ends its row's accessible name (conversation.md, section 20). */
 const SPOKEN: Record<RunState, string> = {
   working: ", working",
-  waiting: ", needs you",
+  waiting: ", waiting",
   blocked: ", blocked",
   failed: ", last run failed",
   "done-with-failures": ", done with failures",
@@ -384,29 +384,10 @@ export function waitingWords(tasks: Task[]): string | null {
   if (waiting.length === 0) return null;
   const first = waiting.reduce((a, b) => ((b.waitingSince ?? 0) < (a.waitingSince ?? 0) ? b : a));
   return first.waitingFor === "question"
-    ? "Waiting for you: a question"
+    ? "Waiting for an answer"
     : first.waitingFor === "approval"
-      ? "Waiting for you: approve a command"
-      : "Waiting for you";
-}
-
-/**
- * What a bot's line two says when the most urgent of its tasks is one whose
- * latest run completed with failed actions, until that task is opened
- * (conversation.md section 20; F-295): "Finished with 1 failed action".
- */
-export function failureWords(
-  tasks: Task[],
-  seen: Parameters<typeof taskState>[1],
-  onScreenKey: string | null,
-): string | null {
-  const failed = tasks
-    .filter((task) => taskState(task, seen, onScreenKey) === "done-with-failures")
-    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
-  // The task's own count, from the gateway's results; none is invented.
-  const count = failed?.failedActions;
-  if (!failed || !count) return null;
-  return `Finished with ${count} failed ${count === 1 ? "action" : "actions"}`;
+      ? "Waiting for an approval"
+      : "Waiting";
 }
 
 /** Drop the separators a menu would start or end with, or show twice in a row. */
@@ -1613,10 +1594,6 @@ export function Rail({
     const tasks = tasksByBot[bot.id] ?? [];
     const summary = summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen);
     const waiting = waitingWords(tasks);
-    const failures =
-      summary.state === "done-with-failures"
-        ? failureWords(tasks, selection.seen, onScreenKey)
-        : null;
     const open = place !== "search" && selection.isOpen(bot.id);
     const several = tasks.length > 1;
     const selected = bot.id === selection.bot?.id;
@@ -1668,12 +1645,8 @@ export function Rail({
               <time className="bot-time">{time(tasks, summary)}</time>
             </span>
             <span className="bot-line">
-              <span
-                className="bot-preview"
-                data-tone={waiting ? "warn" : failures ? "danger" : undefined}
-              >
+              <span className="bot-preview" data-tone={waiting ? "warn" : undefined}>
                 {waiting ??
-                  failures ??
                   (latest
                     ? (latest.preview ?? latest.title)
                     : discovery.status === "loading"
