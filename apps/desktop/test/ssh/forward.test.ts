@@ -499,6 +499,28 @@ describe("the forward's attempts", () => {
     expect(h.forward.state).toEqual({ phase: "closed", reason: "closed" });
   });
 
+  it("starts one attempt, not two, when an observer retries from the waiting state", async () => {
+    const h = harness([{ kind: "same" }], ["no-answer", "http"]);
+    let retried = false;
+    h.forward.onState((state) => {
+      if (state.phase === "waiting" && !retried) {
+        retried = true;
+        h.forward.retryNow();
+      }
+    });
+    h.forward.open();
+    await h.up();
+    expect(retried).toBe(true);
+    // The observer's retry is the only one: no timer is left to start another.
+    expect(h.pending()).toEqual([]);
+    await h.up();
+    expect(h.forward.state).toMatchObject({ phase: "up" });
+    await h.advance(60000);
+    expect(h.processes).toHaveLength(2);
+    expect(h.forward.state).toMatchObject({ phase: "up", localPort: h.processes[1]!.port });
+    await h.forward.close();
+  });
+
   it("is never up for a process that exited while its LOOK ran, and that LOOK is stopped", async () => {
     const h = harness();
     h.forward.open();

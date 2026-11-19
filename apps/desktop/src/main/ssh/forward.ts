@@ -311,6 +311,8 @@ export class ForwardSupervisor {
     if (this.current.phase === "up") this.downSince = this.deps.now();
     this.failures++;
     const retryInMs = backoffMs(this.failures);
+    this.clearTimer();
+    const generation = this.generation;
     this.set({
       phase: "waiting",
       cause,
@@ -318,7 +320,8 @@ export class ForwardSupervisor {
       retryInMs,
       longOutage: this.deps.now() - this.downSince >= LONG_OUTAGE_MS,
     });
-    this.clearTimer();
+    // An observer may have retried, or closed the forward, while it heard "waiting".
+    if (generation !== this.generation || this.closed()) return;
     this.timer = this.deps.setTimer(() => {
       this.timer = null;
       this.track(this.attempt());
