@@ -115,6 +115,8 @@ test("S16 the budget comes first, and it and the figures each name their own per
 }) => {
   await openFixture(page, PAGE, "light");
   const groups = await usage(page).locator(".b-group").allTextContents();
+  expect(groups).toContain("Budget");
+  expect(groups).toContain("Usage");
   expect(groups.indexOf("Budget")).toBeLessThan(groups.indexOf("Usage"));
   await expect(page.getByTestId("budget-window")).toContainText(
     /^Counts the total the gateway reports this week \([A-Z][a-z]{2} \d{1,2}( to [A-Z][a-z]{2} \d{1,2})?, your time\)/,
