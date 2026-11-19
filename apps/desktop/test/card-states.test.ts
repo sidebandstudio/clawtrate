@@ -381,21 +381,23 @@ describe("approval cards from the engine's state", () => {
   it("F-164: the policy line says the host's policy from the request's own fields, never a cause", () => {
     const { card } = approval("approval-pending");
     expect([card.exec!.security, card.exec!.ask]).toEqual(["allowlist", "on-miss"]);
-    expect(policyLine(card)).toBe("Media-box asks before commands that are not on its allowlist.");
+    expect(policyLine(card)).toBe("Request policy: security allowlist, ask on-miss.");
     const ask = (exec: Partial<NonNullable<typeof card.exec>>) =>
       policyLine({ ...card, exec: { ...card.exec!, ...exec } });
-    expect(ask({ ask: "always" })).toBe("Media-box asks before every command.");
-    expect(ask({ host: "gateway", nodeId: null })).toBe(
-      "The gateway's machine asks before commands that are not on its allowlist.",
+    expect(ask({ ask: "always" })).toBe("Request policy: security allowlist, ask always.");
+    // A denied host rejects before asking: the line forecasts nothing, it gives the fields.
+    expect(ask({ security: "deny", ask: "always" })).toBe(
+      "Request policy: security deny, ask always.",
     );
-    // A two-phase request that carries the fields and no evaluation: still policy, not a cause.
-    expect(ask({ commandAnalysis: null })).toBe(
-      "Media-box asks before commands that are not on its allowlist.",
-    );
-    expect(ask({ security: "full", ask: "off" })).toBeNull();
+    // A two-phase request that carries the fields and no evaluation: the same fields.
+    expect(ask({ commandAnalysis: null })).toBe("Request policy: security allowlist, ask on-miss.");
+    expect(ask({ security: "full", ask: "off" })).toBe("Request policy: security full, ask off.");
+    expect(ask({ security: "full", ask: null })).toBe("Request policy: security full.");
+    expect(ask({ security: null, ask: "on-miss" })).toBe("Request policy: ask on-miss.");
+    // A record with neither field has no line.
     expect(ask({ security: null, ask: null })).toBeNull();
     for (const line of [ask({}), ask({ ask: "always" })]) {
-      expect(line).not.toMatch(/because|asked because|why/i);
+      expect(line).not.toMatch(/because|asked because|why|asks before/i);
     }
   });
 });

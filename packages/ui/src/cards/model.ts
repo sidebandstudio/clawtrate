@@ -260,19 +260,14 @@ function possessive(name: string): string {
  * snapshot's `reason` is how it ended), so the line never says this is why
  * this request was asked: the gateway also asks for inline code, heredocs and
  * plans it cannot enforce, and for a per-call ask, whatever the policy says.
- * Null when the request carries neither field as one of these policies.
+ * Null when the request carries neither field.
  */
 export function policyLine(card: ApprovalCard): string | null {
-  if (!card.exec) return null;
-  const machine = machineOf(card);
-  const subject = machine
-    ? `${machine.charAt(0).toUpperCase()}${machine.slice(1)}`
-    : "This machine";
-  if (card.exec.ask === "always") return `${subject} asks before every command.`;
-  if (card.exec.security === "allowlist" && card.exec.ask === "on-miss") {
-    return `${subject} asks before commands that are not on its allowlist.`;
-  }
-  return null;
+  const security = card.exec?.security;
+  const ask = card.exec?.ask;
+  if (security && ask) return `Request policy: security ${security}, ask ${ask}.`;
+  if (security) return `Request policy: security ${security}.`;
+  return ask ? `Request policy: ask ${ask}.` : null;
 }
 
 /** Characters of a command the summary shows; the full request holds the rest. */

@@ -295,7 +295,7 @@ test("F-171 F-164 F-432: a command the gateway warns about: its warnings on the 
     "on-miss",
   ]);
   await expect(full.locator(".request-why")).toHaveText(
-    "The gateway's machine asks before commands that are not on its allowlist.",
+    "Request policy: security allowlist, ask on-miss.",
   );
   await expect(full.getByRole("button", { name: "Manage settings" })).toHaveCount(0);
   await shot(card, "approval-full-request");

@@ -157,18 +157,23 @@ for (const size of SIZES) {
         // The line follows the request's own fields, and says nothing of why this request asked.
         expect(await execFields(page)).toMatchObject({ security: "allowlist", ask: "on-miss" });
         await expect(full.locator(".request-why")).toHaveText(
-          "Media-box asks before commands that are not on its allowlist.",
+          "Request policy: security allowlist, ask on-miss.",
         );
         await expect(full.getByRole("button", { name: "Manage settings" })).toHaveCount(0);
         await fitsWidth(page, card);
         // A two-phase request that carries the fields and no evaluation: the same policy line.
         await changeExec(page, { commandAnalysis: null });
         await expect(full.locator(".request-why")).toHaveText(
-          "Media-box asks before commands that are not on its allowlist.",
+          "Request policy: security allowlist, ask on-miss.",
         );
         await changeExec(page, { ask: "always" });
         await expect(full.locator(".request-why")).toHaveText(
-          "Media-box asks before every command.",
+          "Request policy: security allowlist, ask always.",
+        );
+        // A denied host rejects before asking: the line gives the fields and forecasts nothing.
+        await changeExec(page, { security: "deny", ask: "always" });
+        await expect(full.locator(".request-why")).toHaveText(
+          "Request policy: security deny, ask always.",
         );
         await changeExec(page, { security: null, ask: null });
         await expect(full.locator(".request-why")).toHaveCount(0);
