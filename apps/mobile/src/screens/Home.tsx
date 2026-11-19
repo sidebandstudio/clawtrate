@@ -133,6 +133,8 @@ function Row({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
 function Tile({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
   const { c } = useTheme();
   const { redact } = useRuntime();
+  // As in the rows: the name stays whole at the sizes where rows stack.
+  const stack = stacked(useWindowDimensions().fontScale);
   return (
     <Pressable
       testID={`pin-${redact(row.bot.id)}`}
@@ -166,7 +168,12 @@ function Tile({ row, onOpen }: { row: BotRow; onOpen: () => void }) {
         )}
       </View>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 4, maxWidth: "90%" }}>
-        <Txt size={S["text-sm"]} numberOfLines={1}>
+        <Txt
+          testID={`pin-name-${redact(row.bot.id)}`}
+          size={S["text-sm"]}
+          numberOfLines={stack ? undefined : 1}
+          style={{ flexShrink: 1 }}
+        >
           {redact(row.name)}
         </Txt>
         {row.unread && <UnreadDot />}

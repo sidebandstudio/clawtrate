@@ -1204,6 +1204,111 @@ describe("the iOS app", () => {
       await proxy.close();
     }
   });
+  it("on iPhone, a long bot name, a long pinned name and a long task title are whole in each row's and tile's accessible name, and at the largest text size each takes more than one line", async () => {
+    const LONG_BOT = "Otto, the caretaker of the media box, the backups and the certificates";
+    const LONG_PIN = "Pip, the planner of weekend trips, errands and dinners";
+    const LONG_TITLE = "Disk almost full on the media box, and the backup drive is filling up too";
+    const DISK = "agent:otto:disk-space";
+    const BACKUP = "agent:otto:backup-check";
+    // Short names in the same places, each one line at any size: the controls.
+    const names: Record<string, string> = {
+      otto: LONG_BOT,
+      pip: LONG_PIN,
+      main: "Jo",
+      marlow: "Mo",
+    };
+    const titles: Record<string, string> = { [DISK]: LONG_TITLE, [BACKUP]: "Log" };
+    const proxy = await relay(env.gateway, {
+      // Pip and Marlow are pinned, as the gateway would keep it for its user.
+      fromPhone: (frame) =>
+        frame.method === "users.prefs.get" && frame.id
+          ? {
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: {
+                status: "ok",
+                entries: { "clawtrate.sidebar": { pins: ["pip", "marlow"] } },
+              },
+            }
+          : null,
+      fromGateway: (frame, method) => {
+        if (!frame.ok || !frame.payload) return;
+        if (method === "agents.list")
+          for (const agent of (frame.payload.agents ?? []) as Array<{
+            id: string;
+            identity?: { name?: string };
+          }>)
+            if (agent.identity && names[agent.id]) agent.identity.name = names[agent.id]!;
+        if (method === "sessions.subscribe" || method === "sessions.list") {
+          const list = (method === "sessions.list" ? frame.payload : frame.payload.list) as
+            { sessions?: Array<{ key: string; label?: string }> } | undefined;
+          for (const row of list?.sessions ?? []) if (titles[row.key]) row.label = titles[row.key]!;
+        }
+      },
+    });
+    /** Each element's height, and that it holds the whole string. */
+    const heightOf = async (id: string, whole: string) => {
+      const view = (await layout()).get(id)?.[0];
+      expect(view?.text).toBe(whole);
+      return view!.y2 - view!.y1;
+    };
+    try {
+      launch({ fresh: true, devGateway: proxy.url });
+      await steps("long-connect", [
+        waitFor({ id: "welcome" }),
+        tap({ id: "connect-a-gateway" }),
+        ...typeAddress(proxy.url, env.token),
+        waitFor({ id: "pairing" }, 90_000),
+      ]);
+      devGateway("approve");
+      await steps("long-home", [
+        waitFor({ id: "pin-pip" }, 120_000),
+        scrollTo({ id: "bot-otto" }, "DOWN"),
+      ]);
+      // At the usual size the accessible names are whole, whatever the rows show.
+      const home = await layout();
+      expect(home.get("bot-otto")?.[0]?.text.startsWith(`${LONG_BOT}, `)).toBe(true);
+      expect(home.get("pin-pip")?.[0]?.text.startsWith(`${LONG_PIN}, `)).toBe(true);
+      await steps("long-tasks", [
+        tap({ id: "bot-otto" }),
+        waitFor({ id: "bot-tasks-otto" }, 20_000),
+        waitFor({ id: `task-${lit(DISK)}` }),
+      ]);
+      const tasks = await layout();
+      expect(tasks.get(`task-${DISK}`)?.[0]?.text.startsWith(LONG_TITLE)).toBe(true);
+      await shoot("long-tasks");
+
+      textSize("accessibility-extra-extra-extra-large");
+      // At the largest size each long text wraps: taller than two lines of its control.
+      await steps("long-tasks-largest", [scrollTo({ id: `task-title-${lit(DISK)}` }, "DOWN")]);
+      await until("the task rows at the largest size", async () => {
+        const at = await layout();
+        const title = at.get(`task-title-${DISK}`)?.[0];
+        const time = at.get(`task-time-${DISK}`)?.[0];
+        return title && time && time.y1 >= title.y2 - 1 ? true : null;
+      });
+      const title = await heightOf(`task-title-${DISK}`, LONG_TITLE);
+      await steps("long-control-title", [scrollTo({ id: `task-title-${lit(BACKUP)}` }, "DOWN")]);
+      expect(title).toBeGreaterThan(1.8 * (await heightOf(`task-title-${BACKUP}`, "Log")));
+      await shoot("long-tasks-largest");
+      await steps("long-home-largest", [
+        tap({ id: "back" }),
+        waitFor({ id: "home" }, 20_000),
+        scrollTo({ id: "pin-name-pip" }, "UP"),
+      ]);
+      const pin = await heightOf("pin-name-pip", LONG_PIN);
+      expect(pin).toBeGreaterThan(1.8 * (await heightOf("pin-name-marlow", "Mo")));
+      await steps("long-row-largest", [scrollTo({ id: "bot-name-otto" }, "DOWN")]);
+      const name = await heightOf("bot-name-otto", LONG_BOT);
+      await steps("long-control-row", [scrollTo({ id: "bot-name-main" }, "DOWN")]);
+      expect(name).toBeGreaterThan(1.8 * (await heightOf("bot-name-main", "Jo")));
+      await shoot("home-long-largest");
+    } finally {
+      textSize("large");
+      await proxy.close();
+    }
+  });
 });
 
 /** A gateway frame, as far as the echoing relay reads and changes it. */
