@@ -15,7 +15,7 @@ const check = (name, ok, extra = "") => {
   if (!ok) failed += 1;
   out.push(`${ok ? "ok  " : "FAIL"} ${name} ${extra}`);
 };
-// What every page sent, collected as it closes, for the schema check at the end.
+// Every request a page put on the wire, answered or not, collected as it closes, for the schema check at the end.
 const requests = [];
 const open = async (query = "", viewport = { width: 1440, height: 900 }) => {
   const p = await b.newPage({ viewport });
@@ -24,7 +24,7 @@ const open = async (query = "", viewport = { width: 1440, height: 900 }) => {
   await p.waitForTimeout(150);
   const close = p.close.bind(p);
   p.close = async () => {
-    for (const r of await p.evaluate(() => window.routines?.sent ?? [])) requests.push({ query, ...r });
+    for (const r of await p.evaluate(() => window.routines?.dispatched ?? [])) requests.push({ query, ...r });
     return close();
   };
   return p;
@@ -149,8 +149,12 @@ await event(p, { action: "updated", job: { id: "digest", name: "Morning notes", 
 check("event updated: the row shows the new values, focus stays, nothing announced off screen", (await text(p, '[data-routine="digest"] .r-row-name')) === "Morning notes" && (await text(p, '[data-routine="digest"] .r-row-line')).startsWith("Weekdays at 7:30 AM, New York") && (await focused(p)) === "toggle:digest" && (await live(p)) === "");
 await event(p, { action: "removed", jobId: "backup" });
 check("event removed: the row leaves the list and the rail, focus stays", !(await has(p, '[data-routine="backup"]')) && !(await has(p, '[data-testid="run-task"][data-id="backup"]')) && (await text(p, '[data-testid="count"]')) === "7 routines" && (await focused(p)) === "toggle:digest");
-await event(p, { action: "finished", job: { id: "watch" }, run: { at: Date.UTC(2026, 10, 18, 15, 12), status: "error", completion: "failed", error: "The check script exited with 2.", dur: 0.3, tokens: 0, inT: 0, outT: 0 } });
+await event(p, { action: "finished", jobId: "watch", runId: "w-1", runAtMs: Date.UTC(2026, 10, 18, 15, 12), status: "error", completionStatus: "failed", error: "The check script exited with 2.", durationMs: 300 });
 check("event finished with a failure: announced wherever the person is; the row gets the failed mark", (await live(p)) === "Disk space watch failed" && (await has(p, '[data-routine="watch"] .glyph[data-state="failed"]')));
+await event(p, { action: "updated", job: { id: "digest", state: { nextRunAtMs: Date.UTC(2026, 10, 20, 13, 0) } } });
+check("event updated, state.nextRunAtMs only: the row's Next is the gateway's", (await text(p, '[data-routine="digest"] .r-row-line')).includes(" · Next Fri 8:00 AM · "));
+await event(p, { action: "finished", jobId: "digest", runId: "d-1", runAtMs: Date.UTC(2026, 10, 18, 15, 12), status: "ok", nextRunAtMs: Date.UTC(2026, 10, 23, 13, 0) });
+check("event finished: Next follows its nextRunAtMs", (await text(p, '[data-routine="digest"] .r-row-line')).includes(" · Next Mon 8:00 AM · "));
 await p.close();
 p = await open("view=routine&routine=digest");
 await p.focus('[data-r="run-now"]');
@@ -500,6 +504,18 @@ sent = await lastSent(p);
 check("Once: a changed time is written as an ISO timestamp with its offset, and no tz", JSON.stringify(sent.params.patch.schedule) === '{"kind":"at","at":"2026-11-20T10:00:00+01:00"}');
 check("Once: read back in your zone", (await text(p, '[data-fact="schedule"] dd')) === "Once, Nov 20 at 4:00 AM, New York");
 await p.close();
+p = await open("edit=new");
+await p.fill("#e-name", "Skipped hour");
+await p.fill("#e-instr", "Look.");
+await p.click('[data-e-kind="once"]');
+await p.fill("#e-date", "2027-03-14");
+await p.fill('[data-e="time"]', "02:30");
+const SKIPPED = "2:30 AM doesn't happen on Mar 14, 2027 in New York: the clocks go forward past it. Pick another time.";
+check("Once at a time the clocks skip: the preview says so", (await text(p, '[data-testid="preview"]')) === SKIPPED);
+await p.click('[data-r="save"]');
+await p.waitForTimeout(700);
+check("Once at a time the clocks skip: refused under When, nothing sent", (await text(p, "#e-when-error")) === SKIPPED && (await p.evaluate(() => window.routines.dispatched.length)) === 0);
+await p.close();
 // F-195: the floor is the spacing between consecutive firings, read in croner's grammar,
 // the gateway's own (section 9). Each row is what croner 10.0.1 does from the page's clock in
 // New York: "ok" with its first firing, "floor" (two firings under 5 minutes apart, across an
@@ -510,9 +526,11 @@ const CRON_TABLE = [
   ["30 */5 * * * *", "ok", "2026-11-18T15:15:30.000Z"], ["0 8 * * 5L", "ok", "2026-11-27T13:00:00.000Z"], ["0 8 15W * *", "ok", "2026-12-15T13:00:00.000Z"],
   ["0 8 * * MON#2,FRI", "ok", "2026-11-20T13:00:00.000Z"], ["@hourly", "ok", "2026-11-18T16:00:00.000Z"], ["0 0 8 * * * 2027", "ok", "2027-01-01T13:00:00.000Z"],
   ["0 9 1 * 1", "ok", "2026-11-23T14:00:00.000Z"], ["0 8 * * +1", "ok", "2026-11-23T13:00:00.000Z"],
+  // Passes on the nominal clock (1:59 to 3:00), though the gateway fires it at 06:59Z and 07:00Z on 2027-03-14.
+  ["0 0,59 1,3 * * *", "ok", "2026-11-19T06:00:00.000Z"],
   ["*/4 * * * *", "floor"], ["* * * * *", "floor"], ["0,2 * * * *", "floor"], ["*/7 * * * *", "floor"], ["1-59/7 * * * *", "floor"], ["*/5,*/7 * * * *", "floor"],
-  ["0,59 23,0 * * *", "floor"], ["0,59 0,23 L,1 * *", "floor"], ["0 */4 * * * *", "floor"], ["*/5 * * * * *", "floor"],
-  ["99 * * * *", "error"], ["5/10 * * * *", "error"], ["0 8 * * 5-1", "error"], ["0 24 * * *", "error"], ["0 8 * *", "error"], ["0 8 31 2 *", "never"],
+  ["0,59 23,0 * * *", "floor"], ["0,59 0,23 L,1 * *", "floor"], ["0,59 0,23 1 * ?", "floor"], ["0 */4 * * * *", "floor"], ["*/5 * * * * *", "floor"],
+  ["99 * * * *", "error"], ["5/10 * * * *", "error"], ["0 8 * * 5-1", "error"], ["0 24 * * *", "error"], ["0 8 * *", "error"], ["0 0-8-9 * * *", "error"], ["0 8 31 2 *", "never"],
 ];
 // The table itself is checked against croner when the gateway's package is at hand (OPENCLAW_PACKAGE_DIR).
 if (process.env.OPENCLAW_PACKAGE_DIR) {
@@ -581,12 +599,12 @@ await p.click('[data-ci="daily"]');
 check("the catch: Juniper keeps checking in, said before saving", (await text(p, "#checkins-dialog .b-note")) === "Juniper checks in now through the gateway's default. Saving also gives Juniper a setting of its own with the same cadence, so it keeps checking in.");
 await p.click("#checkins-dialog summary");
 await p.fill("[data-ci-prompt]", "Tell me about my day.");
-check("a custom prompt without NO_REPLY: silence is what the default prompt asks for, not a promise either way", (await text(p, '[data-testid="prompt-note"]')) === "This prompt doesn't ask Marlow to reply NO_REPLY when nothing needs attention, as the gateway's own prompt does, so Marlow may answer every check-in.");
+check("a custom prompt: the note says what the gateway's own prompt asks, and claims nothing about this one", (await text(p, '[data-testid="prompt-note"]')) === "This prompt replaces the gateway's own, which asks Marlow to reply NO_REPLY when nothing needs attention. Whether Marlow stays quiet depends on what this prompt asks.");
 await p.click('[data-r="ci-save"]');
 await p.keyboard.press("Escape");
 check("check-ins: Escape while saving keeps the dialog until the answer", await p.evaluate(() => document.querySelector("#checkins-dialog").open));
 await p.waitForTimeout(700);
-check("F-201 saved: Marlow daily, said from its own prompt, announced", (await text(p, '[data-testid="checkins-text"]')) === "Once a day, Marlow looks for anything that needs you. Its prompt doesn't ask it to stay quiet, so it may answer every check-in." && (await live(p)) === "Check-ins saved");
+check("F-201 saved: Marlow daily, said from its own prompt, announced", (await text(p, '[data-testid="checkins-text"]')) === "Once a day, Marlow checks in with a prompt of its own." && (await live(p)) === "Check-ins saved");
 await p.click('[data-r="bot-menu"]');
 await p.click('#r-menu [data-id="juniper"]');
 check("the catch held: Juniper still every 30 minutes", (await text(p, '[data-testid="checkins-text"]')).startsWith("Every 30 minutes, Juniper"));
@@ -673,21 +691,32 @@ check("Every day with no time: the preview asks for one", (await text(p, '[data-
 await p.close();
 
 // Run identity: the open run is the one chosen, by its gateway id ----------------------------------
-const FIN = (runId, h, min, extra = {}) => ({ runId, at: Date.UTC(2026, 10, 18, h + 5, min), status: "ok", completion: "succeeded", dur: 2, tokens: 100, inT: 60, outT: 40, ...extra });
+// A \`finished\` event as the gateway sends it: its fields at the top level, \`runId\` optional.
+const FIN = (jobId, runId, h, min, extra = {}) => ({ action: "finished", jobId, ...(runId ? { runId } : {}), runAtMs: Date.UTC(2026, 10, 18, h + 5, min), status: "ok", completionStatus: "succeeded", durationMs: 2000, usage: { input_tokens: 60, output_tokens: 40, total_tokens: 100 }, ...extra });
 p = await open("view=run&routine=digest&run=0");
-await event(p, { action: "finished", job: { id: "digest" }, run: FIN("other-1", 10, 0) });
+await event(p, FIN("digest", "other-1", 10, 0));
 check("a finished run elsewhere doesn't replace the run being read", (await text(p, '[data-testid="run-when"]')) === "Marlow · Today 8:00 AM" && (await text(p, '[data-testid="scheduled-message"] p')).startsWith("Summarise the notes I added yesterday, and list"));
 await p.click('[data-r="back-to-routine"]');
 check("the other run joins the list in time order, and focus returns to the run that was open", (await count(p, '[data-testid="run-row"]')) === 7 && (await text(p, '[data-testid="run-row"] .r-run-when')) === "Today 10:00 AM" && (await p.evaluate(() => document.activeElement.querySelector(".r-run-when")?.textContent)) === "Today 8:00 AM");
 await p.close();
 p = await open("view=run&routine=digest&run=-1&state=running");
 check("the running run's view", (await text(p, '[data-testid="run-foot"]')).trim() === "Running…" && (await text(p, '[data-testid="run-when"]')) === "Marlow · Today 10:11 AM");
-await event(p, { action: "finished", job: { id: "digest" }, run: FIN("other-2", 9, 0) });
-check("another run's finish leaves the running run open and running", (await text(p, '[data-testid="run-foot"]')).trim() === "Running…" && (await text(p, '[data-testid="run-when"]')) === "Marlow · Today 10:11 AM");
-await event(p, { action: "finished", job: { id: "digest" }, run: FIN("own-1", 10, 11, { history: { message: "Summarise.", reply: "Done." } }) });
+await event(p, FIN("digest", "other-2", 9, 0));
+check("another run's finish leaves the running run open and running, and the rail's working mark", (await text(p, '[data-testid="run-foot"]')).trim() === "Running…" && (await text(p, '[data-testid="run-when"]')) === "Marlow · Today 10:11 AM" && (await has(p, '[data-bot-row="marlow"] .glyph[data-state="working"]')) && (await text(p, '[data-bot-row="marlow"] .bot-preview')) === "Running Morning digest");
+await event(p, FIN("digest", "own-1", 10, 11, { history: { message: "Summarise.", reply: "Done." } }));
 check("its own finish (same runAtMs) becomes the open run, with its time kept", (await text(p, '[data-testid="run-foot"]')).startsWith("This run has finished.") && (await text(p, '[data-testid="run-when"]')) === "Marlow · Today 10:11 AM" && (await text(p, ".r-convo .bubble")) === "Done.");
 await p.click('[data-r="back-to-routine"]');
 check("back on the page the finished run is one row, not a running row and a finished one", (await count(p, '[data-testid="run-row"]')) === 8 && !(await p.evaluate(() => /Running…/.test(document.querySelector('[data-testid="runs"]').textContent))) && (await p.evaluate(() => document.activeElement.dataset.run)) === "own-1");
+await p.close();
+p = await open("view=run&routine=digest&run=-1&state=running");
+const threw = await p.evaluate(() => { try { window.routines.event({ action: "finished", jobId: "digest", runId: "r", runAtMs: 1795014660000, status: "ok" }); return ""; } catch (e) { return String(e); } });
+check("a finished event with only the gateway's top-level fields is applied", threw === "", threw);
+await p.close();
+p = await open("view=run&routine=digest&run=-1&state=running");
+await event(p, FIN("digest", null, 10, 11));
+check("a finish with no runId is known by its runAtMs: the open running run becomes it", (await text(p, '[data-testid="run-foot"]')).startsWith("This run has finished.") && (await text(p, '[data-testid="run-when"]')) === "Marlow · Today 10:11 AM" && !(await has(p, '[data-bot-row="marlow"] .glyph[data-state="working"]')));
+await p.click('[data-r="back-to-routine"]');
+check("and back on the page it is one row, focused by that identity", (await count(p, '[data-testid="run-row"]')) === 7 && (await p.evaluate(() => document.activeElement.dataset.run)) === `at:${Date.UTC(2026, 10, 18, 15, 11)}`);
 await p.close();
 p = await open("view=run&routine=digest&run=-1");
 check("run=-1 with nothing running: the run isn't available, no 1969 date", (await text(p, '[data-testid="run-missing"] h4')) === "This run isn't available." && !(await p.evaluate(() => /1969|Dec 31/.test(document.body.textContent))));
@@ -704,12 +733,12 @@ await p.click('[data-r="back-to-routine"]');
 check("and its page then says it was deleted", (await text(p, ".b-note")).startsWith("This routine was deleted. It won't run again.") && !(await has(p, '[data-r="run-now"]')));
 await p.close();
 p = await open("view=routine&routine=reminder");
-await event(p, { action: "finished", job: { id: "reminder" }, run: FIN("once-1", 10, 12, { summary: "Posted the reminder." }) });
+await event(p, FIN("reminder", "once-1", 10, 12, { summary: "Posted the reminder." }));
 await event(p, { action: "removed", jobId: "reminder" });
 check("a one-shot's finished then removed: it ran once and the gateway removed it, with its run", (await text(p, ".b-note")).startsWith("This routine ran once, and the gateway removed it. Its run succeeded today 10:12 AM.") && (await count(p, '[data-testid="run-row"]')) === 1);
 await p.close();
 p = await open("view=routine&routine=reminder");
-await event(p, { action: "finished", job: { id: "reminder" }, run: FIN("once-2", 10, 12, { status: "error", completion: "failed", error: "The model didn't answer." }) });
+await event(p, FIN("reminder", "once-2", 10, 12, { status: "error", completionStatus: "failed", error: "The model didn't answer." }));
 await event(p, { action: "removed", jobId: "reminder" });
 check("a one-shot removed after a failed run reads as deleted, not as ran once", (await text(p, ".b-note")).startsWith("This routine was deleted."));
 await p.close();
@@ -730,6 +759,17 @@ check("checking: still no Save", !(await footSave(p)));
 await p.waitForTimeout(500);
 check("it landed: Check now compares what was sent with the job and says it reads as typed", (await text(p, "#edit-dialog .b-note")).startsWith("Morning digest now reads as you typed it.") && !(await footSave(p)));
 await p.close();
+p = await open("view=routine&routine=digest&editstate=noanswer&lookup=found");
+await p.click('.r-head [data-r="edit"]');
+await p.fill("#e-name", "My digest");
+await p.click('[data-r="save"]');
+await p.waitForTimeout(700);
+await event(p, { action: "updated", job: { id: "digest", name: "Theirs", updatedAtMs: Date.UTC(2026, 10, 18, 15, 12) } });
+check("changed elsewhere while a save is unanswered: Check now stays, and no write is offered", (await has(p, '[data-r="check-now"]')) && !(await has(p, '[data-r="conflict-save"]')) && !(await footSave(p)));
+await p.click('[data-r="check-now"]');
+await p.waitForTimeout(500);
+check("once checked, the change elsewhere is shown; one write was sent", (await has(p, '[data-r="conflict-show"]')) && (await p.evaluate(() => window.routines.dispatched.length)) === 1);
+await p.close();
 p = await open("view=routine&routine=digest&editstate=noanswer");
 await p.click('.r-head [data-r="edit"]');
 await p.fill("#e-time", "09:00");
@@ -738,11 +778,13 @@ await p.waitForTimeout(700);
 await p.click('[data-r="check-now"]');
 await p.waitForTimeout(500);
 check("it didn't land: says the gateway differs, with what it has, and offers Save again in the note", (await text(p, "#edit-dialog .b-note")).startsWith("Morning digest doesn't read as you typed it. The gateway has: Morning digest, Weekdays at 8:00 AM, New York.") && (await has(p, '#edit-dialog .b-note [data-r="save"]')) && !(await footSave(p)));
+check("the unanswered attempt is a dispatched request, not a landed write", (await p.evaluate(() => `${window.routines.dispatched.length},${window.routines.sent.length}`)) === "1,0");
 await p.close();
 for (const q of ["edit=new&editstate=saving", "edit=open&routine=digest&editstate=saving"]) {
   p = await open(q);
-  check(`${q}: Saving…, and Escape waits`, (await text(p, '[data-r="save"]')) === "Saving…" && (await p.keyboard.press("Escape").then(() => p.evaluate(() => document.querySelector("#edit-dialog").open))));
+  check(`${q}: Saving…, focus on the dialog's heading, and Escape waits`, (await text(p, '[data-r="save"]')) === "Saving…" && (await p.evaluate(() => document.activeElement.id)) === "edit-title" && (await p.keyboard.press("Escape").then(() => p.evaluate(() => document.querySelector("#edit-dialog").open))));
   await p.waitForTimeout(4200);
+  check(`${q}: when the wait ends, focus moves to Check now`, (await p.evaluate(() => document.activeElement.dataset.r)) === "check-now");
   check(`${q}: the wait ends as no answer, with Check now, and Escape closes again`, (await text(p, "#edit-dialog .b-note")).startsWith("The gateway didn't answer.") && !(await footSave(p)) && (await p.keyboard.press("Escape").then(() => p.evaluate(() => !document.querySelector("#edit-dialog").open))));
   await p.close();
 }
@@ -796,7 +838,7 @@ const overlapFree = (p) => p.evaluate(() => {
 });
 for (const vp of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
   p = await open(`view=day${vp.width === 390 ? "&width=phone" : ""}`, vp);
-  await event(p, { action: "finished", job: { id: "digest" }, run: FIN("same-time", 3, 30) });
+  await event(p, FIN("digest", "same-time", 3, 30));
   const r = await overlapFree(p);
   check(`${vp.width} day: two runs at 3:30 AM are side by side, each reached by the pointer at its centre`, r.n === 4 && r.reach && !r.cross, JSON.stringify(r));
   await p.close();
@@ -819,17 +861,25 @@ await p.click('[data-r="seg"][data-v="week"]');
 check("and the calendar draws it, as a band since it runs more than four times a day", (await p.evaluate(() => [...document.querySelectorAll(".r-cal-band")].map((x) => x.textContent))).includes("Often · */5 * * * *"));
 await p.close();
 
-// Check-ins: the sentence follows the prompt in effect ------------------------------------------------
+// Check-ins: "asks it to stay quiet" only for the built-in prompt; any other is the cadence alone ----------
 p = await open("view=checkins&bot=marlow");
 await p.click('[data-r="checkins"]');
 await p.click('[data-ci="asneeded"]');
 await p.click("#checkins-dialog summary");
-await p.fill("[data-ci-prompt]", "Always answer with a joke");
-check("As needed with a custom prompt: the choice no longer promises quiet", (await p.evaluate(() => document.querySelector('[data-ci="asneeded"] .b-choice-sub').textContent)) === "Every 30 minutes, Marlow looks for anything that needs you. Its prompt doesn't ask it to stay quiet, so it may answer every check-in.");
+await p.fill("[data-ci-prompt]", "Never reply NO_REPLY. Report on every check.");
+check("As needed with a custom prompt that mentions NO_REPLY: no claim about quiet", (await p.evaluate(() => document.querySelector('[data-ci="asneeded"] .b-choice-sub').textContent)) === "Every 30 minutes, Marlow checks in with a prompt of its own.");
 await p.click('[data-r="ci-save"]');
 await p.waitForTimeout(700);
-check("saved As needed with that prompt: the block says it may answer every check-in", (await text(p, '[data-testid="checkins-text"]')) === "Every 30 minutes, Marlow looks for anything that needs you. Its prompt doesn't ask it to stay quiet, so it may answer every check-in.");
+check("saved with that prompt: the block says the cadence only", (await text(p, '[data-testid="checkins-text"]')) === "Every 30 minutes, Marlow checks in with a prompt of its own.");
 await p.close();
+p = await open("view=checkins&bot=juniper&defaultprompt=custom");
+check("an empty prompt under a custom gateway default: the cadence only", (await text(p, '[data-testid="checkins-text"]')) === "Every 30 minutes, Juniper checks in with the prompt the gateway sets for every bot.");
+await p.close();
+for (const q of ["view=checkins&bot=juniper&defaultprompt=unreadable", "view=checkins&bot=juniper&access=read"]) {
+  p = await open(q);
+  check(`${q}: a prompt Clawtrate can't read: the cadence only`, (await text(p, '[data-testid="checkins-text"]')) === "Every 30 minutes, Juniper checks in. Clawtrate can't read its prompt.");
+  await p.close();
+}
 
 // Try again reads again ------------------------------------------------------------------------------
 p = await open("view=routine&routine=digest&state=runs-error");
@@ -851,7 +901,18 @@ const galleryErrors = [];
 p.on("pageerror", (e) => galleryErrors.push(String(e)));
 await p.goto(pageUrl("gallery.html") + "?chrome=0&theme=light&section=proactive");
 const links = await p.evaluate(() => [...document.querySelectorAll('a[href^="routines.html"]')].map((a) => a.getAttribute("href")));
-check(`gallery: links to the routines page and its address-only states (${links.length})`, links.length >= 50 && links.includes("routines.html?edit=new&editstate=saving") && links.includes("routines.html?view=run&routine=digest&run=99"));
+// Every address-only state section 18 names, by its address.
+const REQUIRED = [
+  "state=loading", "state=error", "state=empty", "state=scheduler-off", "pausefail=1", "away=1", "away=1&prefs=none",
+  "access=read", "access=write", "access=read&req=requested", "access=read&req=denied", "access=read&req=expired", "access=read&req=failed",
+  "view=routine&routine=digest&state=running", "view=routine&routine=digest&state=paused", "view=routine&routine=digest&state=noruns", "view=routine&routine=digest&state=failed", "view=routine&routine=digest&state=deleted", "view=routine&routine=reminder&state=ran-once", "view=routine&routine=digest&state=runs-error", "view=routine&routine=digest&runs=25", "view=routine&routine=digest&hooks=on", "view=routine&routine=digest&runfail=1", "view=routine&routine=backup&deletefail=1&confirm=delete",
+  "view=run&routine=digest&run=0", "view=run&routine=digest&run=3", "view=run&routine=reminder&run=0&state=ran-once", "view=run&routine=digest&run=0&runstate=running", "view=run&routine=digest&run=0&runstate=loading", "view=run&routine=digest&run=0&runstate=error", "view=run&routine=digest&run=99",
+  "edit=new", "edit=open&routine=digest", "edit=new&editstate=invalid", "edit=new&editstate=saving", "edit=open&routine=digest&editstate=refused", "edit=open&routine=digest&editstate=noanswer", "edit=open&routine=digest&editstate=conflict", "edit=open&routine=digest&editstate=deleted", "editstate=locked", "edit=open&routine=digest&editstate=adminlost",
+  "view=checkins&bot=juniper", "view=checkins&bot=marlow&dialog=open&catch=1", "view=checkins&bot=juniper&checkins=off", "transcript=checkin", "transcript=checkin&live=0", "checkin=running", "view=checkins&bot=juniper&defaultprompt=custom", "view=checkins&bot=juniper&defaultprompt=unreadable", "view=checkins&bot=pip&tzfail=cleanup",
+  "view=day", "view=3day", "view=week",
+].map((q) => `routines.html?${q}`);
+const missingLinks = REQUIRED.filter((q) => !links.includes(q));
+check("gallery: links to every address-only routines state by name", missingLinks.length === 0, JSON.stringify(missingLinks));
 check("gallery F-200: an offer is a reply, with no offer card or Accept button", (await text(p, "#proactive .spec:nth-of-type(1) .bubble")).startsWith("The venue's quote expires on Friday") && !(await p.evaluate(() => [...document.querySelector("#proactive .spec-box").querySelectorAll("button, .card")].length)));
 check("gallery F-364: the connector's failure is a failed action card with the tool's error, and the bot's reply; no Reconnect button or badge", (await p.evaluate(() => { const box = document.querySelectorAll("#proactive .spec-box")[1]; const card = box.querySelector(".action"); return !!card && /failed/i.test(card.dataset.state || card.getAttribute("data-status") || card.textContent) && box.textContent.includes("Gmail signed me out") && ![...box.querySelectorAll("button")].some((x) => /Reconnect/.test(x.textContent)); })));
 await p.close();

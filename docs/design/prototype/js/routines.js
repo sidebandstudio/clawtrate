@@ -144,7 +144,9 @@
         let a, b;
         if (base === "*" || base === "?") [a, b] = [lo, hi];
         else if (base.includes("-")) {
-          const [x, y] = base.split("-");
+          const ends = base.split("-");
+          if (ends.length !== 2) throw `"${base}" isn't a range`;
+          const [x, y] = ends;
           [a, b] = [num(x, names, offset, what), num(y, names, offset, what)];
           if (a > b) throw `"${base}" runs backwards`;
         } else {
@@ -179,8 +181,10 @@
         mon: field(monF, 1, 12, "month", MON_NAMES, 1),
         year: field(yearF, 1, 9999, "year"),
       };
-      const domAny = domF === "*" || domF === "?";
-      const dowAny = dowF === "*" || dowF === "?";
+      // croner marks a field as any only when it is written `*`: a `?` lists every value but
+      // still counts as written, so `1 * ?` fires on the 1st OR any weekday, which is every day.
+      const domAny = domF === "*";
+      const dowAny = dowF === "*";
       const weekday = (y, m, d) => new Date(Date.UTC(y, m - 1, d)).getUTCDay();
       const nearestWeekday = (y, m, n, end) => {
         const w = weekday(y, m, n);
@@ -206,26 +210,30 @@
       return { error: String(why) };
     }
   }
-  // F-195: the shortest spacing, in seconds, between two consecutive firings, on the
-  // schedule's own clock. Within a day it is the closest two firing times; across midnight
-  // it is the last time to the next day's first, counted only when two consecutive days
-  // both fire within the next 2,922 days (eight years). Daylight-saving changes are not counted.
+  // The window the floor, "never runs" and the preview all use (section 9): 2,922 calendar
+  // days starting with today's date on the schedule's clock.
   const CRON_SCAN_DAYS = 2922;
-  function cronSpacing(spec, from = NOW) {
+  const horizon = (tz) => {
+    const p = parts(NOW, tz);
+    return fromZoned(p.y, p.m, p.d + CRON_SCAN_DAYS, 0, 0, tz);
+  };
+  // F-195: the shortest spacing, in seconds, between two consecutive firings on the
+  // schedule's nominal wall clock. Within a day it is the closest two firing times; across
+  // midnight it is the last time to the next day's first, when two consecutive dates in the
+  // window both fire. Today counts whole, its elapsed times included.
+  function cronSpacing(spec, tz) {
     const t = spec.times;
     let gap = Infinity;
     for (let i = 1; i < t.length; i++) gap = Math.min(gap, t[i] - t[i - 1]);
-    const start = new Date(from);
-    let fires = 0;
+    const start = parts(NOW, tz);
     let prev = false;
     for (let i = 0; i < CRON_SCAN_DAYS; i++) {
-      const day = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate() + i));
+      const day = new Date(Date.UTC(start.y, start.m - 1, start.d + i));
       const hit = spec.day(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate());
-      if (hit) fires += 1;
       if (hit && prev) gap = Math.min(gap, t[0] + DAY / 1000 - t[t.length - 1]);
       prev = hit;
     }
-    return { gap, fires };
+    return gap;
   }
   function hm(h, min) {
     const d = new Date(Date.UTC(2026, 0, 1, h, min));
@@ -279,7 +287,7 @@
     const c = cronSpec(s.expr);
     const tz = s.tz || VIEWER;
     const start = parts(from - DAY, tz);
-    for (let i = 0; i < CRON_SCAN_DAYS && out.length < max; i++) {
+    for (let i = 0; i <= CRON_SCAN_DAYS && out.length < max; i++) {
       const day = new Date(Date.UTC(start.y, start.m - 1, start.d + i));
       const y = day.getUTCFullYear(), m = day.getUTCMonth() + 1, d = day.getUTCDate();
       if (fromZoned(y, m, d, 0, 0, tz) >= until) break;
@@ -298,7 +306,8 @@
   }
   // What Clawtrate can't expand is drawn only at the gateway's own next run (section 4).
   const computable = (r) => ["at", "every"].includes(r.schedule.kind) || (r.schedule.kind === "cron" && !r.pacing && !cronSpec(r.schedule.expr).error);
-  const nextRun = (r) => (!r.enabled ? undefined : computable(r) ? occurrences(r.schedule, NOW + 1, NOW + 400 * DAY, 1)[0] : r.state?.nextRunAtMs);
+  // The gateway's own `state.nextRunAtMs` when the job carries it; computed only for a fixture without it.
+  const nextRun = (r) => (!r.enabled ? undefined : r.state?.nextRunAtMs ?? (computable(r) ? occurrences(r.schedule, NOW + 1, NOW + 400 * DAY, 1)[0] : undefined));
   const perDay = (r) => (!computable(r) ? 1 : r.schedule.kind === "every" ? DAY / r.schedule.everyMs : r.schedule.kind === "cron" ? cronSpec(r.schedule.expr).times.length : 1);
 
   // Fixtures ------------------------------------------------------------------------------
@@ -473,8 +482,16 @@
   }
   const rowMark = (r) => (r.running ? glyph("working") : lastRun(r) && outcome(lastRun(r)).mark === "failed" && r.enabled ? glyph("failed") : "");
   // Said from the prompt in effect: empty is the gateway's own, which asks for NO_REPLY.
-  const asksQuiet = (prompt) => !prompt.trim() || /NO_REPLY/.test(prompt);
-  const quiet = (prompt) => (asksQuiet(prompt) ? "Its prompt asks it to stay quiet when nothing does." : "Its prompt doesn't ask it to stay quiet, so it may answer every check-in.");
+  // The gateway's default check-in prompt for every bot, read with admin: "" when unset, so the
+  // built-in prompt applies; null when it couldn't be read (defaultprompt=custom or unreadable).
+  const DEFAULT_PROMPT = P.get("defaultprompt") === "unreadable" ? null : P.get("defaultprompt") === "custom" ? "Report anything new in my inbox." : "";
+  // Only the built-in prompt is known to ask for quiet. Any other prompt, or one Clawtrate
+  // can't read, gets the cadence alone: its wording is never read for intent.
+  function cadence(lead, name, prompt) {
+    if (!isAdmin() || (!prompt.trim() && DEFAULT_PROMPT === null)) return `${lead}, ${name} checks in. Clawtrate can't read its prompt.`;
+    if (!prompt.trim() && DEFAULT_PROMPT === "") return `${lead}, ${name} looks for anything that needs you. Its prompt asks it to stay quiet when nothing does.`;
+    return `${lead}, ${name} checks in with ${prompt.trim() ? "a prompt of its own" : "the prompt the gateway sets for every bot"}.`;
+  }
   const checkinWords = (b) => {
     const c = checkins[b];
     if (!c || !c.every) return "No check-ins";
@@ -592,7 +609,7 @@
     const name = botName(b);
     let text;
     if (!c || !c.every) text = c ? `${name} doesn't check in on a schedule.` : `${name} doesn't check in. Without a setting of its own, only the gateway's default bot checks in.`;
-    else text = `${c.every === DAY ? "Once a day" : everyWords(c.every)}, ${name} looks for anything that needs you. ${quiet(c.prompt)}`;
+    else text = cadence(c.every === DAY ? "Once a day" : everyWords(c.every), name, c.prompt);
     const next = c && c.every ? (schedulerOff() ? "The gateway's scheduler is off, so scheduled check-ins don't run." : `Next check-in ${clock(at(0, 10, 30))} · In ${name}'s main conversation`) : "";
     const zones = [...new Set(routines.filter((r) => r.bot === b && r.schedule.tz).map((r) => city(r.schedule.tz)))];
     return (
@@ -880,6 +897,12 @@
 
   // The cron event (section 8), applied to the list as the engine would.
   const EDITED = ["name", "payload", "schedule", "sessionTarget", "delivery"];
+  // A `finished` event's own top-level fields, as the gateway sends them; `runId` may be absent.
+  // `history` and `manual` are the fixture's: what cron.history would return, and a Run now.
+  const fromFinished = (ev) => ({
+    runId: ev.runId, at: ev.runAtMs, status: ev.status, completion: ev.completionStatus, error: ev.error, delivery: ev.deliveryError, summary: ev.summary,
+    dur: (ev.durationMs ?? 0) / 1000, inT: ev.usage?.input_tokens ?? 0, outT: ev.usage?.output_tokens ?? 0, tokens: ev.usage?.total_tokens ?? 0, manual: !!ev.manual, history: ev.history,
+  });
   function applyEvent(ev) {
     const r = routines.find((x) => x.id === (ev.job?.id ?? ev.jobId));
     const onScreen = r && ((["routine", "run"].includes(S.view) && S.routine === r.id) || D?.id === r.id);
@@ -891,7 +914,10 @@
     else if (ev.action === "updated") {
       const edited = EDITED.some((k) => k in ev.job && JSON.stringify(ev.job[k]) !== JSON.stringify(r[k]));
       Object.assign(r, ev.job);
-      if (D?.id === r.id && edited && !["saving", "checking"].includes(D.status)) {
+      // An attempt whose outcome isn't known yet stays pending until the person checks it;
+      // the change elsewhere is shown after that, so no write is offered before the check.
+      if (D?.id === r.id && edited && ["saving", "noanswer", "checking"].includes(D.status)) D.elsewhere = true;
+      else if (D?.id === r.id && edited) {
         D.status = "conflict";
         renderEditor(inDialog());
       }
@@ -909,7 +935,8 @@
       r.running = ev.runAtMs;
       if (onScreen) announce(`Running ${r.name}`);
     } else if (ev.action === "finished") {
-      const x = ev.run;
+      const x = fromFinished(ev);
+      if (ev.nextRunAtMs !== undefined) r.state = { ...r.state, nextRunAtMs: ev.nextRunAtMs };
       if (r.running === x.at) {
         r.running = null;
         if (S.routine === r.id && S.runKey === `at:${x.at}`) S.runKey = runKey(x);
@@ -917,7 +944,7 @@
       const i = r.runs.findIndex((y) => runKey(y) === runKey(x));
       if (i >= 0) r.runs[i] = x;
       else r.runs.splice(r.runs.filter((y) => y.at > x.at).length, 0, x);
-      if (outcome(ev.run).mark === "failed") announce(`${r.name} failed`);
+      if (outcome(x).mark === "failed") announce(`${r.name} failed`);
       else if (onScreen) announce(`${r.name} finished`);
     }
     repaint();
@@ -999,9 +1026,9 @@
         announce("Couldn't start a run");
         return repaint();
       }
-      applyEvent({ action: "started", job: { id }, runAtMs: NOW });
+      applyEvent({ action: "started", jobId: id, runAtMs: NOW });
       setTimeout(() => {
-        applyEvent({ action: "finished", job: { id }, run: run(0, 10, 12, { runId: `manual:${id}:${NOW}:1`, manual: true, dur: 2.4, tokens: 204, summary: DIGEST_SUMMARY, history: r.payload.kind === "agentTurn" ? recorded(r.payload.message, DIGEST_SUMMARY) : undefined }) });
+        applyEvent({ action: "finished", jobId: id, runId: `manual:${id}:${NOW}:1`, runAtMs: NOW, status: "ok", completionStatus: "succeeded", durationMs: 2400, usage: { input_tokens: 124, output_tokens: 80, total_tokens: 204 }, summary: DIGEST_SUMMARY, manual: true, history: r.payload.kind === "agentTurn" ? recorded(r.payload.message, DIGEST_SUMMARY) : undefined });
       }, 1800);
     }, 500);
   }
@@ -1065,7 +1092,16 @@
     if (d.kind === "once" && (!d.date || !d.time)) return "Choose a date and a time.";
     if (["daily", "weekdays", "days"].includes(d.kind) && !d.time) return "Choose a time.";
     if (d.kind === "days" && !d.days.length) return "Choose at least one day.";
-    return "";
+    return skipped(d);
+  }
+  // A Once whose wall time the clocks skip has no instant: it is refused, never moved to another time.
+  function skipped(d) {
+    if (d.kind !== "once" || !d.date || !d.time) return "";
+    const [h, m] = d.time.split(":").map(Number);
+    const [y, mo, da] = d.date.split("-").map(Number);
+    const tz = d.tz === "auto" ? VIEWER : d.tz;
+    const p = parts(fromZoned(y, mo, da, h, m, tz), tz);
+    return p.h === h && p.min === m ? "" : `${hm(h, m)} doesn't happen on ${MONTHS[mo - 1]} ${da}, ${y} in ${city(tz)}: the clocks go forward past it. Pick another time.`;
   }
   function draftSchedule(d) {
     if (d.locked) return d.job.schedule;
@@ -1082,11 +1118,11 @@
   }
   function previewText(d) {
     const missing = unfinished(d);
-    if (missing) return `${missing.replace(/\.$/, "")} to see when it runs.`;
+    if (missing) return skipped(d) || `${missing.replace(/\.$/, "")} to see when it runs.`;
     const s = draftSchedule(d);
     if (s.kind === "cron" && cronSpec(s.expr).error) return "The gateway can't read this cron expression.";
-    const next = occurrences(s, NOW, NOW + 400 * DAY, 3);
-    if (!next.length) return s.kind === "cron" ? `Runs as the gateway reads "${s.expr}", and not in the next 400 days.` : "It wouldn't run: that time has passed.";
+    const next = occurrences(s, NOW, horizon(s.tz || VIEWER), 3);
+    if (!next.length) return s.kind === "cron" ? `Runs as the gateway reads "${s.expr}", and not in the next eight years.` : "It wouldn't run: that time has passed.";
     const tz = s.tz || VIEWER;
     const first = `${longDate(next[0], tz)}, ${clock(next[0], tz)}${tz !== VIEWER ? ` (${clock(next[0])} your time)` : ""}`;
     const rest = next.slice(1).map((t) => longDate(t, tz)).join(", ");
@@ -1100,11 +1136,11 @@
     if (!d.locked && (!d.id || whenKey(d) !== d.opened)) {
       const missing = unfinished(d);
       if (d.cron.trim()) {
-        const c = cronSpec(d.cron);
-        const sp = !c.error && cronSpacing(c);
+        const s = draftSchedule(d);
+        const c = cronSpec(s.expr);
         if (c.error) e.cron = `The gateway can't read this: ${c.error}.`;
-        else if (!sp.fires) e.cron = "This never runs in the next eight years.";
-        else if (sp.gap < 300) e.cron = "Routines run at least 5 minutes apart.";
+        else if (!occurrences(s, NOW, horizon(s.tz), 1).length) e.cron = "This never runs in the next eight years.";
+        else if (cronSpacing(c, s.tz) < 300) e.cron = "Routines run at least 5 minutes apart.";
       } else if (missing) e.when = missing;
       else if (d.kind === "every" && d.n * (d.unit === "hours" ? 60 : 1) < 5) e.when = "Routines run at least 5 minutes apart.";
       else if (d.kind === "once" && atMs(draftSchedule(d).at) < NOW) e.when = "Pick a time in the future.";
@@ -1223,8 +1259,10 @@
     const outcomeOf = d.attempts === 1 ? d.simulate : "";
     // What this attempt sends, kept with its draft: Check now compares the gateway with it.
     d.submitted = request(d);
+    dispatched.push(d.submitted);
     d.status = "saving";
-    renderEditor('[data-r="save"]');
+    // Save is disabled while saving, so focus waits on the heading rather than falling to the page.
+    renderEditor("#edit-title");
     setTimeout(() => {
       // An answer belongs to the draft that sent it, even if its dialog has closed since.
       if (D !== d) {
@@ -1247,7 +1285,8 @@
       if (outcomeOf === "refused" || outcomeOf === "conflict" || outcomeOf === "noanswer") {
         // lookup=found: the unanswered save did reach the gateway.
         if (outcomeOf === "noanswer" && P.get("lookup") === "found") land(d.submitted);
-        d.status = outcomeOf;
+        d.status = outcomeOf === "refused" && d.elsewhere ? "conflict" : outcomeOf;
+        if (d.status !== "noanswer") d.elsewhere = false;
         renderEditor(outcomeOf === "noanswer" ? '[data-r="check-now"]' : outcomeOf === "conflict" ? '[data-r="conflict-show"]' : '[data-r="save"]');
         return;
       }
@@ -1275,8 +1314,9 @@
         const ids = routines.filter((x) => !x.gone && x.bot === d.bot && x.name === d.name.trim()).map((x) => x.id);
         d.found = ids.length ? { kind: "match", ids, at: routines.find((x) => x.id === ids[0]).createdAtMs } : { kind: "none" };
       }
-      d.status = "found";
-      renderEditor(".b-note .button");
+      d.status = d.elsewhere ? "conflict" : "found";
+      d.elsewhere = false;
+      renderEditor(d.status === "conflict" ? '[data-r="conflict-show"]' : ".b-note .button");
       announce("Checked");
     }, 400);
   }
@@ -1300,6 +1340,8 @@
     if (!d.locked && whenKey(d) !== d.opened) patch.schedule = schedule;
     return { method: "cron.update", params: { id: d.id, patch } };
   }
+  // `dispatched` is every request put on the wire, answered or not; `sent` only the writes that landed.
+  const dispatched = [];
   const sent = [];
   // The gateway's side of a write: what a later cron.get or cron.list would return.
   function land(req) {
@@ -1308,6 +1350,8 @@
       const r = routines.find((x) => x.id === req.params.id);
       const { delivery, ...rest } = req.params.patch;
       Object.assign(r, rest, { updatedAtMs: NOW });
+      // The gateway computes the next run again for a new schedule.
+      if (rest.schedule) r.state = { ...r.state, nextRunAtMs: undefined };
       if (delivery) r.delivery = { ...r.delivery, ...delivery };
       return req.params.id;
     }
@@ -1334,9 +1378,9 @@
     const name = botName(C.bot);
     const sub = {
       off: `${name} doesn't check in on a schedule.`,
-      daily: `Once a day, ${name} looks for anything that needs you. ${quiet(C.prompt)}`,
-      asneeded: `Every 30 minutes, ${name} looks for anything that needs you. ${quiet(C.prompt)}`,
-      every: `${name} looks for anything that needs you as often as you choose. ${quiet(C.prompt)}`,
+      daily: cadence("Once a day", name, C.prompt),
+      asneeded: cadence("Every 30 minutes", name, C.prompt),
+      every: cadence("As often as you choose", name, C.prompt),
     };
     const defaultBots = Object.entries(checkins).filter(([, c]) => c && c.source === "default" && c.every).map(([b]) => b);
     let catchNote = "";
@@ -1345,8 +1389,8 @@
         ? note(`<p>${name} checks in now through the gateway's default. Saving gives ${name} a setting of its own.</p>`)
         : note(`<p>${defaultBots.map(botName).join(" and ")} checks in now through the gateway's default. Saving also gives ${defaultBots.map(botName).join(" and ")} a setting of its own with the same cadence, so it keeps checking in.</p>`);
     }
-    const promptNote = !asksQuiet(C.prompt)
-      ? `<p class="r-error" id="ci-prompt-note" data-testid="prompt-note">This prompt doesn't ask ${esc(name)} to reply NO_REPLY when nothing needs attention, as the gateway's own prompt does, so ${esc(name)} may answer every check-in.</p>` : "";
+    const promptNote = C.prompt.trim()
+      ? `<p class="r-error" id="ci-prompt-note" data-testid="prompt-note">This prompt replaces the gateway's own, which asks ${esc(name)} to reply NO_REPLY when nothing needs attention. Whether ${esc(name)} stays quiet depends on what this prompt asks.</p>` : "";
     const saving = C.status === "saving";
     const dis = saving ? " disabled" : "";
     ciDialog.innerHTML =
@@ -1357,8 +1401,8 @@
       (C.choice === "every" ? `<div class="r-inline"><label for="ci-every">Every</label><select class="input" id="ci-every" data-ci-every>${[["15m", "15 minutes"], ["1h", "1 hour"], ["2h", "2 hours"], ["4h", "4 hours"], ["8h", "8 hours"], ["12h", "12 hours"]].map(([v, t]) => `<option value="${v}"${C.every === v ? " selected" : ""}>${t}</option>`).join("")}</select></div>` : "") +
       (C.choice === "off" ? `<p class="r-hint" data-testid="off-note">${esc(name)} still reports when a command it started in the background finishes.</p>` : "") +
       `<details class="b-disclosure"${C.prompt ? " open" : ""}><summary>What to check</summary><div class="b-disclosure-body"><div class="r-field"><label for="ci-prompt">Prompt</label>` +
-      `<textarea class="input" id="ci-prompt" data-ci-prompt placeholder="Follow the heartbeat monitor scratch context when provided. … If nothing needs attention, reply NO_REPLY."${promptNote ? ' aria-describedby="ci-prompt-note"' : ""}>${esc(C.prompt)}</textarea>` +
-      `${promptNote}<p class="r-hint">Empty uses the gateway's own prompt.</p></div></div></details>${catchNote}</div>` +
+      `<textarea class="input" id="ci-prompt" data-ci-prompt placeholder="${DEFAULT_PROMPT === "" ? "Follow the heartbeat monitor scratch context when provided. … If nothing needs attention, reply NO_REPLY." : ""}"${promptNote ? ' aria-describedby="ci-prompt-note"' : ""}>${esc(C.prompt)}</textarea>` +
+      `${promptNote}<p class="r-hint">Empty uses ${DEFAULT_PROMPT === "" ? "the gateway's own prompt" : "the prompt the gateway sets for every bot"}.</p></div></div></details>${catchNote}</div>` +
       `<footer class="b-foot"><div class="b-actions">${button("Cancel", `data-r="ci-close"${dis}`, "quiet")}${button(saving ? "Saving…" : "Save", `data-r="ci-save"${saving ? " disabled" : ""}`, "primary")}</div></footer>`;
     if (!ciDialog.open) {
       lastFocus = document.activeElement;
@@ -1416,13 +1460,16 @@
       const failed = [];
       const done = [];
       for (const r of zonePlan(z.bot).change) {
+        const schedule = { ...r.schedule, tz };
+        const req = { method: "cron.update", params: { id: r.id, patch: { schedule } } };
+        dispatched.push(req);
         if (P.get("tzfail") === r.id) {
           failed.push(r.name);
           continue;
         }
-        const schedule = { ...r.schedule, tz };
-        sent.push({ method: "cron.update", params: { id: r.id, patch: { schedule } } });
+        sent.push(req);
         r.schedule = schedule;
+        r.state = { ...r.state, nextRunAtMs: undefined };
         done.push(r.name);
       }
       z.status = "";
@@ -1650,7 +1697,7 @@
     if (C && t.matches("[data-ci-prompt]")) {
       C.prompt = t.value;
       const had = !!$('[data-testid="prompt-note"]', ciDialog);
-      const has = !asksQuiet(C.prompt);
+      const has = !!C.prompt.trim();
       if (had !== !!has) {
         renderCheckins("[data-ci-prompt]");
         const ta = $("[data-ci-prompt]", ciDialog);
@@ -1756,10 +1803,12 @@
   if (P.get("dialog") === "open") openCheckins(S.bot || "juniper");
   // For the checks: what Save sent, as the gateway would receive it, and the cron reader.
   window.routines = {
-    sent, routine: (id) => routines.find((r) => r.id === id), event: applyEvent,
+    sent, dispatched, routine: (id) => routines.find((r) => r.id === id), event: applyEvent,
     cron: (expr, tz = VIEWER) => {
       const c = cronSpec(expr);
-      return c.error ? { error: c.error } : { ...cronSpacing(c), next: occurrences({ kind: "cron", expr, tz }, NOW + 1, NOW + 400 * DAY, 3) };
+      if (c.error) return { error: c.error };
+      const next = occurrences({ kind: "cron", expr, tz }, NOW, horizon(tz), 3);
+      return { gap: cronSpacing(c, tz), fires: next.length, next };
     },
   };
   document.addEventListener("ct:settings", () => paint());
