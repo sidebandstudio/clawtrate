@@ -79,33 +79,45 @@ const typeHost = (host) => async (p) => {
   await p.fill("#ssh-host", host);
   await p.press("#ssh-host", "Enter");
 };
+const hostIs = (op) => async (p) => {
+  await p.waitForSelector(`[data-host-dialog="${op}"]`, { timeout: 5000 });
+};
 
 await walk(
-  "this computer, found, to the app read-only",
+  "this computer, found: the host confirms the pairing, then the app read-only",
   "first",
   [
     [(p) => p.locator("[data-choice]").first().click(), "looking-here"],
     [() => {}, "found"],
-    [link("Connect"), "connecting-here"],
+    [btn("Connect"), null],
+    [hostIs("pair"), null],
+    [hostConfirm, "connecting-here"],
   ],
   "app.html",
 );
 await walk(
-  "another computer, known key, to the app read-only",
+  "another computer, known key: the host confirms the account and the pairing, then the app",
   "there",
   [
-    [typeHost("devbox"), "looking-there"],
+    [typeHost("devbox"), null],
+    [hostIs("sshAccount"), null],
+    [hostConfirm, "looking-there"],
     [() => {}, "found-there"],
-    [link("Connect"), "connecting-there"],
+    [btn("Connect"), null],
+    [hostIs("pairThere"), null],
+    [hostConfirm, "connecting-there"],
   ],
   "app.html",
 );
 await walk(
-  "another computer, first contact: key shown, the host confirms, then found",
+  "another computer, first contact: account confirmed, key shown, trust confirmed, then found",
   "there",
   [
-    [typeHost("newbox"), "hostkey"],
+    [typeHost("newbox"), null],
+    [hostIs("sshAccount"), null],
+    [hostConfirm, "hostkey"],
     [btn("Trust this key…"), null],
+    [hostIs("trustKey"), null],
     [hostConfirm, "looking-there"],
   ],
   "found-there",
@@ -120,89 +132,52 @@ await walk(
   ],
 );
 await walk(
-  "another computer, nothing there: set up over SSH, to the app",
+  "another computer, nothing there: no setup offered",
   "there",
   [
-    [typeHost("emptybox"), "looking-there"],
-    [() => {}, "notfound-there"],
-    [link("Set up OpenClaw on emptybox"), "install-confirm-there"],
-    [btn("Set up OpenClaw…"), null],
-    [hostConfirm, "installing-there"],
-    [() => {}, "connecting-there"],
+    [typeHost("emptybox"), null],
+    [hostIs("sshAccount"), null],
+    [hostConfirm, "looking-there"],
   ],
-  "app.html",
+  "notfound-there",
 );
 await walk(
-  "this computer, nothing there: set up here, to the app",
+  "this computer, nothing there: set up here after the host's dialog, then what it found",
   "notfound",
   [
     [link("Set up OpenClaw here"), "install-confirm"],
     [btn("Set up OpenClaw…"), null],
+    [hostIs("install"), null],
     [hostConfirm, "installing"],
-    [() => {}, "connecting-here"],
   ],
-  "app.html",
+  "found",
 );
-await walk("Windows, nothing there: another computer instead", "notfound-windows", [[link("Use another computer"), "there"]]);
+await walk("a failed install, retried: a new host confirmation on the same computer", "install-failed", [[btn("Try again"), null], [hostIs("install"), null], [hostConfirm, "installing"]]);
 await walk(
-  "Windows, first screen: This computer leads to nothing offered",
+  "Windows, this computer: straight to Advanced or another computer",
   "first&os=windows",
   [
-    [(p) => p.locator("[data-choice]").first().click(), "looking-here"],
-    [() => {}, "notfound-windows"],
+    [(p) => p.locator("[data-choice]").first().click(), "notfound-windows"],
+    [link("Use another computer"), "there"],
   ],
 );
 await walk(
-  "a pasted code: a first pairing, then the app",
+  "a pasted code: validated, then a first pairing naming the address",
   "code",
   [
     [btn("Paste a sample code"), null],
     [link("Connect"), "code-pairing"],
-    [link("The gateway's owner approves"), null],
-  ],
-  "app.html",
-);
-await walk(
-  "a phone, from the desktop: code made after the host's dialog, request approved after it",
-  "phone",
-  [
-    [btn("Make a code…"), null],
-    [hostConfirm, "phone-code"],
-    [link("The iPhone scans the code"), "phone-request"],
-    [btn("Approve…"), null],
-    [hostConfirm, "phone-done"],
   ],
 );
 await walk(
-  "the iPhone: review the address, wait, approved",
+  "the iPhone: review the address, then wait for approval",
   "iphone",
   [
     [link("Scan a setup code"), "iphone-review"],
     [link("Connect"), "iphone-waiting"],
-    [link("The gateway's owner approves"), "iphone-done"],
   ],
 );
-await walk("approve from here, through the host's dialog", "approve", [[btn("Approve from here"), null], [hostConfirm, "approve-done"]]);
-await walk(
-  "Tailscale on, checked",
-  "tailscale",
-  [
-    [(p) => p.getByRole("switch", { name: "Private access with Tailscale" }).click(), null],
-    [hostConfirm, "tailscale-steps"],
-  ],
-  "tailscale-on",
-);
-await walk(
-  "Tailscale off",
-  "tailscale-on",
-  [
-    [(p) => p.getByRole("switch", { name: "Private access with Tailscale" }).click(), null],
-    [hostConfirm, "tailscale"],
-  ],
-);
-await walk("remove OpenClaw: named computer, the host's dialog, then what is left", "uninstall", [[btn("Remove…"), null], [hostConfirm, "uninstall-partial"]]);
 await walk("advanced: the address-and-token form as built", "first", [[link("Advanced"), "connect.html"]]);
-await walk("cancel an install: the host confirms, nothing left", "installing", [[btn("Cancel"), null], [hostConfirm, "notfound"]]);
 
 // Part 2: every state, its words ---------------------------------------------------------------
 const WORDS = {
@@ -210,60 +185,38 @@ const WORDS = {
   "looking-here": ["Looking on this computer", "Finding OpenClaw", "Checking its version", "Asking the gateway"],
   found: ["On this computer", "OpenClaw is running", "2026.10.6", "Profile", "default", "On this computer only", "LaunchAgent, starts when you log in", "Connect", "Connect pairs this computer with the gateway as a device that can only read, and the gateway keeps it. Sending or changing anything is asked for later."],
   "connecting-here": ["Connecting", "Making a one-time code", "Pairing this computer, read-only", "Loading your bots"],
-  stopped: ["OpenClaw is installed but not running", "LaunchAgent, stopped", "Start OpenClaw"],
-  untested: ["OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Clawtrate connects read-only, and won't run commands on this computer for you until the versions match.", "Connect read-only", "How to update"],
+  stopped: ["OpenClaw is installed but not running", "LaunchAgent, stopped", "Nothing listening on 18789", "Start OpenClaw"],
+  untested: ["OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Use Advanced to connect to it.", "Use Advanced", "How to update"],
   tooold: ["This OpenClaw is too old for Clawtrate", "OpenClaw 2026.6.2 speaks an older protocol than Clawtrate needs. Update it, then look again.", "Look again"],
   "setup-missing": ["OpenClaw seems to be set up here, but Clawtrate can't find its program", "Clawtrate looked in the usual places."],
-  canttell: ["Clawtrate couldn't tell what is on this computer", "Asking the gateway didn't finish in time.", "Look again"],
+  canttell: ["Clawtrate couldn't tell what is on this computer", "Asking the gateway didn't finish in time.", "Use Advanced", "Look again"],
   nottoken: ["This gateway uses another way to sign in", "Clawtrate connects by itself only to gateways that use a token. Use Advanced."],
-  notfound: ["OpenClaw isn't on this computer", "Set up OpenClaw here", "It runs on another computer", "Clawtrate also saw another OpenClaw service here (OpenClaw Gateway (work)). It connects only to the default gateway and its own; use Advanced for others."],
-  "notfound-windows": ["OpenClaw isn't on this computer", "Clawtrate doesn't set OpenClaw up on Windows yet: OpenClaw's Windows installer changes this computer's Node.js, npm and PATH, which Clawtrate won't do for you.", "Use another computer", "OpenClaw's own install instructions"],
-  there: ["Another computer", "SSH host or alias", "Clawtrate uses your SSH keys and the host's settings from your SSH configuration, and never asks for a password.", "Look there", "Have a setup code instead?"],
-  "there-config": ["devbox is reached through another computer.", "Clawtrate doesn't connect through jump hosts yet. Use a setup code made on devbox, or Advanced."],
-  "looking-there": ["Looking on devbox", "Reaching devbox", "Finding OpenClaw"],
-  unreachable: ["Can't reach devbox", "Nothing answered at devbox.example (connection refused).", "Check the name and that the computer is on.", "Try again"],
-  refused: ["devbox didn't accept your key", "The SSH sign-in for you@devbox.example was refused.", "Check that your key is on that computer. A key with a passphrase has to be in your SSH agent first."],
+  notfound: ["Clawtrate didn't find OpenClaw here", "Set up OpenClaw here", "It runs on another computer", "Clawtrate also saw another OpenClaw service here (OpenClaw Gateway (work)). It connects only to the default gateway and its own; use Advanced for others."],
+  "notfound-windows": ["Use Advanced on Windows", "Clawtrate can't yet look for OpenClaw on Windows. It doesn't set OpenClaw up on Windows either: OpenClaw's Windows installer can change Node.js or PATH and installs OpenClaw globally.", "Use Advanced", "Use another computer", "OpenClaw's own install instructions"],
+  there: ["Another computer", "SSH host or alias", "Clawtrate uses your SSH keys and the host's settings from your SSH configuration, and never asks for a password.", "Look there", "Have a setup code instead?", "Advanced"],
+  "there-config": ["devbox is reached through another computer.", "Clawtrate doesn't connect through jump hosts yet. Use a setup code made on devbox, or Advanced.", "Use a setup code", "Advanced"],
+  "looking-there": ["Looking on you@devbox.example", "Reaching devbox", "Finding OpenClaw"],
+  unreachable: ["Can't reach you@devbox.example", "Nothing answered at devbox.example, port 22 (connection refused).", "Check the name and that the computer is on.", "Try again", "Advanced"],
+  refused: ["you@devbox.example didn't accept your key", "The SSH sign-in for you@devbox.example was refused.", "Check that your key is on that computer. A key with a passphrase has to be in your SSH agent first.", "Advanced"],
   hostkey: ["Is this devbox?", "This is the first time Clawtrate connects to devbox. Its key is below. If you can, compare it with the key devbox itself shows before you trust it.", "ED25519", "SHA256:Q3v8Lw0e Xk2Rj9Ta Nf5Hc1Ub Ym7Pd4Gs Zi6Ko2Ea Vr8", "How to compare", "Trust this key…"],
   "hostkey-changed": ["devbox's key has changed", "This happens when a computer is reinstalled, and it is also what someone between you and devbox would cause. Clawtrate won't connect until you decide.", "Trusted", "Presented now", "Replace the trusted key…"],
-  "found-there": ["On devbox", "OpenClaw is running", "On devbox only", "systemd user service, starts with your session", "Connect"],
-  "connecting-there": ["Connecting to devbox", "Making a one-time code on devbox", "Opening a private connection to devbox", "Pairing this computer, read-only", "Loading your bots"],
-  "notfound-there": ["OpenClaw isn't on devbox", "Set up OpenClaw on devbox"],
-  "install-confirm": ["Set up OpenClaw on this computer", "OpenClaw 2026.10.6, the version this Clawtrate is tested with, with its own copy of Node.js 24.22.1", "Its own folders: the program in Clawtrate's folder, the gateway's data in ~/.openclaw-clawtrate. An OpenClaw you already have isn't touched.", "OpenClaw and Node.js are checked against fingerprints built into this Clawtrate before anything runs.", "npm then downloads about 345 packages OpenClaw uses from the npm registry. Clawtrate can't check those.", "as a LaunchAgent that starts when you log in", "Nothing is asked for: no account and no model key.", "OpenClaw keeps running if you remove Clawtrate. Remove it in Settings first if you want it gone.", "Set up OpenClaw…"],
-  "install-confirm-there": ["Set up OpenClaw on devbox", "~/.local/share/clawtrate/openclaw and ~/.openclaw-clawtrate on devbox. An OpenClaw already there isn't touched.", "Clawtrate can't check those."],
-  installing: ["Setting up OpenClaw", "Download and check OpenClaw 2026.10.6", "Install Node.js and OpenClaw", "Node.js 24.22.1, checked", "Set up the gateway", "Start and check", "Connect", "The times are samples.", "Cancel"],
-  "installing-there": ["Setting up OpenClaw", "On devbox", "OpenClaw 2026.10.6, 345 packages"],
-  "install-failed": ["Install Node.js and OpenClaw failed.", "The installer didn't use the checked Node.js.", "Try again", "Show details", "Exit status"],
-  approve: ["Waiting for the gateway's owner.", "openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942", "Check that the request is yours: this computer's device code is 5AE2-3AFF.", "Request e5eb4aa8", "Approve from here", "Check now", "Cancel request"],
-  "approve-untested": ["Run this on devbox.", "openclaw devices approve"],
-  "approve-done": ["Access granted", "· you can send, stop and answer"],
+  "found-there": ["On you@devbox.example", "OpenClaw is running", "On devbox only", "systemd user service, starts with your session", "Connect"],
+  "connecting-there": ["Connecting to you@devbox.example", "Making a one-time code on devbox", "Opening a private connection to devbox", "Pairing this computer, read-only", "Loading your bots"],
+  "notfound-there": ["On you@devbox.example", "Clawtrate didn't find OpenClaw here", "Setting OpenClaw up on another computer isn't offered in this version.", "Use a setup code", "Advanced"],
+  "install-confirm": ["Set up OpenClaw on this computer", "OpenClaw 2026.10.6, the version this Clawtrate is tested with, with its own copy of Node.js 24.22.1", "Clawtrate puts OpenClaw's program and gateway data in its own folders and adds a user service. npm can also write its cache and OpenClaw can write service logs.", "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.", "as a LaunchAgent that starts when you log in", "Nothing is asked for: no account and no model key.", "Set up OpenClaw…"],
+  installing: ["Setting up OpenClaw", "Download and check OpenClaw 2026.10.6", "Install Node.js and OpenClaw", "Node.js 24.22.1, checked", "Set up the gateway", "Start and check", "The times are samples."],
+  "install-failed": ["Install Node.js and OpenClaw failed.", "The installer didn't use the checked Node.js.", "Try again", "Show details", "Error", "Node.js check", "Exit status"],
+  approve: ["Waiting for the gateway's owner.", "On devbox, approve this request for the default profile:", "openclaw devices approve e5eb4aa8-175f-40f1-bc7a-8f15cfc40942", "Request e5eb4aa8", "Check now", "Cancel request"],
   restoring: ["Restoring the connection to devbox", "· showing saved messages", "Retry now"],
   "route-changed": ["This address now leads to a different gateway", "Review"],
-  uninstall: ["Remove OpenClaw from devbox?", "devbox.example, which reports its name as devbox-1.", "The service ai.openclaw.clawtrate", "The program in ~/.local/share/clawtrate/openclaw", "The gateway's settings, bots and conversations in ~/.openclaw-clawtrate", "Keep the gateway's settings, bots and conversations", "Remove…"],
-  "uninstall-partial": ["OpenClaw is removed.", "macOS moved its service file to your Trash.", "Part of OpenClaw is still on devbox:", "~/Library/Logs/openclaw/gateway-clawtrate.log"],
-  phone: ["Connect a phone", "Make a one-time code that Clawtrate on your iPhone can scan. It works once, for 10 minutes, and it can only ask to read.", "Make a code…"],
-  "phone-code": ["This code leads to devbox.local on your local network. The connection isn't encrypted until the phone is paired; use it only on a network you trust.", "Sample", "Open Clawtrate on your iPhone and scan this code.", "Expires at 20:41 (in 9 minutes)", "Waiting for the phone"],
-  "phone-request": ["Check that the device code matches the one on your iPhone.", "iPhone · 7C41-D2E0", "Asks to read bots, tasks and conversations", "Approve…", "Not now"],
-  "phone-overreach": ["Asks for more than read access. Clawtrate won't approve it here."],
-  "phone-done": ["iPhone connected, read-only."],
-  "phone-expired": ["This code has expired.", "Make a new code…"],
-  "phone-loopback": ["A phone can't reach this gateway yet.", "It only listens on devbox itself.", "Turn on private access with Tailscale", "Or let OpenClaw listen on your local network. Run these on devbox yourself:", "openclaw config set gateway.bind lan", "openclaw gateway restart", "Anyone on that network can then reach the gateway's sign-in; it still needs a token or a pairing. Clawtrate doesn't change the gateway's bind for you."],
+  phone: ["Connect a phone", "Clawtrate doesn't make codes for phones yet.", "A phone needs an encrypted address it can reach. Set one up with OpenClaw's network-exposure instructions.", "OpenClaw's network-exposure instructions", "A setup code stays valid until it is used or expires, even after you close where it was shown."],
+  settings: ["Gateway · devbox", "you@devbox.example over SSH · In use", "Private access with Tailscale", "Set up private access on the gateway using OpenClaw's Tailscale instructions", "OpenClaw's Tailscale instructions", "Connect a phone", "Remove this gateway…"],
   code: ["Use a setup code", "Setup code"],
-  "code-pairing": ["Approve this device", "openclaw devices approve", "Read bots, tasks and conversations", "this computer's device code 5AE2-3AFF"],
-  iphone: ["Connect to your OpenClaw", "Scan a setup code", "Paste a setup code", "Make a code in Clawtrate on your computer, in Settings, Connect a phone.", "Advanced"],
-  "iphone-review": ["Connect to devbox?", "This code leads to devbox.tailnet.example, through Tailscale. Your phone needs Tailscale on.", "Expires at 20:41 (in 9 minutes)", "Connect", "Cancel"],
-  "iphone-waiting": ["Waiting for approval", "Approve this iPhone in Clawtrate on your computer. Its device code is:", "7C41-D2E0", "Or, on the gateway's computer, run:", "Waiting for approval, checking again in 4s"],
-  "iphone-done": ["Connected, read-only", "Open Clawtrate"],
-  tailscale: ["Private access with Tailscale", "Reach this gateway from your own devices anywhere, through Tailscale. Tailscale is never needed for anything else.", "devbox over SSH · In use", "Connect a phone", "Installed by Clawtrate · OpenClaw 2026.10.6", "Remove this gateway…", "Remove OpenClaw…"],
-  "tailscale-steps": ["Checking Tailscale", "Turning on private access", "Restarting OpenClaw", "Checking the new address", "Checking the connection here"],
-  "tailscale-on": ["On · devbox.tailnet.example · checked on devbox"],
-  "tailscale-missing": ["Tailscale isn't installed on devbox.", "Install Tailscale on devbox and sign in, then turn this on again.", "Nothing was changed."],
-  "tailscale-stopped": ["Tailscale is stopped on devbox.", "Start Tailscale on devbox, then turn this on again.", "Nothing was changed."],
-  "tailscale-signedout": ["Tailscale is signed out on devbox.", "Sign in to Tailscale on devbox, then turn this on again."],
-  "tailscale-operator": ["OpenClaw can't use Tailscale on devbox.", "sudo tailscale set --operator=$USER"],
-  "tailscale-https": ["HTTPS isn't turned on for this tailnet.", "Turn on HTTPS certificates in your Tailscale admin console, then turn this on again.", "The setting is back as it was, and the gateway answers again."],
-  "tailscale-unconfirmed": ["The setting is back as it was, but the gateway hasn't answered yet. Clawtrate keeps checking."],
-  "tailscale-foreign": ["A Tailscale route to this gateway already exists.", "Clawtrate didn't make it and leaves it alone. OpenClaw refuses connections through it unless its owner sets gateway.trustedProxies."],
-  "tailscale-outside": ["On, set outside Clawtrate. Change it on devbox."],
+  "code-pairing": ["Approve this device", "gateway.example has not seen this device before.", "with --profile <name> if the gateway doesn't use the default profile", "openclaw devices approve", "Read bots, tasks and conversations", "connecting to gateway.example"],
+  iphone: ["Connect to your OpenClaw", "Scan a setup code", "Paste a setup code", "Get a setup code from the gateway's owner, made on the gateway's computer.", "Advanced"],
+  "iphone-review": ["Connect to devbox?", "This code leads to devbox.tailnet.example, over an encrypted connection.", "Expires at 20:41 (in 9 minutes)", "Connect", "Cancel"],
+  "iphone-waiting": ["Waiting for approval", "Connecting to devbox.tailnet.example", "Ask the gateway's owner to approve this iPhone. Its device code is:", "7C41-D2E0", "with --profile <name> if the gateway doesn't use the default profile", "Waiting for approval, checking again in 4s"],
+  "iphone-done": ["Future example: this state needs a step that isn't proven yet.", "Connected, read-only"],
 };
 
 let p = await open("screen=first");
@@ -291,26 +244,22 @@ for (const [screen, words] of Object.entries(WORDS)) {
 
 // Part 3: the host's confirmations ---------------------------------------------------------------
 const HOST_WORDS = {
+  sshAccount: ["Look for OpenClaw as you@devbox.example, port 22?", "This uses the remote account's SSH login environment."],
   trustKey: ["Trust devbox's key?", "Clawtrate will connect to devbox only while it presents this key."],
   replaceKey: ["Replace devbox's trusted key?", "I checked the new key on devbox itself"],
+  pair: ["Pair this device read-only with the default gateway on this computer?", "The gateway saves this device."],
+  pairThere: ["Pair this device read-only with the default gateway on you@devbox.example?", "The gateway saves this device."],
   start: ["Start OpenClaw on this computer?", "Starts the LaunchAgent ai.openclaw.gateway. It keeps running after Clawtrate closes."],
-  install: ["Set up OpenClaw on this computer?", "which Clawtrate can't check"],
-  installThere: ["Set up OpenClaw on devbox?", "devbox.example, which reports its name as devbox-1."],
-  cancelInstall: ["Stop setting up OpenClaw?", "Nothing else is touched."],
-  approve: ["Approve this request on devbox?", "Gateway: devbox · gateway c5fd-e286, as you on devbox.example.", "Device: Clawtrate Desktop · 5AE2-3AFF, this computer.", "Adds: Send messages and stop runs. Answer questions. Approve actions."],
-  approvePhone: ["Device: iPhone · 7C41-D2E0.", "Adds: Read bots, tasks and conversations."],
-  phoneCode: ["Make a one-time setup code on devbox?", "Anyone who has the code in the next 10 minutes can ask to connect. Nothing connects until you approve it."],
-  tailscaleOn: ["Turn on private access on devbox?", "If anything fails, Clawtrate puts the setting back as it was and checks that the gateway answers."],
-  tailscaleOff: ["Turn off private access on devbox?", "Devices using the Tailscale address stop reaching it."],
+  install: ["Set up OpenClaw on this computer?", "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions."],
   removeRoute: ["Remove devbox from Clawtrate?", "leaves OpenClaw on devbox running", "Also stop OpenClaw on devbox (Clawtrate started it)"],
-  uninstall: ["Remove OpenClaw from devbox?", "devbox.example, which reports its name as devbox-1.", "The service ai.openclaw.clawtrate."],
 };
-check("every host dialog is checked", hostOps.every((op) => op in HOST_WORDS), hostOps.filter((op) => !(op in HOST_WORDS)).join(", "));
+check("every host dialog is checked", hostOps.every((op) => op in HOST_WORDS) && Object.keys(HOST_WORDS).every((op) => hostOps.includes(op)), hostOps.join(", "));
 for (const [op, words] of Object.entries(HOST_WORDS)) {
   p = await open(`screen=first&host=${op}`);
   const t = await text(p, "[data-host-dialog]");
   check(`host dialog ${op}: its words`, !missing(t, words), missing(t, words));
   check(`host dialog ${op}: says it is the app's own dialog, not the page`, t.includes("The app's own dialog, not part of the page"));
+  check(`host dialog ${op}: no setup code or count of packages in it`, !/345|setup code/.test(t));
   await p.close();
 }
 
@@ -329,31 +278,36 @@ await p.keyboard.press("Escape");
 check("host dialog: Escape closes it and returns focus to the button that opened it", await p.evaluate(() => !document.querySelector("[data-host-scrim]") && document.activeElement?.dataset.host === "replaceKey"));
 await p.close();
 
-p = await open("screen=phone");
-check("phone: nothing is made before the host's dialog (no QR, no code)", await p.evaluate(() => !document.querySelector(".s-qr") && !document.querySelector('[aria-label="Copy setup code"]')));
-await p.close();
-
 // Part 4: what each state may and may not offer ---------------------------------------------------
 const offers = async (query, label, fn) => {
   p = await open(query);
   check(label, await p.evaluate(fn));
   await p.close();
 };
+await offers("screen=found", "found: Connect asks the host; nothing pairs from the page", () => document.querySelector('[data-host="pair"]')?.textContent === "Connect" && !document.querySelector('a[href*="connecting"]'));
+await offers("screen=found-there", "found over SSH: Connect asks the host", () => document.querySelector('[data-host="pairThere"]') !== null && !document.querySelector('a[href*="connecting"]'));
 await offers("screen=connecting-here", "connecting here: says nothing about SSH or another computer", () => !/SSH|devbox|private connection/.test(document.getElementById("root").textContent));
 await offers("screen=there", "there, first visit: no remembered computers", () => !document.querySelector(".s-remembered"));
-await offers("screen=there&returning=1", "there, return visit: the remembered computer", () => document.querySelector(".s-remembered")?.textContent.includes("OpenClaw 2026.10.6 · last used today"));
+await offers("screen=there&returning=1", "there, return visit: the remembered computer, by its full destination", () => document.querySelector(".s-remembered")?.textContent.includes("you@devbox.example"));
 await offers("screen=hostkey-changed", "changed key: no way to trust it without the host's dialog", () => !document.querySelector('a[href*="found-there"]') && document.querySelector('[data-host="replaceKey"]') !== null);
-await offers("screen=phone-overreach", "a request for more than read: no Approve", () => !document.querySelector('[data-host="approvePhone"]'));
-await offers("screen=approve-untested", "untested version: no Approve from here, the command to run instead", () => !document.querySelector('[data-host="approve"]') && document.body.textContent.includes("Run this on devbox."));
-await offers("screen=notfound-windows", "Windows: setting up is not offered", () => !/Set up OpenClaw/.test(document.getElementById("root").textContent));
-await offers("screen=first&os=windows", "Windows first screen: the hint points to another computer", () => document.body.textContent.includes("New to OpenClaw? Choose Another computer to use or set up OpenClaw on a Mac or a Linux computer."));
-await offers("screen=tailscale-foreign", "a route Clawtrate didn't make: the switch is disabled", () => document.querySelector('[role="switch"]').disabled);
-await offers("screen=tailscale-outside", "set outside Clawtrate: the switch is disabled", () => document.querySelector('[role="switch"]').disabled);
-await offers("screen=tailscale-steps", "while turning on: the switch is disabled", () => document.querySelector('[role="switch"]').disabled);
-await offers("screen=install-failed", "a failed step is drawn failed and the later ones wait", () => [...document.querySelectorAll(".s-steps li")].map((li) => li.dataset.state).join(",") === "done,failed,waiting,waiting,waiting");
-await offers("screen=unreachable", "a failure is an alert", () => document.querySelector('.b-note[data-tone="danger"]')?.getAttribute("role") === "alert");
-await offers("screen=phone-code", "the QR is labelled as a sample", () => document.querySelector(".s-qr .s-sample")?.textContent === "Sample");
-await offers("screen=uninstall&keep=1", "keeping the data strikes out the data line", () => document.querySelector(".s-kept")?.textContent.includes("~/.openclaw-clawtrate"));
+await offers("screen=unreachable", "SSH refusal: Try again asks the host again, and Advanced is a direct link", () => document.querySelector('[data-host="sshAccount"]') !== null && [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html"));
+await offers("screen=refused", "sign-in refused: a direct Advanced link", () => [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html"));
+await offers("screen=there-config", "a refused setting: a direct Advanced link", () => [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html"));
+await offers("screen=approve", "approve: no automatic approval, the profile named", () => !document.querySelector("[data-host]") && document.body.textContent.includes("for the default profile"));
+await offers("screen=untested", "untested version: Advanced, and no Connect or code", () => [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html") && !document.querySelector('[data-host="pair"]') && !document.querySelector('a[href*="connecting"]'));
+await offers("screen=canttell", "can't tell: Advanced, and no Start", () => [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html") && !document.querySelector('[data-host="start"]'));
+await offers("screen=stopped", "proven stopped: Start asks the host", () => document.querySelector('[data-host="start"]') !== null);
+await offers("screen=notfound-windows", "Windows: no setup, no look; Advanced and another computer", () => !/Set up OpenClaw/.test(document.getElementById("root").textContent) && [...document.querySelectorAll("a")].some((a) => a.getAttribute("href") === "connect.html"));
+await offers("screen=first&os=windows", "Windows first screen: This computer doesn't start a look", () => document.querySelector("[data-choice]").getAttribute("href").includes("screen=notfound-windows"));
+await offers("screen=notfound-there", "another computer, nothing there: no setup offered", () => !/Set up OpenClaw/.test(document.getElementById("root").textContent));
+await offers("screen=installing", "installing: no Cancel in this version", () => !/Cancel/.test(document.getElementById("root").textContent));
+await offers("screen=install-failed", "a failed install: retry asks the host, details are fixed copy", () => document.querySelector('[data-host="install"]') !== null && !/event|said/i.test(document.querySelector(".s-disclosure").textContent));
+await offers("screen=install-failed", "a failed step is drawn failed and the later ones wait", () => [...document.querySelectorAll(".s-steps li")].map((li) => li.dataset.state).join(",") === "done,failed,waiting,waiting");
+await offers("screen=settings", "settings: Tailscale is read-only, with OpenClaw's instructions; no switch", () => !document.querySelector('[role="switch"]') && [...document.querySelectorAll("a")].some((a) => a.href === "https://docs.openclaw.ai/gateway/tailscale"));
+await offers("screen=settings", "settings: no removal of OpenClaw in this version", () => !/Remove OpenClaw/.test(document.getElementById("root").textContent));
+await offers("screen=phone", "phone: no code made or shown, a link to OpenClaw's network-exposure instructions", () => !document.querySelector("[data-host]") && !document.querySelector("code") && [...document.querySelectorAll("a")].some((a) => a.href === "https://docs.openclaw.ai/gateway/security/network-exposure"));
+await offers("screen=iphone-waiting", "iPhone waiting: no simulated approval", () => !document.querySelector("[data-simulate]") && !document.querySelector('a[href*="iphone-done"]'));
+await offers("screen=code-pairing&addr=gateway.example", "pasted code pending: no simulated approval, the address named", () => !document.querySelector("[data-simulate]") && document.body.textContent.includes("gateway.example has not seen this device before."));
 
 for (const [screen, running] of [
   ["looking-here", "Checking its version"],
@@ -361,46 +315,65 @@ for (const [screen, running] of [
   ["connecting-here", "Pairing this computer, read-only"],
   ["connecting-there", "Opening a private connection to devbox"],
   ["installing", "Install Node.js and OpenClaw"],
-  ["tailscale-steps", "Checking the new address"],
 ]) {
   p = await open(`screen=${screen}`);
   const steps = await p.evaluate(() => [...document.querySelectorAll(".s-steps li")].map((li) => ({ state: li.dataset.state, label: li.getAttribute("aria-label"), current: li.getAttribute("aria-current") })));
   const current = steps.filter((s) => s.current === "step");
   check(`${screen}: one running step, marked as the current step`, current.length === 1 && current[0].label === `${running}, running`);
   check(`${screen}: each step's state is in its name`, steps.every((s) => s.label.endsWith(`, ${s.state}`)));
-  check(`${screen}: has a way back or out`, await p.evaluate(() => Boolean(document.querySelector("[data-back], [data-host='cancelInstall'], .b-close"))));
   await p.close();
 }
+for (const screen of ["looking-here", "looking-there", "connecting-here", "connecting-there"]) {
+  await offers(`screen=${screen}`, `${screen}: has a way back`, () => Boolean(document.querySelector("[data-back]")));
+}
 
-// Part 5: the SSH field, Back, and the pasted code ------------------------------------------------
+// Part 5: the SSH field, the destination as text, Back, and the pasted code -----------------------
 p = await open("screen=there");
 for (const bad of ["-oProxyCommand=sh", "-user@host", "devbox; rm", "host name", "user@host:22", ".hidden"]) {
   await p.fill("#ssh-host", bad);
   await p.press("#ssh-host", "Enter");
   await p.waitForTimeout(40);
-  check(`there: "${bad}" is refused before anything runs`, (await text(p)).includes("That isn't an SSH host or alias Clawtrate can use.") && (await screenOf(p)) === "there");
+  check(`there: "${bad}" is refused before anything runs`, (await text(p)).includes("That isn't an SSH host or alias Clawtrate can use.") && (await screenOf(p)) === "there" && !(await p.evaluate(() => document.querySelector("[data-host-dialog]"))));
 }
 await p.fill("#ssh-host", "devbox");
 await p.press("#ssh-host", "Enter");
+await p.waitForSelector('[data-host-dialog="sshAccount"]');
+await hostConfirm(p);
 await at(p, "looking-there");
 await click(p, "[data-back]");
 check("Back from the look keeps the typed host", (await at(p, "there")) && (await p.inputValue("#ssh-host")) === "devbox");
+await p.close();
+
+p = await open(`screen=looking-there&name=${encodeURIComponent('<img src=x onerror="window.hacked=1">')}`);
+check("a destination from the address is shown as text, never as markup", await p.evaluate(() => !document.querySelector("#setup-root img:not(.s-mark)") && !window.hacked && document.body.textContent.includes("<img src=x")));
 await p.close();
 
 p = await open("screen=code");
 const where = () => text(p, "#code-where");
 const connectOff = () => p.evaluate(() => document.getElementById("code-connect").getAttribute("aria-disabled") === "true" && !document.getElementById("code-connect").hasAttribute("href"));
 const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+const FUTURE = 4102444800000;
 check("code: Connect is unavailable before a code", await connectOff());
-await p.fill("#setup-code", "invalid");
-check("code: something that isn't a code says so, and Connect stays unavailable", (await where()) === "That isn't a setup code Clawtrate can use." && (await connectOff()));
-await p.fill("#setup-code", enc({ url: "ws://devbox.local:18789", bootstrapToken: "sample", expiresAtMs: 1000 }));
-check("code: an expired code says so, and Connect stays unavailable", (await where()) === "This code has expired. Make a new one on the gateway's computer." && (await connectOff()));
-await p.fill("#setup-code", enc({ url: "ws://127.0.0.1:18789", bootstrapToken: "sample", expiresAtMs: 4102444800000 }));
-check("code: a loopback code works only where it was made", (await where()).startsWith("This code leads to the computer it was made on") && (await connectOff()));
-await p.fill("#setup-code", enc({ url: "wss://user:pw@gateway.example", bootstrapToken: "sample", expiresAtMs: 4102444800000 }));
-check("code: an address with a user name is refused", (await where()) === "That isn't a setup code Clawtrate can use." && (await connectOff()));
-await p.fill("#setup-code", enc({ url: "wss://gateway.example", bootstrapToken: "sample", expiresAtMs: 4102444800000 }));
+const unsafe = "That address can't be used safely. Clawtrate needs an encrypted address that isn't this computer's own.";
+for (const [label, value, expect] of [
+  ["not a code", "invalid", "That isn't a setup code Clawtrate can use."],
+  ["no token", enc({ url: "wss://gateway.example", expiresAtMs: FUTURE }), "That isn't a setup code Clawtrate can use."],
+  ["no expiry", enc({ url: "wss://gateway.example", bootstrapToken: "sample" }), "That isn't a setup code Clawtrate can use."],
+  ["plain ws://", enc({ url: "ws://devbox.local:18789", bootstrapToken: "sample", expiresAtMs: FUTURE }), unsafe],
+  ["127.0.0.1", enc({ url: "wss://127.0.0.1:18789", bootstrapToken: "sample", expiresAtMs: FUTURE }), unsafe],
+  ["another loopback address", enc({ url: "wss://127.5.5.5", bootstrapToken: "sample", expiresAtMs: FUTURE }), unsafe],
+  ["::1", enc({ url: "wss://[::1]:18789", bootstrapToken: "sample", expiresAtMs: FUTURE }), unsafe],
+  ["localhost", enc({ url: "wss://localhost", bootstrapToken: "sample", expiresAtMs: FUTURE }), unsafe],
+  ["credentials in the address", enc({ url: "wss://user:pw@gateway.example", bootstrapToken: "sample", expiresAtMs: FUTURE }), unsafe],
+  ["a query", enc({ url: "wss://gateway.example/?x=1", bootstrapToken: "sample", expiresAtMs: FUTURE }), unsafe],
+  ["a fragment", enc({ url: "wss://gateway.example/#x", bootstrapToken: "sample", expiresAtMs: FUTURE }), unsafe],
+  ["a path", enc({ url: "wss://gateway.example/other", bootstrapToken: "sample", expiresAtMs: FUTURE }), unsafe],
+  ["expired", enc({ url: "wss://gateway.example", bootstrapToken: "sample", expiresAtMs: 1000 }), "This code has expired. Make a new one on the gateway's computer."],
+]) {
+  await p.fill("#setup-code", value);
+  check(`code: ${label} is refused, and Connect stays unavailable`, (await where()) === expect && (await connectOff()), await where());
+}
+await p.fill("#setup-code", enc({ url: "wss://gateway.example", bootstrapToken: "sample", expiresAtMs: FUTURE }));
 check("code: an encrypted address is named, and Connect is available", (await where()) === "Connects to gateway.example, over an encrypted connection. Expires at 20:41." && !(await connectOff()));
 check("code: the token is never shown", !(await text(p, "#code-where")).includes("sample"));
 await p.close();
@@ -417,22 +390,17 @@ await p.close();
 
 // Part 7: widths, themes, motion -----------------------------------------------------------------
 for (const [label, width] of [["1100", 1100], ["800", 800], ["phone", 390]]) {
-  for (const screen of ["first", "found", "hostkey", "hostkey-changed", "install-confirm", "installing", "phone-request", "approve", "tailscale-https", "uninstall"]) {
+  for (const screen of ["first", "found", "hostkey", "hostkey-changed", "install-confirm", "installing", "approve", "settings", "phone", "code-pairing"]) {
     p = await open(`screen=${screen}&width=${label === "phone" ? "phone" : "full"}`, { width, height: 844 });
     check(`${screen} at ${label}: no sideways scroll`, await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await p.close();
   }
 }
 await offers("screen=first&width=phone", "first at phone width: rows are touch-sized", () => document.querySelector(".b-choice").getBoundingClientRect().height >= 64);
-p = await open("screen=phone-code&width=phone", { width: 390, height: 844 });
-check("phone code at phone width: a sheet, and a 176 px QR", await p.evaluate(() => Math.round(document.querySelector(".s-qr").getBoundingClientRect().width) === 176 && document.querySelector(".s-scrim .b-dialog").getBoundingClientRect().bottom >= innerHeight - 1));
-await p.close();
 await offers("screen=iphone", "iphone: shown at phone width with touch sizes", () => document.documentElement.dataset.width === "phone" && document.documentElement.dataset.input === "touch");
-for (const theme of ["light", "dark"]) {
-  p = await open("screen=phone-code", { theme });
-  check(`phone code, ${theme}: the QR stays black on white`, await p.evaluate(() => getComputedStyle(document.querySelector(".s-qr")).backgroundColor === "rgb(255, 255, 255)"));
-  await p.close();
-}
+p = await open("screen=installing", { theme: "dark" });
+check("installing, dark: the page uses the dark theme", await p.evaluate(() => document.documentElement.dataset.theme === "dark" && getComputedStyle(document.body).backgroundColor !== "rgb(255, 255, 255)"));
+await p.close();
 await offers("screen=installing&motion=reduce", "installing, reduced motion: the running step stands still", () => getComputedStyle(document.querySelector('[data-state="running"] .s-step-mark'), "::before").animationName === "none");
 await offers("screen=installing", "installing: the running step turns with full motion", () => getComputedStyle(document.querySelector('[data-state="running"] .s-step-mark'), "::before").animationName === "s-turn");
 p = await open("screen=looking-here");

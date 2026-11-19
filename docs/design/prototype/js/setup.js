@@ -26,19 +26,24 @@
     for (const [key, value] of Object.entries(extra)) next.set(key, value);
     return `setup.html?${next}`;
   };
-  // The computer typed in the field, carried through the walk (Back keeps it).
-  const typed = params.get("name") || "devbox";
+  // The destination typed in the field, carried through the walk (Back keeps
+  // it), always shown escaped. `host` is its host part; `full` is the account,
+  // host and port as resolved (in the prototype: "you@<host>.example", port 22).
+  const typedRaw = params.get("name") || "devbox";
+  const typed = esc(typedRaw);
+  const hostRaw = typedRaw.split("@").pop();
+  const host = esc(hostRaw.split(".")[0]);
+  const resolvedRaw = typedRaw.includes("@") ? typedRaw : `you@${hostRaw.includes(".") ? hostRaw : `${hostRaw}.example`}`;
+  const full = esc(resolvedRaw);
 
   // Samples. Fingerprints, device codes and setup codes are invented; the codes
   // decode to an address and the word "sample", never a token.
   const PRINT = "SHA256:Q3v8Lw0e Xk2Rj9Ta Nf5Hc1Ub Ym7Pd4Gs Zi6Ko2Ea Vr8";
   const PRINT_NEW = "SHA256:Hb2Wq9Lx Tn4Ce7Ry Mk1Pz5Vd Fs8Ja3Ug Ow6Ni0Ek Tc5";
-  const CODE_LAN =
-    "eyJ1cmwiOiJ3czovL2RldmJveC5sb2NhbDoxODc4OSIsImJvb3RzdHJhcFRva2VuIjoic2FtcGxlIiwiZXhwaXJlc0F0TXMiOjE3OTUwNTAwMDAwMDB9";
   const REQUEST = "e5eb4aa8-175f-40f1-bc7a-8f15cfc40942";
   const PHONE_REQUEST = "7c41d2e0-9a3b-4f0e-8c55-2d6e1b0a9f34";
-  const DEVICE = "5AE2-3AFF";
   const PHONE_DEVICE = "7C41-D2E0";
+  const ADVANCED = "connect.html";
   const FAR_FUTURE = 4102444800000; // 2100: the samples never expire while looked at
 
   // Pieces ----------------------------------------------------------------------
@@ -99,8 +104,6 @@
     `<p class="s-device" aria-label="${label}: ${code.split("").join(" ")}">${code}</p>`;
   const disclosure = (label, body) =>
     `<details class="b-disclosure s-disclosure"><summary>${label}</summary><div class="b-disclosure-body">${body}</div></details>`;
-  const simulate = (label, to, extra = {}) =>
-    `<div class="s-simulate" aria-label="Prototype control"><span>Prototype</span><a class="button" data-size="sm" href="${to === "app" ? "app.html?state=readonly" : go(to, extra)}" data-simulate>${label}</a></div>`;
   // The display settings, carried to another page of the prototype.
   const display = () => {
     const kept = new URLSearchParams([...params].filter(([k]) => ["theme", "width", "motion", "chrome"].includes(k)));
@@ -122,41 +125,44 @@
     (closeTo ? `<a class="icon-button b-close" href="${go(closeTo)}" aria-label="Close">${icon("x")}</a>` : "") +
     `</header><div class="b-body">${body}</div>${foot ? `<div class="b-foot">${foot}</div>` : ""}</div></div>`;
 
-  // A picture of a QR code, labelled as a sample: the app draws a real one.
-  function qr(seed) {
-    const n = 25;
-    let h = 2166136261;
-    for (const c of seed) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0;
-    const rnd = () => ((h = Math.imul(h ^ (h >>> 15), 2246822507) >>> 0), h / 4294967296);
-    const finder = (x, y) =>
-      `<rect x="${x}" y="${y}" width="7" height="7"/><rect x="${x + 1}" y="${y + 1}" width="5" height="5" fill="#fff"/><rect x="${x + 2}" y="${y + 2}" width="3" height="3"/>`;
-    const inFinder = (x, y) => (x < 8 && y < 8) || (x > n - 9 && y < 8) || (x < 8 && y > n - 9);
-    let cells = "";
-    for (let y = 0; y < n; y++)
-      for (let x = 0; x < n; x++) if (!inFinder(x, y) && rnd() > 0.52) cells += `<rect x="${x}" y="${y}" width="1" height="1"/>`;
-    return (
-      `<div class="s-qr" role="img" aria-label="QR code of the setup code (a sample picture in this prototype)"><span class="s-sample">Sample</span>` +
-      `<svg viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges" fill="#000">${finder(0, 0)}${finder(n - 7, 0)}${finder(0, n - 7)}${cells}</svg></div>`
-    );
-  }
-
   // The host's confirmations ---------------------------------------------------
   // Each: the message, the detail, an optional checkbox that must be ticked,
   // the confirming button's words, and where it leads.
 
   const HOST = {
+    sshAccount: {
+      message: `Look for OpenClaw as ${full}, port 22?`,
+      detail: "<p>This uses the remote account's SSH login environment.</p>",
+      confirm: "Continue",
+      to: () =>
+        hostRaw.split(".")[0] === "newbox"
+          ? go("hostkey", { name: typedRaw })
+          : go("looking-there", { play: "1", name: typedRaw, next: hostRaw.split(".")[0] === "emptybox" ? "notfound-there" : "found-there" }),
+    },
     trustKey: {
-      message: `Trust ${typed}'s key?`,
-      detail: `<p>ED25519 ${PRINT}</p><p>Clawtrate will connect to ${typed} only while it presents this key.</p>`,
+      message: `Trust ${host}'s key?`,
+      detail: `<p>ED25519 ${PRINT}</p><p>Clawtrate will connect to ${host} only while it presents this key.</p>`,
       confirm: "Trust",
-      to: () => go("looking-there", { play: "1", next: "found-there", name: typed }),
+      to: () => go("looking-there", { play: "1", next: "found-there", name: typedRaw }),
     },
     replaceKey: {
-      message: `Replace ${typed}'s trusted key?`,
+      message: `Replace ${host}'s trusted key?`,
       detail: `<p>Trusted: ${PRINT}</p><p>Presented now: ${PRINT_NEW}</p>`,
-      checkbox: `I checked the new key on ${typed} itself`,
+      checkbox: `I checked the new key on ${host} itself`,
       confirm: "Replace",
-      to: () => go("looking-there", { play: "1", next: "found-there", name: typed }),
+      to: () => go("looking-there", { play: "1", next: "found-there", name: typedRaw }),
+    },
+    pair: {
+      message: "Pair this device read-only with the default gateway on this computer?",
+      detail: "<p>The gateway saves this device.</p>",
+      confirm: "Pair",
+      to: () => go("connecting-here", { play: "1" }),
+    },
+    pairThere: {
+      message: `Pair this device read-only with the default gateway on ${full}?`,
+      detail: "<p>The gateway saves this device.</p>",
+      confirm: "Pair",
+      to: () => go("connecting-there", { play: "1", name: typedRaw }),
     },
     start: {
       message: "Start OpenClaw on this computer?",
@@ -167,54 +173,9 @@
     install: {
       message: "Set up OpenClaw on this computer?",
       detail:
-        "<p>OpenClaw 2026.10.6 and Node.js 24.22.1 are checked against fingerprints built into Clawtrate before anything runs.</p><p>npm then downloads about 345 packages from the npm registry, which Clawtrate can't check.</p>",
+        "<p>Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.</p>",
       confirm: "Set up",
       to: () => go("installing", { play: "1" }),
-    },
-    installThere: {
-      message: `Set up OpenClaw on ${typed}?`,
-      detail: `<p>${typed}.example, which reports its name as ${typed}-1.</p><p>OpenClaw 2026.10.6 and Node.js 24.22.1 are checked against fingerprints built into Clawtrate before anything runs. npm then downloads about 345 packages from the npm registry, which Clawtrate can't check.</p>`,
-      confirm: "Set up",
-      to: () => go("installing-there", { play: "1", name: typed }),
-    },
-    cancelInstall: {
-      message: "Stop setting up OpenClaw?",
-      detail: "<p>Clawtrate stops the installer and removes the folders and the service this setup made. Nothing else is touched.</p>",
-      confirm: "Stop and remove",
-      to: () => go("notfound"),
-    },
-    approve: {
-      message: "Approve this request on devbox?",
-      detail:
-        "<p>Gateway: devbox · gateway c5fd-e286, as you on devbox.example.</p><p>Device: Clawtrate Desktop · 5AE2-3AFF, this computer.</p><p>Adds: Send messages and stop runs. Answer questions. Approve actions.</p>",
-      confirm: "Approve",
-      to: () => go("approve-done"),
-    },
-    approvePhone: {
-      message: "Approve this request on devbox?",
-      detail:
-        "<p>Gateway: devbox · gateway c5fd-e286, as you on devbox.example.</p><p>Device: iPhone · 7C41-D2E0.</p><p>Adds: Read bots, tasks and conversations.</p>",
-      confirm: "Approve",
-      to: () => go("phone-done"),
-    },
-    phoneCode: {
-      message: "Make a one-time setup code on devbox?",
-      detail: "<p>Anyone who has the code in the next 10 minutes can ask to connect. Nothing connects until you approve it.</p>",
-      confirm: "Make the code",
-      to: () => go("phone-code"),
-    },
-    tailscaleOn: {
-      message: "Turn on private access on devbox?",
-      detail:
-        "<p>OpenClaw restarts on devbox and becomes reachable from your devices signed in to Tailscale. If anything fails, Clawtrate puts the setting back as it was and checks that the gateway answers.</p>",
-      confirm: "Turn on",
-      to: () => go("tailscale-steps", { play: "1" }),
-    },
-    tailscaleOff: {
-      message: "Turn off private access on devbox?",
-      detail: "<p>OpenClaw restarts on devbox. Devices using the Tailscale address stop reaching it.</p>",
-      confirm: "Turn off",
-      to: () => go("tailscale"),
     },
     removeRoute: {
       message: "Remove devbox from Clawtrate?",
@@ -223,13 +184,6 @@
       optional: true,
       confirm: "Remove",
       to: () => go("first"),
-    },
-    uninstall: {
-      message: "Remove OpenClaw from devbox?",
-      detail:
-        "<p>devbox.example, which reports its name as devbox-1.</p><p>The service ai.openclaw.clawtrate. The program in ~/.local/share/clawtrate/openclaw. The gateway's settings, bots and conversations in ~/.openclaw-clawtrate.</p>",
-      confirm: "Remove",
-      to: () => go("uninstall-partial"),
     },
   };
 
@@ -274,7 +228,11 @@
       brand() +
       `<h2 class="s-title s-question" tabindex="-1" data-s-title>Where does OpenClaw run?</h2>` +
       `<ul class="b-choices" aria-label="Where does OpenClaw run?" data-choice-list>` +
-      choiceRow({ title: "This computer", sub: "Clawtrate looks for OpenClaw here.", to: "looking-here", play: true, extra: windows ? { os: "windows", next: "notfound-windows" } : {} }) +
+      choiceRow(
+        windows
+          ? { title: "This computer", sub: "Clawtrate looks for OpenClaw here.", to: "notfound-windows", extra: { os: "windows" } }
+          : { title: "This computer", sub: "Clawtrate looks for OpenClaw here.", to: "looking-here", play: true },
+      ) +
       choiceRow({ title: "Another computer", sub: "A computer you reach with SSH, such as a server or a desktop at home.", to: "there" }) +
       `</ul>` +
       `<p class="s-links">${button("Have a setup code?", { variant: "quiet", size: "sm", to: "code" })}<a class="button" data-variant="quiet" data-size="sm" href="connect.html${display()}" id="advanced-link">Advanced</a></p>` +
@@ -300,7 +258,7 @@
       mark() +
       title("On this computer") +
       found("check", "ok", "OpenClaw is running", runningFacts()) +
-      actions(button("Connect", { variant: "primary", to: "connecting-here", play: true })) +
+      actions(button("Connect", { variant: "primary", host: "pair" })) +
       connectHint,
 
     "connecting-here": () =>
@@ -320,6 +278,7 @@
       found("pause", "", "OpenClaw is installed but not running", [
         ["Version", "2026.10.6"],
         ["Service", "LaunchAgent, stopped"],
+        ["Port", "Nothing listening on 18789"],
       ]) +
       actions(button("Start OpenClaw", { variant: "primary", host: "start" })),
 
@@ -331,9 +290,9 @@
       note(
         "warn",
         "",
-        "OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Clawtrate connects read-only, and won't run commands on this computer for you until the versions match.",
+        "OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Use Advanced to connect to it.",
       ) +
-      actions(button("Connect read-only", { variant: "primary", to: "connecting-here", play: true })) +
+      actions(`<a class="button" data-variant="primary" data-size="lg" href="${ADVANCED}">Use Advanced</a>`) +
       howToUpdate,
 
     tooold: () =>
@@ -361,7 +320,10 @@
       mark() +
       title("On this computer") +
       found("warning", "warn", "Clawtrate couldn't tell what is on this computer", null, lede("Asking the gateway didn't finish in time.")) +
-      actions(button("Look again", { variant: "primary", to: "looking-here", play: true })),
+      actions(
+        `<a class="button" data-variant="primary" data-size="lg" href="${ADVANCED}">Use Advanced</a>`,
+        button("Look again", { variant: "quiet", to: "looking-here", play: true }),
+      ),
 
     nottoken: () =>
       back("first") +
@@ -374,7 +336,7 @@
       back("first") +
       mark() +
       title("On this computer") +
-      found("plus", "", "OpenClaw isn't on this computer", null) +
+      found("plus", "", "Clawtrate didn't find OpenClaw here", null) +
       actions(
         button("Set up OpenClaw here", { variant: "primary", to: "install-confirm" }),
         button("It runs on another computer", { variant: "quiet", to: "there" }),
@@ -388,11 +350,14 @@
       found(
         "plus",
         "",
-        "OpenClaw isn't on this computer",
+        "Use Advanced on Windows",
         null,
-        lede("Clawtrate doesn't set OpenClaw up on Windows yet: OpenClaw's Windows installer changes this computer's Node.js, npm and PATH, which Clawtrate won't do for you."),
+        lede("Clawtrate can't yet look for OpenClaw on Windows. It doesn't set OpenClaw up on Windows either: OpenClaw's Windows installer can change Node.js or PATH and installs OpenClaw globally."),
       ) +
-      actions(button("Use another computer", { variant: "primary", to: "there" })) +
+      actions(
+        `<a class="button" data-variant="primary" data-size="lg" href="${ADVANCED}">Use Advanced</a>`,
+        button("Use another computer", { to: "there" }),
+      ) +
       `<p class="s-links"><a class="button" data-variant="quiet" data-size="sm" href="https://docs.openclaw.ai/install" target="_blank" rel="noreferrer noopener">OpenClaw's own install instructions</a></p>`,
 
     there: () => {
@@ -403,116 +368,119 @@
         title("Another computer") +
         (returning
           ? `<ul class="b-choices s-remembered" aria-label="Computers you used before">` +
-            choiceRow({ title: "devbox", sub: "OpenClaw 2026.10.6 · last used today", to: "looking-there", play: true, extra: { next: "found-there", name: "devbox" } }) +
+            `<li><a class="b-choice" href="${go("there", { name: "you@devbox.example", keep: "you@devbox.example", returning: "1", host: "sshAccount" })}" data-choice><span class="b-choice-text"><span class="b-choice-title">you@devbox.example</span><span class="b-choice-sub">OpenClaw 2026.10.6 · last used today</span></span>${icon("chevron")}</a></li>` +
             `</ul>`
           : "") +
         `<form id="ssh-form" novalidate>${sshField(params.get("keep") || "")}` +
         actions(`<button type="submit" class="button" data-variant="primary" data-size="lg">Look there</button>`) +
-        `</form><p class="s-links">${button("Have a setup code instead?", { variant: "quiet", size: "sm", to: "code" })}</p>` +
+        `</form><p class="s-links">${button("Have a setup code instead?", { variant: "quiet", size: "sm", to: "code" })}<a class="button" data-variant="quiet" data-size="sm" href="${ADVANCED}">Advanced</a></p>` +
         `<p class="s-proto-hint">Prototype: “newbox” is a first contact, “emptybox” has no OpenClaw, “jumpbox” uses a jump host, anything else is found.</p>`
       );
     },
 
     "there-config": () =>
-      back("there", { keep: typed }) +
+      back("there", { keep: typedRaw }) +
       mark() +
       title("Another computer") +
-      sshField(typed) +
+      sshField(typedRaw) +
       note(
         "warn",
-        `${typed} is reached through another computer.`,
-        `Clawtrate doesn't connect through jump hosts yet. Use a setup code made on ${typed}, or Advanced.`,
+        `${host} is reached through another computer.`,
+        `Clawtrate doesn't connect through jump hosts yet. Use a setup code made on ${host}, or Advanced.`,
       ) +
-      actions(button("Use a setup code", { variant: "primary", to: "code" })),
+      actions(button("Use a setup code", { variant: "primary", to: "code" })) +
+      `<p class="s-links"><a class="button" data-variant="quiet" data-size="sm" href="${ADVANCED}">Advanced</a></p>`,
 
     "looking-there": () =>
-      back("there", { keep: typed }) +
+      back("there", { keep: typedRaw }) +
       mark() +
-      title(`Looking on ${typed}`) +
+      title(`Looking on ${full}`) +
       steps([
-        [`Reaching ${typed}`, "done"],
+        [`Reaching ${host}`, "done"],
         ["Finding OpenClaw", "running"],
         ["Checking its version", "waiting"],
         ["Asking the gateway", "waiting"],
       ]),
 
     unreachable: () =>
-      back("there", { keep: typed }) +
+      back("there", { keep: typedRaw }) +
       mark() +
       title("Another computer") +
-      sshField(typed) +
-      note("danger", `Can't reach ${typed}`, `Nothing answered at ${typed}.example (connection refused).`, `<p>Check the name and that the computer is on.</p>`) +
-      actions(button("Try again", { variant: "primary", to: "looking-there", play: true, extra: { next: "found-there", name: typed } })),
+      sshField(typedRaw) +
+      note("danger", `Can't reach ${full}`, `Nothing answered at ${esc(resolvedRaw.split("@").pop())}, port 22 (connection refused).`, `<p>Check the name and that the computer is on.</p>`) +
+      actions(button("Try again", { variant: "primary", host: "sshAccount" })) +
+      `<p class="s-links"><a class="button" data-variant="quiet" data-size="sm" href="${ADVANCED}">Advanced</a></p>`,
 
     refused: () =>
-      back("there", { keep: typed }) +
+      back("there", { keep: typedRaw }) +
       mark() +
       title("Another computer") +
-      sshField(typed) +
+      sshField(typedRaw) +
       note(
         "danger",
-        `${typed} didn't accept your key`,
-        `The SSH sign-in for you@${typed}.example was refused.`,
+        `${full} didn't accept your key`,
+        `The SSH sign-in for ${full} was refused.`,
         `<p>Check that your key is on that computer. A key with a passphrase has to be in your SSH agent first.</p>`,
       ) +
-      actions(button("Try again", { variant: "primary", to: "looking-there", play: true, extra: { next: "found-there", name: typed } })),
+      actions(button("Try again", { variant: "primary", host: "sshAccount" })) +
+      `<p class="s-links"><a class="button" data-variant="quiet" data-size="sm" href="${ADVANCED}">Advanced</a></p>`,
 
     hostkey: () =>
-      back("there", { keep: typed }) +
+      back("there", { keep: typedRaw }) +
       mark() +
-      title(`Is this ${typed}?`) +
-      lede(`This is the first time Clawtrate connects to ${typed}. Its key is below. If you can, compare it with the key ${typed} itself shows before you trust it.`) +
+      title(`Is this ${host}?`) +
+      lede(`This is the first time Clawtrate connects to ${host}. Its key is below. If you can, compare it with the key ${host} itself shows before you trust it.`) +
       fingerprint("ED25519", PRINT) +
       disclosure(
         "How to compare",
-        `<p class="s-hint">On ${typed}, in a session you already trust, <code>ssh-keygen -lf</code> with the key file shows its fingerprint. The file depends on the key's type, for example <code>/etc/ssh/ssh_host_ed25519_key.pub</code>.</p>`,
+        `<p class="s-hint">On ${host}, in a session you already trust, <code>ssh-keygen -lf</code> with the key file shows its fingerprint. The file depends on the key's type, for example <code>/etc/ssh/ssh_host_ed25519_key.pub</code>.</p>`,
       ) +
-      actions(button("Trust this key…", { variant: "primary", host: "trustKey" }), button("Back", { to: "there", extra: { keep: typed } })),
+      actions(button("Trust this key…", { variant: "primary", host: "trustKey" }), button("Back", { to: "there", extra: { keep: typedRaw } })),
 
     "hostkey-changed": () =>
-      back("there", { keep: typed }) +
+      back("there", { keep: typedRaw }) +
       mark() +
       title("Another computer") +
       note(
         "danger",
-        `${typed}'s key has changed`,
-        `The key ${typed} presented is not the one Clawtrate trusted. This happens when a computer is reinstalled, and it is also what someone between you and ${typed} would cause. Clawtrate won't connect until you decide.`,
+        `${host}'s key has changed`,
+        `The key ${host} presented is not the one Clawtrate trusted. This happens when a computer is reinstalled, and it is also what someone between you and ${host} would cause. Clawtrate won't connect until you decide.`,
       ) +
       `<div class="s-prints">${fingerprint("Trusted", PRINT)}${fingerprint("Presented now", PRINT_NEW)}</div>` +
       `<p class="s-print-label">Trusted since 3 November</p>` +
-      actions(button("Try again", { variant: "primary", to: "looking-there", play: true, extra: { next: "hostkey-changed", name: typed } }), button("Back", { to: "there" })) +
+      actions(button("Try again", { variant: "primary", host: "sshAccount" }), button("Back", { to: "there" })) +
       `<p class="s-links">${button("Replace the trusted key…", { variant: "quiet", size: "sm", host: "replaceKey" })}</p>`,
 
     "found-there": () =>
-      back("there", { keep: typed }) +
+      back("there", { keep: typedRaw }) +
       mark() +
-      title(`On ${typed}`) +
+      title(`On ${full}`) +
       found("check", "ok", "OpenClaw is running", [
         ["Version", "2026.10.6"],
         ["Profile", "default"],
-        ["Listens", `On ${typed} only`],
+        ["Listens", `On ${host} only`],
         ["Service", "systemd user service, starts with your session"],
       ]) +
-      actions(button("Connect", { variant: "primary", to: "connecting-there", play: true, extra: { name: typed } })) +
+      actions(button("Connect", { variant: "primary", host: "pairThere" })) +
       connectHint,
 
     "connecting-there": () =>
-      back("found-there", { name: typed }) +
+      back("found-there", { name: typedRaw }) +
       mark() +
-      title(`Connecting to ${typed}`) +
+      title(`Connecting to ${full}`) +
       steps([
-        [`Making a one-time code on ${typed}`, "done"],
-        [`Opening a private connection to ${typed}`, "running"],
+        [`Making a one-time code on ${host}`, "done"],
+        [`Opening a private connection to ${host}`, "running"],
         ["Pairing this computer, read-only", "waiting"],
         ["Loading your bots", "waiting"],
       ]),
 
     "notfound-there": () =>
-      back("there", { keep: typed }) +
+      back("there", { keep: typedRaw }) +
       mark() +
-      title(`On ${typed}`) +
-      found("plus", "", `OpenClaw isn't on ${typed}`, null) +
-      actions(button(`Set up OpenClaw on ${typed}`, { variant: "primary", to: "install-confirm-there", extra: { name: typed } })),
+      title(`On ${full}`) +
+      found("plus", "", "Clawtrate didn't find OpenClaw here", null, lede("Setting OpenClaw up on another computer isn't offered in this version.")) +
+      `<p class="s-links">${button("Use a setup code", { variant: "quiet", size: "sm", to: "code" })}<a class="button" data-variant="quiet" data-size="sm" href="${ADVANCED}">Advanced</a></p>`,
 
     "install-confirm": () =>
       back("notfound") +
@@ -520,9 +488,11 @@
       title("Set up OpenClaw on this computer") +
       sentenceFacts([
         ["What", "OpenClaw 2026.10.6, the version this Clawtrate is tested with, with its own copy of Node.js 24.22.1"],
-        ["Where", "Its own folders: the program in Clawtrate's folder, the gateway's data in ~/.openclaw-clawtrate. An OpenClaw you already have isn't touched."],
-        ["Checked", "OpenClaw and Node.js are checked against fingerprints built into this Clawtrate before anything runs."],
-        ["Not checked", "npm then downloads about 345 packages OpenClaw uses from the npm registry. Clawtrate can't check those."],
+        ["Where", "Clawtrate puts OpenClaw's program and gateway data in its own folders and adds a user service. npm can also write its cache and OpenClaw can write service logs."],
+        [
+          "Checked",
+          "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.",
+        ],
         [
           "Then",
           "A gateway that listens on this computer only, as a LaunchAgent that starts when you log in, with no AI provider yet. You sign in to one when you make your first bot.",
@@ -532,23 +502,6 @@
       hint("OpenClaw keeps running if you remove Clawtrate. Remove it in Settings first if you want it gone.") +
       actions(button("Set up OpenClaw…", { variant: "primary", host: "install" }), button("Cancel", { to: "notfound" })),
 
-    "install-confirm-there": () =>
-      back("notfound-there", { name: typed }) +
-      mark() +
-      title(`Set up OpenClaw on ${typed}`) +
-      sentenceFacts([
-        ["What", "OpenClaw 2026.10.6, the version this Clawtrate is tested with, with its own copy of Node.js 24.22.1"],
-        ["Where", `~/.local/share/clawtrate/openclaw and ~/.openclaw-clawtrate on ${typed}. An OpenClaw already there isn't touched.`],
-        ["Checked", "OpenClaw and Node.js are checked against fingerprints built into this Clawtrate before anything runs."],
-        ["Not checked", "npm then downloads about 345 packages OpenClaw uses from the npm registry. Clawtrate can't check those."],
-        [
-          "Then",
-          `A gateway that listens on ${typed} only, as a systemd user service that starts with your session, with no AI provider yet. You sign in to one when you make your first bot.`,
-        ],
-      ]) +
-      hint("Nothing is asked for: no account and no model key.") +
-      actions(button("Set up OpenClaw…", { variant: "primary", host: "installThere" }), button("Cancel", { to: "notfound-there", extra: { name: typed } })),
-
     installing: () =>
       mark() +
       title("Setting up OpenClaw") +
@@ -557,26 +510,11 @@
         ["Install Node.js and OpenClaw", "running", "Node.js 24.22.1, checked", "0:14"],
         ["Set up the gateway", "waiting"],
         ["Start and check", "waiting"],
-        ["Connect", "waiting"],
       ]) +
-      hint("The times are samples.") +
-      actions(button("Cancel", { host: "cancelInstall" })),
-
-    "installing-there": () =>
-      mark() +
-      title("Setting up OpenClaw") +
-      `<p class="s-where">On ${typed}</p>` +
-      steps([
-        ["Download and check OpenClaw 2026.10.6", "done"],
-        ["Install Node.js and OpenClaw", "running", "OpenClaw 2026.10.6, 345 packages", "0:21"],
-        ["Set up the gateway", "waiting"],
-        ["Start and check", "waiting"],
-        ["Connect", "waiting"],
-      ]) +
-      hint("The times are samples.") +
-      actions(button("Cancel", { host: "cancelInstall" })),
+      hint("The times are samples."),
 
     "install-failed": () =>
+      back("notfound") +
       mark() +
       title("Setting up OpenClaw") +
       steps([
@@ -584,11 +522,10 @@
         ["Install Node.js and OpenClaw", "failed"],
         ["Set up the gateway", "waiting"],
         ["Start and check", "waiting"],
-        ["Connect", "waiting"],
       ]) +
       note("danger", "Install Node.js and OpenClaw failed.", "The installer didn't use the checked Node.js.") +
-      actions(button("Try again", { variant: "primary", to: "installing", play: true }), button("Cancel", { host: "cancelInstall" })) +
-      disclosure("Show details", sentenceFacts([["Step", "Install Node.js and OpenClaw"], ["Exit status", "1"], ["Last installer event", "node: start, version 24.22.1"]])),
+      actions(button("Try again", { variant: "primary", host: "install" })) +
+      disclosure("Show details", sentenceFacts([["Step", "Install Node.js and OpenClaw"], ["Error", "Node.js check"], ["Exit status", "1"]])),
   };
 
   // Screens over the app: the access bar, the strip, Settings and the phone. -----
@@ -600,71 +537,28 @@
     (foot ? `<div class="s-mock-foot">${foot}</div>` : "") +
     `</div>`;
 
-  const accessRequested = (untested = false) =>
+  const accessRequested = () =>
     `<div class="access-bar" role="status" data-s-title tabindex="-1"><div class="access-row">${icon("clock")}` +
-    `<span class="shelf-text"><b>Waiting for the gateway's owner.</b> ${untested ? "Run this on devbox." : "Approve this request on the gateway's machine:"}</span></div>` +
+    `<span class="shelf-text"><b>Waiting for the gateway's owner.</b> On devbox, approve this request for the default profile:</span></div>` +
     `<div class="command command-line"><code>openclaw devices approve ${REQUEST}</code>${copyButton("Copy approve command", `openclaw devices approve ${REQUEST}`)}</div>` +
-    (untested ? "" : `<p class="s-check-first">Check that the request is yours: this computer's device code is ${DEVICE}.</p>`) +
     `<div class="access-row"><span class="access-id">Request e5eb4aa8<span class="access-wait">checking again in 4s</span></span><span class="spacer"></span>` +
-    (untested ? "" : `<button type="button" class="button" data-size="sm" data-host="approve">Approve from here</button>`) +
     `<button type="button" class="button" data-variant="quiet" data-size="sm">Check now</button>` +
     `<button type="button" class="button" data-variant="quiet" data-size="sm">Cancel request</button></div></div>`;
 
-  const gatewayRows = ({ tailscale = "off", disabled = false, sub } = {}) =>
+  const gatewayRows = () =>
     `<ul class="s-rows" aria-label="Gateway">` +
-    `<li><span class="s-row-text"><span class="s-row-title">Reached through</span><span class="s-row-sub">devbox over SSH · In use</span></span></li>` +
-    `<li><span class="s-row-text"><span class="s-row-title">Private access with Tailscale</span><span class="s-row-sub" id="ts-sub">${
-      sub ??
-      (tailscale === "on"
-        ? "On · devbox.tailnet.example · checked on devbox"
-        : "Reach this gateway from your own devices anywhere, through Tailscale. Tailscale is never needed for anything else.")
-    }</span></span>` +
-    `<button type="button" class="b-switch" role="switch" aria-label="Private access with Tailscale" aria-describedby="ts-sub" aria-checked="${tailscale === "on"}"${disabled ? " disabled" : ""} data-host="${tailscale === "on" ? "tailscaleOff" : "tailscaleOn"}"></button></li>` +
-    `<li><span class="s-row-text"><span class="s-row-title">Connect a phone</span><span class="s-row-sub">A one-time code for Clawtrate on your iPhone</span></span>` +
+    `<li><span class="s-row-text"><span class="s-row-title">Reached through</span><span class="s-row-sub">you@devbox.example over SSH · In use</span></span></li>` +
+    `<li><span class="s-row-text"><span class="s-row-title">Private access with Tailscale</span><span class="s-row-sub">Set up private access on the gateway using OpenClaw's Tailscale instructions</span></span>` +
+    `<a class="button" data-size="sm" href="https://docs.openclaw.ai/gateway/tailscale" target="_blank" rel="noreferrer noopener">OpenClaw's Tailscale instructions</a></li>` +
+    `<li><span class="s-row-text"><span class="s-row-title">Connect a phone</span><span class="s-row-sub">Not in this version</span></span>` +
     `<a class="button" data-size="sm" href="${go("phone")}">Connect a phone</a></li>` +
-    `<li><span class="s-row-text"><span class="s-row-title">OpenClaw on devbox</span><span class="s-row-sub">Installed by Clawtrate · OpenClaw 2026.10.6 · systemd user service openclaw-gateway-clawtrate.service</span></span></li>` +
-    `<li><button type="button" class="button" data-variant="quiet" data-size="sm" data-host="removeRoute">Remove this gateway…</button>` +
-    `<a class="button s-danger-text" data-variant="quiet" data-size="sm" href="${go("uninstall")}">Remove OpenClaw…</a></li>` +
+    `<li><button type="button" class="button" data-variant="quiet" data-size="sm" data-host="removeRoute">Remove this gateway…</button></li>` +
     `</ul>`;
 
   const settings = (body) => mockApp() + dialog("settings-lite", "Gateway · devbox", body, "", "first");
 
-  const tailscaleFailure = (lead, text, outcome, failedStep) =>
-    gatewayRows() +
-    steps([
-      ["Checking Tailscale", failedStep === 0 ? "failed" : "done"],
-      ["Turning on private access", failedStep === 0 ? "waiting" : "done"],
-      ["Restarting OpenClaw", failedStep === 0 ? "waiting" : "done"],
-      ["Checking the new address", failedStep === 3 ? "failed" : "waiting"],
-      ["Checking the connection here", "waiting"],
-    ]) +
-    note("warn", lead, text, `<p>${outcome}</p>`);
-
-  const phoneWhere = `<p class="s-where">This code leads to devbox.local on your local network. The connection isn't encrypted until the phone is paired; use it only on a network you trust.</p>`;
-  const phoneCode = (rows = "") =>
-    phoneWhere +
-    qr(CODE_LAN) +
-    hint("Open Clawtrate on your iPhone and scan this code.") +
-    `<div class="s-code">${command(CODE_LAN, "Copy setup code")}</div>` +
-    `<p class="s-expiry" aria-live="off">Expires at 20:41 (in 9 minutes)</p>` +
-    rows;
-  const phoneRow = ({ more = false } = {}) =>
-    `<p class="s-check-first">Check that the device code matches the one on your iPhone.</p>` +
-    `<ul class="b-choices s-request" aria-label="Asking to connect"><li><div class="b-choice">` +
-    `<span class="b-choice-text"><span class="b-choice-title">iPhone · ${PHONE_DEVICE}</span>` +
-    `<span class="b-choice-sub">${more ? "Asks for more than read access. Clawtrate won't approve it here." : "Asks to read bots, tasks and conversations"}</span></span></div></li></ul>` +
-    (more
-      ? ""
-      : `<div class="b-actions" style="margin-top:10px"><button type="button" class="button" data-variant="primary" data-size="sm" data-host="approvePhone">Approve…</button>${button("Not now", { variant: "quiet", size: "sm", to: "phone-code" })}</div>`);
-
   const OVER = {
     approve: () => mockApp("", accessRequested()),
-    "approve-untested": () => mockApp("", accessRequested(true)),
-    "approve-done": () =>
-      mockApp(
-        `<div class="status-strip" data-tone="ok" role="status" data-s-title tabindex="-1"><span class="status-dot"></span><span class="status-strip-text"><b>Access granted</b><span>· you can send, stop and answer</span></span></div>`,
-        `<div class="s-composer" aria-label="Message">Message Otto</div>`,
-      ),
     restoring: () =>
       mockApp(
         `<div class="status-strip" data-tone="warn" role="status" data-s-title tabindex="-1"><span class="status-dot"></span>` +
@@ -675,127 +569,26 @@
         `<div class="status-strip" data-tone="danger" role="status" data-s-title tabindex="-1"><span class="status-dot"></span>` +
           `<span class="status-strip-text"><b>This address now leads to a different gateway</b><span>· disconnected</span></span><a class="s-strip-link" href="${go("there")}">Review</a></div>`,
       ),
-    uninstall: () => {
-      const keep = params.get("keep") === "1";
-      return (
-        mockApp() +
-        dialog(
-          "",
-          "Remove OpenClaw from devbox?",
-          `<p class="b-lead" style="text-align:left">devbox.example, which reports its name as devbox-1.</p>` +
-            `<ul class="s-remove-list"><li>The service ai.openclaw.clawtrate</li><li>The program in ~/.local/share/clawtrate/openclaw</li>` +
-            `<li${keep ? ' class="s-kept"' : ""}>The gateway's settings, bots and conversations in ~/.openclaw-clawtrate</li></ul>` +
-            `<label class="s-check"><input type="checkbox" id="keep-data"${keep ? " checked" : ""} /> <span>Keep the gateway's settings, bots and conversations</span></label>`,
-          `<button type="button" class="button" data-variant="primary" data-size="lg" data-danger data-host="uninstall">Remove…</button>` +
-            button("Cancel", { to: "tailscale" }),
-          "tailscale",
-        )
-      );
-    },
-    "uninstall-partial": () =>
-      mockApp() +
-      dialog(
-        "",
-        "Remove OpenClaw from devbox?",
-        note("", "OpenClaw is removed.", "macOS moved its service file to your Trash.") +
-          note("warn", "Part of OpenClaw is still on devbox:", "", `<p>The log file ~/Library/Logs/openclaw/gateway-clawtrate.log</p>`),
-        button("Done", { variant: "primary", to: "first" }),
-        "first",
-      ),
     phone: () =>
       mockApp() +
       dialog(
         "",
         "Connect a phone",
-        lede("Make a one-time code that Clawtrate on your iPhone can scan. It works once, for 10 minutes, and it can only ask to read."),
-        `<button type="button" class="button" data-variant="primary" data-size="lg" data-host="phoneCode">Make a code…</button>`,
-        "tailscale",
-      ),
-    "phone-code": () =>
-      mockApp() +
-      dialog("", "Connect a phone", phoneCode(`<p class="waiting" role="status"><span class="status-dot" data-status="connecting"></span>Waiting for the phone</p>`) + simulate("The iPhone scans the code", "phone-request"), "", "tailscale"),
-    "phone-request": () => mockApp() + dialog("", "Connect a phone", phoneCode(phoneRow()), "", "tailscale"),
-    "phone-overreach": () => mockApp() + dialog("", "Connect a phone", phoneCode(phoneRow({ more: true })), "", "tailscale"),
-    "phone-done": () =>
-      mockApp() +
-      dialog("", "Connect a phone", `<div class="s-found"><span class="empty-mark" data-tone="ok">${icon("check")}</span><h3 tabindex="-1">iPhone connected, read-only.</h3></div>`, button("Done", { variant: "primary", to: "tailscale" }), "tailscale"),
-    "phone-expired": () =>
-      mockApp() +
-      dialog(
+        note("", "Clawtrate doesn't make codes for phones yet.", "") +
+          `<p class="s-hint" style="text-align:left">A phone needs an encrypted address it can reach. Set one up with OpenClaw's network-exposure instructions.</p>` +
+          `<p class="s-links"><a class="button" data-size="sm" href="https://docs.openclaw.ai/gateway/security/network-exposure" target="_blank" rel="noreferrer noopener">OpenClaw's network-exposure instructions</a></p>` +
+          `<p class="s-hint" style="text-align:left">On the iPhone, scan or paste a setup code, then approve the phone on the gateway's computer. A setup code stays valid until it is used or expires, even after you close where it was shown.</p>`,
         "",
-        "Connect a phone",
-        `<div class="s-qr-gone"><span class="empty-mark">${icon("clock")}</span></div><p class="s-expiry">This code has expired.</p>`,
-        `<button type="button" class="button" data-variant="primary" data-size="lg" data-host="phoneCode">Make a new code…</button>`,
-        "tailscale",
+        "settings",
       ),
-    "phone-loopback": () =>
-      mockApp() +
-      dialog(
-        "",
-        "Connect a phone",
-        note("warn", "A phone can't reach this gateway yet.", "It only listens on devbox itself.") +
-          actions(button("Turn on private access with Tailscale", { to: "tailscale" })) +
-          `<p class="s-hint" style="text-align:left">Or let OpenClaw listen on your local network. Run these on devbox yourself:</p>` +
-          command("openclaw config set gateway.bind lan", "Copy the first command") +
-          command("openclaw gateway restart", "Copy the second command") +
-          `<p class="s-hint" style="text-align:left">Anyone on that network can then reach the gateway's sign-in; it still needs a token or a pairing. Clawtrate doesn't change the gateway's bind for you.</p>`,
-        "",
-        "tailscale",
-      ),
-    tailscale: () => settings(gatewayRows()),
-    "tailscale-steps": () =>
-      settings(
-        gatewayRows({ sub: "Turning on…", disabled: true }) +
-          steps([
-            ["Checking Tailscale", "done"],
-            ["Turning on private access", "done"],
-            ["Restarting OpenClaw", "done"],
-            ["Checking the new address", "running"],
-            ["Checking the connection here", "waiting"],
-          ]),
-      ),
-    "tailscale-on": () => settings(gatewayRows({ tailscale: "on" })),
-    "tailscale-missing": () =>
-      settings(tailscaleFailure("Tailscale isn't installed on devbox.", "Install Tailscale on devbox and sign in, then turn this on again.", "Nothing was changed.", 0)),
-    "tailscale-stopped": () =>
-      settings(tailscaleFailure("Tailscale is stopped on devbox.", "Start Tailscale on devbox, then turn this on again.", "Nothing was changed.", 0)),
-    "tailscale-signedout": () =>
-      settings(tailscaleFailure("Tailscale is signed out on devbox.", "Sign in to Tailscale on devbox, then turn this on again.", "Nothing was changed.", 0)),
-    "tailscale-operator": () =>
-      settings(
-        tailscaleFailure("OpenClaw can't use Tailscale on devbox.", "On devbox, run <code>sudo tailscale set --operator=$USER</code> yourself, then turn this on again.", "Nothing was changed.", 0),
-      ),
-    "tailscale-https": () =>
-      settings(
-        tailscaleFailure(
-          "HTTPS isn't turned on for this tailnet.",
-          "Turn on HTTPS certificates in your Tailscale admin console, then turn this on again.",
-          "The setting is back as it was, and the gateway answers again.",
-          3,
-        ),
-      ),
-    "tailscale-unconfirmed": () =>
-      settings(
-        tailscaleFailure(
-          "HTTPS isn't turned on for this tailnet.",
-          "Turn on HTTPS certificates in your Tailscale admin console, then turn this on again.",
-          "The setting is back as it was, but the gateway hasn't answered yet. Clawtrate keeps checking.",
-          3,
-        ),
-      ),
-    "tailscale-foreign": () =>
-      settings(
-        gatewayRows({ disabled: true }) +
-          note(
-            "warn",
-            "A Tailscale route to this gateway already exists.",
-            "Clawtrate didn't make it and leaves it alone. OpenClaw refuses connections through it unless its owner sets gateway.trustedProxies.",
-          ),
-      ),
-    "tailscale-outside": () => settings(gatewayRows({ tailscale: "on", disabled: true, sub: "On, set outside Clawtrate. Change it on devbox." })),
+    settings: () => settings(gatewayRows()),
   };
 
   // The desktop's pasted code and the iPhone's screens, in the column. -------------
+
+  const addrRaw = params.get("addr") || "gateway.example";
+  const addr = esc(addrRaw);
+  const futureLabel = `<p class="s-future" role="note">Future example: this state needs a step that isn't proven yet.</p>`;
 
   Object.assign(SCREENS, {
     code: () =>
@@ -803,7 +596,7 @@
       mark() +
       title("Use a setup code") +
       `<label class="field"><span class="s-field-label">Setup code</span>` +
-      `<textarea class="s-code-field" id="setup-code" spellcheck="false" placeholder="Paste a code from openclaw qr or from Connect a phone"></textarea></label>` +
+      `<textarea class="s-code-field" id="setup-code" spellcheck="false" placeholder="Paste a setup code"></textarea></label>` +
       `<p class="s-hint" id="code-where" role="status"></p>` +
       actions(`<a class="button" data-variant="primary" data-size="lg" id="code-connect" aria-disabled="true">Connect</a>`) +
       `<p class="s-proto-hint">Prototype: paste a sample code to see it read. <button type="button" class="button" data-size="sm" data-sample-code>Paste a sample code</button></p>`,
@@ -812,28 +605,25 @@
       back("code") +
       mark() +
       title("Approve this device") +
-      lede("devbox.local has not seen this device before. Approve it once on the gateway's machine and Clawtrate connects by itself.") +
+      lede(`${addr} has not seen this device before. Ask the gateway's owner to approve it; Clawtrate then connects by itself.`) +
+      `<p class="s-hint">Run this on the gateway's computer, with <code>--profile &lt;name&gt;</code> if the gateway doesn't use the default profile.</p>` +
       command(`openclaw devices approve ${REQUEST}`, "Copy approve command") +
       `<p class="waiting" role="status"><span class="status-dot" data-status="connecting"></span>Waiting for approval, checking again in 4s</p>` +
       `<ul class="scopes"><li>${icon("read")}Read bots, tasks and conversations</li></ul>` +
-      `<p class="connect-foot">Request e5eb4aa8 · this computer's device code ${DEVICE}</p>` +
-      simulate("The gateway's owner approves", "app"),
+      `<p class="connect-foot">Request e5eb4aa8 · connecting to ${addr}</p>`,
 
     iphone: () =>
       brand() +
       `<h2 class="s-title s-question" tabindex="-1" data-s-title>Connect to your OpenClaw</h2>` +
-      actions(
-        button("Scan a setup code", { variant: "primary", to: "iphone-review" }),
-        button("Paste a setup code", { to: "iphone-review" }),
-      ) +
-      hint("Make a code in Clawtrate on your computer, in Settings, Connect a phone.") +
+      actions(button("Scan a setup code", { variant: "primary", to: "iphone-review" }), button("Paste a setup code", { to: "iphone-review" })) +
+      hint("Get a setup code from the gateway's owner, made on the gateway's computer.") +
       `<p class="s-links"><a class="button" data-variant="quiet" data-size="sm" href="connect.html?width=phone">Advanced</a></p>`,
 
     "iphone-review": () =>
       back("iphone") +
       mark() +
       title("Connect to devbox?") +
-      `<p class="s-where">This code leads to devbox.tailnet.example, through Tailscale. Your phone needs Tailscale on.</p>` +
+      `<p class="s-where">This code leads to devbox.tailnet.example, over an encrypted connection.</p>` +
       `<p class="s-expiry">Expires at 20:41 (in 9 minutes)</p>` +
       actions(button("Connect", { variant: "primary", to: "iphone-waiting" }), button("Cancel", { to: "iphone" })),
 
@@ -841,18 +631,18 @@
       back("iphone-review") +
       mark() +
       title("Waiting for approval") +
-      lede("Approve this iPhone in Clawtrate on your computer. Its device code is:") +
+      `<p class="s-where">Connecting to devbox.tailnet.example</p>` +
+      lede("Ask the gateway's owner to approve this iPhone. Its device code is:") +
       deviceCode(PHONE_DEVICE, "This iPhone's device code") +
-      `<p class="s-hint">Or, on the gateway's computer, run:</p>` +
+      `<p class="s-hint">On the gateway's computer, with <code>--profile &lt;name&gt;</code> if the gateway doesn't use the default profile:</p>` +
       command(`openclaw devices approve ${PHONE_REQUEST}`, "Copy approve command") +
-      `<p class="waiting" role="status"><span class="status-dot" data-status="connecting"></span>Waiting for approval, checking again in 4s</p>` +
-      simulate("The gateway's owner approves", "iphone-done"),
+      `<p class="waiting" role="status"><span class="status-dot" data-status="connecting"></span>Waiting for approval, checking again in 4s</p>`,
 
     "iphone-done": () =>
+      futureLabel +
       mark() +
       title("Connected, read-only") +
-      lede("Clawtrate on this iPhone can read your bots, tasks and conversations. Sending or changing anything is asked for later.") +
-      actions(`<a class="button" data-variant="primary" data-size="lg" href="app.html?state=readonly&width=phone">Open Clawtrate</a>`),
+      lede("Clawtrate on this iPhone can read your bots, tasks and conversations. Sending or changing anything is asked for later."),
   });
 
   // Render ------------------------------------------------------------------------
@@ -942,14 +732,12 @@
     "looking-there": params.get("next") || "found-there",
     "connecting-here": "app",
     "connecting-there": "app",
-    installing: "connecting-here",
-    "installing-there": "connecting-there",
-    "tailscale-steps": "tailscale-on",
+    installing: "found",
   };
   if (params.get("play") === "1" && id in NEXT) {
     setTimeout(() => {
       const to = NEXT[id];
-      location.href = to === "app" ? "app.html?state=readonly" : go(to, { ...(to.startsWith("connecting") ? { play: "1" } : {}), name: typed, ...(windows ? { os: "windows" } : {}) });
+      location.href = to === "app" ? "app.html?state=readonly" : go(to, { name: typedRaw });
     }, 2400);
   }
 
@@ -968,10 +756,10 @@
         input.setAttribute("aria-describedby", "ssh-error");
         return input.focus();
       }
-      const host = value.split("@").pop().split(".")[0];
-      if (host === "newbox") location.href = go("hostkey", { name: host });
-      else if (host === "jumpbox") location.href = go("there-config", { name: host });
-      else location.href = go("looking-there", { play: "1", name: host, next: host === "emptybox" ? "notfound-there" : "found-there" });
+      // The host confirms the account before anything runs there; the
+      // prototype's sample names choose the walk.
+      if (value.split("@").pop().split(".")[0] === "jumpbox") location.href = go("there-config", { name: value });
+      else location.href = go("there", { name: value, keep: value, host: "sshAccount" });
     });
   }
 
@@ -984,41 +772,49 @@
     const allow = (ok) => {
       if (ok) {
         connect.removeAttribute("aria-disabled");
-        connect.href = go("code-pairing");
+        connect.href = go("code-pairing", { addr: connect.dataset.addr || "" });
       } else {
         connect.setAttribute("aria-disabled", "true");
         connect.removeAttribute("href");
       }
     };
+    // Section 13: a well-formed code, a wss:// address the host can verify,
+    // no credentials, query, fragment or path, not loopback, not expired.
+    const LOOPBACK = (h) => h === "localhost" || h.endsWith(".localhost") || /^127\./.test(h) || h === "[::1]" || h === "::1" || h === "0.0.0.0";
     const read = () => {
       const text = codeField.value.trim();
       if (!text) return ((where.textContent = ""), allow(false));
+      let json;
       try {
         if (!/^[A-Za-z0-9_-]+$/.test(text)) throw new Error("shape");
-        const json = JSON.parse(atob(text.replace(/-/g, "+").replace(/_/g, "/")));
-        const url = new URL(json.url);
-        if (!["ws:", "wss:"].includes(url.protocol) || url.username || url.password || (url.pathname && url.pathname !== "/")) throw new Error("address");
-        if (typeof json.expiresAtMs !== "number" || json.expiresAtMs <= Date.now()) {
-          where.textContent = "This code has expired. Make a new one on the gateway's computer.";
-          return allow(false);
-        }
-        if (["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) {
-          where.textContent = `This code leads to the computer it was made on, ${url.hostname}. It works only there.`;
-          return allow(false);
-        }
-        where.textContent =
-          url.protocol === "wss:"
-            ? `Connects to ${url.hostname}, over an encrypted connection. Expires at 20:41.`
-            : `Connects to ${url.hostname} on your local network, unencrypted until paired. Expires at 20:41.`;
-        allow(true);
+        json = JSON.parse(atob(text.replace(/-/g, "+").replace(/_/g, "/")));
+        if (!json || typeof json.url !== "string" || typeof json.bootstrapToken !== "string" || !json.bootstrapToken || typeof json.expiresAtMs !== "number") throw new Error("shape");
       } catch {
         where.textContent = "That isn't a setup code Clawtrate can use.";
-        allow(false);
+        return allow(false);
       }
+      let url;
+      try {
+        url = new URL(json.url);
+      } catch {
+        where.textContent = "That isn't a setup code Clawtrate can use.";
+        return allow(false);
+      }
+      if (url.protocol !== "wss:" || url.username || url.password || url.search || url.hash || (url.pathname && url.pathname !== "/") || LOOPBACK(url.hostname)) {
+        where.textContent = "That address can't be used safely. Clawtrate needs an encrypted address that isn't this computer's own.";
+        return allow(false);
+      }
+      if (json.expiresAtMs <= Date.now()) {
+        where.textContent = "This code has expired. Make a new one on the gateway's computer.";
+        return allow(false);
+      }
+      where.textContent = `Connects to ${url.hostname}, over an encrypted connection. Expires at 20:41.`;
+      connect.dataset.addr = url.hostname;
+      allow(true);
     };
     codeField.addEventListener("input", read);
     root.querySelector("[data-sample-code]")?.addEventListener("click", () => {
-      codeField.value = btoa(JSON.stringify({ url: "ws://devbox.local:18789", bootstrapToken: "sample", expiresAtMs: FAR_FUTURE }))
+      codeField.value = btoa(JSON.stringify({ url: "wss://gateway.example", bootstrapToken: "sample", expiresAtMs: FAR_FUTURE }))
         .replace(/\+/g, "-")
         .replace(/\//g, "_")
         .replace(/=+$/, "");
@@ -1029,10 +825,6 @@
     });
   }
 
-  // Keep the data: the struck-out line follows the checkbox.
-  document.getElementById("keep-data")?.addEventListener("change", (event) => {
-    location.href = go("uninstall", event.target.checked ? { keep: "1" } : {});
-  });
 
   // Radio rows: choosing one enables what waits for it.
   root.querySelectorAll("[data-radio]").forEach((row, _i, rows) =>

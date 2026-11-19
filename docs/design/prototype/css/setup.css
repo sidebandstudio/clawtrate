@@ -311,32 +311,8 @@
   color: var(--text-faint);
 }
 
-/* new: a setup code's QR. Black on white in both themes, with a quiet zone. */
-.s-qr {
-  display: block;
-  width: 200px;
-  height: 200px;
-  margin: var(--space-3) auto 0;
-  padding: 16px;
-  border-radius: var(--radius-md);
-  background: #fff;
-}
 
-.s-qr svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
 
-.s-qr-gone {
-  display: grid;
-  place-items: center;
-  width: 200px;
-  height: 200px;
-  margin: var(--space-3) auto 0;
-  border-radius: var(--radius-md);
-  background: var(--bg-bubble);
-}
 
 /* new: a countdown, tabular; warn in its last minute. */
 .s-expiry {
@@ -347,9 +323,6 @@
   text-align: center;
 }
 
-.s-expiry[data-tone="warn"] {
-  color: var(--warn);
-}
 
 .s-where {
   margin: 0;
@@ -358,21 +331,9 @@
   text-align: center;
 }
 
-.s-code {
-  margin: var(--space-3) 0 0;
-}
 
-.s-code code {
-  font-size: var(--text-xs);
-}
 
-.s-request {
-  margin: var(--space-4) 0 0;
-}
 
-.s-request .b-choice {
-  cursor: default;
-}
 
 /* A dialog in the prototype's frame: placed in the frame, not the window, so
    every width shows it as the product would. */
@@ -548,10 +509,6 @@
   height: 48px;
 }
 
-[data-width="phone"] .s-qr {
-  width: 176px;
-  height: 176px;
-}
 
 [data-width="phone"] .s-scrim {
   place-items: end stretch;
@@ -709,19 +666,6 @@ a.b-choice:hover {
   cursor: default;
 }
 
-/* A prototype control for an event from outside the app. Not product. */
-.s-simulate {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  margin: var(--space-5) 0 0;
-  padding: 8px 10px;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-md);
-  font-size: var(--text-xs);
-  color: var(--text-faint);
-}
 
 .s-proto-hint {
   margin: var(--space-4) 0 0;
@@ -734,20 +678,7 @@ a.b-choice:hover {
   text-align: center;
 }
 
-.s-qr {
-  position: relative;
-}
 
-.s-sample {
-  position: absolute;
-  top: -10px;
-  right: -10px;
-  padding: 2px 8px;
-  border-radius: var(--radius-pill);
-  background: var(--bg-inverse);
-  font-size: var(--text-xs);
-  color: var(--text-inverse);
-}
 
 /* new: a device code, compared by eye between two screens. */
 .s-device {
@@ -772,35 +703,24 @@ a.b-choice:hover {
   grid-template-columns: 1fr;
 }
 
-.s-check-first {
-  margin: 8px 2px;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
 
-.s-remove-list {
-  margin: 0 0 var(--space-2);
-  padding-left: 20px;
-  font-size: var(--text-md);
-  line-height: 1.6;
-}
 
-.s-kept {
-  color: var(--text-faint);
-  text-decoration: line-through;
-}
 
-.s-composer {
-  padding: 14px 18px;
-  border-radius: 24px;
-  background: var(--bg-inset);
-  font-size: var(--text-base);
-  color: var(--text-faint);
-}
 
 .s-strip-link {
   margin-right: 8px;
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   color: var(--text);
+}
+
+/* A state drawn only as a future example: it needs a step that isn't proven. */
+.s-future {
+  margin: 0 0 var(--space-4);
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  text-align: center;
 }
