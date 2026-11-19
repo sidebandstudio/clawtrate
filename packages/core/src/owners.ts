@@ -334,6 +334,44 @@ export const SAVE_OWNERS: Record<string, Owner> = {
   },
 };
 
+/** Captured host keys waiting for the person's decision, in the desktop app's SSH transport. */
+export const MAX_SSH_CAPTURES = 8;
+/** Routes one SSH transport knows the latest preparation of; an older route is stale. */
+export const MAX_SSH_ROUTES = 16;
+/** Forwards one SSH transport keeps open at once. */
+export const MAX_SSH_FORWARDS = 8;
+/** `ssh` processes one SSH transport runs at once. */
+export const MAX_SSH_PROCESSES = 32;
+/** Listeners to one forward's states. */
+export const MAX_FORWARD_LISTENERS = 8;
+/** The longest key a captured known-hosts line may carry, in base64 characters. */
+export const MAX_HOST_KEY_CHARS = 8192;
+
+/**
+ * The desktop app's SSH transport (`apps/desktop/src/main/ssh/`). It is not
+ * held by a bridge session yet, so nothing here is counted in a row of the
+ * host's worst case; the unit that puts it behind the interface gives its
+ * captured keys a row.
+ */
+export const SSH_TRANSPORT_OWNERS: Record<string, Owner> = {
+  captures: {
+    max: MAX_SSH_CAPTURES,
+    each: 3 * ID + MAX_HOST_KEY_CHARS + SHORT,
+    row: null,
+    opaque: "one public host key, at most `MAX_HOST_KEY_CHARS`, each dropped after 2 minutes",
+  },
+  forwards: { max: MAX_SSH_FORWARDS, each: N, row: null },
+  routes: { max: MAX_SSH_ROUTES, each: 2 * ID, row: null },
+};
+/** The `ssh` processes an SSH transport runs (`ProcessTable`), by PID. */
+export const SSH_PROCESS_OWNERS: Record<string, Owner> = {
+  running: { max: MAX_SSH_PROCESSES, each: N, row: null },
+};
+/** A forward's state listeners (`ForwardSupervisor`): functions. */
+export const SSH_FORWARD_OWNERS: Record<string, Owner> = {
+  listeners: { max: MAX_FORWARD_LISTENERS, each: N, row: null },
+};
+
 /**
  * The collection fields of each class whose instances the host keeps, from
  * the registry: what a class's source may declare. A field not named here is
@@ -345,6 +383,9 @@ export function ownerClassFields(): Record<string, string[]> {
     ViewerSession: new Set(Object.keys(VIEWER_OWNERS)),
     AttachmentStore: new Set(Object.keys(ATTACHMENT_OWNERS)),
     PendingSaves: new Set(Object.keys(SAVE_OWNERS)),
+    SshTransport: new Set(Object.keys(SSH_TRANSPORT_OWNERS)),
+    ProcessTable: new Set(Object.keys(SSH_PROCESS_OWNERS)),
+    ForwardSupervisor: new Set(Object.keys(SSH_FORWARD_OWNERS)),
   };
   for (const path of Object.keys(CLIENT_OWNERS)) {
     const parts = path.split(".");
