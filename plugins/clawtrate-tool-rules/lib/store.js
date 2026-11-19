@@ -464,24 +464,11 @@ export class DecisionLog {
     // Never rewrite a record that could not be read from what memory holds of it.
     if (!this.loaded) {
       this.#load();
+      // Still unread: memory keeps its bounds, the read error stays said, nothing is written.
+      if (!this.loaded) this.#trim();
       return;
     }
-    const cutoff = this.now() - this.retentionMs;
-    let drop = 0;
-    while (drop < this.records.length && this.records[drop].at < cutoff) drop += 1;
-    this.expiryPending ||= drop > 0;
-    drop = Math.max(drop, this.records.length - this.max);
-    if (drop > 0) {
-      for (const record of this.records.slice(0, drop)) {
-        this.byId.delete(record.id);
-        // An evicted line stays on disk until a rewrite: remember when the oldest expires.
-        if (this.evictedOldestAt === null || record.at < this.evictedOldestAt) {
-          this.evictedOldestAt = record.at;
-        }
-      }
-      this.records = this.records.slice(drop);
-      this.extraLines += drop;
-    }
+    this.#trim();
     // Rewritten only when asked (expiry) or when the file holds a fifth more
     // lines than records kept, never once per append.
     const bloated = this.extraLines > 0 && this.extraLines >= this.records.length / 5;
@@ -499,6 +486,28 @@ export class DecisionLog {
     } catch (error) {
       this.problem = `the decision record cannot be written (${error.code ?? "error"})`;
     }
+  }
+
+  /**
+   * Drop from memory the records past the retention or the cap, oldest first.
+   * What the file still holds of them is counted only once it was read.
+   */
+  #trim() {
+    const cutoff = this.now() - this.retentionMs;
+    let drop = 0;
+    while (drop < this.records.length && this.records[drop].at < cutoff) drop += 1;
+    if (this.loaded) this.expiryPending ||= drop > 0;
+    drop = Math.max(drop, this.records.length - this.max);
+    if (drop === 0) return;
+    for (const record of this.records.slice(0, drop)) {
+      this.byId.delete(record.id);
+      // An evicted line stays on disk until a rewrite: remember when the oldest expires.
+      if (this.loaded && (this.evictedOldestAt === null || record.at < this.evictedOldestAt)) {
+        this.evictedOldestAt = record.at;
+      }
+    }
+    this.records = this.records.slice(drop);
+    if (this.loaded) this.extraLines += drop;
   }
 
   /**

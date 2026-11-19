@@ -282,3 +282,25 @@ describe("a rewrite whose temporary file cannot be closed", () => {
     expect(reread.map((r) => r.id).sort()).toEqual([...ids].sort());
   });
 });
+
+describe("a decision record that cannot be read at all", () => {
+  it("keeps memory within its cap and the file untouched", () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    const file = join(dir, "decisions.jsonl");
+    const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+    const first = new DecisionLog(dir, { now: () => 1 });
+    for (let i = 0; i < 10; i += 1) first.add(fields);
+    const original = actual.readFileSync(file, "utf8");
+    io.path = file;
+    io.failures = Number.POSITIVE_INFINITY;
+    let now = 1;
+    const log = new DecisionLog(dir, { now: () => ++now, max: 10 });
+    const ids = Array.from({ length: 12 }, () => log.add(fields));
+    expect(log.list({ limit: 50 }).records.map((r) => r.id)).toEqual(ids.slice(2).reverse());
+    expect(log.byId.size).toBe(10);
+    expect(log.problem).toMatch(/cannot be read \(EIO\)/);
+    expect(actual.readFileSync(file, "utf8")).toBe(original);
+  });
+});
