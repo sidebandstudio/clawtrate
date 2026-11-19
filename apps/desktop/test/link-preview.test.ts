@@ -87,6 +87,45 @@ describe("a link's preview", () => {
     expect(asked).toEqual(["https://jump.example/"]);
   });
 
+  it("F-116: an inward address is refused however it is written: inside an IPv6 one, in another IPv4 spelling, with a zone or a trailing dot", async () => {
+    const { fetch, asked } = web({});
+    const loop = join4(127, 0, 0, 1);
+    const answers: Record<string, string> = {
+      "mapped.example": join6("", "", "ffff", join4(10, 0, 0, 1)),
+      "zoned.example": `${join6("fe80", "", "1")}%eth0`,
+      "garbled.example": "not-an-address",
+    };
+    const preview = createLinkPreviewer({
+      fetch,
+      lookup: async (host) => (host in answers ? [{ address: answers[host]!, family: 6 }] : PUBLIC),
+    });
+    const inward = [
+      `http://[${join6("", "", "ffff", loop)}]/`,
+      `http://[${join6("", "", "ffff", INSIDE)}]/`,
+      `http://[${join6("", "", loop)}]/`,
+      `http://[${join6("", "", "ffff", "0", loop)}]/`,
+      `http://[${join6("64", "ff9b", "", ROUTER)}]/`,
+      `http://[${join6("2002", "a00", "8", "", "1")}]/`,
+      `http://[${join6("", "")}]/`,
+      `http://[${join6("fe80", "", "1")}%25eth0]/`,
+      `http://${["0x7f", "1"].join(".")}/`,
+      `http://${String(127 * 2 ** 24 + 1)}/`,
+      `http://${["0177", "0", "0", "1"].join(".")}/`,
+      `http://${join4(0, 0, 0, 0)}/`,
+      "http://localhost./",
+      "http://printer.local./",
+      "http://mapped.example/",
+      "http://zoned.example/",
+      "http://garbled.example/",
+    ];
+    for (const url of inward) expect(await preview(url), url).toEqual({ status: "none", url });
+    expect(asked).toEqual([]);
+    // The same check, on the parsed address.
+    expect(isPrivateAddress(join6("", "", "ffff", loop))).toBe(true);
+    expect(isPrivateAddress(`[${join6("fe80", "", "1")}%eth0]`)).toBe(true);
+    expect(isPrivateAddress(join6("", "", "ffff", "203.0.113.7"))).toBe(false);
+  });
+
   it("F-116: a picture over 512 KB, or of another type, is left out; a page that isn't HTML has no preview", async () => {
     const { fetch } = web({
       "https://a.example/": html(

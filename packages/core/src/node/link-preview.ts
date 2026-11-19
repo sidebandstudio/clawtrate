@@ -12,7 +12,6 @@
 // 8 seconds in all.
 
 import { lookup as dnsLookup } from "node:dns/promises";
-import { isIP } from "node:net";
 import type { LinkPreview, LinkPreviewer } from "../host.ts";
 
 export const PREVIEW_PAGE_BYTES = 524_288;
@@ -24,48 +23,150 @@ const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 type Lookup = (hostname: string) => Promise<{ address: string; family: number }[]>;
 type Fetch = typeof globalThis.fetch;
 
-function v4(address: string): number[] | null {
-  const parts = address.split(".").map(Number);
-  return parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)
-    ? parts
-    : null;
+/** An address as numbers: four bytes, or eight 16-bit words. */
+export type ParsedAddress = { family: 4; bytes: number[] } | { family: 6; words: number[] };
+
+/**
+ * An IPv4 address in any spelling the resolver and the URL parser accept: one
+ * to four parts, each decimal, octal (leading 0) or hexadecimal (0x), the last
+ * filling the bytes left. Null when it is not one.
+ */
+function parseIPv4(text: string): number[] | null {
+  const parts = text.split(".");
+  if (parts.length === 0 || parts.length > 4 || parts.some((part) => part === "")) return null;
+  const values: number[] = [];
+  for (const part of parts) {
+    let value: number;
+    if (/^0x[0-9a-f]*$/i.test(part))
+      value = part.length === 2 ? 0 : Number.parseInt(part.slice(2), 16);
+    else if (/^0[0-7]+$/.test(part)) value = Number.parseInt(part.slice(1), 8);
+    else if (/^(0|[1-9][0-9]*)$/.test(part)) value = Number(part);
+    else return null;
+    if (!Number.isSafeInteger(value)) return null;
+    values.push(value);
+  }
+  const last = values.pop()!;
+  if (values.some((value) => value > 255)) return null;
+  if (last >= 256 ** (4 - values.length)) return null;
+  const bytes = [...values];
+  for (let shift = 3 - values.length; shift >= 0; shift -= 1)
+    bytes.push(Math.floor(last / 256 ** shift) % 256);
+  return bytes;
 }
 
-/** An address on this machine or a network that is not the public internet. */
-export function isPrivateAddress(address: string): boolean {
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
-  const four = v4(mapped ? mapped[1]! : address);
-  if (four) {
-    const [a, b] = four as [number, number, number, number];
-    return (
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 192 && b === 0) ||
-      (a === 198 && (b === 18 || b === 19)) ||
-      a >= 224
-    );
+/** An IPv6 address, with `::` and a dotted IPv4 tail, as eight words. Null when it is not one. */
+function parseIPv6(text: string): number[] | null {
+  let body = text;
+  const tail: number[] = [];
+  const dotted = /^(.*:)([^:]*\.[^:]*)$/.exec(body);
+  if (dotted) {
+    const four = /^\d+\.\d+\.\d+\.\d+$/.test(dotted[2]!) ? parseIPv4(dotted[2]!) : null;
+    if (!four) return null;
+    tail.push((four[0]! << 8) | four[1]!, (four[2]! << 8) | four[3]!);
+    body = dotted[1]!.endsWith("::") ? dotted[1]! : dotted[1]!.slice(0, -1);
   }
-  const lower = address.toLowerCase();
+  const halves = body.split("::");
+  if (halves.length > 2) return null;
+  const words = (half: string) => (half === "" ? [] : half.split(":"));
+  const head = words(halves[0]!);
+  const rest = halves.length === 2 ? words(halves[1]!) : [];
+  const all = [...head, ...rest];
+  if (all.some((word) => !/^[0-9a-f]{1,4}$/i.test(word))) return null;
+  const count = all.length + tail.length;
+  if (halves.length === 1 ? count !== 8 : count > 7) return null;
+  const fill = new Array<number>(8 - count).fill(0);
+  const out = [
+    ...head.map((w) => Number.parseInt(w, 16)),
+    ...(halves.length === 2 ? fill : []),
+    ...rest.map((w) => Number.parseInt(w, 16)),
+    ...tail,
+  ];
+  return out.length === 8 ? out : null;
+}
+
+/**
+ * An address written as text, in brackets or not, with or without a zone
+ * (after a `%`), as the address it is; null when the text is not an address.
+ */
+export function parseAddress(text: string): ParsedAddress | null {
+  const bare = text
+    .trim()
+    .replace(/^\[|\]$/g, "")
+    .replace(/%.*$/, "");
+  if (bare.includes(":")) {
+    const words = parseIPv6(bare);
+    return words ? { family: 6, words } : null;
+  }
+  const bytes = parseIPv4(bare);
+  return bytes ? { family: 4, bytes } : null;
+}
+
+function privateIPv4([a, b]: number[]): boolean {
   return (
-    lower === "::" ||
-    lower === "::1" ||
-    /^f[cd]/.test(lower) ||
-    /^fe[89ab]/.test(lower) ||
-    /^ff/.test(lower)
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b! >= 64 && b! <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b! >= 16 && b! <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 192 && b === 0) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a! >= 224
   );
 }
+
+/** The IPv4 address an IPv6 one carries: mapped, compatible, NAT64 or 6to4. */
+function embeddedIPv4(w: number[]): number[] | null {
+  const four = (hi: number, lo: number) => [hi >> 8, hi & 255, lo >> 8, lo & 255];
+  const zeros = (n: number) => w.slice(0, n).every((word) => word === 0);
+  if (zeros(5) && w[5] === 0xffff) return four(w[6]!, w[7]!); // IPv4-mapped
+  if (zeros(6)) return four(w[6]!, w[7]!); // IPv4-compatible, and the unspecified and loopback addresses
+  if (zeros(4) && w[4] === 0xffff && w[5] === 0) return four(w[6]!, w[7]!); // IPv4-translated
+  if (w[0] === 0x64 && w[1] === 0xff9b && w.slice(2, 6).every((word) => word === 0))
+    return four(w[6]!, w[7]!); // the well-known NAT64 prefix
+  if (w[0] === 0x2002) return four(w[1]!, w[2]!); // 6to4
+  return null;
+}
+
+/**
+ * An address on this machine or a network that is not the public internet:
+ * loopback, unspecified, private, shared (carrier-grade), link-local,
+ * unique-local, site-local, multicast and the like, in IPv4 or IPv6, including
+ * an IPv4 address an IPv6 one carries. Decided on the parsed address; text
+ * that is not an address counts as private, so nothing unread is reached.
+ */
+export function isPrivateAddress(text: string): boolean {
+  const parsed = parseAddress(text);
+  if (!parsed) return true;
+  if (parsed.family === 4) return privateIPv4(parsed.bytes);
+  const w = parsed.words;
+  const embedded = embeddedIPv4(w);
+  if (embedded) return privateIPv4(embedded) || w.every((word, i) => i === 7 || word === 0);
+  return (
+    (w[0]! & 0xfe00) === 0xfc00 || // unique-local (the first 7 bits 1111110)
+    (w[0]! & 0xffc0) === 0xfe80 || // link-local (the first 10 bits 1111111010)
+    (w[0]! & 0xffc0) === 0xfec0 || // site-local (the first 10 bits 1111111011)
+    (w[0]! & 0xff00) === 0xff00 || // multicast (the first byte all ones)
+    (w[0] === 0x64 && w[1] === 0xff9b && w[2] === 1) || // the local NAT64 prefix
+    (w[0] === 0x2001 && w[1] === 0) || // Teredo: carries an address it does not show
+    (w[0] === 0x100 && w.slice(1, 4).every((word) => word === 0)) // the discard prefix
+  );
+}
+
+/** A host name as names compare: lower case, without the trailing dots of a rooted name. */
+const plainName = (name: string) => name.toLowerCase().replace(/\.+$/, "");
+
+const INWARD_NAMES = /(^|\.)(localhost|local|internal|home\.arpa|localdomain)$/;
 
 async function publicTarget(url: URL, lookup: Lookup): Promise<boolean> {
   if (url.protocol !== "http:" && url.protocol !== "https:") return false;
   if (url.username || url.password) return false;
-  const host = url.hostname.replace(/^\[|\]$/g, "");
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local")) return false;
-  const addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await lookup(host);
+  const host = plainName(url.hostname.replace(/^\[|\]$/g, ""));
+  const literal = parseAddress(host);
+  if (literal) return !isPrivateAddress(host);
+  if (!host || INWARD_NAMES.test(host)) return false;
+  const addresses = await lookup(host);
   return addresses.length > 0 && addresses.every((each) => !isPrivateAddress(each.address));
 }
 
