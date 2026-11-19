@@ -285,6 +285,25 @@ test("F-190 F-193: a run opens its conversation as the run recorded it, from the
   await expect(task).toBeVisible();
   await task.click();
   await expect(view().getByTestId("scheduled-message")).toContainText("Summarise my notes. #steps");
+  // The gateway normalizes an unbound current target back to isolated.
+  const key = `agent:marlow:changed-target:${STAMP}`;
+  await call("sessions.create", { key, agentId: "marlow" });
+  await call("cron.update", {
+    id: job.id,
+    patch: { sessionTarget: "current", sessionKey: key },
+  });
+  expect(await call("cron.get", { id: job.id })).toMatchObject({
+    sessionTarget: "current",
+    sessionKey: key,
+  });
+  await view()
+    .getByRole("button", { name: `Back to ${name}, all runs` })
+    .click();
+  await expect(view().getByTestId("routine-facts")).toContainText(
+    "The conversation it was made in",
+  );
+  await view().getByTestId("run-row").first().click();
+  await expect(view().getByTestId("scheduled-message")).toContainText("Summarise my notes. #steps");
 });
 
 test("F-190: shared routine runs open the recorded conversation", async () => {

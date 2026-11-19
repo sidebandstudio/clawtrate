@@ -152,6 +152,20 @@ describe("F-197: occurrences", () => {
       "2026-03-10T06:30:00.000Z",
     ]);
   });
+  it("lists distinct instants in order when spring wall times overlap", () => {
+    const overlapping = routine({
+      schedule: schedule({ expr: "0,30 1,2,3 14 3 *", tz: NY }),
+      nextRunAt: Date.parse("2027-03-14T06:00:00Z"),
+    });
+    expect(iso(occurrences(overlapping, overlapping.nextRunAt!, Date.parse("2027-03-15")))).toEqual(
+      [
+        "2027-03-14T06:00:00.000Z",
+        "2027-03-14T06:30:00.000Z",
+        "2027-03-14T07:00:00.000Z",
+        "2027-03-14T07:30:00.000Z",
+      ],
+    );
+  });
   it("run a time the clock passes twice (fall back) once, the first time, as the gateway does", () => {
     const daily = routine({
       schedule: schedule({ expr: "30 1 * * *", tz: NY }),

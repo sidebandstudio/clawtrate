@@ -306,8 +306,8 @@ export function occurrences(routine: Routine, from: number, to: number): number[
 }
 
 function scheduled(schedule: RoutineSchedule, next: number, from: number, to: number): number[] {
-  const out: number[] = [];
   if (schedule.kind === "every") {
+    const out: number[] = [];
     const step = schedule.everyMs!;
     let at = next + Math.ceil((from - next) / step) * step;
     while (at < to && out.length < 2_000) {
@@ -319,6 +319,7 @@ function scheduled(schedule: RoutineSchedule, next: number, from: number, to: nu
   const cron = parseCron(schedule.expr!)!;
   const tz = schedule.tz!;
   const start = partsIn(from, tz);
+  const times = new Set<number>();
   for (let offset = 0; offset * DAY <= to - from + DAY; offset += 1) {
     const date = new Date(Date.UTC(start.year, start.month - 1, start.day + offset));
     const [year, month, day, weekday] = [
@@ -341,10 +342,11 @@ function scheduled(schedule: RoutineSchedule, next: number, from: number, to: nu
         const earlier = partsIn(at - HOUR, tz);
         if (earlier.hour === hour && earlier.minute === minute && earlier.day === wall.day)
           at -= HOUR;
-        if (at >= from && at < to && out.length < 2_000) out.push(at);
+        if (at >= from && at < to) times.add(at);
       }
   }
-  return out;
+  // A skipped wall time can land on another occurrence after the gap.
+  return [...times].sort((a, b) => a - b).slice(0, 2_000);
 }
 
 /**

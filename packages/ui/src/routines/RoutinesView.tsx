@@ -521,17 +521,18 @@ function RunView({
   const bridge = useBridge();
   const command = routine.payload === "other";
   const isolated = run.sessionKey?.includes(`:cron:${run.jobId}:run:`);
-  // A current target runs detached. Its execution key is not the bound conversation.
-  const bound =
-    routine.updatedAt === null || routine.updatedAt <= run.runAt + (run.durationMs ?? 0)
-      ? routine.sharedSessionKey
-      : undefined;
+  // A current target runs detached, so its execution key can look like an isolated run.
+  const targetAtRun =
+    routine.updatedAt === null || routine.updatedAt <= run.runAt + (run.durationMs ?? 0);
   const session = command
     ? null
     : (!isolated && run.sessionKey) ||
-      bound ||
+      (targetAtRun ? routine.sharedSessionKey : undefined) ||
       (routine.target === "main" && !isolated ? mainKey : null);
-  const shared = session !== null || routine.target !== "isolated";
+  const shared =
+    session !== null ||
+    routine.payload === "systemEvent" ||
+    (routine.target !== "isolated" && (!run.sessionKey || targetAtRun));
   const main = session === mainKey;
   const conversation = main
     ? `${bot.name}'s main conversation`
