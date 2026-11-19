@@ -16,6 +16,7 @@ import {
   payload,
   tempDir,
   type FeedServer,
+  type Handler,
 } from "./harness.ts";
 
 let server: FeedServer;
@@ -258,6 +259,44 @@ describe("the update engine against a local feed", () => {
     const started = Date.now();
     expect(await engine.check()).toEqual(failed("check", "timed-out"));
     expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  /** Sends a byte every 20 ms until the client goes, never ending the response. */
+  const trickle: Handler = (_request, response) => {
+    response.writeHead(200);
+    const timer = setInterval(() => response.write(" "), 20);
+    response.on("close", () => clearInterval(timer));
+  };
+
+  it("gives up on a feed that keeps trickling past its overall time", async () => {
+    server.route("/feed.json", trickle);
+    const { engine } = engineFor(server, dir.path, { limits: { feedTimeoutMs: 400 } });
+    expect(await engine.check()).toEqual(failed("check", "timed-out"));
+  });
+
+  it("gives up on a download that keeps trickling past its overall time, and deletes it", async () => {
+    server.route("/feed.json", json(feedFor(server.origin, "0.2.0", payloadEntry())));
+    server.route("/files/app.zip", trickle);
+    const { engine } = engineFor(server, dir.path, {
+      limits: { downloadTimeoutMs: 400 },
+    });
+    await engine.check();
+    expect(await engine.download()).toEqual(failed("download", "timed-out"));
+    expect(downloads()).toEqual([]);
+  });
+
+  it("stops a download the moment it passes the feed's size, not when the server stops", async () => {
+    server.route("/feed.json", json(feedFor(server.origin, "0.2.0", payloadEntry())));
+    server.route("/files/app.zip", (_request, response) => {
+      response.writeHead(200);
+      const timer = setInterval(() => response.write(Buffer.alloc(64)), 5);
+      response.on("close", () => clearInterval(timer));
+    });
+    // Without the early stop this would run to the overall deadline.
+    const { engine } = engineFor(server, dir.path, { limits: { downloadTimeoutMs: 3000 } });
+    await engine.check();
+    expect(await engine.download()).toEqual(failed("download", "size-mismatch"));
+    expect(downloads()).toEqual([]);
   });
 
   it("gives up on a download that stops sending, and deletes what it wrote", async () => {
