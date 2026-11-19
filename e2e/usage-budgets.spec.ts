@@ -259,18 +259,26 @@ async function keptBudgets(): Promise<Array<Json>> {
 }
 
 /** One bridge command, over the page's host's own socket, as another viewer sends it. */
-async function hostCommand(on: Page, command: Json): Promise<void> {
-  await on.evaluate(
+async function hostCommand(
+  on: Page,
+  command: Json,
+): Promise<{ ok: boolean; error: string | null }> {
+  return await on.evaluate(
     (command) =>
-      new Promise<void>((resolve, reject) => {
+      new Promise<{ ok: boolean; error: string | null }>((resolve, reject) => {
         const socket = new WebSocket(`ws://${location.host}/bridge`);
         socket.onmessage = (event) => {
-          const message = JSON.parse(String(event.data)) as { type: string; id?: string };
+          const message = JSON.parse(String(event.data)) as {
+            type: string;
+            id?: string;
+            ok?: boolean;
+            error?: string;
+          };
           if (message.type === "hello")
             socket.send(JSON.stringify({ type: "command", id: "do", command }));
           else if (message.id === "do") {
             socket.close();
-            resolve();
+            resolve({ ok: message.ok === true, error: message.error ?? null });
           }
         };
         socket.onerror = () => reject(new Error("bridge socket error"));
@@ -904,7 +912,7 @@ test("a read-only connection sees the figures and every budget, and cannot set o
   await settings.getByRole("button", { name: "Usage", exact: true }).click();
   await expect(settings.getByTestId("budgets")).toContainText("Otto · weekly");
   await expect(settings.getByTestId("budget-add")).toHaveCount(0);
-  // The host refuses the command even when a viewer sends it.
+  // The host refuses the command even when a viewer sends it, because it only reads.
   await expect(
     hostCommand(reader, {
       type: "changeBudget",
@@ -913,7 +921,10 @@ test("a read-only connection sees the figures and every budget, and cannot set o
         budget: { botId: "pip", routineId: null, period: "daily", tokens: 5_000, timeZone },
       },
     }),
-  ).resolves.toBeUndefined();
+  ).resolves.toEqual({
+    ok: false,
+    error: "This host only reads; it does not change budgets.",
+  });
   expect((await keptBudgets()).some((each) => each.botId === "pip")).toBe(false);
   await reader.keyboard.press("Escape");
 });
