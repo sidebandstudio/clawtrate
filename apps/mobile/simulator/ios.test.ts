@@ -179,7 +179,9 @@ const HIDDEN_LINK = `[${HIDDEN_LINK_TEXT}](https://example.com/report)`;
 const MAIL_LINE = "Write [to the team](mailto:someone@example.com) for a copy.";
 let browserUrl = "";
 let browserGet = false;
+let browserRequests = 0;
 const browser = createServer((req, res) => {
+  browserRequests += 1;
   if (req.method === "GET" && req.url === "/clawtrate-link-check") {
     browserGet = req.headers.authorization === undefined && req.headers.cookie === undefined;
   }
@@ -632,6 +634,8 @@ describe("the iOS app", () => {
       HIDDEN_LINK,
       MAIL_LINE,
       `The setup token was ${env.token}.`,
+      // Its text is the listener's address; its link adds a slash, so it asks first.
+      `[${browserUrl}](${browserUrl}/)`,
       browserUrl,
     ])
       await inject(reading.key, message);
@@ -702,6 +706,20 @@ describe("the iOS app", () => {
       notSee(`.*${lit(env.token)}.*`),
       scrollTo({ text: lit(browserUrl) }, "DOWN"),
     ]);
+    // A link whose text is another address asks too; Cancel sends the listener nothing.
+    const lookalikeText = `${lit(browserUrl)} \\(${lit(new URL(browserUrl).host)}\\)`;
+    await steps("lookalike-in-view", [scrollTo({ text: lookalikeText }, "UP")]);
+    const lookalike = (await boundsOf(new RegExp(`^${lookalikeText}`)))!;
+    await steps("lookalike-link", [
+      { tapOn: { point: `${lookalike.x1 + 24},${lookalike.y1 + 10}` } },
+      waitFor(lit(LINK_WORDS.ask), 10_000),
+      see(lit(`${browserUrl}/`)),
+      tap(lit(LINK_WORDS.cancel)),
+      waitGone(lit(LINK_WORDS.ask), 10_000),
+      see({ id: "transcript" }),
+      scrollTo({ text: lit(browserUrl) }, "DOWN"),
+    ]);
+    expect(browserRequests).toBe(0);
     // An address written as itself opens in the system browser without asking:
     // the system starts Safari, which was not running before. The system says
     // so; the driver is not asked about a screen while Safari starts.

@@ -123,6 +123,18 @@ describe("the bot's markdown on iOS", () => {
     });
   });
 
+  it("asks first when the text differs from its address only in a path's case, a trailing slash or a query's case", () => {
+    for (const [shown, target] of [
+      ["http://127.0.0.1:47000/Notes", "http://127.0.0.1:47000/notes"],
+      ["http://127.0.0.1:47000/notes", "http://127.0.0.1:47000/notes/"],
+      ["http://127.0.0.1:47000/view?id=ABC", "http://127.0.0.1:47000/view?id=abc"],
+    ]) {
+      expect(parseMarkdown(`[${shown}](${target})`)[0]).toMatchObject({
+        children: [{ t: "link", plain: false }],
+      });
+    }
+  });
+
   it("shows raw HTML as text", () => {
     const html = parseMarkdown("<b>bold</b>")[0]!;
     expect(

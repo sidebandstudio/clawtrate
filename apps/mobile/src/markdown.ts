@@ -51,13 +51,12 @@ export function openableUrl(url: string): URL | null {
 }
 
 /** Whether a link's visible text is its own address (an autolink, or the address written out). */
-function shownAddress(text: string, url: string): boolean {
-  const trim = (value: string) => value.trim().replace(/\/$/, "").toLowerCase();
-  return (
-    trim(text) === trim(url) ||
-    trim(`https://${text}`) === trim(url) ||
-    trim(`http://${text}`) === trim(url)
-  );
+function shownAddress(text: string, destination: URL): boolean {
+  const label = text.trim();
+  const source =
+    openableUrl(label) ??
+    (/^www\./i.test(label) ? openableUrl(`${destination.protocol}//${label}`) : null);
+  return source?.href === destination.href;
 }
 
 /** The plain text of inlines. */
@@ -103,7 +102,7 @@ function inlines(nodes: PhrasingContent[]): Inline[] {
             t: "link",
             url: url.href,
             host: url.host,
-            plain: shownAddress(inlineText(children), node.url),
+            plain: shownAddress(inlineText(children), url),
             children,
           },
         ];
@@ -181,7 +180,7 @@ export function columnWidths(table: Extract<Block, { t: "table" }>, fontSize: nu
 
 /** What the app asks before it leaves for a link whose text is not its address. */
 export const LINK_WORDS = {
-  ask: "Open this link in your browser?",
+  ask: "Open this link?",
   open: "Open",
   cancel: "Cancel",
   /** VoiceOver's name for a link: its text, then where it goes. */
