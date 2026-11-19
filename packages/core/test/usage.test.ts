@@ -538,8 +538,51 @@ function fakeGateway(options: { identity?: boolean; meddle?: number; counting?: 
       assistant("m3", T + 1, 500),
       fromBot("m4", T + 2, "agent:pip:slow"),
       assistant("m4", T + 3, 300),
+      // A send the gateway delivered, whose run then failed: the result is an error that names
+      // the run (`sentBeforeError`), and the run's tokens are another bot's.
+      fromBot("m5", T + 4, "agent:pip:slow"),
+      assistant("m5", T + 5, 100),
+      // A send refused before delivery: its error names a run that no message started.
+      fromBot("m6", T + 6, "agent:pip:slow"),
+      assistant("m6", T + 7, 100),
     ],
-    "agent:pip:slow": [person("p2", T), sendResult("agent:marlow:other", null, "accepted")],
+    "agent:pip:slow": [
+      person("p2", T),
+      sendResult("agent:marlow:other", null, "accepted"),
+      {
+        role: "toolResult",
+        toolName: "sessions_send",
+        isError: false,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "error",
+              sentBeforeError: true,
+              runId: "m5",
+              sessionKey: "agent:marlow:other",
+              error: "after delivery",
+            }),
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "sessions_send",
+        isError: false,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "error",
+              runId: "m6",
+              sessionKey: "agent:marlow:other",
+              error: "before delivery",
+            }),
+          },
+        ],
+      },
+    ],
     "agent:pip:ask-marlow": [
       person("p1", T),
       assistant("p1", T + 1),
@@ -1017,13 +1060,15 @@ describe("the usage engine", () => {
       ["agent:marlow:other", 800],
       ["agent:marlow:main", 400],
     ]);
-    // m1 (a person's, 200) and m3 (500) are people's; m2 (200) is the run Pip's send names; m4
-    // (300), another message from Pip that no result names, is not attributed.
+    // m1 (a person's, 200) and m3 (500) are people's; m2 (200) is the run Pip's send names, and
+    // m5 (100) the run a delivered send names before it failed; m4 (300), a message from Pip
+    // that no result names, and m6 (100), named only by a send refused before delivery, are not
+    // attributed.
     expect(report.sources).toEqual({
       people: 700,
       routines: 0,
-      bots: 200,
-      unattributed: 800,
+      bots: 300,
+      unattributed: 700,
       partial: false,
     });
     engine.onClose();
@@ -1139,7 +1184,7 @@ describe("the usage engine", () => {
     expect(counting.sources).toEqual({
       people: 700,
       routines: 0,
-      bots: 200,
+      bots: 300,
       unattributed: null,
       partial: true,
     });

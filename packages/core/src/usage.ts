@@ -395,7 +395,11 @@ export function sentRunIds(messages: unknown): Map<string, Set<string>> {
     const runId = result.runId;
     const key = typeof result.sessionKey === "string" ? result.sessionKey : details.sessionKey;
     if (typeof runId !== "string" || typeof key !== "string") continue;
-    if (result.status === "forbidden" || result.status === "error") continue;
+    if (
+      result.status === "forbidden" ||
+      (result.status === "error" && result.sentBeforeError !== true)
+    )
+      continue;
     const set = out.get(key) ?? new Set<string>();
     set.add(runId);
     out.set(key, set);
