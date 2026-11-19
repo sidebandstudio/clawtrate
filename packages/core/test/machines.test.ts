@@ -915,6 +915,11 @@ describe("Settings, Machines: the engine", () => {
       engine(gw, { admin: true }).setMachineDefaults(NODE, "always", "h0"),
     ).rejects.toThrow(/changed since it was read/);
     expect(gw.calls.map(([m]) => m)).not.toContain("exec.approvals.node.set");
+    // A page that showed no revision can't overwrite a file that has one now.
+    await expect(
+      engine(gw, { admin: true }).setMachineDefaults(NODE, "always", null),
+    ).rejects.toThrow(/changed since it was read/);
+    expect(gw.calls.map(([m]) => m)).not.toContain("exec.approvals.node.set");
     gw.ignore.add("exec.approvals.node.set");
     await expect(
       engine(gw, { admin: true }).setMachineDefaults(NODE, "never", "h1"),

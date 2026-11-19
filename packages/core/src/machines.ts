@@ -907,7 +907,8 @@ export class MachinesEngine {
       );
     const current = rec(await get());
     const hash = str(current.hash);
-    if (expectedHash !== null && hash !== expectedHash)
+    // The revision the page showed, even none: a file that has one since was changed by someone else.
+    if (hash !== expectedHash)
       throw new PlacementWriteError(
         "This file changed since it was read. It has been read again; choose again.",
       );
