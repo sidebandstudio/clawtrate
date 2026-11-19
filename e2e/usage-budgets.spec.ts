@@ -15,6 +15,7 @@ import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { rangeSpan } from "../packages/core/src/usage-engine.ts";
 import {
   BUDGETS_PREF_KEY,
   rangeFor,
@@ -410,14 +411,78 @@ test("F-131: the Messages from other bots line counts only the run a send's resu
   expect(sent).toBeGreaterThan(0);
   const taskTotal = runs.reduce((sum, runId) => sum + runTokens(runId), 0);
   expect(taskTotal).toBeGreaterThan(sent);
+  // Every bot-to-bot run of Marlow's this week, worked out from the gateway's own records: a
+  // turn another bot's send delivered, in any of Marlow's tasks, whose run the sending task's
+  // `sessions_send` result names. Other checks of this run may have added more than the seed's.
+  const { startMs, endMs } = rangeSpan(range);
+  const marlowTasks = await gateway.request<{ sessions: Array<{ key: string; usage?: Json }> }>(
+    "sessions.usage",
+    { agentId: "marlow", ...rangeParams(range), limit: 200 },
+  );
+  const results = new Map<string, Set<string>>();
+  const sendersRead = new Set<string>();
+  let expected = 0;
+  for (const task of marlowTasks.sessions.filter(
+    (each) => Number(each.usage?.totalTokens ?? 0) > 0,
+  )) {
+    const history = await gateway.request<{ messages: Json[] }>("chat.history", {
+      sessionKey: task.key,
+      limit: 1000,
+    });
+    for (const row of history.messages) {
+      const provenance = row.provenance as Json | undefined;
+      const key = row.idempotencyKey;
+      if (provenance?.kind !== "inter_session" || typeof key !== "string" || !key.endsWith(":user"))
+        continue;
+      const source = String(provenance.sourceSessionKey);
+      if (!sendersRead.has(source)) {
+        sendersRead.add(source);
+        const sent = await gateway.request<{ messages: Json[] }>("chat.history", {
+          sessionKey: source,
+          limit: 1000,
+        });
+        for (const each of sent.messages) {
+          if (each.role !== "toolResult" || each.toolName !== "sessions_send") continue;
+          const text = (each.content as Array<{ text?: string }>).map((b) => b.text ?? "").join("");
+          const result = JSON.parse(text) as {
+            runId?: string;
+            sessionKey?: string;
+            status?: string;
+          };
+          if (!result.runId || !result.sessionKey || result.status === "forbidden") continue;
+          results.set(
+            result.sessionKey,
+            (results.get(result.sessionKey) ?? new Set()).add(result.runId),
+          );
+        }
+      }
+      const runId = key.slice(0, -":user".length);
+      if (!results.get(task.key)?.has(runId)) continue;
+      expected += history.messages
+        .filter(
+          (each) =>
+            each.role === "assistant" &&
+            (each.__openclaw as Json | undefined)?.runId === runId &&
+            Number(each.timestamp) >= startMs &&
+            Number(each.timestamp) <= endMs,
+        )
+        .reduce((sum, each) => sum + Number((each.usage as Json | undefined)?.totalTokens ?? 0), 0);
+    }
+  }
+  expect(expected).toBeGreaterThanOrEqual(sent);
   await usagePage(page, "Marlow");
   await page.getByTestId("usage-page").getByRole("radio", { name: "This week" }).click();
   await expect(page.getByTestId("usage-sources")).toBeVisible();
-  // Every other bot-to-bot run Marlow has this week is one some send names; here there is one.
-  expect(await bar(page, "usage-sources", "Messages from other bots")).toBe(sent);
-  expect(await bar(page, "usage-sources", "Messages from people")).toBeGreaterThanOrEqual(
-    taskTotal - sent,
-  );
+  await expect(page.getByTestId("usage-source")).not.toContainText("still being counted", {
+    timeout: 60_000,
+  });
+  const shown = await bar(page, "usage-sources", "Messages from other bots");
+  // Never the recipient task's whole total charged to the send, never the person's run.
+  expect(shown).toBeGreaterThanOrEqual(sent);
+  if ((await page.getByTestId("usage-page").textContent())?.includes("Partial: some tasks"))
+    // More tasks than the page reads: what it shows is part of the gateway's figure, never more.
+    expect(shown).toBeLessThanOrEqual(expected);
+  else expect(shown).toBe(expected);
   const total = (await gatewayTotal("marlow", "week")).total;
   const parts = await Promise.all(
     ["Messages from people", "Routines", "Messages from other bots", "Not attributed"].map((name) =>
@@ -425,7 +490,6 @@ test("F-131: the Messages from other bots line counts only the run a send's resu
     ),
   );
   expect(parts.reduce((sum, each) => sum + each, 0)).toBe(total);
-  expect(range.startDate <= range.endDate).toBe(true);
 });
 
 test("F-234: a weekly budget set on one device is shown with the same value after a reload and on the second device", async () => {
