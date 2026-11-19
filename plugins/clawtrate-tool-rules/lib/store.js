@@ -528,14 +528,22 @@ export class DecisionLog {
 
   /**
    * Records newest first, filtered: `agentId`, `sessionKey`, `runId`,
-   * `before` (a time, exclusive), at most `limit`.
-   * @param {{ agentId?: string, sessionKey?: string, runId?: string, before?: number, limit: number }} filter
+   * `before` (a time, exclusive), at most `limit`. `cursor` is a record's id,
+   * from a page's `nextCursor`: the page goes on after that record in the
+   * list's own order, so records of the same millisecond are not skipped. A
+   * cursor whose record has left the record names nothing older: an empty page.
+   * @param {{ agentId?: string, sessionKey?: string, runId?: string, before?: number, cursor?: string, limit: number }} filter
    */
-  list({ agentId, sessionKey, runId, before, limit }) {
+  list({ agentId, sessionKey, runId, before, cursor, limit }) {
     const cutoff = this.now() - this.retentionMs;
     const out = [];
     let hasMore = false;
-    for (let i = this.records.length - 1; i >= 0; i -= 1) {
+    let start = this.records.length - 1;
+    if (cursor !== undefined) {
+      const after = this.byId.get(cursor);
+      start = after ? this.records.lastIndexOf(after) - 1 : -1;
+    }
+    for (let i = start; i >= 0; i -= 1) {
       const record = this.records[i];
       if (record.at < cutoff) break;
       if (before !== undefined && record.at >= before) continue;
@@ -548,6 +556,6 @@ export class DecisionLog {
       }
       out.push({ ...record });
     }
-    return { records: out, hasMore };
+    return { records: out, hasMore, ...(hasMore ? { nextCursor: out.at(-1).id } : {}) };
   }
 }

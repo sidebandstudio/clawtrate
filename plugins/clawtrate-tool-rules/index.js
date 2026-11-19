@@ -63,6 +63,8 @@ export const CHANGED_EVENT = "changed";
 /** How often expired decision records are removed and the rules file looked at. */
 export const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 const LIST_LIMIT = { default: 100, max: 500 };
+/** A page's `nextCursor`: the id of the last record it listed. */
+const CURSOR = /^[0-9a-f]{16}$/;
 /** The longest filter `decisions.list` takes. */
 const FILTER_MAX = 512;
 const ANSWERS = new Set(["allow-once", "allow-always", "deny", "timeout", "cancelled"]);
@@ -426,6 +428,16 @@ export function createToolRules(api, options = {}) {
     if (params.before !== undefined && !Number.isSafeInteger(params.before)) {
       throw new RequestError("INVALID_REQUEST", "bad_request", "before must be a time in ms");
     }
+    if (
+      params.cursor !== undefined &&
+      !(typeof params.cursor === "string" && CURSOR.test(params.cursor))
+    ) {
+      throw new RequestError(
+        "INVALID_REQUEST",
+        "bad_request",
+        "cursor must be a page's nextCursor as given",
+      );
+    }
     const limit = params.limit ?? LIST_LIMIT.default;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > LIST_LIMIT.max) {
       throw new RequestError(
@@ -434,10 +446,11 @@ export function createToolRules(api, options = {}) {
         `limit must be 1 to ${LIST_LIMIT.max}`,
       );
     }
-    const { records, hasMore } = log.list({ ...params, limit });
+    const { records, hasMore, nextCursor } = log.list({ ...params, limit });
     return {
       records,
       hasMore,
+      ...(nextCursor ? { nextCursor } : {}),
       retention: { days: RETENTION_MS / 86_400_000, maxRecords: MAX_DECISIONS },
     };
   });

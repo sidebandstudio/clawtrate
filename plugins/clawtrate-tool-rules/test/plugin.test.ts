@@ -742,3 +742,30 @@ describe("thirty days means thirty days", () => {
     expect(readFileSync(file, "utf8")).not.toContain("old-run");
   });
 });
+
+describe("paging the decision record", () => {
+  it("goes on from a cursor, so two decisions in one millisecond are both listed", async () => {
+    const h = host({ now: () => 5000, log: { now: () => 5000 } });
+    for (const runId of ["run-a", "run-b", "run-c"])
+      h.before("otto", "read", { path: "a" }, { runId });
+    const seen: string[] = [];
+    let cursor: unknown;
+    for (let page = 0; page < 5; page += 1) {
+      const answer = (await h.call("decisions.list", { limit: 1, ...(cursor ? { cursor } : {}) }))
+        .payload!;
+      seen.push(...(answer.records as { runId: string }[]).map((r) => r.runId));
+      if (!answer.hasMore) {
+        expect(answer.nextCursor).toBeUndefined();
+        break;
+      }
+      expect(answer.nextCursor).toMatch(/^[0-9a-f]{16}$/);
+      cursor = answer.nextCursor;
+    }
+    expect(seen).toEqual(["run-c", "run-b", "run-a"]);
+    // `before` stays a time filter beside it.
+    expect((await h.call("decisions.list", { before: 5000 })).payload!.records).toEqual([]);
+    expect((await h.call("decisions.list", { cursor: "not a cursor" })).error?.code).toBe(
+      "INVALID_REQUEST",
+    );
+  });
+});
