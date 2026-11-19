@@ -15,7 +15,19 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
-import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
+import {
+  AccountsEngine,
+  AdminNeededError,
+  type CreateBotInput,
+  type CreatedBot,
+} from "./accounts-engine.ts";
+import {
+  dismissCheckInSave,
+  loadCheckIns,
+  saveCheckIn,
+  type CheckInDraft,
+  type CheckInsContext,
+} from "./check-ins.ts";
 import {
   admitApproval,
   applyApprovalRequested,
@@ -3509,6 +3521,38 @@ export class ClawtrateClient {
     return this.accounts.removeFallbacks(botId);
   }
 
+  // Check-ins (`check-ins.ts`; automation.md section 13) ---------------------------------------
+
+  private checkInsContext(): CheckInsContext {
+    return {
+      request: (method, params) => this.request(method, params),
+      get: () => this.state.checkIns,
+      set: (checkIns) => this.store.update((state) => ({ ...state, checkIns })),
+      botIds: () => this.state.bots.map((bot) => bot.id),
+      admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
+      generation: () => this.generation,
+      now: () => this.now(),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    };
+  }
+
+  /** Read the bots' check-ins: their heartbeat jobs, the scheduler and their own settings. */
+  refreshCheckIns(): Promise<void> {
+    if (this.state.connection.status !== "connected") return Promise.resolve();
+    return loadCheckIns(this.checkInsContext());
+  }
+
+  /** Save one bot's check-ins; the outcome is `checkIns.save` with this `saveId`. */
+  saveCheckIn(saveId: string, botId: string, draft: CheckInDraft): Promise<void> {
+    if (!this.state.connection.canAdmin)
+      return Promise.reject(new AdminNeededError("Changing check-ins"));
+    return saveCheckIn(this.checkInsContext(), saveId, botId, draft);
+  }
+
+  dismissCheckInSave(saveId: string): void {
+    dismissCheckInSave(this.checkInsContext(), saveId);
+  }
+
   /** Read the bot list again, after a bot was created. */
   private async refreshBots(): Promise<void> {
     const generation = this.generation;
@@ -4166,6 +4210,7 @@ export class ClawtrateClient {
   /** What one gateway reported that must never be read against another. */
   private forgetGatewayState(): void {
     this.accounts.reset();
+    if (this.state.checkIns) this.store.update(({ checkIns: _, ...state }) => state);
     // A creation belongs to the gateway it was asked of; it is never asked of another.
     for (const timer of this.creationTimers.values()) clearTimeout(timer);
     this.creationTimers.clear();

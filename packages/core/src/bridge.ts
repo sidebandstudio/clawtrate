@@ -20,6 +20,7 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
+import { CHECKIN_EVERY, MAX_CHECKIN_PROMPT_CHARS } from "./check-ins.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -157,6 +158,11 @@ export type BridgeCommand =
     }
   | { type: "setBotModel"; botId: string; model: string; effort: string | null }
   | { type: "removeBotFallbacks"; botId: string }
+  // Check-ins (`check-ins.ts`). Saving needs admin.
+  | { type: "refreshCheckIns" }
+  /** `prompt`: "" for the gateway's own, null to leave it as it is. The outcome is `checkIns.save`. */
+  | { type: "saveCheckIn"; saveId: string; botId: string; every: string; prompt: string | null }
+  | { type: "dismissCheckInSave"; saveId: string }
   /**
    * The rail's task actions (`task-actions.ts`). They act on any task the rail
    * lists, open in this view or not, and each stays at `operator.write`.
@@ -489,6 +495,24 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return command.tier === "admin"
         ? { type: "requestAccess", tier: "admin" }
         : { type: "requestAccess" };
+    case "refreshCheckIns":
+      return { type: command.type };
+    case "saveCheckIn": {
+      if (typeof command.every !== "string" || !CHECKIN_EVERY.test(command.every))
+        throw new Error("invalid check-in cadence");
+      return {
+        type: "saveCheckIn",
+        saveId: id(command.saveId, "save"),
+        botId: botId(command.botId),
+        every: command.every,
+        prompt:
+          command.prompt === null
+            ? null
+            : shortText(command.prompt, MAX_CHECKIN_PROMPT_CHARS, "prompt"),
+      };
+    }
+    case "dismissCheckInSave":
+      return { type: "dismissCheckInSave", saveId: id(command.saveId, "save") };
     case "refreshAccounts":
     case "cancelSignIn":
     case "dismissSignIn":
@@ -949,6 +973,15 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId);
+      case "refreshCheckIns":
+        return client.refreshCheckIns();
+      case "saveCheckIn":
+        return client.saveCheckIn(command.saveId, command.botId, {
+          every: command.every,
+          prompt: command.prompt,
+        });
+      case "dismissCheckInSave":
+        return client.dismissCheckInSave(command.saveId);
       case "sendMessage": {
         const key = this.mine(command.key);
         if (command.attachmentIds.length > 0 && !policy.attachments) {
