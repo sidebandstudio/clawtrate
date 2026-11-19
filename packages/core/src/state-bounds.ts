@@ -86,6 +86,13 @@ import {
   type SidebarState,
 } from "./sidebar.ts";
 import type { Digest } from "./bounds.ts";
+import {
+  MAX_CHECKIN_PROMPT_CHARS,
+  type CheckInJob,
+  type CheckInSave,
+  type CheckInSetting,
+  type CheckInsState,
+} from "./check-ins.ts";
 import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
 import type {
   Bot,
@@ -859,6 +866,35 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   write: accountWrite,
 });
 
+// Check-ins (check-ins.ts): one job and one setting per bot, and the one save under way.
+const checkInJob = object<CheckInJob>()({
+  botId: ID,
+  enabled: FLAG,
+  everyMs: NUMBER,
+  nextRunAtMs: NUMBER,
+});
+const checkInSetting = object<CheckInSetting>()({
+  botId: ID,
+  every: NAME,
+  prompt: text(MAX_CHECKIN_PROMPT_CHARS),
+  promptCut: FLAG,
+});
+const checkInSave = object<CheckInSave>()({
+  id: ID,
+  botId: ID,
+  every: NAME,
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+});
+export const CHECK_INS: Bound = object<CheckInsState>()({
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  scheduler: FLAG,
+  jobs: list(MAX_BOTS, checkInJob),
+  settings: list(MAX_BOTS, checkInSetting),
+  save: checkInSave,
+});
+
 /** Every part of the state but the transcripts, and the transcripts as one map. */
 export const STATE: Bound = flagged<ClawtrateState>()({
   connection,
@@ -872,6 +908,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   accounts: ACCOUNTS,
   retention: retentionAlarm,
   sidebar,
+  checkIns: CHECK_INS,
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };

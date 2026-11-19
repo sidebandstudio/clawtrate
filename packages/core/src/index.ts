@@ -25,6 +25,7 @@ export * from "./sidebar.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
 export * from "./file-paths.ts";
+export * from "./check-ins.ts";
 export { fromBase64, sha256Hex, toBase64, utf8Bytes } from "./bytes.ts";
 export { worstCase, type Bound, type Digest } from "./bounds.ts";
 export * from "./state-bounds.ts";
