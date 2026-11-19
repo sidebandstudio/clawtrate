@@ -396,6 +396,15 @@
   display: none;
 }
 
+/* The composer's own note: the same availability rule as Compact's button. */
+.s-compose-note {
+  max-width: var(--column, 720px);
+  margin: 0 auto 8px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
 /* The low-disk note above the composer, in the look of the note controls.md adds. */
 .s-disk-note {
   display: flex;

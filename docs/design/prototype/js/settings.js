@@ -87,26 +87,29 @@
     failed: "⚙️ Compaction failed: Compaction safeguard could not summarize the session: Summarization failed for 15 messages • Context 9.7k/128k (8%)",
     stopped: "⚙️ Compaction failed: Compaction safeguard could not summarize the session • Context 9.9k/128k (8%) ⚠️ Your in-flight request was aborted by compaction — please resend it.",
   };
+  // The line says what the gateway reported and no more: a fold only on a compaction marker
+  // matched to this send, sizes only when the marker carries them.
   function compactHtml() {
     const c = S.compact;
     const stamp = `<div class="stamp">Today 5:24 PM</div>`;
     const running = c === "running" || c === "stopped" ? turn("user", bubble("user", "Compare the running costs over ten years.")) : "";
-    if (c === "done")
+    const replyToggle = `<button type="button" class="s-compacted-toggle" data-s="reply" aria-expanded="${S.replyOpen}" aria-controls="s-reply">${icon("chevron")}Show the gateway's reply</button>`;
+    if (c === "done" || c === "nosizes")
       return (
         stamp +
-        `<div class="s-compacted" data-testid="compacted"><div class="s-compacted-line"><span class="event-line">Context compacted · 9.7k → 2.1k tokens</span>` +
+        `<div class="s-compacted" data-testid="compacted"><div class="s-compacted-line"><span class="event-line">${c === "done" ? "The gateway reported a compaction · 9.7k → 2.1k tokens" : "The gateway reported a compaction."}</span>` +
         `<button type="button" class="s-compacted-toggle" data-s="fold" aria-expanded="${S.foldOpen}" aria-controls="s-fold-j1">${icon("chevron")}3 earlier turns</button></div>` +
         `<div class="s-compacted-turns" id="s-fold-j1"${S.foldOpen ? "" : " hidden"}>${earlierTurns()}` +
-        `<p class="s-compacted-foot">Juniper's context now holds a summary of these and its most recent messages.</p></div></div>`
+        `<p class="s-compacted-foot">These are earlier turns in this transcript. The gateway reported a compaction here.</p></div></div>`
       );
     const line = {
       compacting: `<div class="event-line" data-testid="compact-line"><span class="status-dot" data-status="connecting"></span> Compacting Juniper's context…</div>`,
       skipped: `<div class="event-line" data-testid="compact-line">Nothing to compact yet.</div>`,
-      failed: `<div class="s-compacted" data-testid="compact-line"><div class="s-compacted-line"><span class="event-line">Couldn't compact. Juniper's context is as it was.</span>` +
-        `<button type="button" class="s-compacted-toggle" data-s="reply" aria-expanded="${S.replyOpen}" aria-controls="s-reply">${icon("chevron")}Show the gateway's reply</button></div>` +
+      unconfirmed: `<div class="s-compacted" data-testid="compact-line"><div class="s-compacted-line"><span class="event-line">Clawtrate hasn't confirmed compaction.</span>` +
+        `<button type="button" class="s-compacted-toggle" data-s="refresh-history">Refresh history</button></div></div>`,
+      failed: `<div class="s-compacted" data-testid="compact-line"><div class="s-compacted-line"><span class="event-line">The gateway reported that compaction failed.</span>${replyToggle}</div>` +
         `<p class="s-reply" id="s-reply"${S.replyOpen ? "" : " hidden"}>${esc(REPLY.failed)}</p></div>`,
-      stopped: `<div class="s-compacted" data-testid="compact-line"><div class="s-compacted-line"><span class="event-line">Couldn't compact. Juniper's context is as it was.</span>` +
-        `<button type="button" class="s-compacted-toggle" data-s="reply" aria-expanded="${S.replyOpen}" aria-controls="s-reply">${icon("chevron")}Show the gateway's reply</button></div>` +
+      stopped: `<div class="s-compacted" data-testid="compact-line"><div class="s-compacted-line"><span class="event-line">The gateway reported that compaction failed.</span>${replyToggle}</div>` +
         `<p class="s-warn-line">The gateway stopped the run that was going. Send that message again.</p>` +
         `<p class="s-reply" id="s-reply"${S.replyOpen ? "" : " hidden"}>${esc(REPLY.stopped)}</p></div>`,
     }[c];
@@ -790,13 +793,43 @@
       j1.html = compactHtml();
       rerenderTask();
       setTimeout(() => {
-        S.compact = ["done", "skipped", "failed", "stopped"].includes(S.reply) ? S.reply : "done";
+        S.compact = ["done", "nosizes", "skipped", "failed", "stopped", "unconfirmed"].includes(S.reply) ? S.reply : "done";
         S.foldOpen = false;
         j1.html = compactHtml();
         rerenderTask();
-        announce({ done: "Compacted", skipped: "Nothing to compact yet", failed: "Couldn't compact", stopped: "Couldn't compact" }[S.compact]);
+        announce({ done: "The gateway reported a compaction", nosizes: "The gateway reported a compaction", skipped: "Nothing to compact yet", failed: "The gateway reported that compaction failed", stopped: "The gateway reported that compaction failed", unconfirmed: "Compaction not confirmed" }[S.compact]);
       }, 1200);
     }
+
+    // Typing /compact is the same thing as the button, under the same rule.
+    function typedCompact(event) {
+      const input = $(".composer-input");
+      if (!input || !/^\/compact\b/.test(input.value.trim())) return;
+      const t = app.bots.find((b) => b.id === app.model.selectedBot)?.tasks.find((x) => x.id === app.model.selectedTask);
+      if (!t) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (t.status === "running") {
+        const old = $(".s-compose-note");
+        if (old) old.outerHTML = "";
+        const n = document.createElement("p");
+        n.className = "s-compose-note";
+        n.setAttribute("role", "status");
+        n.dataset.testid = "compose-note";
+        n.textContent = "Compact is available when this run ends. The gateway would stop a run still going a minute after you compact.";
+        $("#composer").before(n);
+        return;
+      }
+      input.value = "";
+      app.model.drafts[t.id] = "";
+      compact();
+    }
+    document.addEventListener("click", (event) => {
+      if (event.target.closest('#composer [data-action="send"]')) typedCompact(event);
+    }, true);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && event.target.closest?.(".composer-input")) typedCompact(event);
+    }, true);
 
     // Clicks ----------------------------------------------------------------------------------------------
 
@@ -923,6 +956,12 @@
           return D.openSettings($(".gateway-pill"), "gateways");
         case "compact":
           return compact();
+        case "refresh-history":
+          // A fresh read of the task's history; the prototype's next read finds the marker.
+          S.compact = "done";
+          j1.html = compactHtml();
+          rerenderTask();
+          return announce("The gateway reported a compaction");
         case "after-access":
           return setTimeout(rerenderTask, 60);
         case "fold": {

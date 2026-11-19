@@ -521,15 +521,15 @@ const J1 = "bot=juniper&task=j1&panel=open&tab=details";
   const before = await p.locator("#transcript [data-testid=transcript-turn]").count();
   await press(p, "button", "Compact");
   check("walk: Compact: compacting, in the transcript and Details", (await text(p, "#transcript")).includes("Compacting Juniper's context…") && (await text(p, "#panel-details")).includes("Compacting…"));
-  check("walk: Compact: nothing announced before the reply", (await announced(p)) !== "Compacted");
+  check("walk: Compact: nothing announced before the reply", !(await announced(p)).startsWith("The gateway reported"));
   await p.waitForTimeout(1400);
   const line = await text(p, '[data-testid="compacted"]');
-  check("walk: Compact: the compacted line", line.includes("Context compacted · 9.7k → 2.1k tokens") && line.includes("3 earlier turns") && (await announced(p)) === "Compacted", line);
+  check("walk: Compact: a marker matched to the send folds, with the sizes it carries", line.includes("The gateway reported a compaction · 9.7k → 2.1k tokens") && line.includes("3 earlier turns") && (await announced(p)) === "The gateway reported a compaction", line);
   const toggle = p.locator(".s-compacted-toggle");
   check("walk: Compact: the earlier turns folded, a button with aria-expanded", (await toggle.getAttribute("aria-expanded")) === "false" && (await p.locator("#s-fold-j1").isHidden()) && before === 6);
   await toggle.click();
   await p.waitForTimeout(80);
-  check("walk: Compact: the fold opens", (await toggle.getAttribute("aria-expanded")) === "true" && (await p.locator("#s-fold-j1").isVisible()) && (await text(p, "#s-fold-j1")).includes("Juniper's context now holds a summary of these and its most recent messages."));
+  check("walk: Compact: the fold opens", (await toggle.getAttribute("aria-expanded")) === "true" && (await p.locator("#s-fold-j1").isVisible()) && (await text(p, "#s-fold-j1")).includes("These are earlier turns in this transcript. The gateway reported a compaction here.") && !/summary of these|most recent messages/.test(await text(p, "#s-fold-j1")));
   check("Compact: no /compact bubble", !(await text(p, "#transcript")).includes("/compact"));
   await p.close();
 }
@@ -541,14 +541,42 @@ async function compactReply(name, reply, words) {
   return p;
 }
 {
-  const p = await compactReply("the gateway failed it", "failed", ["Couldn't compact. Juniper's context is as it was.", "Show the gateway's reply"]);
-  check("Compact, failed: announced", (await announced(p)) === "Couldn't compact");
+  const p = await compactReply("the gateway failed it", "failed", ["The gateway reported that compaction failed.", "Show the gateway's reply"]);
+  check("Compact, failed: announced, no claim the context is unchanged", (await announced(p)) === "The gateway reported that compaction failed" && !(await text(p, "#transcript")).includes("as it was"));
   await press(p, "button", "Show the gateway's reply");
   check("Compact, failed: the reply opens as text", (await p.locator("#s-reply").isVisible()) && (await text(p, "#s-reply")).includes("Compaction failed"));
   await p.close();
 }
 await (await compactReply("nothing to compact", "skipped", ["Nothing to compact yet."])).close();
-await (await compactReply("a run was stopped", "stopped", ["Couldn't compact.", "The gateway stopped the run that was going. Send that message again."])).close();
+await (await compactReply("a run was stopped", "stopped", ["The gateway reported that compaction failed.", "The gateway stopped the run that was going. Send that message again."])).close();
+{
+  const p = await compactReply("a marker without sizes", "nosizes", ["The gateway reported a compaction.", "3 earlier turns"]);
+  check("Compact, a marker without sizes: no sizes drawn", !/→|tokens/.test(await text(p, '[data-testid="compacted"]')));
+  await p.close();
+}
+{
+  const p = await compactReply("no outcome matched to the send", "unconfirmed", ["Clawtrate hasn't confirmed compaction.", "Refresh history"]);
+  check("Compact, no matching outcome: no fold", (await p.locator('[data-testid="compacted"]').count()) === 0);
+  await press(p, "button", "Refresh history", 200);
+  check("walk: Compact, Refresh history: the marker read, then the fold", (await p.locator('[data-testid="compacted"]').count()) === 1);
+  await p.close();
+}
+{
+  const p = await open("bot=juniper&task=j1&compact=running");
+  await p.fill(".composer-input", "/compact");
+  await p.press(".composer-input", "Enter");
+  await p.waitForTimeout(150);
+  check("Compact typed while a run is active: the same rule as the button", (await text(p, '[data-testid="compose-note"]')).includes("Compact is available when this run ends.") && !(await text(p, "#transcript")).includes("Compacting"));
+  await p.close();
+}
+{
+  const p = await open("bot=juniper&task=j1");
+  await p.fill(".composer-input", "/compact");
+  await p.press(".composer-input", "Enter");
+  await p.waitForTimeout(1500);
+  check("Compact typed: drawn as the button's, no /compact bubble", (await p.locator('[data-testid="compacted"]').count()) === 1 && !(await text(p, "#transcript")).includes("/compact"));
+  await p.close();
+}
 {
   const p = await open(`${J1}&compact=running`);
   const t = await text(p, '[data-testid="context-group"]');
