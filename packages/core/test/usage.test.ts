@@ -344,10 +344,27 @@ describe("where a bot's runs came from", () => {
     ]);
   });
 
-  it("F-131: only runs a send's result names count as sent; a queued or refused send names none", () => {
+  it("F-131: accepted queued delivery names a run and a queued notification does not", () => {
+    const sendsJson = (result: Record<string, unknown>) => ({
+      role: "toolResult",
+      toolName: "sessions_send",
+      isError: false,
+      content: [{ type: "text", text: JSON.stringify(result) }],
+    });
     const named = sentRunIds([
       sendResult("agent:marlow:main", "r2"),
-      sendResult("agent:marlow:main", null, "accepted"),
+      sendsJson({
+        status: "accepted",
+        targetDisposition: "queued",
+        runId: "queued-run",
+        sessionKey: "agent:marlow:main",
+      }),
+      sendsJson({
+        status: "queued",
+        runStarted: false,
+        notificationId: "note",
+        sessionKey: "agent:marlow:main",
+      }),
       sendResult("agent:otto:main", "r9", "forbidden"),
       { role: "toolResult", toolName: "read", content: "{}" },
       // Cut by the gateway to a display length: its first fields are still read.
@@ -370,7 +387,7 @@ describe("where a bot's runs came from", () => {
       },
     ]);
     expect([...named.entries()].map(([k, v]) => [k, [...v]])).toEqual([
-      ["agent:marlow:main", ["r2"]],
+      ["agent:marlow:main", ["r2", "queued-run"]],
       ["agent:pip:main", ["r7"]],
     ]);
   });
