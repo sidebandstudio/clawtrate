@@ -583,6 +583,17 @@ export class RoutinesEngine {
     }
   }
 
+  /** One routine as the gateway has it now, or null when it has none by that id. Reads only. */
+  async read(id: string): Promise<Routine | null> {
+    try {
+      return parseRoutine(await this.ctx.request("cron.get", { id }));
+    } catch (error) {
+      const refused = refusal(error);
+      if (refused !== null && notFound(refused)) return null;
+      throw error;
+    }
+  }
+
   /** The routine a draft made, if the gateway lists it: found by the draft's own key, nothing else. */
   async findCreated(key: string): Promise<Routine | null> {
     let offset = 0;

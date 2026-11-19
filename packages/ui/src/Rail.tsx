@@ -1826,8 +1826,7 @@ export function Rail({
         </button>
         {query === null ? (
           <>
-            {/* Shown once the gateway has a routine: with nothing to create one from yet, an empty view offers nothing. */}
-            {onOpenRoutines && (routines.length > 0 || routinesOpen) && (
+            {onOpenRoutines && (
               <button
                 type="button"
                 className="icon-button"

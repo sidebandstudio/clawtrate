@@ -3476,6 +3476,11 @@ export class ClawtrateClient {
     return this.routines.create(input, key);
   }
 
+  /** One routine as the gateway has it now: what a save in doubt is checked against. */
+  readRoutine(id: string): Promise<Routine | null> {
+    return this.routines.read(id);
+  }
+
   /** The routine a draft made, if the gateway lists it. */
   findCreatedRoutine(key: string): Promise<Routine | null> {
     return this.routines.findCreated(key);

@@ -1,14 +1,44 @@
 // The Routines view (automation.md sections 3 to 7): every routine on the
 // gateway by bot, or one bot's; the calendar; a routine's page with its runs;
 // and a run's conversation. It takes the conversation's place in the main
-// pane. Everything here reads; the gateway's scheduled jobs are changed in the
-// editor and the row and page actions, which come with admin access later.
+// pane. With admin access a routine is created and changed in the editor, and
+// paused, run and deleted from its row and its page (sections 9 and 10);
+// without it nothing that writes is offered, and the access bar at the foot
+// says how to ask for admin.
 
-import type { Bot, ClawtrateState, Routine, RoutineRun, RunConversation } from "@clawtrate/core";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import type {
+  Bot,
+  ClawtrateState,
+  HostInfo,
+  Routine,
+  RoutineRun,
+  RunConversation,
+} from "@clawtrate/core";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
+import { Menu, type MenuEntry } from "../Menu.tsx";
+import { AdminBar, GrantedBar, useAnnouncer, useGranted } from "../bots/parts.tsx";
+import {
+  canAdmin,
+  DeleteRoutine,
+  GatewayHooks,
+  routineEntries,
+  RoutineSwitch,
+  RunNoteLine,
+  TimeZoneLine,
+  useRoutineActions,
+  type RoutineActions,
+} from "./Actions.tsx";
+import { ADMIN_NEED, Editor, type EditorTarget } from "./Editor.tsx";
 import { Avatar } from "../Avatar.tsx";
 import { useBridge } from "../bridge.tsx";
-import { BackIcon, ChevronIcon, ClockIcon } from "../icons.tsx";
+import { BackIcon, ChevronIcon, ClockIcon, MoreIcon, PlusIcon } from "../icons.tsx";
 import { Markdown } from "../Markdown.tsx";
 import { Note } from "../bots/parts.tsx";
 import { Calendar } from "./Calendar.tsx";
@@ -150,12 +180,21 @@ function List({
   bot,
   now,
   onOpen,
+  admin,
+  actions,
+  onMenu,
+  create,
 }: {
   routines: Routine[];
   bots: Bot[];
   bot: string | null;
   now: number;
   onOpen: (id: string) => void;
+  admin: boolean;
+  actions: RoutineActions;
+  onMenu: (routine: Routine, at: { x: number; y: number }) => void;
+  /** "New routine", with admin: in the empty state and under one bot's routines. */
+  create: ((botId: string | null) => void) | null;
 }) {
   const groups = bots
     .filter((each) => bot === null || each.id === bot)
@@ -177,6 +216,16 @@ function List({
               A routine runs one of your bots on a schedule: a morning summary, a weekly check.
             </p>
           </>
+        )}
+        {create && (
+          <button
+            type="button"
+            className="button"
+            data-variant={named ? undefined : "primary"}
+            onClick={() => create(bot)}
+          >
+            {named ? `New routine for ${named.name}` : "New routine"}
+          </button>
         )}
       </div>
     );
@@ -204,6 +253,17 @@ function List({
                     aria-label={rowLabel(routine, each.name, now)}
                     title={routine.name}
                     onClick={() => onOpen(routine.id)}
+                    onContextMenu={(event: MouseEvent) => {
+                      event.preventDefault();
+                      onMenu(routine, { x: event.clientX, y: event.clientY });
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                        event.preventDefault();
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        onMenu(routine, { x: rect.left + 48, y: rect.bottom });
+                      }
+                    }}
                   >
                     <span className="r-row-mark">
                       <Mark routine={routine} />
@@ -213,10 +273,22 @@ function List({
                       <RowLine routine={routine} now={now} />
                     </span>
                   </button>
+                  {admin && <RoutineSwitch routine={routine} actions={actions} />}
                 </div>
+                {actions.notes[routine.id] && (
+                  <p className="r-row-note" role="alert" data-testid="row-note">
+                    {actions.notes[routine.id]}
+                  </p>
+                )}
               </li>
             ))}
           </ul>
+          {bot !== null && <TimeZoneLine routines={rows} botName={each.name} admin={admin} />}
+          {bot !== null && create && (
+            <button type="button" className="button r-new-for" onClick={() => create(each.id)}>
+              New routine for {each.name}
+            </button>
+          )}
         </section>
       ))}
     </>
@@ -289,11 +361,14 @@ function Page({
   bot,
   now,
   onRun,
+  hooks,
 }: {
   routine: Routine;
   bot: Bot;
   now: number;
   onRun: (run: RoutineRun) => void;
+  /** With admin: the gateway's hook address, under Triggers (F-349). */
+  hooks: ReactNode;
 }) {
   const [runs, retry] = useRuns(routine);
   const tz = routineZone(routine.schedule);
@@ -399,6 +474,7 @@ function Page({
             <dd>
               Its schedule only.
               <small>This gateway&apos;s webhooks start a bot directly, not a routine.</small>
+              {hooks}
             </dd>
           </div>
         </dl>
@@ -628,6 +704,7 @@ function ModeSwitch({
 
 export function RoutinesView({
   state,
+  info,
   nav,
   onNav,
   onClose,
@@ -635,6 +712,7 @@ export function RoutinesView({
   phone,
 }: {
   state: ClawtrateState;
+  info: HostInfo;
   nav: RoutinesNav;
   onNav: (nav: RoutinesNav) => void;
   onClose: () => void;
@@ -674,6 +752,36 @@ export function RoutinesView({
       ? onClose
       : null;
   const count = store.routines.filter((each) => nav.bot === null || each.botId === nav.bot).length;
+
+  // Every way into a write passes here: below admin nothing opens.
+  const admin = canAdmin(state.connection, info);
+  const granted = useGranted(state.connection);
+  const [announcer, announce] = useAnnouncer();
+  const actions = useRoutineActions(announce);
+  const [editor, setEditor] = useState<EditorTarget | null>(null);
+  const [deleting, setDeleting] = useState<Routine | null>(null);
+  const [menu, setMenu] = useState<{ routine: Routine; x: number; y: number } | null>(null);
+  const edit = (target: EditorTarget) => admin && setEditor(target);
+  const remove = (routine: Routine) => admin && setDeleting(routine);
+  const closeEditor = () => setEditor(null);
+  // A delete or a menu asks nothing typed of the person: they close when admin goes.
+  if (!admin && (deleting || menu)) {
+    setDeleting(null);
+    setMenu(null);
+  }
+  const live = shown && !deleted ? shown.routine : null;
+  const rowEntries = (routine: Routine): MenuEntry[] =>
+    routineEntries(
+      routine,
+      actions,
+      {
+        page: () => onNav({ ...nav, routine: routine.id, run: null }),
+        edit: () => edit({ mode: "edit", id: routine.id }),
+        remove: () => remove(routine),
+      },
+      () => setMenu(null),
+      admin ? undefined : [],
+    );
 
   return (
     <main
@@ -730,6 +838,34 @@ export function RoutinesView({
             All runs
           </button>
         )}
+        {!shown && admin && store.status === "loaded" && (
+          <button
+            type="button"
+            className={phone ? "icon-button" : "button"}
+            data-variant={phone ? undefined : "primary"}
+            data-size={phone ? undefined : "sm"}
+            aria-label={
+              phone
+                ? nav.bot
+                  ? `New routine for ${bots.find((b) => b.id === nav.bot)?.name ?? nav.bot}`
+                  : "New routine"
+                : undefined
+            }
+            data-testid="new-routine"
+            onClick={() => edit({ mode: "new", botId: nav.bot })}
+          >
+            {phone ? <PlusIcon /> : "New routine"}
+          </button>
+        )}
+        {live && !nav.run && admin && (
+          <PageActions
+            routine={live}
+            actions={actions}
+            narrow={narrow}
+            onEdit={() => edit({ mode: "edit", id: live.id })}
+            onDelete={() => remove(live)}
+          />
+        )}
       </header>
       <div className="r-body">
         {deleted && (
@@ -771,12 +907,18 @@ export function RoutinesView({
               <p className="r-hint">No runs yet.</p>
             )
           ) : (
-            <Page
-              routine={shown.routine}
-              bot={shown.bot}
-              now={now}
-              onRun={(each) => onNav({ ...nav, run: each })}
-            />
+            <>
+              {live && <RunNoteLine note={actions.runs[live.id]} paused={!live.enabled} />}
+              <Page
+                routine={shown.routine}
+                bot={shown.bot}
+                now={now}
+                onRun={(each) => onNav({ ...nav, run: each })}
+                hooks={
+                  live && admin ? <GatewayHooks gatewayUrl={state.connection.gatewayUrl} /> : null
+                }
+              />
+            </>
           )
         ) : (
           <>
@@ -826,6 +968,10 @@ export function RoutinesView({
                 bot={nav.bot}
                 now={now}
                 onOpen={(id) => onNav({ ...nav, routine: id, run: null })}
+                admin={admin}
+                actions={actions}
+                onMenu={(routine, at) => setMenu({ routine, ...at })}
+                create={admin ? (botId) => edit({ mode: "new", botId }) : null}
               />
             ) : (
               <Calendar
@@ -841,6 +987,131 @@ export function RoutinesView({
           </>
         )}
       </div>
+      {granted ? (
+        <div className="r-foot">
+          <GrantedBar />
+        </div>
+      ) : (
+        !admin && (
+          <div className="r-foot">
+            <AdminBar connection={state.connection} info={info} need={ADMIN_NEED} />
+          </div>
+        )
+      )}
+      {announcer}
+      {menu && (
+        <Menu
+          label={menu.routine.name}
+          className="rail-menu r-menu"
+          style={{ left: menu.x, top: menu.y }}
+          entries={rowEntries(menu.routine)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {editor && (
+        <Editor
+          state={state}
+          info={info}
+          target={editor}
+          onClose={closeEditor}
+          onSaved={(routine, created) => {
+            setEditor(null);
+            announce(created ? "Routine created" : "Saved");
+            if (created) onNav({ ...nav, routine: routine.id, run: null });
+          }}
+        />
+      )}
+      {deleting && (
+        <DeleteRoutine
+          routine={deleting}
+          onCancel={() => setDeleting(null)}
+          onDeleted={() => {
+            announce(`Deleted ${deleting.name}`);
+            setDeleting(null);
+            onNav({ ...nav, routine: null, run: null });
+          }}
+        />
+      )}
     </main>
+  );
+}
+
+/** The page's actions (section 6): in full from 800 px, else Run now and More. */
+function PageActions({
+  routine,
+  actions,
+  narrow,
+  onEdit,
+  onDelete,
+}: {
+  routine: Routine;
+  actions: RoutineActions;
+  narrow: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const [more, setMore] = useState<HTMLElement | null>(null);
+  const starting = actions.runs[routine.id]?.status === "starting";
+  const pending = routine.id in actions.pending;
+  return (
+    <div className="r-actions" data-testid="routine-actions">
+      <button
+        type="button"
+        className="button"
+        data-size="sm"
+        disabled={starting}
+        onClick={() => void actions.runNow(routine)}
+      >
+        {starting ? "Starting…" : routine.enabled ? "Run now" : "Run once now"}
+      </button>
+      {!narrow && (
+        <>
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            disabled={pending}
+            onClick={() => void actions.setEnabled(routine, !routine.enabled)}
+          >
+            {routine.enabled ? "Pause" : "Resume"}
+          </button>
+          <button type="button" className="button" data-size="sm" onClick={onEdit}>
+            Edit
+          </button>
+        </>
+      )}
+      <button
+        type="button"
+        className="icon-button"
+        aria-label="More"
+        aria-haspopup="menu"
+        aria-expanded={more !== null}
+        onClick={(event) => setMore(more ? null : event.currentTarget)}
+      >
+        <MoreIcon />
+      </button>
+      {more && (
+        <Menu
+          label="More"
+          className="rail-menu r-menu"
+          style={{
+            left: Math.max(8, more.getBoundingClientRect().right - 200),
+            top: more.getBoundingClientRect().bottom + 6,
+          }}
+          trigger={more}
+          entries={routineEntries(
+            routine,
+            actions,
+            { edit: onEdit, remove: onDelete },
+            () => setMore(null),
+            narrow ? ["pause", "edit", "delete"] : ["delete"],
+          )}
+          onClose={(refocus) => {
+            if (refocus) more.focus();
+            setMore(null);
+          }}
+        />
+      )}
+    </div>
   );
 }

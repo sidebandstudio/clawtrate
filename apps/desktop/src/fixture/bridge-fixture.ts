@@ -536,7 +536,7 @@ export function createFixtureBridge(
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
   async function apply(command: BridgeCommand): Promise<unknown> {
-    const routine = routineCommand(command, () => state, now, routineParams);
+    const routine = routineCommand(command, () => state, now, routineParams, set);
     if (routine) {
       sent.push(command);
       return routine;

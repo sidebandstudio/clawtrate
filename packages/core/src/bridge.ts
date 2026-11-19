@@ -142,6 +142,8 @@ export type BridgeCommand =
   | { type: "createRoutine"; input: NewRoutine; key: string }
   /** The routine a draft made, found by the draft's key: after a create whose answer never came. */
   | { type: "findCreatedRoutine"; key: string }
+  /** One routine as the gateway has it now; reads only. */
+  | { type: "readRoutine"; id: string }
   /** `original` is what the editor opened with; only what differs from it is written. */
   | { type: "updateRoutine"; id: string; original: RoutineFields; edit: RoutineFields }
   | { type: "setRoutineEnabled"; id: string; enabled: boolean }
@@ -234,7 +236,7 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                     ? RunConversation
                     : C extends { type: "createRoutine" | "updateRoutine" | "setRoutineEnabled" }
                       ? RoutineWrite
-                      : C extends { type: "findCreatedRoutine" }
+                      : C extends { type: "findCreatedRoutine" | "readRoutine" }
                         ? Routine | null
                         : C extends { type: "runRoutineNow" }
                           ? RoutineRunNow
@@ -627,6 +629,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "runRoutineNow":
     case "removeRoutine":
+    case "readRoutine":
       return { type: command.type, id: id(command.id, "routine id") };
     case "readGatewayHooks":
       return { type: "readGatewayHooks" };
@@ -1055,6 +1058,8 @@ class ViewerSession implements BridgeSession {
         return client.createRoutine(command.input, command.key);
       case "findCreatedRoutine":
         return client.findCreatedRoutine(command.key);
+      case "readRoutine":
+        return client.readRoutine(command.id);
       case "updateRoutine":
         return client.updateRoutine(command.id, command.original, command.edit);
       case "setRoutineEnabled":

@@ -1,0 +1,865 @@
+// The routine editor (automation.md section 9): a dialog that creates a
+// routine or changes one. It is opened only with admin access; if access goes
+// while it is open, the access bar takes Save's place and what was typed
+// stays. Every way a save can end is said: saved (only from the gateway's
+// answer), refused with the gateway's reason, changed or deleted elsewhere,
+// and not known, which offers a check that only reads and a separate retry.
+
+import {
+  changedFields,
+  fieldsOf,
+  type ClawtrateState,
+  type HostInfo,
+  type Routine,
+  type RoutineFields,
+  type RoutineWrite,
+} from "@clawtrate/core";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useBridge } from "../bridge.tsx";
+import { CheckIcon, ChevronIcon, CloseIcon } from "../icons.tsx";
+import { Dialog } from "../bots/Dialog.tsx";
+import { AdminBar, Note } from "../bots/parts.tsx";
+import {
+  draftOf,
+  fieldsOfDraft,
+  MAX_NAME_CHARS,
+  newDraft,
+  nextRuns,
+  problems,
+  scheduleOf,
+  usualZone,
+  zoneOf,
+  type Draft,
+  type Problems,
+  type WhenKind,
+} from "./draft.ts";
+import { scheduleWords, viewerZone, zoneCity } from "./schedule.ts";
+
+export type EditorTarget = { mode: "new"; botId: string | null } | { mode: "edit"; id: string };
+
+/** How long Save waits before saying the answer hasn't come; a later answer still counts. */
+const ANSWER_MS = 30_000;
+export const ADMIN_NEED = "Creating and changing routines needs admin access.";
+
+const KINDS: Array<[WhenKind, string]> = [
+  ["daily", "Every day"],
+  ["weekdays", "Weekdays"],
+  ["days", "Some days of the week"],
+  ["every", "Every few hours or minutes"],
+  ["once", "Once"],
+];
+const WEEK: Array<[number, string]> = [
+  [1, "Mon"],
+  [2, "Tue"],
+  [3, "Wed"],
+  [4, "Thu"],
+  [5, "Fri"],
+  [6, "Sat"],
+  [0, "Sun"],
+];
+
+type Check =
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "missing" }
+  | { status: "same" }
+  | { status: "failed"; error: string };
+
+type Save =
+  | { status: "idle" }
+  | { status: "saving" }
+  | { status: "refused"; error: string }
+  | { status: "not-sent"; reason: "admin" | "offline" }
+  /** `sent` is what this save asked for, compared with what a check finds. */
+  | { status: "unknown"; error: string; sent: RoutineFields; check: Check }
+  | { status: "conflict"; current: Routine };
+
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+function newKey(): string {
+  return crypto.randomUUID();
+}
+
+function whenWords(fields: RoutineFields): string {
+  const words = scheduleWords(fields.schedule).text;
+  return fields.schedule.tz ? `${words}, ${zoneCity(fields.schedule.tz)}` : words;
+}
+
+/** The schedule's preview: what the gateway will do and the next three times (section 9). */
+function Preview({ draft, now }: { draft: Draft; now: number }) {
+  const tz = zoneOf(draft);
+  const viewer = viewerZone();
+  const schedule = scheduleOf(draft);
+  const next = nextRuns(draft, now);
+  const day = (ms: number) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: schedule.kind === "every" ? viewer : tz,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    })
+      .format(ms)
+      .replace(",", "");
+  const clock = (ms: number, zone: string) =>
+    new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(
+      ms,
+    );
+  const words = scheduleWords(schedule);
+  const lead = words.written
+    ? `Runs as the gateway reads "${schedule.expr}"`
+    : `Runs ${/^(Every|Weekdays|Weekends|Once)\b/u.test(words.text) ? words.text[0]!.toLowerCase() + words.text.slice(1) : `on ${words.text}`}${schedule.kind === "every" ? "" : `, ${zoneCity(tz)} time`}`;
+  if (next.length === 0)
+    return (
+      <p className="r-preview" data-testid="preview">
+        {lead}.
+      </p>
+    );
+  const zone = schedule.kind === "every" ? viewer : tz;
+  const first = `${day(next[0]!)}, ${clock(next[0]!, zone)}${zone !== viewer ? ` (${clock(next[0]!, viewer)} your time)` : ""}`;
+  const rest = next.slice(1).map(day).join(", ");
+  return (
+    <p className="r-preview" aria-live="polite" data-testid="preview">
+      {lead}. Next: {first}
+      {rest && `, then ${rest}`}.
+    </p>
+  );
+}
+
+function Field({
+  id,
+  label,
+  error,
+  children,
+}: {
+  id: string;
+  label: string;
+  error: string | undefined;
+  children: ReactNode;
+}) {
+  return (
+    <div className="r-field">
+      <label htmlFor={id}>{label}</label>
+      {children}
+      {error && (
+        <p className="r-error" id={`${id}-error`}>
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function Editor({
+  state,
+  info,
+  target,
+  onClose,
+  onSaved,
+}: {
+  state: ClawtrateState;
+  info: HostInfo;
+  target: EditorTarget;
+  onClose: () => void;
+  onSaved: (routine: Routine, created: boolean) => void;
+}) {
+  const bridge = useBridge();
+  const { connection, bots, routines: store } = state;
+  const admin = connection.status === "connected" && connection.canAdmin && !info.readOnly;
+  const [now] = useState(() => Date.now());
+  const [mode, setMode] = useState(target);
+  const live =
+    mode.mode === "edit" ? store.routines.find((each) => each.id === mode.id) : undefined;
+  // What the editor opened with: a save writes only what differs from it.
+  const [original, setOriginal] = useState<RoutineFields | null>(() =>
+    live ? fieldsOf(live) : null,
+  );
+  const [draft, setDraft] = useState<Draft>(() =>
+    live
+      ? draftOf(live, now)
+      : newDraft(
+          (target.mode === "new" && target.botId) ||
+            (bots.find((each) => each.isDefault) ?? bots[0])?.id ||
+            "main",
+          store.routines,
+          now,
+        ),
+  );
+  const [key] = useState(newKey);
+  const [save, setSave] = useState<Save>({ status: "idle" });
+  /** The gateway said it has no such routine. */
+  const [gone, setGone] = useState(false);
+  const [tried, setTried] = useState(false);
+  // The draft as the person had it when they chose to see the other version.
+  const [mine, setMine] = useState<Draft | null>(null);
+  const [gateway] = useState(connection.gatewayId);
+  const attempt = useRef(0);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [payload] = useState(live?.payload ?? "agentTurn");
+  const [textLocked] = useState(live ? live.payload === "other" || live.textCut : false);
+
+  // A save still out when the editor closes is no longer this editor's to report.
+  useEffect(
+    () => () => {
+      attempt.current += 1;
+    },
+    [],
+  );
+
+  // A draft belongs to the gateway it was opened on.
+  useEffect(() => {
+    if (gateway !== null && connection.gatewayId !== null && connection.gatewayId !== gateway)
+      onClose();
+  }, [gateway, connection.gatewayId, onClose]);
+
+  const errors: Problems = tried ? problems(draft, now) : {};
+  const bot = bots.find((each) => each.id === draft.botId);
+  const botName = bot?.name ?? draft.botId;
+  const busy = save.status === "saving" || save.status === "unknown";
+  const deleted = mode.mode === "edit" && (gone || (store.status === "loaded" && !live));
+  // Changed elsewhere: by the gateway's event while open, or found just before saving.
+  const changed =
+    save.status === "conflict"
+      ? (live ?? save.current)
+      : live && original && changedFields(original, fieldsOf(live)).length > 0 && !busy
+        ? live
+        : null;
+  const set = (change: Partial<Draft>) => setDraft((each) => ({ ...each, ...change }));
+
+  const focusError = (found: Problems) => {
+    const first = (["name", "text", "when", "cron"] as const).find((each) => found[each]);
+    if (!first) return;
+    if (first === "cron")
+      bodyRef.current
+        ?.querySelector<HTMLDetailsElement>("details.r-more")
+        ?.setAttribute("open", "");
+    requestAnimationFrame(() =>
+      bodyRef.current?.querySelector<HTMLElement>(`[data-field="${first}"]`)?.focus(),
+    );
+  };
+
+  /** The one way to save: checked, then sent; `against` replaces what it is compared with. */
+  const submit = (against: RoutineFields | null = original, asNew = mode.mode === "new") => {
+    setTried(true);
+    const found = problems(draft, Date.now());
+    if (Object.keys(found).length > 0) {
+      focusError(found);
+      return;
+    }
+    const fields = fieldsOfDraft(draft);
+    const id = (attempt.current += 1);
+    const sentOn = connection.gatewayId;
+    setSave({ status: "saving" });
+    const settle = (result: RoutineWrite) => {
+      if (id !== attempt.current || sentOn !== state.connection.gatewayId) return;
+      if (result.status === "saved") onSaved(result.routine, asNew);
+      else if (result.status === "deleted") {
+        setSave({ status: "idle" });
+        setGone(true);
+      } else if (result.status === "unknown")
+        setSave({
+          status: "unknown",
+          error: result.error,
+          sent: fields,
+          check: { status: "idle" },
+        });
+      else setSave(result);
+    };
+    const timer = setTimeout(() => {
+      if (id === attempt.current)
+        setSave((each) =>
+          each.status === "saving"
+            ? {
+                status: "unknown",
+                error: "No answer in 30 seconds.",
+                sent: fields,
+                check: { status: "idle" },
+              }
+            : each,
+        );
+    }, ANSWER_MS);
+    const request =
+      !asNew && mode.mode === "edit" && against
+        ? bridge.invoke({ type: "updateRoutine", id: mode.id, original: against, edit: fields })
+        : bridge.invoke({ type: "createRoutine", input: { ...fields, botId: draft.botId }, key });
+    void request
+      .then(settle, (error: unknown) => settle({ status: "unknown", error: errorText(error) }))
+      .finally(() => clearTimeout(timer));
+  };
+
+  /** Reads only: does the gateway show what this save asked for? */
+  const check = async () => {
+    if (save.status !== "unknown") return;
+    const { sent } = save;
+    const at = (next: Check) =>
+      setSave((each) => (each.status === "unknown" ? { ...each, check: next } : each));
+    at({ status: "checking" });
+    try {
+      if (mode.mode === "new") {
+        const found = await bridge.invoke({ type: "findCreatedRoutine", key });
+        if (!found) return at({ status: "missing" });
+        if (changedFields(sent, fieldsOf(found)).length === 0) return onSaved(found, true);
+        // It landed, then changed: the editor now edits it.
+        setMode({ mode: "edit", id: found.id });
+        setSave({ status: "conflict", current: found });
+        return;
+      }
+      const fresh = await bridge.invoke({ type: "readRoutine", id: mode.id });
+      if (!fresh) return setGone(true);
+      const wanted = original ? changedFields(original, sent) : [];
+      const landed = changedFields(sent, fieldsOf(fresh)).filter((each) => wanted.includes(each));
+      if (landed.length === 0) return onSaved(fresh, false);
+      if (original && changedFields(original, fieldsOf(fresh)).length === 0)
+        return at({ status: "same" });
+      setSave({ status: "conflict", current: fresh });
+    } catch (error) {
+      at({ status: "failed", error: errorText(error) });
+    }
+  };
+
+  const showTheirs = (current: Routine) => {
+    setMine(draft);
+    setDraft(draftOf(current, now));
+    setOriginal(fieldsOf(current));
+    setSave({ status: "idle" });
+  };
+
+  const notes: ReactNode[] = [];
+  if (save.status === "refused")
+    notes.push(
+      <Note tone="danger" key="refused" testId="editor-refused">
+        <p role="alert">
+          <strong>The gateway didn&apos;t save this.</strong> {save.error}
+        </p>
+      </Note>,
+    );
+  if (save.status === "not-sent" && save.reason === "offline")
+    notes.push(
+      <Note tone="warn" key="offline" testId="editor-offline">
+        <p role="alert">
+          <strong>Not saved.</strong> Clawtrate isn&apos;t connected to the gateway, so nothing was
+          sent.
+        </p>
+      </Note>,
+    );
+  if (save.status === "unknown") {
+    const c = save.check;
+    notes.push(
+      <Note tone="warn" key="unknown" testId="editor-unknown">
+        <p role="alert">
+          <strong>Not saved yet.</strong> The gateway didn&apos;t answer ({save.error}). It may
+          still have saved it.{" "}
+          {c.status === "missing"
+            ? "The gateway doesn't list it. Saving again can't make a second one."
+            : c.status === "same"
+              ? "The gateway still has it as it was before you saved."
+              : c.status === "failed"
+                ? `Couldn't check: ${c.error}`
+                : "Check before saving again."}
+        </p>
+        <div className="b-actions">
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            disabled={c.status === "checking"}
+            onClick={() => void check()}
+          >
+            {c.status === "checking" ? "Checking…" : "Check now"}
+          </button>
+          {(c.status === "missing" || c.status === "same") && admin && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              data-variant="quiet"
+              onClick={() => submit()}
+            >
+              Save again
+            </button>
+          )}
+        </div>
+      </Note>,
+    );
+  }
+  if (changed && !deleted)
+    notes.push(
+      <Note tone="warn" key="changed" testId="editor-changed">
+        <p role="alert">
+          <strong>This routine was changed elsewhere</strong> while you were editing.
+        </p>
+        <div className="b-actions">
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            onClick={() => showTheirs(changed)}
+          >
+            Show the new version
+          </button>
+          {admin && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              data-variant="quiet"
+              onClick={() => {
+                setOriginal(fieldsOf(changed));
+                setSave({ status: "idle" });
+                submit(fieldsOf(changed));
+              }}
+            >
+              Save mine anyway
+            </button>
+          )}
+        </div>
+      </Note>,
+    );
+  if (deleted)
+    notes.push(
+      <Note tone="warn" key="deleted" testId="editor-deleted">
+        <p role="alert">
+          <strong>This routine was deleted</strong> while you were editing.
+        </p>
+        <div className="b-actions">
+          {admin && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              onClick={() => {
+                setMode({ mode: "new", botId: draft.botId });
+                setGone(false);
+                setOriginal(null);
+                setSave({ status: "idle" });
+                submit(null, true);
+              }}
+            >
+              Save as a new routine
+            </button>
+          )}
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            data-variant="quiet"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+      </Note>,
+    );
+
+  const described = (field: keyof Problems) =>
+    errors[field] ? { "aria-invalid": true as const, "aria-describedby": `e-${field}-error` } : {};
+
+  const onKindKey = (event: KeyboardEvent<HTMLUListElement>) => {
+    const at = KINDS.findIndex(([each]) => each === draft.when);
+    const step =
+      event.key === "ArrowDown" || event.key === "ArrowRight"
+        ? 1
+        : event.key === "ArrowUp" || event.key === "ArrowLeft"
+          ? -1
+          : 0;
+    if (!step) return;
+    event.preventDefault();
+    const next = KINDS[(at + step + KINDS.length) % KINDS.length]![0];
+    set({ when: next, cron: "" });
+    requestAnimationFrame(() =>
+      event.currentTarget?.querySelector<HTMLElement>(`[data-kind="${next}"]`)?.focus(),
+    );
+  };
+
+  const zones = [
+    ...new Set(
+      store.routines
+        .filter((each) => each.botId === draft.botId && each.schedule.tz)
+        .map((each) => each.schedule.tz!),
+    ),
+  ];
+  const allZones = Intl.supportedValuesOf("timeZone");
+  const tzField = draft.when !== "every" && !draft.cron.trim() && (
+    <Field id="e-tz" label="Time zone" error={undefined}>
+      <select
+        className="b-select"
+        id="e-tz"
+        value={draft.tz}
+        onChange={(event) => set({ tz: event.target.value })}
+      >
+        <option value="auto">Auto-detect ({zoneCity(viewerZone())})</option>
+        {zones.length > 0 && (
+          <optgroup label={`${botName}'s routines`}>
+            {zones.map((zone) => (
+              <option key={zone} value={zone}>
+                {zoneCity(zone)} ({zone})
+              </option>
+            ))}
+          </optgroup>
+        )}
+        <optgroup label="Every zone">
+          {allZones
+            .filter((zone) => !zones.includes(zone))
+            .map((zone) => (
+              <option key={zone} value={zone}>
+                {zoneCity(zone)} ({zone})
+              </option>
+            ))}
+          {draft.tz !== "auto" && !allZones.includes(draft.tz) && !zones.includes(draft.tz) && (
+            <option value={draft.tz}>{draft.tz}</option>
+          )}
+        </optgroup>
+      </select>
+      {draft.tz === "auto" && (
+        <p className="r-hint">
+          Writes this device&apos;s zone, {viewerZone()}. It does not follow the device later.
+        </p>
+      )}
+    </Field>
+  );
+
+  let when: ReactNode;
+  if (draft.locked) {
+    const words = scheduleWords(draft.locked);
+    when = (
+      <div className="r-field">
+        <span className="r-label">When</span>
+        <div className="r-locked" data-testid="locked">
+          {words.written ? <code>{words.text}</code> : words.text}
+          {draft.locked.tz && `, ${zoneCity(draft.locked.tz)}`}
+          <br />
+          This schedule was set on the gateway. You can rename the routine and change its
+          instruction here; change its schedule on the gateway.
+        </div>
+      </div>
+    );
+  } else {
+    const time = (
+      <input
+        className="input"
+        type="time"
+        aria-label="At"
+        id="e-time"
+        value={draft.time}
+        onChange={(event) => set({ time: event.target.value })}
+      />
+    );
+    when = (
+      <>
+        <div className="r-field">
+          <span className="r-label" id="e-when-label">
+            When
+          </span>
+          {draft.cron.trim() ? (
+            <p className="r-hint">Set by the cron expression under More.</p>
+          ) : (
+            <>
+              <ul
+                className="b-choices"
+                role="radiogroup"
+                aria-labelledby="e-when-label"
+                onKeyDown={onKindKey}
+                data-field="when"
+                tabIndex={-1}
+                {...described("when")}
+              >
+                {KINDS.map(([kind, label]) => (
+                  <li key={kind}>
+                    <button
+                      type="button"
+                      className="b-choice"
+                      role="radio"
+                      aria-checked={draft.when === kind}
+                      tabIndex={draft.when === kind ? 0 : -1}
+                      data-kind={kind}
+                      onClick={() => set({ when: kind })}
+                    >
+                      <span className="b-choice-text">
+                        <span className="b-choice-title">{label}</span>
+                      </span>
+                      <CheckIcon className="b-tick" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {draft.when === "days" && (
+                <div className="r-days" role="group" aria-label="Days">
+                  {WEEK.map(([day, label]) => (
+                    <button
+                      key={day}
+                      type="button"
+                      aria-pressed={draft.days.includes(day)}
+                      onClick={() =>
+                        set({
+                          days: draft.days.includes(day)
+                            ? draft.days.filter((each) => each !== day)
+                            : [...draft.days, day],
+                        })
+                      }
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {(draft.when === "daily" || draft.when === "weekdays" || draft.when === "days") && (
+                <div className="r-inline">
+                  <label htmlFor="e-time">At</label>
+                  {time}
+                </div>
+              )}
+              {draft.when === "every" && (
+                <div className="r-inline">
+                  <label htmlFor="e-count">Every</label>
+                  <input
+                    className="input r-count"
+                    type="number"
+                    min={1}
+                    id="e-count"
+                    value={draft.count}
+                    onChange={(event) => set({ count: event.target.value })}
+                  />
+                  <select
+                    className="b-select r-unit"
+                    aria-label="Unit"
+                    value={draft.unit}
+                    onChange={(event) => set({ unit: event.target.value as Draft["unit"] })}
+                  >
+                    <option value="minutes">minutes</option>
+                    <option value="hours">hours</option>
+                  </select>
+                </div>
+              )}
+              {draft.when === "once" && (
+                <div className="r-inline">
+                  <label htmlFor="e-date">On</label>
+                  <input
+                    className="input"
+                    type="date"
+                    id="e-date"
+                    value={draft.date}
+                    onChange={(event) => set({ date: event.target.value })}
+                  />
+                  {time}
+                </div>
+              )}
+            </>
+          )}
+          {errors.when && (
+            <p className="r-error" id="e-when-error">
+              {errors.when}
+            </p>
+          )}
+        </div>
+        {tzField}
+        {!errors.when && !errors.cron && <Preview draft={draft} now={now} />}
+      </>
+    );
+  }
+
+  const isDefault = bot?.isDefault === true;
+  const more = (
+    <details className="b-disclosure r-more" open={draft.cron.trim() !== "" || undefined}>
+      <summary>
+        <ChevronIcon />
+        More
+      </summary>
+      <div className="b-disclosure-body r-dialog-more">
+        {!draft.locked && (
+          <Field id="e-cron" label="Cron expression" error={errors.cron}>
+            <input
+              className="input r-mono"
+              id="e-cron"
+              data-field="cron"
+              placeholder="0 8 * * 1-5"
+              autoComplete="off"
+              spellCheck={false}
+              value={draft.cron}
+              onChange={(event) => set({ cron: event.target.value })}
+              {...described("cron")}
+            />
+          </Field>
+        )}
+        {(draft.target === "isolated" || draft.target === "main") &&
+          (isDefault || draft.target === "main") &&
+          payload === "agentTurn" && (
+            <Field id="e-runs" label="Runs in" error={undefined}>
+              <select
+                className="b-select"
+                id="e-runs"
+                value={draft.target}
+                onChange={(event) => set({ target: event.target.value as Draft["target"] })}
+              >
+                <option value="isolated">A new conversation each time</option>
+                <option value="main">{botName}&apos;s main conversation</option>
+              </select>
+            </Field>
+          )}
+        {(draft.delivery === "none" || draft.delivery === "announce") && (
+          <Field id="e-results" label="Results" error={undefined}>
+            <select
+              className="b-select"
+              id="e-results"
+              value={draft.delivery}
+              onChange={(event) => set({ delivery: event.target.value as Draft["delivery"] })}
+            >
+              <option value="none">Keep them with the run</option>
+              <option value="announce">Also announce to the gateway&apos;s channels</option>
+            </select>
+          </Field>
+        )}
+      </div>
+    </details>
+  );
+
+  // A note about how a save ended is at the top of the form: bring it into view.
+  const noteKeys = notes.map((note) => (note as { key: string }).key).join(" ");
+  useEffect(() => {
+    if (noteKeys) bodyRef.current?.scrollTo({ top: 0 });
+  }, [noteKeys]);
+
+  const textLabel = payload === "systemEvent" ? "Reminder" : "Instruction";
+  const saving = save.status === "saving";
+  return (
+    <Dialog kind="create" labelledBy="r-edit-title" onClose={onClose} testId="routine-editor">
+      <div className="b-sheet r-dialog">
+        <header className="b-head">
+          <h2 id="r-edit-title" tabIndex={-1}>
+            {mode.mode === "new" ? "New routine" : "Edit routine"}
+          </h2>
+          <button
+            type="button"
+            className="icon-button b-close"
+            aria-label="Close"
+            onClick={onClose}
+          >
+            <CloseIcon />
+          </button>
+        </header>
+        <div className="b-body" ref={bodyRef}>
+          {notes}
+          <fieldset className="r-fields" disabled={busy} aria-busy={saving || undefined}>
+            {mode.mode === "new" ? (
+              <Field id="e-bot" label="Bot" error={undefined}>
+                <select
+                  className="b-select"
+                  id="e-bot"
+                  value={draft.botId}
+                  onChange={(event) =>
+                    set({
+                      botId: event.target.value,
+                      tz: usualZone(store.routines, event.target.value) ?? draft.tz,
+                      target: "isolated",
+                    })
+                  }
+                >
+                  {bots.map((each) => (
+                    <option key={each.id} value={each.id}>
+                      {each.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            ) : (
+              <div className="r-field">
+                <span className="r-label">Bot</span>
+                <p className="r-hint">{botName}. To run it on another bot, make a new routine.</p>
+              </div>
+            )}
+            <Field id="e-name" label="Name" error={errors.name}>
+              <input
+                className="input"
+                id="e-name"
+                data-field="name"
+                data-b-focus=""
+                maxLength={MAX_NAME_CHARS}
+                autoComplete="off"
+                value={draft.name}
+                onChange={(event) => set({ name: event.target.value })}
+                {...described("name")}
+              />
+            </Field>
+            {textLocked ? (
+              <div className="r-field">
+                <span className="r-label">{textLabel}</span>
+                <div className="r-locked">
+                  {payload === "other"
+                    ? "This routine runs a command on the gateway, not a bot. Change what it runs on the gateway."
+                    : "This instruction is too long to change here. Change it on the gateway."}
+                </div>
+              </div>
+            ) : (
+              <Field id="e-text" label={textLabel} error={errors.text}>
+                {payload === "systemEvent" && (
+                  <p className="r-hint">
+                    Posted as a reminder in {botName}&apos;s main conversation.
+                  </p>
+                )}
+                <textarea
+                  className="input"
+                  id="e-text"
+                  data-field="text"
+                  rows={6}
+                  placeholder={`What should ${botName} do each time? For example: Summarise yesterday's notes and list anything I need to answer.`}
+                  value={draft.text}
+                  onChange={(event) => set({ text: event.target.value })}
+                  {...described("text")}
+                />
+              </Field>
+            )}
+            {when}
+            {more}
+          </fieldset>
+          {mine && (
+            <details className="b-disclosure" data-testid="your-version">
+              <summary>
+                <ChevronIcon />
+                Your version
+              </summary>
+              <div className="b-disclosure-body r-yours">
+                <p>
+                  <strong>{mine.name}</strong> · {whenWords(fieldsOfDraft(mine))}
+                </p>
+                <p className="r-instruction">{mine.text}</p>
+                <button
+                  type="button"
+                  className="button"
+                  data-size="sm"
+                  onClick={() => setDraft({ ...mine, from: draft.from })}
+                >
+                  Use my version
+                </button>
+              </div>
+            </details>
+          )}
+          {mode.mode === "new" && (
+            <p className="r-hint">
+              It runs first at its next time; creating it doesn&apos;t run it.
+            </p>
+          )}
+        </div>
+        <footer className="b-foot">
+          {admin ? (
+            <div className="b-actions">
+              <button type="button" className="button" data-variant="quiet" onClick={onClose}>
+                Cancel
+              </button>
+              {save.status !== "unknown" && !deleted && (
+                <button
+                  type="button"
+                  className="button"
+                  data-variant="primary"
+                  disabled={saving}
+                  onClick={() => submit()}
+                >
+                  {saving ? "Saving…" : "Save"}
+                </button>
+              )}
+            </div>
+          ) : (
+            <AdminBar connection={connection} info={info} need={ADMIN_NEED} />
+          )}
+        </footer>
+      </div>
+    </Dialog>
+  );
+}
