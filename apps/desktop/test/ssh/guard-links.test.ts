@@ -65,7 +65,8 @@ describe("the guard, as the file system walks a path", () => {
     // Spelled, this is the home's own config; walked, it is the guarded folder's.
     expect(check(`${toNested}/../config`)).toThrow(SshWorldRefused);
     // Walked back up and out of the account, to the test home's own file.
-    expect(check(`${toNested}/../../../home/.ssh/config`)).not.toThrow();
+    // Built from parts, unnormalized: the `..`s are walked by the file system, not folded here.
+    expect(check([toNested, "..", "..", "..", "home", ".ssh", "config"].join("/"))).not.toThrow();
     expect(check(join(world.home, "to-guarded"))).toThrow(SshWorldRefused);
     expect(check(join(world.home, ".ssh", "config"))).not.toThrow();
   });
