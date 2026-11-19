@@ -1126,6 +1126,22 @@ describe("the usage engine", () => {
       engine.readReport({ botId: "otto", period: "today", timeZone: NY, detail: false, bots: [] }),
     ).resolves.toMatchObject({ botId: "otto" });
     engine.onClose();
+    // A hello on the same socket, after its bootstrap, does not end a report that started on it.
+    gatewayName = "first";
+    const held2: Array<() => void> = held;
+    const same = engine.readReport({
+      botId: "otto",
+      period: "today",
+      timeZone: NY,
+      detail: false,
+      bots: [],
+    });
+    await flush();
+    engine.onHello();
+    await flush();
+    while (held2.length > 0) held2.shift()!();
+    await expect(same).resolves.toMatchObject({ botId: "otto" });
+    engine.onClose();
   });
 
   it("F-235: refreshes of the providers' limits that overlap are one read, with one timer, and none outlives the connection", async () => {

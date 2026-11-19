@@ -359,6 +359,84 @@ test("F-234: while the host is busy reading other usage the page says it waits, 
   await expect(settings).not.toContainText("Couldn't load");
 });
 
+/** The `readUsage` commands the page has sent the fixture's host so far. */
+const usageReads = (page: Page) =>
+  page.evaluate(
+    () =>
+      (
+        window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } }
+      ).clawtrateFixture.sent.filter((each) => each.type === "readUsage").length,
+  );
+
+/** Say the window is hidden, or shown again, as the browser does. */
+const setHidden = (page: Page, hidden: boolean) =>
+  page.evaluate((hidden) => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => (hidden ? "hidden" : "visible"),
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, hidden);
+
+test("F-234: a hidden window asks for no report at the date's rollover, and reads the new day once shown (fixture)", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    ...contextFor({ name: "1440", width: 1440, height: 900 }, "light"),
+    timezoneId: "America/New_York",
+  });
+  const page = await context.newPage();
+  await page.clock.install({ time: new Date("2026-11-16T23:59:40-05:00") });
+  await page.goto(`/?${PAGE}&theme=light`);
+  await expect(page.getByTestId("usage-source")).toContainText("this week (Nov 16, your time)");
+  await setHidden(page, true);
+  const before = await usageReads(page);
+  // Past midnight and the page's 30-second tick, while hidden.
+  await page.clock.fastForward("01:00");
+  expect(await usageReads(page)).toBe(before);
+  await setHidden(page, false);
+  await expect.poll(() => usageReads(page)).toBeGreaterThan(before);
+  await expect(page.getByTestId("usage-source")).toContainText(
+    "this week (Nov 16 to Nov 17, your time)",
+  );
+  await context.close();
+});
+
+test("F-237: through a switch of host, Settings drops the old gateway's figures and reads again once connected (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write`, "light");
+  const settings = await settingsUsage(page);
+  await expect(settings.getByTestId("usage-all-total")).toContainText("Every bot:");
+  const before = await usageReads(page);
+  const setConnection = (change: Record<string, unknown>) =>
+    page.evaluate(
+      (change) =>
+        (
+          window as unknown as {
+            clawtrateFixture: {
+              setState(change: (state: { connection: object }) => unknown): void;
+            };
+          }
+        ).clawtrateFixture.setState((state) => ({
+          ...state,
+          connection: { ...state.connection, ...change },
+        })),
+      change,
+    );
+  await setConnection({
+    status: "connecting",
+    gatewayUrl: "ws://127.0.0.1:19999",
+    gatewayId: "another-gateway",
+    connectedAt: null,
+  });
+  await expect(settings.getByTestId("usage-all")).toHaveCount(0);
+  expect(await usageReads(page)).toBe(before);
+  await setConnection({ status: "connected", connectedAt: Date.now() + 1 });
+  await expect.poll(() => usageReads(page)).toBeGreaterThan(before);
+  await expect(settings.getByTestId("usage-all-total")).toContainText("Every bot:");
+});
+
 test("F-237: a period whose figures couldn't be read says so, and never shows another period's (fixture)", async ({
   page,
 }) => {

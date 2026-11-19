@@ -11,7 +11,7 @@ import {
   useSyncExternalStore,
   type KeyboardEvent,
 } from "react";
-import { useBridge } from "../bridge.tsx";
+import { useBridge, useClawtrateState } from "../bridge.tsx";
 import { EyeIcon } from "../icons.tsx";
 import { barText, deviceTimeZone, meterTone, PERIODS, reportFits, type BarRow } from "./words.ts";
 
@@ -214,14 +214,33 @@ export function useUsageReport(
   again: unknown = null,
 ): ReportState & { retry: () => void } {
   const bridge = useBridge();
+  const { connection } = useClawtrateState();
+  const gateway = JSON.stringify([connection.gatewayUrl, connection.gatewayId]);
   const [tries, setTries] = useState(0);
   const retry = useCallback(() => setTries((n) => n + 1), []);
   const range = rangeFor(period, useNow(), deviceTimeZone());
-  const key = JSON.stringify([botId, period, detail, tries, again, range]);
-  // The answer, and the request it answers: one for an earlier request is shown as loading.
-  const [answer, setAnswer] = useState<{ key: string; state: ReportState } | null>(null);
+  const key = JSON.stringify([
+    botId,
+    period,
+    detail,
+    tries,
+    again,
+    range,
+    gateway,
+    connection.connectedAt,
+  ]);
+  // The answer, the request it answers and its gateway: one for an earlier request is shown as
+  // loading, and one from another gateway is not shown at all.
+  const [received, setAnswer] = useState<{
+    key: string;
+    gateway: string;
+    state: ReportState;
+  } | null>(null);
+  const answer = received?.gateway === gateway ? received : null;
+  const shown = useWindowShown() && enabled;
   useEffect(() => {
-    if (!enabled) return;
+    if (!shown || document.visibilityState === "hidden") return;
+    if (connection.status !== "connected") return;
     let live = true;
     bridge
       .invoke({ type: "readUsage", botId, period, timeZone: deviceTimeZone(), detail })
@@ -230,17 +249,23 @@ export function useUsageReport(
         if ("busy" in report)
           setAnswer((was) => ({
             key,
-            state: { status: "loading", report: was?.state.report ?? null, waiting: true },
+            gateway,
+            state: {
+              status: "loading",
+              report: was?.gateway === gateway ? was.state.report : null,
+              waiting: true,
+            },
           }));
-        else setAnswer({ key, state: { status: "ready", report } });
+        else setAnswer({ key, gateway, state: { status: "ready", report } });
       })
       .catch((failure: unknown) => {
         if (live)
           setAnswer((was) => ({
             key,
+            gateway,
             state: {
               status: "error",
-              report: was?.state.report ?? null,
+              report: was?.gateway === gateway ? was.state.report : null,
               error: failure instanceof Error ? failure.message : String(failure),
             },
           }));
@@ -248,8 +273,7 @@ export function useUsageReport(
     return () => {
       live = false;
     };
-  }, [bridge, botId, period, detail, enabled, key]);
-  const shown = useWindowShown() && enabled;
+  }, [bridge, botId, period, detail, shown, key, gateway, connection.status]);
   // While the gateway says it is still counting, read again shortly: its next answer can be complete.
   const counting =
     answer?.key === key && answer.state.status === "ready" && stillCounted(answer.state.report);

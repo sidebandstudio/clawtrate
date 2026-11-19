@@ -161,7 +161,6 @@ export class UsageEngine {
   }
 
   onHello(): void {
-    this.onClose();
     void this.loadBudgets(this.generation);
     void this.readLimits(this.generation);
   }
