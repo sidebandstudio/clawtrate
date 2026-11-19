@@ -6,6 +6,7 @@ import {
   budgetPercent,
   currentCount,
   type Bot,
+  type Budget,
   type ConnectionState,
   type HostInfo,
   type Routine,
@@ -14,6 +15,7 @@ import {
 } from "@clawtrate/core";
 import { useEffect, useState, type ReactNode } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
+import { ChevronIcon } from "../icons.tsx";
 import { BudgetForm, type BudgetTarget } from "./Budget.tsx";
 import {
   Bars,
@@ -120,6 +122,8 @@ function Budgets({
   const usage = state.usage;
   const now = useNow();
   const [adding, setAdding] = useState(false);
+  // The saved budget whose form is open, opened from its own row.
+  const [editing, setEditing] = useState<string | null>(null);
   const [target, setTarget] = useState<string>("");
   const [routines, setRoutines] = useState<Routine[] | null>(null);
   useEffect(() => {
@@ -154,6 +158,17 @@ function Budgets({
     ]),
   ];
   const chosen = targets.find(([id]) => id === target) ?? null;
+  const who = (budget: Budget) =>
+    budget.routineId
+      ? `Routine ${budget.routineName ?? budget.routineId} (${name(budget.botId)})`
+      : name(budget.botId);
+  const edited = budgets.find((each) => each.id === editing) ?? null;
+  const closeEditor = (id: string) => {
+    setEditing(null);
+    requestAnimationFrame(() =>
+      document.querySelector<HTMLElement>(`[data-budget="${id}"] button.b-open`)?.focus(),
+    );
+  };
   return (
     <>
       {budgets.length === 0 ? (
@@ -165,38 +180,75 @@ function Budgets({
           {budgets.map((budget) => {
             const count = currentCount(usage, budget, now);
             const percent = budgetPercent(budget, count?.used ?? null);
-            const who = budget.routineId
-              ? `Routine ${budget.routineName ?? budget.routineId} (${name(budget.botId)})`
-              : name(budget.botId);
-            return (
+            const line = `${who(budget)} · ${kindWord(budget.period)} · ${budgetLine(budget, count)}${
+              percent !== null && percent >= 100
+                ? " · reached"
+                : percent !== null && percent >= 80
+                  ? ` · ${percent}%`
+                  : ""
+            }`;
+            const main = (
+              <span className="b-row-main">
+                <span>{line}</span>
+                {count?.partial && <small>{PARTIAL_COUNT}</small>}
+                <small>
+                  <ShownOnly />
+                </small>
+              </span>
+            );
+            // A saved budget's row opens its own form; read-only, it is a value only.
+            return canSet ? (
+              <div key={budget.id} data-budget={budget.id}>
+                <button
+                  type="button"
+                  className="b-open"
+                  aria-label={`${line}. Shown only. Change.`}
+                  onClick={() => {
+                    setAdding(false);
+                    setEditing(budget.id);
+                  }}
+                >
+                  {main}
+                  <ChevronIcon />
+                </button>
+              </div>
+            ) : (
               <div className="b-row" key={budget.id} data-budget={budget.id}>
-                <span className="b-row-main">
-                  <span>
-                    {who} · {kindWord(budget.period)} · {budgetLine(budget, count)}
-                    {percent !== null && percent >= 100
-                      ? " · reached"
-                      : percent !== null && percent >= 80
-                        ? ` · ${percent}%`
-                        : ""}
-                  </span>
-                  {count?.partial && <small>{PARTIAL_COUNT}</small>}
-                  <small>
-                    <ShownOnly />
-                  </small>
-                </span>
+                {main}
               </div>
             );
           })}
         </dl>
       )}
-      {canSet && !adding && (
+      {canSet && edited && (
+        <div data-testid="budget-edit-form">
+          <BudgetForm
+            key={edited.id}
+            target={{
+              botId: edited.botId,
+              routineId: edited.routineId,
+              routineName: edited.routineName,
+            }}
+            existing={edited}
+            name={
+              edited.routineId ? `routine ${edited.routineName ?? edited.routineId}` : who(edited)
+            }
+            announce={announce}
+            onDone={() => closeEditor(edited.id)}
+          />
+        </div>
+      )}
+      {canSet && !adding && !edited && (
         <div className="b-actions" style={{ marginTop: 8 }}>
           <button
             type="button"
             className="button"
             data-size="sm"
             data-testid="budget-add"
-            onClick={() => setAdding(true)}
+            onClick={() => {
+              setEditing(null);
+              setAdding(true);
+            }}
           >
             Add a budget
           </button>

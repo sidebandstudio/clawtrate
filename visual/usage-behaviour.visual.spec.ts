@@ -235,6 +235,30 @@ test("a read-only connection sees every figure and budget, and is offered no bud
   await expect(settings.getByTestId("budget-add")).toHaveCount(0);
 });
 
+test("S17 a saved budget's row in Settings opens its own form; Escape returns to the row", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write`, "light");
+  const settings = await settingsUsage(page);
+  const row = settings.locator('[data-budget="bot:otto"] button');
+  await expect(row).toHaveAccessibleName(
+    /^Otto · weekly · .* tokens this week\. Shown only\. Change\.$/,
+  );
+  await row.click();
+  const form = settings.getByTestId("budget-edit-form");
+  await expect(form.getByTestId("budget-tokens")).toBeFocused();
+  await expect(form.getByTestId("budget-tokens")).toHaveValue("2,500,000");
+  await expect(form.getByRole("radio", { name: "Weekly" })).toHaveAttribute("aria-checked", "true");
+  await expect(settings.getByTestId("budget-target")).toHaveCount(0);
+  await expect(settings).not.toContainText("Add a budget");
+  await page.keyboard.press("Escape");
+  await expect(form).toHaveCount(0);
+  await expect(row).toBeFocused();
+  // The routine's row opens the routine's form.
+  await settings.locator('[data-budget="routine:weekly-cleanup"] button').click();
+  await expect(settings.getByTestId("budget-edit-form")).toContainText("routine Weekly cleanup");
+});
+
 test("F-235: provider limits carry their window, reset, the gateway's time and no account (fixture)", async ({
   page,
 }) => {
