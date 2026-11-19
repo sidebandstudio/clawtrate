@@ -643,3 +643,25 @@ a.b-nav-item {
     grid-template-columns: 1fr;
   }
 }
+
+/* The page's label for draft examples, and Raw's records. */
+.d-proposed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
+
+.d-raw {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

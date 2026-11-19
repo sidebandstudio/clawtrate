@@ -1351,17 +1351,17 @@
     {
       id: "drafts",
       title: "Drafts and the Vault",
-      note: "What docs/design/drafts-and-vault.md adds: a draft card that shows exactly what will be sent, is sent or discarded, and is edited in place with a second answer; the masked secret card; and Settings, Drafts and Vault. Each link opens drafts.html in that state, as section 14 lists them.",
+      note: "Draft examples use a proposed plugin (#89) and stand-in tools. What docs/design/drafts-and-vault.md adds: a draft card that shows exactly what will be sent, is sent or discarded, and is edited in place with a second answer; the masked secret card; and Settings, Drafts and Vault. Each link opens drafts.html in that state, as section 14 lists them.",
       specimens: [
         ...[
-          ["Email drafts", (d) => `view=draft&d=${d}`, ["pending", "full", "sending", "sent", "sentnoreport", "failed", "discarded", "refused", "noanswer", "already", "expired", "closed", "cancelled", "filechanged", "unchecked", "edit", "editsaving", "editfailed", "edited", "elsewhere", "editsent", "editdiscarded", "editexpired", "editrestart", "disable", "disabled", "disablefailed"]],
+          ["Email drafts", (d) => `view=draft&d=${d}`, ["pending", "full", "raw", "sending", "sent", "sentnoreport", "toolfailed", "discarded", "refused", "noanswer", "unknown", "already", "expired", "closed", "cancelled", "runended", "filechanged", "unchecked", "norecord", "edit", "editsaving", "editfailed", "editunconfirmed", "editwaiting", "edited", "elsewhere", "editsent", "editdiscarded", "editexpired", "editrestart", "disable", "disabled", "disableunknown"]],
           ["Slack drafts", (d) => `view=draft&kind=slack&d=${d}`, ["pending", "sent", "discarded", "edit", "edited", "editsent"]],
-          ["Drafts on other connections and with the plugin stopped", (q) => q, ["view=draft&access=read", "view=draft&access=read&req=requested", "view=draft&access=interactive", "view=draft&p=stopped"]],
-          ["The masked secret card", (s) => `view=secret&s=${s}`, ["pending", "typed", "hosts", "exists", "saving", "saved", "refused", "noanswer", "already", "skipped", "expired", "cannotask"]],
+          ["Drafts on other connections and with the plugin unchecked", (q) => q, ["view=draft&access=read", "view=draft&access=read&req=requested", "view=draft&access=interactive", "view=draft&p=unchecked", "view=draft&p=absent", "view=draft&p=old"]],
+          ["The masked secret card", (s) => `view=secret&s=${s}`, ["pending", "typed", "hosts", "exists", "saving", "saved", "savedrefresh", "refused", "unconfirmed", "already", "skipped", "expired", "cannotask", "raw", "omitted", "missing", "kindchanged", "hostsunavailable"]],
           ["The secret card on a read-only connection", (q) => q, ["view=secret&access=read"]],
-          ["Settings, Vault", (v) => `view=vault&v=${v}`, ["list", "empty", "loading", "error", "item", "new", "replace", "saved", "unconfirmed", "failed", "remove", "removed", "stilllisted", "removeunknown"]],
+          ["Settings, Vault", (v) => `view=vault&v=${v}`, ["list", "empty", "loading", "error", "item", "envitem", "new", "newenv", "replace", "saved", "savedrefresh", "listedonly", "notlisted", "failed", "remove", "removed", "removedrefresh", "stilllisted", "removeunknown"]],
           ["The Vault below admin", (q) => q, ["view=vault&access=interactive", "view=vault&access=read&req=denied"]],
-          ["Settings, Drafts", (q) => q, ["view=drafts", "view=drafts&p=stopped", "view=drafts&p=absent", "view=drafts&access=interactive"]],
+          ["Settings, Drafts", (q) => q, ["view=drafts", "view=drafts&p=unchecked", "view=drafts&p=absent", "view=drafts&p=old", "view=drafts&access=interactive"]],
         ].map(([name, query, list]) => ({
           name,
           html: `<ul class="c-state-links">${list.map((x) => `<li><a href="drafts.html?${query(x)}">${x}</a></li>`).join("")}</ul>`,
