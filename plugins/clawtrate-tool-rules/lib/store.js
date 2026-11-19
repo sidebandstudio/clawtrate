@@ -4,8 +4,8 @@
 // The rules file is written whole and atomically: a temporary file in the
 // same folder, flushed, then renamed over the old one, and the folder
 // flushed. It is read again whenever it changes on disk (by its size,
-// modification time and inode), and checked as strictly as a `set`; when it
-// cannot be read the rules are unavailable and nothing is enforced.
+// modification time and inode), and checked as strictly as a `set`. A file
+// that cannot be used is a lost policy, never an empty one (RulesStore).
 //
 // The decision record is metadata only, one JSON object per line, appended
 // as calls are decided and compacted (rewritten atomically) when it holds
@@ -112,18 +112,46 @@ function statOrNull(path) {
 }
 
 /**
- * The rules store in `dir`. `scopes()` is the map the evaluator reads, or
- * null with `problem()` saying why when the file cannot be read.
+ * The rules store in `dir`, in one of three states, never confused:
+ *
+ *   none   there is no rules file: nothing was ever saved, nothing to enforce
+ *   read   the file was read and checked: its rules are enforced
+ *   lost   a file is there (or was, in this process) and cannot be used:
+ *          unreadable, too large, another schema, or not a valid store. The
+ *          last good copy this process read, if any, is kept and enforced;
+ *          with none, the plugin asks before every call
+ *
+ * `view()` is the state now. `onStateChange` is called on every change of
+ * state or of its reason, `onExternalChange` when the file changed by
+ * anything but this store's own write.
  */
 export class RulesStore {
-  constructor(dir) {
+  constructor(dir, { now = Date.now } = {}) {
     this.dir = dir;
     this.path = join(dir, RULES_FILE);
+    this.now = now;
     this.seen = undefined;
-    /** @type {{ scopes: Map<string, any> | null, problem: string | null }} */
-    this.state = { scopes: null, problem: "not read yet" };
-    /** Called after the rules on disk changed by anything but this store's own write. */
+    /** The last rules this process read or wrote, with when. */
+    this.good = null;
+    /** @type {{ kind: "none" | "read" | "lost" | "unread", scopes: Map<string, any> | null, readAt: number | null, problem: string | null }} */
+    this.state = { kind: "unread", scopes: null, readAt: null, problem: null };
     this.onExternalChange = () => {};
+    /** @type {(next: ReturnType<RulesStore["view"]>, before: { kind: string, problem: string | null }) => void} */
+    this.onStateChange = () => {};
+  }
+
+  #set(state, external) {
+    const before = this.state;
+    this.state = state;
+    if (state.kind === "read") this.good = { scopes: state.scopes, readAt: state.readAt };
+    if (before.kind !== state.kind || before.problem !== state.problem) {
+      this.onStateChange(this.#view(), { kind: before.kind, problem: before.problem });
+    }
+    if (external) this.onExternalChange();
+  }
+
+  #lost(problem) {
+    return { kind: "lost", scopes: null, readAt: null, problem };
   }
 
   /** Read the file again if it changed on disk. Never throws. */
@@ -132,53 +160,75 @@ export class RulesStore {
     try {
       stat = statOrNull(this.path);
     } catch (error) {
-      this.seen = undefined;
-      this.state = {
-        scopes: null,
-        problem: `the rules file cannot be read (${error.code ?? "error"})`,
-      };
+      const changed = this.seen !== "error";
+      this.seen = "error";
+      if (changed) {
+        this.#set(this.#lost(`the rules file cannot be read (${error.code ?? "error"})`), true);
+      }
       return;
     }
     const key = statKey(stat);
     if (key === this.seen) return;
     const first = this.seen === undefined;
     this.seen = key;
-    this.state = stat === null ? { scopes: new Map(), problem: null } : this.#read(stat);
-    if (!first) this.onExternalChange();
+    let next;
+    if (stat !== null) next = this.#read(stat);
+    // No file: nothing was saved, unless this process read rules from one.
+    else if (this.good) next = this.#lost("the rules file is gone");
+    else next = { kind: "none", scopes: new Map(), readAt: null, problem: null };
+    this.#set(next, !first);
   }
 
   #read(stat) {
+    if (!stat.isFile()) return this.#lost("the rules file is not a file");
     if (stat.size > MAX_RULES_BYTES) {
-      return { scopes: null, problem: "the rules file is larger than the plugin reads" };
+      return this.#lost("the rules file is larger than the plugin reads");
     }
     let parsed;
     try {
       parsed = JSON.parse(readFileSync(this.path, "utf8"));
     } catch (error) {
-      return {
-        scopes: null,
-        problem:
-          error instanceof SyntaxError
-            ? "the rules file is not JSON"
-            : `the rules file cannot be read (${error.code ?? "error"})`,
-      };
+      return this.#lost(
+        error instanceof SyntaxError
+          ? "the rules file is not JSON"
+          : `the rules file cannot be read (${error.code ?? "error"})`,
+      );
     }
     try {
-      return { scopes: parseRules(parsed), problem: null };
+      return { kind: "read", scopes: parseRules(parsed), readAt: this.now(), problem: null };
     } catch (error) {
-      if (error instanceof RuleError) return { scopes: null, problem: error.message };
+      if (error instanceof RuleError) return this.#lost(error.message);
       throw error;
     }
   }
 
-  scopes() {
+  #view() {
+    const { kind, scopes, readAt, problem } = this.state;
+    if (kind !== "lost") return { kind, scopes, enforced: scopes, readAt, problem, kept: null };
+    return {
+      kind,
+      scopes: null,
+      // The rules enforced while lost: the last good copy, or none (ask every call).
+      enforced: this.good?.scopes ?? null,
+      readAt: null,
+      problem,
+      kept: this.good ? { readAt: this.good.readAt } : null,
+    };
+  }
+
+  /** The state now, after looking at the file. */
+  view() {
     this.refresh();
-    return this.state.scopes;
+    return this.#view();
+  }
+
+  /** The rules as read now: an empty map with no file, null when they are lost. */
+  scopes() {
+    return this.view().scopes;
   }
 
   problem() {
-    this.refresh();
-    return this.state.problem;
+    return this.view().problem;
   }
 
   /**
@@ -204,7 +254,7 @@ export class RulesStore {
     } catch {
       this.seen = undefined;
     }
-    this.state = { scopes, problem: null };
+    this.#set({ kind: "read", scopes, readAt: this.now(), problem: null }, false);
   }
 }
 
@@ -227,7 +277,15 @@ export function parseRules(parsed) {
       `the rules file has schema ${JSON.stringify(parsed.schema)}; this plugin reads schema ${RULES_SCHEMA}`,
     );
   }
-  const entries = Object.entries(parsed.scopes ?? {});
+  // The envelope exactly: a missing or malformed `scopes` is not an empty store.
+  if (Object.keys(parsed).sort().join() !== "format,schema,scopes") {
+    throw new RuleError("bad_store", "the rules file is not a valid rules store");
+  }
+  const raw = parsed.scopes;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new RuleError("bad_store", "the rules file's scopes are not a valid rules store");
+  }
+  const entries = Object.entries(raw);
   if (entries.length > LIMITS.scopeEntries) {
     throw new RuleError("bad_store", "the rules file holds more scopes than the plugin allows");
   }
@@ -252,6 +310,8 @@ const DECISION_KEYS = [
   "runId",
   "callId",
   "tool",
+  /** The rules' state when the call was decided: none, read, kept (a copy) or lost. */
+  "rules",
   "decision",
   "source",
   "answer",

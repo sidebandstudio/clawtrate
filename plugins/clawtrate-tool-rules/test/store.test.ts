@@ -116,6 +116,7 @@ describe("the decision record", () => {
         "callId",
         "decision",
         "id",
+        "rules",
         "runId",
         "sessionKey",
         "source",

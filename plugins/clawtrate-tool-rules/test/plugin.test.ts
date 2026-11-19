@@ -3,7 +3,7 @@
 // what it must never do (design section 21).
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import plugin, {
@@ -102,43 +102,140 @@ describe("status says only what the plugin itself knows", () => {
   });
 });
 
-describe("Rules unavailable", () => {
-  it("reports it, enforces nothing, refuses get and set, and records why calls passed", async () => {
+describe("a lost policy is not an empty one", () => {
+  const LOST: [string, (file: string) => void, RegExp][] = [
+    ["not JSON", (f) => writeFileSync(f, "{ broken"), /not JSON/],
+    ["too large", (f) => writeFileSync(f, Buffer.alloc(8 * 1024 * 1024 + 1, 32)), /larger/],
+    [
+      "a newer schema",
+      (f) =>
+        writeFileSync(f, JSON.stringify({ format: "clawtrate-tool-rules", schema: 2, scopes: {} })),
+      /schema 2/,
+    ],
+    [
+      "no scopes",
+      (f) => writeFileSync(f, JSON.stringify({ format: "clawtrate-tool-rules", schema: 1 })),
+      /not a valid rules store/,
+    ],
+    [
+      "scopes that are a list",
+      (f) =>
+        writeFileSync(f, JSON.stringify({ format: "clawtrate-tool-rules", schema: 1, scopes: [] })),
+      /not a valid rules store/,
+    ],
+    [
+      "scopes that are null",
+      (f) =>
+        writeFileSync(
+          f,
+          JSON.stringify({ format: "clawtrate-tool-rules", schema: 1, scopes: null }),
+        ),
+      /not a valid rules store/,
+    ],
+    ["unreadable", (f) => (writeFileSync(f, "{}"), chmodSync(f, 0o000)), /cannot be read/],
+  ];
+
+  it("no rules file: nothing was saved, and nothing is decided", () => {
     const h = host();
-    await h.save("otto", [{ action: "never", tools: ["write"] }]);
-    writeFileSync(rulesFile(h.stateDir), "{ broken");
-    const status = (await h.call("status")).payload!;
-    expect(status.rules).toEqual({ state: "unavailable", reason: "the rules file is not JSON" });
-    expect(status.matches).toBeNull();
     expect(h.before("otto", "write", { path: "a" })).toBeUndefined();
-    const got = await h.call("get");
-    expect(got.error).toMatchObject({
-      code: "UNAVAILABLE",
-      details: { reason: "rules_unavailable" },
-    });
-    expect(got.error?.message).toMatch(/^Rules unavailable: /);
-    const set = await h.call("set", {
-      scope: "otto",
-      rules: [],
-      fallback: false,
-      expectedVersion: 1,
-    });
-    expect(set.error).toMatchObject({ code: "UNAVAILABLE" });
-    // The broken file is not overwritten.
-    expect(readFileSync(rulesFile(h.stateDir), "utf8")).toBe("{ broken");
-    const [record] = (await h.call("decisions.list")).payload!.records as Record<string, unknown>[];
-    expect(record).toMatchObject({
-      tool: "write",
-      decision: "none",
-      source: { kind: "rules-unavailable" },
-    });
   });
 
-  it("still never touches ask_user", () => {
+  for (const [what, spoil, reason] of LOST) {
+    it(`${what}, with no copy read in this process: every call but ask_user asks, saying the rules could not be read`, async () => {
+      const h0 = host();
+      mkdirSync(join(h0.stateDir, "clawtrate-tool-rules"), { recursive: true });
+      spoil(rulesFile(h0.stateDir));
+      try {
+        const h = load({ stateDir: h0.stateDir });
+        for (const [tool, params] of [
+          ["read", { path: "AGENTS.md" }],
+          ["web_search", { query: "x" }],
+          ["exec", { command: "ls" }],
+        ] as const) {
+          const approval = h.before("otto", tool, params)?.requireApproval;
+          expect(approval?.title, tool).toBe(`${tool}: Clawtrate's rules could not be read`);
+          expect(approval?.description).toMatch(
+            /could not read its rules, so it asks before every tool call/,
+          );
+          expect(approval?.allowedDecisions).toEqual(["allow-once", "deny"]);
+        }
+        expect(h.before("otto", "ask_user", { questions: [] })).toBeUndefined();
+        const [record] = (await h.call("decisions.list")).payload!.records as Record<
+          string,
+          unknown
+        >[];
+        expect(record).toMatchObject({ tool: "ask_user", decision: "none" });
+        const records = (await h.call("decisions.list")).payload!.records as Record<
+          string,
+          unknown
+        >[];
+        expect(records[1]).toMatchObject({
+          decision: "ask",
+          rules: "lost",
+          source: { kind: "rules-lost" },
+        });
+        expect(h.warnings.join("\n")).toMatch(reason);
+        expect(h.warnings.join("\n")).toMatch(/every tool call but ask_user is asked about/);
+        const got = await h.call("get");
+        expect(got.error).toMatchObject({
+          code: "UNAVAILABLE",
+          details: { reason: "rules_unavailable" },
+        });
+      } finally {
+        chmodSync(rulesFile(h0.stateDir), 0o600);
+      }
+    });
+  }
+
+  it("with a copy read earlier, goes on enforcing it, says so, and never overwrites the file", async () => {
     const h = host();
-    mkdirSync(join(h.stateDir, "clawtrate-tool-rules"), { recursive: true });
+    await h.save("otto", [{ action: "never", tools: ["write"] }]);
+    for (const [, spoil] of LOST) {
+      spoil(rulesFile(h.stateDir));
+      try {
+        expect(h.before("otto", "write", { path: "a" })?.block).toBe(true);
+        expect(h.before("otto", "read", { path: "a" })).toBeUndefined();
+        const set = await h.call("set", {
+          scope: "otto",
+          rules: [],
+          fallback: false,
+          expectedVersion: 1,
+        });
+        expect(set.error).toMatchObject({
+          code: "UNAVAILABLE",
+          details: { reason: "rules_unavailable" },
+        });
+        expect(set.error?.message).toMatch(/Enforcing the copy read at /);
+      } finally {
+        chmodSync(rulesFile(h.stateDir), 0o600);
+      }
+    }
+    const records = (await h.call("decisions.list")).payload!.records as Record<string, unknown>[];
+    expect(records[0]).toMatchObject({ tool: "read", decision: "none", rules: "kept" });
+    expect(records[1]).toMatchObject({ tool: "write", decision: "block", rules: "kept" });
+  });
+
+  it("a file deleted after it was read is lost, not empty", async () => {
+    const h = host();
+    await h.save("otto", [{ action: "never", tools: ["write"] }]);
+    rmSync(rulesFile(h.stateDir));
+    expect(h.before("otto", "write", { path: "a" })?.block).toBe(true);
+    expect(h.warnings.at(-1)).toMatch(/the rules file is gone\. Enforcing the copy read at/);
+  });
+
+  it("logs each change of state, once, and tells readers", async () => {
+    const h = host();
+    await h.save("otto", [{ action: "never", tools: ["write"] }]);
+    const events = h.events.length;
+    const good = readFileSync(rulesFile(h.stateDir), "utf8");
     writeFileSync(rulesFile(h.stateDir), "{ broken");
-    expect(h.before("otto", "ask_user", { questions: [] })).toBeUndefined();
+    h.before("otto", "write", { path: "a" });
+    h.before("otto", "write", { path: "a" });
+    expect(h.warnings.filter((w) => /Rules unavailable/.test(w))).toHaveLength(1);
+    writeFileSync(rulesFile(h.stateDir), good);
+    await h.call("status");
+    expect(h.infos.at(-1)).toBe("clawtrate-tool-rules: Rules read; enforcing them.");
+    expect(h.events.length - events).toBe(2);
   });
 });
 
@@ -410,6 +507,7 @@ describe("the decision record", () => {
         // As the gateway's audit log writes the same call's id.
         callId: `sha256:${createHash("sha256").update("call_abc").digest("hex")}`,
         tool: "exec",
+        rules: "read",
         decision: "ask",
         source: { kind: "rule", scope: "otto", ruleId, version: 1, action: "ask" },
         answer: "allow-once",

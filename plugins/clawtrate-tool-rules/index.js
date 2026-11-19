@@ -83,7 +83,7 @@ function sharedState(dir, options) {
   let shared = slots.get(dir);
   if (!shared) {
     shared = {
-      store: new RulesStore(dir),
+      store: new RulesStore(dir, options.now ? { now: options.now } : {}),
       log: new DecisionLog(dir, options.log ?? {}),
       /** When the hook last saw a tool call, in this process. */
       lastCallAt: null,
@@ -91,6 +91,16 @@ function sharedState(dir, options) {
       active: new Map(),
     };
     shared.store.onExternalChange = () => emitChanged(shared);
+    // Every change of state is said in the log, not only at start. (Readers are
+    // told by onExternalChange, or by the save that made the change.)
+    // (The first read is said by the service's start.)
+    shared.store.onStateChange = (view, before) => {
+      if (before.kind === "unread") return;
+      const running = [...shared.active.values()].reverse().find((entry) => entry.logger);
+      const line = `${PLUGIN_ID}: ${stateLine(view)}`;
+      if (view.kind === "lost") running?.logger.warn?.(line);
+      else running?.logger.info?.(line);
+    };
     slots.set(dir, shared);
   }
   return shared;
@@ -100,6 +110,16 @@ function emitChanged(shared) {
   const running = [...shared.active.values()].reverse().find((entry) => entry.emit);
   // Empty: readers fetch again, and nothing about a rule or a bot goes out.
   running?.emit(CHANGED_EVENT, {}, { scope: "operator.read" });
+}
+
+/** The rules' state in words, for the gateway's log. */
+function stateLine(view) {
+  if (view.kind === "none") return "No rules file: nothing was saved, so nothing is enforced.";
+  if (view.kind === "read") return "Rules read; enforcing them.";
+  if (view.kind === "lost" && view.kept) {
+    return `Rules unavailable: ${view.problem}. Enforcing the copy read at ${new Date(view.kept.readAt).toISOString()}.`;
+  }
+  return `Rules unavailable: ${view.problem}. No copy was read in this process, so every tool call but ask_user is asked about.`;
 }
 
 /** What the rules match, for `status`: tools by name, and the scopes that ask for every tool. */
@@ -135,6 +155,17 @@ export function approvalText(result, tool, target) {
     DESCRIPTION_MAX,
   );
   return { title, description };
+}
+
+/** The card while the rules are lost and no copy was read: every call is asked about. */
+export function lostRulesText(tool, target) {
+  return {
+    title: clip(`${tool}: Clawtrate's rules could not be read`, TITLE_MAX),
+    description: clip(
+      `Clawtrate's rules plugin could not read its rules, so it asks before every tool call until they can be read. The call: ${tool}${targetWords(target)}.`,
+      DESCRIPTION_MAX,
+    ),
+  };
 }
 
 /** The reason a Never gives, naming the rule; the call's own result carries it. */
@@ -203,15 +234,26 @@ export function createToolRules(api, options = {}) {
       log.add({ ...base, decision: "none", source: null });
       return undefined;
     }
-    const scopes = store.scopes();
-    if (scopes === null) {
-      // The rules cannot be read: nothing is enforced, and status says so.
-      log.add({ ...base, decision: "none", source: { kind: "rules-unavailable" } });
-      return undefined;
-    }
+    const view = store.view();
+    const rules = view.kind === "lost" ? (view.kept ? "kept" : "lost") : view.kind;
     const target = readTarget(tool, event?.params, workspaceOf(agentId));
-    const result = evaluate(scopes, { agentId, tool, target });
-    const id = log.add({ ...base, decision: result.decision, source: result.source });
+    const ask = (text, id) => ({
+      requireApproval: {
+        ...text,
+        severity: "warning",
+        timeoutMs: APPROVAL_TIMEOUT_MS,
+        allowedDecisions: [...ALLOWED_DECISIONS],
+        // Only the decision word is kept; nothing standing is made from it.
+        onResolution: (decision) => log.answer(id, ANSWERS.has(decision) ? decision : "unknown"),
+      },
+    });
+    if (view.enforced === null) {
+      // Lost, with no copy: nothing a person forbade may run unasked.
+      const id = log.add({ ...base, rules, decision: "ask", source: { kind: "rules-lost" } });
+      return ask(lostRulesText(tool, target), id);
+    }
+    const result = evaluate(view.enforced, { agentId, tool, target });
+    const id = log.add({ ...base, rules, decision: result.decision, source: result.source });
     if (result.decision === "block") return { block: true, blockReason: blockReason(result) };
     if (result.decision !== "ask") return undefined;
     return {
@@ -261,25 +303,23 @@ export function createToolRules(api, options = {}) {
   };
 
   const unavailable = () =>
-    new RequestError(
-      "UNAVAILABLE",
-      "rules_unavailable",
-      `Rules unavailable: ${store.problem() ?? "the rules cannot be read"}`,
-    );
+    new RequestError("UNAVAILABLE", "rules_unavailable", stateLine(store.view()));
 
   method("status", "operator.read", () => {
-    const scopes = store.scopes();
-    const problem = store.problem();
+    const view = store.view();
     return {
       plugin: PLUGIN_ID,
       version: PLUGIN_VERSION,
       rulesSchema: RULES_SCHEMA,
-      rules: problem ? { state: "unavailable", reason: problem } : { state: "available" },
+      rules:
+        view.kind === "lost"
+          ? { state: "unavailable", reason: view.problem }
+          : { state: "available" },
       hook: {
         registered: [...shared.active.values()].some((entry) => entry.hook),
         lastCallAt: shared.lastCallAt,
       },
-      matches: scopes ? matchesOf(scopes) : null,
+      matches: view.enforced ? matchesOf(view.enforced) : null,
     };
   });
 
@@ -389,11 +429,12 @@ export function createToolRules(api, options = {}) {
         const events = ctx?.gatewayEvents;
         shared.active.set(registration, {
           hook: hookRegistered,
+          logger,
           emit: events ? (name, payload, opts) => events.emit(name, payload, opts) : null,
         });
-        store.refresh();
-        const problem = store.problem();
-        if (problem) logger.warn?.(`${PLUGIN_ID}: Rules unavailable: ${problem}`);
+        const view = store.view();
+        // Said at every start; later changes are said as they happen.
+        if (view.kind === "lost") logger.warn?.(`${PLUGIN_ID}: ${stateLine(view)}`);
         // What lets a bot change the rules, from the gateway's config, in its log.
         for (const line of exposureWarnings(currentConfig()))
           logger.warn?.(`${PLUGIN_ID}: ${line}`);

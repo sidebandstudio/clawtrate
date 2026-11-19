@@ -55,6 +55,7 @@ export function load(
   const services: { start(ctx: Json): void; stop(): void }[] = [];
   const events: { name: string; payload: unknown; opts: unknown }[] = [];
   const warnings: string[] = [];
+  const infos: string[] = [];
   const config = options.config ?? {};
   const api: Json = {
     pluginConfig: {},
@@ -66,7 +67,11 @@ export function load(
           options.workspaces?.[agentId] ?? `/nonexistent-workspaces/${agentId}`,
       },
     },
-    logger: { info() {}, warn: (m: string) => warnings.push(m), error() {} },
+    logger: {
+      info: (m: string) => infos.push(m),
+      warn: (m: string) => warnings.push(m),
+      error() {},
+    },
     registerGatewayMethod: (name: string, handler: (opts: Json) => Promise<void>, opts: Json) =>
       methods.set(name, { handler, opts }),
     registerService: (service: (typeof services)[number]) => services.push(service),
@@ -142,6 +147,7 @@ export function load(
     services,
     events,
     warnings,
+    infos,
     call,
     before,
     save,
