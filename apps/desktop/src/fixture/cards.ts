@@ -71,7 +71,6 @@ export const CARD_SCENES = [
   "approval-closed-ended",
   "approval-closed-failed",
   "approval-closed-unknown",
-  "approval-withdrawn",
   "approval-winner",
   "question-single",
   "question-multi",
@@ -709,15 +708,6 @@ function build(
             }),
           ),
         ),
-      };
-    case "approval-withdrawn":
-      // The run completed while its request was still pending: this client denied the request so
-      // its command is not run after the run, and the card closes with the run (F-418).
-      return {
-        b: waitingApproval(now)
-          .toolResult("exec", "call_mv", { content: text("approval-pending") }, ago(1))
-          .end(ago(1))
-          .update(settle(resolution("denied", "deny", ago(1), { reason: "run-ended" }))),
       };
     case "approval-winner":
       return {

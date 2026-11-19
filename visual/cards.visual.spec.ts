@@ -92,7 +92,6 @@ const SHOTS: Shot[] = [
   { name: "approval-closed-ended", scene: "approval-closed-ended", rows: "F-418" },
   { name: "approval-closed-failed", scene: "approval-closed-failed", rows: RESOLVED },
   { name: "approval-closed-unknown", scene: "approval-closed-unknown", rows: RESOLVED },
-  { name: "approval-withdrawn", scene: "approval-withdrawn", rows: "F-418" },
   { name: "approval-winner", scene: "approval-winner", rows: RESOLVED },
   { name: "question-single", scene: "question-single", rows: QUESTION },
   { name: "question-multi", scene: "question-multi", rows: "F-114" },

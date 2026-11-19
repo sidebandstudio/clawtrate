@@ -2241,41 +2241,6 @@ export class ClawtrateClient {
   // Approvals -------------------------------------------------------------------
 
   /**
-   * A request still pending after its own run completed or failed is closed by
-   * denying it, so its action is not taken after the run it belonged to
-   * (conversation.md section 12, "When the run has already ended"; F-418).
-   * The run's end must be its own `lifecycle` `end` or `error` event, received
-   * on the live stream; an end inferred from history or a reconnect never
-   * withdraws anything. The deny goes through `resolveApproval` like any
-   * other, once: only while nothing was ever decided for the approval here
-   * (`attempt` 0), and only on a
-   * connection that already holds `operator.approvals`, so it never asks for
-   * access by itself. Its outcome keeps why it was sent (`reason`), and a
-   * decision that raced it shows as the gateway reports it. A stopped run is
-   * the gateway's to cancel.
-   */
-  private withdrawEndedApprovals(key: string): void {
-    const transcript = this.state.transcripts[key];
-    if (!transcript || !this.holds(APPROVALS_SCOPE)) return;
-    for (const approval of transcript.approvals) {
-      if (approval.status !== "pending" || !approval.runEnded || !approval.runId) continue;
-      const run = findRun(transcript, approval.runId);
-      if (!run || (run.state !== "completed" && run.state !== "failed")) continue;
-      // Only on the run's own end, as the gateway sent it: never on an end this client inferred
-      // from history or a reconnect, while the gateway may still be waiting on the request.
-      if (
-        !run.outcomeKnown ||
-        !run.lifecycle?.some((each) => /lifecycle (end|error)\)$/.test(each.via))
-      )
-        continue;
-      if (this.attemptsFor(approval.id).attempt !== 0 || this.attemptsFull(approval.id)) continue;
-      void this.resolveApproval(key, approval.id, "deny", {
-        reason: run.state === "failed" ? "run-failed" : "run-ended",
-      }).catch(() => undefined);
-    }
-  }
-
-  /**
    * Resolve an approval with the method for its kind: allow once, deny, or a
    * standing allow (`allow-always`), optionally limited to `expiresInDays`
    * days where the gateway takes a duration (exec and the generic kind). Deny
@@ -2292,8 +2257,6 @@ export class ClawtrateClient {
       expiresInDays?: number | null;
       owner?: object;
       shownDigest?: string | null;
-      /** This client's reason for a deny it sends on its own (`run-ended`, `run-failed`). */
-      reason?: "run-ended" | "run-failed";
     } = {},
   ): Promise<void> {
     const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
@@ -2360,17 +2323,13 @@ export class ClawtrateClient {
         resolution = resolutionFromSnapshot(result?.approval, { via: method, record: result });
         applied = result?.applied === true;
         if (!resolution) throw new Error("The gateway did not say how the approval ended.");
-        // This client's own deny, applied: why it sent it is what the card says.
-        if (applied && options.reason && resolution.status === "denied") {
-          resolution = { ...resolution, reason: options.reason };
-        }
       } else {
         // The legacy methods answer `{ok: true}` once the decision is applied.
         resolution = {
           id: approvalId,
           status: decision === "deny" ? "denied" : "allowed",
           decision,
-          reason: options.reason ?? "user",
+          reason: "user",
           resolvedAt: this.now(),
           resolvedBy: this.host.client.displayName,
           resolver: null,
@@ -3834,7 +3793,6 @@ export class ClawtrateClient {
     });
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
-    this.withdrawEndedApprovals(key);
     for (const run of transcript.runs) {
       const timerKey = `${key}\u0000${run.id}`;
       const timer = this.turnTimers.get(timerKey);
