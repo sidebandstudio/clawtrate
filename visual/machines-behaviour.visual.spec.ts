@@ -364,6 +364,11 @@ test("F-157: device access is asked for by name only; with it alone, only this d
   const list = page.getByTestId("device-list");
   await expect(list).toBeVisible();
   await expect(list.locator("dt").first()).toHaveText("This device");
+  // Below admin the gateway lists only this device, and the page says so.
+  await expect(list.locator("dt")).toHaveCount(1);
+  await expect(page.getByTestId("devices-own-only")).toHaveText(
+    "Without admin access, the gateway lists only this device.",
+  );
   // The gateway lets a device token below admin change only its own record.
   await expect(list.getByRole("button", { name: "Rename" })).toHaveCount(1);
   await expect(list.getByRole("button", { name: "Remove" })).toHaveCount(0);
@@ -376,8 +381,6 @@ test("F-157: device access is asked for by name only; with it alone, only this d
   await page.keyboard.press("Enter");
   await expect(settingsAnnouncer(page)).toHaveText("Renamed");
   await expect(list).toContainText("Desk");
-  // A paired client's last-seen reason, as the gateway gives it.
-  await expect(list).toContainText(/Last seen .+ \(connect\)/);
 });
 
 test("F-157: with admin, another device is renamed and a machine removed after a confirmation that promises nothing more", async ({
@@ -404,6 +407,9 @@ test("F-157: with admin, another device is renamed and a machine removed after a
   // The gateway removes only a paired record: no Remove for the unpaired one.
   await expect(page.getByRole("button", { name: "Remove media-box…" })).toHaveCount(0);
   const list = page.getByTestId("device-list");
+  // A paired client's last-seen reason, as the gateway gives it.
+  await expect(list).toContainText(/Last seen .+ \(connect\)/);
+  await expect(page.getByTestId("devices-own-only")).toHaveCount(0);
   await list.getByRole("button", { name: "Rename" }).nth(1).click();
   await page.getByRole("textbox", { name: /New name for Clawtrate on iPhone/ }).fill("Phone");
   await page.keyboard.press("Enter");

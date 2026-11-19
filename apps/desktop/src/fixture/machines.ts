@@ -335,7 +335,12 @@ export function machineCommands(now: number, params: MachineParams) {
         })),
       ],
       nodesOmitted: 0,
-      devices: pairing(state) ? w.devices : { status: "needs-pairing" },
+      // Below admin the gateway lists a device-token connection's own record only.
+      devices: !pairing(state)
+        ? { status: "needs-pairing" }
+        : admin(state)
+          ? w.devices
+          : w.devices.filter((device) => device.thisDevice),
       devicesOmitted: 0,
     };
   }

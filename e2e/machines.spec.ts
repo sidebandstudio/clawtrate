@@ -208,6 +208,31 @@ test("F-046 F-047: below admin every place shows, nothing can change, and the ba
   await shots(page, "runs-on-below-admin");
 });
 
+test("F-157: with device access alone, the gateway lists this device's own record only, and the page says so", async () => {
+  test.setTimeout(120_000);
+  const page = writer.page;
+  const settings = await machines(page);
+  await settings.getByTestId("device-bar").getByRole("button", { name: "Request access" }).click();
+  await expect(settings.getByTestId("device-bar")).toContainText(
+    "Waiting for the gateway's owner.",
+    {
+      timeout: 15_000,
+    },
+  );
+  await approve();
+  const list = settings.getByTestId("device-list");
+  await expect(list).toBeVisible({ timeout: 30_000 });
+  // The gateway holds other paired devices (the admin client, the reader), and lists none of them.
+  const all = await admin.request<{ paired: Json[] }>("device.pair.list", {});
+  expect(all.paired.filter((device) => device.role !== "node").length).toBeGreaterThan(1);
+  await expect(list.locator("dt")).toHaveCount(1);
+  await expect(list.locator("dt")).toHaveText("This device");
+  await expect(settings.getByTestId("devices-own-only")).toHaveText(
+    "Without admin access, the gateway lists only this device.",
+  );
+  await page.keyboard.press("Escape");
+});
+
 test("F-046: admin asked for explicitly sets Otto's commands to media-box; it is read back, and a read-only connection sees it", async () => {
   test.setTimeout(180_000);
   const page = writer.page;

@@ -647,9 +647,16 @@ export function useMachinesSection({
             : `Couldn't read the paired devices. ${devices.status === "failed" ? devices.message : ""}`}
         </p>
       ) : (
-        <dl className="facts m-facts" data-testid="device-list">
-          {devices.map(deviceRow)}
-        </dl>
+        <>
+          <dl className="facts m-facts" data-testid="device-list">
+            {devices.map(deviceRow)}
+          </dl>
+          {!connection.canAdmin && (
+            <p className="b-hint" data-testid="devices-own-only">
+              Without admin access, the gateway lists only this device.
+            </p>
+          )}
+        </>
       )}
       <p className="b-hint" data-testid="machines-read-at">
         As the gateway reported them at {clockTime(view.readAt)}.

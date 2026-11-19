@@ -22,8 +22,9 @@ describe("device access", () => {
     fake.gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
     fake.gateway.handlers["node.list"] = () => ({ nodes: [] });
     fake.gateway.handlers["config.get"] = () => ({ config: {}, hash: "c1" });
+    // As OpenClaw 2026.10.6 answers a device-token connection below admin: its own record only.
     fake.gateway.handlers["device.pair.list"] = () => ({
-      paired: [{ deviceId: "dev-phone", displayName: "Clawtrate on iPhone", role: "operator" }],
+      paired: [{ deviceId: "device-1", displayName: "Clawtrate Desktop", role: "operator" }],
     });
     const { client, storage } = await accountsClient({ gateway: fake, scopes: INTERACTIVE_SCOPES });
     // Reading the machines asks for nothing: devices say which access they need.
@@ -44,9 +45,9 @@ describe("device access", () => {
     expect(client.state.connection.canAdmin).toBe(false);
 
     const after = await client.readMachines();
-    expect(Array.isArray(after.devices) && after.devices.map((d) => d.name)).toEqual([
-      "Clawtrate on iPhone",
-    ]);
+    expect(
+      Array.isArray(after.devices) && after.devices.map((d) => [d.name, d.thisDevice]),
+    ).toEqual([["Clawtrate Desktop", true]]);
     // Every later connect asks for what was granted, and nothing more.
     fake.gateway.dropAll();
     await until(
