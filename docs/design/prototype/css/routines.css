@@ -560,6 +560,7 @@
   right: 0;
   height: 0;
   border-top: 1.5px solid var(--text-muted);
+  pointer-events: none;
 }
 
 /* The editor */
@@ -828,5 +829,20 @@
 }
 
 [data-input="touch"] .r-view .event-line:has(.r-link) {
+  min-height: 44px;
+}
+
+/* The dialogs' controls on the phone: 44 px, drawn that size, not only hit at it. */
+[data-input="touch"] .r-dialog .b-close {
+  width: 44px;
+  height: 44px;
+}
+
+/* A check-in choice says what it does in a sentence; it wraps rather than losing its end. */
+.r-dialog .b-choice-sub {
+  white-space: normal;
+}
+
+[data-input="touch"] .r-convo .steps > summary {
   min-height: 44px;
 }
