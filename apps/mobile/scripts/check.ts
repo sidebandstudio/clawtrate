@@ -164,7 +164,7 @@ function clean(record: CheckRecord, env: NodeJS.ProcessEnv): boolean {
   return ok;
 }
 
-async function main(): Promise<number> {
+export async function main(): Promise<number> {
   if (!existsSync(APP_PATH))
     throw new Error(`There is no build at ${APP_PATH}. Run pnpm mobile:build first.`);
   const developerDir = findDeveloperDir();
@@ -207,7 +207,7 @@ async function main(): Promise<number> {
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 
-  // Recorded before either exists, so a killed run's device and instance are found by the next.
+  // The run id is written before start. The device id is recorded as soon as create returns.
   writeRecord(RECORD, record);
   try {
     const choice = chooseDevice(env);
@@ -227,6 +227,7 @@ async function main(): Promise<number> {
       throw new Error("The development gateway did not start.");
     const gateway = readDevConnection(REPO, { instance: record.instance });
     if (!gateway) throw new Error(`The instance ${record.instance} is not running.`);
+    const driverEnv = maestroEnv(await closedPort());
     if (stopping) return 130;
 
     child = spawn(
@@ -239,7 +240,7 @@ async function main(): Promise<number> {
         detached: true,
         env: {
           ...env,
-          ...maestroEnv(await closedPort()),
+          ...driverEnv,
           JAVA_HOME: javaHome,
           CLAWTRATE_IOS_MAESTRO: maestro,
           CLAWTRATE_IOS_DEVICE: record.device,
