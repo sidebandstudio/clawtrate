@@ -238,3 +238,131 @@ describe("the setup connection's token gate", () => {
     expect(setupGrant(hello({ role: "node", scopes: ["operator.read"] }))).toBe("other");
   });
 });
+
+/** A client whose every published state and log line is kept, as text. */
+function recorded(gateway: FakeGateway, storage = memoryStorage()) {
+  const logs: string[] = [];
+  const host = {
+    ...testHost(gateway, storage),
+    log: (_level: string, line: string) => void logs.push(line),
+  };
+  const client = new ClawtrateClient(host, FAST);
+  const snapshots: string[] = [];
+  client.store.subscribe((state) => snapshots.push(JSON.stringify(state)));
+  return { client, storage, everything: () => [...snapshots, ...logs].join("\n") };
+}
+
+describe("what a setup connection publishes, whatever the gateway sends", () => {
+  it("F-494: a refusal that echoes the code puts it in no state, snapshot or log line", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `unauthorized: setup code ${CODE} invalid`,
+        details: { code: "AUTH_BOOTSTRAP_TOKEN_INVALID", remediationHint: `retry without ${CODE}` },
+      },
+    });
+    const { client, everything } = recorded(gateway);
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error).toMatchObject({
+      code: "AUTH_BOOTSTRAP_TOKEN_INVALID",
+      message: "The one-time code didn't work.",
+      hint: null,
+    });
+    expect(everything()).not.toContain(CODE);
+    client.stop();
+  });
+
+  it("F-494: a pairing that echoes the code in its request, hint and scopes keeps it out of state", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "NOT_PAIRED",
+        message: `pairing required for ${CODE}`,
+        details: {
+          code: "PAIRING_REQUIRED",
+          requestId: CODE,
+          deviceId: `device-${CODE}`,
+          remediationHint: `approve ${CODE}`,
+          requestedScopes: ["operator.read", CODE],
+        },
+      },
+    });
+    const { client, everything } = recorded(gateway);
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
+    await until(() => client.state.connection.status === "pairing");
+    expect(everything()).not.toContain(CODE);
+    client.stop();
+  });
+
+  it("F-492: a reconnect right after a read-only first pairing uses and stores read only, whatever is granted", async () => {
+    const gateway = new FakeGateway();
+    let connects = 0;
+    gateway.connectReply = () =>
+      (connects += 1) === 1
+        ? { ok: true, payload: helloOk(["operator.read"], "device-token") }
+        : { ok: true, payload: helloOk(["operator.read", "operator.write"], "wider-token") };
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
+    await until(() => client.state.connection.status === "connected");
+    gateway.dropAll();
+    await until(() => connects === 2 && client.state.connection.status === "connected");
+    expect(client.state.connection.scopes).toEqual(["operator.read"]);
+    expect(client.state.connection.canWrite).toBe(false);
+    expect(JSON.parse(storage.data.get(tokenKey(URL))!)).toMatchObject({
+      token: "wider-token",
+      grantedScopes: ["operator.read"],
+      heldScopes: ["operator.read"],
+    });
+    client.stop();
+  });
+
+  it("F-515: a setup hello on another protocol writes nothing and ends on the protocol notice", async () => {
+    const gateway = gatewayGranting({
+      role: "operator",
+      scopes: ["operator.read"],
+      deviceToken: "device-token",
+    });
+    const replied = gateway.connectReply;
+    gateway.connectReply = (params, url) => {
+      const reply = replied(params, url);
+      return reply.ok
+        ? { ok: true, payload: { ...(reply.payload as object), protocol: 3 } }
+        : reply;
+    };
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error?.code).toBe("PROTOCOL_MISMATCH");
+    expect(storage.data.has(tokenKey(URL))).toBe(false);
+    client.stop();
+  });
+
+  it("F-492: says what this device can already do on a gateway", async () => {
+    const storage = memoryStorage({
+      [tokenKey("ws://127.0.0.1:19960")]: JSON.stringify({
+        token: "t",
+        grantedScopes: ["operator.read"],
+        heldScopes: ["operator.read", "operator.write"],
+      }),
+      [tokenKey(URL)]: JSON.stringify({
+        token: "t",
+        grantedScopes: ["operator.read"],
+        heldScopes: ["operator.read"],
+      }),
+    });
+    const client = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
+    expect(await client.deviceAccess(URL)).toBe("read");
+    expect(await client.deviceAccess("ws://127.0.0.1:19960")).toBe("more");
+    expect(await client.deviceAccess("ws://127.0.0.1:19980")).toBe("new");
+  });
+});

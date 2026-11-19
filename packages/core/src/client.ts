@@ -701,6 +701,8 @@ export class ClawtrateClient {
    */
   private tokenGate: { generation: number; url: string; staged: StagedDeviceToken | null } | null =
     null;
+  /** The device token of the gateway connected to last, kept only to scrub it from gateway text. */
+  private heldToken: string | null = null;
 
   private readonly host: ClawtrateHost;
   private readonly options: ClientOptions;
@@ -953,6 +955,17 @@ export class ClawtrateClient {
       expiresAtMs: options.expiresAtMs,
     };
     await this.open();
+  }
+
+  /**
+   * What this device can already do on the gateway at `url`: `new` with no
+   * token there, `read` when it holds read only, `more` when it holds more.
+   */
+  async deviceAccess(url: string): Promise<"new" | "read" | "more"> {
+    const identity = await this.loadIdentity();
+    const record = await this.loadToken(validateGatewayUrl(url), identity.deviceId, "operator");
+    if (!record) return "new";
+    return record.heldScopes.some((scope) => !READ_SCOPES.includes(scope)) ? "more" : "read";
   }
 
   /** Whether this device already holds a token for the gateway at `url`. */
@@ -4122,6 +4135,7 @@ export class ClawtrateClient {
       createRequestId: () => this.randomId(),
       buildConnectPlan: async ({ nonce, challengeTs }) => {
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
+        this.heldToken = token?.token ?? null;
         // The host's one-time code, while it lives, for a device not yet paired with this gateway.
         const code =
           !token && this.setupCode?.url === settings.url && this.now() < this.setupCode.expiresAtMs
@@ -4168,6 +4182,8 @@ export class ClawtrateClient {
           // The code is used: it is forgotten whatever the grant.
           this.tokenGate = null;
           this.setupCode = null;
+          // Another protocol: nothing is written, and the protocol notice says so (onHello).
+          if (hello.protocol !== PROTOCOL_VERSION) return;
           const staged = gate.staged;
           if (setupGrant(hello) !== "read" || staged === null || staged.role !== "operator") {
             this.refuseSetupGrant();
@@ -4381,9 +4397,16 @@ export class ClawtrateClient {
   ) {
     const details = asRecord(error.details) ?? {};
     const code = typeof details.code === "string" ? details.code : error.gatewayCode;
-    const hint = typeof details.remediationHint === "string" ? details.remediationHint : null;
     // A setup connection keeps its code only while the gateway waits for its owner's approval.
     const setup = this.tokenGate?.generation === generation;
+    // A setup connection publishes fixed words only, never the gateway's text.
+    const hint =
+      !setup && typeof details.remediationHint === "string" ? details.remediationHint : null;
+    const message = setup
+      ? code === "AUTH_BOOTSTRAP_TOKEN_INVALID"
+        ? "The one-time code didn't work."
+        : "The gateway refused the setup connection."
+      : error.message;
     if (setup && code !== "PAIRING_REQUIRED") this.setupCode = null;
 
     const mismatch = protocolMismatch(details);
@@ -4458,11 +4481,13 @@ export class ClawtrateClient {
     this.setConnection({
       status: pause ? "error" : this.everConnected ? "reconnecting" : "connecting",
       pairing: null,
-      error: { code, message: error.message, hint },
+      error: { code, message, hint },
     });
     // The gateway stopped accepting this device: work waiting for access will not get it on this connection.
     if (pause)
-      this.rejectAccessWaiters(new Error(`The gateway refused this device: ${error.message}`));
+      this.rejectAccessWaiters(
+        new Error(`The gateway refused this device: ${this.scrub(message)}`),
+      );
     return {
       closeCode: 1000,
       closeReason: "connect rejected",
@@ -4478,7 +4503,9 @@ export class ClawtrateClient {
     const bootId = asRecord(hello.server)?.bootId;
     this.gatewayBootId =
       typeof bootId === "string" && bootId.length > 0 && bootId.length <= 96 ? bootId : null;
-    const scopes = [...(hello.auth.scopes ?? [])];
+    // Only what this connection asked for is used: a wider grant is held to the request.
+    const asked = this.state.connection.requestedScopes;
+    const scopes = [...(hello.auth.scopes ?? [])].filter((scope) => asked.includes(scope));
     const canWrite = scopeSatisfied(scopes, WRITE_SCOPE);
     const policy = asRecord(hello.policy);
     const number = (value: unknown) =>
@@ -5414,7 +5441,50 @@ export class ClawtrateClient {
   }
 
   private setConnection(patch: Partial<ConnectionState>): void {
-    this.store.update((state) => ({ ...state, connection: { ...state.connection, ...patch } }));
+    const scrubbed = this.scrubConnection(patch);
+    this.store.update((state) => ({ ...state, connection: { ...state.connection, ...scrubbed } }));
+  }
+
+  /** The credentials this client holds now: a setup code, a staged or typed token. */
+  private secrets(): string[] {
+    return [
+      this.setupCode?.bootstrapToken,
+      this.tokenGate?.staged?.token,
+      this.settings?.token,
+      this.heldToken,
+    ].filter((value): value is string => typeof value === "string" && value.length >= 8);
+  }
+
+  /** Any text the gateway sent, with every credential this client holds taken out. */
+  private scrub(text: string): string {
+    let out = text;
+    for (const secret of this.secrets()) out = out.split(secret).join("[credential]");
+    return out;
+  }
+
+  /** A connection patch with no credential in its error or pairing text. */
+  private scrubConnection(patch: Partial<ConnectionState>): Partial<ConnectionState> {
+    const next = { ...patch };
+    if (next.error) {
+      next.error = {
+        ...next.error,
+        message: this.scrub(next.error.message),
+        hint: next.error.hint === null ? null : this.scrub(next.error.hint),
+      };
+    }
+    if (next.pairing) {
+      next.pairing = {
+        ...next.pairing,
+        requestId: this.scrub(next.pairing.requestId),
+        deviceId: this.scrub(next.pairing.deviceId),
+        approveCommand: this.scrub(next.pairing.approveCommand),
+        requestedScopes: next.pairing.requestedScopes.map((scope) => this.scrub(scope)),
+        message: this.scrub(next.pairing.message),
+        approveNote:
+          next.pairing.approveNote === null ? null : this.scrub(next.pairing.approveNote),
+      };
+    }
+    return next;
   }
 
   private async loadIdentity() {
@@ -5491,10 +5561,12 @@ export class ClawtrateClient {
         }
         const existing = await this.loadToken(url, deviceId, role);
         if (!current()) return;
+        const held = existing?.heldScopes ?? [...READ_SCOPES];
         await this.writeToken(url, deviceId, role, {
           token,
-          grantedScopes: scopes,
-          heldScopes: existing?.heldScopes ?? [...READ_SCOPES],
+          // A replacement token is held to what this client asks for, whatever it was granted.
+          grantedScopes: scopes.filter((scope) => held.includes(scope)),
+          heldScopes: held,
           ...(existing?.adminHeld ? { adminHeld: true } : {}),
         });
       },
@@ -5517,7 +5589,7 @@ export class ClawtrateClient {
   }
 
   private log(level: "debug" | "info" | "warn" | "error", message: string): void {
-    this.host.log?.(level, message);
+    this.host.log?.(level, this.scrub(message));
   }
 }
 
