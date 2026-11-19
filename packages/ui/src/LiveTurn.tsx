@@ -46,26 +46,6 @@ export function OutgoingBubble({
     case "awaiting-access":
     case "sending":
       if (!connected) caption = <span>Sends when reconnected</span>;
-      else if (message.upload && message.upload.sentBytes < message.upload.totalBytes) {
-        // Its files are being written out: a bar that fills, gone once all of it has left (F-286).
-        const done = Math.floor((message.upload.sentBytes / message.upload.totalBytes) * 100);
-        caption = (
-          <>
-            <span>Sending…</span>
-            <span
-              className="upload-bar"
-              role="progressbar"
-              aria-label="Sending the files"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={done}
-              data-testid="upload-bar"
-            >
-              <span style={{ width: `${done}%` }} />
-            </span>
-          </>
-        );
-      }
       break;
     case "checking":
       caption = <span>No answer from the gateway yet. Checking whether it was sent…</span>;

@@ -632,12 +632,6 @@ export type OutgoingMessage = {
   attachments: OutgoingAttachmentInfo[];
   /** The gateway's id of the message this one replies to (`chat.send` `replyToId`, F-067). */
   replyToId?: string;
-  /**
-   * How much of its `chat.send` frame the connection has written, for a message with files,
-   * while the attempt under way is written out (F-286): the frame's bytes, and those no longer
-   * in the socket's buffer. Absent where the socket does not say.
-   */
-  upload?: { sentBytes: number; totalBytes: number };
 };
 
 export type OutgoingAttachmentInfo = { fileName: string; mimeType: string; sizeBytes: number };

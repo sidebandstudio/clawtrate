@@ -256,7 +256,6 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
  */
 export const CLIENT_NOT_WALKED: Record<string, string> = {
   host: "the host's own objects: its socket factory, storage and signer",
-  socketBuffered: "a reader of the buffered bytes of the attempt's socket, one at a time",
   protocol: "the official client package's protocol client; its requests time out",
   auth: "the official client package's device-auth lifecycle and this connection's token store",
   scopeUpgrade: "the official client package's access request, one at a time",

@@ -36,8 +36,6 @@ export function helloOk(scopes: string[] = ["operator.read"], deviceToken?: stri
 
 class FakeSocket implements WebSocketLike {
   readyState = 0;
-  /** What a test says the socket has yet to write (F-286). */
-  bufferedAmount = 0;
   onopen: ((event: unknown) => void) | null = null;
   onmessage: ((event: { data: unknown }) => void) | null = null;
   onclose: ((event: { code: number; reason: string }) => void) | null = null;

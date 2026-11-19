@@ -22,11 +22,6 @@ export type DeviceSigner = {
 /** The subset of the WHATWG WebSocket that core uses. Browsers, Node 22+ and React Native all provide it. */
 export type WebSocketLike = {
   readonly readyState: number;
-  /**
-   * Bytes handed to `send` and not yet written to the network, where the socket says
-   * (browsers, Node's WebSocket): how far a large send has got (F-286).
-   */
-  readonly bufferedAmount?: number;
   send(data: string): void;
   close(code?: number, reason?: string): void;
   onopen: ((event: unknown) => void) | null;

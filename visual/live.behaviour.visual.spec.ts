@@ -403,49 +403,6 @@ test.describe("sending", () => {
   });
 });
 
-test("F-286: while a message's files go out it reads Sending… with a bar that fills, and the bar leaves once all of it has gone", async ({
-  page,
-}) => {
-  await open(page, "send-uploading");
-  const bubble = page.getByTestId("outgoing");
-  const bar = bubble.getByRole("progressbar", { name: "Sending the files" });
-  await expect(bubble.locator(".msg-caption")).toContainText("Sending…");
-  await expect(bar).toHaveAttribute("aria-valuenow", "40");
-  const width = () => bar.locator("span").evaluate((el) => el.getBoundingClientRect().width);
-  const before = await width();
-  const upload = (sentBytes: number) =>
-    page.evaluate((sent) => {
-      const fixture = (
-        window as unknown as {
-          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
-        }
-      ).clawtrateFixture;
-      fixture.setState((state) => {
-        const key = "agent:otto:disk-space";
-        const transcript = state.transcripts[key]!;
-        return {
-          ...state,
-          transcripts: {
-            ...state.transcripts,
-            [key]: {
-              ...transcript,
-              outbox: transcript.outbox.map((each) => ({
-                ...each,
-                upload: { sentBytes: sent, totalBytes: 9_785_000 },
-              })),
-            },
-          },
-        };
-      });
-    }, sentBytes);
-  await upload(8_806_500);
-  await expect(bar).toHaveAttribute("aria-valuenow", "90");
-  await expect.poll(width).toBeGreaterThan(before);
-  await upload(9_785_000);
-  await expect(bar).toHaveCount(0);
-  await expect(bubble.locator(".msg-caption")).toHaveCount(0);
-});
-
 test("F-074: files can be dragged into the composer or pasted into its field", async ({ page }) => {
   await open(page, "composer");
   await page.locator(".composer-box").evaluate((box) => {

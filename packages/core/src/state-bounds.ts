@@ -372,10 +372,6 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   error: text(MAX_ERROR_JSON_CHARS),
   attachments: list(MAX_FILES_PER_MESSAGE, attachmentInfo),
   replyToId: ID,
-  upload: object<NonNullable<OutgoingMessage["upload"]>>()({
-    sentBytes: NUMBER,
-    totalBytes: NUMBER,
-  }),
 });
 const questionOption = object<QuestionOption>()({
   index: NUMBER,
