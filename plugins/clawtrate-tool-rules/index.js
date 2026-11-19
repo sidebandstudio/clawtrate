@@ -26,6 +26,7 @@ import {
   EVERY_BOT,
   EXEMPT_TOOL,
   LIMITS,
+  holdsRules,
   RULES_SCHEMA,
   RuleError,
   isScopeId,
@@ -330,7 +331,7 @@ export function createToolRules(api, options = {}) {
       throw new RequestError(
         "INVALID_REQUEST",
         "bad_request",
-        "expectedVersion must be the scope's version as read (0 for a scope with no rules)",
+        "expectedVersion must be the scope's version as read (0 for a scope never saved)",
       );
     }
     const scopes = store.scopes();
@@ -351,14 +352,17 @@ export function createToolRules(api, options = {}) {
       setBy: device ? `sha256:${createHash("sha256").update(device).digest("hex")}` : null,
       newId: () => randomBytes(6).toString("hex"),
     });
-    const after = new Map(scopes);
-    // A scope with nothing in it is not kept; its version starts again at 0.
-    if (next.rules.length === 0 && !next.fallback) after.delete(scope);
-    else after.set(scope, next);
-    const bots = [...after.keys()].filter((id) => id !== EVERY_BOT).length;
-    if (bots > LIMITS.botScopes && !scopes.has(scope)) {
+    // An emptied scope is kept with its revision, so a revision never repeats.
+    const after = new Map(scopes).set(scope, next);
+    const bots = [...after].filter(([id, s]) => id !== EVERY_BOT && holdsRules(s)).length;
+    if (bots > LIMITS.botScopes && holdsRules(next) && !(stored && holdsRules(stored))) {
       throw new RuleError("limit", `rules are kept for at most ${LIMITS.botScopes} bots`, {
         limit: LIMITS.botScopes,
+      });
+    }
+    if (after.size > LIMITS.scopeEntries && !stored) {
+      throw new RuleError("limit", `at most ${LIMITS.scopeEntries} scopes are kept`, {
+        limit: LIMITS.scopeEntries,
       });
     }
     try {
@@ -372,7 +376,7 @@ export function createToolRules(api, options = {}) {
       );
     }
     emitChanged(shared);
-    return { scope, ...(after.get(scope) ?? { version: 0, fallback: false, rules: [] }) };
+    return { scope, ...next };
   });
 
   // ---- the service ----

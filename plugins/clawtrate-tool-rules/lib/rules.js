@@ -30,8 +30,14 @@ export const LIMITS = Object.freeze({
   noteLength: 1000,
   toolsPerRule: 16,
   toolNameLength: 128,
+  /** Bots whose scope holds a rule or the fallback. */
   botScopes: 64,
+  /** Scopes kept at all, emptied ones included, which keep their revision. */
+  scopeEntries: 1000,
 });
+
+/** Whether a scope holds anything that decides a call. */
+export const holdsRules = (scope) => scope.rules.length > 0 || scope.fallback;
 
 export const ACTIONS = ["allow", "ask", "never"];
 const ACTION_WORDS = { allow: "Allow", ask: "Ask first", never: "Never" };

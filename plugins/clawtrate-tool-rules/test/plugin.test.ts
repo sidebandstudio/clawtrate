@@ -214,12 +214,53 @@ describe("set", () => {
     });
   });
 
-  it("drops a scope left empty, so its version starts again", async () => {
+  it("never repeats a scope's revision: a clear keeps it, and an old revision is refused after a clear and recreate", async () => {
     const h = host();
-    await h.save("otto", [{ action: "ask", tools: ["write"] }]);
-    const emptied = await h.save("otto", []);
-    expect(emptied.payload).toEqual({ scope: "otto", version: 0, fallback: false, rules: [] });
-    expect((await h.call("get")).payload!.scopes).toEqual({});
+    const set = (rules: unknown[], expectedVersion: number) =>
+      h.call("set", { scope: "otto", rules, fallback: false, expectedVersion });
+    const ask = [{ action: "ask", tools: ["write"] }];
+    expect((await set(ask, 0)).payload).toMatchObject({ version: 1 });
+    // Emptied: the scope stays, with its revision.
+    expect((await set([], 1)).payload).toEqual({
+      scope: "otto",
+      version: 2,
+      fallback: false,
+      rules: [],
+    });
+    expect((await h.call("get", { scope: "otto" })).payload!.scopes).toEqual({
+      otto: { version: 2, fallback: false, rules: [] },
+    });
+    // A client that read nothing, or read version 1, cannot recreate it over the clear.
+    for (const stale of [0, 1]) {
+      expect((await set(ask, stale)).error).toMatchObject({
+        details: { reason: "version_conflict", currentVersion: 2 },
+      });
+    }
+    expect((await set(ask, 2)).payload).toMatchObject({ version: 3 });
+    // A client that read version 1 before the clear still cannot save.
+    expect((await set([], 1)).error?.details?.reason).toBe("version_conflict");
+    // And a fresh process sees the same revision.
+    const fresh = host({ stateDir: h.stateDir });
+    expect(
+      (
+        (await fresh.call("get", { scope: "otto" })).payload!.scopes as Record<
+          string,
+          { version: number }
+        >
+      ).otto!.version,
+    ).toBe(3);
+  });
+
+  it("does not count an emptied scope against the bots with rules", async () => {
+    const h = host();
+    for (let i = 0; i < 64; i += 1) {
+      await h.save(`bot${i}`, [{ action: "ask", tools: ["write"] }]);
+    }
+    expect(
+      (await h.save("bot64", [{ action: "ask", tools: ["write"] }])).error?.details?.reason,
+    ).toBe("limit");
+    await h.save("bot0", []);
+    expect((await h.save("bot64", [{ action: "ask", tools: ["write"] }])).ok).toBe(true);
   });
 });
 

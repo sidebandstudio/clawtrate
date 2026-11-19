@@ -25,7 +25,14 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { RULES_SCHEMA, RuleError, checkStoredScope, isScopeId, LIMITS } from "./rules.js";
+import {
+  RULES_SCHEMA,
+  RuleError,
+  checkStoredScope,
+  holdsRules,
+  isScopeId,
+  LIMITS,
+} from "./rules.js";
 
 export const STORE_DIR = "clawtrate-tool-rules";
 export const RULES_FILE = "rules.json";
@@ -221,13 +228,18 @@ export function parseRules(parsed) {
     );
   }
   const entries = Object.entries(parsed.scopes ?? {});
-  if (entries.filter(([id]) => id !== "*").length > LIMITS.botScopes) {
-    throw new RuleError("bad_store", "the rules file holds more bot scopes than the plugin allows");
+  if (entries.length > LIMITS.scopeEntries) {
+    throw new RuleError("bad_store", "the rules file holds more scopes than the plugin allows");
   }
   const scopes = new Map();
   for (const [id, scope] of entries) {
     if (!isScopeId(id)) throw new RuleError("bad_store", `${id} is not a scope`);
     scopes.set(id, checkStoredScope(id, scope));
+  }
+  if (
+    [...scopes].filter(([id, scope]) => id !== "*" && holdsRules(scope)).length > LIMITS.botScopes
+  ) {
+    throw new RuleError("bad_store", "the rules file holds more bot scopes than the plugin allows");
   }
   return scopes;
 }
