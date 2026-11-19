@@ -560,6 +560,21 @@ test.describe("the thread's link", () => {
   });
 });
 
+test.describe("T3 Code words follow the record", () => {
+  test.use(contextFor(SIZES[0]!, "light"));
+
+  test("F-470: a wait whose delivery is unknown, in a run no one was seen to stop, says no result establishes delivery", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=t3-wait-unknown", "light");
+    const own = page.locator('.card.action[data-call="call_t3w"]');
+    await expect(own.locator(":scope > summary .action-state")).toHaveText("Delivery unknown");
+    await own.locator(":scope > summary").click();
+    await expect(own).toContainText("No result establishes whether T3 Code received this call.");
+    await expect(own).not.toContainText("The bot was stopped");
+  });
+});
+
 test.describe("T3 Code at 390 px", () => {
   test.use(contextFor(SIZES[3]!, "light"));
 

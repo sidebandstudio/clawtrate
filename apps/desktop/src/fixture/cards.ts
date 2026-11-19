@@ -121,6 +121,7 @@ export const CARD_SCENES = [
   "t3-not-sent",
   "t3-two-threads",
   "t3-before-record",
+  "t3-wait-unknown",
   "t3-listings",
 ] as const;
 
@@ -1218,6 +1219,20 @@ function build(
           }))
           .end(ago(1), "end", { aborted: true, stopReason: "aborted" }),
       };
+    case "t3-wait-unknown": {
+      // A wait whose result says only that it was aborted, in a run no one stopped: no result
+      // establishes whether T3 Code received it.
+      const b = t3Launch(now);
+      t3Start(b, "t3_thread_wait", "call_t3w", { threadId: T3_THREAD, timeoutMs: 30000 }, ago(4));
+      b.toolResult(
+        t3Name("t3_thread_wait"),
+        "call_t3w",
+        { content: [{ type: "text", text: "Aborted" }] },
+        ago(4) + 500,
+        true,
+      );
+      return { extra: { mcpTools: T3_MAP }, b: b.end(ago(3)) };
+    }
     case "t3-delivery-unknown":
       return {
         extra: { mcpTools: T3_MAP },

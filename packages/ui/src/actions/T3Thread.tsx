@@ -173,10 +173,7 @@ function CameBack({ call }: { call: T3Call }) {
         </>
       );
     }
-    if (call.state === "unknown")
-      say(
-        "The bot was stopped before the call returned. The gateway cannot say whether T3 Code received it.",
-      );
+    if (call.state === "unknown") say("No result establishes whether T3 Code received this call.");
     if (call.state === "not-sent") say("This call was not made. Nothing was sent.");
     if (call.state === "started")
       say(
