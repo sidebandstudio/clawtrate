@@ -371,8 +371,14 @@ test("F-232 F-237: a bot's Usage page shows the gateway's own totals for each pe
   await expect(settings.getByTestId("usage-all")).not.toContainText("still being counted", {
     timeout: 60_000,
   });
-  await expect(settings.getByTestId("usage-all-total")).toContainText(
-    `Every bot: ${(await gatewayTotal(null, "week")).total.toLocaleString("en-US")} tokens`,
+  // Every bot's figure was read: none is Unavailable, and the total is settled, with its time.
+  await expect(
+    settings.getByTestId("usage-bots").getByRole("listitem", { name: /: Unavailable$/ }),
+  ).toHaveCount(0);
+  await expect(settings.getByTestId("usage-all-total")).toHaveText(
+    new RegExp(
+      `^Every bot: ${(await gatewayTotal(null, "week")).total.toLocaleString("en-US")} tokens · about \\$0\\.00, as of \\d{1,2}:\\d{2} [AP]M\\.$`,
+    ),
   );
   // By source, for every bot: the parts add up to the gateway's total, nothing charged twice.
   await expect(settings.getByTestId("usage-sources")).toBeVisible();
