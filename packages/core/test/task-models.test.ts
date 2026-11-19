@@ -117,7 +117,6 @@ function rig(options: { task?: Partial<Task>; active?: boolean; write?: boolean 
       views = change(views);
     },
     task: () => task,
-    botAccount: () => "acme:home",
     active: () => state.active,
     lastTurnEnd: () => 5_000,
     connected: () => true,
@@ -172,14 +171,14 @@ describe("a task's model and effort", () => {
     ]);
   });
 
-  it("F-042 F-045: a change with no turn running is saved at once, with the bot's account and the task's session, and leaves a line", async () => {
+  it("F-042 F-045: a change with no turn running is saved at once, guarded by the task's session, and leaves a line", async () => {
     const r = rig();
     await opened(r);
     await expect(r.engine.choose(KEY, { model: "acme/dev-2", effort: null })).resolves.toBe(
       "saved",
     );
     expect(r.patches()).toEqual([
-      { key: KEY, model: "acme/dev-2@acme:home", expectedSessionId: "session-1" },
+      { key: KEY, model: "acme/dev-2", expectedSessionId: "session-1" },
     ]);
     expect(r.task().model).toBe("acme/dev-2");
     const [line] = r.view().events;
@@ -213,7 +212,7 @@ describe("a task's model and effort", () => {
     await opened(r);
     await r.engine.choose(KEY, { model: "acme/dev-lite", effort: null });
     expect(r.patches()[0]).toMatchObject({
-      model: "acme/dev-lite@acme:home",
+      model: "acme/dev-lite",
       thinkingLevel: "off",
     });
     const line = r.view().events[0]!;
@@ -248,7 +247,7 @@ describe("a task's model and effort", () => {
     expect(r.patches()).toEqual([
       {
         key: KEY,
-        model: "acme/dev-2@acme:home",
+        model: "acme/dev-2",
         thinkingLevel: "high",
         expectedSessionId: "session-1",
       },
@@ -367,16 +366,16 @@ describe("a task's model and effort", () => {
     expect(r.view().models).toHaveLength(3);
   });
 
-  it("F-042: the account the task's conversation selected is written before the bot's", async () => {
+  it("F-042: a model change names the model alone, whatever account the task's list reports", async () => {
     const r = rig();
     r.ctx.request = async (method, params) => {
       r.requests.push({ method, params: params as Record<string, unknown> });
       return method === "models.list" ? listAnswer("acme:work") : { ok: true };
     };
     await opened(r);
-    expect(r.view().account).toBe("acme:work");
     await r.engine.choose(KEY, { model: "acme/dev-2", effort: null });
-    expect(r.patches()[0]?.model).toBe("acme/dev-2@acme:work");
+    expect(r.patches()[0]?.model).toBe("acme/dev-2");
+    expect(JSON.stringify(r.patches())).not.toContain("@");
   });
 
   it("F-042: a connection that may only read cannot change it, and nothing is asked of the gateway", async () => {

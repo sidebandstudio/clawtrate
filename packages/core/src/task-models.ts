@@ -86,8 +86,6 @@ export type TaskModelView = {
   catalogError: string | null;
   /** The models of the task's provider, as `models.list {sessionKey}` lists them. */
   models: CatalogModel[];
-  /** The account the task's conversation selected (`accountSelection`), if it selected one. */
-  account: string | null;
   /** A change made while a turn was active, saved once it settles. */
   held: (TaskModelChoice & { at: number; sessionId: string | null }) | null;
   saving: boolean;
@@ -101,7 +99,6 @@ export const emptyTaskModel: TaskModelView = {
   catalog: "idle",
   catalogError: null,
   models: [],
-  account: null,
   held: null,
   saving: false,
   refused: null,
@@ -116,8 +113,6 @@ export type TaskModelsContext = {
   update(change: (all: Record<string, TaskModelView>) => Record<string, TaskModelView>): void;
   /** The task's row as the gateway last listed it. */
   task(key: string): Task | null;
-  /** The account a bot is bound to, if it is bound to one. */
-  botAccount(botId: string): string | null;
   /** A turn of the task is running, waiting for the person, or stopping. */
   active(key: string): boolean;
   /** The gateway's time of the end of the task's last turn, or of its last message. */
@@ -364,7 +359,7 @@ export class TaskModelsEngine {
     }
   }
 
-  /** `models.list {sessionKey}`: the models of the task's provider, and the account it selected. */
+  /** `models.list {sessionKey}`: the models of the task's provider. */
   async readCatalog(key: string): Promise<void> {
     if (!this.ctx.get()[key]) return;
     this.patch(key, (view) => ({
@@ -377,14 +372,11 @@ export class TaskModelsEngine {
       const models = readCatalog(answer)
         .filter((each) => provider === null || each.provider === provider)
         .slice(0, MAX_TASK_MODELS);
-      const selection = asRecord(asRecord(answer)?.accountSelection);
-      const account = selection?.kind === "shared" ? shortId(selection.authProfileId) : null;
       this.patch(key, (view) => ({
         ...view,
         catalog: "ready",
         catalogError: null,
         models,
-        account,
       }));
     } catch (error) {
       this.patch(key, (view) => ({
@@ -512,17 +504,6 @@ export class TaskModelsEngine {
     return this.saves.get(key) ?? Promise.resolve();
   }
 
-  /** The model to write: with the account the task selected, else the bot's, of the same provider. */
-  private withAccount(key: string, model: string): string {
-    const ref = parseModelRef(model);
-    if (!ref) return model;
-    const task = this.ctx.task(key);
-    const own = this.ctx.get()[key]?.account ?? null;
-    const bot = task ? this.ctx.botAccount(task.botId) : null;
-    const account = [own, bot].find((each) => each?.startsWith(`${ref.provider}:`)) ?? null;
-    return `${ref.provider}/${ref.model}${account ? `@${account}` : ""}`;
-  }
-
   private save(key: string, desired: TaskModelChoice, sessionId: string | null): Promise<void> {
     const run = (async () => {
       const task = this.ctx.task(key);
@@ -544,7 +525,9 @@ export class TaskModelsEngine {
         wasEffort !== null &&
         !(catalogEntry(view.models, change.model)?.levels.includes(wasEffort) ?? true);
       const params: RawRecord = { key };
-      if (change.model) params.model = this.withAccount(key, change.model);
+      // The model alone: the gateway keeps the task's account. An account Clawtrate read (or one
+      // the gateway chose by itself) is never sent back as the person's choice (bots.md F-490).
+      if (change.model) params.model = change.model;
       if (change.effort) params.thinkingLevel = change.effort;
       // A task replaced or removed meanwhile is refused, never made again (25.3).
       if (sessionId) params.expectedSessionId = sessionId;

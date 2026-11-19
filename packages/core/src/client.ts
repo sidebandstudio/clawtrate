@@ -831,10 +831,6 @@ export class ClawtrateClient {
     update: (change) =>
       this.store.update((state) => ({ ...state, taskModels: change(state.taskModels) })),
     task: (key) => this.taskRow(key),
-    botAccount: (botId) => {
-      const binding = this.state.accounts.bindings.find((each) => each.botId === botId);
-      return binding?.mode === "account" ? binding.account : null;
-    },
     active: (key) => {
       const transcript = this.state.transcripts[key];
       return transcript ? activeRun(transcript) !== undefined : false;

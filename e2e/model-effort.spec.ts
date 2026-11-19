@@ -317,6 +317,41 @@ test("F-043 F-045: a held change of effort that the gateway refuses says why, an
   await patchTask({ model: "acme/dev-1@acme:work" });
 });
 
+test("F-042: a model chosen in the app keeps the account another client chose for the task, and the next turn is served on it", async () => {
+  test.setTimeout(240_000);
+  // The first client chooses acme:home for the task; Quill itself is bound to acme:work.
+  await patchTask({ model: "acme/dev-1@acme:home" });
+  const selected = async () =>
+    (
+      (await reader.request<Json>("models.list", { sessionKey: TASK })).accountSelection as
+        Json | undefined
+    )?.authProfileId;
+  await expect.poll(selected, { timeout: 30_000 }).toBe("acme:home");
+  await expect(chip(page)).toHaveAccessibleName(/^Model for this task: acme\/dev-1, /, {
+    timeout: 30_000,
+  });
+  // The app, on the second client, changes only the model.
+  await chip(page).click();
+  await page.getByRole("menuitemradio", { name: "dev-2" }).click();
+  await expect.poll(async () => (await row()).model, { timeout: 60_000 }).toBe("dev-2");
+  // The account that remains is the first client's.
+  expect(await selected()).toBe("acme:home");
+  const before = (await requestsFor(TASK)).length;
+  const field = page.getByTestId("composer-input");
+  await field.fill("#text");
+  await field.press("Enter");
+  await expect
+    .poll(async () => (await requestsFor(TASK)).length, { timeout: 60_000 })
+    .toBeGreaterThan(before);
+  const served = (await requestsFor(TASK)).slice(before);
+  expect(served.map((each) => `${each.model} on ${each.account}`)).toEqual(
+    served.map(() => "dev-2 on acme:home"),
+  );
+  await expect.poll(async () => (await row()).status, { timeout: 60_000 }).not.toBe("running");
+  // Put back for any later check.
+  await patchTask({ model: "acme/dev-1@acme:work" });
+});
+
 test("F-042 F-043: a bot's model and effort chosen in its settings are saved on its account and seen by a second connection", async () => {
   test.setTimeout(180_000);
   await page.getByRole("button", { name: "Show work panel" }).click();

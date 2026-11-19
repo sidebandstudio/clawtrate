@@ -903,7 +903,6 @@ export const TASK_MODEL: Bound = object<TaskModelView>()({
   catalog: ENUM,
   catalogError: text(MAX_TASK_MODEL_ERROR_CHARS),
   models: list(MAX_TASK_MODELS, catalogModel),
-  account: taskModelId,
   held: object<NonNullable<TaskModelView["held"]>>()({
     model: taskModelId,
     effort: taskModelId,

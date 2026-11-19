@@ -129,7 +129,6 @@ function view(state: ClawtrateState, change: Partial<TaskModelView>): TaskModelV
     catalog: "ready",
     catalogError: null,
     models: FIXTURE_MODELS,
-    account: null,
     held: null,
     saving: false,
     refused: null,
