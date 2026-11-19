@@ -28,9 +28,11 @@ export type SshWorld = {
   /** The local account name, used when neither the destination nor the configuration names a user. */
   localUser: string;
   /**
-   * The key agent `ssh` uses, chosen by the app: "none" (`IdentityAgent none`),
-   * the socket of the agent the person runs, or, on Windows, the bundled
-   * client's own agent pipe. A person's `IdentityAgent` setting overrides it.
+   * The key agent `ssh` uses, chosen by the app: "none" (`IdentityAgent none`)
+   * or the socket of the agent the person runs. On Windows, leave
+   * IdentityAgent unspecified to use the bundled client's default behavior.
+   * Agent sign-in with that default and explicitly naming its pipe are
+   * unverified. A person's `IdentityAgent` setting overrides it.
    */
   agent: SshAgent;
   platform: NodeJS.Platform;
@@ -160,8 +162,8 @@ const WINDOWS_ENV = [
 /**
  * The environment `ssh` is started with: a fixed `PATH` on macOS and Linux,
  * and the system's own variables on Windows. Nothing else of the app's
- * environment reaches it, and no agent variable: the configuration names the
- * agent.
+ * environment reaches it, and no agent variable: on macOS and Linux the
+ * configuration names the selected socket or disables the agent.
  */
 export function childEnv(world: SshWorld): NodeJS.ProcessEnv {
   if (world.platform !== "win32") return { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };

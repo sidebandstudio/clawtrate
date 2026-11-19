@@ -38,8 +38,9 @@ export function pathValue(path: string, platform: NodeJS.Platform): string {
 
 /**
  * The agent, always chosen here: the person's `IdentityAgent` when they set
- * one, else the world's. On Windows the bundled client's own pipe is its
- * default and is left unnamed.
+ * one, else the world's. On Windows, leave IdentityAgent unspecified to use
+ * the bundled client's default behavior. Agent sign-in with that default and
+ * explicitly naming its pipe are unverified.
  */
 function agentLines(target: Target, world: SshWorld, p: (path: string) => string): string[] {
   const agent = target.identityAgent === "world" ? world.agent : target.identityAgent;

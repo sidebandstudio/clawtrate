@@ -108,7 +108,7 @@ export function failureNote(
         sentence: `The SSH sign-in for ${account} was refused.`,
         next:
           "Check that your key is on that computer. A key with a passphrase has to be in your SSH agent first." +
-          (platform === "win32" ? " Turn on the OpenSSH Authentication Agent service." : ""),
+          (platform === "win32" ? " Key-agent sign-in has not been verified on Windows." : ""),
       };
     case "host-key-unknown":
       return {

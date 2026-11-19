@@ -216,7 +216,7 @@ describe("ssh's three failures, told apart", () => {
       next: "Check that your key is on that computer. A key with a passphrase has to be in your SSH agent first.",
     });
     expect(failureNote({ kind: "sign-in-refused", exit: 255 }, route, "win32").next).toBe(
-      "Check that your key is on that computer. A key with a passphrase has to be in your SSH agent first. Turn on the OpenSSH Authentication Agent service.",
+      "Check that your key is on that computer. A key with a passphrase has to be in your SSH agent first. Key-agent sign-in has not been verified on Windows.",
     );
     expect(failureNote({ kind: "host-key-changed", exit: 255 }, route, "darwin").title).toBe(
       "devbox's key has changed",
