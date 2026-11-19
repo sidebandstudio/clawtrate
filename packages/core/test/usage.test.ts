@@ -680,6 +680,43 @@ describe("the usage engine", () => {
     engine.onClose();
   });
 
+  it("F-234: a write whose answer was lost is confirmed only by reading what the gateway holds, which is then shown", async () => {
+    const budget: BudgetInput = {
+      botId: "otto",
+      routineId: null,
+      routineName: null,
+      period: "weekly",
+      tokens: 5_000,
+      timeZone: NY,
+    };
+    // Kept, then the answer lost: the read finds it, so it stands.
+    const kept = fakeGateway();
+    const keptThenLost: typeof kept.request = async (method, raw) => {
+      const answer = await kept.request(method, raw);
+      if (method === "users.prefs.set") throw new Error("Connection lost after the write");
+      return answer;
+    };
+    const one = engineOn({ ...kept, request: keptThenLost });
+    await expect(one.engine.changeBudget({ op: "set", budget })).resolves.toBeUndefined();
+    expect(one.usage().budgets.map((b) => [b.id, b.tokens])).toEqual([["bot:otto", 5_000]]);
+    one.engine.onClose();
+    // Lost before the gateway kept it: it couldn't be confirmed, and what is held is shown.
+    const lost = fakeGateway();
+    const asked: string[] = [];
+    const neverKept: typeof lost.request = async (method, raw) => {
+      asked.push(method);
+      if (method === "users.prefs.set") throw new Error("Connection lost");
+      return lost.request(method, raw);
+    };
+    const two = engineOn({ ...lost, request: neverKept });
+    await expect(two.engine.changeBudget({ op: "set", budget })).rejects.toThrow(
+      "The change couldn't be confirmed: Connection lost. The gateway doesn't hold it now",
+    );
+    expect(two.usage()).toMatchObject({ budgetsStatus: "ok", budgets: [] });
+    expect(asked).toEqual(["users.prefs.get", "users.prefs.set", "users.prefs.get"]);
+    two.engine.onClose();
+  });
+
   it("refuses a budget when the gateway keeps no preferences for this connection", async () => {
     const { engine, usage } = engineOn(fakeGateway({ identity: false }));
     await expect(

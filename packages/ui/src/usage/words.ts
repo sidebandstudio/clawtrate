@@ -2,6 +2,7 @@
 // (docs/design/controls.md, sections 16 to 18), from the gateway's figures.
 
 import {
+  BUDGET_UNCONFIRMED,
   budgetPercent,
   currentCount,
   rangeFor,
@@ -314,6 +315,12 @@ export function stillClosed(
 ): ReadonlyMap<string, number> {
   const kept = new Map([...closed].filter(([key, percent]) => current.get(key) === percent));
   return kept.size === closed.size ? closed : kept;
+}
+
+/** A budget change that failed, or whose answer was lost, said in the form. */
+export function budgetFailure(op: "set" | "remove", message: string): string {
+  if (message.startsWith(BUDGET_UNCONFIRMED)) return message;
+  return `Couldn't ${op === "set" ? "save" : "remove"} the budget: ${message}`;
 }
 
 /** What a budget is, said under its meter. */

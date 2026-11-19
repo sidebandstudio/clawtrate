@@ -11,6 +11,7 @@ import { asRecord, type RawRecord } from "./mapping.ts";
 import {
   applyBudgetChange,
   ATTRIBUTION_HISTORY_ROWS,
+  BUDGET_UNCONFIRMED,
   BudgetError,
   budgetsBytes,
   BUDGETS_PREF_KEY,
@@ -265,12 +266,18 @@ export class UsageEngine {
           "The gateway keeps at most 4,096 bytes of budgets, and this one would pass that. Remove a budget first.",
         );
       const issued = ++this.issued;
-      const result = asRecord(
-        await this.ctx.request("users.prefs.set", {
+      let answer: unknown;
+      try {
+        answer = await this.ctx.request("users.prefs.set", {
           entries: { [BUDGETS_PREF_KEY]: next },
           expectedEntries: { [BUDGETS_PREF_KEY]: read.raw ?? null },
-        }),
-      );
+        });
+      } catch (error) {
+        // The answer was lost: the gateway may have kept the change. What it holds is read,
+        // and shown, before anything is said of the change.
+        return this.confirmBudgets(next, errorText(error), generation);
+      }
+      const result = asRecord(answer);
       if (result?.status === "ok") {
         if (generation === this.generation) this.setBudgets("ok", next, issued);
         return;
@@ -281,6 +288,32 @@ export class UsageEngine {
         );
     }
     throw new BudgetError("The budgets kept changing on another device. Try again.");
+  }
+
+  /**
+   * After a write whose answer was lost: read what the gateway holds and show
+   * it. The change stands only if the gateway holds it; otherwise it couldn't
+   * be confirmed, said with what was read.
+   */
+  private async confirmBudgets(next: BudgetPrefs, lost: string, generation: number) {
+    const issued = ++this.issued;
+    let read: Awaited<ReturnType<UsageEngine["readRaw"]>>;
+    try {
+      read = await this.readRaw();
+    } catch (error) {
+      throw new BudgetError(
+        `${BUDGET_UNCONFIRMED}: ${lost}. Reading the gateway's budgets again failed too: ${errorText(error)}`,
+      );
+    }
+    if (read.status !== "ok")
+      throw new BudgetError(`${BUDGET_UNCONFIRMED}: ${lost}. The gateway keeps no budgets now.`);
+    const held =
+      read.raw === null || read.raw === undefined ? { budgets: [] } : parseBudgets(read.raw);
+    if (generation === this.generation) this.setBudgets("ok", held, issued);
+    if (JSON.stringify(read.raw) === JSON.stringify(next)) return;
+    throw new BudgetError(
+      `${BUDGET_UNCONFIRMED}: ${lost}. The gateway doesn't hold it now; what it holds is shown.`,
+    );
   }
 
   // Counting ------------------------------------------------------------------------------------

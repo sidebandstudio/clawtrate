@@ -3,6 +3,7 @@
 // marked "Shown only", and nothing here says it stops a run or a send.
 
 import {
+  BUDGET_UNCONFIRMED,
   budgetPercent,
   budgetTokens,
   type Budget,
@@ -15,6 +16,7 @@ import { useBridge } from "../bridge.tsx";
 import { Note } from "../bots/parts.tsx";
 import { Choice, Meter, ShownOnly, useNow } from "./parts.tsx";
 import {
+  budgetFailure,
   budgetInput,
   budgetLine,
   budgetWindow,
@@ -76,10 +78,9 @@ export function BudgetForm({
       announce("Budget saved");
       onDone(true);
     } catch (error) {
-      setFailure(
-        `Couldn't save the budget: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      announce("Couldn't save");
+      const said = budgetFailure("set", error instanceof Error ? error.message : String(error));
+      setFailure(said);
+      announce(said.startsWith(BUDGET_UNCONFIRMED) ? "Couldn't confirm" : "Couldn't save");
       setSaving(false);
     }
   };
@@ -91,10 +92,9 @@ export function BudgetForm({
       announce("Budget removed");
       onDone(true);
     } catch (error) {
-      setFailure(
-        `Couldn't remove the budget: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      announce("Couldn't save");
+      const said = budgetFailure("remove", error instanceof Error ? error.message : String(error));
+      setFailure(said);
+      announce(said.startsWith(BUDGET_UNCONFIRMED) ? "Couldn't confirm" : "Couldn't remove");
       setSaving(false);
     }
   };

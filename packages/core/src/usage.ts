@@ -669,6 +669,9 @@ export type BudgetInput = {
 
 export type BudgetChange = { op: "set"; budget: BudgetInput } | { op: "remove"; id: string };
 
+/** How a change whose answer was lost begins: the gateway may or may not hold it. */
+export const BUDGET_UNCONFIRMED = "The change couldn't be confirmed";
+
 /** A change to the budgets that cannot be kept, said in plain words. */
 export class BudgetError extends Error {
   constructor(message: string) {

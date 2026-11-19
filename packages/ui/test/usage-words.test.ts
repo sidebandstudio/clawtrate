@@ -8,6 +8,7 @@ import {
   barText,
   botBars,
   botsLeftOut,
+  budgetFailure,
   budgetInput,
   CONTEXT_HINT,
   contextValue,
@@ -223,5 +224,19 @@ describe("a closed provider note", () => {
     expect([...stillClosed(at92, new Map([["openai:Weekly", 91]]))]).toEqual([]);
     // A window no longer reported is forgotten.
     expect([...stillClosed(closedAt91, new Map())]).toEqual([]);
+  });
+});
+
+describe("a budget change that failed", () => {
+  it("F-234: one whose answer was lost says it couldn't be confirmed, never that it wasn't saved", () => {
+    expect(
+      budgetFailure(
+        "set",
+        "The change couldn't be confirmed: Connection lost. The gateway doesn't hold it now; what it holds is shown.",
+      ),
+    ).toMatch(/^The change couldn't be confirmed/);
+    expect(budgetFailure("remove", "Not connected.")).toBe(
+      "Couldn't remove the budget: Not connected.",
+    );
   });
 });
