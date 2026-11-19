@@ -165,15 +165,11 @@ export default async function globalSetup() {
   // Provider accounts (docs/design/bots.md) run on an instance of their own, with scripted
   // accounts and sign-ins, so nothing they create reaches the seeded instance's checks.
   const accounts = `e2e-${run}-acct`;
-  // Setting up on this computer (e2e/setup.spec.ts) looks at an instance of its own, in a
-  // sandbox, with local pairing at the gateway's default: the look never sees another.
-  const setup = `e2e-${run}-setup`;
-  const own = [name, sentinel, accounts, setup];
+  const own = [name, sentinel, accounts];
   // The spec's own dev-gateway calls address this run's instance.
   process.env.CLAWTRATE_DEV_INSTANCE = name;
   process.env.CLAWTRATE_E2E_SENTINEL = sentinel;
   process.env.CLAWTRATE_E2E_ACCOUNTS = accounts;
-  process.env.CLAWTRATE_E2E_SETUP = setup;
 
   recoverDeadRuns(RECORDS, resetInstance);
 
@@ -287,8 +283,7 @@ export default async function globalSetup() {
       "clawtrate-dev-signin",
       "--no-seed",
     );
-    await startInstance(setup, "--default-local-pairing", "--no-seed");
-    for (const instance of [name, accounts, setup]) {
+    for (const instance of [name, accounts]) {
       const mine = listInstances().find((row) => row.name === instance);
       if (!mine?.gatewayRunning) throw new Error(`instance ${instance} is not running`);
       for (const port of [mine.gatewayPort, mine.providerPort]) {
@@ -334,8 +329,6 @@ export default async function globalSetup() {
       throw new Error(`preview host is on ${url}, a port e2e never uses`);
     }
     process.env.CLAWTRATE_E2E_URL = url;
-    // The setup checks' sandboxes and the desktop app's data, removed with the run.
-    process.env.CLAWTRATE_E2E_SETUP_DIR = tempDir();
     // For a test that runs a second client host from the same build and a copy of this one's data.
     process.env.CLAWTRATE_E2E_STATIC = staticDir;
     process.env.CLAWTRATE_E2E_DATA = dataDir;
