@@ -3279,8 +3279,9 @@ export class ClawtrateClient {
     await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
     this.checkNotWithdrawn(options.owner);
     if (this.selfId === null) await this.readSelf(generation);
-    // An event about this message after the request is newer than its answer.
-    const before = this.state.transcripts[key]?.reactions?.[messageId];
+    // Any change of the task's reactions after the request is newer than its answer.
+    const incarnation = this.incarnations.get(key);
+    const before = this.state.transcripts[key]?.reactions;
     let answer: RawRecord | null;
     try {
       answer = asRecord(
@@ -3295,8 +3296,17 @@ export class ClawtrateClient {
       this.noteMissingScope(error);
       throw error;
     }
-    if (generation !== this.generation || !this.tracked(key)) return;
-    if (this.state.transcripts[key]?.reactions?.[messageId] !== before) return;
+    if (
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation
+    )
+      return;
+    if (this.state.transcripts[key]?.reactions !== before) {
+      // Something newer changed them: the gateway's list says what is true now.
+      void this.readReactions(key, generation);
+      return;
+    }
     this.applyReactions(key, messageId, answer?.reactions);
   }
 

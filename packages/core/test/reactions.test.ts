@@ -79,4 +79,34 @@ describe("reactions (F-283)", () => {
     expect(Object.keys(transcript().reactions ?? {})).toEqual(["m2"]);
     client.stop();
   });
+
+  it("F-283: late set cannot restore a badge removed by a newer event", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = history(["m1"]);
+    gateway.handlers["users.self"] = () => ({ profile: { id: "me" } });
+    gateway.handlers["session.reactions.list"] = () => ({ reactions: {} });
+    const answer = deferred<unknown>();
+    gateway.handlers["session.reactions.set"] = () => answer.promise;
+    const { client, transcript } = await openTask({ gateway });
+    const set = client.setReaction(KEY, "m1", "👍", false);
+    await until(() => gateway.calls("session.reactions.set").length === 1);
+    // Newer events: the reaction added, then removed again; the badge is absent once more.
+    gateway.emit("session.reaction", reacted("m1", "👍", "me"));
+    await until(() => transcript().reactions?.m1 !== undefined);
+    gateway.emit("session.reaction", {
+      ...reacted("m1", "👍", "me"),
+      action: "removed",
+      reactions: [],
+    });
+    await until(() => transcript().reactions?.m1 === undefined);
+    // The older answer arrives last, saying the reaction is there.
+    answer.resolve({ reactions: summary("👍", "me") });
+    await set;
+    await sleep(30);
+    expect(transcript().reactions?.m1).toBeUndefined();
+    await until(() => gateway.calls("session.reactions.list").length >= 2);
+    await sleep(30);
+    expect(transcript().reactions?.m1).toBeUndefined();
+    client.stop();
+  });
 });
