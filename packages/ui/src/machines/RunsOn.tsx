@@ -300,7 +300,8 @@ export function RunsOnPage({
     } catch (failure) {
       if (!mounted.current) return;
       setError(failure instanceof Error ? failure.message : String(failure));
-      announce("Couldn't save");
+      // A refusal and a reply that never came both end here: neither confirms a save.
+      announce("Save not confirmed");
     } finally {
       if (mounted.current) {
         setSaving(false);

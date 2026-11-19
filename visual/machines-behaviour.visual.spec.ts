@@ -218,7 +218,7 @@ test("F-046: a refused save says what the gateway answered, and the setting show
   await expect(page.getByTestId("runs-on-error-line")).toHaveText(
     /The gateway answered: invalid config/,
   );
-  await expect(announcer(page)).toHaveText("Couldn't save");
+  await expect(announcer(page)).toHaveText("Save not confirmed");
   await expect(page.getByTestId("runs-on-machine")).toHaveAccessibleName(
     "Otto's command machine: media-box · Connected",
   );
