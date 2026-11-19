@@ -4,14 +4,14 @@ Settings as a whole: the sections it has and their order, several gateways (addi
 
 What must be true is in `docs/parity.md`, rows F-010, F-158, F-159, F-228 to F-231, F-279, F-388 to F-391, F-393 to F-395 and F-458. What the gateway, Electron and the app's own code do is in `docs/research/settings.md`; every state below names the fact it rests on, and section 16 lists them. Section 18 is for builders.
 
-One rule sits above the rest: **a row says what was read back, and nothing else.** A save, a switch and a removal each say what is true afterwards, step by step, including after a failure in the middle. Where nothing can establish a behaviour, the screen says less: no update source means no "Check for Updates"; no translation means no Language setting; no way to see a screen saver means the rule for installing an update does not mention one.
+One rule sits above the rest: **a row says what was read back, and nothing else.** A save, a switch and a removal each say what is true afterwards, step by step, including after a failure in the middle. Where nothing can establish a behaviour, the screen says less: no update source means no "Check for Updates"; no translation means no Language setting; no way to see a screen saver, or to prove that no run is active, means no automatic restart.
 
 Five facts from the research shape the design:
 
 - **One gateway is connected at a time.** Clawtrate saves a separate connection for each gateway, and a gateway is told apart by `gateway.identity.get`, which answers only after a connection has authenticated (research §1). Switching closes one connection and opens another.
 - **This device's record on a gateway can be removed by this client only with admin access**: `device.pair.remove` needs `operator.pairing`, which the client never asks for, and admin includes it. Below admin the record stays, and its owner removes it on the gateway's computer (research §3).
 - **There is no update source.** Packaging writes no feed, no updater is in the app, and Windows' installer is not one Electron's own updater can update (research §4). Everything about checking and installing is drawn for when the owner publishes one, and labelled so.
-- **Electron sees a locked screen and idle time on macOS and Windows, and nothing reports a screen saver** (research §5).
+- **Electron sees a locked screen and idle time on macOS and Windows, nothing reports a screen saver, and nothing yet proves that no run is active** (research §5, §6), so the automatic restart is unavailable in this build.
 - **`/compact` during a run waits up to a minute and then ends the run** (research §8, live), so Compact is offered only when no run is active.
 
 The prototype walks every path to its outcome: `prototype/settings.html`, with the state in the address (`prototype/README.md`). The styles are in `prototype/css/settings.css`, the behaviour in `prototype/js/settings.js`, and `prototype/tools/checks/settings.mjs` clicks through every walk and asserts each state's words and structure.
@@ -99,7 +99,7 @@ No new tokens.
 Every preference here is written, then read back, and only what was read back is shown:
 
 - **The interface's preferences** (Theme, Your messages) are written to the interface's storage and read again at once. When the read does not return what was written, the choice applies to this window until Clawtrate closes, and the section says so: "Clawtrate couldn't save this. It applies until you close Clawtrate."
-- **The app's preferences** (spelling, hardware acceleration, automatic updates) are written by the host to its own settings file, and the host answers with what the file holds after the write and, where Electron has a reading, what Electron reports (`session.isSpellCheckerEnabled()`, `app.isHardwareAccelerationEnabled()`). A switch moves only when that answer comes. A failed write leaves the switch as it was, with "Couldn't save. Try again."
+- **The app's preferences** (spelling, hardware acceleration) are written by the host to its own settings file, and the host answers with what the file holds after the write and, where Electron has a reading, what Electron reports (`session.isSpellCheckerEnabled()`, `app.isHardwareAccelerationEnabled()`). A switch moves only when that answer comes. A failed write leaves the switch as it was, with "Couldn't save. Try again."
 
 ### Input
 
@@ -111,7 +111,7 @@ Every preference here is written, then read back, and only what was read back is
 
 ### Announcements
 
-The Settings dialog's polite live region (`bots.md` §2) announces, only once each is read back: "Switched to Studio gateway", "Couldn't reach Studio gateway", "Added Lab gateway", "Studio gateway is removed from this device", "Theme: Dark", "Your messages: Neutral", "Spelling is checked", "Spelling isn't checked", "Hardware acceleration turns off when Clawtrate restarts", "Compacted", "Nothing to compact yet", "Couldn't compact", and the copy results. Nothing is announced on a click alone.
+The Settings dialog's polite live region (`bots.md` §2) announces, only once each is read back: "Switched to Studio gateway", "Couldn't reach Studio gateway", "Added Lab gateway", "Studio gateway is removed from this device", "Theme: Dark", "Your messages: Neutral", "Spelling is checked", "Spelling isn't checked", "Hardware acceleration turns off when Clawtrate restarts", "The gateway reported a compaction", "Nothing to compact yet", "The gateway reported that compaction failed", "Still can't use Home gateway", "No newer version was offered", and the copy results. Nothing is announced on a click alone.
 
 ## 3. Settings as a whole
 
@@ -203,7 +203,7 @@ While setup runs, the gateway in use is closed (one connection at a time, resear
 
 - **Discarded, exactly.** Today such a message lives only in the core's memory; opening another gateway's address resets that state (`packages/core/src/client.ts`, the connection's `initialState` when the address differs), and nothing puts the text back in the composer. So the sentence says it is discarded, and the design adds no machinery to keep it.
 - A message that was sent and not yet confirmed is counted apart, because the gateway may already have it: "1 message to Otto was sent to Home gateway and isn't confirmed yet. Switching stops following it; Home gateway may still have it."
-- With nothing waiting there is no confirmation. Drafts, the text still in a composer, are kept on this device for each gateway's address (`packages/ui/src/Composer.tsx`) and come back on return.
+- With nothing waiting there is no confirmation. Drafts, the text still in a composer, are kept on this device for each gateway (today under its address, `packages/ui/src/Composer.tsx`; under its local key once switching ships) and come back on return.
 - Adding a gateway and restarting Clawtrate ask the same way, with the same words for what happens to the message.
 
 **Each step, as it is.**
