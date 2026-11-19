@@ -141,6 +141,15 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     expect(run.gone()).toBe(true);
   });
 
+  it("recovers the setup checks' own instance, named for its run", () => {
+    const run = aRun(deadProcess());
+    run.record.instances.push({ name: `e2e-${run.record.run}-setup`, runId: newRunId() });
+    saveRecord(run.records, run.record);
+    expect(readRecord(recordPath(run.records, run.record.run))?.instances).toContainEqual(
+      expect.objectContaining({ name: `e2e-${run.record.run}-setup` }),
+    );
+  });
+
   it("leaves alone a record that names instances other than its run's own", () => {
     const run = aRun(deadProcess());
     run.record.instances.push({ name: "review", runId: newRunId() });

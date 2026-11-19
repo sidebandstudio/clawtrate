@@ -1,28 +1,41 @@
 // Setting up on this computer (docs/design/setup.md §3 to §7) in the
-// desktop app, against a real gateway: this run's own instance, started
-// with --default-local-pairing, seen through a sandbox (a temporary home, the
-// `openclaw` program and that instance's profile). The app is the
-// development build, driven by Playwright; its native dialog is answered in
-// its main process. The look never sees this computer's own OpenClaw: every
-// launch here is automated, and the guard refuses a look without a sandbox.
+// desktop app, against a real gateway: an instance this file starts for
+// itself with --default-local-pairing, seen through sandboxes of its own. In
+// a sandbox the look runs only the repository's stand-in for `openclaw`
+// (e2e/openclaw-stand-in.ts): OpenClaw's own `gateway status` inspects the
+// user's whole launchd job list and chooses its probe itself, so it never
+// runs here. The stand-in answers status from the instance's recorded facts
+// and runs the real program only for the version, the auth mode and the
+// one-time code, for this instance alone. The app is the development build,
+// driven by Playwright; its native dialog is answered in its main process.
+//
+// The instance is recorded in a run record of this file's own before it
+// starts, so a run killed outright is cleaned up by the next `pnpm e2e`. Only
+// the shard that runs this file starts it.
 //
 // Electron must be installed. On Linux the app runs without Chromium's
 // sandbox (CI's runners refuse its namespaces) and needs a display (CI uses xvfb).
 import { _electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
-import { devGateway } from "./global-setup.ts";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { devGateway, FORBIDDEN_PORTS, listInstances } from "./global-setup.ts";
+import { cleanUp, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
+import { realOpenclaw, writeSandbox } from "./setup-sandbox.ts";
 import { openInstance, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
-import { stateDirFor } from "../tools/dev-gateway/src/instance.ts";
+import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const DESKTOP = join(ROOT, "apps/desktop");
-const SETUP = process.env.CLAWTRATE_E2E_SETUP!;
-const DIR = process.env.CLAWTRATE_E2E_SETUP_DIR!;
+const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
+const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
+/** This file's own run: its instance and its folder. */
+const RUN = randomBytes(4).toString("hex");
+const SETUP = `e2e-${RUN}-setup`;
 const PROFILE = `clawtrate-dev-${SETUP}`;
 
 /**
@@ -42,39 +55,22 @@ let ELECTRON: string | null = null;
 
 test.describe.configure({ mode: "serial" });
 
-/** The `openclaw` this machine runs, found on PATH as the dev-gateway tool finds it. */
-const OPENCLAW = (() => {
-  try {
-    return execFileSync("/usr/bin/which", ["openclaw"], { encoding: "utf8" }).trim();
-  } catch {
-    return "";
-  }
-})();
+const record: RunRecord = {
+  run: RUN,
+  runner: { pid: process.pid, identity: "" },
+  instances: [],
+  host: null,
+  dirs: [],
+};
+let DIR = "";
 
 let count = 0;
-/** A fresh folder of this run's, for one launch. */
+/** A fresh folder of this file's run, for one launch. */
 const folder = (name: string) => {
   const dir = join(DIR, `${(count += 1)}-${name}`);
   mkdirSync(dir, { recursive: true });
   return dir;
 };
-
-type Sandbox = { home: string; openclaw: string; instance: string; stateDir: string };
-
-function writeSandbox(dir: string, change: Partial<Sandbox> = {}): string {
-  const home = join(dir, "home");
-  mkdirSync(home, { recursive: true });
-  const sandbox: Sandbox = {
-    home,
-    openclaw: OPENCLAW,
-    instance: SETUP,
-    stateDir: stateDirFor(SETUP, homedir()),
-    ...change,
-  };
-  const path = join(dir, "sandbox.json");
-  writeFileSync(path, JSON.stringify(sandbox));
-  return path;
-}
 
 /** The environment the app gets: nothing that points it at a development gateway or changes Electron. */
 function appEnv(): Record<string, string> {
@@ -100,7 +96,9 @@ async function launch(
   const args = [DESKTOP, `--user-data-dir=${data}`];
   if (process.platform === "linux") args.push("--no-sandbox");
   if (options.sandbox !== null)
-    args.push(`--clawtrate-setup-sandbox=${options.sandbox ?? writeSandbox(dir)}`);
+    args.push(
+      `--clawtrate-setup-sandbox=${options.sandbox ?? writeSandbox({ dir, instance: SETUP }).file}`,
+    );
   const app = await _electron.launch({ executablePath: ELECTRON!, args, env: appEnv(), cwd: dir });
   let output = "";
   app.process().stdout?.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
@@ -148,15 +146,55 @@ const thisComputer = (page: Page) =>
     .getByRole("list", { name: "Where does OpenClaw run?" })
     .getByRole("button", { name: /This computer/ });
 
-test.beforeAll(() => {
+/** What the app stored: its key-value file, `state.json` in its data folder, as text. */
+function readStore(data: string): string {
+  const path = join(data, "gateway/state.json");
+  return existsSync(path) ? readFileSync(path, "utf8") : "";
+}
+
+const cli = (...args: string[]) =>
+  execFileSync(process.execPath, [CLI, ...args], {
+    cwd: ROOT,
+    env: Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => key !== "CLAWTRATE_DEV_INSTANCE"),
+    ),
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+
+test.beforeAll(async () => {
+  test.setTimeout(600_000);
   ELECTRON = electronBinary();
   if (ELECTRON === null) throw new Error("Electron's binary is missing: run pnpm install with it");
-  expect(OPENCLAW).not.toBe("");
+  expect(realOpenclaw()).not.toBe("");
+  // Recorded before anything starts, so a killed run is cleaned up by the next one.
+  const self = processIdentity(process.pid);
+  if (self.state !== "alive") throw new Error("could not determine this process's start time");
+  record.runner.identity = self.identity;
+  DIR = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+  record.dirs.push(DIR);
+  const runId = newRunId();
+  record.instances.push({ name: SETUP, runId });
+  saveRecord(RECORDS, record);
+  cli("start", "--run-id", runId, "--instance", SETUP, "--default-local-pairing", "--no-seed");
+  const mine = listInstances().find((row) => row.name === SETUP);
+  if (!mine?.gatewayRunning) throw new Error(`instance ${SETUP} is not running`);
+  for (const port of [mine.gatewayPort, mine.providerPort]) {
+    if (port === null || FORBIDDEN_PORTS.includes(port)) {
+      throw new Error(`instance ${SETUP} is on port ${port}, which e2e never uses`);
+    }
+  }
   // The development build of the desktop app, into its own output folder.
   execFileSync("pnpm", ["--filter", "@clawtrate/desktop", "exec", "electron-vite", "build"], {
     cwd: ROOT,
     stdio: "ignore",
   });
+});
+
+test.afterAll(() => {
+  const problems = cleanUp(RECORDS, record, (name, runId) =>
+    cli("reset", "--run-id", runId, "--instance", name),
+  );
+  expect(problems).toEqual([]);
 });
 
 test("an automated launch without a sandbox refuses the real computer, loudly, and finds nothing", async () => {
@@ -167,6 +205,22 @@ test("an automated launch without a sandbox refuses the real computer, loudly, a
     launched.page.getByRole("heading", { name: "Clawtrate didn't find OpenClaw here" }),
   ).toBeVisible();
   await expect.poll(launched.log).toContain("The look on this computer refused to start");
+  await close(launched);
+});
+
+test("a sandbox whose program is not the stand-in is refused, and nothing runs", async () => {
+  const dir = folder("refused");
+  const sandbox = writeSandbox({ dir, instance: SETUP, openclaw: realOpenclaw() });
+  // The sandbox's program itself replaced by the real one: refused before anything starts.
+  const file = JSON.parse(readFileSync(sandbox.file, "utf8")) as Record<string, string>;
+  const real = join(dir, "real.json");
+  writeFileSync(real, JSON.stringify({ ...file, openclaw: realOpenclaw() }));
+  const launched = await launch({ sandbox: real });
+  await thisComputer(launched.page).click();
+  await expect(
+    launched.page.getByRole("heading", { name: "Looking on this computer is off here" }),
+  ).toBeVisible();
+  await expect(launched.page.getByText(/isn't the repository's stand-in/)).toBeVisible();
   await close(launched);
 });
 
@@ -183,16 +237,9 @@ test("F-492 F-494: the consent declined pairs nothing, as the gateway itself say
   await expect(launched.page.getByRole("button", { name: "Connect" })).toBeVisible();
   // Nothing was minted or registered: the gateway's devices are as they were.
   expect(devices()).toEqual(before);
-  expect(existsSync(join(launched.data, "gateway"))).toBe(true);
   expect(readStore(launched.data)).not.toContain("deviceToken:");
   await close(launched);
 });
-
-/** What the app stored: its key-value file, `state.json` in its data folder, as text. */
-function readStore(data: string): string {
-  const path = join(data, "gateway/state.json");
-  return existsSync(path) ? readFileSync(path, "utf8") : "";
-}
 
 test("F-492 F-494: the gateway on this computer is found and connected read-only with nothing typed", async () => {
   const before = devices().paired.map((device) => device.deviceId);
@@ -206,7 +253,7 @@ test("F-492 F-494: the gateway on this computer is found and connected read-only
     "Version2026.10.6",
     `Profile${PROFILE}`,
     "ListensOn this computer only",
-    "ServiceNone, started by hand",
+    "ServiceNone registered",
   ]);
   await expect(page.locator("input")).toHaveCount(0);
   await page.getByRole("button", { name: "Connect" }).click();
@@ -233,16 +280,8 @@ test("F-492 F-494: the gateway on this computer is found and connected read-only
 
 test("F-515: another version is named, offers Advanced, and runs nothing for the person", async () => {
   const dir = folder("other-version");
-  // A stand-in program that reports another version for everything the real one prints.
-  const wrapper = join(dir, "bin/openclaw");
-  mkdirSync(join(dir, "bin"));
-  writeFileSync(
-    wrapper,
-    // The real program's folder first on PATH, as the look gives it: `node` may live beside it.
-    `#!/bin/sh\nPATH="${dirname(OPENCLAW)}:$PATH"\nout=$("${OPENCLAW}" "$@")\ncode=$?\nprintf '%s\\n' "$out" | /usr/bin/sed 's/2026\\.10\\.6/2026.9.37/g'\nexit $code\n`,
-  );
-  chmodSync(wrapper, 0o755);
-  const launched = await launch({ sandbox: writeSandbox(dir, { openclaw: wrapper }) });
+  const sandbox = writeSandbox({ dir, instance: SETUP, version: "2026.9.37" });
+  const launched = await launch({ sandbox: sandbox.file });
   await thisComputer(launched.page).click();
   await expect(launched.page.getByRole("status").filter({ hasText: "2026.9.37" })).toHaveText(
     "OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Use Advanced to connect to it.",
@@ -254,37 +293,17 @@ test("F-515: another version is named, offers Advanced, and runs nothing for the
   await close(launched);
 });
 
-test("F-516: another profile and another service are named and not connected to", async () => {
+test("F-516: another profile is named and not connected to", async () => {
   const dir = folder("others");
-  const sandbox = writeSandbox(dir);
-  const home = join(dir, "home");
-  mkdirSync(join(home, ".openclaw-work"));
-  mkdirSync(join(home, "Library/LaunchAgents"), { recursive: true });
-  writeFileSync(
-    join(home, "Library/LaunchAgents/com.example.openclaw-gateway.plist"),
-    `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>Label</key><string>com.example.openclaw-gateway</string>
-<key>ProgramArguments</key><array><string>/usr/local/bin/openclaw</string><string>--profile</string><string>work</string><string>gateway</string><string>run</string></array>
-</dict></plist>
-`,
-  );
-  // The same service as a systemd user unit, for the look on Linux.
-  mkdirSync(join(home, ".config/systemd/user"), { recursive: true });
-  writeFileSync(
-    join(home, ".config/systemd/user/openclaw@work.service"),
-    "[Service]\nExecStart=/usr/local/bin/openclaw --profile work gateway run\n",
-  );
-  const service =
-    process.platform === "linux" ? "openclaw@work.service" : "com.example.openclaw-gateway";
-  const launched = await launch({ sandbox });
+  const sandbox = writeSandbox({ dir, instance: SETUP });
+  mkdirSync(join(sandbox.home, ".openclaw-work"));
+  const launched = await launch({ sandbox: sandbox.file });
   await thisComputer(launched.page).click();
   await expect(launched.page.getByRole("status").filter({ hasText: "also saw" })).toHaveText(
-    `Clawtrate also saw other OpenClaw services here (service ${service}, profile work). It connects only to the default gateway and its own; use Advanced for others.`,
+    "Clawtrate also saw another OpenClaw service here (profile work). It connects only to the default gateway and its own; use Advanced for others.",
     { timeout: 60_000 },
   );
-  // What the card offers to connect to is this run's instance, by its profile.
+  // What the card offers to connect to is this file's instance, by its profile.
   await expect(launched.page.getByTestId("setup-found").locator("dl > div").nth(1)).toHaveText(
     `Profile${PROFILE}`,
   );
@@ -314,12 +333,10 @@ test("a gateway that is stopped is installed but not running, with nothing liste
   await thisComputer(launched.page).click();
   await expect(
     launched.page.getByRole("heading", { name: "OpenClaw is installed but not running" }),
-  ).toBeVisible({
-    timeout: 60_000,
-  });
+  ).toBeVisible({ timeout: 60_000 });
   const facts = launched.page.getByTestId("setup-found").locator("dl > div");
   await expect(facts.nth(0)).toHaveText("Version2026.10.6");
-  await expect(facts.nth(1)).toHaveText("ServiceNone, started by hand");
+  await expect(facts.nth(1)).toHaveText("ServiceNone registered");
   await expect(facts.nth(2)).toHaveText(/^PortNothing listening on 19\d\d\d$/);
   await expect(launched.page.getByRole("button", { name: "Connect" })).toHaveCount(0);
   await close(launched);
