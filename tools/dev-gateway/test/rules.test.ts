@@ -3,6 +3,7 @@
 // tool and no setting, it keeps every bot's denies, and the default instance
 // never loads it.
 
+import { createHash } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,7 @@ import { CHECKOUT_DIR } from "../src/env.ts";
 import {
   RULES_CHECKS,
   eventually,
+  isResultOfCall,
   logSaysAfter,
   ranOk,
   toolCallsOf,
@@ -172,5 +174,16 @@ describe("the rules checks' temporary settings", () => {
       ),
     ).rejects.toThrow("not applied");
     expect(steps).toEqual(["apply", "restore"]);
+  });
+});
+
+describe("the rules checks' history matching", () => {
+  it("takes a tool result as this run's only when its call id hashes to the decision record's", () => {
+    const callId = `sha256:${createHash("sha256").update("call_this_run").digest("hex")}`;
+    const result = (toolCallId: string) => ({ role: "toolResult", toolName: "read", toolCallId });
+    expect(isResultOfCall(result("call_this_run"), callId)).toBe(true);
+    expect(isResultOfCall(result("call_an_earlier_run"), callId)).toBe(false);
+    expect(isResultOfCall({ role: "toolResult", toolName: "read" }, callId)).toBe(false);
+    expect(isResultOfCall(result("call_this_run"), null)).toBe(false);
   });
 });

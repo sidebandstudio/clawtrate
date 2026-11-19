@@ -13,6 +13,7 @@
 // asserts what it does and says so in its name (the plugin turned off in the
 // middle of a run, a run another bot's message started).
 
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GatewayEvent, OperatorSession } from "./operator.ts";
@@ -387,6 +388,17 @@ export async function eventually<T>(
     }
     await sleep(everyMs);
   }
+}
+
+/**
+ * Whether a history message is the result of the call a decision record
+ * names: its `toolCallId`, hashed as the gateway's audit log and the plugin
+ * hash it, is the record's `callId`.
+ */
+export function isResultOfCall(message: JsonRecord, callId: string | null): boolean {
+  const id = message.toolCallId;
+  if (typeof id !== "string" || id.length === 0 || !callId) return false;
+  return `sha256:${createHash("sha256").update(id).digest("hex")}` === callId;
 }
 
 export const logSaysAfter = (log: Buffer, text: string, from: number) =>
@@ -1111,7 +1123,8 @@ export const RULES_CHECKS: RulesCheck[] = [
         ["read", "ask", "cancelled"],
         "Pip's call in the decision record",
       );
-      // The refused read's result is written after the hook returns: wait for it in the history.
+      // The refused read's result is written after the hook returns: wait for this
+      // run's result in the history, matched to the decision record by its call id.
       const text = await eventually("Pip's read result in its history", async () => {
         const history = answered(
           await call(ctx.clients.admin, "chat.history", {
@@ -1120,11 +1133,10 @@ export const RULES_CHECKS: RulesCheck[] = [
           }),
           "Pip's main task",
         );
-        const results = ((history.messages ?? []) as JsonRecord[]).filter(
-          (m) => m.role === "toolResult" && m.toolName === "read",
+        const mine = ((history.messages ?? []) as JsonRecord[]).find(
+          (m) => m.role === "toolResult" && isResultOfCall(m, record.callId),
         );
-        const last = results.at(-1);
-        return last ? JSON.stringify(last.content ?? "") : undefined;
+        return mine ? JSON.stringify(mine.content ?? "") : undefined;
       });
       expect(text.includes(GATEWAY_UNAVAILABLE), `Pip's read result: ${text.slice(0, 300)}`);
     },
