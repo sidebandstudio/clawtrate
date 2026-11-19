@@ -785,11 +785,19 @@ describe("Connect goes only to the gateway that answered, and says what is true"
       await new Promise<void>((resolve) => holds.push(resolve));
       return disconnect();
     };
+    let asked = 0;
+    const hasDeviceToken = h.client.hasDeviceToken.bind(h.client);
+    h.client.hasDeviceToken = (url: string) => {
+      asked += 1;
+      return hasDeviceToken(url);
+    };
     const connecting = h.setup.connect();
     await until(() => holds.length > 0);
     h.setup.cancel();
     for (const release of holds) release();
     await connecting;
+    // Nothing more is started, not even a read of this device's tokens.
+    expect(asked).toBe(0);
     expect(minted(h.requests)).toEqual([]);
     h.client.stop();
   });
