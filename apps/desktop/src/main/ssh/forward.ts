@@ -148,7 +148,7 @@ export class ForwardSupervisor {
     this.track(this.attempt());
   }
 
-  /** Ends the forward; resolves once its process is gone. Nothing restarts it. */
+  /** Stop the forward and join its local SSH process, HTTP probe and LOOK request. */
   close(): Promise<void> {
     return this.finish("closed");
   }
@@ -171,7 +171,7 @@ export class ForwardSupervisor {
     this.work = Promise.allSettled([this.work, work]);
   }
 
-  /** Ends everything; resolves only once its process, any retiring one, and its probe and LOOK have ended. */
+  /** Join this supervisor's local work. Closing SSH does not confirm remote program exit. */
   private finish(reason: "closed" | "key-changed" | "different-gateway"): Promise<void> {
     if (this.closing) return this.closing;
     this.generation++;

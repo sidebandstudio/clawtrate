@@ -507,7 +507,7 @@ The rows this design governs are in `docs/parity.md`. Statuses do not change. In
 | Command                                 | Kind    | Does                                                                                                                                      |
 | --------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `setup.look {where: "here"}`            | read    | Section 4; returns the typed facts of section 17                                                                                          |
-| `setup.cancel {lookId}`                 | read    | Ends that look's programs by PID                                                                                                          |
+| `setup.cancel {lookId}`                 | read    | Ends the host's local process for the look by PID. On an SSH route, remote command exit is unconfirmed.                                   |
 | `setup.readCode {text}`                 | read    | Decodes and validates a pasted code in the host; returns its address, expiry and validity, never its token                                |
 | `setup.prepare {operation, routeId, …}` | prepare | Builds the operation from the host's own state and shows the host's dialog; the interface gets only "confirmed", "cancelled" or "changed" |
 
