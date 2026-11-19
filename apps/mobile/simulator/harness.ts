@@ -254,6 +254,11 @@ export function activate() {
   simctl("launch", env.device, env.bundle);
 }
 
+/** Whether an app runs on the device now, from the system's own list of the apps it launched. */
+export function running(bundleId: string): boolean {
+  return simctl("spawn", env.device, "launchctl", "list").includes(`UIKitApplication:${bundleId}`);
+}
+
 /** Delete the app and install it again: iOS removes its data with it, not its Keychain items. */
 export function reinstall() {
   quit();

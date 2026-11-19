@@ -39,6 +39,7 @@ import {
   Proxy,
   quit,
   reinstall,
+  running,
   rgb,
   screen,
   scrollTo,
@@ -162,6 +163,7 @@ const HIDDEN_LINK_TEXT = "the quarterly report on heating costs";
 const HIDDEN_LINK = `[${HIDDEN_LINK_TEXT}](https://example.com/report)`;
 const MAIL_LINE = "Write [to the team](mailto:someone@example.com) for a copy.";
 const AUTOLINK = "https://example.com/";
+const SAFARI = "com.apple.mobilesafari";
 
 beforeAll(async () => {
   started = Date.now();
@@ -661,8 +663,12 @@ describe("the iOS app", () => {
       notSee(`.*${lit(env.token)}.*`),
       scrollTo({ text: lit(AUTOLINK) }, "DOWN"),
     ]);
-    // An address written as itself opens in the system browser without asking.
-    await steps("open-link", [tap(lit(AUTOLINK)), waitGone({ id: "transcript" }, 30_000)]);
+    // An address written as itself opens in the system browser without asking:
+    // the system starts Safari, which was not running before. The system says
+    // so; the driver is not asked about a screen while Safari starts.
+    expect(running(SAFARI)).toBe(false);
+    await steps("open-link", [tap(lit(AUTOLINK))]);
+    await until("the browser to open the link", async () => running(SAFARI) || null, 30_000);
     // Back from the browser, the app is where it was.
     activate();
     await steps("back-from-browser", [
