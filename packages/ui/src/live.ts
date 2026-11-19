@@ -350,7 +350,8 @@ export function endingOf(run: Run, _transcript?: Transcript): RunEnding | null {
   if (run.state === "completed" && run.finishedBeforeStop) return { kind: "finished-before-stop" };
   if (run.state === "stopped") {
     if (!run.outcomeKnown) return run.stopRequestedAt !== null ? { kind: "stop-unknown" } : null;
-    if (run.turnLimit !== undefined) return { kind: "turn-limit", minutes: run.turnLimit };
+    if (run.turnLimit !== undefined && run.turnLimit > 0)
+      return { kind: "turn-limit", minutes: run.turnLimit };
     return {
       kind: "stopped",
       after: runDuration(run),

@@ -523,7 +523,9 @@ export type Run = {
   stoppedForTimeouts?: number;
   /**
    * The run passed the "Turn time limit" (F-100), in minutes, and this client asked the gateway
-   * to stop it, as any Stop: it is `stopping` until the gateway confirms. Absent otherwise.
+   * to stop it, as any Stop: it is `stopping` until the gateway confirms. 0 when the limit was
+   * reached but did not stop it (no one current run, no write access, or the gateway refused):
+   * the limit is not asked again and no later stop is put down to it. Absent otherwise.
    */
   turnLimit?: number;
   /**
@@ -1456,6 +1458,7 @@ export function revertStop(activity: TaskActivity, runId: string, error: string)
           pendingCards: [...run.suspendedCards, ...run.pendingCards],
           suspendedCards: [],
           stopRequestedAt: null,
+          ...(run.turnLimit === undefined ? {} : { turnLimit: 0 }),
           stopError: error,
         }
       : run,

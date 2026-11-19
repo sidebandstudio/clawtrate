@@ -4103,7 +4103,7 @@ export class ClawtrateClient {
         !this.options.readOnly
       ) {
         const count = timeoutsInARow(run);
-        if (count >= TIMEOUTS_IN_A_ROW) {
+        if (count >= TIMEOUTS_IN_A_ROW && runningRunId(transcript, run.id) === run.id) {
           this.updateActivity(key, (activity) => markStoppedForTimeouts(activity, run.id, count));
           void this.stopRun(key, run.id).then(() => {
             // The stop was refused or could not be asked: the run goes on, not as stopped for this.
@@ -4234,7 +4234,7 @@ export class ClawtrateClient {
   private turnLimitReached(key: string, runId: string): void {
     this.turnTimers.delete(`${key}\u0000${runId}`);
     const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
-    if (!run || !isActive(run.state)) return;
+    if (!run || (run.state !== "running" && run.state !== "waiting")) return;
     const limit = this.turnLimitMs;
     if (this.now() - (run.startedAt ?? this.now()) < limit) {
       // Woken early by the timer ceiling: arm again.
@@ -4245,8 +4245,17 @@ export class ClawtrateClient {
     // and asked again after a reconnect if unanswered. Nothing fails and nothing queued is
     // released on the limit alone; the limit is reached once per run.
     const minutes = Math.round(this.turnLimitMs / 60_000);
+    if (
+      !this.state.connection.canWrite ||
+      this.options.readOnly ||
+      runningRunId(this.state.transcripts[key]!, runId) !== runId
+    ) {
+      // Not stopped by the limit: it is not asked again, and no later stop is put down to it.
+      this.updateActivity(key, (activity) => markTurnLimit(activity, runId, 0));
+      return;
+    }
     this.updateActivity(key, (activity) => markTurnLimit(activity, runId, minutes));
-    if (this.state.connection.canWrite && !this.options.readOnly) void this.stopRun(key, runId);
+    void this.stopRun(key, runId);
   }
 
   private clearTurnTimers(key: string): void {

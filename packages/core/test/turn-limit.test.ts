@@ -41,6 +41,15 @@ describe("the turn time limit (F-100)", () => {
     again.client.stop();
   });
 
+  const aborted = (runId: string) => ({
+    runId,
+    seq: 9,
+    stream: "lifecycle",
+    ts: Date.now(),
+    sessionKey: KEY,
+    data: { phase: "end", status: "cancelled", aborted: true },
+  });
+
   /** A client whose task runs one message past a 1-minute limit, with one queued behind it. */
   async function pastTheLimit(abort: (params: unknown) => unknown) {
     const parts = started("1");
@@ -113,6 +122,43 @@ describe("the turn time limit (F-100)", () => {
     expect(run()!.error).toBeNull();
     expect(client.state.transcripts[KEY]!.outbox[1]!.status).toBe("queued");
     expect(gateway.calls("chat.send")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-100: a refused deadline and a deadline during manual Stop do not label a later manual stop", async () => {
+    // A deadline the gateway refuses, then the person's own Stop, which the gateway confirms.
+    let refuse = true;
+    const first = await pastTheLimit(() => {
+      if (refuse) throw new GatewayError({ code: "INVALID_REQUEST", message: "abort refused" });
+      setTimeout(() => first.gateway.emit("agent", aborted(first.run()!.id)), 0);
+      return { ok: true, aborted: true, runIds: [first.run()!.id] };
+    });
+    await until(() => first.run()?.stopError === "abort refused");
+    refuse = false;
+    await first.client.stopRun(KEY, first.run()!.id);
+    await until(() => first.run()?.state === "stopped");
+    expect(first.run()!.turnLimit ?? 0).toBe(0);
+    first.client.stop();
+
+    // The person's Stop on its way, unanswered, when the deadline passes; then the gateway's end.
+    const second = started("1");
+    const { client, gateway, advance } = second;
+    gateway.handlers["chat.abort"] = () => new Promise(() => {});
+    await client.start();
+    await until(() => client.state.discovery.status === "ready");
+    client.openSession(KEY);
+    await until(() => client.state.transcripts[KEY]?.status === "ready");
+    client.sendMessage(KEY, "Take your time");
+    const run = () => client.state.transcripts[KEY]!.runs[0];
+    await until(() => run()?.bound === true && run()?.state === "running");
+    void client.stopRun(KEY, run()!.id);
+    await until(() => run()?.state === "stopping");
+    advance(61_000);
+    await client.setTurnLimit(1);
+    await sleep(30);
+    gateway.emit("agent", aborted(run()!.id));
+    await until(() => run()?.state === "stopped");
+    expect(run()!.turnLimit ?? 0).toBe(0);
     client.stop();
   });
 });
