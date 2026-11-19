@@ -137,11 +137,19 @@ export function BotUsagePage({
       />
     </>
   );
+  // The period choice stays while a period is read, and after its read failed.
+  const choice = (
+    <>
+      <h4 className="b-group">Usage</h4>
+      <PeriodChoice value={period} onChange={setPeriod} />
+    </>
+  );
   if (report.status === "loading" && !report.report)
     return (
       <div className="c-usage" data-testid="usage-page">
         {head}
         {budget}
+        {choice}
         {report.waiting && (
           <p className="b-hint" role="status" data-testid="usage-waiting">
             {USAGE_WAITING}
@@ -159,6 +167,7 @@ export function BotUsagePage({
       <div className="c-usage" data-testid="usage-page">
         {head}
         {budget}
+        {choice}
         <div className="work-empty" data-testid="usage-error">
           <span className="empty-mark">
             <WarnIcon />
@@ -182,8 +191,7 @@ export function BotUsagePage({
     <div className="c-usage" data-testid="usage-page" aria-busy={report.status === "loading"}>
       {head}
       {budget}
-      <h4 className="b-group">Usage</h4>
-      <PeriodChoice value={period} onChange={setPeriod} />
+      {choice}
       {report.status === "error" && (
         <p className="b-field-error" role="alert" data-testid="usage-refresh-error">
           {refreshFailed(report.error, r)}{" "}
