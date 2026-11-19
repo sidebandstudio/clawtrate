@@ -875,7 +875,7 @@
   function renderEditor(focusSel) {
     const d = D;
     const r = d.id && routines.find((x) => x.id === d.id);
-    const saving = d.status === "saving";
+    const saving = d.status === "saving" || d.status === "checking";
     const dis = saving ? " disabled" : "";
     let notes = "";
     if (d.status === "refused") notes += note(`<p><b>The gateway didn't save this.</b> invalid cron.add params: CronPattern: invalid configuration format ('99 * * *'), exactly five, six, or seven space separated parts are required.</p>`, "danger");
@@ -883,14 +883,27 @@
       notes += note(`<p><b>This routine was changed elsewhere</b> while you were editing.</p><div class="b-actions">${button("Show the new version", 'data-size="sm" data-r="conflict-show"')}${button("Save mine anyway", 'data-size="sm" data-r="conflict-save"', "quiet")}</div>`, "warn");
     if (d.status === "deleted")
       notes += note(`<p><b>This routine was deleted</b> while you were editing.</p><div class="b-actions">${button("Save as a new routine", 'data-size="sm" data-r="save-as-new"')}${button("Close", 'data-size="sm" data-r="edit-close"', "quiet")}</div>`, "warn");
-    if (d.status === "noanswer") notes += note(`<p><b>Not saved yet.</b> The gateway didn't answer. Check the routine list before saving again.</p><div class="b-actions">${button("Check now", 'data-size="sm" data-r="check-now"')}</div>`, "warn");
+    if (d.status === "noanswer") notes += note(`<p><b>The gateway didn't answer.</b> This may or may not have saved. Check what the gateway has before saving again.</p><div class="b-actions">${button("Check now", 'data-size="sm" data-r="check-now"')}</div>`, "warn");
+    if (d.status === "checking") notes += note(`<p aria-busy="true">Checking what the gateway has…</p>`, "warn");
+    // What the lookup found, said as found: it can't tell this save from the same change made elsewhere.
+    if (d.status === "found") {
+      const f = d.found;
+      const again = `${button("Save again", 'data-size="sm" data-r="save"')}`;
+      notes += note(
+        f.kind === "same" ? `<p><b>${esc(r.name)} now reads as you typed it.</b> That may be your save, or the same change made elsewhere.</p><div class="b-actions">${button("Close", 'data-size="sm" data-r="edit-close"')}</div>`
+          : f.kind === "differs" ? `<p><b>${esc(r.name)} doesn't read as you typed it.</b> The gateway has: ${esc(f.has)}.</p><div class="b-actions">${button("Check again", 'data-size="sm" data-r="check-now"')}${again}</div>`
+          : f.kind === "match" ? `<p><b>The gateway has ${f.ids.length === 1 ? "a routine" : `${f.ids.length} routines`} for ${botName(d.bot)} named ${esc(d.name.trim())},</b> created ${esc(when(f.at))}. It may be the one you saved, or one made elsewhere.</p><div class="b-actions">${button("Open it", `data-size="sm" data-r="open-found" data-id="${f.ids[0]}"`)}${again}</div><p class="r-hint">Saving again makes another routine if that one is yours.</p>`
+          : `<p><b>The gateway has no routine for ${botName(d.bot)} named ${esc(d.name.trim())}.</b> The save may still arrive.</p><div class="b-actions">${button("Check again", 'data-size="sm" data-r="check-now"')}${again}</div>`,
+        "warn",
+      );
+    }
     const botField = d.id
       ? `<div class="r-field"><span class="r-label">Bot</span><p class="r-hint" style="margin:0">${botName(d.bot)}. To run it on another bot, make a new routine.</p></div>`
       : `<div class="r-field"><label for="e-bot">Bot</label><select class="input" id="e-bot" data-e="bot"${dis}>${bots.map((b) => `<option value="${b.id}"${b.id === d.bot ? " selected" : ""}>${b.name}</option>`).join("")}</select></div>`;
     const err = (k) => (d.errors[k] ? ` aria-invalid="true" aria-describedby="e-${k}-error"` : "");
-    let when;
+    let whenField;
     if (d.locked) {
-      when = `<div class="r-field"><span class="r-label">When</span><div class="r-locked" data-testid="locked"><code>${esc(r.schedule.expr || everyWords(r.schedule.everyMs))}</code>${r.schedule.tz ? `, ${esc(city(r.schedule.tz))}` : ""}<br />` +
+      whenField = `<div class="r-field"><span class="r-label">When</span><div class="r-locked" data-testid="locked"><code>${esc(r.schedule.expr || everyWords(r.schedule.everyMs))}</code>${r.schedule.tz ? `, ${esc(city(r.schedule.tz))}` : ""}<br />` +
         `This schedule was set on the gateway. You can rename the routine and change its instruction here; change its schedule on the gateway.</div></div>`;
     } else {
       const kinds = `<ul class="b-choices" role="radiogroup" aria-label="When" id="e-when"${err("when")}>` +
@@ -907,7 +920,7 @@
         `<div class="r-field"><label for="e-tz">Time zone</label><select class="input" id="e-tz" data-e="tz"${dis}><option value="auto"${d.tz === "auto" ? " selected" : ""}>Auto-detect (New York)</option>` +
         ZONES.map((z) => `<option value="${z}"${d.tz === z ? " selected" : ""}>${city(z)} (${z})</option>`).join("") + `</select>` +
         (d.tz === "auto" ? `<p class="r-hint">Writes this device's zone, America/New_York. It does not follow the device later.</p>` : "") + `</div>`;
-      when = `<div class="r-field"><span class="r-label" id="e-when-label">When</span>${kinds}${atField}${d.errors.when ? `<p class="r-error" id="e-when-error">${esc(d.errors.when)}</p>` : ""}</div>${zone}` +
+      whenField = `<div class="r-field"><span class="r-label" id="e-when-label">When</span>${kinds}${atField}${d.errors.when ? `<p class="r-error" id="e-when-error">${esc(d.errors.when)}</p>` : ""}</div>${zone}` +
         `<p class="r-preview" aria-live="polite" data-testid="preview">${esc(previewText(d))}</p>`;
     }
     const more =
@@ -917,15 +930,15 @@
       `<div class="r-field"><label for="e-results">Results</label><select class="input" id="e-results" data-e="results"${dis}><option value="none"${d.results === "none" ? " selected" : ""}>Keep them with the run</option><option value="announce"${d.results === "announce" ? " selected" : ""}>Also announce to the gateway's channels</option></select></div>` +
       `</div></details>`;
     editDialog.innerHTML =
-      `<header class="b-head"><h2 id="edit-title" tabindex="-1">${d.id ? "Edit routine" : "New routine"}</h2><button type="button" class="icon-button b-close" data-r="edit-close" aria-label="Close">${icon("x")}</button></header>` +
+      `<header class="b-head"><h2 id="edit-title" tabindex="-1">${d.id ? "Edit routine" : "New routine"}</h2><button type="button" class="icon-button b-close" data-r="edit-close" aria-label="Close"${dis}>${icon("x")}</button></header>` +
       `<div class="b-body">${notes}${botField}` +
       field("e-name", "Name", `<input class="input" id="e-name" data-e="name" maxlength="80" autocomplete="off" value="${esc(d.name)}"${err("name")}${dis} />`, d.errors.name) +
       (d.payload
         ? `<div class="r-field"><span class="r-label">${d.payload.kind === "systemEvent" ? "Reminder" : "Command"}</span><div class="r-locked" data-testid="payload-locked">${esc(d.payload.text || d.payload.argv.join(" "))}<br />` +
           `This ${d.payload.kind === "systemEvent" ? "reminder's text" : "command"} was set on the gateway. You can rename the routine and change when it runs here; change ${d.payload.kind === "systemEvent" ? "its text" : "it"} on the gateway.</div></div>`
         : field("e-instr", "Instruction", `<textarea class="input" id="e-instr" data-e="instruction" placeholder="What should ${botName(d.bot)} do each time? For example: Summarise yesterday's notes and list anything I need to answer."${err("instruction")}${dis}>${esc(d.instruction)}</textarea>`, d.errors.instruction)) +
-      when + more + (d.id ? "" : `<p class="r-hint">It runs first at its next time; creating it doesn't run it.</p>`) +
-      `</div><footer class="b-foot"><div class="b-actions">${button("Cancel", 'data-r="edit-close"', "quiet")}${button(saving ? "Saving…" : "Save", `data-r="save"${dis}`, "primary")}</div></footer>`;
+      whenField + more + (d.id ? "" : `<p class="r-hint">It runs first at its next time; creating it doesn't run it.</p>`) +
+      `</div><footer class="b-foot"><div class="b-actions">${button("Cancel", `data-r="edit-close"${dis}`, "quiet")}${d.status === "found" ? "" : button(d.status === "saving" ? "Saving…" : "Save", `data-r="save"${dis}`, "primary")}</div></footer>`;
     if (!editDialog.open) {
       lastFocus = document.activeElement;
       editDialog.showModal();
@@ -944,16 +957,48 @@
       return;
     }
     const outcomeOf = P.get("editstate");
-    D.status = "saving";
+    const d = D;
+    d.status = "saving";
     renderEditor('[data-r="save"]');
     setTimeout(() => {
+      // An answer belongs to the draft that sent it, even if its dialog has closed since.
+      if (D !== d) {
+        if (!outcomeOf) {
+          land(request(d));
+          announce(`Saved ${d.name.trim()}`);
+          paint();
+        }
+        return;
+      }
       if (outcomeOf === "refused" || outcomeOf === "conflict" || outcomeOf === "noanswer") {
-        D.status = outcomeOf;
-        renderEditor('[data-r="save"]');
+        // lookup=found: the unanswered save did reach the gateway.
+        if (outcomeOf === "noanswer" && P.get("lookup") === "found") land(request(d));
+        d.status = outcomeOf;
+        renderEditor(outcomeOf === "noanswer" ? '[data-r="check-now"]' : '[data-r="save"]');
         return;
       }
       commit();
     }, 600);
+  }
+  // Check now: cron.get for an edit, cron.list for a new routine. It reports and never saves.
+  function checkNow() {
+    const d = D;
+    d.status = "checking";
+    renderEditor("#edit-title");
+    setTimeout(() => {
+      if (D !== d) return;
+      const r = d.id && routines.find((x) => x.id === d.id);
+      if (r) {
+        const left = request(d).params.patch;
+        d.found = Object.keys(left).length ? { kind: "differs", has: `${r.name}, ${wordsText(r.schedule)}` } : { kind: "same" };
+      } else {
+        const ids = routines.filter((x) => !x.gone && x.bot === d.bot && x.name === d.name.trim()).map((x) => x.id);
+        d.found = ids.length ? { kind: "match", ids, at: routines.find((x) => x.id === ids[0]).createdAtMs } : { kind: "none" };
+      }
+      d.status = "found";
+      renderEditor(".b-note .button");
+      announce("Checked");
+    }, 400);
   }
   // What Save sends: cron.add with every field, or cron.update with only what changed.
   function request(d) {
@@ -971,17 +1016,21 @@
     return { method: "cron.update", params: { id: r.id, patch } };
   }
   const sent = [];
+  // The gateway's side of a write: what a later cron.get or cron.list would return.
+  function land(req) {
+    sent.push(req);
+    if (req.method === "cron.update") {
+      Object.assign(routines.find((x) => x.id === req.params.id), req.params.patch, { updatedAtMs: NOW });
+      return req.params.id;
+    }
+    const { agentId, wakeMode, ...fields } = req.params;
+    const id = `r${routines.length + 1}`;
+    routines.push({ id, bot: agentId, enabled: true, runs: [], updatedAtMs: NOW, createdAtMs: NOW, ...fields });
+    return id;
+  }
   function commit() {
     const d = D;
-    const req = request(d);
-    sent.push(req);
-    let id = d.id;
-    if (req.method === "cron.update") Object.assign(routines.find((x) => x.id === id), req.params.patch, { updatedAtMs: NOW });
-    else {
-      const { agentId, wakeMode, ...fields } = req.params;
-      id = `r${routines.length + 1}`;
-      routines.push({ id, bot: agentId, enabled: true, runs: [], updatedAtMs: NOW, ...fields });
-    }
+    const id = land(request(d));
     const created = !d.id;
     editDialog.close();
     D = null;
@@ -1013,8 +1062,9 @@
     const promptNote = C.prompt.trim() && !/NO_REPLY/.test(C.prompt)
       ? `<p class="r-error" id="ci-prompt-note" data-testid="prompt-note">Without "If nothing needs attention, reply NO_REPLY", every check-in will post a message.</p>` : "";
     const saving = C.status === "saving";
+    const dis = saving ? " disabled" : "";
     ciDialog.innerHTML =
-      `<header class="b-head"><h2 id="checkins-title" tabindex="-1">${esc(name)}'s check-ins</h2><button type="button" class="icon-button b-close" data-r="ci-close" aria-label="Close">${icon("x")}</button></header>` +
+      `<header class="b-head"><h2 id="checkins-title" tabindex="-1">${esc(name)}'s check-ins</h2><button type="button" class="icon-button b-close" data-r="ci-close" aria-label="Close"${dis}>${icon("x")}</button></header>` +
       `<div class="b-body"><ul class="b-choices" role="radiogroup" aria-label="Check-ins">` +
       CI.map(([k, t]) => `<li><button type="button" class="b-choice" role="radio" aria-checked="${C.choice === k}" tabindex="${C.choice === k ? 0 : -1}" data-ci="${k}"${saving ? " disabled" : ""}><span class="b-choice-text"><span class="b-choice-title">${t}</span><span class="b-choice-sub">${esc(sub[k])}</span></span>${icon("check", "icon b-tick")}</button></li>`).join("") +
       `</ul>` +
@@ -1023,7 +1073,7 @@
       `<details class="b-disclosure"${C.prompt ? " open" : ""}><summary>What to check</summary><div class="b-disclosure-body"><div class="r-field"><label for="ci-prompt">Prompt</label>` +
       `<textarea class="input" id="ci-prompt" data-ci-prompt placeholder="Follow the heartbeat monitor scratch context when provided. … If nothing needs attention, reply NO_REPLY."${promptNote ? ' aria-describedby="ci-prompt-note"' : ""}>${esc(C.prompt)}</textarea>` +
       `${promptNote}<p class="r-hint">Empty uses the gateway's own prompt.</p></div></div></details>${catchNote}</div>` +
-      `<footer class="b-foot"><div class="b-actions">${button("Cancel", 'data-r="ci-close"', "quiet")}${button(saving ? "Saving…" : "Save", `data-r="ci-save"${saving ? " disabled" : ""}`, "primary")}</div></footer>`;
+      `<footer class="b-foot"><div class="b-actions">${button("Cancel", `data-r="ci-close"${dis}`, "quiet")}${button(saving ? "Saving…" : "Save", `data-r="ci-save"${saving ? " disabled" : ""}`, "primary")}</div></footer>`;
     if (!ciDialog.open) {
       lastFocus = document.activeElement;
       ciDialog.showModal();
@@ -1133,9 +1183,13 @@
         return renderEditor("#e-name");
       }
       case "conflict-save":
-      case "check-now":
         D.status = "";
         return commit();
+      case "check-now":
+        return checkNow();
+      case "open-found":
+        editDialog.close();
+        return go("routine", { routine: id, from: "list", back: "list", deleted: false });
       case "save-as-new":
         D.id = null;
         D.status = "";
@@ -1147,15 +1201,18 @@
         C = null;
         return lastFocus?.focus();
       case "ci-save": {
-        C.status = "saving";
+        const c0 = C;
+        c0.status = "saving";
         renderCheckins('[data-r="ci-save"]');
         return setTimeout(() => {
-          const every = { off: 0, daily: DAY, asneeded: 30 * MIN, every: { "15m": 15 * MIN, "1h": HOUR, "2h": 2 * HOUR, "4h": 4 * HOUR, "8h": 8 * HOUR, "12h": 12 * HOUR }[C.every] }[C.choice];
-          for (const [b, c] of Object.entries(checkins)) if (c && c.source === "default") c.source = "own";
-          checkins[C.bot] = { every, source: "own", prompt: C.prompt };
+          const every = { off: 0, daily: DAY, asneeded: 30 * MIN, every: { "15m": 15 * MIN, "1h": HOUR, "2h": 2 * HOUR, "4h": 4 * HOUR, "8h": 8 * HOUR, "12h": 12 * HOUR }[c0.every] }[c0.choice];
+          for (const [, c] of Object.entries(checkins)) if (c && c.source === "default") c.source = "own";
+          checkins[c0.bot] = { every, source: "own", prompt: c0.prompt };
+          announce("Check-ins saved");
+          // The answer is this draft's: a dialog opened since keeps its own.
+          if (C !== c0) return paint();
           ciDialog.close();
           C = null;
-          announce("Check-ins saved");
           paint('[data-r="checkins"]');
         }, 600);
       }
@@ -1251,6 +1308,12 @@
     event.preventDefault();
     openMenu(rowMain, routineMenu(routines.find((x) => x.id === rowMain.dataset.id)), event.clientX, event.clientY);
   });
+  // While a save is in flight its dialog stays open: Escape waits for the answer.
+  const busy = () => ["saving", "checking"].includes(D?.status) || C?.status === "saving";
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && busy()) event.preventDefault();
+  }, true);
+  for (const dlg of [editDialog, ciDialog]) dlg.addEventListener("cancel", (event) => busy() && event.preventDefault());
   for (const dlg of [editDialog, ciDialog, confirmDialog])
     dlg.addEventListener("close", () => {
       if (dlg === editDialog) D = null;
