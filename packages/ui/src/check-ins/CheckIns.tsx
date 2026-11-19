@@ -401,9 +401,10 @@ function CheckInsDialog({
             />
             {typed && (
               <p className="ci-hint" id="ci-prompt-note" data-testid="prompt-note">
-                This prompt replaces the gateway's own, which asks {bot.name} to reply NO_REPLY when
-                nothing needs attention. Whether {bot.name} stays quiet depends on what this prompt
-                asks.
+                {promptKind(null, checkIns.defaults) === "builtin"
+                  ? `This prompt replaces the gateway's own, which asks ${bot.name} to reply NO_REPLY when nothing needs attention.`
+                  : "This prompt replaces the gateway's default for this bot."}{" "}
+                Whether {bot.name} stays quiet depends on what this prompt asks.
               </p>
             )}
             <p className="ci-hint" id="ci-prompt-hint">

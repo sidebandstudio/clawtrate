@@ -449,6 +449,12 @@ test("F-201: an inherited custom prompt is what an empty prompt means, and no wo
   );
   await expect(juniper).toContainText("Empty uses the prompt the gateway sets for every bot.");
   await expect(juniper.getByTestId("prompt-note")).toHaveCount(0);
+  // The built-in prompt's words are not said of a custom default.
+  await juniper.getByRole("textbox", { name: "Prompt" }).fill("Look at the calendar.");
+  await expect(juniper.getByTestId("prompt-note")).toHaveText(
+    "This prompt replaces the gateway's default for this bot. Whether Juniper stays quiet depends on what this prompt asks.",
+  );
+  await juniper.getByRole("textbox", { name: "Prompt" }).fill("");
   await expect(block(page, "main")).toContainText(
     "Every 30 minutes, Juniper checks in with the prompt the gateway sets for every bot.",
   );
