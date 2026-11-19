@@ -749,35 +749,42 @@ tools with the same tool event shape: `sessions_spawn` (sub-agent),
 
 - Search and inspect: `memory.status {agentId}`,
   `memory.search {agentId, query}` and `memory.get` (`operator.read`;
-  their params are not in the published schema). Live: `status` returned
-  the backend and index state. `search` returned
-  `{provider:"none", searchMode:"fts-only", results:[]}` even after a
-  matching `MEMORY.md` was written, because the index had not been built.
-  The gateway asked for `openclaw memory status --index --agent <id>`.
-  `memory.get` requires "a provider-scoped memory reference", which only
-  `memory.search {version:2}` returns (row 20, memory); untested.
-- With `memory.search.provider: "none"` (the section 4 template),
-  `memory.status` reports provider `none` and `memory.search` uses local
-  full-text search only. Live: after `MEMORY.md` was written, search for a
-  word in it returned that file, with `searchMode: "fts-only"`.
-- Edit: memory is Markdown in the bot workspace. `MEMORY.md` is read and
-  written through `agents.files.get`/`agents.files.set` (admin for set;
-  live). Dated notes under `memory/` are refused by
-  `agents.files.set` ("unsupported file"). They can be read through
-  `agents.workspace.list {agentId, path?}` and
-  `agents.workspace.get {agentId, path}` (live for `MEMORY.md`). Maintenance
-  methods: `doctor.memory.status` and `doctor.memory.dreamDiary`
+  their params are not in the published schema). The development gateway
+  starts with `memory.search.enabled: false`; both status and search then
+  fail `UNAVAILABLE: Memory provider unavailable` (live). Setting `enabled:
+  true` while keeping `provider: "none"` made status `ready` with the local
+  full-text backend, without a restart (live). `memory.get` requires "a
+  provider-scoped memory reference", which only `memory.search {version:2}`
+  returns (row 20, memory); untested.
+- The first search with no index built it and returned a newly written note
+  (live). Once a valid index existed, later direct writes to `MEMORY.md`,
+  `USER.md`, direct notes and a nested note were not picked up by status or
+  search, in either response version (live). A replacement to an indexed
+  note kept its old excerpt; a new note was still absent after 57 s. Status
+  kept `dirty:false` and never reported `custom.watcher`. The running
+  watcher's paths and delay are **not established**
+  (`docs/research/memory-plugin.md`).
+- `openclaw --profile clawtrate-dev-memprobe memory index --force --agent main`
+  explicitly rebuilt the index. Searches then returned current text from
+  `MEMORY.md`, `USER.md`, a direct note and a nested note (live). A write
+  being stored therefore does not make it searchable, and
+  `coverage:"complete"` did not show that the index was current.
+- Edit: memory is Markdown in the bot workspace. `MEMORY.md` and `USER.md`
+  are read and written through `agents.files.get`/`agents.files.set` (admin
+  for set; live), and both reached a new private task's recorded model
+  request. Notes written directly under `memory/` did not reach that request
+  (live). Dated notes under `memory/` are refused by `agents.files.set`
+  ("unsupported file"). They can be read through `agents.workspace.list
+  {agentId, path?}` and `agents.workspace.get {agentId, path}` (live).
+  Maintenance methods: `doctor.memory.status` and `doctor.memory.dreamDiary`
   (`operator.read`), the other `doctor.memory.*` repair methods
   (`operator.write`), and `migrations.memory.plan`/`apply`
   (`operator.admin`).
 - Delete: there is no RPC to delete one memory item or file.
-- A dated note written straight into `<workspace>/memory/` was **not**
-  returned by `memory.search` within 13 s (live). The docs say memory files
-  are watched and reindexed with a debounce
-  (`<openclaw>/docs/concepts/memory-builtin.md` line 154). Which paths are
-  watched, and how fast, is **unverified**.
-- **Status: partial.** Read works. Editing through RPC covers only
-  `MEMORY.md` and needs admin. There is no delete. See plugin P2.
+- **Status: partial.** Read works after enabling the backend. Editing
+  through RPC covers only the bootstrap files and needs admin. There is no
+  delete, and automatic pickup of direct file writes was not observed. See
+  plugin P2.
 
 ### 11. Files and artifacts
 
@@ -3237,10 +3244,13 @@ demonstrated on the probe gateway; everything else is **unverified**.
   one validated call instead of several.
 - Config writes would use `api.runtime.config.mutateConfigFile`, and
   bootstrap files would be written into the workspace that
-  `api.runtime.agent.resolveAgentWorkspaceDir(cfg, agentId)` returns. Both
-  are listed in `PluginRuntimeCore` (`config-contracts-C65kIjn4.d.ts`) and
-  are not in the official-only gate list above, but neither was called from
-  a user-installed plugin: **unverified**.
+  `api.runtime.agent.resolveAgentWorkspaceDir(cfg, agentId)` returns. The
+  workspace resolver worked from the user-loaded memory probe for the
+  default bot and a second bot (**live**, `docs/research/memory-plugin.md`).
+  `mutateConfigFile` was not called from a user-installed plugin:
+  **unverified**. Both are listed in `PluginRuntimeCore`
+  (`config-contracts-C65kIjn4.d.ts`) and are not in the official-only gate
+  list above.
 - Event `plugin.clawtrate-bots.changed {agentId, revision}` through the
   service's `ctx.gatewayEvents.emit` (emission shown with the probe plugin).
 
@@ -3251,15 +3261,17 @@ demonstrated on the probe gateway; everything else is **unverified**.
   matching `agents.files.set`. Paths are confined to `MEMORY.md` and
   `memory/**/*.md`.
 - Files are located with `api.runtime.agent.resolveAgentWorkspaceDir`
-  (**unverified** from a user plugin) and changed with plain `node:fs`
-  writes. The plugin runs in the gateway process with its file access.
+  (**live** from the user-loaded probe, for the default bot and a second
+  bot) and changed with plain `node:fs` writes (**live**, with an immediate
+  read through `agents.workspace.get`). The plugin runs in the gateway
+  process with its file access. See `docs/research/memory-plugin.md`.
 - Reindex: there is no runtime method for it; `PluginRuntime` has none. The
-  plan relies on the memory backend's file watcher
-  (`<openclaw>/docs/concepts/memory-builtin.md` line 154). A live direct
-  write under `memory/` was **not** picked up by `memory.search` within
-  13 s, so this step is unverified and may need a reindex path. Options to
-  test are `openclaw memory status --index --agent <id>`, run by the plugin
-  as a subprocess, or confirming the watcher's paths and debounce.
+  probe disproved reliance on automatic pickup in this gateway: after a valid
+  index existed, direct note writes and replacements stayed stale, including
+  after 57 s, and status did not report a running watcher. `openclaw memory
+  index --force --agent <id>` refreshed root files and direct and nested
+  notes (live). A production refresh path, and the running watcher's paths
+  and delay, remain **unverified**.
 - Event `plugin.clawtrate-memory.changed {agentId, path}`.
 
 **P3, `clawtrate-push` (row 16, missing).**
