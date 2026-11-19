@@ -424,17 +424,26 @@ export type Routine = { id: string; name: string; botId: string };
 export const MAX_ROUTINES = 64;
 
 /**
- * The routines in a `cron.list` answer that run in tasks of their own
- * (`agent:<bot>:cron:<id>`), so their usage can be counted apart. A job that
- * runs in a bot's main task, such as the gateway's heartbeat, is left out.
+ * The session targets whose runs the gateway puts in a task of the routine's
+ * own (`agent:<bot>:cron:<id>`, a run's own `…:run:<id>` under it), so their
+ * usage can be counted apart: `isolated`, and `current`, which runs detached
+ * from the task it was made in. A job that runs in a bot's main task (the
+ * gateway's heartbeat) or in a named task (`session:<key>`) shares that task
+ * with everything else in it, so its use can't be told apart: it is left out,
+ * as is a job whose target is not given.
  */
+const OWN_TASK_TARGETS = new Set(["isolated", "current"]);
+
+/** The routines in a `cron.list` answer that run in tasks of their own, so their usage can be counted apart. */
 export function routinesOf(result: unknown): Routine[] {
   const jobs = asRecord(result)?.jobs;
   const out: Routine[] = [];
   for (const each of Array.isArray(jobs) ? jobs : []) {
     const job = asRecord(each);
     if (!job || typeof job.id !== "string" || !PLAIN_ID.test(job.id)) continue;
-    if (job.sessionTarget === "main" || asRecord(job.payload)?.kind === "heartbeat") continue;
+    if (typeof job.sessionTarget !== "string" || !OWN_TASK_TARGETS.has(job.sessionTarget))
+      continue;
+    if (asRecord(job.payload)?.kind === "heartbeat") continue;
     const botId = [job.agentId, job.effectiveAgentId].find(
       (value): value is string => typeof value === "string" && PLAIN_ID.test(value),
     );

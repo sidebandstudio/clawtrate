@@ -246,7 +246,7 @@ describe("the gateway's figures", () => {
 });
 
 describe("routines", () => {
-  it("F-234: lists the routines that run in tasks of their own, and leaves the heartbeat out", () => {
+  it("F-234: lists the routines that run in tasks of their own, and leaves out those whose runs share a task", () => {
     expect(
       routinesOf({
         jobs: [
@@ -269,9 +269,22 @@ describe("routines", () => {
             id: "c0ffee",
             name: "nightly",
             effectiveAgentId: "pip",
+            sessionTarget: "current",
+            sessionKey: "agent:pip:ask-marlow",
             payload: { kind: "agentTurn" },
           },
-          { id: "bad id!", agentId: "otto" },
+          // Runs in a task it names, beside everything else in that task (OpenClaw's cron
+          // `session:` target): its use can't be told apart from the task's.
+          {
+            id: "notes",
+            name: "daily-notes",
+            agentId: "otto",
+            sessionTarget: "session:agent:otto:daily-notes",
+            payload: { kind: "agentTurn" },
+          },
+          // No target given: where it runs isn't established.
+          { id: "unknown", name: "unknown", agentId: "otto", payload: { kind: "agentTurn" } },
+          { id: "bad id!", agentId: "otto", sessionTarget: "isolated" },
         ],
       }),
     ).toEqual([
