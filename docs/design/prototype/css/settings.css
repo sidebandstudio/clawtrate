@@ -4,6 +4,13 @@
    existing component (the settings frame, choice rows, switches, the note
    above the composer, the connection column) in a new screen. */
 
+/* Each page's line: where its settings live and who else sees them. */
+.s-owner {
+  margin: 0 0 14px;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
+
 /* Your gateways ---------------------------------------------------------------- */
 
 .s-gateways .b-choice {

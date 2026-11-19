@@ -89,6 +89,23 @@ await stateWords("Gateway pane: Other gateways and Remove this gateway…, not U
   await p.close();
 }
 
+for (const [section, words] of [
+  ["gateway", "Saved on this device. Read-only access lets you switch, add or remove saved connections here."],
+  ["gateways", "Saved on this device. Read-only access lets you switch, add or remove saved connections here."],
+  ["appearance", "Applies on this device."],
+  ["system", "Applies on this device."],
+  ["updates", "Applies on this device."],
+]) {
+  const p = await open(`open=settings&section=${section}&access=read`);
+  check(`ownership: ${section} says where it lives and what read-only can do`, (await text(p, '#settings-dialog [data-testid="owner-line"]')) === words);
+  await p.close();
+}
+{
+  const p = await open("open=settings&section=gateways&host=web");
+  check("ownership: on the web preview, the shared host is named", (await text(p, '#settings-dialog [data-testid="owner-line"]')).startsWith("Saved on this preview's host, shared by every browser that uses it."));
+  await p.close();
+}
+
 // Part 2: Your gateways and a gateway's page --------------------------------------------------------------
 
 await stateWords("Your gateways: its words and rows", "open=settings&section=gateways", settings, [
@@ -318,7 +335,7 @@ const recordLine = (p) => text(p, '#settings-dialog [data-testid="record-line"]'
 
 {
   const p = await open("open=settings&section=appearance");
-  const [ok, miss] = await has(p, settings, ["Theme", "Follow system", "Light", "Dark", "Your messages", "Accent", "Neutral", "Kept on this device."]);
+  const [ok, miss] = await has(p, settings, ["Theme", "Follow system", "Light", "Dark", "Your messages", "Accent", "Neutral", "Applies on this device."]);
   check("Appearance: its words", ok, miss);
   await press(p, "radio", "Dark");
   check("walk: Appearance, Dark: the page is dark, announced", (await p.evaluate(() => document.documentElement.dataset.theme)) === "dark" && (await announced(p)) === "Theme: Dark");

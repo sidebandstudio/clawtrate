@@ -177,6 +177,12 @@
       if (focus) D.focusFirst(settingsDialog);
     };
     const rerenderTask = () => app.openTask(app.model.selectedBot, app.model.selectedTask);
+    // Each page's one line: where its settings live, who else sees them, what read-only access can do.
+    const owner = (text) => `<p class="s-owner" data-testid="owner-line">${text}</p>`;
+    const savedHere = () =>
+      S.web
+        ? owner("Saved on this preview's host, shared by every browser that uses it. Read-only access lets you switch, add or remove saved connections here.")
+        : owner("Saved on this device. Read-only access lets you switch, add or remove saved connections here.");
 
     // The section list, in the order of settings.md section 3. System and Updates are desktop only.
     const SECTIONS = CT.botsSections;
@@ -508,7 +514,7 @@
         return {
           title: "Gateway",
           back: back("Back to settings", "to-nav"),
-          body: `<p class="b-lead">${S.conn === "connecting" ? `Connecting to ${esc(gw(S.target).name)}…` : "Not connected."}</p>${button("Your gateways", 'data-s="to-gateways" data-size="sm"')}`,
+          body: savedHere() + `<p class="b-lead">${S.conn === "connecting" ? `Connecting to ${esc(gw(S.target).name)}…` : "Not connected."}</p>${button("Your gateways", 'data-s="to-gateways" data-size="sm"')}`,
         };
       }
       const g = gw(S.inUse);
@@ -516,6 +522,7 @@
       const refused = S.conn === "refused";
       const theirs = S.refused === "client" ? 5 : 3;
       const body =
+        savedHere() +
         `<dl class="facts"><div><dt>Address</dt><dd>${esc(g.route)}</dd></div><div><dt>State</dt><dd>${refused ? "Can't use it" : "Connected"}</dd></div>` +
         `<div><dt>This device</dt><dd class="mono">device ${DEVICE.slice(0, 6)}</dd></div><div><dt>Granted scopes</dt><dd class="b-wrap-value">${refused ? "None while not connected" : scopes.join(", ")}</dd></div>` +
         `<div><dt>${refused ? "Last seen" : "Gateway"}</dt><dd>${refused ? (S.refused === "gateway" ? "OpenClaw 2026.4.2 on Nov 12" : "OpenClaw 2026.10.6 on Nov 18") : "OpenClaw 2026.10.6"}</dd></div></dl>` +
@@ -560,6 +567,7 @@
       const body =
         removalResult() +
         added +
+        savedHere() +
         `<p class="s-lead">Clawtrate saves a separate connection for each gateway and uses one at a time.</p>` +
         (S.conn === "none" ? note("<p>Not connected. Choose a gateway to use.</p>", "warn") : "") +
         `<ul class="b-choices s-gateways" data-testid="gateway-list">${S.order.map(row).join("")}</ul>` +
@@ -570,6 +578,7 @@
 
     function gatewayPage(g) {
       const body =
+        savedHere() +
         `<dl class="facts" data-testid="gateway-page"><div><dt>Route</dt><dd>${esc(g.route)}</dd></div><div><dt>Last used</dt><dd>${esc(g.last === "Just now" ? "Just now" : g.last)}</dd></div>` +
         `<div><dt>This device there</dt><dd>Last paired here · ${esc(g.last === "Just now" ? "Just now" : g.last)}</dd></div>` +
         `<div><dt>Identity</dt><dd class="mono">${g.identity ? esc(g.identity) : "Not read"}</dd></div></dl>` +
@@ -590,6 +599,7 @@
     const bubblesNow = () => (document.documentElement.dataset.bubbles === "neutral" ? "neutral" : "accent");
     CT.botsSectionViews.appearance = () => {
       const body =
+        owner("Applies on this device.") +
         (S.unsaved ? note("<p>Clawtrate couldn't save this. It applies until you close Clawtrate.</p>", "warn") : "") +
         `<div class="s-group"><h4>Theme</h4><div class="s-setting"><span class="s-setting-main"><strong>Theme</strong><span>The same choice as the gateway menu's.</span></span>` +
         seg("Theme", "theme", themeNow(), [["system", "Follow system"], ["light", "Light"], ["dark", "Dark"]]) +
@@ -598,7 +608,7 @@
         `<span class="s-sample" data-fill="accent" aria-hidden="true">Accent</span><span class="s-sample" data-fill="neutral" aria-hidden="true">Neutral</span></span></span>` +
         seg("Your messages", "bubbles", bubblesNow(), [["accent", "Accent"], ["neutral", "Neutral"]]) +
         `</div></div>` +
-        `<p class="b-hint">Kept on this device. Your other devices choose for themselves.</p>`;
+        "";
       return { title: "Appearance", back: back("Back to settings", "to-nav"), body };
     };
 
@@ -623,6 +633,7 @@
       const [tone, line] = spellLine();
       const [hwLine, hwOn, restart] = HW[S.hw];
       const body =
+        owner("Applies on this device.") +
         `<div class="s-group"><h4>Spelling</h4><div class="s-setting"><span class="s-setting-main"><strong>Check spelling while typing</strong>` +
         `<span id="s-spell-line"${tone ? ` data-tone="${tone}"` : ""}>${line}</span>` +
         (S.spell === "failed" ? `<span class="s-setting-actions">${button("Try again", 'data-s="spell-retry" data-size="sm"')}</span>` : "") +
@@ -668,6 +679,7 @@
       // The automatic restart waits until the app can establish every condition (settings.md section 10).
       const auto = live ? `<p class="b-hint" data-testid="auto-restart">Automatic restart is unavailable in this build.</p>` : "";
       const body =
+        owner("Applies on this device.") +
         future +
         cannot +
         `<dl class="facts" data-testid="updates"><div><dt>Version</dt><dd>Clawtrate ${S.version}</dd></div><div><dt>Updates</dt><dd data-testid="updates-line">${line}</dd></div></dl>` +
