@@ -1066,14 +1066,21 @@ export const RULES_CHECKS: RulesCheck[] = [
         ["read", "ask", "cancelled"],
         "Pip's call in the decision record",
       );
-      const history = answered(
-        await call(ctx.clients.admin, "chat.history", { sessionKey: "agent:pip:main", limit: 20 }),
-        "Pip's main task",
-      );
-      const results = ((history.messages ?? []) as JsonRecord[]).filter(
-        (m) => m.role === "toolResult" && m.toolName === "read",
-      );
-      const text = JSON.stringify(results.at(-1)?.content ?? "");
+      // The refused read's result is written after the hook returns: wait for it in the history.
+      const text = await eventually("Pip's read result in its history", async () => {
+        const history = answered(
+          await call(ctx.clients.admin, "chat.history", {
+            sessionKey: "agent:pip:main",
+            limit: 20,
+          }),
+          "Pip's main task",
+        );
+        const results = ((history.messages ?? []) as JsonRecord[]).filter(
+          (m) => m.role === "toolResult" && m.toolName === "read",
+        );
+        const last = results.at(-1);
+        return last ? JSON.stringify(last.content ?? "") : undefined;
+      });
       expect(text.includes(GATEWAY_UNAVAILABLE), `Pip's read result: ${text.slice(0, 300)}`);
     },
   },
