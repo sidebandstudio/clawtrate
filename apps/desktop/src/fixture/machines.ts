@@ -54,8 +54,8 @@ export const NO_MACHINE_PARAMS: MachineParams = {
   pairing: null,
 };
 
-const MEDIA = "6d1f0c2a9e8b47f3a5c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3";
-const STUDIO = "b7e2d4c6a8f0e1d3c5b7a9f8e6d4c2b0a1f3e5d7c9b8a6f4e2d0c1b3a5f7e9d8";
+const MEDIA = "node-media-box";
+const STUDIO = "node-studio-mac";
 
 const choiceLevels: Record<
   DefaultsChoice,

@@ -17,8 +17,8 @@ import {
   type MachinesContext,
 } from "../src/machines.ts";
 
-const NODE = "2846c8a7f0f455f9920cfbad0c643354426a8adf67c0e94146e122c59be1d0cc";
-const OTHER = "9b1e0000000000000000000000000000000000000000000000000000000000aa";
+const NODE = "node-media-box";
+const OTHER = "node-other";
 
 const nodeRow = (over: Record<string, unknown> = {}) => ({
   nodeId: NODE,
