@@ -263,7 +263,7 @@ export function useUsageReport(
   }, [counting, waiting, shown, retry]);
   // A report is shown only for this bot and these days, never for another period's.
   const kept = (report: UsageReport | null) =>
-    report && reportFits(report, botId, range) ? report : null;
+    report && reportFits(report, botId, period, range) ? report : null;
   const state: ReportState =
     answer === null
       ? { status: "loading", report: null }

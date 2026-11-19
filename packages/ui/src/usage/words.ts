@@ -78,10 +78,19 @@ export function rangeWords(range: DateRange): string {
   return `${days}, ${zoneWords(range.timeZone)}`;
 }
 
-/** Whether a report is for this bot (or every bot) and exactly these days, in this time zone. */
-export function reportFits(report: UsageReport, botId: string | null, range: DateRange): boolean {
+/**
+ * Whether a report is for this bot (or every bot), this period and exactly these days, in this
+ * time zone: on a Monday, This week and Today are the same day, but each is said as its own.
+ */
+export function reportFits(
+  report: UsageReport,
+  botId: string | null,
+  period: UsagePeriod,
+  range: DateRange,
+): boolean {
   return (
     report.botId === botId &&
+    report.period === period &&
     report.range.startDate === range.startDate &&
     report.range.endDate === range.endDate &&
     report.range.timeZone === range.timeZone
