@@ -87,18 +87,19 @@ export function BotUsagePage({
   /** Whether the page is shown: a hidden one asks the host for nothing again. */
   visible: boolean;
   announce: (text: string) => void;
-  openForm: boolean;
+  /** The request that opens the page with its budget form, or 0: each new one opens the form. */
+  openForm: number;
   onBack: () => void;
 }) {
   const bridge = useBridge();
   const state = useClawtrateState();
   const now = useNow();
   const [period, setPeriod] = useState<UsagePeriod>("week");
-  const [form, setForm] = useState(openForm);
+  const [form, setForm] = useState(openForm > 0);
   const [forForm, setForForm] = useState(openForm);
   if (forForm !== openForm) {
     setForForm(openForm);
-    if (openForm) setForm(true);
+    if (openForm > 0) setForm(true);
   }
   const own = budgetOf(state.usage, bot.id, now);
   const report = useUsageReport(bot.id, period, true, visible, own?.count?.asOf ?? null);
@@ -320,13 +321,13 @@ type BotSettingsProps = ComponentProps<typeof BotSettings>;
  */
 export function BotSettingsWithUsage(props: BotSettingsProps & { task: Task | null }) {
   const { task, ...settings } = props;
-  const [page, setPage] = useState<{ botId: string; form: boolean } | null>(null);
+  const [page, setPage] = useState<{ botId: string; form: boolean; seq: number } | null>(null);
   // A request from outside the pane ("Raise budget" above the composer), shown once.
   const request = useUsageRequest();
   const [shown, setShown] = useState(0);
   if (request && request.seq !== shown && request.botId === props.bot.id) {
     setShown(request.seq);
-    setPage({ botId: request.botId, form: request.form });
+    setPage({ botId: request.botId, form: request.form, seq: request.seq });
   }
   useEffect(() => {
     if (request && request.seq === shown) settleUsageRequest(request);
@@ -358,7 +359,7 @@ export function BotSettingsWithUsage(props: BotSettingsProps & { task: Task | nu
             task={task}
             canSet={!props.info.readOnly}
             announce={props.announce}
-            openForm={page.form}
+            openForm={page.form ? page.seq : 0}
             onBack={back}
             visible={props.visible}
           />
@@ -368,7 +369,7 @@ export function BotSettingsWithUsage(props: BotSettingsProps & { task: Task | nu
         <UsageRow
           bot={props.bot}
           visible={props.visible}
-          onOpen={() => setPage({ botId: props.bot.id, form: false })}
+          onOpen={() => setPage({ botId: props.bot.id, form: false, seq: 0 })}
         />
       }
     />

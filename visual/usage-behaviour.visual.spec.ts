@@ -247,6 +247,19 @@ test("S17 Raise budget above the composer opens the bot's budget form; Back retu
   await expect(page.getByTestId("usage-row")).toBeFocused();
 });
 
+test("S17 each Raise budget above the composer opens the form, also after the form was cancelled", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write&budget=reached`, "light");
+  await page.getByTestId("raise-from-composer").click();
+  await expect(page.getByTestId("budget-form")).toBeVisible();
+  await page.getByTestId("budget-form").getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("budget-form")).toHaveCount(0);
+  await page.getByTestId("raise-from-composer").click();
+  await expect(page.getByTestId("budget-form")).toBeVisible();
+  await expect(page.getByTestId("budget-tokens")).toBeFocused();
+});
+
 test("a read-only connection sees every figure and budget, and is offered no budget change", async ({
   page,
 }) => {
