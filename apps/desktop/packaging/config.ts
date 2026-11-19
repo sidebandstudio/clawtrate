@@ -3,7 +3,7 @@
 // It is a function of the environment so that signing can be turned on later
 // without a code change: with no signing variables the macOS app is ad-hoc
 // signed and not notarized, and the Windows installer is not signed. See
-// CONTRIBUTING.md for the variables.
+// docs/development/packaging.md for the variables.
 
 import { FuseV1Options, FuseVersion, type FuseV1Config } from "@electron/fuses";
 import { execFileSync } from "node:child_process";
