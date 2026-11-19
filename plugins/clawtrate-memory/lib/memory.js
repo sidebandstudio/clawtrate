@@ -574,7 +574,20 @@ export function registerMemory(api, sdk) {
               if (latest !== config) {
                 const access = await visibleAgents();
                 const updated = { ...call, config: latest, visible: access };
-                for (const id of params.agents) allowedAgent(id, updated);
+                for (const [index, id] of params.agents.entries()) {
+                  allowedAgent(id, updated);
+                  if (
+                    data.results[index].hash &&
+                    api.runtime.agent.resolveAgentWorkspaceDir(config, id) !==
+                      api.runtime.agent.resolveAgentWorkspaceDir(latest, id)
+                  ) {
+                    data.results[index] = {
+                      agentId: id,
+                      unknown: true,
+                      reason: "The bot's workspace changed. Read its root memory before retrying",
+                    };
+                  }
+                }
                 const folder = await folderFor({ sharedRoot: params.item.sharedRoot }, updated);
                 if (!allowedPath(folder, params.item.path) || context.getRuntimeConfig() !== latest)
                   throw new Refusal("Gateway access or configuration changed");

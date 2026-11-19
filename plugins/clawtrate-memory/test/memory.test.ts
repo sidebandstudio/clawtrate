@@ -106,8 +106,10 @@ function setup({
           },
         },
         agent: {
-          resolveAgentWorkspaceDir: (_config: object, id: string) =>
-            id === "main" ? workspace : other,
+          resolveAgentWorkspaceDir: (
+            config: { agents: { entries: Record<string, { workspace?: string }> } },
+            id: string,
+          ) => config.agents.entries[id]?.workspace ?? (id === "main" ? workspace : other),
         },
       },
       registerGatewayMethod: (method: string, handler: Handler, options: { scope: string }) => {
@@ -157,8 +159,8 @@ function setup({
     hook,
     savers,
     call,
-    reload: () => {
-      config = { ...config };
+    reload: (entries = config.agents.entries) => {
+      config = { ...config, agents: { entries } };
     },
   };
 }
@@ -822,5 +824,42 @@ describe("memory changes", () => {
       release();
       await Promise.all(batches);
     }
+  });
+
+  it("withholds a completed copy hash when the bot moves to another workspace", async () => {
+    let onWrite = () => {};
+    const { call, workspace, shared, reload } = setup({
+      root: async (...args: Parameters<typeof fs.root>) => {
+        const root = await fs.root(...args);
+        const write = root.write.bind(root);
+        root.write = async (...options: unknown[]) => {
+          await write(...options);
+          onWrite();
+        };
+        return root;
+      },
+    });
+    const newWorkspace = join(directory, "moved");
+    mkdirSync(newWorkspace);
+    onWrite = () => reload({ main: { workspace: newWorkspace }, other: {} });
+    writeFileSync(join(workspace, "MEMORY.md"), "existing");
+    writeFileSync(join(shared, "sample.md"), "source");
+    const sharedRoot = sha256(await fs.canonicalPathFromExistingAncestor(shared));
+    expect(
+      await call("copy", {
+        item: { sharedRoot, path: "sample.md" },
+        agents: ["main"],
+        expectedHashes: { main: sha256("existing") },
+      }),
+    ).toMatchObject({
+      ok: true,
+      payload: {
+        results: [
+          { agentId: "main", unknown: true, reason: expect.stringContaining("workspace changed") },
+        ],
+      },
+    });
+    expect(readFileSync(join(workspace, "MEMORY.md"), "utf8")).toContain("source");
+    expect(readdirSync(newWorkspace)).toEqual([]);
   });
 });
