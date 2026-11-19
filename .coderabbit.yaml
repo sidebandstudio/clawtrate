@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
-# CodeRabbit reviews every pull request that is not a draft. Its comments are advice, and nothing
+# CodeRabbit reviews every pull request into main that is not a draft. Its comments are advice, and nothing
 # waits on them: AGENTS.md says how to handle them.
 language: en-US
 tone_instructions: >-

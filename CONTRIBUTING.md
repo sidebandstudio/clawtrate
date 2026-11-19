@@ -71,7 +71,7 @@ The title says what changes for the person using Clawtrate, in plain words and u
 
 The body says what changes in one to three sentences, why, and how it was checked. Use short, plain sentences, and delete the template's comments. Interface changes need before and after screenshots at desktop and phone width.
 
-CodeRabbit reviews every pull request that is not a draft. Its comments are advice: check each one against the code, fix the real ones, and reply with the reason when one is wrong. Nothing waits on it.
+CodeRabbit reviews every pull request into `main` that is not a draft. Its comments are advice: check each one against the code, fix the real ones, and reply with the reason when one is wrong. Nothing waits on it.
 
 Coding agents are welcome here, since most of Clawtrate is written with them. You are still responsible for every line you submit. Read the diff before you open the pull request, and leave co-author trailers, "generated with" lines and any other tool or agent attribution out of commits and pull requests.
 

@@ -83,7 +83,7 @@ A check that fails only sometimes is a defect. Find out whether the app or the c
 - The title is `type: what changes for the person using Clawtrate`, under 72 characters. Types are `feat`, `fix`, `docs`, `test`, `ci`, `refactor` and `chore`. Name what someone can now do or what stops going wrong, not the function you changed. `fix: a stopped run no longer restarts after a reconnect` is right. `fix(core): guard the lease generation in releaseControl` is not. Neither is a title that lists every part of the change in one long sentence.
 - The body says what changes in one to three sentences, why, and how it was checked. Use short, plain sentences, active voice and concrete words. Delete the template's comments.
 - Interface changes need before and after screenshots at desktop and phone width.
-- CodeRabbit reviews every pull request that is not a draft. Treat its comments like any other review: check each against the code, fix the real ones, and reply with the reason when one is wrong. Nothing waits on it.
+- CodeRabbit reviews every pull request into `main` that is not a draft. Treat its comments like any other review: check each against the code, fix the real ones, and reply with the reason when one is wrong. Nothing waits on it.
 - Commits on a branch are small and describe the change. No co-author trailers, no "generated with" lines, no tool or agent attribution anywhere.
 
 ## Documentation
