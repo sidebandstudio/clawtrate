@@ -237,7 +237,7 @@ The host keeps, for each notification it shows, what it was for: the gateway's i
 
 **During quiet hours** Clawtrate posts no new notifications. (A banner the system already shows, or keeps in its list, is the system's.) The rail's marks, the task rows and the dock or taskbar badge go on updating as they do now: they never depended on notifications.
 
-**When they end**, each held wait is shown, one notification each, only if a fresh pending record that this device can see says it still waits (the question or approval list read after the end), and only by section 3's order at that moment (a wait answered on another device, a bot switched off meanwhile, or the bot now on screen is not shown). A wait this device knows only from the run's waiting phase is not held at all: nothing could confirm it later. A budget warning that fell in quiet hours is shown then too, once, if it still holds (section 11). A reply or a failure during quiet hours is never shown later: the rail and the task hold it. "When they end" is the minute the stored zone reaches To, checked every minute and again when the computer wakes (`powerMonitor` `resume`).
+**When they end**, each held wait is shown, one notification each, only if a fresh pending record that this device can see says it still waits (the question or approval list read after the end), and only by section 3's order at that moment (a wait answered on another device, a bot switched off meanwhile, or the bot now on screen is not shown). A wait this device knows only from the run's waiting phase is not held at all: nothing could confirm it later. A budget warning that fell in quiet hours is shown after them, once, only on a fresh count for the same budget and period (section 11). A reply or a failure during quiet hours is never shown later: the rail and the task hold it. "When they end" is the minute the stored zone reaches To, checked every minute and again when the computer wakes (`powerMonitor` `resume`).
 
 **Clawtrate must be running and connected for that.** It shows its notifications itself, so if it is not running when quiet hours end, nothing is shown then or later. If the connection is down when they end, every hold is dropped: nothing held is released without a fresh pending record. Missed events can appear in your tasks when it reconnects. On macOS it keeps running with its window closed; on Windows closing its window quits it (research §7). Settings says this in its words for each system.
 
@@ -320,13 +320,23 @@ The page's states are section 7's for its controls: reading, couldn't read, read
 
 ## 11. Budget warnings
 
-A budget's 80 percent warning (`controls.md` §17, F-396) is a notification under these rules, with three differences from a bot's notifications:
+A budget's 80 percent warning (`controls.md` §17, F-396) is a notification under these rules. It reads the same usage the in-app line does: the budgets kept in `users.prefs` under `clawtrate.budgets`, and each budget's count from `UsageEngine.countBudgets` (`packages/core/src/usage-engine.ts`), a `BudgetCount` with `used`, `counting` and `error` for the budget's current `range`, the one `currentCount` and `budgetPercent` (`packages/core/src/usage.ts`) give to `BudgetLine` (`packages/ui/src/usage/ConversationUsage.tsx`). It differs from a bot's notifications in four ways:
 
-- It has its own switch on this computer, Budget warnings, in place of step 4: a bot switched off still warns about its budget, and a budget warning is not a task's.
-- It is shown once per budget and period on this computer, as the line in the task is.
-- During quiet hours it is held, like a wait, and shown when they end, once, if it still holds: Clawtrate is running then, and the budget is still at or over 80 percent for the same period. If the period has rolled over, or the budget was raised or removed meanwhile, nothing is shown. The line in the bot's task is there either way.
+- **Its own switch.** Budget warnings, on this computer, takes the place of step 4: a bot switched off still warns about its budget, and a budget warning is not a task's.
+- **Once per budget and period.** It fires when `budgetPercent` first reaches `BUDGET_WARN_PERCENT` (80) for a budget's period, and is kept by the budget's id and the period's start date in the budget's own zone (`rangeFor(budget.period, now, budget.timeZone)`). There is one warning: none at 100 percent, where the note above the composer is the warning (`controls.md` §17).
+- **Its own slot.** It is kept apart from a task's wait: it never replaces a pending question or approval's notification, and is never replaced by one. When a wait and a budget warning are due at once, the wait is posted first.
+- **During quiet hours it is held**, at most one per budget and period, and shown when they end, once, only if it still holds then. At the end the host asks for a fresh count (a `countBudgets` started after the end) and decides on it:
 
-Its words are section 4's ("Used 82% of its weekly budget. Shown only: nothing was stopped."), and it opens the bot's open task at the budget line. At 100 percent there is no notification: the note above the composer is the warning (`controls.md` §17). Like every other notification, the host shows it, not the interface.
+| At the end                                                                                                                                                                                                    | Outcome                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The same budget and period (`currentCount` finds the count for the range the hold was made in), the latest saved limit, a fresh count with `counting` false and no `error`, and `budgetPercent` at 80 or more | The one 80 percent warning is shown, also when the budget was raised meanwhile and still qualifies, and also when the count has reached 100 percent or more |
+| The fresh count is under 80 percent of the latest saved limit                                                                                                                                                 | Dropped                                                                                                                                                     |
+| The count is still `counting` (`stillCounting` reads the gateway's `cacheStatus`, for instance `refreshing`)                                                                                                  | Unknown, so dropped                                                                                                                                         |
+| The read failed                                                                                                                                                                                               | Dropped                                                                                                                                                     |
+| The period rolled over, or the budget was removed                                                                                                                                                             | Dropped                                                                                                                                                     |
+| Clawtrate is not running, or not connected                                                                                                                                                                    | Dropped, as every hold is (section 6)                                                                                                                       |
+
+The line in the bot's task is there either way. Its words are section 4's, and it opens the bot's open task at the budget line. Like every other notification, the host shows it, not the interface.
 
 ## 12. Widths, themes, keyboard, screen readers, motion
 
@@ -395,7 +405,7 @@ So the first thing a builder does is check each: a toast from the NSIS install, 
 
 - Keeps a record per shown notification (its opaque id, gateway identity, bot, task key, run id, card id, kind), at most one per task, dropped when withdrawn or once a click's target has been received; nothing of it on disk.
 - On quit (`before-quit`) withdraws every notification it shows; on switching gateways withdraws the old gateway's.
-- Holds waits during quiet hours in memory, by task and card id, and drops a held wait when it ends.
+- Holds waits during quiet hours in memory, by task and card id, and drops a held wait when it ends; holds at most one budget warning per budget and period start, apart from the waits.
 - Listens for `failed` and keeps its time for Settings.
 - Registers `Notification.handleActivation` on Windows only to bring the window forward for a notification it has no record of.
 
@@ -413,7 +423,7 @@ So the first thing a builder does is check each: a toast from the NSIS install, 
 3. Opening, with every check of section 5.
 4. Your settings in `users.prefs` and Settings, Notifications; the bot's row and page; the task's setting.
 5. Waits seen only as a phase; quiet hours; the bot-names switch.
-6. Budget warnings moved to the host under section 11.
+6. Budget warnings, posted by the host under section 11 from `UsageEngine.countBudgets`.
 
 ### The prototype's states and walks
 
