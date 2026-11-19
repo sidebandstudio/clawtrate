@@ -116,6 +116,8 @@ export class ForwardSupervisor {
   private readonly stop = new AbortController();
   /** Everything this forward started that may still be running: retiring processes, probes, LOOKs. */
   private work: Promise<unknown> = Promise.resolve();
+  /** The ending of a process this forward retired; the next attempt starts only after it. */
+  private retiring: Promise<unknown> = Promise.resolve();
 
   private readonly deps: ForwardDeps;
 
@@ -202,6 +204,9 @@ export class ForwardSupervisor {
     if (this.closed()) return;
     const generation = ++this.generation;
     this.set({ phase: "starting", attempt: this.failures + 1 });
+    // A timed retry or "retry now" waits until the ssh it replaces has ended.
+    await this.retiring;
+    if (generation !== this.generation || this.closed()) return;
     let port: number;
     try {
       port = await this.deps.pickPort();
@@ -293,7 +298,11 @@ export class ForwardSupervisor {
     const process = this.process;
     this.process = null;
     this.generation++;
-    if (process) this.track(process.end());
+    if (process) {
+      const ended = process.end();
+      this.retiring = Promise.allSettled([this.retiring, ended]);
+      this.track(ended);
+    }
     this.fail(cause);
   }
 

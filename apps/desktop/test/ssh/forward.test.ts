@@ -454,6 +454,51 @@ describe("the forward and its observers", () => {
 });
 
 describe("the forward's attempts", () => {
+  /** A forward whose first process, once told to end, ends only when `release` is called. */
+  const retiringSlowly = async () => {
+    const h = harness([], ["no-answer", "http"]);
+    let release: () => void = () => {};
+    h.forward.open();
+    await h.flush();
+    const first = h.last();
+    first.end = () =>
+      new Promise<void>((resolve) => {
+        release = () => {
+          first.ended = true;
+          resolve();
+        };
+      });
+    first.listen();
+    await h.flush();
+    expect(h.forward.state).toMatchObject({ phase: "waiting", cause: { kind: "cant-tell" } });
+    return { h, release: () => release() };
+  };
+
+  it("starts no replacement, timed or at once, until the old ssh has ended", async () => {
+    for (const retry of ["timer", "now"] as const) {
+      const { h, release } = await retiringSlowly();
+      if (retry === "timer") await h.advance(1000);
+      else h.forward.retryNow();
+      await h.flush();
+      expect(h.processes, retry).toHaveLength(1);
+      release();
+      await h.flush();
+      expect(h.processes, retry).toHaveLength(2);
+      await h.forward.close();
+    }
+  });
+
+  it("starts nothing after the old ssh ends when it was closed meanwhile", async () => {
+    const { h, release } = await retiringSlowly();
+    await h.advance(1000);
+    const closing = h.forward.close();
+    release();
+    await closing;
+    await h.flush();
+    expect(h.processes).toHaveLength(1);
+    expect(h.forward.state).toEqual({ phase: "closed", reason: "closed" });
+  });
+
   it("is never up for a process that exited while its LOOK ran, and that LOOK is stopped", async () => {
     const h = harness();
     h.forward.open();
