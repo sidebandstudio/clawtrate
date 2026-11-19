@@ -147,6 +147,8 @@ function pairing(): ClawtrateState {
       status: "pairing",
       gatewayUrl: GATEWAY_URL,
       deviceId: DEVICE_ID,
+      // What the client signed, as core records it before it connects.
+      requestedScopes: ["operator.read"],
       retryAt: Date.now() + 4000,
       pairing: {
         requestId: "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55",

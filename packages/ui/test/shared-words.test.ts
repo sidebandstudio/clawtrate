@@ -9,7 +9,12 @@ import {
   type Transcript,
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { isCleartext } from "../src/connect-words.ts";
+import {
+  CONNECT_WORDS,
+  isCleartext,
+  pairingScopes,
+  scopesDifferWords,
+} from "../src/connect-words.ts";
 import { readOnlyWords } from "../src/conversation-words.ts";
 import { grantedWords } from "../src/gateway-state.ts";
 import { statusLineFor } from "../src/live.ts";
@@ -43,6 +48,35 @@ describe("what the connection screens say", () => {
       null,
     ])
       expect(isCleartext(url), String(url)).toBe(false);
+  });
+
+  it("lists the scopes this client signed, and says when the gateway's echo differs, showing both", () => {
+    const pairing = {
+      requestId: "r",
+      deviceId: "d",
+      message: "",
+      approveCommand: null,
+      approveNote: null,
+      requestedScopes: ["operator.read"],
+    };
+    const same = connection({ requestedScopes: ["operator.read"], pairing });
+    expect(pairingScopes(same)).toEqual({ asked: ["operator.read"], echoed: null });
+    const echo = connection({
+      requestedScopes: ["operator.read"],
+      pairing: { ...pairing, requestedScopes: ["operator.read", "operator.admin"] },
+    });
+    expect(pairingScopes(echo)).toEqual({
+      asked: ["operator.read"],
+      echoed: ["operator.read", "operator.admin"],
+    });
+    expect(scopesDifferWords(["operator.read", "operator.admin"])).toBe(
+      "The gateway reports this request as asking for Read bots, tasks and conversations, operator.admin. This device asked only for what is listed above.",
+    );
+  });
+
+  it("says the token is used for the first pairing, not once", () => {
+    expect(CONNECT_WORDS.hint).toContain("the token is used for the first pairing");
+    expect(CONNECT_WORDS.hint).not.toContain("used once");
   });
 });
 

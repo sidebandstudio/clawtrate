@@ -170,3 +170,48 @@ export const FACE_WORDS: Record<FaceState, string> = {
   failed: "failed",
   stopped: "stopped",
 };
+
+/** The characters along the foot of the connection screens. Decoration only. */
+export const ENSEMBLE: Array<CharacterSpec & { size: number; sink: number; lean: number }> = [
+  {
+    body: "drop",
+    color: "#45bdf5",
+    tilt: 3,
+    look: [0.3, 0.5],
+    lift: 1,
+    size: 132,
+    sink: -0.3,
+    lean: -8,
+  },
+  {
+    body: "arch",
+    color: "#ff8552",
+    tilt: 5,
+    look: [-0.7, 0.3],
+    lift: -1.5,
+    size: 176,
+    sink: -0.26,
+    lean: 5,
+  },
+  { body: "disc", color: "#f6bd3b", tilt: 6, look: [0.8, 0], size: 118, sink: -0.2, lean: -4 },
+  { body: "block", color: "#5b8dff", tilt: 0, look: [0.9, 0.2], size: 204, sink: -0.3, lean: 3 },
+  {
+    body: "pebble",
+    color: "#58c26f",
+    tilt: -7,
+    look: [0.6, -0.3],
+    size: 160,
+    sink: -0.24,
+    lean: -6,
+  },
+  { body: "hex", color: "#ff6f9c", tilt: -4, look: [-0.8, 0.2], size: 124, sink: -0.26, lean: 7 },
+  { body: "bloom", color: "#a98bff", tilt: -5, look: [0, -0.5], size: 186, sink: -0.28, lean: -3 },
+  { body: "gem", color: "#a5d955", tilt: 0, look: [-0.4, -0.4], size: 122, sink: -0.24, lean: 4 },
+];
+
+/** Below this height of the window the row of characters is not shown, so the form fits by itself. */
+export const ENSEMBLE_MIN_HEIGHT = 640;
+
+export function showEnsemble(height: number): boolean {
+  return height >= ENSEMBLE_MIN_HEIGHT;
+}

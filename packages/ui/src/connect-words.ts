@@ -17,7 +17,7 @@ export const CONNECT_WORDS = {
   token: "Token, for the first pairing only",
   tokenLabel: "Gateway token, needed for the first pairing only",
   devGateway: "Use the development gateway",
-  hint: `${PRODUCT_NAME} works with an OpenClaw gateway you already run. It asks for read access only, and the token is used once.`,
+  hint: `${PRODUCT_NAME} works with an OpenClaw gateway you already run. It asks for read access only, and the token is used for the first pairing.`,
   missingAddress: {
     title: "Enter the gateway's address",
     message: "It looks like ws://host:port or wss://host.",
@@ -63,6 +63,28 @@ export function isCleartext(url: string | null | undefined): boolean {
   if (parsed.protocol !== "ws:") return false;
   const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
   return !(host === "localhost" || host === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host));
+}
+
+/**
+ * The scopes the pending-approval screen lists: those this client asked for and
+ * signed (`connection.requestedScopes`), never the gateway's echo of them. When
+ * the echo differs, `echoed` holds it, so the screen can say so and show both.
+ */
+export function pairingScopes(connection: ConnectionState): {
+  asked: string[];
+  echoed: string[] | null;
+} {
+  const asked = connection.requestedScopes;
+  const echo = connection.pairing?.requestedScopes ?? [];
+  const same = echo.length === asked.length && echo.every((scope) => asked.includes(scope));
+  return { asked, echoed: same ? null : echo };
+}
+
+/** What the screen says when the gateway's echo of the request differs from what was signed. */
+export function scopesDifferWords(echoed: string[]): string {
+  return `The gateway reports this request as asking for ${
+    echoed.length > 0 ? echoed.map(scopeWords).join(", ") : "nothing"
+  }. This device asked only for what is listed above.`;
 }
 
 /** A connection failure's title. */

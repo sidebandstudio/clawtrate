@@ -1,11 +1,13 @@
 // The connection screens (visual-language.md, section 10, at phone size): the
 // welcome screen with the mark and its one action, the gateway's address with the
 // notice for an unencrypted one, the step list while it connects and loads, the
-// pending approval with the exact scopes requested, and the notice for a gateway
-// on another protocol. Every word comes from `@clawtrate/ui/connect-words`, as on
-// the desktop, and nothing the gateway sent back shows a credential.
+// pending approval with the scopes this device signed and its command to copy,
+// and the notice for a gateway on another protocol. The row of characters stands
+// at the foot. Every word comes from `@clawtrate/ui/connect-words`, as on the
+// desktop, and nothing the gateway sent back shows a credential.
 
 import type { ConnectionError, ConnectionState, DiscoveryState } from "@clawtrate/core";
+import { ENSEMBLE, showEnsemble } from "@clawtrate/ui/character";
 import {
   CLEARTEXT_WORDS,
   CONNECT_WORDS as W,
@@ -14,16 +16,27 @@ import {
   footWords,
   isCleartext,
   pairingLede,
+  pairingScopes,
   PRODUCT_NAME,
   protocolLede,
+  scopesDifferWords,
   scopeWords,
   setupSteps,
   SLOGAN,
 } from "@clawtrate/ui/connect-words";
+import * as Clipboard from "expo-clipboard";
 import { useEffect, useState, type ReactNode } from "react";
-import { Image, KeyboardAvoidingView, ScrollView, TextInput, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  Image,
+  KeyboardAvoidingView,
+  ScrollView,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from "react-native";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import MARK from "../../assets/logo-mark.png";
+import { Character } from "../components/Avatar.tsx";
 import { EyeIcon } from "../components/icons.tsx";
 import { Button, Dot, Txt } from "../components/ui.tsx";
 import { APP_VERSION } from "../host/index.ts";
@@ -34,32 +47,80 @@ const HOST = `iPhone ${APP_VERSION}`;
 
 function Column({ children, testID }: { children: ReactNode; testID: string }) {
   const { c } = useTheme();
+  const { height } = useWindowDimensions();
+  const ensemble = showEnsemble(height);
+  const { bottom } = useSafeAreaInsets();
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: c.bg }}>
+    <SafeAreaView edges={["top", "left", "right"]} style={{ flex: 1, backgroundColor: c.bg }}>
       <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         <ScrollView
           testID={testID}
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{
-            flexGrow: 1,
-            justifyContent: "center",
-            paddingHorizontal: S["space-4"],
-            paddingVertical: S["space-8"],
-          }}
+          // The form is centred in the space above the characters, which stand on the bottom edge.
+          contentContainerStyle={{ flexGrow: 1, paddingBottom: ensemble ? 0 : bottom }}
         >
           <View
             style={{
-              width: "100%",
-              maxWidth: TOUCH.column,
-              alignSelf: "center",
-              gap: S["space-4"],
+              flexGrow: 1,
+              justifyContent: "center",
+              paddingHorizontal: S["space-4"],
+              paddingVertical: S["space-8"],
             }}
           >
-            {children}
+            <View
+              style={{
+                width: "100%",
+                maxWidth: TOUCH.column,
+                alignSelf: "center",
+                gap: S["space-4"],
+              }}
+            >
+              {children}
+            </View>
           </View>
+          {ensemble && <Ensemble />}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+/**
+ * The characters along the foot (section 10), scaled to 60% on the phone, on
+ * the screen's bottom edge. Decoration only; below 640 points of height they
+ * are not shown, so the form fits by itself.
+ */
+function Ensemble() {
+  return (
+    <View
+      testID="ensemble"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      pointerEvents="none"
+      style={{
+        flexDirection: "row",
+        justifyContent: "center",
+        alignItems: "flex-end",
+        overflow: "hidden",
+        height: 90,
+      }}
+    >
+      {ENSEMBLE.map(({ size, sink, lean, ...spec }, index) => {
+        const side = Math.round(size * 0.6);
+        return (
+          <View
+            key={index}
+            style={{
+              marginBottom: Math.round(side * sink),
+              marginHorizontal: -6,
+              transform: [{ rotate: `${lean}deg` }],
+            }}
+          >
+            <Character spec={spec} size={side} />
+          </View>
+        );
+      })}
+    </View>
   );
 }
 
@@ -437,7 +498,18 @@ export function Pairing({
   const { send, redact } = useRuntime();
   const { c } = useTheme();
   const pairing = connection.pairing!;
+  const scopes = pairingScopes(connection);
   const now = useNow();
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  const copy = async (command: string) => {
+    await Clipboard.setStringAsync(command);
+    setCopied(true);
+  };
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState(false);
   const check = async () => {
@@ -464,22 +536,39 @@ export function Pairing({
           {redact(pairing.approveNote)}
         </Txt>
       )}
-      <View
-        style={{
-          backgroundColor: c["bg-inset"],
-          borderRadius: S["radius-sm"],
-          padding: S["space-3"],
-        }}
-      >
-        <Txt
-          testID="approve-command"
-          selectable
-          size={S["text-sm"]}
-          style={{ fontFamily: FONTS.mono }}
-        >
-          {pairing.approveCommand}
-        </Txt>
-      </View>
+      {pairing.approveCommand && (
+        <View style={{ gap: S["space-2"] }}>
+          <View
+            style={{
+              backgroundColor: c["bg-inset"],
+              borderRadius: S["radius-sm"],
+              padding: S["space-3"],
+            }}
+          >
+            <Txt
+              testID="approve-command"
+              selectable
+              size={S["text-sm"]}
+              style={{ fontFamily: FONTS.mono }}
+            >
+              {pairing.approveCommand}
+            </Txt>
+          </View>
+          <Button
+            label={copied ? W.copied : W.copyApprove}
+            onPress={() => void copy(pairing.approveCommand!)}
+            testID="copy-command"
+          />
+          <Txt
+            testID="copy-status"
+            accessibilityLiveRegion="polite"
+            size={S["text-sm"]}
+            color="text-muted"
+          >
+            {copied ? W.copied : ""}
+          </Txt>
+        </View>
+      )}
       <Steps
         connection={connection}
         loadingBots={false}
@@ -490,7 +579,7 @@ export function Pairing({
         testID="scopes"
         style={{ flexDirection: "row", flexWrap: "wrap", gap: S["space-2"] }}
       >
-        {pairing.requestedScopes.map((scope) => (
+        {scopes.asked.map((scope) => (
           <View
             key={scope}
             testID={`scope-${scope}`}
@@ -511,9 +600,15 @@ export function Pairing({
           </View>
         ))}
       </View>
+      {scopes.echoed && (
+        <Txt testID="scopes-differ" size={S["text-sm"]} color="warn">
+          {scopesDifferWords(scopes.echoed)}
+        </Txt>
+      )}
       <Button
         label={checking ? W.checking : W.checkNow}
         large
+        busy={checking}
         onPress={() => void check()}
         testID="check-now"
       />
@@ -551,6 +646,7 @@ export function Protocol({
       <Button
         label={retrying ? W.retrying : W.retry}
         large
+        busy={retrying}
         onPress={() => {
           if (!retrying) void send({ type: "retry" });
         }}

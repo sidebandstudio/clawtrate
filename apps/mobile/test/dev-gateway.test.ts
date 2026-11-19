@@ -8,6 +8,7 @@ import {
   devGatewayHint,
 } from "../src/host/dev-gateway.ts";
 
+const ID = "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55";
 const read = (values: Record<string, unknown>) => (key: string) => values[key];
 
 describe("the approve command on the iOS pairing screen", () => {
@@ -23,14 +24,16 @@ describe("the approve command on the iOS pairing screen", () => {
       instance: "checks",
     });
     for (const url of ["ws://127.0.0.1:19201", "ws://127.0.0.1:19202", "wss://gateway.example"]) {
-      expect(ios(url, "req-1")).toEqual(desktop(url, "req-1"));
+      expect(ios(url, ID)).toEqual(desktop(url, ID));
     }
-    expect(ios("ws://127.0.0.1:19201", "req-1").command).toBe(
+    expect(ios("ws://127.0.0.1:19201", ID).command).toBe(
       "pnpm dev-gateway approve --instance checks",
     );
-    expect(ios("wss://gateway.example", "req-1").command).not.toContain("dev-gateway");
-    expect(approvalInstructionsFor(null)("ws://127.0.0.1:19201", "r")).toEqual(
-      desktopInstructions(null)("ws://127.0.0.1:19201", "r"),
+    expect(ios("wss://gateway.example", ID).command).not.toContain("dev-gateway");
+    // An id the gateway sent in another form goes into no command.
+    expect(ios("wss://gateway.example", "x; rm -rf ~").command).toBeNull();
+    expect(approvalInstructionsFor(null)("ws://127.0.0.1:19201", ID)).toEqual(
+      desktopInstructions(null)("ws://127.0.0.1:19201", ID),
     );
   });
 

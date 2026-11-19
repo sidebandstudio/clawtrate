@@ -55,6 +55,7 @@ export function Button({
   onPress,
   variant = "default",
   disabled = false,
+  busy = false,
   large = false,
   testID,
   style,
@@ -63,6 +64,8 @@ export function Button({
   onPress: () => void;
   variant?: ButtonVariant;
   disabled?: boolean;
+  /** Working on it: the label says so, and assistive technology hears it is busy. */
+  busy?: boolean;
   large?: boolean;
   testID?: string;
   style?: StyleProp<ViewStyle>;
@@ -86,7 +89,7 @@ export function Button({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ disabled }}
+      accessibilityState={{ disabled, busy }}
       disabled={disabled}
       testID={testID}
       onPress={onPress}

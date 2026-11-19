@@ -8,7 +8,8 @@ import {
   type ReactNode,
 } from "react";
 import logoUrl from "./assets/logo-mark.png";
-import { Character, type CharacterSpec } from "./Avatar.tsx";
+import { Character } from "./Avatar.tsx";
+import { ENSEMBLE } from "./character.ts";
 import { useCommand } from "./bridge.tsx";
 import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
 import {
@@ -17,9 +18,11 @@ import {
   failureTitle,
   footWords,
   pairingLede,
+  pairingScopes,
   PRODUCT_NAME,
   protocolLede,
   scopeWords,
+  scopesDifferWords,
   setupSteps,
   SLOGAN,
 } from "./connect-words.ts";
@@ -124,6 +127,7 @@ function SetupSteps({
 function PairingPanel({ connection }: { connection: ConnectionState }) {
   const send = useCommand();
   const pairing = connection.pairing!;
+  const scopes = pairingScopes(connection);
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState(false);
   // While it checks, the button stays focusable (aria-disabled, not disabled),
@@ -157,13 +161,18 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
         }
       />
       <ul className="scopes" aria-label={W.scopesLabel}>
-        {pairing.requestedScopes.map((scope) => (
+        {scopes.asked.map((scope) => (
           <li key={scope} data-scope={scope}>
             <EyeIcon />
             {scopeWords(scope)}
           </li>
         ))}
       </ul>
+      {scopes.echoed && (
+        <p className="approve-note" data-testid="scopes-differ">
+          {scopesDifferWords(scopes.echoed)}
+        </p>
+      )}
       <div className="actions">
         <button
           type="button"
@@ -383,44 +392,6 @@ function ProtocolNotice({
     </section>
   );
 }
-
-/** The characters along the foot of the connection screens. Decoration only. */
-const ENSEMBLE: Array<CharacterSpec & { size: number; sink: number; lean: number }> = [
-  {
-    body: "drop",
-    color: "#45bdf5",
-    tilt: 3,
-    look: [0.3, 0.5],
-    lift: 1,
-    size: 132,
-    sink: -0.3,
-    lean: -8,
-  },
-  {
-    body: "arch",
-    color: "#ff8552",
-    tilt: 5,
-    look: [-0.7, 0.3],
-    lift: -1.5,
-    size: 176,
-    sink: -0.26,
-    lean: 5,
-  },
-  { body: "disc", color: "#f6bd3b", tilt: 6, look: [0.8, 0], size: 118, sink: -0.2, lean: -4 },
-  { body: "block", color: "#5b8dff", tilt: 0, look: [0.9, 0.2], size: 204, sink: -0.3, lean: 3 },
-  {
-    body: "pebble",
-    color: "#58c26f",
-    tilt: -7,
-    look: [0.6, -0.3],
-    size: 160,
-    sink: -0.24,
-    lean: -6,
-  },
-  { body: "hex", color: "#ff6f9c", tilt: -4, look: [-0.8, 0.2], size: 124, sink: -0.26, lean: 7 },
-  { body: "bloom", color: "#a98bff", tilt: -5, look: [0, -0.5], size: 186, sink: -0.28, lean: -3 },
-  { body: "gem", color: "#a5d955", tilt: 0, look: [-0.4, -0.4], size: 122, sink: -0.24, lean: 4 },
-];
 
 function Ensemble() {
   return (

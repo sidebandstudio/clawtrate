@@ -12,6 +12,7 @@ import {
   VISOR_COLOR,
   visorOf,
   visorY,
+  type CharacterSpec,
   type FaceState,
   type Shape,
 } from "@clawtrate/ui/character";
@@ -36,14 +37,16 @@ function ShapeElement({ shape }: { shape: Shape }) {
 
 export function Character({
   id,
+  spec: given,
   size,
   state = "idle",
 }: {
-  id: string;
+  id?: string;
+  spec?: CharacterSpec;
   size: number;
   state?: FaceState;
 }) {
-  const spec = characterFor(id);
+  const spec = given ?? characterFor(id ?? "");
   const y = visorY(spec);
   const { el: _el, ...visor } = visorOf(y);
   return (
