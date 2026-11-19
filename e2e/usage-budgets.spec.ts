@@ -330,7 +330,7 @@ test.afterAll(async () => {
   }
 });
 
-test("F-232 F-237: a bot's Usage page shows the gateway's own totals for each period, with their source and age", async () => {
+test("F-237: usage by bot and source agrees with the gateway for the selected period", async () => {
   await usagePage(page, "Otto");
   for (const [choice, period] of [
     ["This week", "week"],
