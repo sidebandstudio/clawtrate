@@ -3,6 +3,7 @@ import type {
   Bot,
   ConnectionState,
   DiscoveryState,
+  Routine,
   SidebarState,
   Task,
 } from "@clawtrate/core";
@@ -26,6 +27,7 @@ import {
   ArrowDownIcon,
   ArrowUpIcon,
   ChevronIcon,
+  ClockIcon,
   CloseIcon,
   CopyIcon,
   EditIcon,
@@ -134,6 +136,67 @@ function Presence({ bot, state, primary }: { bot: Bot; state: RunState | null; p
 }
 
 type Tip = { text: string; top: number; left: number };
+
+/** A routine run counts as working; anything more urgent the bot's tasks show wins (automation.md section 8). */
+function withRoutine(summary: BotSummary, running: Routine | null): BotSummary {
+  return running && !summary.state ? { ...summary, state: "working" } : summary;
+}
+
+/**
+ * Each of a bot's routines with a run, once, as a row under the bot: the
+ * clock, the routine's name, its latest run's time and the failed mark when
+ * that run failed (F-193). It opens that run.
+ */
+function RoutineRows({
+  bot,
+  routines,
+  now,
+  onOpen,
+}: {
+  bot: Bot;
+  routines: Routine[];
+  now: number;
+  onOpen: (id: string) => void;
+}) {
+  const rows = routines
+    .filter((each) => each.botId === bot.id && (each.lastRunAt !== null || each.runningAt !== null))
+    .sort((a, b) => (b.runningAt ?? b.lastRunAt ?? 0) - (a.runningAt ?? a.lastRunAt ?? 0));
+  if (rows.length === 0) return null;
+  return (
+    <ul className="task-list" aria-label={`${bot.name}'s routine runs`} data-testid="routine-runs">
+      {rows.map((routine) => {
+        const failed = routine.runningAt === null && routine.lastStatus === "error";
+        const at = routine.runningAt ?? routine.lastRunAt!;
+        return (
+          <li key={routine.id}>
+            <button
+              type="button"
+              className="task routine-task"
+              data-testid="routine-task"
+              data-routine={routine.id}
+              data-state={routine.runningAt !== null ? "working" : failed ? "failed" : undefined}
+              aria-label={`${routine.name}, routine run${routine.runningAt !== null ? ", running" : failed ? ", failed" : ""}`}
+              onClick={() => onOpen(routine.id)}
+            >
+              <ClockIcon className="task-pin" />
+              <span className="task-title">{routine.name}</span>
+              <time className="task-time" aria-hidden="true">
+                {routine.runningAt !== null ? "now" : rowTime(at, now)}
+              </time>
+              <span className="task-mark" aria-hidden="true">
+                {routine.runningAt !== null ? (
+                  <StateMark state="working" />
+                ) : failed ? (
+                  <StateMark state="failed" />
+                ) : null}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 /**
  * A row's menu as a control of its own, for touch, where there is no right-click
@@ -401,6 +464,10 @@ export function Rail({
   interactive = false,
   sidebar,
   newTaskHint = "⌘T",
+  routines = [],
+  routinesOpen = false,
+  onOpenRoutines,
+  onOpenRoutineRun,
 }: {
   bots: Bot[];
   tasksByBot: Record<string, Task[]>;
@@ -432,6 +499,12 @@ export function Rail({
   sidebar?: SidebarState | undefined;
   /** The New task shortcut as this host takes it: ⌘T in the desktop app, ⌥T in a browser. */
   newTaskHint?: string;
+  /** The gateway's routines: a bot works while one of its routines runs (F-024), and each run shows under it (F-193). */
+  routines?: Routine[];
+  routinesOpen?: boolean;
+  onOpenRoutines?: () => void;
+  /** Open a routine's newest run. */
+  onOpenRoutineRun?: (id: string) => void;
 }) {
   const send = useCommand();
   const bridge = useBridge();
@@ -1572,9 +1645,16 @@ export function Rail({
         }
       : {};
 
+  const runningRoutine = (botId: string) =>
+    routines.find((each) => each.botId === botId && each.runningAt !== null) ?? null;
+
   const renderRow = (bot: Bot, place: "list" | "section" | "hidden" | "search") => {
     const tasks = tasksByBot[bot.id] ?? [];
-    const summary = summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen);
+    const running = runningRoutine(bot.id);
+    const summary = withRoutine(
+      summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
+      running,
+    );
     const waiting = waitingWords(tasks);
     const open = place !== "search" && selection.isOpen(bot.id);
     const several = tasks.length > 1;
@@ -1629,11 +1709,13 @@ export function Rail({
             <span className="bot-line">
               <span className="bot-preview" data-tone={waiting ? "warn" : undefined}>
                 {waiting ??
-                  (latest
-                    ? (latest.preview ?? latest.title)
-                    : discovery.status === "loading"
-                      ? "Loading tasks"
-                      : "No tasks yet")}
+                  (running
+                    ? `Running ${running.name}`
+                    : latest
+                      ? (latest.preview ?? latest.title)
+                      : discovery.status === "loading"
+                        ? "Loading tasks"
+                        : "No tasks yet")}
               </span>
               {summary.unread && <span className="unread-dot" />}
             </span>
@@ -1671,13 +1753,24 @@ export function Rail({
             now={now}
           />
         )}
+        {place !== "search" && (open || !several) && (
+          <RoutineRows
+            bot={bot}
+            routines={routines}
+            now={now}
+            onOpen={(id) => onOpenRoutineRun?.(id)}
+          />
+        )}
       </li>
     );
   };
 
   const renderPin = (bot: Bot) => {
     const tasks = tasksByBot[bot.id] ?? [];
-    const summary = summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen);
+    const summary = withRoutine(
+      summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
+      runningRoutine(bot.id),
+    );
     const several = tasks.length > 1;
     return (
       <li key={bot.id}>
@@ -1731,6 +1824,18 @@ export function Rail({
         </button>
         {query === null ? (
           <>
+            {onOpenRoutines && (
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Routines"
+                title="Routines"
+                aria-current={routinesOpen ? "page" : undefined}
+                onClick={onOpenRoutines}
+              >
+                <ClockIcon />
+              </button>
+            )}
             <button
               type="button"
               className="icon-button"
