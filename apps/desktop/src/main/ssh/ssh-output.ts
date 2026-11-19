@@ -17,43 +17,126 @@ export type SshFailure =
   | { kind: "spawn-failed" }
   | { kind: "ssh-stopped"; exit: number | null };
 
-/** The category of an `ssh` that exited with `exit` after writing `stderr`. */
-export function classifySshFailure(stderr: string, exit: number | null): SshFailure {
-  // `-v`'s debug lines and a running forward's per-connection channel lines say
-  // nothing about why `ssh` itself stopped.
-  const text = stderr
-    .split("\n")
-    .map((line) => line.replace(/\r$/, ""))
-    .filter((line) => !/^debug[0-9]: |^channel [0-9]+: /.test(line))
-    .join("\n");
-  if (exit !== 255) return { kind: "ssh-stopped", exit };
-  if (/REMOTE HOST IDENTIFICATION HAS CHANGED/.test(text))
-    return { kind: "host-key-changed", exit };
-  if (/Host key verification failed\./.test(text)) return { kind: "host-key-unknown", exit };
-  if (/Permission denied \(/.test(text)) return { kind: "sign-in-refused", exit };
-  if (/Address already in use|Could not request local forwarding/.test(text)) {
-    return { kind: "local-port-taken", exit };
-  }
-  if (/Could not resolve hostname/.test(text)) {
-    return { kind: "unreachable", cause: "no such name", exit };
-  }
-  if (/Connection refused/.test(text) && !/closed by remote host/.test(text)) {
-    return { kind: "unreachable", cause: "connection refused", exit };
-  }
-  if (/Network is unreachable|No route to host/.test(text)) {
-    return { kind: "unreachable", cause: "network unreachable", exit };
-  }
+/** The facts a line of `ssh`'s error output can carry, as bits. */
+const FACT = {
+  keyChanged: 1,
+  keyFailed: 2,
+  denied: 4,
+  portTaken: 8,
+  noName: 16,
+  refused: 32,
+  closed: 64,
+  network: 128,
+  dropped: 256,
+  timedOut: 512,
+} as const;
+
+/**
+ * The facts of one line. `-v`'s debug lines and a running forward's
+ * per-connection channel lines say nothing about why `ssh` itself stopped.
+ */
+export function lineFacts(raw: string): number {
+  const line = raw.replace(/\r$/, "");
+  if (/^debug[0-9]: |^channel [0-9]+: /.test(line)) return 0;
+  let facts = 0;
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED/.test(line)) facts |= FACT.keyChanged;
+  if (/Host key verification failed\./.test(line)) facts |= FACT.keyFailed;
+  if (/Permission denied \(/.test(line)) facts |= FACT.denied;
+  if (/Address already in use|Could not request local forwarding/.test(line))
+    facts |= FACT.portTaken;
+  if (/Could not resolve hostname/.test(line)) facts |= FACT.noName;
+  if (/Connection refused/.test(line)) facts |= FACT.refused;
+  if (/closed by remote host/.test(line)) facts |= FACT.closed;
+  if (/Network is unreachable|No route to host/.test(line)) facts |= FACT.network;
   if (
     /closed by remote host|Timeout, server .* not responding|Connection reset|Broken pipe/.test(
-      text,
+      line,
     )
   ) {
-    return { kind: "dropped", exit };
+    facts |= FACT.dropped;
   }
-  if (/(Operation|Connection) timed out|timed out during banner exchange/.test(text)) {
-    return { kind: "unreachable", cause: "timed out", exit };
+  if (/(Operation|Connection) timed out|timed out during banner exchange/.test(line))
+    facts |= FACT.timedOut;
+  return facts;
+}
+
+/** The category of an `ssh` that exited with `exit`, from the facts of its error output's lines. */
+export function failureFromFacts(facts: number, exit: number | null): SshFailure {
+  if (exit !== 255) return { kind: "ssh-stopped", exit };
+  if (facts & FACT.keyChanged) return { kind: "host-key-changed", exit };
+  if (facts & FACT.keyFailed) return { kind: "host-key-unknown", exit };
+  if (facts & FACT.denied) return { kind: "sign-in-refused", exit };
+  if (facts & FACT.portTaken) return { kind: "local-port-taken", exit };
+  if (facts & FACT.noName) return { kind: "unreachable", cause: "no such name", exit };
+  if (facts & FACT.refused && !(facts & FACT.closed)) {
+    return { kind: "unreachable", cause: "connection refused", exit };
   }
+  if (facts & FACT.network) return { kind: "unreachable", cause: "network unreachable", exit };
+  if (facts & FACT.dropped) return { kind: "dropped", exit };
+  if (facts & FACT.timedOut) return { kind: "unreachable", cause: "timed out", exit };
   return { kind: "ssh-stopped", exit };
+}
+
+/** The category of an `ssh` that exited with `exit` after writing `stderr`. */
+export function classifySshFailure(stderr: string, exit: number | null): SshFailure {
+  return failureFromFacts(
+    stderr.split("\n").reduce((facts, line) => facts | lineFacts(line), 0),
+    exit,
+  );
+}
+
+/** The longest part of a line a forward's reader holds while it waits for the line's end. */
+export const MAX_PENDING_LINE = 1024;
+
+/**
+ * A running forward's error output, read as it arrives into facts only: why
+ * it may stop, whether it listens, and what its forwarded connections met.
+ * No line is kept once read, and an unfinished line is held to
+ * `MAX_PENDING_LINE` characters.
+ */
+export class ForwardOutput {
+  facts = 0;
+  listening = false;
+  refused = false;
+  connectFailed = false;
+  private pending = "";
+  private overlong = false;
+  private readonly localPort: number;
+
+  constructor(localPort: number) {
+    this.localPort = localPort;
+  }
+
+  get held(): number {
+    return this.pending.length;
+  }
+
+  push(chunk: string): void {
+    const parts = chunk.split("\n");
+    const last = parts.pop() ?? "";
+    for (const part of parts) {
+      const line = this.overlong ? "" : this.pending + part;
+      this.pending = "";
+      this.overlong = false;
+      this.read(line);
+    }
+    if (this.overlong) return;
+    this.pending += last;
+    if (this.pending.length > MAX_PENDING_LINE) {
+      // A line this long is no line ssh writes about these facts: drop it to its end.
+      this.pending = "";
+      this.overlong = true;
+    }
+  }
+
+  private read(line: string): void {
+    this.facts |= lineFacts(line);
+    const plain = line.replace(/\r$/, "");
+    if (forwardListening(plain, this.localPort)) this.listening = true;
+    if (/^channel [0-9]+: open failed: administratively prohibited/.test(plain))
+      this.refused = true;
+    if (/^channel [0-9]+: open failed: connect failed/.test(plain)) this.connectFailed = true;
+  }
 }
 
 /** The `-v` lines a host-key probe reads, and nothing else. */

@@ -44,7 +44,8 @@ import { routeConfigText } from "./route-config.ts";
 import { endProcess, ProcessTable, type RunResult, runSsh, type Spawn } from "./run.ts";
 import {
   classifySshFailure,
-  forwardListening,
+  failureFromFacts,
+  ForwardOutput,
   parseSshVersion,
   readProbeLines,
   type SshFailure,
@@ -706,27 +707,18 @@ export class SshTransport {
       "--",
       route.alias,
     ]);
-    let tail = "";
-    let pending = "";
+    // Its error output is read into facts as it arrives; none of it is kept.
+    const output = new ForwardOutput(localPort);
     const listening: Array<() => void> = [];
     const exits: Array<(failure: SshFailure) => void> = [];
     let heard = false;
-    const channel = { refused: false, connectFailed: false };
     child.stdin?.on("error", () => {});
     child.stdin?.end();
     child.stdout?.resume();
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
-      tail = (tail + chunk).slice(-16384);
-      pending += chunk;
-      const lines = pending.split("\n");
-      pending = (lines.pop() ?? "").slice(-4096);
-      for (const line of lines) {
-        if (/^channel [0-9]+: open failed: administratively prohibited/.test(line))
-          channel.refused = true;
-        if (/^channel [0-9]+: open failed: connect failed/.test(line)) channel.connectFailed = true;
-      }
-      if (!heard && lines.some((line) => forwardListening(line, localPort))) {
+      output.push(chunk);
+      if (!heard && output.listening) {
         heard = true;
         for (const listener of listening) listener();
       }
@@ -741,12 +733,12 @@ export class SshTransport {
     child.once("error", () => {
       if (child.pid === undefined) exit({ kind: "spawn-failed" });
     });
-    child.once("close", (code) => exit(classifySshFailure(tail, code)));
+    child.once("close", (code) => exit(failureFromFacts(output.facts, code)));
     return {
       pid: child.pid ?? null,
       onListening: (listener) => listening.push(listener),
       onExit: (listener) => exits.push(listener),
-      channel: () => ({ ...channel }),
+      channel: () => ({ refused: output.refused, connectFailed: output.connectFailed }),
       end: () => endProcess(child),
     };
   }

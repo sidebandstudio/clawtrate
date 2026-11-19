@@ -101,27 +101,34 @@ export function runSsh(
       return;
     }
     let settled = false;
-    let stdout = "";
-    let stderr = "";
+    // Read as bytes and counted as bytes; decoded once, at the end.
+    const out: Buffer[] = [];
+    let outBytes = 0;
+    const err: Buffer[] = [];
+    let errBytes = 0;
     let overflow = false;
     let timedOut = false;
     let stopped = false;
     let cancelled = false;
     const finish = () => endProcess(child);
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => {
+    child.stdout?.on("data", (chunk: Buffer) => {
       if (overflow) return;
-      stdout += chunk;
-      if (stdout.length > options.maxStdout) {
+      outBytes += chunk.length;
+      if (outBytes > options.maxStdout) {
         overflow = true;
-        stdout = "";
+        out.length = 0;
         void finish();
+        return;
       }
+      out.push(chunk);
     });
-    child.stderr?.on("data", (chunk: string) => {
-      if (stderr.length < maxStderr) stderr = (stderr + chunk).slice(0, maxStderr);
-      if (!stopped && options.stopWhen?.(stderr)) {
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (errBytes < maxStderr) {
+        const kept = chunk.subarray(0, maxStderr - errBytes);
+        err.push(kept);
+        errBytes += kept.length;
+      }
+      if (!stopped && options.stopWhen?.(Buffer.concat(err).toString("utf8"))) {
         stopped = true;
         void finish();
       }
@@ -154,8 +161,8 @@ export function runSsh(
     child.once("close", (code) => {
       done({
         exit: code,
-        stdout,
-        stderr,
+        stdout: Buffer.concat(out).toString("utf8"),
+        stderr: Buffer.concat(err).toString("utf8"),
         timedOut,
         overflow,
         stopped,

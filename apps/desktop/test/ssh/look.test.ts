@@ -436,6 +436,30 @@ describe("the LOOK script", () => {
     },
   );
 
+  it(
+    "cuts a program's output where it is produced, so endless output ends the LOOK at once",
+    { timeout: 45000 },
+    async () => {
+      const loud = join(root, "loud");
+      mkdirSync(join(loud, ".openclaw", "bin"), { recursive: true });
+      writeFileSync(
+        join(loud, ".openclaw", "bin", "openclaw"),
+        '#!/bin/sh\ncase "$1" in --version) echo "OpenClaw 2026.10.6" ;; *) exec yes clawtrate ;; esac\n',
+        { mode: 0o755 },
+      );
+      const started = Date.now();
+      const { parsed } = await runUnder("/bin/sh", loud);
+      expect(Date.now() - started).toBeLessThan(10000);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) return;
+      // Cut at 32 KiB, so the program was stopped by its pipe: not a status that can be read.
+      expect(parsed.facts.gateways).toEqual([
+        { profile: "default", exit: expect.any(Number), unreadable: true },
+      ]);
+      expect((parsed.facts.gateways[0] as { exit: number }).exit).not.toBe(0);
+    },
+  );
+
   it("stops itself after 30 seconds", { timeout: 45000 }, async () => {
     const slow = join(root, "slow");
     mkdirSync(join(slow, ".openclaw", "bin"), { recursive: true });

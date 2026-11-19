@@ -261,6 +261,45 @@ describe.skipIf(process.platform === "win32")("the ssh client", () => {
     });
   });
 
+  it("counts the LOOK's output in bytes: multibyte noise past 64 KiB is too much", async () => {
+    const world = worldWith("OpenSSH_9.9p2, LibreSSL 3.3.6", "darwin", "bytes");
+    // 40,000 two-byte characters: 80,000 bytes, though fewer than 65,536 characters.
+    writeFileSync(
+      world.ssh,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "-V" ]; then echo "OpenSSH_9.9p2, LibreSSL 3.3.6" >&2; exit 0; fi',
+        "cat >/dev/null",
+        `printf '${"é".repeat(40000)}\\n'`,
+        "exit 0",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const transport = new SshTransport(world);
+    writeFileSync(world.personConfig, "Host devbox\n  HostName devbox.example\n");
+    const route = transport.prepareRoute("1", "devbox");
+    if (!route.ok) throw new Error();
+    const key = Buffer.concat([
+      Buffer.from([0, 0, 0, 11]),
+      Buffer.from("ssh-ed25519"),
+      Buffer.from([0, 0, 0, 32]),
+      Buffer.alloc(32, 2),
+    ]).toString("base64");
+    new AppKnownHosts(join(world.appDir, "known_hosts")).pin(
+      route.alias,
+      { type: "ssh-ed25519", key, fingerprint: fingerprintOf(key) },
+      route.endpoint,
+      new Date(0),
+      false,
+    );
+    expect(await transport.look(route)).toEqual({
+      ok: false,
+      kind: "cant-tell",
+      reason: "too-large",
+    });
+  });
+
   it("writes Windows paths with forward slashes, and uses Windows' bundled ssh in production", () => {
     const world = { ...worldWith("x", "win32", "paths"), platform: "win32" as const };
     const text = routeConfigText(

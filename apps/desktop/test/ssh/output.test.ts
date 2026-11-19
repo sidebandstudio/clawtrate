@@ -6,6 +6,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   classifySshFailure,
+  failureFromFacts,
+  ForwardOutput,
+  MAX_PENDING_LINE,
   forwardListening,
   parseSshVersion,
   readProbeLines,
@@ -299,4 +302,45 @@ describe("the ssh client's version", () => {
     });
     expect(parseSshVersion("Sun_SSH_1.1\n")).toBeNull();
   });
+});
+
+describe("a running forward's error output", () => {
+  it("is read into facts as it arrives, across chunk boundaries, and holds no line once read", () => {
+    const output = new ForwardOutput(54000);
+    output.push("debug1: Local forwarding listen");
+    expect(output.listening).toBe(false);
+    output.push(
+      "ing on 127.0.0.1 port 54000.\r\nchannel 2: open failed: administratively prohibited: open failed\n",
+    );
+    expect(output.listening).toBe(true);
+    expect(output.refused).toBe(true);
+    expect(output.held).toBe(0);
+    for (let i = 0; i < 10000; i++) output.push(`debug1: channel ${i}: new [direct-tcpip]\n`);
+    expect(output.held).toBe(0);
+    output.push("Connection to 127.0.0.1 closed by remote host.\n");
+    expect(output.facts).not.toBe(0);
+  });
+
+  it("holds at most a bounded part of an unfinished line, and drops an overlong one to its end", () => {
+    const output = new ForwardOutput(54000);
+    output.push("x".repeat(MAX_PENDING_LINE - 1));
+    expect(output.held).toBe(MAX_PENDING_LINE - 1);
+    output.push("x".repeat(10 * 1024 * 1024));
+    expect(output.held).toBe(0);
+    output.push("still the same line");
+    expect(output.held).toBe(0);
+    output.push(" and its end\nTimeout, server 127.0.0.1 not responding.\n");
+    expect(output.held).toBe(0);
+  });
+
+  it.each(RECORDED)(
+    "classifies as the whole output does: %s, %s",
+    (_client, _case, stderr, expected) => {
+      const exit = "exit" in expected && expected.exit !== null ? expected.exit : 255;
+      const output = new ForwardOutput(54000);
+      for (const piece of stderr.match(/[\s\S]{1,7}/g) ?? []) output.push(piece);
+      output.push("\n");
+      expect(failureFromFacts(output.facts, exit)).toEqual(expected);
+    },
+  );
 });

@@ -41,10 +41,15 @@ for p in "$HOME/.openclaw/bin/openclaw" /opt/homebrew/bin/openclaw /usr/local/bi
   if [ -z "$prog" ] && [ -f "$p" ] && [ -x "$p" ]; then prog=$p; line program ",\"i\":$i"; fi
   i=$((i + 1))
 done
+exec 4>&1
+# A program's output is cut to 32 KiB as it is produced, and sent straight out as base64; its
+# exit status comes back on fd 3. Nothing of it is held in a variable.
 run() {
   key=$1; shift
-  out=$("$prog" "$@" </dev/null 2>/dev/null) && code=0 || code=$?
-  line "$key" ",\"exit\":$code,\"v\":\"$(printf '%s' "$out" | b64 32768 || true)\""
+  printf '{"k":"%s","v":"' "$key"
+  code=$( { { "$prog" "$@" </dev/null 2>/dev/null && c=0 || c=$?; printf '%s' "$c" >&3; } | b64 32768 >&4; } 3>&1 )
+  case "$code" in ''|*[!0-9]*) code=255 ;; esac
+  printf '","exit":%s}\n' "$code"
 }
 if [ -n "$prog" ]; then
   run version --version
@@ -243,8 +248,8 @@ export function parseLookOutput(stdout: string, requestId: string): LookParse {
   };
   const seen = new Set<string>();
   const after = lines.slice(begin + 1);
-  // What follows the last line break is not a line.
-  if (after.at(-1) === "") after.pop();
+  // What follows the last line break is not a line: empty, or a line the script was stopped in.
+  after.pop();
   for (const line of after) {
     let json: unknown;
     try {

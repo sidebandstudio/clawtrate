@@ -142,6 +142,10 @@ const ALLOWED: Record<string, string> = {
   "apps/desktop/src/main/ssh/person-config.ts:IGNORED": "static, the settings left out",
   "apps/desktop/src/main/ssh/person-config.ts:DEFAULT_IDENTITIES": "static, five key names",
   "apps/desktop/src/main/ssh/world.ts:WINDOWS_ENV": "static, fifteen variable names",
+  "apps/desktop/src/main/ssh/run.ts:<anonymous>>out":
+    "one ssh run's standard output, at most its `maxStdout` bytes, gone when the run ends",
+  "apps/desktop/src/main/ssh/run.ts:<anonymous>>err":
+    "one ssh run's error output, at most its `maxStderr` bytes, gone when the run ends",
   "apps/desktop/src/main/ssh/run.ts:closed": "weak, dies with the child processes it names",
   "apps/desktop/src/main/ssh/transport.ts:startForward>listening":
     "one forward process's listener from its supervisor, gone with the process",
