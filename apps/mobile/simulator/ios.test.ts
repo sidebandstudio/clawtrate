@@ -845,7 +845,8 @@ describe("the iOS app", () => {
       await steps("largest-tasks", [
         tap({ id: "bot-otto" }),
         waitFor({ id: "bot-tasks-otto" }, 20_000),
-        waitFor({ id: `task-title-${lit("agent:otto:disk-space")}` }, 20_000),
+        // At this size a task may be below the fold too.
+        scrollTo({ id: `task-title-${lit("agent:otto:disk-space")}` }, "DOWN"),
       ]);
       const tasks = await layout();
       const titles = [...tasks.keys()].filter((id) => id.startsWith("task-title-"));
