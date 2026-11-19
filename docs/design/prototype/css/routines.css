@@ -498,10 +498,25 @@
   min-height: 8px;
 }
 
-.r-occ {
+.r-cal-day ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.r-cal-day li {
   position: absolute;
   left: 4px;
   right: 4px;
+}
+
+.r-cal-range {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.r-occ {
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 4px;

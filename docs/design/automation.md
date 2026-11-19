@@ -93,7 +93,7 @@ So a read-only connection sees everything and changes nothing, and the request f
 
 - The view is reached with the rail's "Routines" button. The view switch is a radio group with one tab stop: arrows move and choose; Home and End go to the ends.
 - A routine row is one tab stop; Enter or Space opens its page; the context-menu key, Shift+F10 or a right-click opens its menu (section 10). Its switch is a separate tab stop.
-- In the calendar, Tab moves through chips in time order; Left and Right move a day; Enter opens the routine.
+- In the calendar, Tab moves through chips day by day in time order; Left and Right move to the chip closest in time on the nearest earlier or later day that has one (at the range's edge they do nothing; Previous and Next move the range); Enter opens the routine.
 - Dialogs follow `bots.md` §2: modal, Tab stays inside, Escape closes, focus returns to the control that opened it. While a dialog's Save is in flight, Escape waits for the answer (section 9).
 - One polite live region announces: "Routine created", "Saved", "Paused <name>", "Resumed <name>", "Running <name>", "<name> finished", "<name> failed", "Deleted <name>", "<name> was changed elsewhere", "<name> was deleted elsewhere", "Check-ins saved", and the access bar's phrases. Events from other clients are announced only for the routine on screen and for failures (section 8).
 
@@ -119,11 +119,11 @@ So a read-only connection sees everything and changes nothing, and the request f
 
 ## 4. The Routines view: the calendar
 
-Day, 3 days and Week (F-197) draw the same routines as occurrences in time. The days start today; "Previous" and "Next" (round buttons, chevrons) move by the view's length, and "Today" returns. The hour scale is the viewer's own time zone, said once in the corner ("Your time, New York"), because routines in different zones must line up on one scale.
+Day, 3 days and Week (F-197) draw the same routines as occurrences in time. The days start today; "Previous" and "Next" (round buttons, chevrons, named "Previous 7 days" and "Next 7 days", or "day" and "3 days") move the dates by the view's length, and "Today" returns. The range is said beside them, "Today Nov 18 to Tue Nov 24", as a status line, so moving is announced; focus stays on the button pressed. The hour scale is the viewer's own time zone, said once in the corner ("Your time, New York"), because routines in different zones must line up on one scale.
 
-- Occurrences are computed by Clawtrate from each routine's schedule and time zone, from now on (the gateway gives only the next one; row 7). Past days show the runs `cron.runs` returned, so the past is what happened and the future is what is scheduled.
-- A routine that occurs more than four times a day is not drawn as chips; it gets one band at the top of each day: "Every 30 minutes · Otto's backup check".
-- A paused routine is not drawn in the future. Check-ins are not drawn: they are one line under the day heads, "Check-ins: Juniper every 30 minutes", because a check-in that finds nothing says nothing (section 13).
+- Occurrences are computed by Clawtrate from each routine's schedule and time zone, from now on (the gateway gives only the next one; row 7). Before now, the calendar draws runs: the entries `cron.runs` returned (the 20 most recent per routine), of every routine, paused, frequent or not, each with how it ended. So the past is what happened and the future is what is scheduled, and the rules below for what is drawn ahead never hide a run that happened. Within a day, chips are in time order.
+- A routine that occurs more than four times a day is not drawn ahead as chips; it gets one band at the top of each day from today on: "Disk space watch · every 30 minutes". Its past runs are chips like any other.
+- A paused routine is not drawn ahead; its past runs stay. Check-ins are not drawn: they are one line under the day heads, "Check-ins: Juniper every 30 minutes", because a check-in that finds nothing says nothing (section 13).
 - A schedule Clawtrate cannot compute (a cron expression with steps or lists it does not read, an `on-exit` or `stream` trigger, a condition script, `pacing`) is drawn only at its next run, with "and later, as the gateway decides" in its tooltip.
 - A top-of-the-hour cron schedule may start up to 5 minutes late, which the gateway does on purpose to spread load (row 8); chips sit at the written time and the tooltip says "may start up to 5 minutes later".
 
@@ -393,7 +393,7 @@ The gateway does not notice that a person has stopped using it (F-194, row 23). 
 
 - **Themes**: only tokens; the screenshots show both. Paused text is `--text-faint` in both; warnings and failures use the soft fills.
 - **Keyboard**: section 2, "Input". The view's Back is reachable as the header's first control; Escape in the view does nothing (it is not a dialog). Focus never moves on a live event.
-- **Screen readers**: the view is a `main` region labelled "Routines"; each bot's block is a list labelled by the bot's name; a row is a link with the full accessible name of section 5; the switch says its state; the calendar is a grid with day columns as column headers and chips as links named "Morning digest, Marlow, Thursday 8:00 AM"; the state line is a live region; the editor's errors are tied to their fields with `aria-describedby`, and the refused-save note is announced.
+- **Screen readers**: the view is a `main` region labelled "Routines"; each bot's block is a list labelled by the bot's name; a row is a link with the full accessible name of section 5; the switch says its state; the calendar is a group, "Routines by day", holding one list per day named by its date ("Thu Nov 19"; "Nothing scheduled" when empty), each chip a list item and a button named "Morning digest, Marlow, Thu 8:00 AM", with ", succeeded" or how it ended for a past run; the day heads are drawn for sight and hidden from assistive technology, since each list carries its name; the state line is a live region; the editor's errors are tied to their fields with `aria-describedby`, and the refused-save note is announced.
 - **Motion**: only the working mark and waiting dot move, and they hold still when motion is reduced.
 
 ## 16. What the gateway's facts drive

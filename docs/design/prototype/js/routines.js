@@ -511,49 +511,58 @@
   function renderCalendar() {
     const days = S.view === "day" ? 1 : S.view === "3day" ? 3 : 7;
     const startP = parts(NOW, VIEWER);
-    const dayStart = (i) => fromZoned(startP.y, startP.m, startP.d + i, 0, 0, VIEWER);
+    const off = S.calOffset || 0;
+    const dayStart = (i) => fromZoned(startP.y, startP.m, startP.d + off + i, 0, 0, VIEWER);
     const narrow = CT.settings.width === "800";
-    const enabled = routines.filter((r) => r.enabled && (!S.bot || r.bot === S.bot));
+    const mine = routines.filter((r) => !r.gone && (!S.bot || r.bot === S.bot));
+    // The future is what is scheduled; the past is what ran, whatever the routine is now.
+    const enabled = mine.filter((r) => r.enabled);
     const frequent = enabled.filter((r) => perDay(r) > 4);
     const placed = enabled.filter((r) => perDay(r) <= 4);
     const hb = Object.entries(checkins).filter(([, c]) => c && c.every).map(([b, c]) => `${botName(b)} ${c.every === DAY ? "daily" : everyWords(c.every).toLowerCase()}`);
+    const dayName = (ms) => {
+      const p = parts(ms, VIEWER);
+      return `${dayIndex(ms, VIEWER) === dayIndex(NOW, VIEWER) ? "Today" : WEEK[p.dow]} ${MONTHS[p.m - 1]} ${p.d}`;
+    };
     let cols = "";
     let heads = "";
     let bands = "";
     for (let i = 0; i < days; i++) {
-      const s = dayStart(i);
+      const s0 = dayStart(i);
       const e = dayStart(i + 1);
-      const p = parts(s, VIEWER);
-      heads += `<div class="r-cal-dayhead" role="columnheader" data-today="${i === 0}">${i === 0 ? "Today" : WEEK[p.dow]}<small>${MONTHS[p.m - 1]} ${p.d}</small></div>`;
-      bands += `<div class="r-cal-bands">${frequent.map((r) => `<div class="r-cal-band" title="${esc(`${everyWords(r.schedule.everyMs)} · ${botName(r.bot)}'s ${r.name}`)}">${esc(`${r.name} · ${everyWords(r.schedule.everyMs).toLowerCase()}`)}</div>`).join("")}</div>`;
+      const p = parts(s0, VIEWER);
+      const today = dayIndex(s0, VIEWER) === dayIndex(NOW, VIEWER);
+      heads += `<div class="r-cal-dayhead" aria-hidden="true" data-today="${today}">${today ? "Today" : WEEK[p.dow]}<small>${MONTHS[p.m - 1]} ${p.d}</small></div>`;
+      bands += `<div class="r-cal-bands">${e > NOW ? frequent.map((r) => `<div class="r-cal-band" title="${esc(`${everyWords(r.schedule.everyMs)} · ${botName(r.bot)}'s ${r.name}`)}">${esc(`${r.name} · ${everyWords(r.schedule.everyMs).toLowerCase()}`)}</div>`).join("") : ""}</div>`;
+      const items = [];
+      for (const r of mine) for (const x of r.runs) if (x.at >= s0 && x.at < Math.min(e, NOW)) items.push({ r, t: x.at, ran: x });
+      if (e > NOW) for (const r of placed) for (const t of occurrences(r.schedule, Math.max(s0, NOW), e)) items.push({ r, t });
+      items.sort((x, y) => x.t - y.t);
       let chips = "";
-      for (const r of placed) {
-        const past = i === 0 ? r.runs.filter((x) => x.at >= s && x.at < NOW) : [];
-        const future = occurrences(r.schedule, Math.max(s, NOW), e);
-        for (const t of [...past.map((x) => x.at), ...future]) {
-          const p2 = parts(t, VIEWER);
-          const top = `calc(${p2.h + p2.min / 60} * var(--hour))`;
-          const ran = past.find((x) => x.at === t);
-          const o = ran && outcome(ran);
-          const tip = `${r.name}, ${botName(r.bot)}, ${WEEK[p2.dow]} ${clock(t)}${ran ? `, ${o.short}` : ""}${r.schedule.kind === "cron" && readCron(r.schedule.expr)?.min === 0 && !ran ? ". May start up to 5 minutes later." : ""}`;
-          chips += `<button type="button" class="r-occ" style="top:${top}" data-r="open" data-id="${r.id}" data-past="${!!ran}" data-outcome="${o?.mark === "failed" ? "failed" : ""}" aria-label="${esc(tip)}" title="${esc(tip)}" data-testid="occurrence">` +
-            `<span class="avatar" data-bot="${r.bot}"></span><span>${esc(r.name)}</span></button>`;
-        }
+      for (const { r, t, ran } of items) {
+        const p2 = parts(t, VIEWER);
+        const o = ran && outcome(ran);
+        const tip = `${r.name}, ${botName(r.bot)}, ${WEEK[p2.dow]} ${clock(t)}${ran ? `, ${o.short}` : ""}${r.schedule.kind === "cron" && readCron(r.schedule.expr)?.min === 0 && !ran ? ". May start up to 5 minutes later." : ""}`;
+        chips += `<li style="top:calc(${p2.h + p2.min / 60} * var(--hour))"><button type="button" class="r-occ" data-r="open" data-id="${r.id}" data-min="${p2.h * 60 + p2.min}" data-past="${!!ran}" data-outcome="${o?.mark === "failed" ? "failed" : ""}" aria-label="${esc(tip)}" title="${esc(tip)}" data-testid="occurrence">` +
+          `<span class="avatar" data-bot="${r.bot}"></span><span>${esc(r.name)}</span></button></li>`;
       }
-      const nowLine = i === 0 ? `<span class="r-now" style="top:calc(${startP.h + startP.min / 60} * var(--hour))" aria-hidden="true"></span>` : "";
-      cols += `<div class="r-cal-day" role="gridcell" aria-label="${i === 0 ? "Today" : WEEK[p.dow]}">${chips}${nowLine}</div>`;
+      const nowLine = today ? `<span class="r-now" style="top:calc(${startP.h + startP.min / 60} * var(--hour))" aria-hidden="true"></span>` : "";
+      cols += `<div class="r-cal-day"><ul aria-label="${esc(dayName(s0))}" data-testid="cal-day">${chips || `<li class="visually-hidden">Nothing scheduled</li>`}</ul>${nowLine}</div>`;
     }
+    const range = days === 1 ? dayName(dayStart(0)) : `${dayName(dayStart(0))} to ${dayName(dayStart(days - 1))}`;
     const hours = Array.from({ length: 12 }, (_, k) => `<span style="top:calc(${k * 2} * var(--hour))">${k === 0 ? "" : hm(k * 2, 0).replace(":00", "")}</span>`).join("");
     const head =
       `<header class="r-head">${phone() ? backButton("Back to bots", "to-bots") : ""}<h1 id="view-title">Routines</h1><span class="spacer"></span>${seg()}` +
       (isAdmin() ? newButton("New routine") : "") + `</header>`;
     const body =
       `<div class="r-toolbar">${botSelect()}</div>` +
-      `<div class="r-cal-bar"><button type="button" class="icon-button" aria-label="Previous">${icon("back")}</button><button type="button" class="icon-button" aria-label="Next">${icon("chevron")}</button>` +
-      button("Today", 'data-size="sm"', "quiet") + `<span class="r-zone">Your time, New York</span></div>` +
-      `<div class="r-cal-scroll"><div class="r-cal" role="grid" aria-label="Routines by day" style="--days:${days}" data-days="${days}" data-narrow="${narrow}" data-testid="calendar">` +
+      `<div class="r-cal-bar"><button type="button" class="icon-button" data-r="cal-move" data-v="-1" aria-label="Previous ${days === 1 ? "day" : `${days} days`}">${icon("back")}</button>` +
+      `<button type="button" class="icon-button" data-r="cal-move" data-v="1" aria-label="Next ${days === 1 ? "day" : `${days} days`}">${icon("chevron")}</button>` +
+      button("Today", `data-size="sm" data-r="cal-move" data-v="0"${off ? "" : ' aria-disabled="true"'}`, "quiet") +
+      `<span class="r-cal-range" role="status" data-testid="cal-range">${esc(range)}</span><span class="r-zone">Your time, New York</span></div>` +
+      `<div class="r-cal-scroll"><div class="r-cal" role="group" aria-label="Routines by day" style="--days:${days}" data-days="${days}" data-narrow="${narrow}" data-testid="calendar">` +
       `<div class="r-cal-checkins">Check-ins: ${esc(hb.join(", ") || "none")}</div>` +
-      `<div class="r-cal-corner"></div>${heads}<div class="r-cal-corner"></div>${bands}<div class="r-cal-hours" aria-hidden="true">${hours}</div>${cols}</div></div>`;
+      `<div class="r-cal-corner" aria-hidden="true"></div>${heads}<div class="r-cal-corner"></div>${bands}<div class="r-cal-hours" aria-hidden="true">${hours}</div>${cols}</div></div>`;
     return { head, body, r: "calendar" };
   }
 
@@ -1268,6 +1277,9 @@
     switch (act) {
       case "open-view":
         return go("list", { bot: "" });
+      case "cal-move":
+        S.calOffset = t.dataset.v === "0" ? 0 : (S.calOffset || 0) + +t.dataset.v * (S.view === "day" ? 1 : S.view === "3day" ? 3 : 7);
+        return paint(`[data-r="cal-move"][data-v="${t.dataset.v === "0" && S.calOffset === 0 ? "1" : t.dataset.v}"]`);
       case "seg":
         return go(t.dataset.v, { focus: `[data-r="seg"][data-v="${t.dataset.v}"]` });
       case "open":
@@ -1453,6 +1465,20 @@
       const j = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (i + (["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : -1) + items.length) % items.length;
       event.preventDefault();
       items[j].click();
+      return;
+    }
+    // In the calendar, Left and Right go to the closest chip in time on the nearest day that has one.
+    if (t.matches?.(".r-occ") && ["ArrowLeft", "ArrowRight"].includes(event.key)) {
+      event.preventDefault();
+      const cols = $$('[data-testid="cal-day"]');
+      const step = event.key === "ArrowRight" ? 1 : -1;
+      for (let i = cols.indexOf(t.closest("ul")) + step; i >= 0 && i < cols.length; i += step) {
+        const chips = $$(".r-occ", cols[i]);
+        if (!chips.length) continue;
+        const near = (c) => Math.abs(+c.dataset.min - +t.dataset.min);
+        chips.reduce((a, c) => (near(c) < near(a) ? c : a)).focus();
+        return;
+      }
       return;
     }
     const rowMain = t.closest?.(".r-row-main");
