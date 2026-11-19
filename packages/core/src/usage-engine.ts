@@ -101,6 +101,9 @@ export type UsageReport = {
 /** The answer while the host already reads `MAX_USAGE_REPORTS` reports: ask again later. */
 export type UsageBusy = { busy: true };
 
+/** A `sessions.usage` reply without its list of tasks. */
+const NO_TASK_LIST = "The gateway's answer had no task list.";
+
 /** A routine whose runs share a task: its use can't be told apart from the task's. */
 const ROUTINE_NOT_SEPARATE = "Usage for this routine can't be counted separately.";
 
@@ -435,6 +438,8 @@ export class UsageEngine {
           limit: SESSIONS_LIMIT,
         });
         const record = asRecord(result) ?? {};
+        // A reply without a task list is no empty one: the earlier count stays, marked failed.
+        if (!Array.isArray(record.sessions)) throw new Error(NO_TASK_LIST);
         const used = tasksOf(result)
           .filter((task) => task.routineId === budget.routineId)
           .reduce((sum, task) => sum + task.total, 0);
@@ -588,6 +593,10 @@ export class UsageEngine {
       const listed = asRecord(
         await ask("sessions.usage", { ...scope, ...params, limit: SESSIONS_LIMIT }),
       );
+      if (!Array.isArray(listed?.sessions)) {
+        report.detailError = NO_TASK_LIST;
+        return report;
+      }
       const listedTotal = asRecord(listed?.totals)?.totalTokens;
       const tasks = tasksOf(listed);
       report.tasks = tasks.slice(0, MAX_REPORT_TASKS);

@@ -1007,6 +1007,47 @@ describe("the usage engine", () => {
     engine.onClose();
   });
 
+  it("F-234: a reply without a task list keeps the routine's earlier count, marked failed, and shows no tasks", async () => {
+    let broken = false;
+    const gateway = fakeGateway();
+    const { engine, usage } = engineOn({
+      ...gateway,
+      request: async (method, raw) =>
+        broken && method === "sessions.usage"
+          ? { updatedAt: 9, cacheStatus: fresh, totals: totals(1000, 600) }
+          : gateway.request(method, raw),
+    });
+    await engine.changeBudget({
+      op: "set",
+      budget: {
+        botId: "otto",
+        routineId: "job1",
+        routineName: "Weekly cleanup",
+        period: "daily",
+        tokens: 1_000,
+        timeZone: NY,
+      },
+    });
+    await engine.countBudgets();
+    expect(usage().counts).toMatchObject([{ used: 200, error: null }]);
+    broken = true;
+    await engine.countBudgets();
+    expect(usage().counts).toMatchObject([
+      { used: 200, error: "The gateway's answer had no task list." },
+    ]);
+    const report = await reportOf(engine, {
+      botId: "otto",
+      period: "week",
+      timeZone: NY,
+      detail: true,
+      bots: [],
+    });
+    expect(report.tasks).toBeNull();
+    expect(report.sources).toBeNull();
+    expect(report.detailError).toBe("The gateway's answer had no task list.");
+    engine.onClose();
+  });
+
   it("F-234: a routine moved into a shared task is no longer counted, can't be saved again, and can be removed", async () => {
     const gateway = fakeGateway();
     const { engine, usage } = engineOn(gateway);
