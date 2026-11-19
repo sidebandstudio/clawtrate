@@ -137,17 +137,38 @@ export const scrollTo = (selector: Selector, direction: "UP" | "DOWN"): Step => 
 
 type Node = { attributes?: Record<string, string>; children?: Node[] };
 
+/**
+ * Maestro's view of the screen, as JSON text. Like `steps`, a driver that did
+ * not start is no result of the app's: it is asked once more, with the runner
+ * installed afresh.
+ */
+async function hierarchy(): Promise<string> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const { stdout } = await run(
+        need("CLAWTRATE_IOS_MAESTRO"),
+        [
+          "--device",
+          env.device,
+          "hierarchy",
+          attempt === 1 ? "--no-reinstall-driver" : "--reinstall-driver",
+        ],
+        { maxBuffer: 64 * 1024 * 1024 },
+      );
+      return stdout;
+    } catch (error) {
+      const { stdout = "", stderr = "" } = error as { stdout?: string; stderr?: string };
+      if (attempt === 1 && DRIVER_DID_NOT_START.test(`${stdout}${stderr}`)) continue;
+      throw error;
+    }
+  }
+}
+
 /** Where each element with an id is on screen now, in points, from Maestro's view of the app. */
 export async function layout(): Promise<
   Map<string, Array<{ x1: number; y1: number; x2: number; y2: number; text: string }>>
 > {
-  const { stdout } = await run(
-    need("CLAWTRATE_IOS_MAESTRO"),
-    ["--device", env.device, "hierarchy", "--no-reinstall-driver"],
-    {
-      maxBuffer: 64 * 1024 * 1024,
-    },
-  );
+  const stdout = await hierarchy();
   const tree = JSON.parse(stdout.slice(stdout.indexOf("{"))) as Node;
   const found = new Map<
     string,
@@ -177,11 +198,7 @@ export async function layout(): Promise<
 export async function boundsOf(
   pattern: RegExp,
 ): Promise<{ x1: number; y1: number; x2: number; y2: number } | null> {
-  const { stdout } = await run(
-    need("CLAWTRATE_IOS_MAESTRO"),
-    ["--device", env.device, "hierarchy", "--no-reinstall-driver"],
-    { maxBuffer: 64 * 1024 * 1024 },
-  );
+  const stdout = await hierarchy();
   const tree = JSON.parse(stdout.slice(stdout.indexOf("{"))) as Node;
   let found: { x1: number; y1: number; x2: number; y2: number } | null = null;
   const walk = (node: Node) => {
