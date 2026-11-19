@@ -718,11 +718,109 @@ describe("the usage engine", () => {
     };
     const two = engineOn({ ...lost, request: neverKept });
     await expect(two.engine.changeBudget({ op: "set", budget })).rejects.toThrow(
-      "The change couldn't be confirmed: Connection lost. The gateway doesn't hold it now",
+      "The change couldn't be confirmed: Connection lost. The read-back did not confirm this change.",
     );
     expect(two.usage()).toMatchObject({ budgetsStatus: "ok", budgets: [] });
     expect(asked).toEqual(["users.prefs.get", "users.prefs.set", "users.prefs.get"]);
     two.engine.onClose();
+
+    // The answer lost as the connection closed: nothing is asked of the next gateway.
+    const switched: Array<[string, string]> = [];
+    let gatewayName = "first";
+    let write: (error: Error) => void = () => {};
+    const across = fakeGateway();
+    const three = engineOn({
+      ...across,
+      request: async (method, raw) => {
+        switched.push([gatewayName, method]);
+        if (method === "users.prefs.set")
+          return new Promise((_, reject) => {
+            write = reject;
+          });
+        return across.request(method, raw);
+      },
+    });
+    const crossing = three.engine.changeBudget({ op: "set", budget });
+    await flush();
+    three.engine.onClose();
+    gatewayName = "second";
+    write(new Error("old socket closed"));
+    await expect(crossing).rejects.toThrow(
+      "The change couldn't be confirmed: the connection to the gateway closed.",
+    );
+    expect(switched.filter(([name]) => name === "second")).toEqual([]);
+
+    // A lost removal while another device changed another budget: the removal is confirmed,
+    // and the other budget's new amount is shown.
+    const routine = {
+      botId: "otto",
+      routineId: "job1",
+      routineName: "Sample",
+      period: "weekly",
+      tokens: 1_000,
+      timeZone: NY,
+    };
+    let stored: unknown = {
+      rev: 7,
+      budgets: [{ botId: "otto", period: "weekly", tokens: 1_000, timeZone: NY }, routine],
+    };
+    const four = engineOn({
+      ...fakeGateway(),
+      request: async (method, raw) => {
+        if (method === "users.prefs.set") {
+          const written = (raw as { entries: Record<string, { rev: number }> }).entries[
+            BUDGETS_PREF_KEY
+          ]!;
+          stored = { rev: written.rev + 1, budgets: [{ ...routine, tokens: 3_000 }] };
+          throw new Error("response lost");
+        }
+        return { status: "ok", entries: { [BUDGETS_PREF_KEY]: stored } };
+      },
+    });
+    await expect(
+      four.engine.changeBudget({ op: "remove", id: "bot:otto" }),
+    ).resolves.toBeUndefined();
+    expect(four.usage().budgets.map((b) => [b.id, b.tokens])).toEqual([["routine:job1", 3_000]]);
+    four.engine.onClose();
+
+    // A read-back the gateway can't give says that, never that it keeps no budgets.
+    let writes = 0;
+    const five = engineOn({
+      ...fakeGateway(),
+      request: async (method) => {
+        if (method === "users.prefs.set") {
+          writes += 1;
+          throw new Error("response lost");
+        }
+        return writes ? { status: "unavailable" } : { status: "ok", entries: {} };
+      },
+    });
+    await expect(five.engine.changeBudget({ op: "set", budget })).rejects.toThrow(
+      "The change couldn't be confirmed: response lost. Reading the gateway's budgets again was unavailable.",
+    );
+    five.engine.onClose();
+
+    // A conflict answered after the connection closed: no second attempt on the next one.
+    let conflict: (value: unknown) => void = () => {};
+    const sets: string[] = [];
+    const six = engineOn({
+      ...fakeGateway(),
+      request: async (method) => {
+        if (method === "users.prefs.set") {
+          sets.push(method);
+          return new Promise((resolve) => {
+            conflict = resolve;
+          });
+        }
+        return { status: "ok", entries: {} };
+      },
+    });
+    const late = six.engine.changeBudget({ op: "set", budget });
+    await flush();
+    six.engine.onClose();
+    conflict({ status: "conflict" });
+    await expect(late).rejects.toThrow("the connection to the gateway closed");
+    expect(sets).toHaveLength(1);
   });
 
   it("refuses a budget when the gateway keeps no preferences for this connection", async () => {

@@ -251,8 +251,14 @@ export class UsageEngine {
    */
   async changeBudget(change: BudgetChange): Promise<void> {
     const generation = this.generation;
+    const assertSameConnection = () => {
+      if (generation !== this.generation)
+        throw new BudgetError(`${BUDGET_UNCONFIRMED}: the connection to the gateway closed.`);
+    };
     for (let attempt = 0; attempt < BUDGET_WRITE_ATTEMPTS; attempt += 1) {
+      assertSameConnection();
       const read = await this.readRaw();
+      assertSameConnection();
       if (read.status !== "ok")
         throw new BudgetError(
           "This gateway keeps no preferences for this connection, so a budget can't be kept.",
@@ -272,10 +278,12 @@ export class UsageEngine {
           expectedEntries: { [BUDGETS_PREF_KEY]: read.raw ?? null },
         });
       } catch (error) {
+        assertSameConnection();
         // The answer was lost: the gateway may have kept the change. What it holds is read,
         // and shown, before anything is said of the change.
-        return this.confirmBudgets(next, errorText(error), generation);
+        return this.confirmBudgets(next, errorText(error), change, assertSameConnection);
       }
+      assertSameConnection();
       const result = asRecord(answer);
       if (result?.status === "ok") {
         if (generation === this.generation) this.setBudgets("ok", next, issued);
@@ -294,9 +302,15 @@ export class UsageEngine {
    * it. The change stands only if the gateway holds it; otherwise it couldn't
    * be confirmed, said with what was read.
    */
-  private async confirmBudgets(next: BudgetPrefs, lost: string, generation: number) {
+  private async confirmBudgets(
+    next: BudgetPrefs,
+    lost: string,
+    change: BudgetChange,
+    assertSameConnection: () => void,
+  ) {
     const issued = ++this.issued;
     let read: Awaited<ReturnType<UsageEngine["readRaw"]>>;
+    assertSameConnection();
     try {
       read = await this.readRaw();
     } catch (error) {
@@ -304,14 +318,26 @@ export class UsageEngine {
         `${BUDGET_UNCONFIRMED}: ${lost}. Reading the gateway's budgets again failed too: ${errorText(error)}`,
       );
     }
+    assertSameConnection();
     if (read.status !== "ok")
-      throw new BudgetError(`${BUDGET_UNCONFIRMED}: ${lost}. The gateway keeps no budgets now.`);
+      throw new BudgetError(
+        `${BUDGET_UNCONFIRMED}: ${lost}. Reading the gateway's budgets again was unavailable.`,
+      );
     const held =
       read.raw === null || read.raw === undefined ? { budgets: [] } : parseBudgets(read.raw);
-    if (generation === this.generation) this.setBudgets("ok", held, issued);
-    if (JSON.stringify(read.raw) === JSON.stringify(next)) return;
+    if (held) this.setBudgets("ok", held, issued);
+    const expected = change.op === "set" ? next.budgets.at(-1) : undefined;
+    const id = change.op === "remove" ? change.id : expected?.id;
+    const actual = held?.budgets.find((budget) => budget.id === id);
+    if (
+      held &&
+      (change.op === "remove"
+        ? actual === undefined
+        : expected && actual && JSON.stringify(actual) === JSON.stringify(expected))
+    )
+      return;
     throw new BudgetError(
-      `${BUDGET_UNCONFIRMED}: ${lost}. The gateway doesn't hold it now; what it holds is shown.`,
+      `${BUDGET_UNCONFIRMED}: ${lost}. The read-back did not confirm this change.`,
     );
   }
 
