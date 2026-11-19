@@ -81,12 +81,13 @@ const STATES = [
   ["screen=add-checking&id=quillnote", ["Checking what the gateway has…"]],
   ["screen=installed", ["Turned on", "Turned off", "Comes with OpenClaw (3)", "Tool servers", "notes-work", "Added by address", "search-index", "Runs a command", "Add a custom connector"]],
   ["screen=connector&id=tasktide&busy=1", ["The gateway is busy with another change.", "Try again in a moment.", "Try again"]],
-  ["screen=connector&id=tasktide", ["Tasktide", "Added", "Tools", "tasktide, a tool server", "Which bots may use these is in each bot's settings.", "Accounts", "Shared by everyone on this gateway", "Signed in.", "The gateway holds this sign-in until Dec 17, 5:12 PM.", "Whether it still works shows when a bot next uses Tasktide.", "Turn off", "Remove…"]],
-  ["screen=connector&id=calendrop", ["Needs sign-in"]],
-  ["screen=connector&id=calendrop&auth=requires-authorization", ["Needs sign-in again", "The server asked for more access."]],
-  ["screen=connector&id=calendrop&auth=pending-authorization", ["A sign-in was started and didn't finish."]],
+  ["screen=connector&id=tasktide", ["Tasktide", "Added", "Tools", "tasktide, a tool server", "Which bots may use these is in each bot's settings.", "Accounts", "tasktide · Shared by everyone on this gateway", "Signed in.", "The gateway reports saved sign-in tokens.", "Whether they still work isn't reported.", "Turn off", "Remove…"]],
+  ["screen=connector&id=calendrop", ["calendrop · Shared by everyone on this gateway", "Needs sign-in."]],
+  ["screen=connector&id=calendrop&auth=requires-authorization", ["Needs sign-in again."]],
+  ["screen=connector&id=calendrop&auth=pending-authorization", ["Sign-in pending."]],
+  ["screen=connector&id=calendrop&auth=none", ["Sign-in status not reported."]],
   ["screen=connector&id=ledgerkin", ["Turned off. Its tools aren't offered to any bot.", "Turn on", "The gateway reports sign-ins only while Ledgerkin is turned on."]],
-  ["screen=connector&id=postlark", ["Needs setup: the gateway needs Account address before it can turn Postlark on. Change these in the gateway's own settings page."]],
+  ["screen=connector&id=postlark", ["Needs setup. Open Settings on the gateway to finish setup.", "The gateway reports missing: Account address."]],
   ["screen=connector&id=boxwharf", ["Not working: boxwharf-sync: the token store couldn't be read"]],
   ["screen=connector&id=linkpeek", ["Comes with OpenClaw", "Added. Not loaded yet: it loads when a bot first needs it.", "Comes with OpenClaw, so it can be turned off but not removed."]],
   ["screen=connector&id=tasktide&access=read", ["Read-only.", "Changing connectors needs admin access.", "Request admin access"]],
@@ -148,7 +149,7 @@ for (const [query, words] of STATES) {
   check("no state is drawn as Connected", !(await text(q)).includes("Connected"));
   await q.close();
   const r = await open("screen=connector&id=tasktide");
-  check("a signed-in connector never says Connected", !(await text(r)).includes("Connected"));
+  check("a signed-in connector never says Connected, and shows no expiry (ruling 8)", !(await text(r)).includes("Connected") && !/until|expire|Dec 17/i.test(await text(r)));
   check("the section's title takes focus", await r.evaluate(() => document.activeElement?.id === "c-section-title"));
   await r.close();
   const s = await open("screen=remove-confirm&id=tasktide");

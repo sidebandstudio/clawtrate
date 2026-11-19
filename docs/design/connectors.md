@@ -236,25 +236,26 @@ A plugin's page: the initial at 56 px, the name, "by <author>" or "Comes with Op
 
 **The state**, from `plugins.list` and `inspect`:
 
-| The gateway reports                              | The page says                                                                                                                                             | Its actions      |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `enabled`, `runtime.state: "active"`, no sign-in | "Added"                                                                                                                                                   | Turn off, Remove |
-| `enabled`, `runtime.state: "unloaded"`           | "Added. Not loaded yet: it loads when a bot first needs it."                                                                                              | Turn off, Remove |
-| `disabled`                                       | "Turned off. Its tools aren't offered to any bot."                                                                                                        | Turn on, Remove  |
-| `needs-setup`                                    | "Needs setup: the gateway needs <the missing settings, by label> before it can turn Quillnote on." and "Change these in the gateway's own settings page." | Remove           |
-| `error`, or `runtime.state: "service-failed"`    | "Not working:" and `runtime.error` or `error`, as given                                                                                                   | Turn off, Remove |
-| `removable: false`                               | (any of the above) and "Comes with OpenClaw, so it can be turned off but not removed."                                                                    | no Remove        |
+| The gateway reports                              | The page says                                                                                                                                                                                                                 | Its actions      |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `enabled`, `runtime.state: "active"`, no sign-in | "Added"                                                                                                                                                                                                                       | Turn off, Remove |
+| `enabled`, `runtime.state: "unloaded"`           | "Added. Not loaded yet: it loads when a bot first needs it."                                                                                                                                                                  | Turn off, Remove |
+| `disabled`                                       | "Turned off. Its tools aren't offered to any bot."                                                                                                                                                                            | Turn on, Remove  |
+| `needs-setup`                                    | "Needs setup. Open Settings on the gateway to finish setup." When `inspect` reports credential fields with `status: "missing"`, their labels follow: "The gateway reports missing: Account address." No other field is named. | Remove           |
+| `error`, or `runtime.state: "service-failed"`    | "Not working:" and `runtime.error` or `error`, as given                                                                                                                                                                       | Turn off, Remove |
+| `removable: false`                               | (any of the above) and "Comes with OpenClaw, so it can be turned off but not removed."                                                                                                                                        | no Remove        |
 
-Editing a plugin's settings is not designed here (section 20); "Needs setup" names what is missing and where it is changed.
+Editing a plugin's settings is not designed here (section 20); "Needs setup" says where to finish it, and names only fields the gateway reports missing.
 
-**Accounts.** One row per server the plugin declares with a sign-in (`inspect` `mcpAuth`), each "Shared by everyone on this gateway", since one sign-in per server is what the gateway keeps (R§8):
+**Accounts.** One row per server the gateway reports in `inspect` `mcpAuth`, named by its `serverName` and "Shared by everyone on this gateway", since one sign-in per server is what the gateway keeps (R§8). A server the plugin declares with OAuth (its `declared.mcpServers`, with `auth: "oauth"` in the catalog's `mcpServerDetails`) that has no row gets one too, reading "Sign-in status not reported." No expiry is shown: the gateway does not report one.
 
-| `mcpAuth.state`          | The row says                                                                                                                                                                        |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `unauthenticated`        | "Needs sign-in" (warn)                                                                                                                                                              |
-| `requires-authorization` | "Needs sign-in again: the server asked for more access."                                                                                                                            |
-| `pending-authorization`  | "A sign-in was started and didn't finish."                                                                                                                                          |
-| `authorized`             | "Signed in. The gateway holds this sign-in until Dec 17, 5:12 PM." (from its expiry, when it has one) and, under it, "Whether it still works shows when a bot next uses Quillnote." |
+| `mcpAuth.state`                                    | The row says                                                                                                    |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `unauthenticated`                                  | "Needs sign-in." (warn)                                                                                         |
+| `requires-authorization`                           | "Needs sign-in again." (warn)                                                                                   |
+| `pending-authorization`                            | "Sign-in pending."                                                                                              |
+| `authorized`                                       | "Signed in. The gateway reports saved sign-in tokens." and, under it, "Whether they still work isn't reported." |
+| No row for a server the plugin declares with OAuth | "Sign-in status not reported."                                                                                  |
 
 Under the rows: "Open Settings on your OpenClaw gateway to sign in to <server>." and "Check again" (section 10). The gateway's terminal command cannot find a plugin's own server, so it is not offered here (R§7). There is no "Connected": `authorized` means the gateway holds tokens, not that they work (R§8). A plugin with no sign-in has no Accounts group. When the plugin is turned off, `inspect` reports no sign-in, and the group says "The gateway reports sign-ins only while Quillnote is turned on."
 

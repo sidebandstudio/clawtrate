@@ -239,7 +239,7 @@
   const connectorState = (a) => {
     const off = params.get("now") === "off" || (a.local === "disabled" && params.get("now") !== "on");
     if (off) return ["Turned off. Its tools aren't offered to any bot.", [admin ? link("Turn on", "connector", { id: a.id, now: "on", said: "on" }) : ""]];
-    if (a.local === "needs-setup") return [`Needs setup: the gateway needs ${a.missing.join(", ")} before it can turn ${a.name} on. Change these in the gateway's own settings page.`, []];
+    if (a.local === "needs-setup") return [`Needs setup. Open Settings on the gateway to finish setup.${a.missing?.length ? ` The gateway reports missing: ${a.missing.join(", ")}.` : ""}`, []];
     if (a.local === "error") return [`Not working: ${esc(a.error)}`, [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
     if (a.bundled) return ["Added. Not loaded yet: it loads when a bot first needs it.", [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
     return ["Added", [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
@@ -250,14 +250,15 @@
     if (off) return group("Accounts") + `<p class="c-line">The gateway reports sign-ins only while ${a.name} is turned on.</p>`;
     const state = params.get("auth") || a.auth || "unauthenticated";
     const words = {
-      unauthenticated: [pill("Needs sign-in", "warn"), "Sign in"],
-      "requires-authorization": [`${pill("Needs sign-in again", "warn")} <span>The server asked for more access.</span>`, "Sign in"],
-      "pending-authorization": [`<span>A sign-in was started and didn't finish.</span>`, "Sign in"],
-      authorized: [`<span><b>Signed in.</b> The gateway holds this sign-in until Dec 17, 5:12 PM.</span><span class="c-faint">Whether it still works shows when a bot next uses ${a.name}.</span>`, "Sign in again"],
+      unauthenticated: pill("Needs sign-in.", "warn"),
+      "requires-authorization": pill("Needs sign-in again.", "warn"),
+      "pending-authorization": `<span>Sign-in pending.</span>`,
+      authorized: `<span><b>Signed in.</b> The gateway reports saved sign-in tokens.</span><span class="c-faint">Whether they still work isn't reported.</span>`,
+      none: `<span>Sign-in status not reported.</span>`,
     }[state];
     return (
       group("Accounts") +
-      `<ul class="c-rows"><li class="c-account"><span class="c-row-text"><span class="c-row-name">Shared by everyone on this gateway</span><span class="c-row-sub c-account-state">${words[0]}</span></span>` +
+      `<ul class="c-rows"><li class="c-account"><span class="c-row-text"><span class="c-row-name"><span class="mono">${a.servers.find(([, o]) => o)[0]}</span> · Shared by everyone on this gateway</span><span class="c-row-sub c-account-state">${words}</span></span>` +
       `<span class="c-row-end"></span></li></ul>` +
       `<p class="c-line" data-c="settings">Open Settings on your OpenClaw gateway to sign in to ${a.servers.find(([, o]) => o)[0]}.</p>` +
       `<div class="c-actions">${link("Check again", "connector", { id: a.id, checked: "1", ...(params.get("auth") ? { auth: params.get("auth") } : {}) })}</div>` +
