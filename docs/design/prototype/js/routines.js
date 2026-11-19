@@ -106,6 +106,127 @@
     return { min: +f[0], h: +f[1], dows, dom };
   }
   const plainCron = (c) => c && c.dom === null;
+
+  // The gateway reads cron with croner 10.0.1 (`new Cron(expr, {timezone, catch: false})`),
+  // so this follows croner's grammar: five, six (seconds first) or seven (then the year)
+  // fields, names, ranges, `*/n` and `a-b/n` steps, `?`, `L`, `nW`, `n#k`, `nL`, a leading
+  // `+` for day-of-month AND day-of-week, and the @ nicknames. It returns the firing
+  // seconds, minutes and hours and a test for a day, or the reason it can't be read.
+  const NICK = { "@yearly": "0 0 1 1 *", "@annually": "0 0 1 1 *", "@monthly": "0 0 1 * *", "@weekly": "0 0 * * 0", "@daily": "0 0 * * *", "@midnight": "0 0 * * *", "@hourly": "0 * * * *" };
+  const MON_NAMES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const DOW_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+  const cronCache = new Map();
+  const cronSpec = (expr) => (cronCache.has(expr) ? cronCache.get(expr) : cronCache.set(expr, readCronSpec(expr)).get(expr));
+  function readCronSpec(expr) {
+    const raw = expr.trim();
+    const f = (NICK[raw.toLowerCase()] ?? raw).split(/\s+/);
+    if (f.length < 5 || f.length > 7) return { error: "it needs five, six or seven fields" };
+    if (f.length === 5) f.unshift("0");
+    if (f.length === 6) f.push("*");
+    const [secF, minF, hourF, domF, monF, dowF0, yearF] = f;
+    const and = dowF0.startsWith("+");
+    const dowF = and ? dowF0.slice(1) : dowF0;
+    const num = (t, names, offset, what) => {
+      const i = names ? names.indexOf(t.toLowerCase()) : -1;
+      if (i >= 0) return i + offset;
+      if (!/^\d+$/.test(t)) throw `${what} "${t}" isn't a number`;
+      return +t;
+    };
+    // One field: the values it lists, with `L`, `W` and `#` items kept apart for the day test.
+    function field(text, lo, hi, what, names = null, offset = 0, extra = null) {
+      const set = new Set();
+      for (const item of text.split(",")) {
+        if (extra && extra(item)) continue;
+        const [base, step, more] = item.split("/");
+        if (more !== undefined || base === "") throw `"${item}" isn't a ${what}`;
+        if (step !== undefined && !/^\d+$/.test(step)) throw `the step in "${item}" isn't a number`;
+        if (step !== undefined && (+step === 0 || +step > hi - lo + 1)) throw `the step in "${item}" is out of range`;
+        let a, b;
+        if (base === "*" || base === "?") [a, b] = [lo, hi];
+        else if (base.includes("-")) {
+          const [x, y] = base.split("-");
+          [a, b] = [num(x, names, offset, what), num(y, names, offset, what)];
+          if (a > b) throw `"${base}" runs backwards`;
+        } else {
+          if (step !== undefined) throw `a step needs * or a range before it, not "${base}"`;
+          a = b = num(base, names, offset, what);
+        }
+        if (a < lo || b > hi) throw `${what} ${a < lo ? a : b} is out of range`;
+        for (let v = a; v <= b; v += step ? +step : 1) set.add(v);
+      }
+      return [...set].sort((x, y) => x - y);
+    }
+    try {
+      const last = { L: false, LW: false, W: [] };
+      const doms = field(domF, 1, 31, "day of the month", null, 0, (it) => {
+        if (it === "L" || it === "LW") return (last[it] = true);
+        const w = it.match(/^(\d+)W$/);
+        if (w && +w[1] >= 1 && +w[1] <= 31) return last.W.push(+w[1]);
+        return false;
+      });
+      const nth = [];
+      const dows = field(dowF, 0, 7, "day of the week", DOW_NAMES, 0, (it) => {
+        const m = it.match(/^([^#L]+)(#([1-5]|L)|L)$/i);
+        if (!m) return false;
+        const k = m[3] ? (m[3].toUpperCase() === "L" ? "L" : +m[3]) : "L";
+        for (const v of field(m[1], 0, 7, "day of the week", DOW_NAMES)) nth.push([v % 7, k]);
+        return true;
+      }).map((v) => v % 7);
+      const spec = {
+        sec: field(secF, 0, 59, "second"),
+        min: field(minF, 0, 59, "minute"),
+        hour: field(hourF, 0, 23, "hour"),
+        mon: field(monF, 1, 12, "month", MON_NAMES, 1),
+        year: field(yearF, 1, 9999, "year"),
+      };
+      const domAny = domF === "*" || domF === "?";
+      const dowAny = dowF === "*" || dowF === "?";
+      const weekday = (y, m, d) => new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+      const nearestWeekday = (y, m, n, end) => {
+        const w = weekday(y, m, n);
+        if (w === 6) return n > 1 ? n - 1 : n + 2;
+        if (w === 0) return n < end ? n + 1 : n - 2;
+        return n;
+      };
+      spec.day = (y, m, d) => {
+        if (!spec.mon.includes(m) || !spec.year.includes(y)) return false;
+        const end = new Date(Date.UTC(y, m, 0)).getUTCDate();
+        const w = weekday(y, m, d);
+        const domHit = doms.includes(d) || (last.L && d === end) || (last.LW && d === nearestWeekday(y, m, end, end)) || last.W.some((n) => n <= end && d === nearestWeekday(y, m, n, end));
+        const dowHit = dows.includes(w) || nth.some(([v, k]) => v === w && (k === "L" ? d + 7 > end : Math.ceil(d / 7) === k));
+        if (domAny && dowAny) return true;
+        if (domAny) return dowHit;
+        if (dowAny) return domHit;
+        return and ? domHit && dowHit : domHit || dowHit;
+      };
+      // The firing times of one day, in seconds after midnight on the schedule's own clock.
+      spec.times = spec.hour.flatMap((h) => spec.min.flatMap((mi) => spec.sec.map((s) => h * 3600 + mi * 60 + s)));
+      return spec;
+    } catch (why) {
+      return { error: String(why) };
+    }
+  }
+  // F-195: the shortest spacing, in seconds, between two consecutive firings, on the
+  // schedule's own clock. Within a day it is the closest two firing times; across midnight
+  // it is the last time to the next day's first, counted only when two consecutive days
+  // both fire within the next 2,922 days (eight years). Daylight-saving changes are not counted.
+  const CRON_SCAN_DAYS = 2922;
+  function cronSpacing(spec, from = NOW) {
+    const t = spec.times;
+    let gap = Infinity;
+    for (let i = 1; i < t.length; i++) gap = Math.min(gap, t[i] - t[i - 1]);
+    const start = new Date(from);
+    let fires = 0;
+    let prev = false;
+    for (let i = 0; i < CRON_SCAN_DAYS; i++) {
+      const day = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate() + i));
+      const hit = spec.day(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate());
+      if (hit) fires += 1;
+      if (hit && prev) gap = Math.min(gap, t[0] + DAY / 1000 - t[t.length - 1]);
+      prev = hit;
+    }
+    return { gap, fires };
+  }
   function hm(h, min) {
     const d = new Date(Date.UTC(2026, 0, 1, h, min));
     return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", hour: "numeric", minute: "2-digit" }).format(d);
@@ -119,6 +240,7 @@
   function words(s, withZone = true) {
     const zone = s.tz ? `, ${city(s.tz)}` : ", gateway's time";
     if (s.kind === "every") return everyWords(s.everyMs);
+    if (s.kind === "on-exit" || s.kind === "stream") return { mono: [].concat(s.command).join(" "), zone: "" };
     // An `at` is an instant with no zone of its own, so it is said in the viewer's.
     if (s.kind === "at") {
       const t = atMs(s.at);
@@ -154,24 +276,30 @@
       return out;
     }
     if (s.kind === "at") return atMs(s.at) >= from && atMs(s.at) < until ? [atMs(s.at)] : [];
-    const c = readCron(s.expr);
-    if (!c) return [];
+    const c = cronSpec(s.expr);
     const tz = s.tz || VIEWER;
     const start = parts(from - DAY, tz);
-    for (let i = 0; i < 400 && out.length < max; i++) {
-      const base = Date.UTC(start.y, start.m - 1, start.d + i);
-      const day = new Date(base);
+    for (let i = 0; i < CRON_SCAN_DAYS && out.length < max; i++) {
+      const day = new Date(Date.UTC(start.y, start.m - 1, start.d + i));
       const y = day.getUTCFullYear(), m = day.getUTCMonth() + 1, d = day.getUTCDate();
-      const dow = day.getUTCDay();
-      if (c.dom !== null ? d !== c.dom : !c.dows.includes(dow)) continue;
-      const t = fromZoned(y, m, d, c.h, c.min, tz);
-      if (t >= until) break;
-      if (t >= from) out.push(t);
+      if (fromZoned(y, m, d, 0, 0, tz) >= until) break;
+      if (!c.day(y, m, d)) continue;
+      for (const sec of c.times) {
+        const h = Math.floor(sec / 3600), mi = Math.floor(sec / 60) % 60;
+        const t = fromZoned(y, m, d, h, mi, tz) + (sec % 60) * 1000;
+        const p = parts(t, tz);
+        // A time a daylight-saving change skips doesn't fire, as croner skips it.
+        if (p.h !== h || p.min !== mi) continue;
+        if (t >= until || out.length >= max) break;
+        if (t >= from) out.push(t);
+      }
     }
     return out;
   }
-  const nextRun = (r) => (r.enabled ? occurrences(r.schedule, NOW, NOW + 400 * DAY, 1)[0] : undefined);
-  const perDay = (r) => (r.schedule.kind === "every" ? DAY / r.schedule.everyMs : 1);
+  // What Clawtrate can't expand is drawn only at the gateway's own next run (section 4).
+  const computable = (r) => ["at", "every"].includes(r.schedule.kind) || (r.schedule.kind === "cron" && !r.pacing && !cronSpec(r.schedule.expr).error);
+  const nextRun = (r) => (!r.enabled ? undefined : computable(r) ? occurrences(r.schedule, NOW + 1, NOW + 400 * DAY, 1)[0] : r.state?.nextRunAtMs);
+  const perDay = (r) => (!computable(r) ? 1 : r.schedule.kind === "every" ? DAY / r.schedule.everyMs : r.schedule.kind === "cron" ? cronSpec(r.schedule.expr).times.length : 1);
 
   // Fixtures ------------------------------------------------------------------------------
 
@@ -183,7 +311,9 @@
   ];
   const botName = (id) => bots.find((b) => b.id === id)?.name ?? id;
 
-  const run = (daysAgo, h, min, extra = {}) => ({ at: at(daysAgo, h, min), status: "ok", completion: "succeeded", dur: 2.6, tokens: 200, inT: 120, outT: 80, manual: false, ...extra });
+  // `runId` is the run's identity on the gateway (section 7); a fixture's is only unique.
+  let runSeq = 0;
+  const run = (daysAgo, h, min, extra = {}) => ({ runId: `run-${++runSeq}`, at: at(daysAgo, h, min), status: "ok", completion: "succeeded", dur: 2.6, tokens: 200, inT: 120, outT: 80, manual: false, ...extra });
   const PREAMBLE =
     "This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly NO_REPLY.";
   // A run's `history` is what cron.history returned for its runId: the first message as
@@ -196,7 +326,7 @@
       id: "digest", bot: "marlow", name: "Morning digest", enabled: true,
       schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York" },
       payload: { kind: "agentTurn", message: "Summarise the notes I added yesterday, and list anything I need to answer today." },
-      sessionTarget: "isolated", delivery: "none", updatedAtMs: NOW - 3 * DAY,
+      sessionTarget: "isolated", delivery: { mode: "none" }, updatedAtMs: NOW - 3 * DAY,
       runs: [
         run(0, 8, 0, { summary: DIGEST_SUMMARY, history: recorded("Summarise the notes I added yesterday, and list anything I need to answer today.", DIGEST_SUMMARY) }),
         // Recorded before the instruction was last edited: the run shows what it was sent.
@@ -211,13 +341,13 @@
       id: "reminder", bot: "marlow", name: "Send the draft to Sam", enabled: true,
       schedule: { kind: "at", at: "2026-11-20T14:00:00.000Z" },
       payload: { kind: "systemEvent", text: "Reminder: send the newsletter draft to Sam before the weekend." },
-      sessionTarget: "main", delivery: "announce", updatedAtMs: NOW - DAY, runs: [],
+      sessionTarget: "main", delivery: { mode: "announce" }, deleteAfterRun: true, updatedAtMs: NOW - DAY, runs: [],
     },
     {
       id: "backup", bot: "otto", name: "Nightly backup check", enabled: true,
       schedule: { kind: "cron", expr: "30 3 * * *", tz: "America/New_York" },
       payload: { kind: "agentTurn", message: "Check that last night's backup finished on every machine, and tell me only if one did not." },
-      sessionTarget: "isolated", delivery: "none", updatedAtMs: NOW - 9 * DAY,
+      sessionTarget: "isolated", delivery: { mode: "none", failureDestination: { mode: "announce", channel: "last" } }, updatedAtMs: NOW - 9 * DAY,
       runs: [
         run(0, 3, 30, { status: "error", completion: "failed", error: "exec denied: the command needs approval, and nobody was there to approve it.", dur: 4.2, tokens: 310 }),
         run(1, 3, 30, { dur: 5.0, tokens: 290 }),
@@ -229,28 +359,28 @@
       schedule: { kind: "every", everyMs: 30 * MIN, anchorMs: 0 },
       trigger: "df --output=pcent / | tail -1 | tr -dc 0-9 | awk '$1 > 85'",
       payload: { kind: "agentTurn", message: "The media box's disk is over 85%. Find what grew and tell me what is safe to clear." },
-      sessionTarget: "isolated", delivery: "none", updatedAtMs: NOW - 2 * DAY,
+      sessionTarget: "isolated", delivery: { mode: "none" }, updatedAtMs: NOW - 2 * DAY,
       runs: [run(0, 10, 0, { status: "skipped", completion: "unknown", dur: 0.2, tokens: 0 })],
     },
     {
       id: "renewal", bot: "otto", name: "Certificate renewal", enabled: true,
       schedule: { kind: "cron", expr: "0 9 1 * *", tz: "Europe/Berlin" },
       payload: { kind: "agentTurn", message: "Check the expiry of every certificate on the rack and renew any with less than 30 days left." },
-      sessionTarget: "isolated", delivery: "none", updatedAtMs: NOW - 20 * DAY,
+      sessionTarget: "isolated", delivery: { mode: "none" }, updatedAtMs: NOW - 20 * DAY,
       runs: [run(17, 3, 0, { dur: 12.4, tokens: 1840 })],
     },
     {
       id: "standup", bot: "pip", name: "Plan the week", enabled: true,
       schedule: { kind: "cron", expr: "0 17 * * 0", tz: "Europe/London" },
       payload: { kind: "agentTurn", message: "Plan next week from my calendar. Keep Thursday afternoon clear." },
-      sessionTarget: "isolated", delivery: "none", updatedAtMs: NOW - 4 * DAY,
+      sessionTarget: "isolated", delivery: { mode: "none" }, updatedAtMs: NOW - 4 * DAY,
       runs: [run(3, 12, 0, { dur: 8.1, tokens: 960 })],
     },
     {
       id: "cleanup", bot: "pip", name: "Inbox tidy-up", enabled: false,
       schedule: { kind: "cron", expr: "0 16 * * 5", tz: "America/New_York" },
       payload: { kind: "agentTurn", message: "Archive newsletters older than a week and list anything that still needs me." },
-      sessionTarget: "isolated", delivery: "none", updatedAtMs: NOW - 12 * DAY, runs: [],
+      sessionTarget: "isolated", delivery: { mode: "none" }, updatedAtMs: NOW - 12 * DAY, runs: [],
     },
   ];
 
@@ -319,6 +449,10 @@
   // Words for a routine ----------------------------------------------------------------------
 
   const lastRun = (r) => r.runs[0];
+  // A run is known by its job and runId. One in progress has no runId yet (`started` gives
+  // only runAtMs), so until its own `finished`, with the same runAtMs, it is known by that.
+  const runKey = (x) => (x.running || !x.runId ? `at:${x.at}` : x.runId);
+  const runOf = (r, key) => (r.running && key === `at:${r.running}` ? { at: r.running, running: true } : r.runs.find((x) => runKey(x) === key));
   function outcome(x) {
     if (x.status === "error") return { mark: "failed", tone: "danger", short: "failed", text: `Failed: ${x.error.split("\n")[0]}` };
     if (x.status === "skipped") return { mark: "stopped", short: "skipped", text: "Skipped" };
@@ -338,6 +472,9 @@
     return [`${wordsHtml(r.schedule)}${nextHtml}${lastHtml}`, spoken];
   }
   const rowMark = (r) => (r.running ? glyph("working") : lastRun(r) && outcome(lastRun(r)).mark === "failed" && r.enabled ? glyph("failed") : "");
+  // Said from the prompt in effect: empty is the gateway's own, which asks for NO_REPLY.
+  const asksQuiet = (prompt) => !prompt.trim() || /NO_REPLY/.test(prompt);
+  const quiet = (prompt) => (asksQuiet(prompt) ? "Its prompt asks it to stay quiet when nothing does." : "Its prompt doesn't ask it to stay quiet, so it may answer every check-in.");
   const checkinWords = (b) => {
     const c = checkins[b];
     if (!c || !c.every) return "No check-ins";
@@ -455,8 +592,7 @@
     const name = botName(b);
     let text;
     if (!c || !c.every) text = c ? `${name} doesn't check in on a schedule.` : `${name} doesn't check in. Without a setting of its own, only the gateway's default bot checks in.`;
-    else if (c.every === DAY) text = `Once a day, ${name} looks for anything that needs you.`;
-    else text = `${everyWords(c.every)}, ${name} looks for anything that needs you. Its prompt asks it to stay quiet when nothing does.`;
+    else text = `${c.every === DAY ? "Once a day" : everyWords(c.every)}, ${name} looks for anything that needs you. ${quiet(c.prompt)}`;
     const next = c && c.every ? (schedulerOff() ? "The gateway's scheduler is off, so scheduled check-ins don't run." : `Next check-in ${clock(at(0, 10, 30))} · In ${name}'s main conversation`) : "";
     const zones = [...new Set(routines.filter((r) => r.bot === b && r.schedule.tz).map((r) => city(r.schedule.tz)))];
     return (
@@ -539,17 +675,30 @@
       const p = parts(s0, VIEWER);
       const today = dayIndex(s0, VIEWER) === dayIndex(NOW, VIEWER);
       heads += `<div class="r-cal-dayhead" aria-hidden="true" data-today="${today}">${today ? "Today" : WEEK[p.dow]}<small>${MONTHS[p.m - 1]} ${p.d}</small></div>`;
-      bands += `<div class="r-cal-bands">${e > NOW ? frequent.map((r) => `<div class="r-cal-band" title="${esc(`${everyWords(r.schedule.everyMs)} · ${botName(r.bot)}'s ${r.name}`)}">${esc(`${r.name} · ${everyWords(r.schedule.everyMs).toLowerCase()}`)}</div>`).join("") : ""}</div>`;
+      bands += `<div class="r-cal-bands">${e > NOW ? frequent.map((r) => { const w = r.schedule.kind === "every" ? everyWords(r.schedule.everyMs).toLowerCase() : r.schedule.expr; return `<div class="r-cal-band" title="${esc(`${w} · ${botName(r.bot)}'s ${r.name}${r.trigger ? ", only when its check passes" : ""}`)}">${esc(`${r.name} · ${w}`)}</div>`; }).join("") : ""}</div>`;
       const items = [];
       for (const r of mine) for (const x of r.runs) if (x.at >= s0 && x.at < Math.min(e, NOW)) items.push({ r, t: x.at, ran: x });
-      if (e > NOW) for (const r of placed) for (const t of occurrences(r.schedule, Math.max(s0, NOW), e)) items.push({ r, t });
+      if (e > NOW)
+        for (const r of placed) {
+          if (computable(r)) for (const t of occurrences(r.schedule, Math.max(s0, NOW), e)) items.push({ r, t });
+          else if (r.state?.nextRunAtMs >= Math.max(s0, NOW) && r.state.nextRunAtMs < e) items.push({ r, t: r.state.nextRunAtMs, nextOnly: true });
+        }
       items.sort((x, y) => x.t - y.t);
+      // Chips less than an hour apart would cover each other (a chip, or its 44 px hit area on
+      // touch, is under an hour tall), so each such run of chips shares the row side by side.
+      const lanes = [];
+      for (const it of items) {
+        const g = lanes.at(-1);
+        if (g && it.t - g.at(-1).t < HOUR) g.push(it);
+        else lanes.push([it]);
+      }
       let chips = "";
-      for (const { r, t, ran } of items) {
+      for (const g of lanes) for (const [k, { r, t, ran, nextOnly }] of g.entries()) {
         const p2 = parts(t, VIEWER);
         const o = ran && outcome(ran);
-        const tip = `${r.name}, ${botName(r.bot)}, ${WEEK[p2.dow]} ${clock(t)}${ran ? `, ${o.short}` : ""}${r.schedule.kind === "cron" && readCron(r.schedule.expr)?.min === 0 && !ran ? ". May start up to 5 minutes later." : ""}`;
-        chips += `<li style="top:calc(${p2.h + p2.min / 60} * var(--hour))"><button type="button" class="r-occ" data-r="open" data-id="${r.id}" data-min="${p2.h * 60 + p2.min}" data-past="${!!ran}" data-outcome="${o?.mark === "failed" ? "failed" : ""}" aria-label="${esc(tip)}" title="${esc(tip)}" data-testid="occurrence">` +
+        const tip = `${r.name}, ${botName(r.bot)}, ${WEEK[p2.dow]} ${clock(t)}${ran ? `, ${o.short}` : ""}${nextOnly ? ", and later, as the gateway decides" : ""}${r.schedule.kind === "cron" && cronSpec(r.schedule.expr).min?.join() === "0" && !ran ? ". May start up to 5 minutes later." : ""}`;
+        const side = g.length > 1 ? `;left:calc(4px + ${k} * (100% - 8px) / ${g.length});right:auto;width:calc((100% - 8px) / ${g.length} - 2px)` : "";
+        chips += `<li style="top:calc(${p2.h + p2.min / 60} * var(--hour))${side}"><button type="button" class="r-occ" data-r="open" data-id="${r.id}" data-min="${p2.h * 60 + p2.min}" data-past="${!!ran}" data-outcome="${o?.mark === "failed" ? "failed" : ""}" aria-label="${esc(tip)}" title="${esc(tip)}" data-testid="occurrence">` +
           `<span class="avatar" data-bot="${r.bot}"></span><span>${esc(r.name)}</span></button></li>`;
       }
       const nowLine = today ? `<span class="r-now" style="top:calc(${startP.h + startP.min / 60} * var(--hour))" aria-hidden="true"></span>` : "";
@@ -574,10 +723,10 @@
 
   // A routine's page ---------------------------------------------------------------------------------------
 
-  function runRow(r, x, i) {
+  function runRow(r, x) {
     const o = outcome(x);
     const how = x.running ? "Running…" : o.text;
-    return `<li><button type="button" class="r-run" data-r="open-run" data-id="${r.id}" data-i="${i}" data-at="${x.at}" aria-label="${esc(`${when(x.at, VIEWER, true)}${x.manual ? ", started by hand" : ""}, ${how}`)}" data-testid="run-row">` +
+    return `<li><button type="button" class="r-run" data-r="open-run" data-id="${r.id}" data-run="${esc(runKey(x))}" data-at="${x.at}" aria-label="${esc(`${when(x.at, VIEWER, true)}${x.manual ? ", started by hand" : ""}, ${how}`)}" data-testid="run-row">` +
       `<span class="r-row-mark">${x.running ? glyph("working") : o.mark ? glyph(o.mark) : ""}</span>` +
       `<span class="r-run-text"><span class="r-run-when">${esc(when(x.at, VIEWER, true))}${x.manual ? `<span class="r-faint"> · started by hand</span>` : ""}</span>` +
       `<span class="r-run-how" title="${esc(how)}">${o.tone && !x.running ? `<span data-tone="danger">${esc(how)}</span>` : esc(how)}</span></span>${icon("chevron")}</button></li>`;
@@ -623,7 +772,7 @@
       fact("Next run", nextCell, "next") +
       (r.trigger ? fact("Starts", `Only when its check passes<small><code class="r-mono">${esc(r.trigger)}</code></small>`, "starts") : "") +
       fact("Runs in", r.sessionTarget === "isolated" ? "A new conversation each time" : `${botName(r.bot)}'s main conversation`, "runs-in") +
-      fact("Results", r.delivery === "none" ? "Kept with the run" : "Announced to the gateway's channels", "results") +
+      fact("Results", r.delivery?.mode === "none" ? "Kept with the run" : r.delivery?.channel && r.delivery.channel !== "last" ? `Sent to ${esc(r.delivery.channel)}` : "Announced to the gateway's channels", "results") +
       fact("Triggers", "Its schedule only.<small>This gateway's webhooks start a bot directly, not a routine.</small>", "triggers") +
       `</dl>`;
     if (isAdmin() && P.get("hooks") === "on")
@@ -634,9 +783,10 @@
     // Runs
     const runs = r.running ? [{ at: r.running, running: true }, ...r.runs] : r.runs;
     body += `<section class="r-section" aria-labelledby="runs-head"><h3 id="runs-head">Runs</h3>`;
-    if (S.state === "runs-error") body += `<p class="r-hint">Couldn't load runs. ${button("Try again", 'data-size="sm"')}</p>`;
+    if (S.state === "runs-error") body += `<p class="r-hint" data-testid="runs-error">Couldn't load runs. ${button("Try again", 'data-size="sm" data-r="runs-retry"')}</p>`;
+    else if (S.state === "runs-loading") body += `<ul class="r-rows" aria-busy="true" aria-label="Loading runs" data-testid="runs-loading">${[1, 2, 3].map(() => `<li><div class="r-row"><span class="skeleton" style="width:50%;height:14px"></span></div></li>`).join("")}</ul>`;
     else if (!runs.length) body += `<p class="r-hint" data-testid="no-runs">${r.enabled && n !== undefined ? `No runs yet. The first is due ${esc(when(n, tz || VIEWER))}.` : "No runs yet."}</p>`;
-    else body += `<ul class="r-rows" aria-labelledby="runs-head" data-testid="runs">${runs.slice(0, 20).map((x, i) => `${runRow(r, x, r.running ? i - 1 : i)}`).join("")}</ul>`;
+    else body += `<ul class="r-rows" aria-labelledby="runs-head" data-testid="runs">${runs.slice(0, 20).map((x) => runRow(r, x)).join("")}</ul>`;
     body += `<p class="r-foot-note">Clawtrate shows the 20 most recent runs. The gateway keeps 7 days of runs, and each run's conversation for 24 hours unless it is set to keep them longer.</p></section>`;
     return { head, body, r: "routine" };
   }
@@ -645,8 +795,11 @@
 
   function renderRun() {
     const r = r0();
-    const i = S.run ?? 0;
-    const x = i < 0 ? { at: r.running, running: true } : r.runs[i];
+    const x = runOf(r, S.runKey);
+    if (!x) {
+      const head = `<header class="r-head">${backButton(`Back to ${esc(r.name)}, all runs`, "back-to-routine")}<div class="r-titles"><h1 id="view-title" title="${esc(r.name)}">${esc(r.name)}</h1><p><span class="avatar" data-bot="${r.bot}"></span>${botName(r.bot)}</p></div></header>`;
+      return { head, body: `<div class="r-convo"><div class="work-empty" data-testid="run-missing"><span class="empty-mark">${icon("clock")}</span><h4>This run isn't available.</h4><p>The gateway doesn't list it among ${esc(r.name)}'s runs.</p>${button(`Back to ${esc(r.name)}`, 'data-r="back-to-routine"')}</div></div>`, r: "run" };
+    }
     const head =
       `<header class="r-head">${backButton(`Back to ${esc(r.name)}, all runs`, "back-to-routine")}<div class="r-titles"><h1 id="view-title" title="${esc(r.name)}">${esc(r.name)}</h1>` +
       `<p data-testid="run-when"><span class="avatar" data-bot="${r.bot}"></span>${botName(r.bot)} · ${esc(when(x.at, VIEWER, true))}</p></div></header>`;
@@ -657,7 +810,7 @@
     const returned = () => `<p class="r-returned-head">What the run returned:</p><p data-testid="returned">${esc(x.summary || outcome(x).text)}</p>`;
     let body = "";
     if (rs === "loading") body = `<div class="r-convo" aria-busy="true"><span class="skeleton" style="display:block;width:70%;height:16px;margin:24px 0"></span><span class="skeleton" style="display:block;width:50%;height:16px"></span></div>`;
-    else if (rs === "error") body = `<div class="work-empty" data-testid="run-error"><span class="empty-mark">${icon("warning")}</span><h4>Couldn't load this run.</h4><p>The gateway didn't answer in time.</p>${button("Try again")}</div>`;
+    else if (rs === "error") body = `<div class="work-empty" data-testid="run-error"><span class="empty-mark">${icon("warning")}</span><h4>Couldn't load this run.</h4><p>The gateway didn't answer in time.</p>${button("Try again", 'data-r="run-retry"')}</div>`;
     else {
       if (rs === "none")
         body += note(`<p><b>Clawtrate can't show this run's conversation.</b> The gateway returned none for it. It keeps a run's conversation for 24 hours unless it is set to keep them longer, so an older one may have been removed.</p>${returned()}`);
@@ -712,7 +865,7 @@
     renderRail();
     const f = focusSel && $(focusSel);
     if (f) {
-      if (f.id === "view-title") f.tabIndex = -1;
+      if (f.matches("h1, h3")) f.tabIndex = -1;
       f.focus();
     }
   }
@@ -721,7 +874,7 @@
     const a = document.activeElement;
     if (!a || !$("#root").contains(a) || a.closest("dialog, #r-menu")) return null;
     if (a.id) return `#${a.id}`;
-    return ["data-r", "data-id", "data-i", "data-v"].filter((k) => a.hasAttribute(k)).map((k) => `[${k}="${a.getAttribute(k)}"]`).join("") || null;
+    return ["data-r", "data-id", "data-run", "data-v"].filter((k) => a.hasAttribute(k)).map((k) => `[${k}="${a.getAttribute(k)}"]`).join("") || null;
   }
   const repaint = () => paint(focusKey());
 
@@ -745,7 +898,8 @@
       if (onScreen && edited) announce(`${r.name} was changed elsewhere`);
     } else if (ev.action === "removed") {
       r.gone = true;
-      if (S.view === "routine" && S.routine === r.id) S.deleted = true;
+      // A one-shot removes itself after it succeeds (deleteAfterRun): finished, then removed.
+      if (["routine", "run"].includes(S.view) && S.routine === r.id) S.deleted = r.deleteAfterRun && lastRun(r)?.status === "ok" ? "once" : true;
       if (D?.id === r.id) {
         D.status = "deleted";
         renderEditor(inDialog());
@@ -755,8 +909,14 @@
       r.running = ev.runAtMs;
       if (onScreen) announce(`Running ${r.name}`);
     } else if (ev.action === "finished") {
-      r.running = null;
-      r.runs.unshift(ev.run);
+      const x = ev.run;
+      if (r.running === x.at) {
+        r.running = null;
+        if (S.routine === r.id && S.runKey === `at:${x.at}`) S.runKey = runKey(x);
+      }
+      const i = r.runs.findIndex((y) => runKey(y) === runKey(x));
+      if (i >= 0) r.runs[i] = x;
+      else r.runs.splice(r.runs.filter((y) => y.at > x.at).length, 0, x);
       if (outcome(ev.run).mark === "failed") announce(`${r.name} failed`);
       else if (onScreen) announce(`${r.name} finished`);
     }
@@ -841,7 +1001,7 @@
       }
       applyEvent({ action: "started", job: { id }, runAtMs: NOW });
       setTimeout(() => {
-        applyEvent({ action: "finished", job: { id }, run: run(0, 10, 12, { manual: true, dur: 2.4, tokens: 204, summary: DIGEST_SUMMARY, history: r.payload.kind === "agentTurn" ? recorded(r.payload.message, DIGEST_SUMMARY) : undefined }) });
+        applyEvent({ action: "finished", job: { id }, run: run(0, 10, 12, { runId: `manual:${id}:${NOW}:1`, manual: true, dur: 2.4, tokens: 204, summary: DIGEST_SUMMARY, history: r.payload.kind === "agentTurn" ? recorded(r.payload.message, DIGEST_SUMMARY) : undefined }) });
       }, 1800);
     }, 500);
   }
@@ -871,12 +1031,14 @@
     if (!r) {
       const bot = S.bot || "marlow";
       const zones = routines.filter((x) => x.bot === bot && x.schedule.tz).map((x) => x.schedule.tz);
-      const d = { id: null, bot, name: "", instruction: "", kind: "weekdays", time: "08:00", days: [1], n: 30, unit: "minutes", date: "2026-11-20", tz: zones[0] || "auto", cron: "", runsIn: "isolated", results: "none", locked: false, updatedAtMs: null, errors: {}, status: "" };
+      const d = { id: null, bot, name: "", instruction: "", kind: "weekdays", time: "08:00", days: [1], n: 30, unit: "minutes", date: "2026-11-20", tz: zones[0] || "auto", cron: "", runsIn: "isolated", results: "none", locked: false, updatedAtMs: null, errors: {}, status: "", simulate: P.get("editstate") || "" };
       return Object.assign(d, { opened: whenKey(d) });
     }
     const s = r.schedule;
     const c = s.kind === "cron" ? readCron(s.expr) : null;
-    const d = { id: r.id, bot: r.bot, name: r.name, instruction: r.payload.message || r.payload.text, kind: "weekdays", time: "08:00", days: [1], n: 30, unit: "minutes", date: "2026-11-20", tz: s.tz || "auto", cron: "", runsIn: r.sessionTarget, results: r.delivery, locked: false, updatedAtMs: r.updatedAtMs, errors: {}, status: "" };
+    // A job without a delivery has the gateway's default for its kind, which announces.
+    const results = r.delivery?.mode ?? "announce";
+    const d = { id: r.id, bot: r.bot, name: r.name, instruction: r.payload.message || r.payload.text, kind: "weekdays", time: "08:00", days: [1], n: 30, unit: "minutes", date: "2026-11-20", tz: s.tz || "auto", cron: "", runsIn: r.sessionTarget, results, locked: false, updatedAtMs: r.updatedAtMs, errors: {}, status: "", simulate: P.get("editstate") || "" };
     if (s.kind === "every") Object.assign(d, { kind: "every", n: s.everyMs % HOUR === 0 ? s.everyMs / HOUR : s.everyMs / MIN, unit: s.everyMs % HOUR === 0 ? "hours" : "minutes" });
     else if (s.kind === "at") {
       // The saved instant, read in the viewer's zone.
@@ -891,9 +1053,22 @@
     // A reminder or a command keeps its payload: the form edits only an agent turn's message.
     if (r.payload.kind !== "agentTurn") Object.assign(d, { payload: r.payload, instruction: "" });
     d.opened = whenKey(d);
+    // What the editor opened with: Save sends only what differs from it, and a copy of the
+    // job's schedule and delivery for "Save as a new routine".
+    d.base = { name: r.name, message: r.payload.message, sessionTarget: r.sessionTarget, mode: results };
+    d.job = { schedule: r.schedule, delivery: r.delivery, trigger: r.trigger };
     return d;
   }
+  // What keeps a draft's schedule from being built at all; checked before anything reads it.
+  function unfinished(d) {
+    if (d.locked || d.cron.trim()) return "";
+    if (d.kind === "once" && (!d.date || !d.time)) return "Choose a date and a time.";
+    if (["daily", "weekdays", "days"].includes(d.kind) && !d.time) return "Choose a time.";
+    if (d.kind === "days" && !d.days.length) return "Choose at least one day.";
+    return "";
+  }
   function draftSchedule(d) {
+    if (d.locked) return d.job.schedule;
     const [h, m] = d.time.split(":").map(Number);
     const tz = d.tz === "auto" ? VIEWER : d.tz;
     if (d.cron.trim()) return { kind: "cron", expr: d.cron.trim(), tz };
@@ -906,50 +1081,43 @@
     return { kind: "cron", expr: `${m} ${h} * * ${dows}`, tz };
   }
   function previewText(d) {
+    const missing = unfinished(d);
+    if (missing) return `${missing.replace(/\.$/, "")} to see when it runs.`;
     const s = draftSchedule(d);
-    if (d.kind === "days" && !d.days.length) return "Choose at least one day to see when it runs.";
+    if (s.kind === "cron" && cronSpec(s.expr).error) return "The gateway can't read this cron expression.";
     const next = occurrences(s, NOW, NOW + 400 * DAY, 3);
-    if (!next.length) return s.kind === "cron" ? `Runs as the gateway reads "${s.expr}".` : "It wouldn't run: that time has passed.";
+    if (!next.length) return s.kind === "cron" ? `Runs as the gateway reads "${s.expr}", and not in the next 400 days.` : "It wouldn't run: that time has passed.";
     const tz = s.tz || VIEWER;
     const first = `${longDate(next[0], tz)}, ${clock(next[0], tz)}${tz !== VIEWER ? ` (${clock(next[0])} your time)` : ""}`;
     const rest = next.slice(1).map((t) => longDate(t, tz)).join(", ");
     const lead = typeof words(s) === "string" ? `Runs ${words(s, false).replace(/^./, (c) => c.toLowerCase())}${s.tz ? `, ${city(s.tz)} time` : ""}.` : `Runs as the gateway reads "${s.expr}".`;
     return `${lead} Next: ${first}${rest ? `, then ${rest}` : ""}.`;
   }
-  // The smallest gap, in minutes, between two runs of a cron expression, read from
-  // its seconds and minutes fields only: an hour field never brings runs closer.
-  function cronGapMinutes(expr) {
-    const f = expr.trim().split(/\s+/);
-    if (f.length === 6 || f.length === 7) {
-      if (!/^\d+$/.test(f[0])) return 0;
-      f.shift();
-    }
-    const m = f[0] || "";
-    if (/^\d+$/.test(m)) return 60;
-    const step = m.match(/^(\*|\d+-\d+)\/(\d+)$/);
-    if (step) return +step[2];
-    if (m === "*" || /^\d+-\d+$/.test(m)) return 1;
-    if (/^\d+(,\d+)+$/.test(m)) {
-      const xs = m.split(",").map(Number).sort((a, b) => a - b);
-      return Math.min(...xs.map((x, i) => (i ? x - xs[i - 1] : x + 60 - xs[xs.length - 1])));
-    }
-    return 60;
-  }
   function validate(d) {
     const e = {};
     if (!d.name.trim()) e.name = "Give it a name.";
     if (!d.payload && !d.instruction.trim()) e.instruction = "Say what the bot should do.";
     if (!d.locked && (!d.id || whenKey(d) !== d.opened)) {
-      if (d.kind === "every" && d.n * (d.unit === "hours" ? 60 : 1) < 5) e.when = "Routines run at least 5 minutes apart.";
-      if (d.kind === "days" && !d.days.length) e.when = "Choose at least one day.";
-      if (d.kind === "once" && atMs(draftSchedule(d).at) < NOW) e.when = "Pick a time in the future.";
-      if (d.cron.trim() && cronGapMinutes(d.cron) < 5) e.cron = "Routines run at least 5 minutes apart.";
+      const missing = unfinished(d);
+      if (d.cron.trim()) {
+        const c = cronSpec(d.cron);
+        const sp = !c.error && cronSpacing(c);
+        if (c.error) e.cron = `The gateway can't read this: ${c.error}.`;
+        else if (!sp.fires) e.cron = "This never runs in the next eight years.";
+        else if (sp.gap < 300) e.cron = "Routines run at least 5 minutes apart.";
+      } else if (missing) e.when = missing;
+      else if (d.kind === "every" && d.n * (d.unit === "hours" ? 60 : 1) < 5) e.when = "Routines run at least 5 minutes apart.";
+      else if (d.kind === "once" && atMs(draftSchedule(d).at) < NOW) e.when = "Pick a time in the future.";
     }
     return e;
   }
   function field(id, label, control, error) {
     return `<div class="r-field"><label for="${id}">${label}</label>${control}${error ? `<p class="r-error" id="${id}-error">${esc(error)}</p>` : ""}</div>`;
   }
+  // While a save's outcome is unknown, or the routine changed or went elsewhere, the only
+  // ways to write are the note's own: Save again, Save mine anyway, Save as a new routine.
+  const HELD = ["noanswer", "checking", "found", "conflict", "deleted"];
+  const whenText = (d) => (d.locked ? wordsText(d.job.schedule) : unfinished(d) ? "Not finished" : wordsText(draftSchedule(d)));
   const KINDS = [["daily", "Every day"], ["weekdays", "Weekdays"], ["days", "Some days of the week"], ["every", "Every few hours or minutes"], ["once", "Once"]];
   function renderEditor(focusSel) {
     const d = D;
@@ -960,6 +1128,11 @@
     if (d.status === "refused") notes += note(`<p><b>The gateway didn't save this.</b> invalid cron.add params: CronPattern: invalid configuration format ('99 * * *'), exactly five, six, or seven space separated parts are required.</p>`, "danger");
     if (d.status === "conflict")
       notes += note(`<p><b>This routine was changed elsewhere</b> while you were editing.</p><div class="b-actions">${button("Show the new version", 'data-size="sm" data-r="conflict-show"')}${button("Save mine anyway", 'data-size="sm" data-r="conflict-save"', "quiet")}</div>`, "warn");
+    // After "Show the new version": what was typed, kept to copy from.
+    if (d.mine)
+      notes += `<details class="b-disclosure" data-testid="your-version"><summary>Your version</summary><div class="b-disclosure-body"><dl class="facts">` +
+        [["Name", d.mine.name], [d.mine.payload ? "Reminder" : "Instruction", d.mine.instruction || d.mine.payload?.text || ""], ["When", whenText(d.mine)]].map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("") +
+        `</dl></div></details>`;
     if (d.status === "deleted")
       notes += note(`<p><b>This routine was deleted</b> while you were editing.</p><div class="b-actions">${button("Save as a new routine", 'data-size="sm" data-r="save-as-new"')}${button("Close", 'data-size="sm" data-r="edit-close"', "quiet")}</div>`, "warn");
     if (d.status === "noanswer") notes += note(`<p><b>The gateway didn't answer.</b> This may or may not have saved. Check what the gateway has before saving again.</p><div class="b-actions">${button("Check now", 'data-size="sm" data-r="check-now"')}</div>`, "warn");
@@ -982,7 +1155,7 @@
     const err = (k) => (d.errors[k] ? ` aria-invalid="true" aria-describedby="e-${k}-error"` : "");
     let whenField;
     if (d.locked) {
-      whenField = `<div class="r-field"><span class="r-label">When</span><div class="r-locked" data-testid="locked"><code>${esc(r.schedule.expr || everyWords(r.schedule.everyMs))}</code>${r.schedule.tz ? `, ${esc(city(r.schedule.tz))}` : ""}<br />` +
+      whenField = `<div class="r-field"><span class="r-label">When</span><div class="r-locked" data-testid="locked"><code>${esc(d.job.schedule.expr || everyWords(d.job.schedule.everyMs))}</code>${d.job.schedule.tz ? `, ${esc(city(d.job.schedule.tz))}` : ""}<br />` +
         `This schedule was set on the gateway. You can rename the routine and change its instruction here; change its schedule on the gateway.</div></div>`;
     } else {
       const kinds = `<ul class="b-choices" role="radiogroup" aria-label="When" id="e-when"${err("when")}>` +
@@ -1021,7 +1194,7 @@
       (d.status === "adminlost" && !isAdmin()
         ? `<section class="access-bar" role="region" aria-label="Access" data-testid="editor-access"><div class="access-row">${icon("eye")}<span class="shelf-text"><b>Admin access was lost.</b> Saving needs it again. What you typed is kept.</span>` +
           (S.req === "requested" ? `${glyph("waiting")}<span class="shelf-text">Waiting for the gateway's owner.</span>${button("Check now", 'data-size="sm" data-r="access-check"')}` : button("Request admin access", 'data-size="sm" data-r="request"', "primary")) + `</div></section>`
-        : `<div class="b-actions">${button("Cancel", `data-r="edit-close"${dis}`, "quiet")}${d.status === "found" ? "" : button(d.status === "saving" ? "Saving…" : "Save", `data-r="save"${dis}`, "primary")}</div>`) +
+        : `<div class="b-actions">${button("Cancel", `data-r="edit-close"${dis}`, "quiet")}${HELD.includes(d.status) ? "" : button(d.status === "saving" ? "Saving…" : "Save", `data-r="save"${dis}`, "primary")}</div>`) +
       `</footer>`;
     if (!editDialog.open) {
       lastFocus = document.activeElement;
@@ -1034,22 +1207,29 @@
     D = draftFrom(id && routines.find((x) => x.id === id));
     renderEditor();
   }
-  function save() {
-    D.errors = validate(D);
-    const first = Object.keys(D.errors)[0];
+  // Every write from the editor comes here, Save again and the notes' own buttons included,
+  // so each is validated and ends in one of the outcomes of section 9.
+  function save(delay = 600) {
+    const d = D;
+    d.errors = validate(d);
+    const first = Object.keys(d.errors)[0];
     if (first) {
+      d.status = "";
       renderEditor(first === "when" ? "#e-when [aria-checked='true'], #e-n" : `#e-${first === "instruction" ? "instr" : first}`);
       return;
     }
-    const outcomeOf = P.get("editstate");
-    const d = D;
+    // The address's outcome is the first attempt's; a retry is answered as saved.
+    d.attempts = (d.attempts || 0) + 1;
+    const outcomeOf = d.attempts === 1 ? d.simulate : "";
+    // What this attempt sends, kept with its draft: Check now compares the gateway with it.
+    d.submitted = request(d);
     d.status = "saving";
     renderEditor('[data-r="save"]');
     setTimeout(() => {
       // An answer belongs to the draft that sent it, even if its dialog has closed since.
       if (D !== d) {
-        if (!outcomeOf) {
-          land(request(d));
+        if (!["adminlost", "refused", "conflict", "noanswer"].includes(outcomeOf)) {
+          land(d.submitted);
           announce(`Saved ${d.name.trim()}`);
           paint();
         }
@@ -1066,14 +1246,19 @@
       }
       if (outcomeOf === "refused" || outcomeOf === "conflict" || outcomeOf === "noanswer") {
         // lookup=found: the unanswered save did reach the gateway.
-        if (outcomeOf === "noanswer" && P.get("lookup") === "found") land(request(d));
+        if (outcomeOf === "noanswer" && P.get("lookup") === "found") land(d.submitted);
         d.status = outcomeOf;
-        renderEditor(outcomeOf === "noanswer" ? '[data-r="check-now"]' : '[data-r="save"]');
+        renderEditor(outcomeOf === "noanswer" ? '[data-r="check-now"]' : outcomeOf === "conflict" ? '[data-r="conflict-show"]' : '[data-r="save"]');
         return;
       }
-      commit();
-    }, 600);
+      commit(d);
+    }, delay);
   }
+  const sameSchedule = (a, b) =>
+    a.kind === b.kind && (a.kind === "at" ? atMs(a.at) === atMs(b.at) : a.kind === "every" ? a.everyMs === b.everyMs : a.kind === "cron" ? a.expr.trim() === b.expr.trim() && (a.tz || "") === (b.tz || "") : JSON.stringify(a) === JSON.stringify(b));
+  // A field of the job as cron.get returns it against the same field as this save sent it.
+  const sameField = (k, has, sent) =>
+    k === "schedule" ? sameSchedule(has, sent) : k === "delivery" ? (has?.mode ?? "announce") === sent.mode : JSON.stringify(has) === JSON.stringify(sent);
   // Check now: cron.get for an edit, cron.list for a new routine. It reports and never saves.
   function checkNow() {
     const d = D;
@@ -1083,8 +1268,9 @@
       if (D !== d) return;
       const r = d.id && routines.find((x) => x.id === d.id);
       if (r) {
-        const left = request(d).params.patch;
-        d.found = Object.keys(left).length ? { kind: "differs", has: `${r.name}, ${wordsText(r.schedule)}` } : { kind: "same" };
+        const patch = d.submitted.params.patch;
+        const differs = Object.keys(patch).some((k) => !sameField(k, r[k], patch[k]));
+        d.found = differs ? { kind: "differs", has: `${r.name}, ${wordsText(r.schedule)}` } : { kind: "same" };
       } else {
         const ids = routines.filter((x) => !x.gone && x.bot === d.bot && x.name === d.name.trim()).map((x) => x.id);
         d.found = ids.length ? { kind: "match", ids, at: routines.find((x) => x.id === ids[0]).createdAtMs } : { kind: "none" };
@@ -1094,27 +1280,35 @@
       announce("Checked");
     }, 400);
   }
-  // What Save sends: cron.add with every field, or cron.update with only what changed.
+  // What Save sends: cron.add with every field, or cron.update with only what changed since
+  // the editor opened. `delivery` is always an object; an update sends only its mode, which
+  // the gateway merges into the job's delivery, keeping its other fields.
   function request(d) {
-    const r = d.id && routines.find((x) => x.id === d.id);
+    const name = d.name.trim();
     const payload = d.payload || { kind: "agentTurn", message: d.instruction.trim() };
-    const all = { name: d.name.trim(), payload, sessionTarget: d.runsIn, delivery: d.results };
-    if (!d.locked) all.schedule = draftSchedule(d);
-    if (!r) return { method: "cron.add", params: { ...all, agentId: d.bot, wakeMode: "now" } };
+    const schedule = draftSchedule(d);
+    if (!d.id) {
+      const delivery = d.job && d.results === d.base.mode && d.job.delivery ? d.job.delivery : { mode: d.results };
+      return { method: "cron.add", params: { name, agentId: d.bot, schedule, sessionTarget: d.runsIn, wakeMode: "now", payload, delivery, ...(d.job?.trigger ? { trigger: d.job.trigger } : {}) } };
+    }
+    const b = d.base;
     const patch = {};
-    if (all.name !== r.name) patch.name = all.name;
-    if (r.payload.kind === "agentTurn" && payload.message !== r.payload.message) patch.payload = payload;
-    if (all.sessionTarget !== r.sessionTarget) patch.sessionTarget = all.sessionTarget;
-    if (all.delivery !== r.delivery) patch.delivery = all.delivery;
-    if (!d.locked && whenKey(d) !== d.opened) patch.schedule = all.schedule;
-    return { method: "cron.update", params: { id: r.id, patch } };
+    if (name !== b.name) patch.name = name;
+    if (!d.payload && payload.message !== b.message) patch.payload = payload;
+    if (d.runsIn !== b.sessionTarget) patch.sessionTarget = d.runsIn;
+    if (d.results !== b.mode) patch.delivery = { mode: d.results };
+    if (!d.locked && whenKey(d) !== d.opened) patch.schedule = schedule;
+    return { method: "cron.update", params: { id: d.id, patch } };
   }
   const sent = [];
   // The gateway's side of a write: what a later cron.get or cron.list would return.
   function land(req) {
     sent.push(req);
     if (req.method === "cron.update") {
-      Object.assign(routines.find((x) => x.id === req.params.id), req.params.patch, { updatedAtMs: NOW });
+      const r = routines.find((x) => x.id === req.params.id);
+      const { delivery, ...rest } = req.params.patch;
+      Object.assign(r, rest, { updatedAtMs: NOW });
+      if (delivery) r.delivery = { ...r.delivery, ...delivery };
       return req.params.id;
     }
     const { agentId, wakeMode, ...fields } = req.params;
@@ -1122,13 +1316,11 @@
     routines.push({ id, bot: agentId, enabled: true, runs: [], updatedAtMs: NOW, createdAtMs: NOW, ...fields });
     return id;
   }
-  function commit() {
-    const d = D;
-    const id = land(request(d));
-    const created = !d.id;
+  function commit(d) {
+    const id = land(d.submitted);
     editDialog.close();
     D = null;
-    announce(created ? "Routine created" : "Saved");
+    announce(d.id ? "Saved" : "Routine created");
     go("routine", { routine: id, deleted: false });
   }
 
@@ -1142,9 +1334,9 @@
     const name = botName(C.bot);
     const sub = {
       off: `${name} doesn't check in on a schedule.`,
-      daily: `Once a day, ${name} looks for anything that needs you.`,
-      asneeded: `Every 30 minutes, ${name} looks for anything that needs you. Its prompt asks it to stay quiet when nothing does.`,
-      every: `${name} looks for anything that needs you as often as you choose. Its prompt asks it to stay quiet when nothing does.`,
+      daily: `Once a day, ${name} looks for anything that needs you. ${quiet(C.prompt)}`,
+      asneeded: `Every 30 minutes, ${name} looks for anything that needs you. ${quiet(C.prompt)}`,
+      every: `${name} looks for anything that needs you as often as you choose. ${quiet(C.prompt)}`,
     };
     const defaultBots = Object.entries(checkins).filter(([, c]) => c && c.source === "default" && c.every).map(([b]) => b);
     let catchNote = "";
@@ -1153,7 +1345,7 @@
         ? note(`<p>${name} checks in now through the gateway's default. Saving gives ${name} a setting of its own.</p>`)
         : note(`<p>${defaultBots.map(botName).join(" and ")} checks in now through the gateway's default. Saving also gives ${defaultBots.map(botName).join(" and ")} a setting of its own with the same cadence, so it keeps checking in.</p>`);
     }
-    const promptNote = C.prompt.trim() && !/NO_REPLY/.test(C.prompt)
+    const promptNote = !asksQuiet(C.prompt)
       ? `<p class="r-error" id="ci-prompt-note" data-testid="prompt-note">This prompt doesn't ask ${esc(name)} to reply NO_REPLY when nothing needs attention, as the gateway's own prompt does, so ${esc(name)} may answer every check-in.</p>` : "";
     const saving = C.status === "saving";
     const dis = saving ? " disabled" : "";
@@ -1295,11 +1487,11 @@
       case "back":
         return go(S.back && S.back !== "routine" && S.back !== "run" ? S.back : "list", { deleted: false, focus: `[data-r="open"][data-id="${S.routine}"]` });
       case "open-run":
-        return go("run", { run: +t.dataset.i, runstate: "" });
+        return go("run", { runKey: t.dataset.run, runstate: "" });
       case "open-run-task":
-        return go("run", { routine: id, run: 0, runstate: "", back: "list" });
+        return go("run", { routine: id, runKey: runKey(routines.find((x) => x.id === id).runs[0]), runstate: "", back: "list" });
       case "back-to-routine":
-        return go("routine", { focus: `[data-r="open-run"][data-i="${S.run}"]` });
+        return go("routine", { focus: `[data-r="open-run"][data-run="${S.runKey}"]` });
       case "open-bot":
         return go("convo");
       case "to-bots":
@@ -1344,13 +1536,13 @@
         return save();
       case "conflict-show": {
         const mine = D;
-        D = draftFrom(routines.find((x) => x.id === mine.id));
-        D.status = "";
+        D = Object.assign(draftFrom(routines.find((x) => x.id === mine.id)), { mine, attempts: mine.attempts });
         return renderEditor("#e-name");
       }
       case "conflict-save":
-        D.status = "";
-        return commit();
+        // Mine anyway: against the version now on the gateway, through the same validated save.
+        D.updatedAtMs = routines.find((x) => x.id === D.id).updatedAtMs;
+        return save();
       case "check-now":
         return checkNow();
       case "open-found":
@@ -1358,8 +1550,7 @@
         return go("routine", { routine: id, from: "list", back: "list", deleted: false });
       case "save-as-new":
         D.id = null;
-        D.status = "";
-        return commit();
+        return save();
       case "checkins":
         return openCheckins(id);
       case "zone":
@@ -1427,6 +1618,23 @@
       case "retry":
         S.state = "";
         return paint();
+      // Try again reads again: loading, then what the read returns (here, the runs).
+      case "runs-retry":
+        S.state = "runs-loading";
+        paint("#runs-head");
+        announce("Loading runs");
+        return setTimeout(() => {
+          S.state = "";
+          if (S.view === "routine") paint("#runs-head");
+        }, 400);
+      case "run-retry":
+        S.runstate = "loading";
+        paint("#view-title");
+        announce("Loading the run");
+        return setTimeout(() => {
+          S.runstate = "";
+          if (S.view === "run") paint("#view-title");
+        }, 400);
     }
   });
 
@@ -1442,7 +1650,7 @@
     if (C && t.matches("[data-ci-prompt]")) {
       C.prompt = t.value;
       const had = !!$('[data-testid="prompt-note"]', ciDialog);
-      const has = C.prompt.trim() && !/NO_REPLY/.test(C.prompt);
+      const has = !asksQuiet(C.prompt);
       if (had !== !!has) {
         renderCheckins("[data-ci-prompt]");
         const ta = $("[data-ci-prompt]", ciDialog);
@@ -1518,7 +1726,12 @@
 
   const startView = P.get("transcript") === "checkin" ? "convo" : S.view === "checkins" ? "list" : S.view;
   S.view = startView;
-  if (P.get("view") === "run" && S.run === null) S.run = 0;
+  // The address names a run by its place in the list; from then on it is known by its key.
+  if (S.view === "run") {
+    const i = S.run ?? 0;
+    const x = i < 0 ? r0().running && { at: r0().running, running: true } : r0().runs[i];
+    S.runKey = x ? runKey(x) : "none";
+  }
   if (S.view === "routine" || S.view === "run") S.back = "list";
   paint();
   if (P.get("confirm") === "delete") askDelete(S.routine);
@@ -1529,13 +1742,25 @@
       Object.assign(D, { kind: "every", n: 2, unit: "minutes" });
       D.errors = validate(D);
       renderEditor();
-    } else if (D && ["refused", "conflict", "deleted", "noanswer", "saving"].includes(S.editstate)) {
-      D.status = S.editstate;
+    } else if (D && S.editstate === "saving") {
+      // A save in flight; its wait ends as no answer, so the dialog never stays locked.
+      if (!D.id) Object.assign(D, { name: "Evening wrap-up", instruction: "List what I finished today." });
+      D.simulate = "noanswer";
+      save(4000);
+    } else if (D && ["refused", "conflict", "deleted", "noanswer"].includes(S.editstate)) {
+      // The address's outcome stands for the first attempt, already made.
+      Object.assign(D, { status: S.editstate, attempts: 1, submitted: request(D) });
       renderEditor();
     }
   }
   if (P.get("dialog") === "open") openCheckins(S.bot || "juniper");
-  // For the checks: what Save sent, as the gateway would receive it.
-  window.routines = { sent, routine: (id) => routines.find((r) => r.id === id), event: applyEvent };
+  // For the checks: what Save sent, as the gateway would receive it, and the cron reader.
+  window.routines = {
+    sent, routine: (id) => routines.find((r) => r.id === id), event: applyEvent,
+    cron: (expr, tz = VIEWER) => {
+      const c = cronSpec(expr);
+      return c.error ? { error: c.error } : { ...cronSpacing(c), next: occurrences({ kind: "cron", expr, tz }, NOW + 1, NOW + 400 * DAY, 3) };
+    },
+  };
   document.addEventListener("ct:settings", () => paint());
 })();
