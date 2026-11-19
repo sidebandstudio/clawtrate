@@ -1324,12 +1324,13 @@ async function stopProcess(target: StopTarget, identify: Identify): Promise<bool
  * start time the marker recorded at spawn. Anything else is refused, says what
  * disagrees, and signals nothing.
  */
-async function stopLocked(inst: DevInstance): Promise<void> {
+/** Stops what this checkout started for the instance; true when it signalled any process. */
+async function stopLocked(inst: DevInstance): Promise<boolean> {
   if (!lstatOrNull(inst.runFile)) {
     console.log(
       `Nothing to stop: this checkout has no running processes on record for ${label(inst)}.`,
     );
-    return;
+    return false;
   }
   const refuse = (why: string): never => {
     throw new StateInUseError(`Not stopping ${label(inst)}: ${why}. Nothing was signalled.`);
@@ -1352,7 +1353,7 @@ async function stopLocked(inst: DevInstance): Promise<void> {
       `Discarded this checkout's stale run file for ${label(inst)}: ` +
         `${marker ? "its folder now holds another run" : "its folder is gone"}. Nothing was signalled.`,
     );
-    return;
+    return false;
   }
   const problems = markerProblems(marker, inst.name);
   if (problems.length > 0) refuse(`its marker cannot be trusted: ${problems.join("; ")}`);
@@ -1385,6 +1386,7 @@ async function stopLocked(inst: DevInstance): Promise<void> {
     );
   }
   rmSync(inst.runFile, { force: true });
+  return targets.length > 0;
 }
 
 function lstatOrNull(path: string) {
@@ -1397,7 +1399,9 @@ function lstatOrNull(path: string) {
 
 /** Stop the processes this checkout started for the instance, once proven. Nothing else. */
 export async function stop(inst: DevInstance): Promise<void> {
-  await withInstanceLock(inst, () => stopLocked(inst));
+  await withInstanceLock(inst, async () => {
+    await stopLocked(inst);
+  });
 }
 
 /**
@@ -1423,7 +1427,7 @@ export async function reset(inst: DevInstance, options: { runId?: string } = {})
       }
     }
     assertNotInUse(inst);
-    await stopLocked(inst);
+    const stopped = await stopLocked(inst);
     if (ownership(inst.stateDir) === "owned") {
       // Also a browser left by a gateway that is gone: nothing of it may outlive its folder.
       if (!(await settleBrowserProcesses(inst))) {
@@ -1431,8 +1435,8 @@ export async function reset(inst: DevInstance, options: { runId?: string } = {})
           `${label(inst)} (${inst.stateDir}): its browser's processes are still running. Nothing was deleted.`,
         );
       }
-      // Its own processes were just stopped: their ports get a moment to be let go.
-      const blocked = await deletionRefusal(inst, PORT_RELEASE_MS);
+      // When it has just stopped its own processes, their ports get a moment to be let go.
+      const blocked = await deletionRefusal(inst, stopped ? PORT_RELEASE_MS : 0);
       if (blocked) throw new StateInUseError(blocked);
       rmSync(inst.stateDir, { recursive: true });
       console.log(`Removed ${inst.stateDir}`);
