@@ -694,6 +694,9 @@ export class ClawtrateClient {
   /** Reads and writes of the rail's arrangement in the order they were asked, and the latest shown. */
   private sidebarIssued = 0;
   private sidebarShown = 0;
+  /** Reads of the bot list in the order they were asked, and the latest shown. */
+  private botsIssued = 0;
+  private botsShown = 0;
   /** Open transcripts, counted, so several viewers can share one. */
   private readonly openSessions = new Map<string, number>();
   /** The streaming reply text of each task's newest `MAX_STREAMS_PER_TASK` runs, only while they stream. */
@@ -3653,9 +3656,21 @@ export class ClawtrateClient {
   /** Read the bot list again, after a bot was created. */
   private async refreshBots(): Promise<void> {
     const generation = this.generation;
+    const issued = ++this.botsIssued;
     const result = await this.request("agents.list", {});
-    if (generation !== this.generation) return;
+    if (generation !== this.generation || !this.newestBots(issued)) return;
     this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+  }
+
+  /**
+   * Whether a read of the bot list may be shown, marking it shown: answers are ordered by when
+   * they were asked, never by when they arrive, so a late answer never hides a bot a later read
+   * showed.
+   */
+  private newestBots(issued: number): boolean {
+    if (issued < this.botsShown) return false;
+    this.botsShown = issued;
+    return true;
   }
 
   // The Work pane's files (`files.ts`). All `operator.read`; nothing is kept in the state.
@@ -4540,14 +4555,17 @@ export class ClawtrateClient {
     );
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
+    const botsIssued = ++this.botsIssued;
     const [agents, sessions] = await Promise.allSettled([
       this.request("agents.list", {}).then(async (result) => {
         const id = await gatewayId;
         if (generation === this.generation) {
+          // A read asked later, after a bot was created, may have answered first.
+          const newest = this.newestBots(botsIssued);
           this.store.update((state) => ({
             ...state,
             connection: { ...state.connection, gatewayId: id },
-            bots: mapAgents(result),
+            ...(newest ? { bots: mapAgents(result) } : {}),
           }));
         }
         return result;
