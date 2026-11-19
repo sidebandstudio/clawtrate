@@ -638,6 +638,21 @@ button.b-choice:hover {
   color: var(--danger);
 }
 
+/* new: a field's hint and its error in one place. The error covers the hint, which keeps
+   its height, so a centred dialog does not move by a fraction of a pixel as you type; the
+   browser can then show part of it from before the move, a pixel off. */
+.b-field-note {
+  display: grid;
+}
+
+.b-field-note > * {
+  grid-area: 1 / 1;
+}
+
+.b-field-note > [data-covered] {
+  visibility: hidden;
+}
+
 select.input {
   appearance: none;
   padding-right: 36px;
