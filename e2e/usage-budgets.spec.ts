@@ -40,7 +40,10 @@ let page: Page;
 let reader: Page;
 let gateway: OperatorSession;
 let routineId: string | null = null;
+let sharedRoutineId: string | null = null;
 let timeZone = "UTC";
+/** The second device's time zone: far from any machine's, so its days differ from the budget's. */
+const READER_ZONE = "Pacific/Kiritimati";
 
 type Json = Record<string, unknown>;
 
@@ -73,13 +76,22 @@ function ownDays(period: "daily" | "weekly", zone: string) {
   return { startDate: monday.toISOString().slice(0, 10), endDate: today, timeZone: zone };
 }
 
+/** A date as the page names it: "Nov 16". */
+const dayName = (date: string) =>
+  `${"Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ")[Number(date.slice(5, 7)) - 1]} ${Number(date.slice(8))}`;
+
 /**
  * What the gateway answers for a bot's (or every bot's) total over a period, in the page's time
  * zone, once it has finished counting: a cold gateway first answers with what it has read so
  * far and `cacheStatus.status: "refreshing"`, which the page shows as still being counted.
  */
-async function gatewayTotal(botId: string | null, period: UsagePeriod | "daily" | "weekly") {
-  const range = rangeFor(period, Date.now(), timeZone);
+async function gatewayTotal(
+  botId: string | null,
+  period:
+    UsagePeriod | "daily" | "weekly" | { startDate: string; endDate: string; timeZone: string },
+  zone = timeZone,
+) {
+  const range = typeof period === "string" ? rangeFor(period, Date.now(), zone) : period;
   const deadline = Date.now() + 90_000;
   for (;;) {
     const result = await gateway.request<{ totals: Json; updatedAt: number; cacheStatus?: Json }>(
@@ -118,9 +130,12 @@ async function startOwnHost(readOnly = false): Promise<Host> {
   return host;
 }
 
-/** A page on its own host, paired as the person pairs it. */
-async function pairedPage(browser: Browser, host: Host): Promise<Page> {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+/** A page on its own host, paired as the person pairs it, in its own time zone when given. */
+async function pairedPage(browser: Browser, host: Host, timezoneId?: string): Promise<Page> {
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 1000 },
+    ...(timezoneId ? { timezoneId } : {}),
+  });
   const next = await context.newPage();
   await next.goto(host.url);
   await next.getByRole("button", { name: "Use the development gateway" }).click();
@@ -269,7 +284,7 @@ test.beforeAll(async ({ browser }) => {
     .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
     .toMatch(/^Approved /m);
   await expect(page.getByTestId("composer-input")).toBeVisible({ timeout: 30_000 });
-  reader = await pairedPage(browser, await startOwnHost(true));
+  reader = await pairedPage(browser, await startOwnHost(true), READER_ZONE);
 });
 
 test.afterAll(async () => {
@@ -280,6 +295,7 @@ test.afterAll(async () => {
       await hostCommand(page, { type: "changeBudget", change: { op: "remove", id: budget.id } });
     expect(await keptBudgets()).toEqual([]);
     if (routineId) await openclaw(["cron", "rm", routineId]);
+    if (sharedRoutineId) await openclaw(["cron", "rm", sharedRoutineId]);
   } finally {
     await gateway?.close();
     for (const host of hosts.splice(0)) {
@@ -589,9 +605,15 @@ test("F-234: a weekly budget set on one device is shown with the same value afte
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
   await usagePage(page, "Otto");
   await expect.poll(() => meter(page), { timeout: 60_000 }).toEqual(shown);
-  // On the second device, which only reads: the same value, and no way to change it.
+  // On the second device, which only reads and is in another time zone: the same value,
+  // counted over the budget's own days in its own zone, named as that zone, and no way to change it.
   await usagePage(reader, "Otto");
   await expect.poll(() => meter(reader), { timeout: 60_000 }).toEqual(shown);
+  const days = ownDays("weekly", timeZone);
+  await expect(reader.getByTestId("budget-window")).toContainText(
+    `this week (${days.startDate === days.endDate ? dayName(days.endDate) : `${dayName(days.startDate)} to ${dayName(days.endDate)}`}, ${timeZone})`,
+  );
+  await expect(reader.getByTestId("budget")).toContainText(`Resets Monday at 00:00, ${timeZone}.`);
   await expect(reader.getByTestId("budget-edit")).toHaveCount(0);
   await expect(reader.getByTestId("budget-new")).toHaveCount(0);
   await shot(page, "usage-page");
@@ -618,6 +640,27 @@ test("F-234: a routine's budget counts that routine's runs, from its own tasks",
     ]),
   );
   routineId = added.id;
+  // A routine that runs in a task it names, beside everything else there: its use can't be told
+  // apart from the task's, so it is not offered.
+  const shared = parseJsonOutput<{ id: string }>(
+    await openclaw([
+      "cron",
+      "add",
+      "--agent",
+      "otto",
+      "--every",
+      "7d",
+      "--display-name",
+      `Shared notes ${STAMP}`,
+      "--message",
+      "Routine check-in.",
+      "--session",
+      `session:agent:otto:budget-notes-${STAMP}`,
+      `shared-notes-${STAMP}`,
+      "--json",
+    ]),
+  );
+  sharedRoutineId = shared.id;
   await openclaw(["cron", "run", routineId]);
   const routineKey = `agent:otto:cron:${routineId}`;
   const routineTotal = async () => {
@@ -638,6 +681,7 @@ test("F-234: a routine's budget counts that routine's runs, from its own tasks",
   await expect(target.locator("option", { hasText: `Weekly cleanup ${STAMP}` })).toHaveCount(1, {
     timeout: 30_000,
   });
+  await expect(target.locator("option", { hasText: `Shared notes ${STAMP}` })).toHaveCount(0);
   await target.selectOption({ label: `Routine Weekly cleanup ${STAMP} (Otto)` });
   const form = settings.getByTestId("budget-form");
   await form.getByRole("radio", { name: "Daily" }).click();
@@ -658,24 +702,35 @@ test("F-234: a routine's budget counts that routine's runs, from its own tasks",
 });
 
 test("F-234: a Daily and a Weekly budget are each counted over their own days, as the gateway counts them", async () => {
+  // The days are worked out here, apart from the app's date code, and the gateway is asked for
+  // its own total over them.
+  const daily = ownDays("daily", timeZone);
+  const weekly = ownDays("weekly", timeZone);
+  expect(weekly.endDate).toBe(daily.startDate);
   await usagePage(page, "Otto");
   await setBudget(page, "Daily", 1_000_000);
-  const today = await gatewayTotal("otto", "daily");
+  const today = await gatewayTotal("otto", daily);
   await expect
     .poll(() => meter(page))
     .toEqual({ used: today.total, tokens: 1_000_000, words: "today" });
+  await expect(page.getByTestId("budget-window")).toContainText(
+    `today (${dayName(daily.startDate)}, your time)`,
+  );
   await expect(page.getByTestId("budget")).toContainText("Resets at 00:00, your time.");
   await setBudget(page, "Weekly", 1_000_000);
-  const week = await gatewayTotal("otto", "weekly");
+  const week = await gatewayTotal("otto", weekly);
   await expect
     .poll(() => meter(page))
     .toEqual({ used: week.total, tokens: 1_000_000, words: "this week" });
-  await expect(page.getByTestId("budget")).toContainText("Resets Monday at 00:00, your time.");
-  // The two periods are the gateway's own: Monday to today, and today.
-  expect(rangeFor("weekly", Date.now(), timeZone).endDate).toBe(
-    rangeFor("daily", Date.now(), timeZone).startDate,
+  await expect(page.getByTestId("budget-window")).toContainText(
+    `this week (${weekly.startDate === weekly.endDate ? dayName(weekly.endDate) : `${dayName(weekly.startDate)} to ${dayName(weekly.endDate)}`}, your time)`,
   );
+  await expect(page.getByTestId("budget")).toContainText("Resets Monday at 00:00, your time.");
   expect(week.total).toBeGreaterThanOrEqual(today.total);
+  // Changing only the amount keeps the budget's time zone.
+  expect(await keptBudgets()).toContainEqual(
+    expect.objectContaining({ botId: "otto", period: "weekly", timeZone }),
+  );
 });
 
 test("F-396: the warning appears in the bot's task once the gateway's figure passes 80 percent, and a send still works", async () => {
@@ -756,7 +811,8 @@ test("F-396: the warning appears in the bot's task once the gateway's figure pas
 
 test("a read-only connection sees the figures and every budget, and cannot set or change one", async () => {
   await usagePage(reader, "Otto");
-  const expected = await gatewayTotal("otto", "week");
+  // The page's week is the reader's own, in its own time zone.
+  const expected = await gatewayTotal("otto", "week", READER_ZONE);
   await expect.poll(() => shownTokens(reader)).toMatchObject({ total: expected.total });
   await expect(reader.getByTestId("budget-meter")).toBeVisible();
   await expect(reader.getByTestId("budget-edit")).toHaveCount(0);
