@@ -262,6 +262,7 @@ async function rulesChecks(
     const { passed, failed } = await runRulesChecks({
       clients: clients as Record<RulesClient, OperatorSession>,
       gatewayLog: join(inst.runDir, "gateway.log"),
+      stateDir: inst.stateDir,
     });
     console.log(`${passed} of ${passed + failed} rules checks passed`);
     return failed;

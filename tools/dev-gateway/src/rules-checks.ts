@@ -13,7 +13,8 @@
 // asserts what it does and says so in its name (the plugin turned off in the
 // middle of a run, a run another bot's message started).
 
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { OperatorSession } from "./operator.ts";
 import { drainSessions } from "./scenario-check.ts";
 
@@ -54,6 +55,8 @@ export type RulesContext = {
   clients: Record<RulesClient, OperatorSession>;
   /** The instance's gateway log, which the plugin writes its warnings to. */
   gatewayLog: string;
+  /** The instance's state folder, which holds the plugin's rules file. */
+  stateDir: string;
 };
 
 const PLUGIN = "clawtrate-tool-rules";
@@ -327,7 +330,82 @@ export type RulesCheck = {
   run(ctx: RulesContext, world: World): Promise<void>;
 };
 
+/** The plugin's rules file in the instance (plugins/clawtrate-tool-rules, lib/store.js). */
+const rulesFile = (ctx: RulesContext) => join(ctx.stateDir, PLUGIN, "rules.json");
+
+const statusOf = async (ctx: RulesContext) =>
+  answered(await rules(ctx.clients.reader, "status"), "status");
+
+/** Wait until the gateway's log holds `text`, which the plugin writes as its state changes. */
+async function logged(ctx: RulesContext, text: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (!readFileSync(ctx.gatewayLog, "utf8").includes(text)) {
+    expect(Date.now() < deadline, `the gateway's log never said: ${text}`);
+    await sleep(250);
+  }
+}
+
+/** Turn approval forwarding on with no destination, so nothing is delivered anywhere. */
+const FORWARD_NOWHERE = { approvals: { plugin: { enabled: true, mode: "targets", targets: [] } } };
+
 export const RULES_CHECKS: RulesCheck[] = [
+  {
+    // First, while this gateway process has never read a rules file.
+    name: "rules lost with no copy read: every call but ask_user asks, saying the rules could not be read, and status says so",
+    covers: ["#read", "#ask"],
+    async run(ctx, world) {
+      const before = await statusOf(ctx);
+      same(
+        [rec(before.rules).state, before.enforcing],
+        ["none", "nothing"],
+        "status before any rules file",
+      );
+      mkdirSync(join(ctx.stateDir, PLUGIN), { recursive: true });
+      writeFileSync(rulesFile(ctx), "{ not rules");
+      try {
+        const status = await statusOf(ctx);
+        same(
+          [status.rules, status.enforcing, status.matches],
+          [
+            { state: "lost", reason: "the rules file is not JSON", keptCopyReadAt: null },
+            "ask-every-call",
+            null,
+          ],
+          "status with the rules lost",
+        );
+        await logged(ctx, "Rules unavailable: the rules file is not JSON. No copy was read");
+        const key = await task(ctx, world, BOT, "lost");
+        const since = marks(ctx);
+        const runId = await start(ctx, key, "#read");
+        const card = await cardFor(ctx, runId, since.interactive);
+        same(card.request.title, "read: Clawtrate's rules could not be read", "the card's title");
+        same(card.request.allowedDecisions, ["allow-once", "deny"], "the card's decisions");
+        await resolve(ctx, card.id, "deny");
+        await finish(ctx, runId);
+        const [record] = await decisionsOf(ctx, { runId });
+        same(
+          [record?.rules, record?.decision, record?.source],
+          ["lost", "ask", { kind: "rules-lost" }],
+          "the lost-rules decision record",
+        );
+        const question = marks(ctx);
+        const askRun = await start(ctx, key, "#ask");
+        await ctx.clients.interactive.waitFor(
+          "the question",
+          (e) => e.event === "question.requested",
+          60_000,
+          question.interactive,
+        );
+        await sleep(1000);
+        same(cardsSeen(ctx, question, askRun), [], "who received a card for ask_user");
+        await ctx.clients.interactive.request("chat.abort", { sessionKey: key }).catch(() => {});
+        await ctx.clients.interactive.terminal(askRun, 60_000);
+      } finally {
+        rmSync(rulesFile(ctx), { force: true });
+      }
+      same((await statusOf(ctx)).enforcing, "nothing", "status once the file is removed");
+    },
+  },
   {
     name: "status, get and decisions.list answer at the read tier, set only for admin, and its event is empty",
     covers: [],
@@ -609,6 +687,166 @@ export const RULES_CHECKS: RulesCheck[] = [
         "an Allow beside 20 Ask rules",
       );
       same((await save(ctx, "marlow", [askWrite()])).rules.length, 1, "another bot's Ask");
+    },
+  },
+  {
+    name: "rules lost after a copy was read: the copy is enforced, status says when it was read, and the log says each change",
+    covers: ["#write"],
+    async run(ctx, world) {
+      const saved = await save(ctx, BOT, [
+        { action: "never", tools: ["write"], target: { kind: "path", pattern: "notes/**" } },
+      ]);
+      const read = await statusOf(ctx);
+      same([rec(read.rules).state, read.enforcing], ["read", "rules"], "status with rules read");
+      const readAt = rec(read.rules).readAt;
+      const good = readFileSync(rulesFile(ctx), "utf8");
+      writeFileSync(rulesFile(ctx), JSON.stringify({ format: PLUGIN, schema: 1 }));
+      try {
+        const lost = await statusOf(ctx);
+        same(
+          [lost.rules, lost.enforcing],
+          [
+            {
+              state: "lost",
+              reason: "the rules file is not a valid rules store",
+              keptCopyReadAt: readAt,
+            },
+            "kept-copy",
+          ],
+          "status with a copy kept",
+        );
+        await logged(
+          ctx,
+          "Rules unavailable: the rules file is not a valid rules store. Enforcing the copy read at",
+        );
+        const key = await task(ctx, world, BOT, "kept");
+        const run = await finish(ctx, await start(ctx, key, "#write"));
+        expect(
+          run.calls[0]?.isError &&
+            String(run.calls[0].details.reason).includes(`rule ${saved.rules[0]!.id}`),
+          `the kept copy did not block the write: ${show(run.calls)}`,
+        );
+        const [record] = await decisionsOf(ctx, { runId: run.runId });
+        same([record?.rules, record?.decision], ["kept", "block"], "the decision record");
+      } finally {
+        writeFileSync(rulesFile(ctx), good);
+      }
+      same((await statusOf(ctx)).enforcing, "rules", "status once the file is good again");
+      await logged(ctx, "Rules read; enforcing them.");
+    },
+  },
+  {
+    name: "a Never catches another spelling of the same file; an Allow covers only the spelling given",
+    covers: ["#write"],
+    async run(ctx, world) {
+      const never = await save(ctx, BOT, [
+        {
+          action: "never",
+          tools: ["write"],
+          target: { kind: "path", pattern: "NOTES/Scratch.md" },
+        },
+      ]);
+      const key = await task(ctx, world, BOT, "spelling");
+      const blocked = await finish(ctx, await start(ctx, key, "#write"));
+      expect(
+        blocked.calls[0]?.isError &&
+          String(blocked.calls[0].details.reason).includes(`rule ${never.rules[0]!.id}`),
+        `a Never on NOTES/Scratch.md did not block notes/scratch.md: ${show(blocked.calls)}`,
+      );
+      await save(
+        ctx,
+        BOT,
+        [
+          {
+            action: "allow",
+            tools: ["write"],
+            target: { kind: "path", pattern: "NOTES/SCRATCH.md" },
+          },
+        ],
+        true,
+      );
+      const since = marks(ctx);
+      const runId = await start(ctx, key, "#write");
+      const card = await cardFor(ctx, runId, since.interactive);
+      expect(
+        String(card.request.description).includes("Ask when nothing else decides"),
+        `the Allow of another spelling kept the fallback from asking: ${String(card.request.description)}`,
+      );
+      await resolve(ctx, card.id, "deny");
+      await finish(ctx, runId);
+      await save(
+        ctx,
+        BOT,
+        [{ action: "allow", tools: ["write"], target: { kind: "path", pattern: WRITE_PATH } }],
+        true,
+      );
+      const free = marks(ctx);
+      const freeRun = await start(ctx, key, "#write");
+      const ran = await finish(ctx, freeRun);
+      expect(ran.calls[0] && !ran.calls[0].isError, `the exact Allow: ${show(ran.calls)}`);
+      same(cardsSeen(ctx, free, freeRun), [], "who received a card for the exact Allow");
+    },
+  },
+  {
+    name: "with approval forwarding configured a card names no path, command or bot; a setting forces the details back",
+    covers: ["#write"],
+    async run(ctx, world) {
+      same(
+        (await statusOf(ctx)).cardDetails,
+        { mode: "full", because: "no-forwarding" },
+        "card details with no forwarding",
+      );
+      await save(ctx, BOT, [askWrite()]);
+      const key = await task(ctx, world, BOT, "forwarding");
+      const cardText = async () => {
+        const since = marks(ctx);
+        const runId = await start(ctx, key, "#write");
+        const card = await cardFor(ctx, runId, since.interactive);
+        await resolve(ctx, card.id, "deny");
+        await finish(ctx, runId);
+        return `${String(card.request.title)}\n${String(card.request.description)}`;
+      };
+      await patchConfig(ctx, FORWARD_NOWHERE);
+      try {
+        same(
+          (await statusOf(ctx)).cardDetails,
+          { mode: "redacted", because: "forwarding-configured" },
+          "card details with forwarding",
+        );
+        const redacted = await cardText();
+        expect(
+          !redacted.includes(WRITE_PATH) &&
+            !redacted.includes(BOT) &&
+            redacted.endsWith("The details are in Clawtrate."),
+          `the forwarded card carries the target or the bot: ${redacted}`,
+        );
+        await patchConfig(ctx, {
+          plugins: { entries: { [PLUGIN]: { config: { cardDetails: "full" } } } },
+        });
+        await pluginRunning(ctx);
+        same(
+          (await statusOf(ctx)).cardDetails,
+          { mode: "full", because: "setting" },
+          "card details forced by the setting",
+        );
+        const full = await cardText();
+        expect(full.includes(WRITE_PATH), `the forced card left out the target: ${full}`);
+      } finally {
+        await patchConfig(
+          ctx,
+          {
+            approvals: null,
+            plugins: { entries: { [PLUGIN]: { config: { cardDetails: null } } } },
+          },
+          ["approvals.plugin.targets"],
+        );
+        await pluginRunning(ctx);
+      }
+      same(
+        (await statusOf(ctx)).cardDetails,
+        { mode: "full", because: "no-forwarding" },
+        "card details once forwarding is off again",
+      );
     },
   },
   {
