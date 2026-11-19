@@ -2,7 +2,7 @@
 // host writes: every honored setting, every refusal, and hostile input.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
 
@@ -330,6 +330,41 @@ describe("the person's SSH configuration", () => {
         });
       } finally {
         rmSync(key, { force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "refuses a configuration, or an Include's folder, that is there but can't be read",
+    () => {
+      const locked = join(world.home, ".ssh", "locked");
+      mkdirSync(locked, { recursive: true });
+      writeFileSync(join(locked, "config"), "Host devbox\n  Port 2222\n");
+      writeFileSync(join(locked, "part.conf"), "Host devbox\n  Port 2222\n");
+      chmodSync(locked, 0o000);
+      try {
+        // The file is there, behind a folder this account may not search: not "no settings".
+        expect(
+          resolveTarget(
+            { ...world, personConfig: join(locked, "config") },
+            parseDestination("devbox")!,
+          ),
+        ).toMatchObject({ ok: false, category: "unreadable" });
+        expect(resolveWith("Include ~/.ssh/locked/*.conf\n")).toMatchObject({
+          ok: false,
+          category: "unreadable",
+        });
+        // A path that isn't there is still no settings.
+        expect(
+          resolveTarget(
+            { ...world, personConfig: join(world.home, ".ssh", "absent", "config") },
+            parseDestination("devbox")!,
+          ),
+        ).toMatchObject({ ok: true, port: 22 });
+        expect(resolveWith("Include ~/.ssh/absent/*.conf\n")).toMatchObject({ ok: true, port: 22 });
+      } finally {
+        chmodSync(locked, 0o700);
+        rmSync(locked, { recursive: true, force: true });
       }
     },
   );

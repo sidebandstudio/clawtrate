@@ -268,14 +268,21 @@ type Found = {
 
 type Reader = (path: string) => string | null;
 
+/** A path that is not there: no file, or a part of it that is not a folder. Any other error is unreadable. */
+const notThere = (error: unknown) => {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
+};
+
 const defaultReader: Reader = (path) => {
   let size: number;
   try {
     const info = statSync(path);
     if (!info.isFile()) return null;
     size = info.size;
-  } catch {
-    return null;
+  } catch (error) {
+    if (notThere(error)) return null;
+    throw new Unreadable();
   }
   if (size > MAX_FILE_BYTES) throw new Unreadable();
   return readFileSync(path, "utf8");
@@ -299,8 +306,9 @@ function includedFiles(raw: string, from: string, world: SshWorld): string[] {
   let names: string[];
   try {
     names = readdirSync(dirname(path));
-  } catch {
-    return [];
+  } catch (error) {
+    if (notThere(error)) return [];
+    throw new Unreadable();
   }
   return names
     .filter((name) => globMatch(last, name) && !name.startsWith("."))
