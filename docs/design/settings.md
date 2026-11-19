@@ -28,7 +28,7 @@ The prototype walks every path to its outcome: `prototype/settings.html`, with t
 8. Appearance
 9. System: spelling and hardware acceleration
 10. Updates
-11. Update required, and a gateway that needs updating
+11. A protocol refusal: Update required, and a gateway that needs updating
 12. Not offered: Language, security keys, routing traffic
 13. Compact
 14. Free disk on the bot's machine
@@ -51,7 +51,7 @@ Settings (⌘,)                     two panes: the list of sections, the section
   (Notifications)                   a place kept for issues #76 and #77; nothing drawn
   System (desktop)                  Check spelling while typing; Use hardware acceleration
   Updates (desktop)                 the version; with no update source, that and nothing else
-full window                       Update required: this Clawtrate is older than the gateway's protocol
+conversation, rail and strip      a protocol refusal: that connection's alone; gateways stay reachable
 Work pane, Details tab            Context: Compact
 transcript                        a compacted line that folds the turns before it
 above the composer                low disk on the machine the bot is set to work on
@@ -74,7 +74,7 @@ above the composer                low disk on the machine the bot is set to work
 | Command block and copy button                                                            | `visual-language.md` §10                        | The command that removes this device's record         |
 | Event line, steps fold                                                                   | `visual-language.md` §8, `conversation.md` §7.4 | The compacted line and what it folds                  |
 | The note above the composer                                                              | `controls.md` §16 ("Near a provider's limit")   | Low disk                                              |
-| The connection column                                                                    | `visual-language.md` §10                        | Update required                                       |
+| The empty rail and the status strip                                                      | `visual-language.md` §7, §11                    | A protocol refusal                                    |
 | The two-way switch (`.seg`)                                                              | `conversation.md` §8                            | Theme, Your messages                                  |
 
 ### New components
@@ -326,24 +326,28 @@ Desktop only. A fact block, then what the source allows.
 
 **iPhone.** No Updates section: the App Store or TestFlight updates the app.
 
-## 11. Update required, and a gateway that needs updating
+## 11. A protocol refusal: Update required, and a gateway that needs updating
 
-The connect handshake is the only thing that makes an update required: the gateway refuses a client whose protocol it does not speak with `PROTOCOL_MISMATCH` and the protocol it speaks, `expectedProtocol` (research §7, live). The client compares it with its own.
+The connect handshake refuses a client whose protocol range doesn't include the gateway's with `PROTOCOL_MISMATCH` and the protocol the gateway speaks, `expectedProtocol` (research §7, live). The refusal comes before the gateway authenticates anything, and it carries a protocol, not a product version. The client compares `expectedProtocol` with the whole range it offered: above the range's top, this build is the older; below its bottom, the gateway is.
 
-**This Clawtrate is too old** (`expectedProtocol` above the client's). The whole window shows the connection column (`visual-language.md` §10): the mark, then
+**The refusal belongs to that connection.** Nothing else is asked of that gateway after it (the core already sends no request after a mismatch, `packages/core/src/client.ts`). The app stays the app:
 
-- Title: "Update required"
-- "Home gateway speaks protocol 5. This version of Clawtrate speaks protocol 4, so it can't use it."
-- Desktop, no update source: "This copy can't update itself. Install a newer Clawtrate to use Home gateway."
-- Desktop, with an update source: "Update" (primary), which checks, then downloads with section 10's states, then "Restart to Update".
-- iPhone: "Update Clawtrate in the App Store, or in TestFlight if you test it there."
-- "Switch gateway" (default) when another gateway is saved, opening the gateway list in the window; "Try again" (quiet), which runs the handshake again.
+- The rail is empty, with "Can't use Home gateway"; there is no composer and no New.
+- In place of the conversation, "Can't use Home gateway" and "The address saved for Home gateway replied with protocol 5. This version of Clawtrate speaks protocol 4." The words say "the address saved for", because the answer came before anything identified the gateway.
+- The strip says "Can't use Home gateway · protocol 5", with "Try again".
+- "Try again" makes a new handshake. The refusal stays, through a check for updates, a failed check or download, and a restart, until a handshake succeeds; a repeated refusal adds "Tried again at 5:42 PM: protocol 5 again."
+- "Your gateways" opens Settings, Your gateways: the list, Switch, Add gateway and Remove stay reachable, with one saved gateway as well as several. The Gateway pane says "Can't use it", the problem line as built, and "Remove this gateway…".
+- A product version is shown only as last seen, with its date ("Last seen: OpenClaw 2026.4.2 on Nov 12"), never as the gateway's version now.
 
-Nothing else is asked of that gateway while the window shows (the core already sends no request after a mismatch, `packages/core/src/client.ts`). Other gateways are not affected.
+**This build is the older** (`expectedProtocol` above its range):
 
-**The gateway is too old** (`expectedProtocol` below the client's). This is not "Update required" for the person's Clawtrate. The Gateway pane's problem line, as built, says "This gateway speaks another protocol" with both versions, and one sentence more: "Update OpenClaw on the gateway's computer to use it with this version." The rail and the strip show "Can't use Home gateway" with "Switch gateway" when another is saved.
+- "Update required to use Home gateway. Other gateways aren't affected."
+- Desktop, when the updater (issue #68) offers a replacement this build can install (section 10): "Update", which opens Updates. Otherwise, with no source, on a development build, or on a build that can't install updates itself: "This copy can't update itself. A newer Clawtrate is needed to use Home gateway."
+- iPhone: "Look for a newer Clawtrate in the App Store, or in TestFlight if you test it there." It says where to look, not that a newer build exists.
 
-**F-010's rule**, "more than 14 days old and a newer version exists", needs the client's release date and an update feed. There is no feed, and publishing one is its own unit of work, so that rule shows nothing in this design. What this section designs is row F-518 (section 17).
+**The gateway is the older** (`expectedProtocol` below the range): the same refusal, with "Update OpenClaw on the gateway's computer to use it with this version." in place of the update lines.
+
+**F-010's rule**, "more than 14 days old and a newer version exists", needs the client's release date and an update feed. There is no feed, and publishing one is its own unit of work, so that rule shows nothing in this design. When it is designed, a blocking "Update" waits on an installable newer build. What this section designs is row F-518 (section 17), with one check parameterized by direction and by the number of saved gateways (section 18).
 
 ## 12. Not offered: Language, security keys, routing traffic
 
@@ -411,7 +415,7 @@ For the gateway's own machine: "Otto is set to run commands on the gateway's mac
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 1440, 1100     | The Settings dialog is 800 × 640 (`bots.md` §2); every section scrolls inside it                                                                                                                                                                                               |
 | 800            | The dialog takes the window's width less 48 px; the section list stays at 208 px                                                                                                                                                                                               |
-| 390 (iPhone)   | The list first, full width; a section replaces it with Back (`bots.md` §7). No System, no Updates. "Update required" is the iPhone's words. The gateway menu opens downward from the round button at the top left (`visual-language.md` §7)                                    |
+| 390 (iPhone)   | The list first, full width; a section replaces it with Back (`bots.md` §7). No System, no Updates. A refusal gives the iPhone's words. The gateway menu opens downward from the round button at the top left (`visual-language.md` §7)                                         |
 | Themes         | Every state in light and dark, from the tokens only                                                                                                                                                                                                                            |
 | Keyboard       | Section 2, Input. Every action in every walk can be done without a pointer                                                                                                                                                                                                     |
 | Screen readers | Each section's title is its `h3`; switches have their row's title as their name and its line as their description; the removal lists are lists; the compacted line is a `button` with `aria-expanded` that names the count; the low-disk note is a `region` named "Disk space" |
@@ -433,7 +437,7 @@ For the gateway's own machine: "Otto is set to run commands on the gateway's mac
 | "It installs when Clawtrate restarts"                                 | A downloaded update is applied at the next start                                                                                     | §4       |
 | The automatic update rule, without a screen saver                     | `lock-screen`, `unlock-screen`, `getSystemIdleState`, `getSystemIdleTime`; nothing reports a screen saver                            | §5       |
 | "No run is active"                                                    | The connected gateway's run state and this client's unsent messages                                                                  | §6       |
-| Update required, and a gateway too old                                | `PROTOCOL_MISMATCH` with `expectedProtocol` (live)                                                                                   | §7       |
+| A protocol refusal, either way                                        | `PROTOCOL_MISMATCH` with `expectedProtocol` before authentication (live), compared with the offered range                            | §7       |
 | Compact: the button, the wait, the lines                              | `/compact` through `chat.send` (`operator.write`); the gateway-injected reply with the send's key; skipped and failed replies (live) | §8       |
 | Compact unavailable during a run                                      | `/compact` waits up to 60 s, then stops the run (live)                                                                               | §8       |
 | The fold and its line                                                 | The `compaction` row; the transcript keeps every message; recent messages kept intact                                                | §8       |
@@ -465,7 +469,7 @@ For the gateway's own machine: "Otto is set to run commands on the gateway's mac
 
 **Targets decided** (round 1): F-228 is "same in kind": Theme (Follow system, Light, Dark) and the fill of your own messages (Accent, Neutral), each saved and read back (section 8). F-279: Compact asks the gateway, and the fold's line gives the sizes before and after that the gateway reported (section 13). F-391: without the screen saver, which nothing reports, on macOS and Windows (section 10). F-010 stays as it is, `todo`, waiting on an update source. F-229 and F-388 stay `todo`: no Language setting until a second language ships (section 12). F-395 is `gap`: the design draws no switch.
 
-**Added**: F-518, "Update required" from the gateway refusing this client's protocol as too old, and the strip when the gateway is the one too old (section 11). `todo`.
+**Added**: F-518, a protocol refusal held to its connection, in both directions, with the gateways still reachable (section 11). `todo`.
 
 ## 18. For builders
 
@@ -478,7 +482,7 @@ For the gateway's own machine: "Otto is set to run commands on the gateway's mac
 | Removing                        | Confirmation, command block                     | Removal list |
 | Appearance                      | `.seg`                                          | none         |
 | System, Updates                 | Switch, fact block, confirmation                | none         |
-| Update required                 | The connection column                           | none         |
+| A protocol refusal              | The empty rail, the status strip, notes         | none         |
 | Compact                         | Details tab, event line, steps fold, access bar | none         |
 | Low disk                        | The note above the composer                     | none         |
 
@@ -519,52 +523,54 @@ For the gateway's own machine: "Otto is set to run commands on the gateway's mac
 6. **Low disk** (F-159's report).
 7. **Updates** (F-231, F-391, F-458) only once the owner publishes releases; until then the "no source" line.
 
+**F-518's check**, when it is built: one check, parameterized by the gateway's protocol (above this build's range, below it) and by the saved gateways (one, two). Against a development gateway that answers with that protocol, it asserts the words of section 11, that no request goes out on that connection after the refusal, that "Try again" makes a new handshake and the refusal stays until one succeeds, and that Your gateways, Add gateway and Remove are reachable.
+
 ### The prototype's states and walks
 
 `settings.html` takes every parameter `controls.html` takes, and these:
 
-| Parameter                | Values                                                                                                            |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `open=settings&section=` | `gateway`, `gateways`, `appearance`, `system`, `updates` (and every section of `bots.html` and `controls.html`)   |
-| `gw`                     | `studio`: that gateway's page                                                                                     |
-| `gateways`               | `one`: Home gateway alone                                                                                         |
-| `waiting`                | `1`: a message to Otto waits to be sent                                                                           |
-| `switchfail`             | `1`: Studio gateway can't be reached                                                                              |
-| `remove`                 | `studio` or `home`: that removal's confirmation open; `rmfail=remote`, `unknown` or `local`                       |
-| `os`                     | `mac`, `windows`, `linux`                                                                                         |
-| `build`                  | `dev`: a copy run from source                                                                                     |
-| `feed`                   | `1`: an update source exists (the future example); `upd=checking`, `current`, `downloading`, `ready`, `error`     |
-| `spell`                  | `off`, `downloading`, `failed` (Windows)                                                                          |
-| `hw`                     | `pending`, `off`                                                                                                  |
-| `required`               | `client` or `gateway`                                                                                             |
-| `compact`                | `running`, `compacting`, `done`, `skipped`, `failed`, `stopped` (open Juniper's task "Heat pump vs. gas furnace") |
-| `disk`                   | `node`, `gateway`: the low-disk note in Otto's tasks                                                              |
-| `add`                    | `1`: the setup flow's stand-in open                                                                               |
+| Parameter                | Values                                                                                                                                                                                  |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `open=settings&section=` | `gateway`, `gateways`, `appearance`, `system`, `updates` (and every section of `bots.html` and `controls.html`)                                                                         |
+| `gw`                     | `studio`: that gateway's page                                                                                                                                                           |
+| `gateways`               | `one`: Home gateway alone                                                                                                                                                               |
+| `waiting`                | `1`: a message to Otto waits to be sent                                                                                                                                                 |
+| `switchfail`             | `1`: Studio gateway can't be reached                                                                                                                                                    |
+| `remove`                 | `studio` or `home`: that removal's confirmation open; `rmfail=remote`, `unknown` or `local`                                                                                             |
+| `os`                     | `mac`, `windows`, `linux`                                                                                                                                                               |
+| `build`                  | `dev`: a copy run from source                                                                                                                                                           |
+| `feed`                   | `1`: an update source exists (the future example); `upd=checking`, `current`, `downloading`, `ready`, `error`                                                                           |
+| `spell`                  | `off`, `downloading`, `failed` (Windows)                                                                                                                                                |
+| `hw`                     | `pending`, `off`                                                                                                                                                                        |
+| `required`               | `client` or `gateway`: a protocol refusal on Home gateway; `retryok=1`: the next handshake succeeds; `install=1` with `feed=1`: the updater offers a replacement this build can install |
+| `compact`                | `running`, `compacting`, `done`, `skipped`, `failed`, `stopped` (open Juniper's task "Heat pump vs. gas furnace")                                                                       |
+| `disk`                   | `node`, `gateway`: the low-disk note in Otto's tasks                                                                                                                                    |
+| `add`                    | `1`: the setup flow's stand-in open                                                                                                                                                     |
 
 The check walks these by clicking, and asserts each destination's words:
 
-| Walk                                  | From                             | Through                                              | To                                                                                             |
-| ------------------------------------- | -------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Switch, nothing waiting               | The gateway menu                 | Studio gateway                                       | Studio's bots only; "Switched to Studio gateway"                                               |
-| Switch, a message waiting             | `waiting=1`, the gateway menu    | the confirmation, Switch                             | Studio in use; Cancel leaves Home in use                                                       |
-| Switch fails                          | `switchfail=1`                   | Studio gateway, "Back to Home gateway"               | Home in use again                                                                              |
-| Add a new gateway                     | Your gateways                    | Add gateway…, the stand-in's "Paired: a new gateway" | "Added Lab gateway", three gateways                                                            |
-| Add the same gateway                  | Your gateways                    | Add gateway…, "Paired: the same gateway"             | "Home gateway is already here", two gateways                                                   |
-| Add, cancelled                        | Your gateways                    | Add gateway…, Cancel                                 | "Nothing was added", Home in use                                                               |
-| Remove another gateway                | Studio's page                    | Remove…, the lists, Remove                           | "Studio gateway is removed from this device"; one gateway                                      |
-| Remove the gateway in use, with admin | Gateway pane                     | Remove this gateway…, the record checkbox, Remove    | Removed; "Not connected. Choose a gateway to use."                                             |
-| Remove, the gateway refuses           | `remove=home&rmfail=remote`      | Remove                                               | "Home gateway didn't remove this device's record", nothing removed                             |
-| Remove, no answer                     | `remove=home&rmfail=unknown`     | Remove                                               | "Clawtrate can't tell whether Home gateway removed this device's record", nothing else removed |
-| Remove, a local step fails            | `remove=studio&rmfail=local`     | Remove, Try again                                    | Removed                                                                                        |
-| Appearance                            | Appearance                       | Dark, Neutral                                        | the page dark; neutral bubbles                                                                 |
-| Spelling                              | System                           | the switch                                           | "Spelling isn't checked"                                                                       |
-| Hardware acceleration                 | System                           | the switch, Restart now                              | "Off. Clawtrate draws without the graphics hardware."                                          |
-| Updates, no source                    | Updates                          | —                                                    | "no update source"; no button, no switch                                                       |
-| Updates, with a source                | `feed=1`                         | Check for Updates                                    | "You're up to date"; then `upd=ready`, Restart to Update with `waiting=1`, the confirmation    |
-| Update required                       | `required=client`                | —                                                    | "Update required" and Switch gateway; at phone width the App Store line                        |
-| Compact                               | Juniper's task, Details          | Compact                                              | "Compacting…", then "Context compacted", the fold opening "3 earlier turns"                    |
-| Compact while running, read-only      | `compact=running`; `access=read` | —                                                    | disabled with its sentence; the access bar                                                     |
-| Low disk                              | `disk=node`                      | Show the computer                                    | the Computer tab                                                                               |
+| Walk                                                             | From                                           | Through                                               | To                                                                                             |
+| ---------------------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Switch, nothing waiting                                          | The gateway menu                               | Studio gateway                                        | Studio's bots only; "Switched to Studio gateway"                                               |
+| Switch, a message waiting                                        | `waiting=1`, the gateway menu                  | the confirmation, Switch                              | Studio in use; Cancel leaves Home in use                                                       |
+| Switch fails                                                     | `switchfail=1`                                 | Studio gateway, "Back to Home gateway"                | Home in use again                                                                              |
+| Add a new gateway                                                | Your gateways                                  | Add gateway…, the stand-in's "Paired: a new gateway"  | "Added Lab gateway", three gateways                                                            |
+| Add the same gateway                                             | Your gateways                                  | Add gateway…, "Paired: the same gateway"              | "Home gateway is already here", two gateways                                                   |
+| Add, cancelled                                                   | Your gateways                                  | Add gateway…, Cancel                                  | "Nothing was added", Home in use                                                               |
+| Remove another gateway                                           | Studio's page                                  | Remove…, the lists, Remove                            | "Studio gateway is removed from this device"; one gateway                                      |
+| Remove the gateway in use, with admin                            | Gateway pane                                   | Remove this gateway…, the record checkbox, Remove     | Removed; "Not connected. Choose a gateway to use."                                             |
+| Remove, the gateway refuses                                      | `remove=home&rmfail=remote`                    | Remove                                                | "Home gateway didn't remove this device's record", nothing removed                             |
+| Remove, no answer                                                | `remove=home&rmfail=unknown`                   | Remove                                                | "Clawtrate can't tell whether Home gateway removed this device's record", nothing else removed |
+| Remove, a local step fails                                       | `remove=studio&rmfail=local`                   | Remove, Try again                                     | Removed                                                                                        |
+| Appearance                                                       | Appearance                                     | Dark, Neutral                                         | the page dark; neutral bubbles                                                                 |
+| Spelling                                                         | System                                         | the switch                                            | "Spelling isn't checked"                                                                       |
+| Hardware acceleration                                            | System                                         | the switch, Restart now                               | "Off. Clawtrate draws without the graphics hardware."                                          |
+| Updates, no source                                               | Updates                                        | —                                                     | "no update source"; no button, no switch                                                       |
+| Updates, with a source                                           | `feed=1`                                       | Check for Updates                                     | "You're up to date"; then `upd=ready`, Restart to Update with `waiting=1`, the confirmation    |
+| A protocol refusal (F-518), each direction, one and two gateways | `required=client` or `gateway`, `gateways=one` | Try again; Your gateways; with `retryok=1`, Try again | still refused, "protocol 5 again"; the list with Add gateway and Remove; connected             |
+| Compact                                                          | Juniper's task, Details                        | Compact                                               | "Compacting…", then "Context compacted", the fold opening "3 earlier turns"                    |
+| Compact while running, read-only                                 | `compact=running`; `access=read`               | —                                                     | disabled with its sentence; the access bar                                                     |
+| Low disk                                                         | `disk=node`                                    | Show the computer                                     | the Computer tab                                                                               |
 
 ## 19. Not covered here
 

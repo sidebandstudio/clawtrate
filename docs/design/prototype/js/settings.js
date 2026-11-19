@@ -57,7 +57,10 @@
     hw: p("hw") || "on", // on, pending (off at the next start), off, pendingOn
     saveFail: p("savefail") === "1",
     unsaved: false,
-    required: p("required"),
+    // A protocol refusal on Home gateway's connection: "client" (this build is older) or "gateway" (the gateway is).
+    refused: ["client", "gateway"].includes(p("required")) ? p("required") : null,
+    retryOk: p("retryok") === "1", // the next handshake succeeds
+    install: p("install") === "1", // the updater offers a replacement this build can install
     compact: p("compact") || "none",
     reply: p("reply") || "done",
     foldOpen: false,
@@ -203,13 +206,13 @@
       holder.insertAdjacentHTML("afterend", items);
       holder.hidden = true;
       const name = inUseName();
-      const state = { connected: "Connected", connecting: "Connecting…", unreachable: "Can't reach the gateway", none: "Not connected" }[S.conn];
+      const state = { connected: "Connected", connecting: "Connecting…", unreachable: "Can't reach the gateway", none: "Not connected", refused: "Can't use it" }[S.conn];
       $(".gateway-pill strong").textContent = S.conn === "connecting" ? gw(S.target).name : name;
       $("#gateway-state").textContent = state;
       $("#gateway-menu .menu-head strong").textContent = S.conn === "connecting" ? gw(S.target).name : name;
       $("#gateway-menu-state").textContent = S.inUse ? `${state} · ${gw(S.inUse).route}` : state;
       $$('[data-action="gateway-menu"]').forEach((b) => b.setAttribute("aria-label", `${S.conn === "connecting" ? gw(S.target).name : name}, ${state.toLowerCase().replace("…", "")}. Open the gateway menu.`));
-      $$(".rail .status-dot").forEach((dot) => (dot.dataset.status = { connected: "connected", connecting: "connecting", unreachable: "error", none: "disconnected" }[S.conn]));
+      $$(".rail .status-dot").forEach((dot) => (dot.dataset.status = { connected: "connected", connecting: "connecting", unreachable: "error", none: "disconnected", refused: "error" }[S.conn]));
     }
     const closeGatewayMenu = () => {
       if (!$("#gateway-menu").hidden) $(".gateway-pill").click();
@@ -268,6 +271,7 @@
       }, 900);
     }
     function arrive(id) {
+      S.refused = null;
       S.inUse = id;
       S.target = null;
       S.conn = "connected";
@@ -502,13 +506,14 @@
       }
       const g = gw(S.inUse);
       const scopes = { read: ["operator.read"], write: ["operator.read", "operator.write", "operator.approvals", "operator.questions"], admin: ["operator.read", "operator.write", "operator.approvals", "operator.questions", "operator.admin"] }[D.B.access];
-      const old = S.required === "gateway";
+      const refused = S.conn === "refused";
+      const theirs = S.refused === "client" ? 5 : 3;
       const body =
-        `<dl class="facts"><div><dt>Address</dt><dd>${esc(g.route)}</dd></div><div><dt>State</dt><dd>${old ? "Offline" : "Connected"}</dd></div>` +
-        `<div><dt>This device</dt><dd class="mono">device ${DEVICE.slice(0, 6)}</dd></div><div><dt>Granted scopes</dt><dd class="b-wrap-value">${old ? "None while not connected" : scopes.join(", ")}</dd></div>` +
-        `<div><dt>Gateway</dt><dd>OpenClaw ${old ? "2026.4.2 · protocol 3" : "2026.10.6"}</dd></div></dl>` +
-        (old
-          ? `<div class="form-error" role="alert" data-testid="gateway-problem"><strong>This gateway speaks another protocol</strong>This gateway speaks protocol 3. This version of Clawtrate speaks protocol 4. Update OpenClaw on the gateway's computer to use it with this version.</div>`
+        `<dl class="facts"><div><dt>Address</dt><dd>${esc(g.route)}</dd></div><div><dt>State</dt><dd>${refused ? "Can't use it" : "Connected"}</dd></div>` +
+        `<div><dt>This device</dt><dd class="mono">device ${DEVICE.slice(0, 6)}</dd></div><div><dt>Granted scopes</dt><dd class="b-wrap-value">${refused ? "None while not connected" : scopes.join(", ")}</dd></div>` +
+        `<div><dt>${refused ? "Last seen" : "Gateway"}</dt><dd>${refused ? (S.refused === "gateway" ? "OpenClaw 2026.4.2 on Nov 12" : "OpenClaw 2026.10.6 on Nov 18") : "OpenClaw 2026.10.6"}</dd></div></dl>` +
+        (refused
+          ? `<div class="form-error" role="alert" data-testid="gateway-problem"><strong>This gateway speaks another protocol</strong>The address saved for ${esc(g.name)} replied with protocol ${theirs}. This version of Clawtrate speaks protocol 4.${S.refused === "gateway" ? " Update OpenClaw on the gateway's computer to use it with this version." : ""}</div>`
           : "") +
         `<div class="b-actions" style="margin-top:16px">${button("Disconnect", 'data-action="disconnect" data-size="sm"')}${button("Other gateways", 'data-s="to-gateways" data-size="sm"', "quiet")}` +
         `<span class="spacer"></span>${button("Remove this gateway…", `data-s="remove" data-gw="${S.inUse}" data-size="sm" data-tone="danger"`, "quiet")}</div>`;
@@ -531,7 +536,7 @@
         const g = gw(id);
         const sub =
           id === S.inUse
-            ? `${esc(g.route)} · In use`
+            ? `${esc(g.route)} · ${S.conn === "refused" ? "Can't use it" : "In use"}`
             : id === S.target && S.conn === "connecting"
               ? `${esc(g.route)} · Switching`
               : id === S.target && S.conn === "unreachable"
@@ -685,44 +690,32 @@
       });
     }
 
-    // Update required (section 11) ------------------------------------------------------------------------
-
+    // A protocol refusal (section 11): that connection's alone. The rail is empty, nothing is
+    // asked of the gateway, and Your gateways, Add gateway and Remove stay reachable.
     function renderRequired() {
-      const el = $("#s-required");
-      const shell = $(".shell");
-      if (S.required === "gateway" && S.inUse === "home" && !S.requiredDone) {
-        strip(
-          "Can't use Home gateway",
-          "it speaks an older protocol",
-          others().length ? `<button type="button" data-s="open-switch">Switch gateway</button>` : "",
-          "danger",
-        );
-        S.requiredDone = true;
-      }
-      if (S.required !== "client" || S.inUse !== "home") {
-        el.hidden = true;
-        shell.hidden = false;
-        return;
-      }
-      shell.hidden = true;
-      el.hidden = false;
-      const list = S.showList
-        ? `<ul class="b-choices s-gw-list">${others()
-            .map((id) => `<li><button type="button" class="b-choice" data-s="required-switch" data-gw="${id}"><span class="b-choice-text"><span class="b-choice-title">${esc(gw(id).name)}</span><span class="b-choice-sub">${esc(gw(id).route)}</span></span>${icon("chevron")}</button></li>`)
-            .join("")}</ul>`
-        : "";
-      const how = phone()
-        ? `<p>Update Clawtrate in the App Store, or in TestFlight if you test it there.</p>`
-        : S.feed
-          ? ""
-          : `<p>This copy can't update itself. Install a newer Clawtrate to use Home gateway.</p>`;
-      el.innerHTML =
-        `<div class="connect-drag"></div><div class="connect-card"><header class="connect-brand"><img src="../../../packages/ui/src/assets/logo-mark.png" alt="" width="56" height="56" />` +
-        `<h1>Clawtrate</h1><p>Your OpenClaw agents, orchestrated.</p></header>` +
-        `<section class="panel" aria-labelledby="s-required-title" data-testid="update-required"><h2 id="s-required-title" tabindex="-1">Update required</h2>` +
-        `<p>Home gateway speaks protocol 5. This version of Clawtrate speaks protocol 4, so it can't use it.</p>${how}` +
-        `<div class="actions">${!phone() && S.feed ? button("Update", 'data-s="required-update" data-size="lg"', "primary") : ""}` +
-        `${others().length ? button("Switch gateway", 'data-s="required-list" data-size="lg"') : ""}${button("Try again", 'data-s="required-retry" data-size="lg"', "quiet")}</div>${list}</section></div>`;
+      if (!S.refused || S.inUse !== "home" || S.conn !== "refused") return;
+      const name = gw("home").name;
+      const theirs = S.refused === "client" ? 5 : 3;
+      const canInstall = S.feed && S.install && !S.dev && !phone();
+      const how =
+        S.refused === "gateway"
+          ? `<p>Update OpenClaw on the gateway's computer to use it with this version.</p>`
+          : `<p>Update required to use ${esc(name)}. Other gateways aren't affected.</p>` +
+            (phone()
+              ? `<p>Look for a newer Clawtrate in the App Store, or in TestFlight if you test it there.</p>`
+              : canInstall
+                ? ""
+                : `<p>This copy can't update itself. A newer Clawtrate is needed to use ${esc(name)}.</p>`);
+      const tried = S.lastTry ? `<p class="s-tried" role="status">Tried again at 5:42 PM: protocol ${theirs} again.</p>` : "";
+      showEmpty(`Can't use ${esc(name)}`, `The address saved for it replied with protocol ${theirs}.`);
+      $("#transcript").innerHTML =
+        `<div class="transcript-inner"><section class="s-refusal" aria-labelledby="s-refusal-title" data-testid="refusal">` +
+        `<h2 id="s-refusal-title" tabindex="-1">Can't use ${esc(name)}</h2>` +
+        `<p>The address saved for ${esc(name)} replied with protocol ${theirs}. This version of Clawtrate speaks protocol 4.</p>${how}${tried}` +
+        `<div class="b-actions">${canInstall && S.refused === "client" ? button("Update", 'data-s="refusal-update"', "primary") : ""}` +
+        `${button("Try again", 'data-s="refusal-retry"')}${button("Your gateways", 'data-s="refusal-gateways"', "quiet")}</div></section></div>`;
+      strip(`Can't use ${esc(name)}`, `protocol ${theirs}`, `<button type="button" data-s="refusal-retry">Try again</button>`, "danger");
+      renderMenu();
     }
 
     // Low disk (section 14) -------------------------------------------------------------------------------
@@ -894,24 +887,25 @@
           rs();
           $('[data-s="auto"]', settingsDialog)?.focus();
           return announce(S.auto ? "Automatic Updates on" : "Automatic Updates off");
-        case "required-list":
-          S.showList = true;
-          renderRequired();
-          return $('[data-s="required-switch"]')?.focus();
-        case "required-retry":
-          renderRequired();
-          return $("#s-required-title")?.focus();
-        case "required-update":
-          S.feed = true;
-          S.upd = "idle";
-          S.required = null;
-          renderRequired();
-          D.openSettings($(".gateway-pill"), "updates");
-          return check();
-        case "required-switch":
-          S.required = null;
-          renderRequired();
-          return switchTo(id, true);
+        case "refusal-retry":
+          // A new handshake. The refusal stays until one succeeds.
+          strip(`Connecting to ${esc(gw("home").name)}`);
+          return setTimeout(() => {
+            if (S.retryOk) {
+              S.refused = null;
+              S.lastTry = false;
+              arrive("home");
+              announce(`Connected to ${gw("home").name}`);
+            } else {
+              S.lastTry = true;
+              renderRequired();
+              announce(`Still can't use ${gw("home").name}`);
+            }
+          }, 600);
+        case "refusal-update":
+          return D.openSettings($(".gateway-pill"), "updates");
+        case "refusal-gateways":
+          return D.openSettings($(".gateway-pill"), "gateways");
         case "compact":
           return compact();
         case "after-access":
@@ -964,6 +958,7 @@
 
     // First paint from the address ------------------------------------------------------------------------
 
+    if (S.refused) S.conn = "refused";
     renderMenu();
     renderRequired();
     diskNote();

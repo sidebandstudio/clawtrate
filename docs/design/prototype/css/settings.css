@@ -272,37 +272,32 @@
   font-size: var(--text-sm);
 }
 
-/* Update required: the connection column, in place of the app. */
-.s-required[hidden],
-.shell[hidden] {
-  display: none;
-}
-
-.s-required .panel {
+/* A protocol refusal: that connection's, in place of the conversation. */
+.s-refusal {
+  max-width: 520px;
+  margin: 72px auto 0;
   text-align: center;
 }
 
-.s-required h2 {
-  margin: 0 0 8px;
-  font-size: var(--text-title-sm, 20px);
+.s-refusal h2 {
+  margin: 0 0 10px;
+  font-size: var(--text-title-sm);
   font-weight: var(--weight-medium);
 }
 
-.s-required p {
-  margin: 0 0 10px;
+.s-refusal p {
+  margin: 0 0 8px;
   color: var(--text-muted);
   font-size: var(--text-base);
 }
 
-.s-required .actions {
-  display: grid;
+.s-refusal .b-actions {
+  justify-content: center;
   margin-top: 16px;
-  gap: 8px;
 }
 
-.s-required .s-gw-list {
-  margin-top: 14px;
-  text-align: left;
+.s-tried {
+  color: var(--text-faint);
 }
 
 /* The Work pane's Details tab: Context and Compact. */

@@ -407,33 +407,62 @@ await stateWords("Updates, a development build", "open=settings&section=updates&
   check("walk: Restart to Update: Clawtrate 0.2.0", (await text(p, settings)).includes("Clawtrate 0.2.0") && (await text(p, settings)).includes("You're up to date"));
   await p.close();
 }
+// F-518: one walk, parameterized by direction and by the number of saved gateways.
+for (const [dir, theirs] of [["client", 5], ["gateway", 3]]) {
+  for (const count of ["one", "two"]) {
+    const name = `refusal, ${dir === "client" ? "this build older" : "gateway older"}, ${count} saved`;
+    const p = await open(`required=${dir}${count === "one" ? "&gateways=one" : ""}`);
+    const lead = `The address saved for Home gateway replied with protocol ${theirs}. This version of Clawtrate speaks protocol 4.`;
+    const words = dir === "client"
+      ? [`Can't use Home gateway`, lead, "Update required to use Home gateway. Other gateways aren't affected.", "This copy can't update itself. A newer Clawtrate is needed to use Home gateway.", "Try again", "Your gateways"]
+      : [`Can't use Home gateway`, lead, "Update OpenClaw on the gateway's computer to use it with this version.", "Try again", "Your gateways"];
+    const [ok, miss] = await has(p, '[data-testid="refusal"]', words);
+    check(`F-518 ${name}: that connection's words`, ok, miss);
+    check(`F-518 ${name}: the app stays; the rail empty; no composer`, !(await p.evaluate(() => document.querySelector(".shell").hidden)) && !/Otto|Juniper/.test(await rail(p)) && (await p.locator("#composer").isHidden()));
+    check(`F-518 ${name}: the strip, with Try again`, (await text(p, "#status-strip")).includes(`Can't use Home gateway`) && (await text(p, "#status-strip")).includes(`protocol ${theirs}`));
+    check(`F-518 ${name}: no Update, no product version unlabelled`, (await p.getByRole("button", { name: "Update", exact: true }).count()) === 0 && !/OpenClaw \d/.test(await text(p, '[data-testid="refusal"]')));
+    await click(p, '[data-testid="refusal"] [data-s="refusal-retry"]', 800);
+    check(`F-518 ${name}: Try again is a new handshake; still refused`, (await text(p, '[data-testid="refusal"]')).includes(`Tried again at 5:42 PM: protocol ${theirs} again.`) && (await announced(p)) === "Still can't use Home gateway");
+    await click(p, '[data-testid="refusal"] [data-s="refusal-gateways"]', 200);
+    const g = await text(p, settings);
+    check(`F-518 ${name}: Your gateways and Add gateway reachable`, g.includes("Your gateways") && g.includes("Add gateway…") && g.includes("gateway.local · Can't use it"));
+    await press(p, "button", "Home gateway gateway.local · Can't use it");
+    const pane = await text(p, settings);
+    check(`F-518 ${name}: the Gateway pane, Remove reachable, a version only as last seen`, pane.includes("Can't use it") && pane.includes("Remove this gateway…") && pane.includes("Last seen") && pane.includes(lead));
+    check(`F-518 ${name}: no page errors`, p.errors.length === 0, p.errors.join(" | "));
+    await p.close();
+  }
+}
 {
-  const p = await open("required=client");
-  const [ok, miss] = await has(p, "#s-required", ["Update required", "Home gateway speaks protocol 5. This version of Clawtrate speaks protocol 4, so it can't use it.", "This copy can't update itself. Install a newer Clawtrate to use Home gateway.", "Switch gateway", "Try again"]);
-  check("walk: Update required: the whole window, its words", ok && (await p.evaluate(() => document.querySelector(".shell").hidden)), miss);
-  check("Update required: no Update button without a source", (await p.getByRole("button", { name: "Update", exact: true }).count()) === 0);
-  await press(p, "button", "Switch gateway");
-  await press(p, "button", "Studio gateway devbox, over SSH", 1200);
-  check("walk: Update required, Switch gateway: Studio in use", (await rail(p)).includes("Marlow") && !(await p.evaluate(() => document.querySelector(".shell").hidden)));
+  const p = await open("required=client&retryok=1");
+  await click(p, '[data-testid="refusal"] [data-s="refusal-retry"]', 800);
+  check("F-518: a handshake that succeeds ends the refusal", (await rail(p)).includes("Otto") && (await p.locator('[data-testid="refusal"]').count()) === 0 && (await announced(p)) === "Connected to Home gateway");
   await p.close();
 }
-await stateWords("Update required, with a source: Update", "required=client&feed=1", "#s-required", ["Update required", "Update"]);
+{
+  const p = await open("required=client&feed=1");
+  check("F-518: a source alone offers no Update", (await p.getByRole("button", { name: "Update", exact: true }).count()) === 0);
+  await p.close();
+}
+{
+  const p = await open("required=client&feed=1&install=1");
+  check("F-518: Update only when the updater offers an installable replacement", (await p.getByRole("button", { name: "Update", exact: true }).count()) === 1 && !(await text(p, '[data-testid="refusal"]')).includes("This copy can't update itself"));
+  await press(p, "button", "Update");
+  await press(p, "button", "Check for Updates", 1100);
+  await p.keyboard.press("Escape");
+  await p.waitForTimeout(100);
+  check("F-518: the refusal stays through a check for updates", (await p.locator('[data-testid="refusal"]').count()) === 1 && (await footer(p)).includes("Can't use it"));
+  await p.close();
+}
+{
+  const p = await open("required=client&feed=1&install=1&build=dev");
+  check("F-518: a development build offers no Update", (await p.getByRole("button", { name: "Update", exact: true }).count()) === 0);
+  await p.close();
+}
 {
   const p = await open("required=client", { width: 390, height: 844 });
-  const t = await text(p, "#s-required");
-  check("Update required, iPhone: the App Store or TestFlight", t.includes("Update Clawtrate in the App Store, or in TestFlight if you test it there.") && !t.includes("This copy can't update itself"));
-  await p.close();
-}
-{
-  const p = await open("required=client&gateways=one");
-  check("Update required, one gateway: no Switch gateway", !(await text(p, "#s-required")).includes("Switch gateway"));
-  await p.close();
-}
-{
-  const p = await open("required=gateway&open=settings&section=gateway");
-  const [ok, miss] = await has(p, "#status-strip", ["Can't use Home gateway", "it speaks an older protocol", "Switch gateway"]);
-  const [ok2, miss2] = await has(p, settings, ["This gateway speaks another protocol", "Update OpenClaw on the gateway's computer to use it with this version."]);
-  check("a gateway too old: not Update required; the strip and the Gateway pane say so", ok && ok2 && (await p.evaluate(() => document.querySelector("#s-required").hidden)), `${miss} ${miss2}`);
+  const t = await text(p, '[data-testid="refusal"]');
+  check("F-518, iPhone: where to look, not that a newer build exists", t.includes("Look for a newer Clawtrate in the App Store, or in TestFlight if you test it there.") && !t.includes("This copy can't update itself"));
   await p.close();
 }
 
