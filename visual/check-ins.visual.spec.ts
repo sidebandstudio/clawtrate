@@ -2,7 +2,7 @@
 // baselines, in light and dark at 1440, 1100 and 800 px and at phone width:
 // Settings → Check-ins with and without admin, with the scheduler off, and
 // the dialog in each choice, with the default bot's note, a custom prompt's
-// note, and a save refused or not confirmed. The fixture's check-ins are made
+// note, and a save refused, in conflict or not confirmed. The fixture's check-ins are made
 // up (apps/desktop/src/fixture/check-ins.ts).
 import { expect, test, type Page } from "@playwright/test";
 import { checkIns } from "./check-ins-helpers.ts";
@@ -53,6 +53,15 @@ const SCENES: Scene[] = [
       await page.getByRole("radio", { name: /^Daily/ }).click();
       await save(page);
       await expect(page.getByTestId("save-failed")).toBeVisible();
+    }),
+  },
+  {
+    name: "checkins-dialog-conflict",
+    query: `${ADMIN}&checkins=daily&cisave=conflict`,
+    ready: dialog("Juniper", async (page) => {
+      await page.getByRole("radio", { name: /^Off/ }).click();
+      await save(page);
+      await expect(page.getByTestId("save-conflict")).toBeVisible();
     }),
   },
   {

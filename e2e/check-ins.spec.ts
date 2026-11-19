@@ -3,12 +3,13 @@
 // four with the gateway's default check-ins (Juniper's, through
 // `agents.defaults.heartbeat`). The interface runs on a preview host of its
 // own and is driven as a person drives it; what landed is read back from the
-// gateway's config and its heartbeat jobs. The instance's scheduler is off,
-// so no check-in runs on its schedule here: Off is shown by the job the
-// scheduler would run, and by the gateway's own refusal to run it.
+// gateway's config and its heartbeat jobs, and the patches counted in the
+// gateway's own log. The instance's scheduler is off, so no check-in runs on
+// its schedule here: Off is shown by the job the scheduler would run, and by
+// the gateway's own refusal to run it when asked to run it if enabled.
 import { expect, test, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACCOUNT_CLIENTS } from "../tools/dev-gateway/src/account-checks.ts";
@@ -51,6 +52,24 @@ async function settings(): Promise<Record<string, unknown>> {
       .filter(([, entry]) => entry.heartbeat !== undefined)
       .map(([bot, entry]) => [bot, entry.heartbeat]),
   );
+}
+
+/** The `config.patch` requests the gateway has answered, from its log. */
+function patches(): number {
+  const log = join(openInstance(INSTANCE).stateDir, "logs", "gateway.jsonl");
+  if (!existsSync(log)) return 0;
+  // One JSON line per answer; its text appears in more than one field.
+  return readFileSync(log, "utf8")
+    .split("\n")
+    .filter((line) => /⇄ res [✓✗] config\.patch /.test(line)).length;
+}
+
+/** Saves with `run` and checks that the gateway answered exactly one patch for it. */
+async function onePatch(run: () => Promise<void>): Promise<void> {
+  const before = patches();
+  await run();
+  await expect.poll(patches, { timeout: 10_000 }).toBeGreaterThan(before);
+  expect(patches() - before).toBe(1);
 }
 
 async function approve(): Promise<void> {
@@ -145,7 +164,7 @@ test("F-201: below admin the check-ins are read from the gateway's jobs and noth
   await expect(block("marlow").getByRole("button", { name: /^Change / })).toBeVisible();
 });
 
-test("F-201: Daily for Marlow is one change that also keeps Juniper's check-ins, and is saved only once the gateway's jobs show both", async () => {
+test("F-201: Daily for Marlow is one config.patch that also keeps Juniper's check-ins, and once it says saved the gateway's config and jobs show both", async () => {
   test.setTimeout(120_000);
   await block("marlow")
     .getByRole("button", { name: /^Change / })
@@ -154,7 +173,7 @@ test("F-201: Daily for Marlow is one change that also keeps Juniper's check-ins,
     "checks in now through the gateway's default",
   );
   await page.getByTestId("check-ins-dialog").getByRole("button", { name: "Cancel" }).click();
-  await save("marlow", /^Daily/);
+  await onePatch(() => save("marlow", /^Daily/));
   expect(await settings()).toEqual({ main: { every: "30m" }, marlow: { every: "24h" } });
   expect(
     (await jobs()).map(({ agentId, enabled, everyMs }) => [agentId, enabled, everyMs]),
@@ -166,7 +185,20 @@ test("F-201: Daily for Marlow is one change that also keeps Juniper's check-ins,
   await expect(block("main")).toContainText("Checks in every 30 minutes");
 });
 
-test("F-366: Off for Juniper writes every 0m; its job stays, disabled, and the gateway will not run it on its schedule", async () => {
+test("F-201: As needed for Marlow is one config.patch of every 30m, and once it says saved its job runs every 30 minutes", async () => {
+  test.setTimeout(120_000);
+  await onePatch(() => save("marlow", /^As needed/));
+  expect(await settings()).toEqual({ main: { every: "30m" }, marlow: { every: "30m" } });
+  expect(
+    (await jobs()).map(({ agentId, enabled, everyMs }) => [agentId, enabled, everyMs]),
+  ).toEqual([
+    ["main", true, 1_800_000],
+    ["marlow", true, 1_800_000],
+  ]);
+  await expect(block("marlow")).toContainText("Checks in every 30 minutes");
+});
+
+test("F-366: Off for Juniper is one config.patch of every 0m; its job stays, disabled, and the gateway declines to run it if enabled", async () => {
   test.setTimeout(120_000);
   await block("main")
     .getByRole("button", { name: /^Change / })
@@ -176,8 +208,8 @@ test("F-366: Off for Juniper writes every 0m; its job stays, disabled, and the g
     "still reports when a command it started in the background finishes",
   );
   await page.getByTestId("check-ins-dialog").getByRole("button", { name: "Cancel" }).click();
-  await save("main", /^Off/);
-  expect(await settings()).toEqual({ main: { every: "0m" }, marlow: { every: "24h" } });
+  await onePatch(() => save("main", /^Off/));
+  expect(await settings()).toEqual({ main: { every: "0m" }, marlow: { every: "30m" } });
   const main = (await jobs()).find((job) => job.agentId === "main")!;
   expect(main.enabled).toBe(false);
   // What the scheduler asks of a job: run it if it is enabled. The gateway declines.
@@ -188,5 +220,5 @@ test("F-366: Off for Juniper writes every 0m; its job stays, disabled, and the g
   });
   await expect(block("main")).toContainText("No check-ins");
   await expect(block("main")).toContainText("doesn't check in on a schedule.");
-  await expect(block("marlow")).toContainText("Checks in daily");
+  await expect(block("marlow")).toContainText("Checks in every 30 minutes");
 });
