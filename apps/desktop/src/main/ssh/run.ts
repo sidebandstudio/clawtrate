@@ -92,6 +92,10 @@ export function runSsh(
   const maxStderr = options.maxStderr ?? 64 * 1024;
   return new Promise((resolve) => {
     const none = { exit: null, stdout: "", stderr: "", timedOut: false, overflow: false };
+    if (options.signal?.aborted) {
+      resolve({ ...none, stopped: false, cancelled: true, spawnFailed: false });
+      return;
+    }
     let child: ChildProcess;
     try {
       child = table.start(world, args);

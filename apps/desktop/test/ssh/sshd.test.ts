@@ -793,6 +793,28 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     expect((await transport.look(route)).ok).toBe(true);
   });
 
+  it("an open begun as closeAll starts is refused, and the transport opens again once it has finished", async () => {
+    const look = await transport.look(route);
+    if (!look.ok) throw new Error("look failed");
+    const found = serviceOnPort(look.facts, gateway.port);
+    if (!found.ok) throw new Error("no service");
+    // In the same turn: the open's wait for the client check, and closeAll's snapshot of the forwards.
+    const opening = transport.openForward(route, found);
+    const shutdown = transport.closeAll();
+    const [racing] = await Promise.all([opening, shutdown]);
+    try {
+      expect(racing).toEqual({ ok: false, kind: "closing" });
+    } finally {
+      if (racing.ok) await racing.forward.close();
+    }
+    const forward = await openForward(route, found);
+    try {
+      await waitFor(() => forward.state.phase === "up", 20000, "the forward to come up");
+    } finally {
+      await forward.close();
+    }
+  });
+
   it("every ssh ran with -F on the app's own file, no agent, and no SSH_AUTH_SOCK", () => {
     expect(started.length).toBeGreaterThan(10);
     for (const s of started) {

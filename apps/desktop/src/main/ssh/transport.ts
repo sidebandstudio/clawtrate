@@ -210,7 +210,8 @@ export type OpenForwardResult =
   | {
       ok: false;
       kind: "not-pinned" | "not-a-found-service" | "forward-open" | "too-many-forwards";
-    };
+    }
+  | { ok: false; kind: "closing" };
 
 /** A route prepared again since, or forgotten: nothing is done with it. */
 export type StaleRoute = { ok: false; kind: "stale-route" };
@@ -670,7 +671,11 @@ export class SshTransport {
     if (found.ok !== true || found.holdsPort !== true || !isGatewayPort(found.service.port)) {
       return { ok: false, kind: "not-a-found-service" };
     }
+    const shutdown = this.stopAll.signal;
     const client = await this.checkClient();
+    if (shutdown.aborted || this.stopAll.signal !== shutdown) {
+      return { ok: false, kind: "closing" };
+    }
     if (!client.ok) return client;
     const pinned = guarded(() => this.known.get(route.alias, route.endpoint));
     if (pinned !== null && "kind" in pinned) return pinned;
@@ -831,8 +836,9 @@ export class SshTransport {
 
   /** Closes every forward and ends every process this transport started. */
   async closeAll(): Promise<void> {
+    const shutdown = this.stopAll;
     const forwards = [...this.forwards.values()].map((open) => open.forward);
-    this.stopAll.abort();
+    shutdown.abort();
     await Promise.all(forwards.map((forward) => forward.close()));
     let seen: Promise<unknown>;
     do {
@@ -840,7 +846,7 @@ export class SshTransport {
       await seen;
     } while (seen !== this.inflight);
     await this.processes.endAll();
-    this.stopAll = new AbortController();
+    if (this.stopAll === shutdown) this.stopAll = new AbortController();
   }
 
   /** The signal a run stops on: the caller's, or `closeAll`. */
