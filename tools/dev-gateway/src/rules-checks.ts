@@ -1119,7 +1119,6 @@ export const RULES_CHECKS: RulesCheck[] = [
         await op.request("sessions.messages.subscribe", { key: "agent:pip:main" }).catch(() => {});
       }
       const since = marks(ctx);
-      const sentAt = Date.now();
       const runId = await start(ctx, key, "#message-read");
       const run = await finish(ctx, runId);
       same(
@@ -1127,9 +1126,18 @@ export const RULES_CHECKS: RulesCheck[] = [
         ["sessions_send"],
         "Marlow's tool calls",
       );
+      // The run Marlow's send started, as the send's own result names it.
+      const send = run.calls[0];
+      const recipientRunId = send?.details.runId;
+      expect(
+        ranOk(send) && typeof recipientRunId === "string" && recipientRunId.length > 0,
+        `Marlow's send named no run: ${show(run.calls)}`,
+      );
       // Pip's run can still be queued after Marlow's send returns: wait for its record.
       const record = await eventually("Pip's decision record", async () =>
-        (await decisionsOf(ctx, { agentId: "pip", limit: 5 })).find((r) => Number(r.at) >= sentAt),
+        (await decisionsOf(ctx, { agentId: "pip", runId: recipientRunId, limit: 5 })).find(
+          (r) => r.tool === "read",
+        ),
       );
       same(cardsSeen(ctx, since), [], "who received a card");
       same(

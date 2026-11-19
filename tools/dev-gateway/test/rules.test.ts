@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { devConfig, DENIED_TOOLS, loadPlugins, PLUGIN_RULE, sandboxProblems } from "../src/cli.ts";
 import { loadDevPlugin, pluginCopy } from "../src/dev-plugins.ts";
 import { CHECKOUT_DIR } from "../src/env.ts";
@@ -242,4 +242,95 @@ describe("the rules checks' final clean-up", () => {
       RULES_CHECKS.push(...held);
     }
   }, 30_000);
+});
+
+describe("the rules checks' recipient run", () => {
+  const hashed = (id: string) => `sha256:${createHash("sha256").update(id).digest("hex")}`;
+  const denied = "Plugin approval required (gateway unavailable)";
+  const decision = (runId: string, callId: string, at: number) => ({
+    id: runId,
+    agentId: "pip",
+    runId,
+    callId: hashed(callId),
+    at,
+    tool: "read",
+    decision: "ask",
+    answer: "cancelled",
+    source: null,
+  });
+  const toolResult = (toolCallId: string, text: string) => ({
+    role: "toolResult",
+    toolName: "read",
+    toolCallId,
+    content: [{ type: "text", text }],
+  });
+  /** Marlow's send started run pip-1; pip-2, a moment later, is another run of Pip's. */
+  const drive = async (history: Record<string, unknown>[]) => {
+    // Both after the send; the other run's a moment later, so newest first it comes first.
+    const sent = Date.now();
+    const records = [
+      decision("pip-2", "call_other", sent + 2_000),
+      decision("pip-1", "call_sent", sent + 1_000),
+    ];
+    const tool = (phase: string, extra: Record<string, unknown>) => ({
+      at: 0,
+      seq: 0,
+      event: "agent",
+      payload: {
+        stream: "tool",
+        data: { phase, name: "sessions_send", toolCallId: "send_1", ...extra },
+      },
+    });
+    const op = {
+      events: [],
+      lastSeq: 0,
+      send: async () => ({ runId: "marlow-1" }),
+      terminal: async () => ({ state: "final" }),
+      runEvents: () => [
+        tool("start", {}),
+        tool("result", { isError: false, result: { details: { status: "ok", runId: "pip-1" } } }),
+      ],
+      request: async (method: string, params: Record<string, unknown> = {}) => {
+        if (method === "clawtrate-tool-rules.get") return { scopes: {} };
+        if (method === "clawtrate-tool-rules.decisions.list") {
+          return {
+            records: records.filter(
+              (r) =>
+                r.agentId === params.agentId &&
+                (params.runId === undefined || r.runId === params.runId),
+            ),
+          };
+        }
+        if (method === "chat.history") return { messages: history };
+        return {};
+      },
+    } as unknown as OperatorSession;
+    const check = RULES_CHECKS.find((c) => c.covers.includes("#message-read"))!;
+    const clients = { admin: op, interactive: op, approver: op, writer: op, reader: op };
+    vi.useFakeTimers();
+    try {
+      const outcome = check
+        .run({ clients, gatewayLog: "", stateDir: "" }, { stamp: "t", keys: new Set(), counter: 0 })
+        .then(
+          () => "passed",
+          (error: Error) => error.message,
+        );
+      await vi.advanceTimersByTimeAsync(60_000);
+      return await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+
+  it("takes the decision of the run the send started, not a later one of the same bot", async () => {
+    expect(await drive([toolResult("call_sent", denied), toolResult("call_other", "notes")])).toBe(
+      "passed",
+    );
+  });
+
+  it("fails when only another run's refused read is in the history", async () => {
+    expect(await drive([toolResult("call_other", denied)])).toMatch(
+      /Pip's read result in its history did not appear/,
+    );
+  });
 });
