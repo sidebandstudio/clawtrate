@@ -758,10 +758,13 @@
       $$(".s-disk-note").forEach((n) => n.remove());
       const comp = $("#composer");
       if (!S.disk || S.diskClosed || S.inUse !== "home" || app.model.selectedBot !== "otto" || comp.hidden || !app.model.selectedTask) return;
-      const where =
-        S.disk === "gateway"
-          ? "Otto is set to run commands on the gateway's machine. The volume with its workspace has 4.2 GB free of 994 GB, as of 5:40 PM."
-          : "Otto is set to run commands on media-box, which has 2.1 GB free of 512 GB, as of 5:40 PM.";
+      // The note names the volume that was measured, and when (settings.md section 14).
+      const where = {
+        node: "Otto is set to run commands on media-box. The volume containing media-box's home folder has 2.1 GB free of 512 GB, as of 5:40 PM.",
+        stale: "Otto is set to run commands on media-box. The volume containing media-box's home folder has 2.1 GB free of 512 GB, as of 5:31 PM. media-box hasn't sent newer figures.",
+        gateway: "Otto is set to run commands on the gateway's machine. The volume containing the gateway's state folder has 4.2 GB free of 994 GB. The workspace volume was unavailable. Checked at 5:40 PM.",
+        matched: "Otto is set to run commands on the gateway's machine. The volume containing Otto's workspace has 4.2 GB free of 994 GB. Checked at 5:40 PM.",
+      }[S.disk] || "";
       const d = document.createElement("section");
       d.className = "s-disk-note";
       d.setAttribute("role", "region");

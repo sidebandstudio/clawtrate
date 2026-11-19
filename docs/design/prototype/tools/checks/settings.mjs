@@ -597,7 +597,7 @@ await (await compactReply("a run was stopped", "stopped", ["The gateway reported
 {
   const p = await open("disk=node");
   const n = p.locator('[data-testid="disk-note"]');
-  const [ok, miss] = await has(p, '[data-testid="disk-note"]', ["Otto is set to run commands on media-box, which has 2.1 GB free of 512 GB, as of 5:40 PM.", "Clawtrate deletes nothing. Whether Otto asks before it deletes a file depends on its command rules.", "Show the computer", "Otto's rules"]);
+  const [ok, miss] = await has(p, '[data-testid="disk-note"]', ["Otto is set to run commands on media-box. The volume containing media-box's home folder has 2.1 GB free of 512 GB, as of 5:40 PM.", "Clawtrate deletes nothing. Whether Otto asks before it deletes a file depends on its command rules.", "Show the computer", "Otto's rules"]);
   check("low disk: the note's words", ok && (await n.getAttribute("role")) === "region" && (await n.getAttribute("aria-label")) === "Disk space", miss);
   check("low disk: no Delete or Clean up", !/Delete|Clean up|Free space now/.test(await text(p, '[data-testid="disk-note"]')));
   check("low disk: directly above the composer", await p.evaluate(() => document.querySelector('[data-testid="disk-note"]').nextElementSibling?.id === "composer"));
@@ -607,7 +607,14 @@ await (await compactReply("a run was stopped", "stopped", ["The gateway reported
   check("walk: low disk, closed: gone", (await p.locator('[data-testid="disk-note"]').count()) === 0);
   await p.close();
 }
-await stateWords("low disk, the gateway's machine", "disk=gateway", '[data-testid="disk-note"]', ["Otto is set to run commands on the gateway's machine. The volume with its workspace has 4.2 GB free of 994 GB, as of 5:40 PM."]);
+await stateWords("low disk, the gateway's machine, no mount matched: the state folder's volume, named", "disk=gateway", '[data-testid="disk-note"]', ["The volume containing the gateway's state folder has 4.2 GB free of 994 GB. The workspace volume was unavailable. Checked at 5:40 PM."]);
+await stateWords("low disk, the gateway's machine, a mount matched the workspace", "disk=matched", '[data-testid="disk-note"]', ["The volume containing Otto's workspace has 4.2 GB free of 994 GB. Checked at 5:40 PM."]);
+await stateWords("low disk, a node's stale sample", "disk=stale", '[data-testid="disk-note"]', ["as of 5:31 PM. media-box hasn't sent newer figures."]);
+{
+  const p = await open("disk=gateway");
+  check("low disk: the workspace's volume is never claimed without a match", !(await text(p, '[data-testid="disk-note"]')).includes("with its workspace"));
+  await p.close();
+}
 {
   const p = await open("disk=node");
   await click(p, '#bot-list .bot[data-bot="juniper"]', 200);

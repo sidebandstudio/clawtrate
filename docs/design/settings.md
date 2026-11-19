@@ -418,28 +418,29 @@ A history read without a marker proves nothing about the context, so no line say
 
 A report, never a clean-up: the gateway offers a client no clean-up of a machine's files (research §9), so nothing here deletes anything.
 
-**Where the figures come from.** Only from a machine the gateway names for this bot, as `work-pane.md` §16 establishes it:
+**Where the figures come from.** Only from a machine the gateway names for this bot, as `work-pane.md` §16 establishes it, and the note names the volume that was measured:
 
-| The bot is set to work on | Figures                                                                       | Volume                                                                                                                                |
-| ------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| A node                    | The node's `node.hostStats`, or the copy on its `node.list` record            | The node's home volume                                                                                                                |
-| The gateway's machine     | `system.info`, read when the task opens and every 10 minutes while it is open | The entry of `disks` whose path is the longest that contains the bot's `workspace` (`agents.list`), else the gateway's state folder's |
+| The bot is set to work on               | Figures                                                                       | The volume named                                                                                                                             | The time                                 |
+| --------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| A node                                  | The node's `node.hostStats`, or the copy on its `node.list` record            | "The volume containing media-box's home folder": the node measures its home folder's volume (`os.homedir()`)                                 | The node's sample time, `updatedAtMs`    |
+| The gateway's machine, a mount matched  | `system.info`, read when the task opens and every 10 minutes while it is open | "The volume containing Otto's workspace": the entry of `disks` whose path is the longest that contains the bot's `workspace` (`agents.list`) | "Checked at", the time Clawtrate read it |
+| The gateway's machine, no mount matched | The same read                                                                 | "The volume containing the gateway's state folder" (`diskPath`), and "The workspace volume was unavailable."                                 | "Checked at"                             |
 
-Both are `operator.read`, so a read-only connection sees the report.
+`system.info`'s list of volumes can be cut short when its collection times out, so a missing match says the workspace volume was unavailable and never calls the state folder's volume the workspace's. Both reads are `operator.read`, so a read-only connection sees the report.
 
 **When.** Below 5 GB free, or below 5 percent of the volume (Clawtrate's choice), a note above the composer of each of that bot's tasks:
 
-> Otto is set to run commands on media-box, which has 2.1 GB free of 512 GB, as of 5:40 PM.
+> Otto is set to run commands on media-box. The volume containing media-box's home folder has 2.1 GB free of 512 GB, as of 5:40 PM.
 > Clawtrate deletes nothing. Whether Otto asks before it deletes a file depends on its command rules.
 > [Show the computer] [Otto's rules] [×]
 
-For the gateway's own machine: "Otto is set to run commands on the gateway's machine. The volume with its workspace has 4.2 GB free of 994 GB, as of 5:40 PM."
+For the gateway's own machine: "Otto is set to run commands on the gateway's machine. The volume containing the gateway's state folder has 4.2 GB free of 994 GB. The workspace volume was unavailable. Checked at 5:40 PM.", or, when a mount matched, "The volume containing Otto's workspace has 4.2 GB free of 994 GB. Checked at 5:40 PM."
 
 - "Is set to" because it is a setting, not proof of where a command ran (`work-pane.md` §16).
 - "Show the computer" opens the Work pane's Computer tab, where the machine block has the same figures. "Otto's rules" opens Otto's Settings tab at what it may do (`controls.md` §4).
 - Closed with ×, it stays closed until the free space changes by a gigabyte or more.
-- Figures older than three minutes say so, as `work-pane.md` §16 does; a machine that reports no disk gets no note.
-- Naming the largest items, and asking before deleting, is the bot's own work in its turn (F-159); the note does not claim the bot will ask.
+- A node's figures older than three minutes say so: "as of 5:31 PM. media-box hasn't sent newer figures." A machine that reports no disk gets no note.
+- The note is a partial report for F-159: naming the largest items once and waiting for a fresh yes before deleting is the bot's own work in its turn, and the note claims neither.
 
 ## 15. Widths, themes, keyboard, screen readers, motion
 
@@ -578,7 +579,7 @@ For the gateway's own machine: "Otto is set to run commands on the gateway's mac
 | `hw`                     | `pending`, `off`                                                                                                                                                                                                                                                                                                                          |
 | `required`               | `client` or `gateway`: a protocol refusal on Home gateway; `retryok=1`: the next handshake succeeds; `install=1` with `feed=1`: the updater offers a replacement this build can install                                                                                                                                                   |
 | `compact`                | `running`, `compacting`, `done`, `nosizes`, `skipped`, `failed`, `stopped`, `unconfirmed` (open Juniper's task "Heat pump vs. gas furnace"); `reply=` the same values: what the next Compact gets                                                                                                                                         |
-| `disk`                   | `node`, `gateway`: the low-disk note in Otto's tasks                                                                                                                                                                                                                                                                                      |
+| `disk`                   | `node`, `stale` (a node's old sample), `gateway` (no mount matched), `matched`: the low-disk note in Otto's tasks                                                                                                                                                                                                                         |
 | `add`                    | `1`: the setup flow's stand-in open                                                                                                                                                                                                                                                                                                       |
 
 The check walks these by clicking, and asserts each destination's words:
