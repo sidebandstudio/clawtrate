@@ -140,19 +140,20 @@ async function inTurn<T, R>(
 ): Promise<R[]> {
   const out: R[] = new Array<R>(items.length);
   let next = 0;
-  const failures: unknown[] = [];
+  // Only the first failure is kept: it is what the caller is told.
+  let failure = null as { error: unknown } | null;
   const worker = async () => {
-    while (failures.length === 0 && next < items.length) {
+    while (failure === null && next < items.length) {
       const at = next++;
       try {
         out[at] = await job(items[at]!);
       } catch (error) {
-        failures.push(error);
+        failure ??= { error };
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  if (failures.length > 0) throw failures[0];
+  if (failure !== null) throw failure.error;
   return out;
 }
 
