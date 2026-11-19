@@ -138,7 +138,7 @@ export class UpdateEngine {
     return this.current;
   }
 
-  /** The newer version the last check found, or null. */
+  /** The newer version the last check found, or null, also while a check runs and after one failed. */
   get newer(): NewerVersion | null {
     return this.found
       ? { version: formatVersion(this.found.version), releaseDate: this.found.releaseDate }
@@ -174,6 +174,9 @@ export class UpdateEngine {
   }
 
   private async runCheck(): Promise<UpdateState> {
+    // A new check forgets the last one's offer first, so a check that fails
+    // leaves no newer version behind to report, require or download.
+    this.found = null;
     const loopback = this.options.loopbackHttpForTests;
     const address = checkFeedAddress(this.options.feedAddress, loopback);
     if (!address.ok) {
@@ -199,15 +202,12 @@ export class UpdateEngine {
     if (!read.ok) return this.report({ kind: "failed", stage: "check", cause: read.cause });
     const { version, releaseDate, file } = read.feed;
     if (!isNewer(version, this.running)) {
-      this.found = null;
       return this.report({ kind: "up-to-date", latest: formatVersion(version) });
     }
     if (!file) {
-      this.found = null;
       return this.report({ kind: "failed", stage: "check", cause: "no-file-for-this-system" });
     }
     if (file.size > this.limits.maxDownloadBytes) {
-      this.found = null;
       return this.report({ kind: "failed", stage: "check", cause: "too-large" });
     }
     this.found = { version, releaseDate, file };

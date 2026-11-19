@@ -6,7 +6,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { UpdateEngine, type UpdateState } from "../../src/main/update/index.ts";
+import { isUpdateRequired, UpdateEngine, type UpdateState } from "../../src/main/update/index.ts";
 import {
   bytes,
   engineFor,
@@ -430,6 +430,27 @@ describe("the update engine against a local feed", () => {
       expect(await engine.check()).toEqual({ kind: "not-configured" });
     }
     expect(server.requests).toEqual([]);
+  });
+
+  it("forgets the last check's offer when a check fails, so nothing is required or downloaded from it", async () => {
+    const file = payload();
+    const good = feedFor(server.origin, "0.2.0", { size: file.body.length, sha512: file.sha512 });
+    let body: unknown = good;
+    server.route("/feed.json", (request, response) => json(body)(request, response));
+    server.route("/files/app.zip", bytes(file.body));
+    const { engine } = engineFor(server, dir.path);
+    const stale = "2026-01-01T00:00:00.000Z";
+    const now = new Date("2026-11-19T00:00:00.000Z");
+
+    expect((await engine.check()).kind).toBe("available");
+    expect(isUpdateRequired(engine.newer, stale, now)).toBe(true);
+    body = "{ not json";
+    expect(await engine.check()).toEqual(failed("check", "malformed-feed"));
+    expect(engine.newer).toBeNull();
+    expect(isUpdateRequired(engine.newer, stale, now)).toBe(false);
+    expect(await engine.download()).toEqual(failed("check", "malformed-feed"));
+    expect(server.requests).toEqual(["/feed.json", "/feed.json"]);
+    expect(downloads()).toEqual([]);
   });
 
   it("answers a second check while the first runs with the first's result", async () => {
