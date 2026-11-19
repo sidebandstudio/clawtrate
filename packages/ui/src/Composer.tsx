@@ -1,5 +1,8 @@
 import {
+  fileRefusal,
   isStopNow,
+  sendRefusal,
+  type SendShape,
   type AttachmentInfo,
   type Bot,
   type MenuRow,
@@ -45,8 +48,6 @@ export const DEFAULT_LIMITS: SendLimits = {
   payloadBytes: 25 * MIB,
   files: 20,
 };
-/** Room in a frame for the request around the files and words, as the engine counts it. */
-const FRAME_SLACK_BYTES = 1024;
 /** The tag each kind of "/" or "@" row carries (F-071, F-070). */
 const TAG: Record<MenuRow["kind"], string> = {
   skill: "Skill",
@@ -70,9 +71,16 @@ function limit(bytes: number): string {
   return Number.isInteger(mb) ? `${mb} MB` : size(bytes);
 }
 
-/** The bytes a file takes in the `chat.send` frame: its base64 form, its name and type around it. */
-export function encodedBytes(file: { bytes: number; name: string }): number {
-  return Math.ceil(file.bytes / 3) * 4 + new TextEncoder().encode(file.name).length + 96;
+/**
+ * A size past a limit, and the limit, in words that tell them apart: "8.2 MB" and "6 MB", or the
+ * exact bytes when rounding would make them read the same.
+ */
+function past(bytes: number, ceiling: number): [string, string] {
+  const shown = size(bytes);
+  const most = limit(ceiling);
+  if (shown !== most && shown !== `${most.replace(" MB", ".0 MB")}`) return [shown, most];
+  const exact = (n: number) => `${n.toLocaleString("en-US")} bytes`;
+  return [exact(bytes), exact(ceiling)];
 }
 
 type Attached = {
@@ -80,42 +88,53 @@ type Attached = {
   key: string;
   name: string;
   bytes: number;
-  image: boolean;
+  /** Its type, as the request will name it. */
+  mimeType: string;
+  /** The file itself, while the host does not hold it: handed over once the limits admit it. */
+  file: File | null;
   /** The host's id once it holds the file. */
   info: AttachmentInfo | null;
-  /** Why this file cannot go. */
-  refusal: string | null;
-  uploading: boolean;
+  /** Why the host did not take it. The gateway's limits are checked as the chip is drawn. */
+  error: string | null;
 };
 
-/** A file the gateway would refuse, said before anything is sent. */
+/** A file the gateway would refuse, said before anything is sent (the engine's `fileRefusal`). */
 export function refusalFor(
-  file: { size: number; type: string },
+  file: { size: number; type: string; name?: string },
   limits: SendLimits = DEFAULT_LIMITS,
 ): string | null {
-  const image = file.type.startsWith("image/");
-  if (image && file.size > limits.imageBytes)
-    return `${size(file.size)}. Images can be up to ${limit(limits.imageBytes)}.`;
-  if (!image && file.size > limits.fileBytes)
-    return `${size(file.size)}. Files can be up to ${limit(limits.fileBytes)}.`;
+  const refused = fileRefusal(
+    { fileName: file.name ?? "file", mimeType: file.type, bytes: file.size },
+    limits,
+  );
+  if (!refused) return null;
+  const [shown, most] = past(refused.bytes, refused.limit);
+  return `${shown}. ${refused.kind === "image" ? "Images" : "Files"} can be up to ${most}.`;
+}
+
+/**
+ * Why this message cannot go as one request, or null: the engine's own check (`sendRefusal`),
+ * over the request exactly as it would be sent, against the gateway's current policy. A file
+ * over its own ceiling is said on its chip.
+ */
+export function messageRefusal(
+  shape: SendShape,
+  limits: SendLimits = DEFAULT_LIMITS,
+): string | null {
+  const refused = sendRefusal(shape, limits);
+  if (!refused) return null;
+  if (refused.kind === "count")
+    return `${refused.count} files attached. A message can carry up to ${refused.limit} files.`;
+  if (refused.kind === "frame") {
+    const [shown, most] = past(refused.bytes, refused.limit);
+    return `${shown} to send with its files. A message can carry up to ${most}.`;
+  }
   return null;
 }
 
-/** Why a message with these words and files cannot go as one request, or null. */
-export function messageRefusal(
-  text: string,
-  files: Array<{ bytes: number; name: string }>,
-  limits: SendLimits = DEFAULT_LIMITS,
-): string | null {
-  if (files.length > limits.files)
-    return `${files.length} files attached. A message can carry up to ${limits.files} files.`;
-  const encoded =
-    files.reduce((sum, file) => sum + encodedBytes(file), 0) +
-    new TextEncoder().encode(text).length +
-    FRAME_SLACK_BYTES;
-  if (files.length > 0 && encoded > limits.payloadBytes)
-    return `${size(encoded)} to send with its files. A message can carry up to ${limit(limits.payloadBytes)}.`;
-  return null;
+/** The words as a message sends them: each chosen chip's text in front, then what was typed. */
+function sentText(chips: MenuRow[], words: string): string {
+  return [...chips.map((chip) => chip.insert), words.trim()].filter(Boolean).join(" ");
 }
 
 // Drafts are the person's unsent words: kept per gateway and task for this
@@ -243,10 +262,30 @@ export function Composer({
     chosen: chosen && chosen.run === runId ? chosen.mode : null,
   });
 
-  const whole = messageRefusal(text, files, ceilings);
+  // Checked as drawn, against the gateway's current policy: a reconnect that changed it
+  // changes what is refused. The request is the one the engine would build: the words as sent,
+  // a command chip's text in front, and each file as the request names it.
+  const refusalOf = (file: Attached) =>
+    file.error ?? refusalFor({ size: file.bytes, type: file.mimeType, name: file.name }, ceilings);
+  const whole = messageRefusal(
+    {
+      sessionKey: taskKey,
+      text: sentText(tokens, text),
+      idempotencyKey: "x".repeat(36),
+      queueMode: view.mode === "steer" ? "steer" : "followup",
+      files: files.map((file) => ({
+        fileName: file.name,
+        mimeType: file.mimeType,
+        bytes: file.bytes,
+      })),
+    },
+    ceilings,
+  );
   const tooMuch = whole !== null;
-  const refused = files.some((file) => file.refusal) || tooMuch;
-  const uploading = files.some((file) => file.uploading);
+  const refused = files.some((file) => refusalOf(file) !== null) || tooMuch;
+  // A file the limits admit is on its way to the host until the host holds it.
+  const pending = (file: Attached) => !file.info && refusalOf(file) === null;
+  const uploading = files.some(pending);
   const hasContent = text.trim().length > 0 || files.length > 0 || tokens.length > 0;
   const canSend = hasContent && !refused && !uploading;
   const refusalReason = refused ? (whole ?? "Remove the files that are too large to send.") : null;
@@ -289,7 +328,7 @@ export function Composer({
       const words = text;
       const chips = tokens;
       // The chips go first, as their own text: the gateway runs a command or skill named so.
-      const body = [...chips.map((chip) => chip.insert), words.trim()].filter(Boolean).join(" ");
+      const body = sentText(chips, words);
       const taken = files;
       const attachmentIds = taken.flatMap((file) => (file.info ? [file.info.id] : []));
       setText("");
@@ -499,51 +538,51 @@ export function Composer({
     else void sendAs(view.mode);
   };
 
-  const addFiles = useCallback(
-    (list: FileList | File[]) => {
-      for (const file of [...list]) {
-        const key = `${file.name}:${file.size}:${Math.random().toString(36).slice(2)}`;
-        const refusal = refusalFor(file, ceilings);
-        const entry: Attached = {
-          key,
-          name: file.name,
-          bytes: file.size,
-          image: file.type.startsWith("image/"),
-          info: null,
-          refusal,
-          uploading: refusal === null,
-        };
-        setFiles((current) => [...current, entry]);
-        if (refusal) continue;
-        void file
-          .arrayBuffer()
-          .then((data) =>
-            bridge.attach({ name: file.name, type: file.type || "application/octet-stream", data }),
-          )
-          .then(
-            (info) =>
-              setFiles((current) =>
-                current.map((each) =>
-                  each.key === key ? { ...each, info, uploading: false } : each,
-                ),
-              ),
-            (error: unknown) =>
-              setFiles((current) =>
-                current.map((each) =>
-                  each.key === key
-                    ? {
-                        ...each,
-                        uploading: false,
-                        refusal: error instanceof Error ? error.message : String(error),
-                      }
-                    : each,
-                ),
-              ),
-          );
-      }
-    },
-    [bridge, ceilings],
-  );
+  const addFiles = useCallback((list: FileList | File[]) => {
+    const added = [...list].map((file): Attached => ({
+      key: `${file.name}:${file.size}:${Math.random().toString(36).slice(2)}`,
+      name: file.name,
+      bytes: file.size,
+      mimeType: file.type || "application/octet-stream",
+      file,
+      info: null,
+      error: null,
+    }));
+    setFiles((current) => [...current, ...added]);
+  }, []);
+
+  // The host takes a file once the gateway's limits admit it: at once when it is chosen, or
+  // after a reconnect brings a policy that does.
+  const handing = useRef(new Set<string>());
+  useEffect(() => {
+    for (const chip of files) {
+      if (!chip.file || chip.info || chip.error || handing.current.has(chip.key)) continue;
+      if (refusalFor({ size: chip.bytes, type: chip.mimeType, name: chip.name }, ceilings))
+        continue;
+      const { key, file } = chip;
+      const settle = (change: Partial<Attached>, release?: AttachmentInfo) =>
+        setFiles((current) => {
+          // Removed while it was on its way: what the host took for it is let go at once.
+          if (release && !current.some((each) => each.key === key))
+            void bridge.send({ type: "releaseAttachments", attachmentIds: [release.id] });
+          return current.map((each) => (each.key === key ? { ...each, ...change } : each));
+        });
+      handing.current.add(key);
+      void file
+        .arrayBuffer()
+        .then((data) => bridge.attach({ name: file.name, type: chip.mimeType, data }))
+        .then(
+          (info) => {
+            handing.current.delete(key);
+            settle({ info, file: null }, info);
+          },
+          (error: unknown) => {
+            handing.current.delete(key);
+            settle({ error: error instanceof Error ? error.message : String(error) });
+          },
+        );
+    }
+  }, [files, ceilings, bridge]);
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     if (event.clipboardData.files.length > 0) {
@@ -593,10 +632,10 @@ export function Composer({
               key: info.id,
               name: info.fileName,
               bytes: info.sizeBytes,
-              image: info.mimeType.startsWith("image/"),
+              mimeType: info.mimeType,
+              file: null,
               info,
-              refusal: null,
-              uploading: false,
+              error: null,
             })),
           ]);
         }}
@@ -808,19 +847,25 @@ export function Composer({
                   <li
                     key={file.key}
                     className="chip"
-                    data-tone={file.refusal ? "danger" : undefined}
-                    aria-busy={file.uploading || undefined}
+                    data-tone={refusalOf(file) ? "danger" : undefined}
+                    aria-busy={pending(file) || undefined}
                   >
                     <FileIcon />
                     <b>{file.name}</b>
-                    <span>{file.refusal ?? size(file.bytes)}</span>
+                    <span>{refusalOf(file) ?? size(file.bytes)}</span>
                     <button
                       type="button"
                       className="chip-remove"
                       aria-label={`Remove ${file.name}`}
-                      onClick={() =>
-                        setFiles((current) => current.filter((each) => each.key !== file.key))
-                      }
+                      onClick={() => {
+                        // What the host holds for it is free again at once.
+                        if (file.info)
+                          void bridge.send({
+                            type: "releaseAttachments",
+                            attachmentIds: [file.info.id],
+                          });
+                        setFiles((current) => current.filter((each) => each.key !== file.key));
+                      }}
                     >
                       <CloseIcon />
                     </button>

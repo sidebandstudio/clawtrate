@@ -99,6 +99,8 @@ export type BridgeCommand =
    */
   | { type: "readStepRaw"; key: string; stepId: string }
   | { type: "readRunRaw"; key: string; runId: string }
+  /** Files the viewer attached and then removed from its draft: the host lets them go. */
+  | { type: "releaseAttachments"; attachmentIds: string[] }
   /** Ask again, with its own key, for a task creation the gateway refused, or whose outcome is unknown (it may create a second task). */
   | { type: "retryCreation"; creationId: string }
   /** Forget a task creation that failed, settled or cannot be established. */
@@ -735,6 +737,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         key: sessionKey(command.key),
         stepId: id(command.stepId, "step id"),
       };
+    case "releaseAttachments": {
+      const ids = command.attachmentIds;
+      if (!Array.isArray(ids) || ids.length > MAX_ATTACHMENTS_PER_MESSAGE)
+        throw new Error("invalid attachments");
+      return {
+        type: "releaseAttachments",
+        attachmentIds: ids.map((each) => id(each, "attachment id")),
+      };
+    }
     case "readRunRaw":
       return {
         type: "readRunRaw",
@@ -1094,6 +1105,10 @@ class ViewerSession implements BridgeSession {
         return client.readStepRaw(this.mine(command.key), command.stepId);
       case "readRunRaw":
         return client.readRunRaw(this.mine(command.key), command.runId);
+      case "releaseAttachments":
+        // What a removed chip reserved is free again at once, not when it would expire.
+        this.policy.attachments?.release(command.attachmentIds);
+        return;
       case "listTaskFiles":
         return client.listTaskFiles(this.mine(command.key), this.fileOptions());
       case "readTaskFile":

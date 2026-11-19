@@ -436,15 +436,26 @@ describe("attachments", () => {
       "19.0 MB. Files can be up to 18.6 MB.",
     );
     expect(refusalFor({ size: 18 * 1024 * 1024, type: "application/pdf" }, gateway)).toBeNull();
+    const draft = (files: Array<{ fileName: string; bytes: number }>) => ({
+      sessionKey: "agent:otto:disk-space",
+      text: "",
+      idempotencyKey: "x".repeat(36),
+      queueMode: "followup" as const,
+      files: files.map((file) => ({ ...file, mimeType: "application/pdf" })),
+    });
     // Four files of 5 MiB are 20 MiB as files but 26.7 MiB as the frame carries them.
-    const four = [1, 2, 3, 4].map((n) => ({ name: `part-${n}.pdf`, bytes: 5 * 1024 * 1024 }));
-    expect(messageRefusal("", four, gateway)).toBe(
+    const four = [1, 2, 3, 4].map((n) => ({ fileName: `part-${n}.pdf`, bytes: 5 * 1024 * 1024 }));
+    expect(messageRefusal(draft(four), gateway)).toBe(
       "26.7 MB to send with its files. A message can carry up to 25 MB.",
     );
-    expect(messageRefusal("", four.slice(0, 3), gateway)).toBeNull();
-    const many = Array.from({ length: 21 }, (_, n) => ({ name: `${n}.txt`, bytes: 10 }));
-    expect(messageRefusal("", many, gateway)).toBe(
+    expect(messageRefusal(draft(four.slice(0, 3)), gateway)).toBeNull();
+    const many = Array.from({ length: 21 }, (_, n) => ({ fileName: `${n}.txt`, bytes: 10 }));
+    expect(messageRefusal(draft(many), gateway)).toBe(
       "21 files attached. A message can carry up to 20 files.",
+    );
+    // One byte over a ceiling does not read as the ceiling itself.
+    expect(refusalFor({ size: 6_291_457, type: "image/png" })).toBe(
+      "6,291,457 bytes. Images can be up to 6,291,456 bytes.",
     );
   });
 });

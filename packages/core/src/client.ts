@@ -14,6 +14,7 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
+import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
 import {
@@ -352,8 +353,6 @@ export const MAX_MESSAGE_CHARS = 32_000;
 export const DEFAULT_MAX_PAYLOAD_BYTES = 26_214_400;
 /** How often a send with files is sampled as the socket writes it (F-286). */
 const UPLOAD_SAMPLE_MS = 100;
-/** Room left in a frame for the request envelope around the params. */
-const FRAME_SLACK_BYTES = 1024;
 const SESSION_LIST_PARAMS = {
   limit: SESSION_PAGE_SIZE,
   includeDerivedTitles: true,
@@ -477,10 +476,6 @@ function decodedBytes(base64: string): number {
   const clean = base64.replace(/\s+/g, "");
   const padding = clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0;
   return Math.max(0, Math.floor((clean.length * 3) / 4) - padding);
-}
-
-function isImage(attachment: OutgoingAttachment): boolean {
-  return attachment.type === "image" || attachment.mimeType.toLowerCase().startsWith("image/");
 }
 
 type Plan = GatewayBrowserDeviceAuthPlan;
@@ -1405,7 +1400,14 @@ export class ClawtrateClient {
       if (typeof each.type !== "string" || each.type.length > 32)
         throw new Error("invalid file type");
     }
-    this.checkSize(this.sendParams(key, body, "x".repeat(36), "followup", attachments));
+    if (attachments.length > MAX_ATTACHMENTS_PER_MESSAGE)
+      throw new SendTooLargeError(
+        `${attachments.length} files; one message can carry at most ${MAX_ATTACHMENTS_PER_MESSAGE}.`,
+      );
+    // As it will be sent, its reply reference included; checked again at delivery.
+    this.checkSize(
+      this.sendParams(key, body, "x".repeat(36), "followup", attachments, options.replyToId),
+    );
     const bytes = attachments.reduce((sum, each) => sum + decodedBytes(each.content), 0);
     if (this.attachmentBytes + bytes > MAX_RETAINED_ATTACHMENT_BYTES) {
       throw new Error(
@@ -1495,15 +1497,10 @@ export class ClawtrateClient {
     attachments: OutgoingAttachment[],
     replyToId?: string,
   ) {
-    return {
-      sessionKey: key,
-      message: text,
-      idempotencyKey,
-      // Always the mode meant: with none the gateway steers.
-      queueMode,
-      ...(attachments.length > 0 ? { attachments } : {}),
-      ...(replyToId ? { replyToId } : {}),
-    };
+    return chatSendParams(
+      { sessionKey: key, text, idempotencyKey, queueMode, replyToId: replyToId ?? null },
+      attachments,
+    );
   }
 
   /**
@@ -1541,25 +1538,36 @@ export class ClawtrateClient {
     };
   }
 
-  /** Refuse a send that breaks the image, file or frame ceiling, before it reaches the socket. */
-  private checkSize(params: { attachments?: OutgoingAttachment[] }): void {
-    const limits = this.sendLimits();
-    for (const attachment of params.attachments ?? []) {
-      const size = decodedBytes(attachment.content);
-      const limit = isImage(attachment) ? limits.imageBytes : limits.fileBytes;
-      if (size > limit) {
-        throw new SendTooLargeError(
-          `${attachment.fileName} is ${size} bytes; the gateway accepts ${isImage(attachment) ? "images" : "files"} up to ${limit} bytes.`,
-        );
-      }
-    }
-    const maxPayload = limits.payloadBytes;
-    const frame = utf8Length(JSON.stringify(params)) + FRAME_SLACK_BYTES;
-    if (frame > maxPayload) {
-      throw new SendTooLargeError(
-        `The message and its files come to ${frame} bytes; one message can carry at most ${maxPayload}.`,
-      );
-    }
+  /**
+   * Refuse a send past the file count, an image or file ceiling or the frame ceiling, before it
+   * reaches the socket: `sendRefusal`, the function the composer checks a draft with, over the
+   * request as built and the gateway's current policy.
+   */
+  private checkSize(params: ReturnType<typeof chatSendParams<OutgoingAttachment>>): void {
+    const files = (params.attachments ?? []).map((each) => ({
+      fileName: each.fileName,
+      mimeType: each.mimeType,
+      bytes: decodedBytes(each.content),
+    }));
+    const refused = sendRefusal(
+      {
+        sessionKey: params.sessionKey,
+        text: params.message,
+        idempotencyKey: params.idempotencyKey,
+        queueMode: params.queueMode,
+        replyToId: params.replyToId ?? null,
+        files,
+      },
+      this.sendLimits(),
+    );
+    if (!refused) return;
+    throw new SendTooLargeError(
+      refused.kind === "count"
+        ? `${refused.count} files; one message can carry at most ${refused.limit}.`
+        : refused.kind === "frame"
+          ? `The message and its files come to ${refused.bytes} bytes; one message can carry at most ${refused.limit}.`
+          : `${files[refused.index]!.fileName} is ${refused.bytes} bytes; the gateway accepts ${refused.kind === "image" ? "images" : "files"} up to ${refused.limit} bytes.`,
+    );
   }
 
   /**
