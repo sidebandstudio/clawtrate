@@ -366,13 +366,10 @@ const recordLine = (p) => text(p, '#settings-dialog [data-testid="record-line"]'
   check("walk: Restart now: off, read back after the restart", (await text(p, settings)).includes("Off. Clawtrate draws without the graphics hardware.") && !(await text(p, settings)).includes("Restart now"));
   await p.close();
 }
-await stateWords("System, Windows: the dictionary's language", "open=settings&section=system&os=windows", settings, ["Checks English (United States)."]);
-await stateWords("System, Windows: downloading", "open=settings&section=system&os=windows&spell=downloading", settings, ["Uses a dictionary for English (United States), which Clawtrate downloads once."]);
 {
-  const p = await open("open=settings&section=system&os=windows&spell=failed");
-  check("System, Windows: the download failed", (await text(p, settings)).includes("Couldn't download the dictionary for English (United States). Spelling isn't checked."));
-  await press(p, "button", "Try again", 1100);
-  check("walk: the dictionary, Try again: ready", (await text(p, settings)).includes("Checks English (United States).") && (await announced(p)) === "Spelling is checked");
+  const p = await open("open=settings&section=system&os=windows");
+  const t = await text(p, settings);
+  check("System, Windows: spelling unavailable in this build, no switch, nothing downloaded", t.includes("Spelling is unavailable in this build.") && (await p.locator('#settings-dialog [data-s="spell"]').count()) === 0 && !/download/i.test(t));
   await p.close();
 }
 await stateWords("System: turned on again, not restarted", "open=settings&section=system&hw=off", settings, ["Off. Clawtrate draws without the graphics hardware."]);

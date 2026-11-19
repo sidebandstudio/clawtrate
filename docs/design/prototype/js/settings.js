@@ -54,7 +54,7 @@
     upd: p("upd") || "idle",
     version: "0.1.0",
     auto: false,
-    spell: p("spell") || (p("os") === "windows" ? "ready" : "on"), // on, off, downloading, failed, ready (Windows)
+    spell: p("spell") === "off" ? "off" : "on", // on or off; on Windows spelling is unavailable in this build
     hw: p("hw") || "on", // on, pending (off at the next start), off, pendingOn
     saveFail: p("savefail") === "1",
     unsaved: false,
@@ -619,9 +619,7 @@
     function spellLine() {
       if (S.spell === "off") return ["", "Spelling isn't checked."];
       if (S.os === "mac") return ["", "Uses macOS's own spelling checker, in the languages macOS is set to."];
-      if (S.spell === "downloading") return ["", "Uses a dictionary for English (United States), which Clawtrate downloads once."];
-      if (S.spell === "failed") return ["danger", "Couldn't download the dictionary for English (United States). Spelling isn't checked."];
-      return ["", "Checks English (United States)."];
+      return ["", "Spelling is unavailable in this build."];
     }
     const HW = {
       on: ["Turn off if Clawtrate draws badly or flickers on this computer.", true, false],
@@ -636,8 +634,8 @@
         owner("Applies on this device.") +
         `<div class="s-group"><h4>Spelling</h4><div class="s-setting"><span class="s-setting-main"><strong>Check spelling while typing</strong>` +
         `<span id="s-spell-line"${tone ? ` data-tone="${tone}"` : ""}>${line}</span>` +
-        (S.spell === "failed" ? `<span class="s-setting-actions">${button("Try again", 'data-s="spell-retry" data-size="sm"')}</span>` : "") +
-        `</span>${sw(S.spell !== "off", 'data-s="spell"', "Check spelling while typing", "s-spell-line")}</div></div>` +
+        // Windows: no dictionary comes with the app and none is fetched unasked (issue #171), so there is no switch.
+        `</span>${S.os === "windows" ? "" : sw(S.spell !== "off", 'data-s="spell"', "Check spelling while typing", "s-spell-line")}</div></div>` +
         `<div class="s-group"><h4>Graphics</h4><div class="s-setting"><span class="s-setting-main"><strong>Use hardware acceleration</strong><span id="s-hw-line">${hwLine}</span>` +
         (restart ? `<span class="s-setting-actions">${button("Restart now", 'data-s="restart" data-size="sm"', "primary")}</span>` : "") +
         `</span>${sw(hwOn, 'data-s="hw"', "Use hardware acceleration", "s-hw-line")}</div></div>` +
@@ -875,26 +873,12 @@
           return announce(`Your messages: ${el.dataset.value === "neutral" ? "Neutral" : "Accent"}`);
         case "spell": {
           const turningOn = S.spell === "off";
-          S.spell = turningOn ? (S.os === "windows" ? "downloading" : "on") : "off";
+          S.spell = turningOn ? "on" : "off";
           rs();
           $('[data-s="spell"]', settingsDialog)?.focus();
-          if (S.spell === "downloading")
-            setTimeout(() => {
-              S.spell = p("spell") === "failed" ? "failed" : "ready";
-              rs();
-              announce(S.spell === "ready" ? "Spelling is checked" : "Spelling isn't checked");
-            }, 900);
-          else announce(turningOn ? "Spelling is checked" : "Spelling isn't checked");
+          announce(turningOn ? "Spelling is checked" : "Spelling isn't checked");
           return;
         }
-        case "spell-retry":
-          S.spell = "downloading";
-          rs();
-          return setTimeout(() => {
-            S.spell = "ready";
-            rs();
-            announce("Spelling is checked");
-          }, 900);
         case "hw":
           S.hw = { on: "pending", pending: "on", off: "pendingOn", pendingOn: "off" }[S.hw];
           rs();
