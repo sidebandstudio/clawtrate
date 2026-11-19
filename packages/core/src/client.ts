@@ -1118,10 +1118,7 @@ export class ClawtrateClient {
     const target = [...this.tierScopes(wanted), ...(pairing ? [PAIRING_SCOPE] : [])];
     if (target.every((scope) => this.holdsExactly(scope))) return;
     if (!this.settings) throw new Error("Connect to a gateway first.");
-    if (
-      this.scopeUpgrade &&
-      ((wanted === "admin" && this.upgradeTier !== "admin") || (pairing && !this.pairingWanted))
-    ) {
+    if (this.scopeUpgrade && (wanted !== this.upgradeTier || (pairing && !this.pairingWanted))) {
       // A narrower request is waiting; ask again, for this with it.
       this.scopeUpgrade.cancelScopeUpgrade();
       this.scopeUpgrade = null;
@@ -1180,7 +1177,11 @@ export class ClawtrateClient {
         // The rotated token carries the new grant; from now on connect asks for exactly what it covers.
         // It belongs to this gateway and this connection only.
         store: async ({ deviceId, role, token, scopes }) => {
-          if (generation !== this.generation || this.settings?.url !== url) {
+          if (
+            generation !== this.generation ||
+            this.settings?.url !== url ||
+            this.scopeUpgrade !== upgrade
+          ) {
             throw new Error("The gateway changed while access was being approved.");
           }
           const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(scopes, ADMIN_SCOPE);
@@ -1229,7 +1230,8 @@ export class ClawtrateClient {
       })
       .then(
         (outcome) => {
-          if (this.scopeUpgrade === upgrade) this.scopeUpgrade = null;
+          if (this.scopeUpgrade !== upgrade) return;
+          this.scopeUpgrade = null;
           if (outcome.status === "approved") {
             if (
               (tier !== "held" &&
@@ -1253,7 +1255,8 @@ export class ClawtrateClient {
           this.failAccess(new AccessRequestError(outcome.status));
         },
         (error: unknown) => {
-          if (this.scopeUpgrade === upgrade) this.scopeUpgrade = null;
+          if (this.scopeUpgrade !== upgrade) return;
+          this.scopeUpgrade = null;
           if (!this.upgradeWanted) return;
           if (!(error instanceof GatewayProtocolRequestError) && !this.protocol?.connected) {
             // The connection dropped while waiting. Ask again after the next hello.

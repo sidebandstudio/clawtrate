@@ -87,6 +87,44 @@ describe("device access", () => {
     client.stop();
   });
 
+  for (const [second, tier, held] of [
+    ["interactive", INTERACTIVE_SCOPES, "canWrite"],
+    ["admin", ADMIN_SCOPES, "canAdmin"],
+  ] as const) {
+    it(`F-157: a request for ${second} made while device access is pending keeps its own outcome`, async () => {
+      const fake = new AccountsGateway();
+      const first = deferred<unknown>();
+      const next = deferred<unknown>();
+      let count = 0;
+      fake.gateway.handlers["device.scopes.requestUpgrade"] = () => ({
+        requestId: `up-${++count}`,
+      });
+      fake.gateway.handlers["device.scopes.waitUpgrade"] = (params) =>
+        (params as { requestId: string }).requestId === "up-1" ? first.promise : next.promise;
+      const { client } = await accountsClient({ gateway: fake, scopes: READ_SCOPES });
+      await client.requestAccess("pairing");
+      await until(() => client.state.connection.upgrade.status === "pending");
+      await client.requestAccess(second);
+      await until(() => fake.gateway.calls("device.scopes.requestUpgrade").length === 2);
+      const wanted = [...tier, PAIRING_SCOPE];
+      expect(fake.gateway.calls("device.scopes.requestUpgrade")[1]).toEqual({ scopes: wanted });
+      // The first wait ends after it was replaced: the second request stays as it is.
+      first.reject(new Error("cancelled"));
+      await until(() => client.state.connection.upgrade.requestId === "up-2");
+      await new Promise<void>((resolve) => setTimeout(() => resolve(), 50));
+      expect(client.state.connection.upgrade.status).toBe("pending");
+      next.resolve({
+        status: "approved",
+        requestId: "up-2",
+        deviceToken: "rotated",
+        scopes: wanted,
+      });
+      await until(() => client.state.connection[held]);
+      expect(client.state.connection.scopes).toEqual(expect.arrayContaining(wanted));
+      client.stop();
+    });
+  }
+
   it("F-157: the bridge takes the request by name and nothing else", () => {
     expect(parseBridgeCommand({ type: "requestAccess", tier: "pairing" })).toEqual({
       type: "requestAccess",
