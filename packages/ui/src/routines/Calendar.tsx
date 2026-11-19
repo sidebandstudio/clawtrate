@@ -2,10 +2,11 @@
 // viewer's own time, the runs the gateway recorded on those days and the
 // scheduled times from the gateway's next run on, which the gateway does not
 // list and are computed from each schedule. A routine that runs more than four
-// times a day is one band per day; its recorded runs still show as chips.
+// times a day is one band on each coming day it runs; its recorded runs still
+// show as chips.
 
 import type { Bot, Routine } from "@clawtrate/core";
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Avatar } from "../Avatar.tsx";
 import { useBridge } from "../bridge.tsx";
 import { Note } from "../bots/parts.tsx";
@@ -15,6 +16,7 @@ import {
   frequent,
   occurrences,
   ownerOf,
+  runKey,
   scheduleWords,
   viewerZone,
   wallMinutes,
@@ -98,7 +100,7 @@ export function Calendar({
     const routine = byId.get(run.jobId);
     if (!routine) continue;
     chips.push({
-      key: `run:${run.runId ?? run.runAt}`,
+      key: runKey(run.jobId, run.runId, run.runAt),
       routine,
       at: run.runAt,
       past: true,
@@ -110,7 +112,7 @@ export function Calendar({
   for (const routine of routines) {
     if (routine.runningAt !== null && routine.runningAt >= start && routine.runningAt < end)
       chips.push({
-        key: `running:${routine.id}`,
+        key: runKey(routine.id, null, routine.runningAt),
         routine,
         at: routine.runningAt,
         past: false,
@@ -132,7 +134,16 @@ export function Calendar({
       });
   }
   chips.sort((a, b) => a.at - b.at || a.routine.name.localeCompare(b.routine.name));
-  const bands = routines.filter((each) => each.enabled && frequent(each));
+  // A band only on a day it still runs: from now on, and on the gateway's next run for what is not computed.
+  const bands = columns.map((day) =>
+    routines.filter(
+      (each) =>
+        frequent(each) &&
+        addDays(day, 1) > now &&
+        occurrences(each, Math.max(day, now), addDays(day, 1)).length > 0,
+    ),
+  );
+  const headId = useId();
 
   const move = (by: number) => setStart((current) => addDays(current, by));
   // Left and Right: the chip closest in time on the nearest earlier or later day that has one.
@@ -226,23 +237,22 @@ export function Calendar({
           onKeyDown={onKey}
         >
           <div className="r-cal-corner" aria-hidden="true" />
-          {columns.map((day) => (
+          {columns.map((day, index) => (
             <div
               key={`head:${day}`}
+              id={`${headId}-${index}`}
               className="r-cal-dayhead"
               data-today={day === startOfDay(now) || undefined}
-              aria-hidden="true"
             >
-              {dayName(day, now)}
-              <small>{dateName(day)}</small>
+              {dayName(day, now)} <small>{dateName(day)}</small>
             </div>
           ))}
-          {bands.length > 0 && (
+          {bands.some((each) => each.length > 0) && (
             <>
               <div className="r-cal-corner" aria-hidden="true" />
-              {columns.map((day) => (
+              {columns.map((day, index) => (
                 <div key={`bands:${day}`} className="r-cal-bands">
-                  {bands.map((routine) => {
+                  {bands[index]!.map((routine) => {
                     const words = `${scheduleWords(routine.schedule).text} · ${routine.name}`;
                     return (
                       <button
@@ -270,27 +280,47 @@ export function Calendar({
                 </span>
               ))}
           </div>
-          {columns.map((day) => {
+          {columns.map((day, dayIndex) => {
             const mine = chips.filter((chip) => chip.at >= day && chip.at < addDays(day, 1));
             const label = dayLabel(day);
+            const empty = mine.length === 0 && bands[dayIndex]!.length === 0;
+            // Chips that start less than an hour apart share the row side by side, in time order.
+            const groups: Chip[][] = [];
+            for (const chip of mine) {
+              const group = groups.at(-1);
+              const last = group?.at(-1);
+              if (
+                group &&
+                last &&
+                Math.abs(wallMinutes(chip.at, viewer) - wallMinutes(last.at, viewer)) < 60
+              )
+                group.push(chip);
+              else groups.push([chip]);
+            }
+            const place = new Map(
+              groups.flatMap((group) =>
+                group.map((chip, index) => [chip.key, { index, of: group.length }] as const),
+              ),
+            );
             return (
               <ul
                 key={`day:${day}`}
                 className="r-cal-day"
-                aria-label={mine.length > 0 ? label : `${label}, nothing scheduled`}
+                aria-labelledby={`${headId}-${dayIndex}`}
+                aria-describedby={empty ? `${headId}-${dayIndex}-empty` : undefined}
                 data-testid="calendar-day"
               >
+                {empty && (
+                  <li id={`${headId}-${dayIndex}-empty`} hidden>
+                    Nothing scheduled
+                  </li>
+                )}
                 {startOfDay(now) === day && (
                   <li className="r-now" aria-hidden="true" style={{ top: top(now) }} />
                 )}
-                {mine.map((chip, index) => {
+                {mine.map((chip) => {
                   const bot = ownerOf(bots, chip.routine.botId);
-                  // Chips at the same time stack below one another.
-                  const before = mine
-                    .slice(0, index)
-                    .filter(
-                      (other) => Math.abs(top(other.at) - top(chip.at)) < 0.75 * HOUR_PX,
-                    ).length;
+                  const { index, of } = place.get(chip.key)!;
                   const outcome = chip.running
                     ? ", running"
                     : chip.past
@@ -307,7 +337,11 @@ export function Calendar({
                     <li
                       key={chip.key}
                       className="r-occ-slot"
-                      style={{ top: top(chip.at) + before * 24 }}
+                      style={{
+                        top: top(chip.at),
+                        left: `${(index / of) * 100}%`,
+                        right: `${((of - 1 - index) / of) * 100}%`,
+                      }}
                     >
                       <button
                         type="button"
