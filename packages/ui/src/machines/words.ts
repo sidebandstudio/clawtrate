@@ -123,7 +123,7 @@ export function effectiveWords(
     const reviewer = policy.autoReview ? `, so the gateway skips ${botName}'s reviewer` : "";
     return `${head}: ${entry ? `its entry in ${by.name}'s file` : `${by.name}'s file`} asks more than ${botName}'s policy (${policyName})${reviewer}.`;
   }
-  return `${head}, from ${botName}'s policy (${policyName}); ${files.length > 1 ? "these files" : "this file"} ask no more.`;
+  return `${head}, from ${botName}'s policy (${policyName}); ${files.length > 1 ? "these files ask" : "this file asks"} no more.`;
 }
 
 /** The line under a machine's effective results (section 15). */
