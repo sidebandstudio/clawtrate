@@ -708,11 +708,14 @@ describe("the iOS app", () => {
       waitFor({ id: `task-${lit(key)}`, text: `${lit(title)}, working` }, 30_000),
       see({ id: "state-working", childOf: { id: `task-${lit(key)}` } }),
       tap({ id: `task-${lit(key)}` }),
-      waitFor({ id: "running" }, 60_000),
-      // Text streams with no tool call: the bot is writing, and the text is there.
-      waitFor({ id: "running-text", text: "Writing" }, 60_000),
+      // The task opens at its start, the streaming reply already longer than the
+      // screen: its text is there, and Jump to latest carries the run's phrase.
+      waitFor("Here is a long answer, streamed slowly\\..*", 60_000),
+      // Text streams with no tool call: the bot is writing, not thinking.
+      waitFor({ id: "jump-to-latest", text: "Writing\\. Jump to latest" }, 60_000),
+      tap({ id: "jump-to-latest" }),
+      waitFor({ id: "running-text", text: "Writing" }, 30_000),
       see({ id: "running-dot-live" }),
-      see("Here is a long answer, streamed slowly\\..*"),
     ]);
     await shoot("running");
 
@@ -733,6 +736,8 @@ describe("the iOS app", () => {
       tap({ id: "bot-marlow" }),
       waitFor({ id: `task-${lit(key)}` }, 30_000),
       tap({ id: `task-${lit(key)}` }),
+      waitFor({ id: "jump-to-latest", text: "Disconnected\\. Last seen .*" }, 30_000),
+      tap({ id: "jump-to-latest" }),
       waitFor({ id: "running-text", text: "Disconnected\\. Last seen .*" }, 30_000),
       see({ id: "running-dot-off" }),
       notSee({ id: "running-dot-live" }),
