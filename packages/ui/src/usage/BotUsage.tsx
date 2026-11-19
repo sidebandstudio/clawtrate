@@ -102,10 +102,12 @@ export function BotUsagePage({
   }
   const own = budgetOf(state.usage, bot.id, now);
   const report = useUsageReport(bot.id, period, true, visible, own?.count?.asOf ?? null);
-  // Count the budget again as the page opens, so its meter and the figures read the same records.
+  // Count the budget again as the page is shown, so its meter and the figures read the same
+  // records; a page kept out of view asks for nothing.
   useEffect(() => {
+    if (!visible) return;
     void bridge.send({ type: "refreshUsage" }).catch(() => {});
-  }, [bridge, bot.id]);
+  }, [bridge, bot.id, visible]);
   const name = bot.name;
   const head = (
     <div className="b-subhead">

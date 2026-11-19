@@ -520,6 +520,37 @@ test("F-234: a hidden window asks for no report at the date's rollover, and read
   await context.close();
 });
 
+test("F-234: a Usage page kept out of view asks for no recount, and asks once shown again (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, PAGE, "light");
+  await expect(page.getByTestId("usage-total")).toBeVisible();
+  const recounts = () =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } }
+        ).clawtrateFixture.sent.filter((each) => each.type === "refreshUsage").length,
+    );
+  // Details shown, then another bot and back: Otto's Settings tab, out of view, keeps its page.
+  await page.getByRole("tab", { name: "Details" }).click();
+  const before = await recounts();
+  await page
+    .getByTestId("bot-list")
+    .getByRole("button", { name: /^Pip\b/ })
+    .first()
+    .click();
+  await page
+    .getByTestId("bot-list")
+    .getByRole("button", { name: /^Otto\b/ })
+    .first()
+    .click();
+  await page.getByRole("tab", { name: "Details" }).waitFor();
+  expect(await recounts()).toBe(before);
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await expect.poll(recounts).toBeGreaterThan(before);
+});
+
 test("F-237: through a switch of host, Settings drops the old gateway's figures and reads again once connected (fixture)", async ({
   page,
 }) => {
