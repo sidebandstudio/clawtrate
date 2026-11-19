@@ -25,6 +25,7 @@ import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
+import { windowsAppUserModelId } from "./identity.ts";
 import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
 import {
   readDevConnection,
@@ -34,6 +35,9 @@ import {
 } from "../host/runtime.ts";
 
 app.setName("Clawtrate");
+// On Windows, the taskbar button belongs to the installer's shortcuts from the first window.
+const appUserModelId = windowsAppUserModelId(process.platform, app.isPackaged);
+if (appUserModelId) app.setAppUserModelId(appUserModelId);
 // Every renderer is sandboxed, including any not created through createWindow.
 app.enableSandbox();
 
