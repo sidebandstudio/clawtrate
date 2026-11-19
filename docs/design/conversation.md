@@ -884,7 +884,7 @@ Opened, the thread's card lists its calls in order, one item each, and every ite
 - **"Raw"**, a text button at the end of every item, named "Raw for this call", opens that call's own panel (section 9): its tool name, arguments, result, timing and identifiers. Every call that joined the card keeps its Raw here, whether or not it also has a line of its own (11.4).
 - **"Show where it happened"**, on an item whose call also has a line of its own, scrolls to that line (11.4).
 
-Under the items: **Files**, as chips, only when a result or a gateway attachment carries them (F-135), and **"Open thread"**, only when a result carries a `link`, the latest one received. It is a link named "Open the T3 Code thread in your browser"; it opens the system browser when chosen, and nothing is fetched before that. (F-135)
+Under the items: **Files**, as chips, only when a result or a gateway attachment carries them (F-135), and **"Open thread"**. Open thread is offered when the record supplies one distinct HTTP(S) address, with its host. It is a link named "Open the T3 Code thread in your browser"; it opens the system browser when chosen, and nothing is fetched before that. (F-135)
 
 A card that is one call on its own (no known thread) is opened as before: what was sent, what came back, Files, "Open thread" and "Raw".
 

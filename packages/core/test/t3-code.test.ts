@@ -28,6 +28,7 @@ import {
   latestSent,
   threadKey,
   threadStateOf,
+  threadLink,
   threadTitle,
   workMayContinue,
   type ActionCall,
@@ -1039,5 +1040,31 @@ describe("the folded line says what the thread is for (11.2)", () => {
       "Make the weekly check skip machines that are asleep.",
     );
     expect(threadTitle([send])).toBe("Also a test.");
+  });
+});
+
+describe("Open thread goes to the one address the record supplies (11.3)", () => {
+  it("F-135: two different addresses with no proven order give no link", () => {
+    const args = { threadId: THREAD };
+    const a = t3(
+      live("t3_thread_wait", args, {
+        threadId: THREAD,
+        status: "completed",
+        timedOut: false,
+        link: "https://new.example/thread",
+      }),
+    )!;
+    const b = t3(
+      live("t3_thread_read", args, {
+        ...readResult([], false, "running"),
+        link: "https://old.example/thread",
+      }),
+    )!;
+    expect(
+      threadLink([
+        { ...a, call: { ...a.call, resultAt: 4_000 } },
+        { ...b, call: { ...b.call, resultAt: 3_000 } },
+      ]),
+    ).toBeNull();
   });
 });
