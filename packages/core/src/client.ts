@@ -206,7 +206,12 @@ import {
   type SidebarPrefs,
   type SidebarState,
 } from "./sidebar.ts";
-import { UsageEngine, type UsageReport, type UsageReportRequest } from "./usage-engine.ts";
+import {
+  UsageEngine,
+  type UsageBusy,
+  type UsageReport,
+  type UsageReportRequest,
+} from "./usage-engine.ts";
 import { initialUsage, type BudgetChange, type Routine } from "./usage.ts";
 import {
   archiveTask,
@@ -5188,8 +5193,8 @@ export class ClawtrateClient {
 
   // Usage and warning budgets (`usage.ts`, `usage-engine.ts`; controls.md sections 16, 17) ------
 
-  /** A page's usage figures, read now and not kept. */
-  readUsage(request: Omit<UsageReportRequest, "bots">): Promise<UsageReport> {
+  /** A page's usage figures, read now and not kept; `busy` while the host reads as many as it reads at once. */
+  readUsage(request: Omit<UsageReportRequest, "bots">): Promise<UsageReport | UsageBusy> {
     if (this.state.connection.status !== "connected")
       return Promise.reject(new Error("Not connected to the gateway."));
     return this.usage.readReport({ ...request, bots: this.state.bots.map((bot) => bot.id) });

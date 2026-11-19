@@ -13,6 +13,13 @@ test.use(contextFor({ name: "1440", width: 1440, height: 900 }, "light"));
 
 const usage = (page: Page) => page.getByTestId("usage-page");
 
+async function settingsUsageWaiting(page: Page) {
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Usage", exact: true }).click();
+  return settings;
+}
+
 async function settingsUsage(page: Page) {
   await page.keyboard.press("ControlOrMeta+,");
   const settings = page.getByRole("dialog", { name: "Settings" });
@@ -301,6 +308,21 @@ test("F-237: a bot whose own figure couldn't be read is Unavailable on its bar a
   await expect(bots.getByRole("listitem", { name: "Otto: Unavailable" })).toHaveCount(1);
   await expect(bots.getByRole("listitem", { name: /^Otto: \d/ })).toHaveCount(0);
   await expect(bots.getByRole("listitem", { name: "Marlow: 562,000 tokens" })).toHaveCount(1);
+});
+
+test("F-234: while the host is busy reading other usage the page says it waits, never that it couldn't load (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, `${PAGE}&usage=busy`, "light");
+  await expect(page.getByTestId("usage-waiting")).toHaveText(
+    "Waiting: Clawtrate is reading other usage from the gateway first, and asks again in a moment.",
+  );
+  await expect(page.getByTestId("usage-loading")).toBeVisible();
+  await expect(page.getByTestId("usage-error")).toHaveCount(0);
+  await expect(usage(page)).not.toContainText("Couldn't load");
+  const settings = await settingsUsageWaiting(page);
+  await expect(settings.getByTestId("usage-waiting")).toBeVisible();
+  await expect(settings).not.toContainText("Couldn't load");
 });
 
 test("the Usage row's value wraps rather than shortening at phone width", async ({ browser }) => {

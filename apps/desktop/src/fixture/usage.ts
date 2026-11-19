@@ -4,6 +4,7 @@
 //
 //   &usage=loading|error|computing|nocost|partial|nolimits   the figures' states
 //   &usage=botfail                                            Otto's own figure couldn't be read
+//   &usage=busy                                               the host is reading other reports
 //   &budget=none|warn|reached|daily|invalid                   Otto's budget
 //   &plimit=near|reached                                      a provider's reported limit
 //   &uview=usage                                              open Otto's Usage page
@@ -23,7 +24,16 @@ import {
 } from "@clawtrate/core";
 
 export type UsageParams = {
-  usage: "loading" | "error" | "computing" | "nocost" | "partial" | "nolimits" | "botfail" | null;
+  usage:
+    | "loading"
+    | "error"
+    | "computing"
+    | "nocost"
+    | "partial"
+    | "nolimits"
+    | "botfail"
+    | "busy"
+    | null;
   budget: "none" | "warn" | "reached" | "daily" | "invalid" | null;
   plimit: "near" | "reached" | null;
 };
@@ -44,6 +54,7 @@ export function usageParams(params: URLSearchParams): UsageParams {
       "partial",
       "nolimits",
       "botfail",
+      "busy",
     ]),
     budget: pick("budget", ["none", "warn", "reached", "daily", "invalid"]),
     plimit: pick("plimit", ["near", "reached"]),
@@ -263,6 +274,7 @@ export function usageCommand(
   switch (command.type) {
     case "readUsage":
       if (params.usage === "loading") return new Promise(() => {});
+      if (params.usage === "busy") return Promise.resolve({ busy: true });
       if (params.usage === "error")
         return Promise.reject(new Error("usage.cost timed out after 60 seconds."));
       return new Promise((resolve) =>

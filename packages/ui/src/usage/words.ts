@@ -212,6 +212,10 @@ export function moreTasks(omitted: number, capped: boolean): string {
   return capped ? `${tasks} of the ${full(SESSIONS_LIMIT)} listed` : tasks;
 }
 
+/** While the host is busy reading other usage: the page waits, it hasn't failed. */
+export const USAGE_WAITING =
+  "Waiting: Clawtrate is reading other usage from the gateway first, and asks again in a moment.";
+
 /** Said under the tasks when the gateway listed as many as it was asked for. */
 export const TASKS_CAPPED = `The gateway lists at most ${full(SESSIONS_LIMIT)} tasks at once, the most recently updated first: these are the largest of those, and there may be others.`;
 

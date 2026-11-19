@@ -26,6 +26,7 @@ export {
   COUNT_EVERY_MS,
   MAX_USAGE_REPORTS,
   SESSIONS_LIMIT,
+  type UsageBusy,
   type UsageReport,
 } from "./usage-engine.ts";
 export * from "./task-actions.ts";

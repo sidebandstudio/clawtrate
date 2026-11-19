@@ -20,7 +20,7 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
-import type { UsageReport } from "./usage-engine.ts";
+import type { UsageBusy, UsageReport } from "./usage-engine.ts";
 import {
   MAX_ROUTINE_NAME_CHARS,
   validTimeZone,
@@ -243,7 +243,7 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                       : C extends { type: "listArchived" }
                                         ? ArchivedList
                                         : C extends { type: "readUsage" }
-                                          ? UsageReport
+                                          ? UsageReport | UsageBusy
                                           : C extends { type: "listRoutines" }
                                             ? Routine[]
                                             : void;

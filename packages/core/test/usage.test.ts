@@ -9,9 +9,9 @@ import {
   COUNT_COUNTING_MS,
   COUNT_EVERY_MS,
   MAX_USAGE_REPORTS,
-  MAX_WAITING_USAGE_REPORTS,
   UsageEngine,
   type UsageContext,
+  type UsageReportRequest,
 } from "../src/usage-engine.ts";
 import {
   applyBudgetChange,
@@ -201,7 +201,7 @@ describe("the gateway's figures", () => {
         ? { updatedAt: 1, cacheStatus: fresh }
         : gateway.request(method, raw);
     const { engine } = engineOn({ ...gateway, request: empty });
-    const report = await engine.readReport({
+    const report = await reportOf(engine, {
       botId: null,
       period: "today",
       timeZone: NY,
@@ -213,7 +213,7 @@ describe("the gateway's figures", () => {
       { botId: "otto", figure: null, error: "The gateway's answer had no totals." },
     ]);
     await expect(
-      engine.readReport({ botId: "otto", period: "today", timeZone: NY, detail: false, bots: [] }),
+      reportOf(engine, { botId: "otto", period: "today", timeZone: NY, detail: false, bots: [] }),
     ).rejects.toThrow("had no totals");
     engine.onClose();
   });
@@ -604,6 +604,13 @@ const flush = async () => {
   for (let i = 0; i < 20; i += 1) await Promise.resolve();
 };
 
+/** A report that is read, not answered busy. */
+async function reportOf(engine: UsageEngine, request: UsageReportRequest) {
+  const answer = await engine.readReport(request);
+  if ("busy" in answer) throw new Error("answered busy");
+  return answer;
+}
+
 describe("the usage engine", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -730,7 +737,7 @@ describe("the usage engine", () => {
       range: { startDate: "2026-11-16", endDate: "2026-11-19" },
     });
     const counted = gateway.calls.filter((c) => c.method === "usage.cost").map((c) => c.params);
-    const report = await engine.readReport({
+    const report = await reportOf(engine, {
       botId: "otto",
       period: "week",
       timeZone: NY,
@@ -833,7 +840,7 @@ describe("the usage engine", () => {
   it("F-131 F-237: a bot's sources count a sent run only when the sending task's result names it", async () => {
     const gateway = fakeGateway();
     const { engine } = engineOn(gateway);
-    const report = await engine.readReport({
+    const report = await reportOf(engine, {
       botId: "marlow",
       period: "week",
       timeZone: NY,
@@ -882,7 +889,7 @@ describe("the usage engine", () => {
 
   it("F-232: while the gateway is still counting, the sources are marked partial and the figure says so", async () => {
     const { engine } = engineOn(fakeGateway({ counting: true }));
-    const report = await engine.readReport({
+    const report = await reportOf(engine, {
       botId: "marlow",
       period: "week",
       timeZone: NY,
@@ -910,7 +917,7 @@ describe("the usage engine", () => {
       return gateway.request(method, raw);
     };
     const one = engineOn({ ...gateway, request: apart });
-    const report = await one.engine.readReport({
+    const report = await reportOf(one.engine, {
       botId: "otto",
       period: "week",
       timeZone: NY,
@@ -923,7 +930,7 @@ describe("the usage engine", () => {
     one.engine.onClose();
     // A total still being counted: the named parts are shown as partial, the rest is not a figure.
     const two = engineOn(fakeGateway({ counting: true }));
-    const counting = await two.engine.readReport({
+    const counting = await reportOf(two.engine, {
       botId: "marlow",
       period: "week",
       timeZone: NY,
@@ -955,7 +962,7 @@ describe("the usage engine", () => {
       };
     };
     const { engine } = engineOn({ ...gateway, request: capped });
-    const report = await engine.readReport({
+    const report = await reportOf(engine, {
       botId: "marlow",
       period: "week",
       timeZone: NY,
@@ -971,7 +978,7 @@ describe("the usage engine", () => {
   it("F-237: every bot's figures, each read the same way as its own page", async () => {
     const gateway = fakeGateway();
     const { engine } = engineOn(gateway);
-    const report = await engine.readReport({
+    const report = await reportOf(engine, {
       botId: null,
       period: "today",
       timeZone: NY,
@@ -992,7 +999,7 @@ describe("the usage engine", () => {
     engine.onClose();
   });
 
-  it("F-234: reads at most two reports at once; a third waits its turn and is answered, not refused", async () => {
+  it("F-234: reads at most two reports at once; a third is answered busy, not refused as a failure", async () => {
     const gateway = fakeGateway();
     // The gateway answers usage.cost only when told, so the first two reads stay in flight.
     const held: Array<() => void> = [];
@@ -1009,39 +1016,68 @@ describe("the usage engine", () => {
     const { engine } = engineOn({ ...gateway, request: slow });
     const read = () =>
       engine.readReport({ botId: "otto", period: "today", timeZone: NY, detail: false, bots: [] });
-    const reads = [read(), read(), read()];
+    const reads = [read(), read()];
     await flush();
+    // The third is answered at once, and as busy: nothing waits on the host for it.
+    await expect(read()).resolves.toEqual({ busy: true });
     expect(held).toHaveLength(MAX_USAGE_REPORTS);
-    while (held.length > 0) {
-      held.shift()!();
-      await flush();
-    }
-    const settled = await Promise.allSettled(reads);
-    expect(settled.map((s) => s.status)).toEqual(["fulfilled", "fulfilled", "fulfilled"]);
+    while (held.length > 0) held.shift()!();
+    const settled = await Promise.all(reads);
+    expect(settled.map((each) => "figure" in each)).toEqual([true, true]);
     expect(most).toBe(MAX_USAGE_REPORTS);
+    // Once one has ended, the next is read.
+    const next = read();
+    await flush();
+    held.shift()!();
+    await expect(next).resolves.toMatchObject({ botId: "otto" });
     engine.onClose();
   });
 
-  it("refuses a report only when the line of waiting reports is full", async () => {
-    const gateway = fakeGateway();
+  it("a report ends with the connection it started on: nothing is asked of the next gateway, and no answer comes from it", async () => {
+    const asked: Array<[string, string]> = [];
     const held: Array<() => void> = [];
-    const slow: typeof gateway.request = async (method, params) => {
-      if (method === "usage.cost") await new Promise<void>((resolve) => held.push(resolve));
+    let gatewayName = "first";
+    const gateway = fakeGateway();
+    const request: typeof gateway.request = async (method, params) => {
+      asked.push([gatewayName, method]);
+      if (gatewayName === "first" && method === "usage.cost")
+        await new Promise<void>((resolve) => held.push(resolve));
       return gateway.request(method, params);
     };
-    const { engine } = engineOn({ ...gateway, request: slow });
-    const reads = Array.from({ length: MAX_USAGE_REPORTS + MAX_WAITING_USAGE_REPORTS + 1 }, () =>
-      engine.readReport({ botId: "otto", period: "today", timeZone: NY, detail: false, bots: [] }),
-    );
+    const { engine } = engineOn({ ...gateway, request });
+    const reads = [
+      engine.readReport({ botId: "otto", period: "week", timeZone: NY, detail: true, bots: [] }),
+      engine.readReport({
+        botId: null,
+        period: "week",
+        timeZone: NY,
+        detail: false,
+        bots: ["pip"],
+      }),
+    ];
     await flush();
-    // The two in flight and the eight waiting are answered in turn; the eleventh was refused.
-    await expect(reads.at(-1)).rejects.toThrow("Usage is already being read");
-    for (let turn = 0; turn < MAX_USAGE_REPORTS + MAX_WAITING_USAGE_REPORTS; turn += 1) {
-      while (held.length > 0) held.shift()!();
-      await flush();
-    }
-    const settled = await Promise.allSettled(reads.slice(0, -1));
-    expect(settled.every((s) => s.status === "fulfilled")).toBe(true);
+    // The connection closes and the client connects to another gateway.
+    engine.onClose();
+    gatewayName = "second";
+    engine.onHello();
+    await flush();
+    while (held.length > 0) held.shift()!();
+    for (const each of await Promise.allSettled(reads))
+      expect(each).toMatchObject({
+        status: "rejected",
+        reason: { message: expect.stringMatching(/closed/) },
+      });
+    // The second gateway was asked only what its own hello asks, nothing of either report.
+    expect(
+      asked
+        .filter(([name]) => name === "second")
+        .map(([, method]) => method)
+        .sort(),
+    ).toEqual(["usage.status", "users.prefs.get"]);
+    // Their slots are free again.
+    await expect(
+      engine.readReport({ botId: "otto", period: "today", timeZone: NY, detail: false, bots: [] }),
+    ).resolves.toMatchObject({ botId: "otto" });
     engine.onClose();
   });
 

@@ -3,7 +3,14 @@
 // reads a report from the host.
 
 import type { UsagePeriod, UsageReport } from "@clawtrate/core";
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type KeyboardEvent,
+} from "react";
 import { useBridge } from "../bridge.tsx";
 import { EyeIcon } from "../icons.tsx";
 import { barText, deviceTimeZone, PERIODS, short, type BarRow } from "./words.ts";
@@ -152,7 +159,8 @@ export const PeriodChoice = ({
 }) => <Choice label="Period" name="period" value={value} options={PERIODS} onChange={onChange} />;
 
 export type ReportState =
-  | { status: "loading"; report: UsageReport | null }
+  /** `waiting`: the host answered that it is busy reading other reports; asked again while shown. */
+  | { status: "loading"; report: UsageReport | null; waiting?: boolean }
   | { status: "ready"; report: UsageReport }
   | { status: "error"; report: UsageReport | null; error: string };
 
@@ -167,6 +175,20 @@ export function stillCounted(report: UsageReport): boolean {
 
 /** How soon a figure the gateway is still counting is read again. */
 export const COUNTING_AGAIN_MS = 5_000;
+/** How soon a report the host was too busy to read is asked for again. */
+export const BUSY_AGAIN_MS = 3_000;
+
+/** Whether the window is shown: a hidden one asks the host for nothing again. */
+export function useWindowShown(): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      document.addEventListener("visibilitychange", listener);
+      return () => document.removeEventListener("visibilitychange", listener);
+    },
+    () => document.visibilityState !== "hidden",
+    () => true,
+  );
+}
 
 /** The tick a view judges periods and budget states at: now, and every 30 seconds. */
 export function useNow(): number {
@@ -180,7 +202,9 @@ export function useNow(): number {
 
 /**
  * A usage report, read from the host when shown, again when the period
- * changes or `again` does, and never kept beyond this view.
+ * changes or `again` does, and never kept beyond this view. `enabled` is
+ * whether the view is shown: only a shown view asks again, after the host
+ * said it was busy or while the gateway is still counting.
  */
 export function useUsageReport(
   botId: string | null,
@@ -201,7 +225,13 @@ export function useUsageReport(
     bridge
       .invoke({ type: "readUsage", botId, period, timeZone: deviceTimeZone(), detail })
       .then((report) => {
-        if (live) setAnswer({ key, state: { status: "ready", report } });
+        if (!live) return;
+        if ("busy" in report)
+          setAnswer((was) => ({
+            key,
+            state: { status: "loading", report: was?.state.report ?? null, waiting: true },
+          }));
+        else setAnswer({ key, state: { status: "ready", report } });
       })
       .catch((failure: unknown) => {
         if (live)
@@ -218,14 +248,18 @@ export function useUsageReport(
       live = false;
     };
   }, [bridge, botId, period, detail, enabled, key]);
+  const shown = useWindowShown() && enabled;
   // While the gateway says it is still counting, read again shortly: its next answer can be complete.
   const counting =
     answer?.key === key && answer.state.status === "ready" && stillCounted(answer.state.report);
+  // The host was busy: ask again in a moment, while this view is shown.
+  const waiting =
+    answer?.key === key && answer.state.status === "loading" && answer.state.waiting === true;
   useEffect(() => {
-    if (!counting || !enabled) return;
-    const timer = setTimeout(retry, COUNTING_AGAIN_MS);
+    if (!shown || (!counting && !waiting)) return;
+    const timer = setTimeout(retry, waiting ? BUSY_AGAIN_MS : COUNTING_AGAIN_MS);
     return () => clearTimeout(timer);
-  }, [counting, enabled, retry]);
+  }, [counting, waiting, shown, retry]);
   const state: ReportState =
     answer === null
       ? { status: "loading", report: null }

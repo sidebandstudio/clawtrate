@@ -36,6 +36,7 @@ import {
   reportWindow,
   sourceBars,
   sourcesNote,
+  USAGE_WAITING,
 } from "./words.ts";
 import "./usage.css";
 
@@ -264,6 +265,11 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
     <>
       <h4 className="b-group">By bot</h4>
       <PeriodChoice value={period} onChange={setPeriod} />
+      {!r && report.status === "loading" && report.waiting && (
+        <p className="b-hint" role="status" data-testid="usage-waiting">
+          {USAGE_WAITING}
+        </p>
+      )}
       {!r && report.status === "loading" && (
         <div aria-busy="true" aria-label="Loading usage">
           <div className="skeleton" style={{ height: 80, width: "100%", marginTop: 8 }} />

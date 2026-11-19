@@ -51,14 +51,12 @@ export type UsageContext = {
   log(message: string): void;
 };
 
-/** Reports read at once; one more is refused with a reason to show. */
-export const MAX_USAGE_REPORTS = 2;
 /**
- * Reports that wait for one of those to finish, in the order asked; one more
- * is refused. A host that is only busy is not a failure: a page keeps showing
- * that it is loading until its turn comes.
+ * Reports read at once. One more is answered `busy`: the host is only busy,
+ * not failing, and the page that asked shows that it waits and asks again
+ * while it is shown. Nothing waits here for a page that may have gone.
  */
-export const MAX_WAITING_USAGE_REPORTS = 8;
+export const MAX_USAGE_REPORTS = 2;
 /** Requests one report or count sends at once. */
 export const USAGE_REQUESTS_AT_ONCE = 4;
 /** How often budgets are counted again while there are any. */
@@ -98,6 +96,14 @@ export type UsageReport = {
   /** Why the tasks or sources could not be read, or null. */
   detailError: string | null;
 };
+
+/** The answer while the host already reads `MAX_USAGE_REPORTS` reports: ask again later. */
+export type UsageBusy = { busy: true };
+
+/** A report ends with the connection it started on: no request of it goes to another gateway. */
+const CLOSED = "The connection to the gateway closed while its usage was being read.";
+
+type Ask = (method: string, params: unknown) => Promise<unknown>;
 
 export type UsageReportRequest = {
   botId: string | null;
@@ -142,8 +148,6 @@ export class UsageEngine {
   private counting: Promise<void> | null = null;
   private countAgain = false;
   private reports = 0;
-  /** Reports waiting for a slot, each woken in turn when one ends (`MAX_WAITING_USAGE_REPORTS`). */
-  private readonly waiting: Array<() => void> = [];
   /** Budget reads and writes issued, and the newest one shown, to order their answers. */
   private issued = 0;
   private shown = 0;
@@ -412,36 +416,42 @@ export class UsageEngine {
 
   // Reports --------------------------------------------------------------------------------------
 
-  /** A page's figures: read now, not kept. At most `MAX_USAGE_REPORTS` at once; the rest wait their turn. */
-  async readReport(request: UsageReportRequest): Promise<UsageReport> {
-    if (this.reports < MAX_USAGE_REPORTS) this.reports += 1;
-    else {
-      if (this.waiting.length >= MAX_WAITING_USAGE_REPORTS)
-        throw new Error("Usage is already being read. Try again in a moment.");
-      // The slot of the report that ends next is handed to this one.
-      await new Promise<void>((resolve) => this.waiting.push(resolve));
-    }
+  /**
+   * A page's figures: read now, not kept. At most `MAX_USAGE_REPORTS` at once;
+   * one more is answered `busy`. A report belongs to the connection it started
+   * on: once that closes, it sends nothing more, uses no answer, and fails.
+   */
+  async readReport(request: UsageReportRequest): Promise<UsageReport | UsageBusy> {
+    if (this.reports >= MAX_USAGE_REPORTS) return { busy: true };
+    this.reports += 1;
+    const generation = this.generation;
+    const ask: Ask = async (method, params) => {
+      if (generation !== this.generation) throw new Error(CLOSED);
+      const result = await this.ctx.request(method, params);
+      if (generation !== this.generation) throw new Error(CLOSED);
+      return result;
+    };
     try {
-      return await this.report(request);
+      const report = await this.report(request, ask);
+      if (generation !== this.generation) throw new Error(CLOSED);
+      return report;
     } finally {
-      const next = this.waiting.shift();
-      if (next) next();
-      else this.reports -= 1;
+      this.reports -= 1;
     }
   }
 
-  private async report(request: UsageReportRequest): Promise<UsageReport> {
+  private async report(request: UsageReportRequest, ask: Ask): Promise<UsageReport> {
     const range = rangeFor(request.period, this.ctx.now(), request.timeZone);
     const params = rangeParams(range);
     const scope: RawRecord = request.botId ? { agentId: request.botId } : { agentScope: "all" };
-    const figure = figureOf(await this.ctx.request("usage.cost", { ...scope, ...params }));
+    const figure = figureOf(await ask("usage.cost", { ...scope, ...params }));
     const bots = request.botId
       ? null
       : await inTurn(request.bots, USAGE_REQUESTS_AT_ONCE, async (botId) => {
           try {
             return {
               botId,
-              figure: figureOf(await this.ctx.request("usage.cost", { agentId: botId, ...params })),
+              figure: figureOf(await ask("usage.cost", { agentId: botId, ...params })),
               error: null,
             };
           } catch (error) {
@@ -464,7 +474,7 @@ export class UsageEngine {
     if (!request.detail) return report;
     try {
       const listed = asRecord(
-        await this.ctx.request("sessions.usage", { ...scope, ...params, limit: SESSIONS_LIMIT }),
+        await ask("sessions.usage", { ...scope, ...params, limit: SESSIONS_LIMIT }),
       );
       const tasks = tasksOf(listed);
       report.tasks = tasks.slice(0, MAX_REPORT_TASKS);
@@ -477,7 +487,7 @@ export class UsageEngine {
         figure.counting ||
         report.detailCounting ||
         (bots ?? []).some((each) => each.figure?.counting === true);
-      const sources = await this.sources(tasks, figure.tokens.total, range);
+      const sources = await this.sources(tasks, figure.tokens.total, range, ask);
       if (sources.people + sources.routines + sources.bots > figure.tokens.total)
         // Read at different times, the parts and the total can't both be right: neither is shown.
         report.detailError =
@@ -506,6 +516,7 @@ export class UsageEngine {
     tasks: TaskUsage[],
     total: number,
     range: DateRange,
+    ask: Ask,
   ): Promise<UsageSources> {
     const routines = tasks
       .filter((task) => task.routineId)
@@ -516,7 +527,7 @@ export class UsageEngine {
     const histories = await inTurn(scanned, USAGE_REQUESTS_AT_ONCE, async (task) => {
       try {
         const result = asRecord(
-          await this.ctx.request("chat.history", {
+          await ask("chat.history", {
             sessionKey: task.key,
             limit: ATTRIBUTION_HISTORY_ROWS,
             maxChars: 200,
@@ -544,7 +555,7 @@ export class UsageEngine {
     await inTurn(senders.slice(0, MAX_SENDER_TASKS), USAGE_REQUESTS_AT_ONCE, async (key) => {
       try {
         const result = asRecord(
-          await this.ctx.request("chat.history", {
+          await ask("chat.history", {
             sessionKey: key,
             limit: ATTRIBUTION_HISTORY_ROWS,
             // Not cut to a display length: the send's result names its run in its text.

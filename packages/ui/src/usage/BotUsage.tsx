@@ -22,6 +22,7 @@ import {
   moreTasks,
   reportWindow,
   sourceBars,
+  USAGE_WAITING,
   sourcesNote,
   TASKS_CAPPED,
 } from "./words.ts";
@@ -73,10 +74,13 @@ export function BotUsagePage({
   announce,
   openForm,
   onBack,
+  visible,
 }: {
   bot: Bot;
   task: Task | null;
   canSet: boolean;
+  /** Whether the page is shown: a hidden one asks the host for nothing again. */
+  visible: boolean;
   announce: (text: string) => void;
   openForm: boolean;
   onBack: () => void;
@@ -92,7 +96,7 @@ export function BotUsagePage({
     if (openForm) setForm(true);
   }
   const own = budgetOf(state.usage, bot.id, now);
-  const report = useUsageReport(bot.id, period, true, true, own?.count?.asOf ?? null);
+  const report = useUsageReport(bot.id, period, true, visible, own?.count?.asOf ?? null);
   // Count the budget again as the page opens, so its meter and the figures read the same records.
   useEffect(() => {
     void bridge.send({ type: "refreshUsage" }).catch(() => {});
@@ -135,6 +139,11 @@ export function BotUsagePage({
       <div className="c-usage" data-testid="usage-page">
         {head}
         {budget}
+        {report.waiting && (
+          <p className="b-hint" role="status" data-testid="usage-waiting">
+            {USAGE_WAITING}
+          </p>
+        )}
         <div aria-busy="true" aria-label={`Loading ${name}'s usage`} data-testid="usage-loading">
           <div className="skeleton" style={{ height: 30, width: "60%", marginTop: 18 }} />
           <div className="skeleton" style={{ height: 160, width: "100%" }} />
@@ -326,6 +335,7 @@ export function BotSettingsWithUsage(props: BotSettingsProps & { task: Task | nu
             announce={props.announce}
             openForm={page.form}
             onBack={back}
+            visible={props.visible}
           />
         ) : null
       }
