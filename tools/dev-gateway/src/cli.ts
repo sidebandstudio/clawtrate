@@ -410,6 +410,11 @@ export function devConfig(
     },
     discovery: { mdns: { mode: "off" } },
     update: { checkOnStart: false },
+    // Everything the gateway itself fetches from beyond loopback (the plugin
+    // catalog and its feed, plugin downloads, a remote tool server) goes
+    // through this proxy, the instance's own scripted model, which refuses it
+    // and logs what was asked for. Loopback still connects directly.
+    proxy: { proxyUrl: `http://127.0.0.1:${ports.providerPort}` },
     models: {
       // Only the scripted provider exists; no ambient or bundled providers are merged in.
       mode: "replace",
