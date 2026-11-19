@@ -305,6 +305,8 @@ export function useMachinesSection({
   const [busy, setBusy] = useState(false);
   const granted = useGranted(connection);
   const connected = connection.status === "connected";
+  // Read again when the granted scopes change, not when a snapshot brings an equal list.
+  const scopesKey = connection.scopes.join(" ");
   const now = Date.now();
   useEffect(() => {
     if (!active || !connected) return;
@@ -321,7 +323,7 @@ export function useMachinesSection({
     return () => {
       live = false;
     };
-  }, [bridge, active, connected, connection.connectedAt, connection.scopes, tick]);
+  }, [bridge, active, connected, connection.connectedAt, scopesKey, tick]);
   const reload = useCallback(() => setTick((n) => n + 1), []);
   const admin = connection.canAdmin && !info.readOnly;
   const pairing = holdsPairing(connection) && !info.readOnly;

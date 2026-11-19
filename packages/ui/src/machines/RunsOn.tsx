@@ -25,6 +25,8 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
   const [read, setRead] = useState<Read>({ status: "loading" });
   const [tick, setTick] = useState(0);
   const connected = connection.status === "connected";
+  // Read again when the granted scopes change, not when a snapshot brings an equal list.
+  const scopesKey = connection.scopes.join(" ");
   useEffect(() => {
     if (!active || !connected) return;
     let live = true;
@@ -40,7 +42,7 @@ export function usePlacement(botId: string, connection: ConnectionState, active:
     return () => {
       live = false;
     };
-  }, [bridge, botId, active, connected, connection.connectedAt, connection.scopes, tick]);
+  }, [bridge, botId, active, connected, connection.connectedAt, scopesKey, tick]);
   const reload = useCallback(() => setTick((n) => n + 1), []);
   return { read, reload };
 }
