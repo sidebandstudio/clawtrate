@@ -945,6 +945,31 @@ describe("Settings, Machines: the engine", () => {
     expect(gw.calls.some(([m]) => m === "exec.approvals.set")).toBe(true);
   });
 
+  it("F-156: a machine whose approvals are a native policy is said as not a file, and no file is written to it", async () => {
+    const gw = gateway();
+    // The two host-native shapes of OpenClaw 2026.10.6's node snapshot: on, with rules, and off.
+    const native = { enabled: true, hash: "n1", defaultAction: "prompt", rules: [] };
+    gw.handlers["exec.approvals.node.get"] = () => native;
+    const read = await engine(gw, { admin: true }).readMachines();
+    expect(read.machines[1]!.approvals).toEqual({ status: "not-a-file" });
+    await expect(
+      engine(gw, { admin: true }).setMachineDefaults(NODE, "always", "n1"),
+    ).rejects.toThrow(
+      "This machine's approvals aren't kept in a file, so they can't be changed here.",
+    );
+    gw.handlers["exec.approvals.node.get"] = () => ({
+      enabled: false,
+      message: "Off on this host",
+    });
+    expect((await engine(gw, { admin: true }).readMachines()).machines[1]!.approvals).toEqual({
+      status: "not-a-file",
+    });
+    await expect(
+      engine(gw, { admin: true }).setMachineDefaults(NODE, "always", null),
+    ).rejects.toThrow(/aren't kept in a file/);
+    expect(gw.calls.map(([m]) => m)).not.toContain("exec.approvals.node.set");
+  });
+
   it("F-156: a file's defaults are one of the four choices only when they are exactly that pair", () => {
     expect(choiceOf({ security: "allowlist", ask: "always" })).toBe("always");
     expect(choiceOf({ security: "deny", ask: "off" })).toBe("never");

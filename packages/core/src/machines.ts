@@ -49,6 +49,8 @@ export type Unavailable =
   | { status: "needs-admin" }
   | { status: "needs-pairing" }
   | { status: "not-connected" }
+  /** A node whose approvals are a host-native policy, not a file. */
+  | { status: "not-a-file" }
   | { status: "failed"; message: string };
 
 /** A paired machine as `node.list` reported it: last seen, never inferred. */
@@ -447,6 +449,15 @@ export function readApprovalsFile(
   };
 }
 
+/**
+ * A node's snapshot that is a host-native policy (`enabled`, and when on, `defaultAction` and
+ * `rules`) rather than a file (OpenClaw 2026.10.6, `ExecApprovalsNodeSnapshotSchema`).
+ */
+export function isNativeApprovals(value: unknown): boolean {
+  const answer = rec(value);
+  return asRecord(answer.file) === null && typeof answer.enabled === "boolean";
+}
+
 /** A `device.pair.list` row whose role is `operator` and whose every other role is too. */
 function isOperatorOnly(r: RawRecord): boolean {
   return (
@@ -751,7 +762,11 @@ export class MachinesEngine {
             : await settle(() =>
                 ctx
                   .request("exec.approvals.node.get", { nodeId: node.id })
-                  .then((v) => readApprovalsFile(v, botIds)),
+                  .then((v) =>
+                    isNativeApprovals(v)
+                      ? ({ status: "not-a-file" } as const)
+                      : readApprovalsFile(v, botIds),
+                  ),
               );
       machines.push({
         id: node.id,
@@ -906,6 +921,11 @@ export class MachinesEngine {
         node ? { nodeId: node } : {},
       );
     const current = rec(await get());
+    // A file payload sent to a host that keeps a native policy would ask it for something else.
+    if (isNativeApprovals(current))
+      throw new PlacementWriteError(
+        "This machine's approvals aren't kept in a file, so they can't be changed here.",
+      );
     const hash = str(current.hash);
     // The revision the page showed, even none: a file that has one since was changed by someone else.
     if (hash !== expectedHash)

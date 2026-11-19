@@ -421,7 +421,9 @@ export function useMachinesSection({
             ? "Seeing a machine's approvals needs admin access."
             : file.status === "not-connected"
               ? `${machine.name} isn't connected, so its file can't be read now.`
-              : `Couldn't read this file. ${file.status === "failed" ? file.message : ""}`}
+              : file.status === "not-a-file"
+                ? `${machine.name}'s approvals aren't kept in a file, so they can't be shown or changed here.`
+                : `Couldn't read this file. ${file.status === "failed" ? file.message : ""}`}
         </p>
       );
     } else {
