@@ -4,6 +4,7 @@
 
 import { get as httpGet, type IncomingMessage } from "node:http";
 import { get as httpsGet } from "node:https";
+import { rootCertificates } from "node:tls";
 
 export type FetchCause =
   "unreachable" | "timed-out" | "http-status" | "redirect-refused" | "too-large";
@@ -73,28 +74,31 @@ export function open(
   userAgent: string,
 ): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
-    const get = url.protocol === "https:" ? httpsGet : httpGet;
-    const request = get(
-      url,
-      {
-        signal: transfer.signal,
-        agent: false,
-        headers: { accept: "*/*", "accept-encoding": "identity", "user-agent": userAgent },
-      },
-      (response) => {
-        transfer.touch();
-        const status = response.statusCode ?? 0;
-        const refuse = (cause: FetchCause, code?: number) => {
-          response.destroy();
-          reject(new FetchRefused(cause, code));
-        };
-        if (status >= 300 && status < 400) return refuse("redirect-refused", status);
-        if (status !== 200) return refuse("http-status", status);
-        const declared = Number(response.headers["content-length"] ?? NaN);
-        if (Number.isFinite(declared) && declared > maxBytes) return refuse("too-large");
-        resolve(response);
-      },
-    );
+    const options = {
+      signal: transfer.signal,
+      agent: false,
+      headers: { accept: "*/*", "accept-encoding": "identity", "user-agent": userAgent },
+    };
+    const onResponse = (response: IncomingMessage) => {
+      transfer.touch();
+      const status = response.statusCode ?? 0;
+      const refuse = (cause: FetchCause, code?: number) => {
+        response.destroy();
+        reject(new FetchRefused(cause, code));
+      };
+      if (status >= 300 && status < 400) return refuse("redirect-refused", status);
+      if (status !== 200) return refuse("http-status", status);
+      const declared = Number(response.headers["content-length"] ?? NaN);
+      if (Number.isFinite(declared) && declared > maxBytes) return refuse("too-large");
+      resolve(response);
+    };
+    // The certificate is always verified, against Node's bundled certificate
+    // authorities only: NODE_TLS_REJECT_UNAUTHORIZED=0 cannot turn the check
+    // off, and neither NODE_EXTRA_CA_CERTS nor the system's store adds to them.
+    const request =
+      url.protocol === "https:"
+        ? httpsGet(url, { ...options, rejectUnauthorized: true, ca: rootCertificates }, onResponse)
+        : httpGet(url, options, onResponse);
     request.on("error", () => reject(new FetchRefused(transfer.cause())));
   });
 }
