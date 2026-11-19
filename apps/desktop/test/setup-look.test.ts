@@ -296,6 +296,17 @@ describe("the look on this computer", () => {
     expect(report?.found?.profile.args).toEqual(["--profile", "clawtrate"]);
   });
 
+  it("F-516: a found gateway is identified by its profile, config path, service, port and answer", async () => {
+    const report = await lookHere(homeWorld(), fakeRunner(defaultTable()).run);
+    expect(report?.found).toMatchObject({
+      configPath: "<state>/openclaw.json",
+      port: 18789,
+      version: "2026.10.6",
+    });
+    expect(report?.found?.profile.name).toBe("default");
+    expect(report?.look.service).toBe("none");
+  });
+
   it("F-516: Clawtrate's own profile is not asked when its folder isn't there", async () => {
     const { run, requests } = fakeRunner(defaultTable());
     await lookHere(homeWorld(), run);

@@ -49,6 +49,8 @@ function parseJson(stdout: string): unknown {
 /** What `openclaw gateway status --json` says about one profile's gateway. */
 export type GatewayStatus = {
   configExists: boolean;
+  /** The profile's config file, kept to tell this gateway from another; never shown or opened. */
+  configPath: string;
   port: number;
   bind: "loopback" | "network";
   /** The registered service, or none for a gateway started by hand. */
@@ -72,6 +74,7 @@ export function parseStatus(stdout: string): GatewayStatus | null {
   const port = record(root.port);
   const rpc = record(root.rpc);
   if (!config || typeof config.exists !== "boolean") return null;
+  if (typeof config.path !== "string" || config.path.length > 1024) return null;
   if (!gateway || !service || !port || !rpc || typeof rpc.ok !== "boolean") return null;
   const number = gateway.port;
   if (typeof number !== "number" || !Number.isInteger(number) || number < 1024 || number > 65535)
@@ -99,6 +102,7 @@ export function parseStatus(stdout: string): GatewayStatus | null {
   }
   return {
     configExists: config.exists,
+    configPath: config.path,
     port: number,
     bind: gateway.bindMode === "loopback" ? "loopback" : "network",
     service: registered

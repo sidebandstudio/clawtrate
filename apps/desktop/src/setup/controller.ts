@@ -295,6 +295,7 @@ export class SetupController implements SetupHost {
     return (
       status !== null &&
       status.configExists &&
+      status.configPath === found.configPath &&
       status.port === found.port &&
       status.answered?.text === found.version &&
       parseAuthMode(authRun.stdout) === "token"

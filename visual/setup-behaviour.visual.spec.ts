@@ -167,6 +167,18 @@ test("F-516: other services and profiles are named, and Advanced is offered for 
   await expect(page.getByRole("status").filter({ hasText: "also saw" })).toHaveText(
     "Clawtrate also saw other OpenClaw services here (service com.example.openclaw-gateway, profile work). It connects only to the default gateway and its own; use Advanced for others.",
   );
+  await page.getByRole("button", { name: "Advanced" }).click();
+  await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
+});
+
+test("F-515: a gateway that refuses the handshake for its protocol is not connected to, and says what to do", async ({
+  page,
+}) => {
+  await openFixture(page, "scene=protocol-mismatch", "light");
+  const notice = page.getByTestId("protocol-notice");
+  await expect(notice.getByRole("heading")).toHaveText("This gateway speaks another protocol");
+  await expect(notice).toContainText("Update the one that is older, then retry.");
+  await expect(page.getByTestId("bot-list")).toHaveCount(0);
 });
 
 test("F-493: Advanced is the address-and-token form as it was, and Back returns to the question", async ({

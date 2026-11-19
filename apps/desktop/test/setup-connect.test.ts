@@ -4,7 +4,16 @@
 // runner stands in for `openclaw`, and the core's fake gateway for the gateway.
 
 import { ClawtrateClient, type ClawtrateState } from "@clawtrate/core";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -160,11 +169,43 @@ function harness(
   };
 }
 
+/** Every file under the temporary folder changed since `since`, as text, a few levels deep. */
+function temporaryFiles(since: number): string[] {
+  const found: string[] = [];
+  const walk = (path: string, depth: number) => {
+    let stat;
+    try {
+      stat = statSync(path);
+    } catch {
+      return;
+    }
+    if (stat.mtimeMs < since) return;
+    if (stat.isDirectory() && depth < 4) {
+      let entries: string[] = [];
+      try {
+        entries = readdirSync(path);
+      } catch {
+        return;
+      }
+      for (const entry of entries) walk(join(path, entry), depth + 1);
+    } else if (stat.isFile() && stat.size < 1024 * 1024) {
+      try {
+        found.push(readFileSync(path, "utf8"));
+      } catch {
+        // not readable: not written by this test
+      }
+    }
+  };
+  for (const entry of readdirSync(tmpdir())) walk(join(tmpdir(), entry), 0);
+  return found;
+}
+
 const minted = (requests: ProgramRequest[]) =>
   requests.filter((request) => request.args.includes("qr"));
 
 describe("Connect on this computer", () => {
   it("F-492 F-494: Connect asks the host's dialog first, then redeems a voice-node code for read alone, and the code reaches no state, snapshot, log, argument, environment, storage or dialog", async () => {
+    const started = Date.now();
     const h = harness();
     await h.client.start();
     await h.setup.look();
@@ -208,12 +249,14 @@ describe("Connect on this computer", () => {
     expect(h.client.state.connection.status).toBe("connected");
     expect(JSON.parse(h.storage.data.get(tokenKey(URL))!).heldScopes).toEqual(["operator.read"]);
     expect(h.everywhere()).not.toContain(CODE);
+    expect(temporaryFiles(started).filter((text) => text.includes(CODE))).toEqual([]);
     // The shared token is never asked for: no command reads it or the config file.
     for (const request of h.requests) {
       expect(request.args.join(" ")).not.toMatch(/auth-token|gateway\.auth\.token|openclaw\.json/);
     }
     h.client.stop();
-  });
+    // The temporary folder is scanned, which takes a while on a busy machine.
+  }, 60_000);
 
   it("F-492: declining the host's dialog mints nothing and pairs nothing", async () => {
     const h = harness({ confirm: async () => false });

@@ -43,6 +43,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gatedSpawn } from "../tools/dev-gateway/src/env.ts";
+import { stateDirFor } from "../tools/dev-gateway/src/instance.ts";
 import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { FORBIDDEN_PORTS, listInstances, runningOthers } from "../e2e/global-setup.ts";
 import { askToClose, forceEnd, windowsProcesses } from "./windows.ts";
@@ -246,6 +247,30 @@ export function appEnv(): NodeJS.ProcessEnv {
   );
 }
 
+/**
+ * The sandbox the app's look on this computer is given (docs/development/setup.md):
+ * a temporary home, the `openclaw` program, and this run's instance as the only
+ * profile. Without it the automated app refuses to look at all.
+ */
+function writeSandbox(dir: string, instance: string): string {
+  const home = join(dir, "setup-home");
+  mkdirSync(home);
+  let openclaw = join(dir, "no-openclaw");
+  if (process.platform !== "win32") {
+    try {
+      openclaw = execFileSync("/usr/bin/which", ["openclaw"], { encoding: "utf8" }).trim();
+    } catch {
+      // not installed: the look finds nothing
+    }
+  }
+  const path = join(dir, "setup-sandbox.json");
+  writeFileSync(
+    path,
+    JSON.stringify({ home, openclaw, instance, stateDir: stateDirFor(instance, homedir()) }),
+  );
+  return path;
+}
+
 export default async function globalSetup() {
   if (process.platform === "win32") return windowsSetup();
   if (process.platform !== "darwin") throw new Error("the launch check runs on macOS and Windows");
@@ -399,7 +424,11 @@ export default async function globalSetup() {
     const gated = gatedSpawn(
       spawn,
       packagedExecutable(app),
-      [`--user-data-dir=${userData}`, "--remote-debugging-port=0"],
+      [
+        `--user-data-dir=${userData}`,
+        "--remote-debugging-port=0",
+        `--clawtrate-setup-sandbox=${writeSandbox(dir, name)}`,
+      ],
       { cwd: dir, env: appEnv(), stdio: ["ignore", logFd, logFd] },
     );
     appProcess = gated.child;
@@ -503,11 +532,20 @@ async function windowsSetup() {
   };
 
   try {
-    appProcess = spawn(exe, [`--user-data-dir=${userData}`, "--remote-debugging-port=0"], {
-      cwd: dirname(userData),
-      env: appEnv(),
-      stdio: ["ignore", "ignore", "inherit"],
-    });
+    const sandbox = writeSandbox(dir, `e2e-${randomBytes(4).toString("hex")}`);
+    appProcess = spawn(
+      exe,
+      [
+        `--user-data-dir=${userData}`,
+        "--remote-debugging-port=0",
+        `--clawtrate-setup-sandbox=${sandbox}`,
+      ],
+      {
+        cwd: dirname(userData),
+        env: appEnv(),
+        stdio: ["ignore", "ignore", "inherit"],
+      },
+    );
     const port = await debuggingPort(userData, appProcess);
     process.env.CLAWTRATE_PACKAGED_CDP = `http://127.0.0.1:${port}`;
     process.env.CLAWTRATE_PACKAGED_APP = app;

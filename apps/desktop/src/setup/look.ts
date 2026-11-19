@@ -49,7 +49,8 @@ export type FoundGateway = {
   profile: LookProfile;
   port: number;
   version: string;
-  configExists: true;
+  /** The config file `gateway status` named for this profile. */
+  configPath: string;
 };
 
 export type LookReport = { look: SetupLook; found: FoundGateway | null };
@@ -229,7 +230,13 @@ function classify(
     if (compareVersions(version, TESTED) !== 0) return { look: look("untested"), found: null };
     return {
       look: look("running"),
-      found: { program, profile, port: status.port, version: version.text, configExists: true },
+      found: {
+        program,
+        profile,
+        port: status.port,
+        version: version.text,
+        configPath: status.configPath,
+      },
     };
   }
   // Nothing answered. Stopped only when nothing listens and no service claims to run.

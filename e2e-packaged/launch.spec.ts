@@ -108,6 +108,9 @@ test("opens its window from the packaged app on the connect screen", async () =>
   expect(decodeURI(page.url())).toBe(bundled);
   await expect(page).toHaveTitle("Clawtrate");
   await expect(page.getByRole("heading", { name: "Clawtrate" })).toBeVisible();
+  // The first screen asks where OpenClaw runs; the address-and-token form is under Advanced.
+  await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
+  await page.getByRole("button", { name: "Advanced" }).click();
   await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
   // A packaged app does not look for the development gateway.
@@ -140,6 +143,28 @@ test("opens its window from the packaged app on the connect screen", async () =>
   ]);
   expect(page_.csp).toContain("default-src 'self'");
   expect(page_.csp).toContain("script-src 'self'");
+});
+
+test("looks on this computer only in the sandbox the launch check gave it", async () => {
+  await page.getByRole("button", { name: "Back" }).click();
+  await page
+    .getByRole("list", { name: "Where does OpenClaw run?" })
+    .getByRole("button", { name: /This computer/ })
+    .click();
+  if (WINDOWS) {
+    await expect(page.getByRole("heading", { name: "Use Advanced on Windows" })).toBeVisible();
+  } else {
+    // The run's own instance, by its profile: the only one the sandbox lets the look see.
+    await expect(page.getByRole("heading", { name: "OpenClaw is running" })).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(page.getByTestId("setup-found").locator("dl > div").nth(1)).toHaveText(
+      `Profileclawtrate-dev-${INSTANCE}`,
+    );
+  }
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByRole("button", { name: "Advanced" }).click();
+  await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
 });
 
 test("names its window Clawtrate, as Windows sees it", async () => {

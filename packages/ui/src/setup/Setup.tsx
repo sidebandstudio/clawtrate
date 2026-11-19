@@ -252,13 +252,18 @@ function runningFacts(look: SetupLook): Array<[string, string]> {
 }
 
 /** Other services and profiles the look saw: named, never used. */
-function Others({ others }: { others: string[] }) {
+function Others({ others, onAdvanced }: { others: string[]; onAdvanced: () => void }) {
   if (others.length === 0) return null;
   const several = others.length > 1;
   return (
-    <Note>
-      {`${PRODUCT_NAME} also saw ${several ? "other OpenClaw services" : "another OpenClaw service"} here (${others.join(", ")}). It connects only to the default gateway and its own; use Advanced for others.`}
-    </Note>
+    <>
+      <Note>
+        {`${PRODUCT_NAME} also saw ${several ? "other OpenClaw services" : "another OpenClaw service"} here (${others.join(", ")}). It connects only to the default gateway and its own; use Advanced for others.`}
+      </Note>
+      <p className="s-links">
+        <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
+      </p>
+    </>
   );
 }
 
@@ -678,7 +683,7 @@ export function SetupFlow({
           onAnother={another}
           confirming={setup.phase === "confirming"}
         />
-        <Others others={look.others} />
+        <Others others={look.others} onAdvanced={advanced} />
       </>
     );
   }
