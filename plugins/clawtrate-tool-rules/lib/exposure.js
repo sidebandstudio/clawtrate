@@ -19,7 +19,8 @@
 // gateway reads them). Anything it cannot tell (a tool profile, a group it
 // does not know) counts as offered. Commands run elsewhere only on a node,
 // or in a sandbox for every task when the bot does not name the gateway's
-// host. A warning is a warning: it protects nothing.
+// host and elevated exec cannot take them out of it. A warning is a
+// warning: it protects nothing.
 
 /** The groups of OpenClaw 2026.10.6 (tool-catalog) holding the tools checked here. */
 const GROUPS = {
@@ -91,6 +92,23 @@ export function surelyDenied(config, agent, tool) {
   return false;
 }
 
+/**
+ * Whether a sandboxed bot's command could still run on the gateway's host
+ * through elevated exec (OpenClaw 2026.10.6, `resolveElevatedPermissions`):
+ * on unless `tools.elevated.enabled` is false for the gateway or the bot, and
+ * open to a sender listed in `tools.elevated.allowFrom` (any non-empty list)
+ * or, with no list, to one a configured channel's own fallback list names.
+ */
+function elevatedOpen(config, agent) {
+  const global = rec(rec(rec(config).tools).elevated);
+  const own = rec(rec(agent.tools).elevated);
+  if (global.enabled === false || own.enabled === false) return false;
+  const anySender = (allowFrom) =>
+    Object.values(rec(allowFrom)).some((entries) => Array.isArray(entries) && entries.length > 0);
+  const channels = Object.keys(rec(rec(config).channels)).length > 0;
+  return anySender(global.allowFrom) || channels;
+}
+
 const sandboxedAll = (config, agent) =>
   (rec(agent.sandbox).mode ?? rec(rec(rec(config).agents).defaults?.sandbox).mode) === "all";
 
@@ -110,9 +128,11 @@ export function exposures(config) {
     const exec = { ...rec(global.exec), ...rec(own.exec) };
     const commandsOff =
       exec.mode === "deny" || (exec.mode === undefined && exec.security === "deny");
-    // A sandbox keeps commands off the gateway's machine unless the bot names that host.
+    // A sandbox keeps commands off the gateway's machine unless the bot names
+    // that host, or elevated exec can take them out of the sandbox.
     const elsewhere =
-      exec.host === "node" || (sandboxedAll(config, agent) && exec.host !== "gateway");
+      exec.host === "node" ||
+      (sandboxedAll(config, agent) && exec.host !== "gateway" && !elevatedOpen(config, agent));
     const shell = ["exec", "process"].some((tool) => !surelyDenied(config, agent, tool));
     if (shell && !commandsOff && !elsewhere) reasons.push("commands-on-gateway-host");
     const fs = { ...rec(global.fs), ...rec(own.fs) };

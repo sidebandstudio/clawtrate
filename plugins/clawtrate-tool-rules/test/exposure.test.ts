@@ -121,3 +121,44 @@ describe("policy entries named like inherited properties", () => {
     }
   });
 });
+
+describe("a sandboxed bot and elevated exec", () => {
+  const sandboxed = { tools: { exec: { mode: "ask" } }, sandbox: { mode: "all" } };
+  const config = (
+    tools: Record<string, unknown>,
+    extra: Record<string, unknown> = {},
+    agent = sandboxed,
+  ) => ({
+    ...SAFE,
+    tools: { ...SAFE.tools, ...tools },
+    ...extra,
+    agents: { entries: { otto: agent } },
+  });
+  const warned = (c: Record<string, unknown>) =>
+    exposures(c).some((e) => e.reasons.includes("commands-on-gateway-host"));
+
+  it("is warned about while a sender can turn elevated on", () => {
+    expect(warned(config({ elevated: { allowFrom: { discord: ["user-1"] } } }))).toBe(true);
+    expect(warned(config({ elevated: { enabled: true, allowFrom: { telegram: ["*"] } } }))).toBe(
+      true,
+    );
+    // No allowlist, but a channel that could supply one.
+    expect(warned(config({}, { channels: { telegram: { enabled: true } } }))).toBe(true);
+  });
+
+  it("is not warned about once the gateway or the bot closes elevated", () => {
+    expect(warned(config({ elevated: { enabled: false, allowFrom: { discord: ["u"] } } }))).toBe(
+      false,
+    );
+    const closedForBot = {
+      ...sandboxed,
+      tools: { ...sandboxed.tools, elevated: { enabled: false } },
+    };
+    expect(warned(config({ elevated: { allowFrom: { discord: ["u"] } } }, {}, closedForBot))).toBe(
+      false,
+    );
+    // Nobody can qualify: no allowlist and no channel.
+    expect(warned(config({}))).toBe(false);
+    expect(warned(config({ elevated: { allowFrom: { discord: [] } } }))).toBe(false);
+  });
+});
