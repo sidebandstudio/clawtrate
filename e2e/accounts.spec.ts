@@ -285,7 +285,7 @@ test("F-474 F-476: a sign-in with a link and a code lands where the screen says 
   const settings = await connectFromSettings();
   await shots("settings-accounts");
   await settings.getByRole("button", { name: "Connect an account" }).first().click();
-  await settings.getByRole("button", { name: /^Acme \(scripted\)/ }).click();
+  await settings.getByRole("button", { name: /^Acme \(scripted\) · a link and a code/ }).click();
   const code = settings.locator(".b-code code");
   await expect(code).toBeVisible({ timeout: 20_000 });
   await expect(settings.getByText(/The code works for 15 minutes\./)).toBeVisible();
@@ -398,7 +398,7 @@ test("F-474 F-475: an API key typed into the key path reaches the gateway once a
 test("F-474: a sign-in that is refused says so, and what the gateway now has", async () => {
   const settings = await connectFromSettings();
   await settings.getByRole("button", { name: "Connect an account" }).first().click();
-  await settings.getByRole("button", { name: /^Acme \(scripted\)/ }).click();
+  await settings.getByRole("button", { name: /^Acme \(scripted\) · a link and a code/ }).click();
   const code = settings.locator(".b-code code");
   await expect(code).toBeVisible({ timeout: 20_000 });
   await scripted("/scripted/signin/answer", {
