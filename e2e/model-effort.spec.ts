@@ -224,7 +224,14 @@ test("F-042 F-044 F-045: a task's model changed during a turn is held, saved whe
     .poll(async () => (await requestsFor(TASK)).length, { timeout: 60_000 })
     .toBeGreaterThan(before);
   const next = (await requestsFor(TASK)).slice(before);
-  expect(next.every((each) => each.model === "dev-2" && each.account === "acme:work")).toBe(true);
+  expect(next.map((each) => each.model)).toEqual(next.map(() => "dev-2"));
+  // Quill is bound to acme:work, not locked: the gateway may serve the turn on another account of
+  // the provider (bots.md section 10, "Bound"); the annotation says which it was.
+  expect(next.every((each) => each.account?.startsWith("acme:"))).toBe(true);
+  test.info().annotations.push({
+    type: "served by",
+    description: next.map((each) => `${each.model} on ${each.account}`).join(", "),
+  });
   await expect.poll(async () => (await row()).status, { timeout: 60_000 }).not.toBe("running");
 
   // The turn's record names the model the gateway reported, and the effort this app asked for.
