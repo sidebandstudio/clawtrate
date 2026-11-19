@@ -546,10 +546,12 @@ test("F-021: an ordinary question cancelled elsewhere leaves the owner waiting o
       on.getByTestId("question-card").filter({ hasText: "Which colour?" });
     for (const on of [page, second])
       await expect(question(on)).toHaveAttribute("data-state", "pending", { timeout: 30_000 });
-    // Cancelled by another client: neither device has a question to answer.
+    // Cancelled by another client: neither device has a question to answer, and neither says
+    // a run was stopped.
     await op.request("question.resolve", { id, cancel: true });
     for (const on of [page, second]) {
       await expect(question(on)).toHaveAttribute("data-state", "dismissed", { timeout: 30_000 });
+      await expect(on.getByTestId("stop-note")).toHaveCount(0);
       await expect(on.locator('[data-testid="question-card"][data-state="pending"]')).toHaveCount(
         0,
       );

@@ -1078,7 +1078,7 @@ Any other question record is shown readable and not answerable: a card titled "O
 | Answered  | The letter and the answer with a check, one row per answer; a typed answer is the text with a check | The answers                                          |
 | Dismissed | "Dismissed"                                                                                         | That there is no answer. The run carries on. (F-302) |
 | Expired   | "Expired without an answer"                                                                         | That there is no answer. The run carries on.         |
-| Cancelled | "Cancelled: you stopped the run"                                                                    | Nothing; the run is over                             |
+| Cancelled | "Cancelled by the gateway."                                                                         | Nothing; the run is over                             |
 | Closed    | "No longer pending on the gateway. Its outcome was not read here."                                  | Nothing                                              |
 
 Pending or resolved, the card ends with "Raw": the question event, and the answer event once there is one.

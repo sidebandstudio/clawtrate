@@ -488,7 +488,7 @@ export function questionNote(card: QuestionCard): string {
     case "expired":
       return "Expired without an answer";
     case "cancelled":
-      return "Cancelled: you stopped the run";
+      return "Cancelled by the gateway.";
     case "closed":
       // The gateway no longer holds it and said nothing of how: no reason of this app's.
       return "No longer pending on the gateway. Its outcome was not read here.";

@@ -7,6 +7,7 @@ import {
   initialState,
   applyApprovalRequested,
   applyQuestionRequested,
+  applyQuestionResolved,
   parseExecApproval,
   parsePluginApproval,
   RawTable,
@@ -446,11 +447,51 @@ describe("question cards from the engine's state", () => {
     };
     expect(note("question-dismissed")).toBe("Dismissed");
     expect(note("question-expired")).toBe("Expired without an answer");
-    expect(note("question-cancelled")).toBe("Cancelled: you stopped the run");
+    expect(note("question-cancelled")).toBe("Cancelled by the gateway.");
     // Closed says what the gateway established and no reason of this app's, however the run ended.
     for (const name of ["question-closed-ended", "question-closed-failed"] as CardSceneName[]) {
       expect(note(name)).toBe("No longer pending on the gateway. Its outcome was not read here.");
     }
+  });
+
+  it("F-302: a question cancelled after a Stop the gateway reported, with no Stop from this app, says only that the gateway cancelled it", () => {
+    const KEY = "agent:otto:remote-stop";
+    const ctx = { sessionKey: KEY, now: 9_000, raw: new RawTable() };
+    const lifecycle = (activity: TaskActivity, seq: number, data: Record<string, unknown>) =>
+      applyAgentEvent(
+        activity,
+        { runId: "run-r", seq, stream: "lifecycle", ts: 1_000 + seq, sessionKey: KEY, data },
+        ctx,
+      ).activity;
+    let a = lifecycle(emptyActivity, 1, { phase: "start" });
+    a = applyQuestionRequested(
+      a,
+      {
+        id: "q-r",
+        runId: "run-r",
+        sessionKey: KEY,
+        createdAtMs: 1_500,
+        expiresAtMs: 900_000,
+        status: "pending",
+        questions: [
+          {
+            questionId: "a",
+            header: "A",
+            question: "Which?",
+            options: [{ label: "x" }, { label: "y" }],
+            isOther: true,
+          },
+        ],
+      },
+      ctx,
+    );
+    expect(a.questions[0]!.ordinary).toBe(true);
+    // Another device stopped the run: the gateway reports it. This app sent no Stop.
+    a = lifecycle(a, 2, { phase: "end", aborted: true, stopReason: "rpc" });
+    expect(a.runs[0]!.stopRequestedAt ?? null).toBeNull();
+    a = applyQuestionResolved(a, { id: "q-r", status: "cancelled" });
+    expect(a.questions[0]!.status).toBe("cancelled");
+    expect(questionNote(a.questions[0]!)).toBe("Cancelled by the gateway.");
   });
 });
 
