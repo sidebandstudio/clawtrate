@@ -9,9 +9,11 @@
 // runner (so always with `--profile clawtrate-dev-<name>`). It never prints a
 // token: every line it prints passes through `redact`. `--port` points the
 // client at another local port, and is refused unless the process listening
-// there is an `ssh` whose command line forwards exactly that port to this
-// instance's port on loopback: the token is never sent to an unproven
-// listener. A scratch client folder it makes is removed when it ends; one
+// there is an `ssh` whose command line forwards exactly that port to
+// 127.0.0.1:<this instance's port> on the far side. That checks the
+// forward's arguments, not which computer the forward ends on: the operator
+// chooses the tunnel, and it must end on the computer running this instance,
+// or the instance's token goes to whatever listens there. A scratch client folder it makes is removed when it ends; one
 // given with `--data` is kept, for `upgrade` and `method`.
 //
 // Experiments:
@@ -76,7 +78,7 @@ if (values.port) assertOwnForward(port, gatewayPort);
 const SCOPES = values.scopes!.split(",").map((s) => `operator.${s.trim()}`);
 if (!SCOPES.every((s) => /^operator\.(read|write|approvals|questions|admin)$/.test(s))) throw new Error("--scopes takes read, write, approvals, questions, admin");
 
-/** The only listener on `port` must be an ssh forwarding exactly `port` to the instance's own port. */
+/** The only listener on `port` must be an ssh forwarding exactly `port` to the instance's port on the far side's loopback; the far side itself is the operator's choice. */
 function assertOwnForward(local: number, target: number) {
   if (!Number.isInteger(local) || local < 1024 || local > 65535 || local === target) throw new Error("--port must be another unprivileged port");
   const pids = spawnSync("lsof", ["-nP", `-iTCP:${local}`, "-sTCP:LISTEN", "-t"], { encoding: "utf8" }).stdout.trim().split("\n").filter(Boolean);
