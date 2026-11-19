@@ -168,11 +168,21 @@ const SPOKEN: Record<RunState, string> = {
 };
 
 /**
- * The status a task's name ends with when its row shows no mark: done when its
- * latest run finished, idle otherwise (F-057). The unread dot adds ", unread".
+ * The status a task's name ends with when its row shows no mark (F-057): done
+ * when its latest run finished, stopped when it was stopped (its mark goes once
+ * the task is opened, its state does not), idle otherwise. The unread dot adds
+ * ", unread".
  */
-function restingWords(task: Task): string {
-  return task.status === "done" || task.status === "done-with-failures" ? ", done" : ", idle";
+export function restingWords(task: Pick<Task, "status">): string {
+  switch (task.status) {
+    case "done":
+    case "done-with-failures":
+      return ", done";
+    case "stopped":
+      return ", stopped";
+    default:
+      return ", idle";
+  }
 }
 
 /** What a bot's rows can do: set only when the connection writes. */
@@ -393,8 +403,9 @@ export function failureWords(
   const failed = tasks
     .filter((task) => taskState(task, seen, onScreenKey) === "done-with-failures")
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0];
-  if (!failed) return null;
-  const count = failed.failedActions ?? 1;
+  // The task's own count, from the gateway's results; none is invented.
+  const count = failed?.failedActions;
+  if (!failed || !count) return null;
   return `Finished with ${count} failed ${count === 1 ? "action" : "actions"}`;
 }
 

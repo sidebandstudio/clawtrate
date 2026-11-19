@@ -4,8 +4,7 @@
 // not follow, and from the engine's runs for one it does.
 
 import { describe, expect, it } from "vitest";
-import { fromActivity, WaitingIndex } from "../src/waiting.ts";
-import { emptyActivity, type Run, type Step } from "../src/runs.ts";
+import { WaitingIndex } from "../src/waiting.ts";
 import { groupTasks } from "../src/mapping.ts";
 import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { until } from "./fake-gateway.ts";
@@ -62,42 +61,64 @@ describe("F-057 F-295: the latest run's end, from the gateway's events", () => {
   });
 });
 
-function step(id: string, status: Step["status"], extra: Partial<Step> = {}): Step {
-  return {
-    id: `tool:${id}`,
-    kind: "tool",
-    toolCallId: id,
-    toolName: "read",
-    status,
-    argsText: null,
-    output: null,
-    result: { text: status === "failed" ? "ENOENT" : "text", totalChars: 4 },
-    raw: null,
-    truncated: false,
-    startedAt: 1,
-    endedAt: 2,
-    ...extra,
-  } as Step;
-}
+describe("F-057 F-295: what the review found", () => {
+  it("a result sent again, or replacing an earlier one, for the same call counts once", () => {
+    const index = new WaitingIndex();
+    index.onAgent(lifecycle("start"), 1);
+    const failed = { ...toolResult(true, "r1", "same") };
+    index.onAgent(failed, 2);
+    index.onAgent({ ...failed, data: { ...failed.data, replace: true } }, 3);
+    index.onAgent(lifecycle("end"), 4);
+    expect(index.latestEnd(KEY).failedActions).toBe(1);
+    // A replacing result that succeeds takes the failure back.
+    const again = new WaitingIndex();
+    again.onAgent(lifecycle("start"), 1);
+    again.onAgent(toolResult(true, "r1", "call_x"), 2);
+    again.onAgent(toolResult(false, "r1", "call_x"), 3);
+    again.onAgent(lifecycle("end"), 4);
+    expect(again.latestEnd(KEY).failedActions).toBe(0);
+  });
 
-function run(state: Run["state"], steps: Step[]): Run {
-  return { id: "r1", state, steps, startedAt: 1, reportedStartAt: 1, endedAt: 3 } as Run;
-}
+  it("a retriable lifecycle error keeps an unopened task's wait for an approval", () => {
+    const index = new WaitingIndex();
+    index.onAgent(lifecycle("start"), 1);
+    index.onAgent(lifecycle("waiting-approval", { approvalId: "ap-1" }), 2);
+    expect(index.waitingFor(KEY)?.kind).toBe("approval");
+    index.onAgent(lifecycle("error", { error: "retry" }), 3);
+    expect(index.waitingFor(KEY)?.kind).toBe("approval");
+    // A definitive one ends the run, and its wait with it.
+    index.onAgent(lifecycle("error", { error: "gave up", executionSettled: true }), 4);
+    expect(index.waitingFor(KEY)).toBeNull();
+  });
 
-describe("F-057 F-295: the latest run's end, from the engine's runs", () => {
-  it("a held task whose latest run completed with a failed action counts it as the run line does", () => {
-    const held = fromActivity({
-      ...emptyActivity,
-      runs: [run("completed", [step("a", "done"), step("b", "failed")])],
-    });
-    expect(held).toMatchObject({ failedActions: 1, active: false, stoppedAt: null });
-    expect(
-      fromActivity({ ...emptyActivity, runs: [run("completed", [step("a", "done")])] })
-        .failedActions,
-    ).toBe(0);
-    expect(
-      fromActivity({ ...emptyActivity, runs: [run("running", [step("b", "failed")])] }),
-    ).toMatchObject({ failedActions: 0, active: true });
+  it("an end older than the task's row does not describe the task: no failed count, no blocked", () => {
+    const index = new WaitingIndex();
+    index.onAgent({ ...lifecycle("start"), ts: 1_000 }, 1_000);
+    index.onAgent(toolResult(true), 1_100);
+    index.onAgent({ ...lifecycle("end"), ts: 2_000 }, 2_000);
+    expect(index.latestEnd(KEY, 2_100).failedActions).toBe(1);
+    // The row was written well after that end: newer activity the index did not see.
+    expect(index.latestEnd(KEY, 60_000).failedActions).toBe(0);
+    const blocked = new WaitingIndex();
+    blocked.onAgent({ ...lifecycle("start"), ts: 1_000 }, 1_000);
+    blocked.onAgent(
+      { ...lifecycle("error", { livenessState: "blocked", executionSettled: true }), ts: 2_000 },
+      2_000,
+    );
+    expect(blocked.latestEnd(KEY, 2_500).blocked).toBe(true);
+    expect(blocked.latestEnd(KEY, 60_000).blocked).toBe(false);
+  });
+
+  it("a task open in the engine reads the same failed count as one that is not: one source", () => {
+    const index = new WaitingIndex();
+    index.onAgent(lifecycle("start"), 1);
+    index.onAgent(toolResult(true, "r1", "call_a"), 2);
+    index.onAgent(toolResult(true, "r1", "call_b"), 3);
+    index.onAgent(lifecycle("end"), 4);
+    const unopened = index.latestEnd(KEY).failedActions;
+    index.hold(KEY, { waiting: null, stoppedAt: null, active: false });
+    expect(index.latestEnd(KEY).failedActions).toBe(unopened);
+    expect(unopened).toBe(2);
   });
 });
 

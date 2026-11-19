@@ -22,15 +22,26 @@
 // Bounded: `MAX_WAITING_SESSIONS` tasks in each map, `MAX_WAITING_MARKERS`
 // markers per task, ids at most `MAX_WAITING_ID_CHARS` JSON characters.
 
-import { callFromStep, readingContextOf, runLineOf } from "./action-feed.ts";
 import { jsonTextLength } from "./bounds.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
-import { classifyLifecycleTerminal, type TaskActivity } from "./runs.ts";
-import type { Transcript } from "./types.ts";
+import {
+  classifyLifecycleTerminal,
+  isDefinitiveLifecycleError,
+  type TaskActivity,
+} from "./runs.ts";
 
 export const MAX_WAITING_SESSIONS = 64;
-/** The most failed actions counted for one run from the events; the rail needs only "some". */
-export const MAX_COUNTED_ERRORS = 999;
+/**
+ * The most tool calls of one run whose result is kept by call id, so a result
+ * the gateway sends again or replaces for the same call is counted once.
+ */
+export const MAX_COUNTED_CALLS = 64;
+/**
+ * How much later than a run's end a task's row may be and still be that run's:
+ * a row the gateway wrote well after the end belongs to newer activity, so the
+ * end no longer describes the task.
+ */
+export const ROW_AFTER_END_MS = 5_000;
 export const MAX_WAITING_MARKERS = 8;
 /** The longest key or id kept, in JSON characters (the state's id cap). */
 export const MAX_WAITING_ID_CHARS = 1_024;
@@ -39,8 +50,12 @@ const MARKER_PREFIX_CHARS = 13;
 /** JSON characters one kept marker can take: its id, and its kind, run id and time. */
 export const WAITING_MARKER_CHARS =
   MAX_WAITING_ID_CHARS + MARKER_PREFIX_CHARS + MAX_WAITING_ID_CHARS + 64;
-/** JSON characters one entry of the latest-run map can take: its key, run id, time and flag. */
-export const WAITING_RUN_CHARS = 2 * MAX_WAITING_ID_CHARS + 96;
+/**
+ * JSON characters one entry of the latest-run map can take: its key, run id,
+ * time and flags, and the outcome of each of its counted calls by call id.
+ */
+export const WAITING_RUN_CHARS =
+  2 * MAX_WAITING_ID_CHARS + 96 + MAX_COUNTED_CALLS * (MAX_WAITING_ID_CHARS + 8);
 /** JSON characters one held task can take: its key, a waiting kind and two times. */
 export const WAITING_HELD_CHARS = MAX_WAITING_ID_CHARS + 96;
 
@@ -54,13 +69,12 @@ export type Waiting = { kind: WaitingKind; since: number };
 
 /**
  * A task as its held runs describe it: what it waits on, when its latest run
- * was stopped, how many of the actions of a latest run that completed failed
- * (the run line's own count), and whether a run is active.
+ * was stopped, and whether a run is active. Failed actions and a blocked end
+ * come from the gateway's events alone, so a task reads the same open or not.
  */
 export type HeldTask = {
   waiting: Waiting | null;
   stoppedAt: number | null;
-  failedActions: number;
   active: boolean;
 };
 
@@ -80,16 +94,8 @@ const str = (value: unknown): string | null =>
 const time = (value: unknown, fallback: number): number =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;
 
-/**
- * What a held task's runs say: a run waiting on a card, a latest run that was
- * stopped, or one that completed with failed actions, counted as its run line
- * counts them (Failed and Not run), read with what the task's history said of
- * its tools.
- */
-export function fromActivity(
-  activity: Pick<TaskActivity, "runs"> &
-    Partial<Pick<Transcript, "mcpTools" | "builtinTools" | "workspaceRoot">>,
-): HeldTask {
+/** What a held task's runs say: a run waiting on a card, or a latest run that was stopped. */
+export function fromActivity(activity: Pick<TaskActivity, "runs">): HeldTask {
   const runs = activity.runs;
   const active = runs.find(
     (run) => run.state === "running" || run.state === "waiting" || run.state === "stopping",
@@ -109,21 +115,12 @@ export function fromActivity(
   }
   const stoppedAt =
     !active && latest?.state === "stopped" ? (latest.endedAt ?? latest.startedAt ?? 0) : null;
-  let failedActions = 0;
-  if (!active && latest?.state === "completed") {
-    const ctx = readingContextOf({ mcpTools: activity.mcpTools ?? {}, ...activity });
-    const calls = (latest.steps ?? [])
-      .filter((step) => step.kind === "tool")
-      .map((step) => callFromStep(step, latest));
-    failedActions = runLineOf(latest, calls, ctx)?.failed ?? 0;
-  }
-  return { waiting, stoppedAt, failedActions, active: active !== undefined };
+  return { waiting, stoppedAt, active: active !== undefined };
 }
 
 const sameHeld = (a: HeldTask | undefined, b: HeldTask): boolean =>
   a !== undefined &&
   a.stoppedAt === b.stoppedAt &&
-  a.failedActions === b.failedActions &&
   a.active === b.active &&
   a.waiting?.kind === b.waiting?.kind &&
   a.waiting?.since === b.waiting?.since;
@@ -138,8 +135,8 @@ export class WaitingIndex {
   private readonly sessions = new Map<string, Map<string, Marker>>();
   /**
    * Each task's latest run as the events report it: its id, when, whether it
-   * was stopped, how many of its tool results the gateway flagged as errors
-   * (`tool` `result` `isError`), and how it ended: `completed`, `blocked`
+   * was stopped, the latest result of each of its tool calls by call id (`tool`
+   * `result` `isError`; a later result for the same call replaces it), and how it ended: `completed`, `blocked`
    * (the gateway's `livenessState`), or null while it runs or for other ends.
    */
   private readonly runs = new Map<
@@ -149,7 +146,8 @@ export class WaitingIndex {
       at: number;
       stopped: boolean;
       stopSeq: number;
-      errors: number;
+      /** Each counted call's latest result: whether the gateway flagged it as an error. */
+      calls: Map<string, boolean>;
       end: "completed" | "blocked" | null;
     }
   >();
@@ -196,8 +194,11 @@ export class WaitingIndex {
     if (payload.stream === "tool") {
       // A failed action of the task's latest run, while it runs.
       const latest = this.runs.get(key);
-      if (data.phase === "result" && data.isError === true && latest?.runId === runId) {
-        latest.errors = Math.min(latest.errors + 1, MAX_COUNTED_ERRORS);
+      const callId = str(data.toolCallId);
+      if (data.phase === "result" && callId && latest?.runId === runId) {
+        // One entry per call: a result sent again, or replacing an earlier one, replaces it.
+        latest.calls.delete(callId);
+        if (latest.calls.size < MAX_COUNTED_CALLS) latest.calls.set(callId, data.isError === true);
       }
       return false;
     }
@@ -213,7 +214,7 @@ export class WaitingIndex {
           at: ts,
           stopped: false,
           stopSeq: latest?.stopSeq ?? 0,
-          errors: 0,
+          calls: new Map(),
           end: null,
         });
         cap(this.runs, MAX_WAITING_SESSIONS);
@@ -231,6 +232,8 @@ export class WaitingIndex {
       }
       case "end":
       case "error": {
+        // An attempt that failed and is retried ends nothing: the run, and what it waits on, go on.
+        if (data.phase === "error" && !isDefinitiveLifecycleError(data)) return false;
         // The run is over: nothing of it waits any more.
         const changed = this.remove(key, (_, marker) => marker.runId === runId);
         const latest = this.runs.get(key);
@@ -245,8 +248,8 @@ export class WaitingIndex {
           at: ts,
           stopped,
           stopSeq: stopped ? (this.stops += 1) : (latest?.stopSeq ?? 0),
-          // Errors are counted for the run they came with; a run seen only from its end has none.
-          errors: latest?.runId === runId ? latest.errors : 0,
+          // Calls are counted for the run they came with; a run seen only from its end has none.
+          calls: latest?.runId === runId ? latest.calls : new Map(),
           end,
         });
         cap(this.runs, MAX_WAITING_SESSIONS);
@@ -380,26 +383,27 @@ export class WaitingIndex {
   }
 
   /**
-   * How the task's latest run ended, as far as the rail tells it apart: its
-   * held runs' word, else the events'. A run seen only from its end, with none
-   * of its tool events, has no failed actions known. Blocked is the gateway's
-   * word on the run's end (`livenessState: "blocked"`), held or not.
+   * How the task's latest run ended, as far as the rail tells it apart. Stopped
+   * is its held runs' word, else the events'. Failed actions (each call once,
+   * by its latest result) and blocked (`livenessState: "blocked"`) come from
+   * the gateway's events alone, held or not, and only while the task's row is
+   * not newer than that end (`rowUpdatedAt`): an old end never overrides newer
+   * activity. A run seen only from its end has no failed actions known.
    */
-  latestEnd(key: string): LatestEnd {
+  latestEnd(key: string, rowUpdatedAt: number | null = null): LatestEnd {
     const held = this.held.get(key);
     const latest = this.runs.get(key);
-    if (held) {
-      // The run's end event says blocked; the held runs say only that nothing is active.
-      return {
-        stoppedAt: held.stoppedAt,
-        failedActions: held.failedActions,
-        blocked: !held.active && held.stoppedAt === null && latest?.end === "blocked",
-      };
-    }
+    // An end describes the task only while the task's row is not newer than that end.
+    const current =
+      latest !== undefined &&
+      latest.end !== null &&
+      (rowUpdatedAt === null || rowUpdatedAt <= latest.at + ROW_AFTER_END_MS) &&
+      !held?.active;
+    const failed = current ? [...latest!.calls.values()].filter((isError) => isError).length : 0;
     return {
-      stoppedAt: latest?.stopped ? latest.at : null,
-      failedActions: latest?.end === "completed" ? latest.errors : 0,
-      blocked: latest?.end === "blocked",
+      stoppedAt: held ? held.stoppedAt : latest?.stopped ? latest.at : null,
+      failedActions: current && latest!.end === "completed" ? failed : 0,
+      blocked: current && latest!.end === "blocked",
     };
   }
 

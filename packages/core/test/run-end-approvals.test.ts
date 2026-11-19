@@ -107,7 +107,12 @@ describe("F-418: a request that outlives its run", () => {
     const activity = (outcomeKnown: boolean) =>
       normalizeApprovals({
         ...emptyActivity,
-        runs: [{ ...newRun("run-1", { state: "completed", bound: true }, 1), outcomeKnown }],
+        runs: [
+          {
+            ...newRun("run-1", { state: "completed", bound: true, origin: "local" }, 1),
+            outcomeKnown,
+          },
+        ],
         approvals: [pending],
       });
     expect(activity(false).approvals[0]!.runEnded).toBe(false);

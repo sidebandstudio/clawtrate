@@ -4533,7 +4533,7 @@ export class ClawtrateClient {
             waitingSince: waiting.since,
           };
         } else if (task.status === "idle" || task.status === "done" || task.status === "failed") {
-          const end = this.waiting.latestEnd(task.key);
+          const end = this.waiting.latestEnd(task.key, task.updatedAt);
           if (end.stoppedAt !== null && task.status !== "failed") {
             // A run stopped with `chat.abort` leaves the row no status: its runs or its end said so.
             tasks[index] = { ...task, status: "stopped" };

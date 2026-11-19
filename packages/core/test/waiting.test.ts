@@ -34,7 +34,7 @@ describe("which tasks wait for the person", () => {
     index.onQuestionRequested({ id: "q1", sessionKey: KEY, runId: "r2" }, 150);
     index.onAgent(lifecycle("end"), 200);
     expect(index.waitingFor(KEY)).toEqual({ kind: "question", since: 150 });
-    index.onAgent(lifecycle("error", {}, "r2"), 300);
+    index.onAgent(lifecycle("error", { executionSettled: true }, "r2"), 300);
     expect(index.waitingFor(KEY)).toBeNull();
   });
 
