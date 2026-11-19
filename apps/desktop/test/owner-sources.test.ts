@@ -90,6 +90,8 @@ const ALLOWED: Record<string, string> = {
     "static, an empty list copied on write",
   "packages/core/src/accounts.ts:initialAccountsState.bindings":
     "static, an empty list copied on write",
+  "packages/core/src/accounts.ts:initialAccountsState.changes":
+    "static, an empty list copied on write",
   // Values that go into the bounded state, captured only by an update that runs at once.
   "packages/core/src/client.ts:completeCreation>message.attachments":
     "the new outgoing message's files, empty; kept only in the outbox, under its bound",
