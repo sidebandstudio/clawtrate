@@ -20,6 +20,7 @@ import {
   figureLine,
   full,
   moreTasks,
+  refreshFailed,
   reportWindow,
   sourceBars,
   USAGE_WAITING,
@@ -181,6 +182,14 @@ export function BotUsagePage({
       {budget}
       <h4 className="b-group">Usage</h4>
       <PeriodChoice value={period} onChange={setPeriod} />
+      {report.status === "error" && (
+        <p className="b-field-error" role="alert" data-testid="usage-refresh-error">
+          {refreshFailed(report.error, r)}{" "}
+          <button type="button" className="link-button" onClick={report.retry}>
+            Try again
+          </button>
+        </p>
+      )}
       <p className="b-hint" data-testid="usage-source">
         From the gateway's usage records for {name} {reportWindow(r.period, r.range)},{" "}
         {asOf(figure.asOf)}.

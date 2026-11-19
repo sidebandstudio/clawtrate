@@ -325,6 +325,25 @@ test("F-234: while the host is busy reading other usage the page says it waits, 
   await expect(settings).not.toContainText("Couldn't load");
 });
 
+test("F-237: a period whose figures couldn't be read says so, and never shows another period's (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, `${PAGE}&usage=periodfail`, "light");
+  await expect(page.getByTestId("usage-total")).toHaveText("1,640,000 tokens");
+  await usage(page).getByRole("radio", { name: "Today" }).click();
+  await expect(page.getByTestId("usage-error")).toContainText("Couldn't load Otto's usage");
+  await expect(page.getByTestId("usage-total")).toHaveCount(0);
+  await expect(usage(page)).not.toContainText("1,640,000");
+  // Back to This week: its own figures again.
+  await usage(page).getByRole("radio", { name: "This week" }).click();
+  await expect(page.getByTestId("usage-total")).toHaveText("1,640,000 tokens");
+  // Settings: the same.
+  const settings = await settingsUsage(page);
+  await settings.getByRole("radio", { name: "Today" }).click();
+  await expect(settings.getByTestId("usage-error")).toContainText("Couldn't load usage");
+  await expect(settings.getByTestId("usage-all")).toHaveCount(0);
+});
+
 test("the Usage row's value wraps rather than shortening at phone width", async ({ browser }) => {
   const context = await browser.newContext(
     contextFor({ name: "phone", width: 390, height: 844, phone: true }, "light"),

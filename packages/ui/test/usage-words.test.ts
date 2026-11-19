@@ -16,6 +16,7 @@ import {
   deviceTimeZone,
   figureLine,
   moreTasks,
+  reportFits,
   reportWindow,
   sourceBars,
   sourcesNote,
@@ -158,5 +159,21 @@ describe("sources and tasks", () => {
     expect(botsLeftOut(["bots[8<]", "tasksByBot.otto[3<]"])).toBe(8);
     expect(botsLeftOut(["bots[3].name"])).toBe(0);
     expect(botsLeftOut(undefined)).toBe(0);
+  });
+});
+
+describe("a report kept while another is read", () => {
+  it("F-237: is shown only for the same bot and the same days, so no other period's figures stand in", () => {
+    const week = { startDate: "2026-11-16", endDate: "2026-11-19", timeZone: NY };
+    const report = { botId: "otto", range: week } as UsageReport;
+    expect(reportFits(report, "otto", week)).toBe(true);
+    // Today, after This week: another period.
+    expect(reportFits(report, "otto", { ...week, startDate: "2026-11-19" })).toBe(false);
+    // The same period after the date's rollover: other days.
+    expect(reportFits(report, "otto", { ...week, endDate: "2026-11-20" })).toBe(false);
+    // Another bot, or every bot.
+    expect(reportFits(report, "pip", week)).toBe(false);
+    expect(reportFits(report, null, week)).toBe(false);
+    expect(reportFits(report, "otto", { ...week, timeZone: "Asia/Tokyo" })).toBe(false);
   });
 });

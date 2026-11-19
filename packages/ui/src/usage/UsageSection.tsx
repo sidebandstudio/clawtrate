@@ -33,6 +33,7 @@ import {
   full,
   kindWord,
   PARTIAL_COUNT,
+  refreshFailed,
   reportWindow,
   sourceBars,
   sourcesNote,
@@ -285,6 +286,14 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
       )}
       {r && (
         <div aria-busy={report.status === "loading"} data-testid="usage-all">
+          {report.status === "error" && (
+            <p className="b-field-error" role="alert" data-testid="usage-refresh-error">
+              {refreshFailed(report.error, r)}{" "}
+              <button type="button" className="link-button" onClick={report.retry}>
+                Try again
+              </button>
+            </p>
+          )}
           <p className="b-hint" style={{ marginTop: 0 }}>
             From the gateway's usage records {reportWindow(r.period, r.range)},{" "}
             {asOf(r.figure.asOf)}.

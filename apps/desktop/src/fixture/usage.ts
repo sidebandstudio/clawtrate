@@ -5,6 +5,7 @@
 //   &usage=loading|error|computing|nocost|partial|nolimits   the figures' states
 //   &usage=botfail                                            Otto's own figure couldn't be read
 //   &usage=busy                                               the host is reading other reports
+//   &usage=periodfail                                         reading Today fails
 //   &budget=none|warn|reached|daily|invalid                   Otto's budget
 //   &plimit=near|reached                                      a provider's reported limit
 //   &uview=usage                                              open Otto's Usage page
@@ -33,6 +34,7 @@ export type UsageParams = {
     | "nolimits"
     | "botfail"
     | "busy"
+    | "periodfail"
     | null;
   budget: "none" | "warn" | "reached" | "daily" | "invalid" | null;
   plimit: "near" | "reached" | null;
@@ -55,6 +57,7 @@ export function usageParams(params: URLSearchParams): UsageParams {
       "nolimits",
       "botfail",
       "busy",
+      "periodfail",
     ]),
     budget: pick("budget", ["none", "warn", "reached", "daily", "invalid"]),
     plimit: pick("plimit", ["near", "reached"]),
@@ -275,7 +278,7 @@ export function usageCommand(
     case "readUsage":
       if (params.usage === "loading") return new Promise(() => {});
       if (params.usage === "busy") return Promise.resolve({ busy: true });
-      if (params.usage === "error")
+      if (params.usage === "error" || (params.usage === "periodfail" && command.period === "today"))
         return Promise.reject(new Error("usage.cost timed out after 60 seconds."));
       return new Promise((resolve) =>
         setTimeout(

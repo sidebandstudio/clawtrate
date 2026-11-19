@@ -2,7 +2,7 @@
 // meter, the bars, the period choice, the "Shown only" mark, and the hook that
 // reads a report from the host.
 
-import type { UsagePeriod, UsageReport } from "@clawtrate/core";
+import { rangeFor, type UsagePeriod, type UsageReport } from "@clawtrate/core";
 import {
   useCallback,
   useEffect,
@@ -13,7 +13,7 @@ import {
 } from "react";
 import { useBridge } from "../bridge.tsx";
 import { EyeIcon } from "../icons.tsx";
-import { barText, deviceTimeZone, PERIODS, short, type BarRow } from "./words.ts";
+import { barText, deviceTimeZone, PERIODS, reportFits, short, type BarRow } from "./words.ts";
 
 /** A meter: a 6 px bar with its numbers in text beside it, never alone. */
 export function Meter({
@@ -202,9 +202,12 @@ export function useNow(): number {
 
 /**
  * A usage report, read from the host when shown, again when the period
- * changes or `again` does, and never kept beyond this view. `enabled` is
- * whether the view is shown: only a shown view asks again, after the host
- * said it was busy or while the gateway is still counting.
+ * changes, when its days change (the date's rollover, judged every 30
+ * seconds) or `again` does, and never kept beyond this view. While a new one
+ * is read, or when reading it failed, the last one is shown only if it is
+ * for the same bot and the same days; a failed read is said either way.
+ * `enabled` is whether the view is shown: only a shown view asks again,
+ * after the host said it was busy or while the gateway is still counting.
  */
 export function useUsageReport(
   botId: string | null,
@@ -216,7 +219,8 @@ export function useUsageReport(
   const bridge = useBridge();
   const [tries, setTries] = useState(0);
   const retry = useCallback(() => setTries((n) => n + 1), []);
-  const key = JSON.stringify([botId, period, detail, tries, again]);
+  const range = rangeFor(period, useNow(), deviceTimeZone());
+  const key = JSON.stringify([botId, period, detail, tries, again, range]);
   // The answer, and the request it answers: one for an earlier request is shown as loading.
   const [answer, setAnswer] = useState<{ key: string; state: ReportState } | null>(null);
   useEffect(() => {
@@ -260,11 +264,16 @@ export function useUsageReport(
     const timer = setTimeout(retry, waiting ? BUSY_AGAIN_MS : COUNTING_AGAIN_MS);
     return () => clearTimeout(timer);
   }, [counting, waiting, shown, retry]);
+  // A report is shown only for this bot and these days, never for another period's.
+  const kept = (report: UsageReport | null) =>
+    report && reportFits(report, botId, range) ? report : null;
   const state: ReportState =
     answer === null
       ? { status: "loading", report: null }
-      : answer.key === key
-        ? answer.state
-        : { status: "loading", report: answer.state.report };
+      : answer.key !== key
+        ? { status: "loading", report: kept(answer.state.report) }
+        : answer.state.status === "ready"
+          ? answer.state
+          : { ...answer.state, report: kept(answer.state.report) };
   return { ...state, retry };
 }

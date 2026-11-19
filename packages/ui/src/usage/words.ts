@@ -85,6 +85,22 @@ export function rangeWords(range: DateRange): string {
   return `${days}, ${zoneWords(range.timeZone)}`;
 }
 
+/** Whether a report is for this bot (or every bot) and exactly these days, in this time zone. */
+export function reportFits(report: UsageReport, botId: string | null, range: DateRange): boolean {
+  return (
+    report.botId === botId &&
+    report.range.startDate === range.startDate &&
+    report.range.endDate === range.endDate &&
+    report.range.timeZone === range.timeZone
+  );
+}
+
+/** A failed read beside the figures of an earlier one for the same days. */
+export function refreshFailed(error: string, report: UsageReport): string {
+  const said = /[.!?]$/.test(error) ? error : `${error}.`;
+  return `Couldn't read these again: ${said} Shown: the figures ${asOf(report.figure.asOf)}.`;
+}
+
 /** A report's period in words: "this week (Nov 16 to Nov 19, your time)". */
 export function reportWindow(period: UsagePeriod, range: DateRange): string {
   const name = period === "today" ? "today" : period === "week" ? "this week" : "the last 30 days";
