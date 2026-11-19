@@ -2602,6 +2602,12 @@ export class ClawtrateClient {
         );
       }
     }
+    for (const [key, approvals] of this.keptApprovals) {
+      if (approvals.some((approval) => approval.id === known.id)) {
+        const updated = applyApprovalResolved({ ...emptyActivity, approvals }, known);
+        this.keptApprovals.set(key, updated.approvals);
+      }
+    }
     // A settled approval makes room for one that was waiting.
     this.routeUnrouted();
   }
