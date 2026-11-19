@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { devConfig, DENIED_TOOLS, loadPlugins, PLUGIN_RULE, sandboxProblems } from "../src/cli.ts";
 import { loadDevPlugin, pluginCopy } from "../src/dev-plugins.ts";
 import { CHECKOUT_DIR } from "../src/env.ts";
-import { RULES_CHECKS, logSaysAfter } from "../src/rules-checks.ts";
+import { RULES_CHECKS, eventually, logSaysAfter } from "../src/rules-checks.ts";
 import { SCENARIOS } from "../src/scenarios.ts";
 
 const PORTS = { gatewayPort: 19400, providerPort: 19410 };
@@ -103,5 +103,17 @@ describe("the rules checks' log reading", () => {
     // An earlier recovery's line does not satisfy a later one.
     expect(logSaysAfter(log, "Rules read; enforcing them.", 30)).toBe(false);
     expect(logSaysAfter(log, "later lines", 30)).toBe(true);
+  });
+});
+
+describe("the rules checks' bounded wait", () => {
+  it("returns what appears before its deadline, and fails naming what never did", async () => {
+    let tries = 0;
+    expect(
+      await eventually("a record", async () => (++tries >= 3 ? "found" : undefined), 5_000, 10),
+    ).toBe("found");
+    await expect(eventually("Pip's record", async () => undefined, 50, 10)).rejects.toThrow(
+      /Pip's record did not appear within 50 ms/,
+    );
   });
 });

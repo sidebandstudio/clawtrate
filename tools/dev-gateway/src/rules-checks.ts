@@ -337,6 +337,24 @@ const statusOf = async (ctx: RulesContext) =>
   answered(await rules(ctx.clients.reader, "status"), "status");
 
 /** Wait until the gateway's log holds `text`, which the plugin writes as its state changes. */
+/** What `get` returns once it returns something, waiting at most `timeoutMs`. */
+export async function eventually<T>(
+  what: string,
+  get: () => Promise<T | undefined>,
+  timeoutMs = 30_000,
+  everyMs = 250,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await get();
+    if (value !== undefined) return value;
+    if (Date.now() > deadline) {
+      throw new RulesCheckFailure(`${what} did not appear within ${timeoutMs} ms`);
+    }
+    await sleep(everyMs);
+  }
+}
+
 export const logSaysAfter = (log: Buffer, text: string, from: number) =>
   log.subarray(from).toString("utf8").includes(text);
 
@@ -1038,11 +1056,11 @@ export const RULES_CHECKS: RulesCheck[] = [
         ["sessions_send"],
         "Marlow's tool calls",
       );
-      await sleep(1000);
-      same(cardsSeen(ctx, since), [], "who received a card");
-      const [record] = (await decisionsOf(ctx, { agentId: "pip", limit: 5 })).filter(
-        (r) => Number(r.at) >= sentAt,
+      // Pip's run can still be queued after Marlow's send returns: wait for its record.
+      const record = await eventually("Pip's decision record", async () =>
+        (await decisionsOf(ctx, { agentId: "pip", limit: 5 })).find((r) => Number(r.at) >= sentAt),
       );
+      same(cardsSeen(ctx, since), [], "who received a card");
       same(
         [record?.tool, record?.decision, record?.answer],
         ["read", "ask", "cancelled"],
