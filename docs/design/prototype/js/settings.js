@@ -665,12 +665,8 @@
       const future = S.feed && !S.dev ? `<p class="s-future">${S.os === "linux" ? "When a Linux package is built" : "When releases are published"}: a future example. No update source exists today.</p>` : "";
       const source = live && ["idle", "current", "failcheck", "nofile", "faildl", "restarted"].includes(S.upd) ? `<p class="b-hint" data-testid="update-source">Checks ${SOURCE} for a newer build, only when you choose to.</p>` : "";
       const cannot = live && !S.install ? note("<p>This build can't install updates itself.</p>", "warn") : "";
-      const auto =
-        S.feed && !S.dev && S.os !== "linux"
-          ? `<div class="s-setting" style="margin-top:14px"><span class="s-setting-main"><strong>Automatic Updates</strong>` +
-            `<span id="s-auto-line">Install a downloaded update by itself while you're away: when the screen is locked, the computer has been idle for 10 minutes, and no run is active on the gateway Clawtrate is using.</span>` +
-            `<em>Clawtrate can't tell when a screen saver is on, so only a locked screen counts.</em></span>${sw(S.auto, 'data-s="auto"', "Automatic Updates", "s-auto-line")}</div>`
-          : "";
+      // The automatic restart waits until the app can establish every condition (settings.md section 10).
+      const auto = live ? `<p class="b-hint" data-testid="auto-restart">Automatic restart is unavailable in this build.</p>` : "";
       const body =
         future +
         cannot +
@@ -910,11 +906,6 @@
           });
         case "download":
           return download();
-        case "auto":
-          S.auto = !S.auto;
-          rs();
-          $('[data-s="auto"]', settingsDialog)?.focus();
-          return announce(S.auto ? "Automatic Updates on" : "Automatic Updates off");
         case "refusal-retry":
           // A new handshake. The refusal stays until one succeeds.
           strip(`Connecting to ${esc(gw("home").name)}`);

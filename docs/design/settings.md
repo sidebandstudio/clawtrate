@@ -332,11 +332,15 @@ Desktop only. A fact block, then what the source allows.
 - Whether quitting and reopening also installs a downloaded update depends on the updater the builder chooses (Electron's own `autoUpdater` applies one at the next start); the screen says so only for the updater in use, by platform.
 - "Restart to Update" asks first when something waits to be sent, with section 9's confirmation and the title "Restart to update?".
 
-**Automatic Updates** (a switch under the row, on macOS and Windows, off by default until the owner chooses otherwise): "Install a downloaded update by itself while you're away: when the screen is locked, the computer has been idle for 10 minutes, and no run is active on the gateway Clawtrate is using." And under it, in faint: "Clawtrate can't tell when a screen saver is on, so only a locked screen counts."
+**The automatic restart.** Updates says "Automatic restart is unavailable in this build." and offers no switch, until the app can establish every condition of F-391. Today it can't:
 
-- **The rule**, all three at once: the screen is locked (`lock-screen` without a later `unlock-screen`, or `getSystemIdleState(600)` is `locked`); `getSystemIdleTime()` is at least 600; and no run is active, which means no task on the connected gateway has a run in progress and Clawtrate holds no message waiting to send or to be confirmed (research §5, §6). Runs on other gateways are not connected, cannot be seen, and are not stopped by a restart.
-- The host checks the rule once a minute while an update is ready, and once more just before restarting.
-- A screen saver is not in the rule: nothing in Electron reports one.
+- **Locked, in effect.** `lock-screen` fires when the system is about to lock (`electron.d.ts`), so the rule needs `getSystemIdleState(600)` to read `locked` at the moment of deciding, on macOS and Windows.
+- **The screen saver** is reported by nothing in Electron, so F-391's "or the screensaver is on" can't be honoured by itself.
+- **Idle for ten minutes**: `getSystemIdleTime()` at least 600, on every system.
+- **No active run, established, not assumed.** The status line describes one selected task (`packages/ui/src/Conversation.tsx`), the client keeps only the newest task rows and its discovery can be partial (`packages/core/src/client.ts`), and a reconnect, a switch or a missed event gives no positive "idle" answer. Unknown, reconnecting, loading, partial or stale activity on any connected gateway blocks the restart, as does a message waiting to be sent or confirmed.
+- A manual restart can apply a downloaded update by itself on macOS (Electron's `autoUpdater` applies one at the next start), whatever this rule says; how each platform's installer behaves on a manual restart is described once the update engine provides installing (issue #68).
+
+The checks for it, when it is built: another client starts a run in a task that isn't selected, and the restart doesn't happen; the gateway is disconnected, and the restart doesn't happen.
 
 **Linux.** This repository builds no Linux package (research §4). A Linux package, when there is one, shows the version and "Updates are managed by your package manager.", with no switch and no button. A copy run from source shows the development build's line.
 
@@ -439,29 +443,29 @@ For the gateway's own machine: "Otto is set to run commands on the gateway's mac
 
 ## 16. What each fact drives
 
-| Shown or done                                                         | Rests on                                                                                                                             | Research |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------- |
-| One gateway in use; switching closes one connection and opens another | The core holds one connection; a message is never sent to another gateway                                                            | §1, §6   |
-| A second gateway apart from a second route                            | `gateway.identity.get` (`operator.read`) after hello                                                                                 | §1       |
-| Each gateway's own pairing                                            | Device tokens keyed by route; one device key on the host                                                                             | §1, §2   |
-| Discovery and writes wait for the identity check                      | `gateway.identity.get` answers only after authentication; the core starts discovery alongside it today                               | §1       |
-| The removal's "Removed" list                                          | The host's and the interface's storage, item by item                                                                                 | §2       |
-| "This device's record" stays, with the command                        | `device.pair.remove` needs `operator.pairing`; refused at read and interactive (live)                                                | §3       |
-| "Also remove this device's record" with admin                         | Admin removed its own record; the result names the id and the connection ends (live)                                                 | §3       |
-| No "Check for Updates" today                                          | `publish: null`; no updater in the app                                                                                               | §4       |
-| What an update would need                                             | Squirrel.Mac needs a signed app; Electron cannot update NSIS; electron-builder's updater with a publish provider                     | §4       |
-| The update screens' states                                            | The update engine's typed states (issue #68); install eligibility is not among them                                                  | §4       |
-| The automatic update rule, without a screen saver                     | `lock-screen`, `unlock-screen`, `getSystemIdleState`, `getSystemIdleTime`; nothing reports a screen saver                            | §5       |
-| "No run is active"                                                    | The connected gateway's run state and this client's unsent messages                                                                  | §6       |
-| A protocol refusal, either way                                        | `PROTOCOL_MISMATCH` with `expectedProtocol` before authentication (live), compared with the offered range                            | §7       |
-| Compact: the button, the wait, the lines                              | `/compact` through `chat.send` (`operator.write`); the gateway-injected reply with the send's key; skipped and failed replies (live) | §8       |
-| Compact unavailable during a run                                      | `/compact` waits up to 60 s, then stops the run (live)                                                                               | §8       |
-| The fold and its line                                                 | The `compaction` row; the transcript keeps every message; recent messages kept intact                                                | §8       |
-| Free disk, and deleting nothing                                       | `node.hostStats`, `system.info`, `agents.list` workspace (all `operator.read`, live for the last two); no client clean-up of files   | §9       |
-| No Language setting                                                   | No translation in the interface                                                                                                      | §10      |
-| Spelling on each system                                               | Electron's spellchecker; macOS's checker; Hunspell on Windows                                                                        | §10      |
-| Hardware acceleration needs a restart                                 | `app.disableHardwareAcceleration()` before ready                                                                                     | §10      |
-| No security key setting                                               | No gateway support                                                                                                                   | §10      |
+| Shown or done                                                         | Rests on                                                                                                                                         | Research |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------- |
+| One gateway in use; switching closes one connection and opens another | The core holds one connection; a message is never sent to another gateway                                                                        | §1, §6   |
+| A second gateway apart from a second route                            | `gateway.identity.get` (`operator.read`) after hello                                                                                             | §1       |
+| Each gateway's own pairing                                            | Device tokens keyed by route; one device key on the host                                                                                         | §1, §2   |
+| Discovery and writes wait for the identity check                      | `gateway.identity.get` answers only after authentication; the core starts discovery alongside it today                                           | §1       |
+| The removal's "Removed" list                                          | The host's and the interface's storage, item by item                                                                                             | §2       |
+| "This device's record" stays, with the command                        | `device.pair.remove` needs `operator.pairing`; refused at read and interactive (live)                                                            | §3       |
+| "Also remove this device's record" with admin                         | Admin removed its own record; the result names the id and the connection ends (live)                                                             | §3       |
+| No "Check for Updates" today                                          | `publish: null`; no updater in the app                                                                                                           | §4       |
+| What an update would need                                             | Squirrel.Mac needs a signed app; Electron cannot update NSIS; electron-builder's updater with a publish provider                                 | §4       |
+| The update screens' states                                            | The update engine's typed states (issue #68); install eligibility is not among them                                                              | §4       |
+| The automatic restart, unavailable                                    | `lock-screen` fires before the lock; no screen-saver signal; the status line is one task's, the task list bounded and discovery possibly partial | §5, §6   |
+| "No run is active" can't be established today                         | The selected task's run state; bounded rows; partial discovery                                                                                   | §6       |
+| A protocol refusal, either way                                        | `PROTOCOL_MISMATCH` with `expectedProtocol` before authentication (live), compared with the offered range                                        | §7       |
+| Compact: the button, the wait, the lines                              | `/compact` through `chat.send` (`operator.write`); the gateway-injected reply with the send's key; skipped and failed replies (live)             | §8       |
+| Compact unavailable during a run                                      | `/compact` waits up to 60 s, then stops the run (live)                                                                                           | §8       |
+| The fold and its line                                                 | The `compaction` row; the transcript keeps every message; recent messages kept intact                                                            | §8       |
+| Free disk, and deleting nothing                                       | `node.hostStats`, `system.info`, `agents.list` workspace (all `operator.read`, live for the last two); no client clean-up of files               | §9       |
+| No Language setting                                                   | No translation in the interface                                                                                                                  | §10      |
+| Spelling on each system                                               | Electron's spellchecker; macOS's checker; Hunspell on Windows                                                                                    | §10      |
+| Hardware acceleration needs a restart                                 | `app.disableHardwareAcceleration()` before ready                                                                                                 | §10      |
+| No security key setting                                               | No gateway support                                                                                                                               | §10      |
 
 ## 17. Parity rows
 

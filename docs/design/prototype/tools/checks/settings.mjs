@@ -401,6 +401,7 @@ await stateWords("Updates, a development build", "open=settings&section=updates&
 {
   const p = await open("open=settings&section=updates&feed=1");
   check("Updates, a build that can't install itself says so", (await text(p, settings)).includes("This build can't install updates itself."));
+  check("Updates: automatic restart unavailable, and no switch for it", (await text(p, settings)).includes("Automatic restart is unavailable in this build.") && (await p.locator('#settings-dialog [role="switch"]').count()) === 0 && !(await text(p, settings)).includes("screen saver"));
   await p.close();
 }
 {
