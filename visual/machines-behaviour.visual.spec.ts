@@ -470,7 +470,7 @@ test("F-157: a rename that completes after its form was cancelled leaves another
   await list.getByRole("button", { name: "Rename" }).nth(1).click();
   await page.getByRole("textbox", { name: /New name for Clawtrate on iPhone/ }).fill("Phone");
   await page.keyboard.press("Enter");
-  await page.keyboard.press("Escape");
+  await list.getByRole("button", { name: "Cancel" }).click();
   await list.getByRole("button", { name: "Rename" }).first().click();
   const other = page.getByRole("textbox", { name: /New name for Clawtrate on this Mac/ });
   await other.fill("Desk");
