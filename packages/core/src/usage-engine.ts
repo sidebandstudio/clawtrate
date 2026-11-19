@@ -167,6 +167,8 @@ export class UsageEngine {
   }
 
   onHello(): void {
+    // A bootstrap that ends after its socket closed starts nothing: the next hello will.
+    if (!this.ctx.connected()) return;
     void this.loadBudgets(this.generation);
     void this.readLimits(this.generation);
   }

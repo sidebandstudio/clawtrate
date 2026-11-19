@@ -1639,6 +1639,24 @@ describe("the usage engine", () => {
     engine.onClose();
   });
 
+  it("a hello that comes after its socket closed reads nothing and leaves no timer", async () => {
+    vi.useFakeTimers();
+    const gateway = fakeGateway();
+    const engine = new UsageEngine({
+      request: gateway.request,
+      get: () => initialUsage,
+      update: () => {},
+      connected: () => false,
+      now: () => Date.now(),
+      log: () => {},
+    });
+    engine.onClose();
+    engine.onHello();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(gateway.calls).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("F-235: reads the providers' limits at a hello", async () => {
     const { engine, usage } = engineOn(fakeGateway());
     engine.onHello();
