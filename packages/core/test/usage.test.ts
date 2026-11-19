@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseBridgeCommand } from "../src/bridge.ts";
+import { ClawtrateClient } from "../src/client.ts";
 import { enforceState, initialState } from "../src/index.ts";
 import {
   COUNT_AFTER_RUN_MS,
@@ -39,6 +40,9 @@ import {
   type BudgetInput,
   type UsageState,
 } from "../src/usage.ts";
+import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
+import { FAST, grantingGateway, URL_A, URL_B } from "./client-harness.ts";
+import { deferred, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 // Thursday 19 November 2026, 06:00 UTC: 01:00 in New York, 15:00 in Tokyo.
 const NOW = Date.UTC(2026, 10, 19, 6, 0, 0);
@@ -1796,5 +1800,85 @@ describe("the bridge's usage commands", () => {
       type: "changeBudget",
       change: { op: "remove", id: "routine:job1" },
     });
+  });
+});
+
+describe("a budget write through the client", () => {
+  const budget: BudgetInput = {
+    botId: "otto",
+    routineId: null,
+    routineName: null,
+    period: "weekly",
+    tokens: 5_000,
+    timeZone: NY,
+  };
+
+  /** A read-tier connection whose request for write access waits until `grant` is called. */
+  async function readTier() {
+    const gateway = grantingGateway();
+    let prefs: unknown = undefined;
+    gateway.handlers["users.prefs.get"] = () => ({
+      status: "ok",
+      entries: prefs === undefined ? {} : { [BUDGETS_PREF_KEY]: prefs },
+    });
+    gateway.handlers["users.prefs.set"] = (params) => {
+      prefs = (params as { entries: Record<string, unknown> }).entries[BUDGETS_PREF_KEY];
+      return { status: "ok" };
+    };
+    const wait = deferred<unknown>();
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: READ_SCOPES,
+        heldScopes: READ_SCOPES,
+      }),
+    });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await until(() => client.state.discovery.status === "ready");
+    const grant = () =>
+      wait.resolve({
+        status: "approved",
+        requestId: "up-1",
+        deviceToken: "rotated-token",
+        scopes: [...INTERACTIVE_SCOPES],
+      });
+    return { client, gateway, grant, prefs: () => prefs };
+  }
+
+  it("F-234: a budget saved on a read-only connection is kept once write access is granted, on the connection the grant reopened", async () => {
+    const { client, gateway, grant, prefs } = await readTier();
+    const saving = client.changeBudget({ op: "set", budget }, { owner: {} });
+    await until(() => client.state.connection.upgrade.status === "pending");
+    expect(gateway.calls("users.prefs.set")).toEqual([]);
+    grant();
+    await expect(saving).resolves.toBeUndefined();
+    expect(client.state.connection.canWrite).toBe(true);
+    expect(prefs()).toMatchObject({ budgets: [expect.objectContaining({ id: "bot:otto" })] });
+    client.stop();
+  });
+
+  it("F-234: a budget waiting for write access sends nothing once its viewer has gone, or once another gateway is chosen", async () => {
+    const gone = await readTier();
+    const owner = {};
+    const withdrawn = gone.client.changeBudget({ op: "set", budget }, { owner });
+    await until(() => gone.client.state.connection.upgrade.status === "pending");
+    gone.client.withdraw(owner);
+    gone.grant();
+    await expect(withdrawn).rejects.toThrow("The request was withdrawn.");
+    await until(() => gone.client.state.connection.canWrite);
+    expect(gone.gateway.calls("users.prefs.set")).toEqual([]);
+    gone.client.stop();
+
+    const switched = await readTier();
+    const elsewhere = switched.client.changeBudget({ op: "set", budget }, { owner: {} });
+    await until(() => switched.client.state.connection.upgrade.status === "pending");
+    await switched.client.connect({ url: URL_B, token: "t" });
+    await expect(elsewhere).rejects.toThrow("Switched to another gateway.");
+    expect(switched.gateway.calls("users.prefs.set")).toEqual([]);
+    switched.client.stop();
   });
 });

@@ -5203,10 +5203,14 @@ export class ClawtrateClient {
   /** Set or remove a warning budget, kept with the gateway as this person's preference. */
   async changeBudget(change: BudgetChange, options: { owner?: object } = {}): Promise<void> {
     if (this.options.readOnly) throw new Error("This host only reads; it does not change budgets.");
+    const owner = options.owner ?? null;
+    const url = this.settings?.url;
+    await this.actionContext(owner).ensureWrite();
+    // A grant of write access reconnects to the same gateway, so the write is bound to the
+    // connection that holds it now. A switch to another gateway is never written to.
+    if (this.settings?.url !== url) throw new Error("Switched to another gateway.");
     // Every request of the write is the viewer's: none is sent once that viewer has gone.
-    const context = this.actionContext(options.owner ?? null);
-    await context.ensureWrite();
-    await this.usage.changeBudget(change, context.request);
+    await this.usage.changeBudget(change, this.actionContext(owner).request);
   }
 
   /** The routines a budget can be set for, read now and not kept. */
