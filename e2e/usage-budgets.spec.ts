@@ -1,0 +1,617 @@
+// Usage and warning budgets (docs/design/controls.md, sections 16 to 18)
+// against a real development gateway: this run's own instance, a preview host
+// of its own with the interactive tier (the person's first device), and a
+// second host pinned read-only (their second device). Every figure the
+// interface shows is compared with what the gateway itself answers to the
+// same question (`usage.cost`, `sessions.usage`, `chat.history`), read by a
+// paired operator of this spec's own. The scripted model reports 120 input and
+// 80 output tokens for each answer, at a configured price of zero.
+//
+// What the checks change is put back afterwards: every budget is removed and
+// the routine this spec makes is deleted. Its own tasks stay, as other specs'
+// tasks do; nothing here pins, hides or moves a bot.
+import { expect, test, type Browser, type Page } from "@playwright/test";
+import type { ChildProcess } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  BUDGETS_PREF_KEY,
+  rangeFor,
+  rangeParams,
+  type UsagePeriod,
+} from "../packages/core/src/usage.ts";
+import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
+import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
+import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { devGateway, startHost, stopChild } from "./global-setup.ts";
+
+const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
+const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
+const STAMP = Date.now().toString(36);
+/** Screenshots against the real gateway, into a folder outside the repository, when set. */
+const SHOTS = process.env.CLAWTRATE_USAGE_SHOTS ?? null;
+
+test.describe.configure({ mode: "serial" });
+
+type Host = { child: ChildProcess; url: string; data: string };
+const hosts: Host[] = [];
+let page: Page;
+let reader: Page;
+let gateway: OperatorSession;
+let routineId: string | null = null;
+let timeZone = "UTC";
+
+type Json = Record<string, unknown>;
+
+async function openclaw(args: string[]): Promise<string> {
+  const result = await openInstance(INSTANCE).runner.run(args);
+  if (result.status !== 0)
+    throw new Error(`openclaw ${args.join(" ")} failed:\n${result.stdout}${result.stderr}`);
+  return result.stdout;
+}
+
+/** A gateway method with the instance's own operator credentials. */
+async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
+  return parseJsonOutput<T>(
+    await openclaw(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]),
+  );
+}
+
+/** What the gateway answers for a bot's (or every bot's) total over a period, in the page's time zone. */
+async function gatewayTotal(botId: string | null, period: UsagePeriod | "daily" | "weekly") {
+  const range = rangeFor(period, Date.now(), timeZone);
+  const result = await gateway.request<{ totals: Json; updatedAt: number }>("usage.cost", {
+    ...(botId ? { agentId: botId } : { agentScope: "all" }),
+    ...rangeParams(range),
+  });
+  return {
+    input: Number(result.totals.input),
+    output: Number(result.totals.output),
+    cacheRead: Number(result.totals.cacheRead),
+    cacheWrite: Number(result.totals.cacheWrite),
+    total: Number(result.totals.totalTokens),
+    unpriced: Number(result.totals.missingCostEntries),
+    cost: Number(result.totals.totalCost),
+  };
+}
+
+const n = (text: string | null) => Number((text ?? "").replace(/[^\d]/g, ""));
+
+async function startOwnHost(readOnly = false): Promise<Host> {
+  const data = mkdtempSync(join(tmpdir(), "clawtrate-usage-"));
+  const started = startHost(INSTANCE, STATIC, data, { readOnly });
+  started.gated.release();
+  const host = { child: started.host, url: await started.url, data };
+  hosts.push(host);
+  return host;
+}
+
+/** A page on its own host, paired as the person pairs it; notifications recorded, not shown. */
+async function pairedPage(browser: Browser, host: Host): Promise<Page> {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  await context.addInitScript(() => {
+    const notes: Array<[string, string]> = [];
+    class Recorded {
+      static permission = "granted";
+      static requestPermission = async () => "granted";
+      constructor(title: string, options?: { body?: string }) {
+        notes.push([title, options?.body ?? ""]);
+      }
+    }
+    Object.assign(window, { Notification: Recorded, __notes: notes });
+  });
+  const next = await context.newPage();
+  await next.goto(host.url);
+  await next.getByRole("button", { name: "Use the development gateway" }).click();
+  await expect(next.getByRole("heading", { name: "Approve this device" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect
+    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
+    .toMatch(/^Approved /m);
+  await expect(next.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+  return next;
+}
+
+const botRow = (on: Page, name: string) =>
+  on.getByTestId("bot-list").getByRole("button", { name: new RegExp(`^${name}\\b`) });
+
+/** A bot's Usage page, in the Work pane's Settings tab. */
+async function usagePage(on: Page, bot: string): Promise<void> {
+  await botRow(on, bot).first().click();
+  if (await on.getByRole("button", { name: "Show work panel" }).count())
+    await on.getByRole("button", { name: "Show work panel" }).click();
+  await on.getByRole("tab", { name: "Settings" }).click();
+  const back = on.getByTestId("usage-page").getByRole("button", { name: "Back to settings" });
+  if (await back.count()) await back.click();
+  await on.getByTestId("usage-row").click();
+  await expect(on.getByTestId("usage-page")).toBeVisible();
+  await expect(on.getByTestId("usage-total")).toBeVisible({ timeout: 30_000 });
+}
+
+/** The figures a Usage page shows, as numbers. */
+async function shownTokens(on: Page) {
+  const value = async (label: string) =>
+    n(
+      await on
+        .getByTestId("usage-tokens")
+        .locator("div", { has: on.locator("dt", { hasText: new RegExp(`^${label}$`) }) })
+        .locator("dd")
+        .textContent(),
+    );
+  return {
+    input: await value("Input"),
+    output: await value("Output"),
+    cacheRead: await value("Cache read"),
+    cacheWrite: await value("Cache write"),
+    total: await value("Total"),
+  };
+}
+
+/** A bar's figure, from its accessible name ("Messages from other bots: 200 tokens"). */
+async function bar(on: Page, list: string, name: string): Promise<number> {
+  const label = await on
+    .getByTestId(list)
+    .locator("li", { hasText: name })
+    .first()
+    .getAttribute("aria-label");
+  return n(label?.split(":").at(-1) ?? null);
+}
+
+/** The budget meter's count and tokens, from its accessible name. */
+async function meter(on: Page): Promise<{ used: number; tokens: number; words: string }> {
+  const label = (await on
+    .getByTestId("budget-meter")
+    .getByRole("meter")
+    .getAttribute("aria-label"))!;
+  const match = /: ([\d,]+) of ([\d,]+) tokens (today|this week)$/.exec(label)!;
+  return { used: n(match[1]!), tokens: n(match[2]!), words: match[3]! };
+}
+
+/** Set the open bot's budget on its Usage page, as the person does. */
+async function setBudget(on: Page, period: "Daily" | "Weekly", tokens: number): Promise<void> {
+  const page = on.getByTestId("usage-page");
+  const open = page.getByTestId("budget-edit").or(page.getByTestId("budget-new"));
+  await open.click();
+  const form = page.getByTestId("budget-form");
+  await form.getByRole("radio", { name: period }).click();
+  await form.getByTestId("budget-tokens").fill(String(tokens));
+  await form.getByTestId("budget-save").click();
+  await expect(page.getByTestId("budget-meter")).toBeVisible({ timeout: 30_000 });
+}
+
+/** The budgets the gateway keeps for the person, read back. */
+async function keptBudgets(): Promise<Array<Json>> {
+  const result = await gateway.request<{ entries?: Json }>("users.prefs.get", {
+    keys: [BUDGETS_PREF_KEY],
+  });
+  const value = result.entries?.[BUDGETS_PREF_KEY] as { budgets?: Json[] } | null | undefined;
+  return value?.budgets ?? [];
+}
+
+/** One bridge command, over the page's host's own socket, as another viewer sends it. */
+async function hostCommand(on: Page, command: Json): Promise<void> {
+  await on.evaluate(
+    (command) =>
+      new Promise<void>((resolve, reject) => {
+        const socket = new WebSocket(`ws://${location.host}/bridge`);
+        socket.onmessage = (event) => {
+          const message = JSON.parse(String(event.data)) as { type: string; id?: string };
+          if (message.type === "hello")
+            socket.send(JSON.stringify({ type: "command", id: "do", command }));
+          else if (message.id === "do") {
+            socket.close();
+            resolve();
+          }
+        };
+        socket.onerror = () => reject(new Error("bridge socket error"));
+        setTimeout(() => reject(new Error("no answer from the bridge")), 15_000);
+      }),
+    command,
+  );
+}
+
+async function shot(on: Page, name: string): Promise<void> {
+  if (!SHOTS) return;
+  const size = on.viewportSize()!;
+  for (const [width, height] of [
+    [1440, 900],
+    [390, 844],
+  ] as const) {
+    for (const theme of ["light", "dark"] as const) {
+      await on.setViewportSize({ width, height });
+      await on.emulateMedia({ colorScheme: theme });
+      await on.waitForTimeout(300);
+      await on.screenshot({ path: join(SHOTS, `${name}-${theme}-${width}.png`) });
+    }
+  }
+  await on.setViewportSize(size);
+  await on.emulateMedia({ colorScheme: "light" });
+}
+
+test.beforeAll(async ({ browser }) => {
+  test.setTimeout(300_000);
+  expect(INSTANCE, "a named instance").toMatch(/^[a-z0-9-]+$/);
+  gateway = await openOperator(
+    openInstance(INSTANCE),
+    "Clawtrate usage check",
+    ["operator.read"],
+    [],
+  );
+  page = await pairedPage(browser, await startOwnHost());
+  timeZone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  // Interactive access, asked as the person asks it: Request access in the access bar.
+  await botRow(page, "Pip").first().click();
+  const bar = page.getByRole("region", { name: "Access" });
+  await bar.getByRole("button", { name: "Request access" }).click();
+  await expect
+    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
+    .toMatch(/^Approved /m);
+  await expect(page.getByTestId("composer-input")).toBeVisible({ timeout: 30_000 });
+  reader = await pairedPage(browser, await startOwnHost(true));
+});
+
+test.afterAll(async () => {
+  test.setTimeout(120_000);
+  try {
+    // Put it back: no budget is left for later checks, and the routine goes.
+    for (const budget of await keptBudgets().catch(() => []))
+      await hostCommand(page, { type: "changeBudget", change: { op: "remove", id: budget.id } });
+    expect(await keptBudgets()).toEqual([]);
+    if (routineId) await openclaw(["cron", "rm", routineId]);
+  } finally {
+    await gateway?.close();
+    for (const host of hosts.splice(0)) {
+      await stopChild(host.child);
+      rmSync(host.data, { recursive: true, force: true });
+    }
+  }
+});
+
+test("F-232 F-237: a bot's Usage page shows the gateway's own totals for each period, with their source and age", async () => {
+  await usagePage(page, "Otto");
+  for (const [choice, period] of [
+    ["This week", "week"],
+    ["Today", "today"],
+    ["30 days", "month"],
+  ] as const) {
+    await page.getByTestId("usage-page").getByRole("radio", { name: choice }).click();
+    await expect(page.getByTestId("usage-page")).not.toHaveAttribute("aria-busy", "true");
+    const expected = await gatewayTotal("otto", period);
+    await expect
+      .poll(() => shownTokens(page))
+      .toEqual({
+        input: expected.input,
+        output: expected.output,
+        cacheRead: expected.cacheRead,
+        cacheWrite: expected.cacheWrite,
+        total: expected.total,
+      });
+    expect(expected.total).toBeGreaterThan(0);
+  }
+  await expect(page.getByTestId("usage-source")).toHaveText(
+    /^From the gateway's usage records for Otto, as of \d{1,2}:\d{2} [AP]M\./,
+  );
+  // The development gateway configures a price of zero: an estimate of zero, named as the gateway's.
+  await expect(page.getByTestId("usage-cost")).toHaveText("About $0.00");
+  await expect(page.getByTestId("usage-cost-hint")).toContainText(
+    "The gateway's estimate from its configured prices, in US dollars, as of",
+  );
+  // By task: each listed task's share is the gateway's, for the period.
+  const sessions = await gateway.request<{ sessions: Array<{ label?: string; usage?: Json }> }>(
+    "sessions.usage",
+    { agentId: "otto", ...rangeParams(rangeFor("month", Date.now(), timeZone)), limit: 200 },
+  );
+  const largest = sessions.sessions
+    .filter((each) => Number(each.usage?.totalTokens ?? 0) > 0)
+    .sort((a, b) => Number(b.usage!.totalTokens) - Number(a.usage!.totalTokens))[0]!;
+  await expect(
+    page
+      .getByTestId("usage-tasks")
+      .locator("div", { hasText: largest.label! })
+      .first()
+      .locator("dd"),
+  ).toHaveText(`${Number(largest.usage!.totalTokens).toLocaleString("en-US")} tokens`);
+  // Settings → Usage: every bot's bar is that bot's own total, and the sum the gateway's.
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Usage", exact: true }).click();
+  await expect(settings.getByTestId("usage-all")).toBeVisible({ timeout: 30_000 });
+  for (const [bot, id] of [
+    ["Juniper", "main"],
+    ["Marlow", "marlow"],
+    ["Otto", "otto"],
+    ["Pip", "pip"],
+  ] as const)
+    expect(await bar(page, "usage-bots", bot)).toBe((await gatewayTotal(id, "week")).total);
+  await expect(settings.getByTestId("usage-all-total")).toContainText(
+    `Every bot: ${(await gatewayTotal(null, "week")).total.toLocaleString("en-US")} tokens`,
+  );
+  // By source, for every bot: the parts add up to the gateway's total, nothing charged twice.
+  await expect(settings.getByTestId("usage-sources")).toBeVisible();
+  const parts = await Promise.all(
+    ["Messages from people", "Routines", "Messages from other bots", "Not attributed"].map((name) =>
+      bar(page, "usage-sources", name),
+    ),
+  );
+  expect(parts.reduce((sum, each) => sum + each, 0)).toBe((await gatewayTotal(null, "week")).total);
+  expect(parts[2]).toBeGreaterThan(0);
+  // The development gateway reports no provider's limits, and says when.
+  await expect(settings.getByTestId("limits-none")).toHaveText(/^No limits reported, as of /);
+  await shot(page, "settings-usage");
+  await page.keyboard.press("Escape");
+});
+
+test("F-131: the Messages from other bots line counts only the run a send's result names", async () => {
+  // Marlow's main task holds a run a person started and a run Pip's send started (the seed's
+  // "Ask Marlow about the plan"); Pip's task holds the send's result, which names that run.
+  const range = rangeFor("week", Date.now(), timeZone);
+  const sender = await gateway.request<{ messages: Json[] }>("chat.history", {
+    sessionKey: "agent:pip:ask-marlow",
+    limit: 200,
+  });
+  const named = sender.messages
+    .filter((each) => each.role === "toolResult" && each.toolName === "sessions_send")
+    .map((each) => {
+      const text = (each.content as Array<{ text?: string }>)
+        .map((block) => block.text ?? "")
+        .join("");
+      return JSON.parse(text) as { runId?: string; sessionKey?: string };
+    })
+    .filter((each) => each.sessionKey === "agent:marlow:main" && each.runId);
+  expect(named).toHaveLength(1);
+  const recipient = await gateway.request<{ messages: Json[] }>("chat.history", {
+    sessionKey: "agent:marlow:main",
+    limit: 200,
+  });
+  const runTokens = (runId: string) =>
+    recipient.messages
+      .filter(
+        (each) =>
+          each.role === "assistant" && (each.__openclaw as Json | undefined)?.runId === runId,
+      )
+      .reduce((sum, each) => sum + Number((each.usage as Json | undefined)?.totalTokens ?? 0), 0);
+  const runs = [
+    ...new Set(
+      recipient.messages.flatMap((each) => {
+        const runId = (each.__openclaw as Json | undefined)?.runId;
+        return each.role === "assistant" && typeof runId === "string" ? [runId] : [];
+      }),
+    ),
+  ];
+  // The recipient task has runs the send does not name: the person's.
+  expect(runs.length).toBeGreaterThan(1);
+  const sent = runTokens(named[0]!.runId!);
+  expect(sent).toBeGreaterThan(0);
+  const taskTotal = runs.reduce((sum, runId) => sum + runTokens(runId), 0);
+  expect(taskTotal).toBeGreaterThan(sent);
+  await usagePage(page, "Marlow");
+  await page.getByTestId("usage-page").getByRole("radio", { name: "This week" }).click();
+  await expect(page.getByTestId("usage-sources")).toBeVisible();
+  // Every other bot-to-bot run Marlow has this week is one some send names; here there is one.
+  expect(await bar(page, "usage-sources", "Messages from other bots")).toBe(sent);
+  expect(await bar(page, "usage-sources", "Messages from people")).toBeGreaterThanOrEqual(
+    taskTotal - sent,
+  );
+  const total = (await gatewayTotal("marlow", "week")).total;
+  const parts = await Promise.all(
+    ["Messages from people", "Routines", "Messages from other bots", "Not attributed"].map((name) =>
+      bar(page, "usage-sources", name),
+    ),
+  );
+  expect(parts.reduce((sum, each) => sum + each, 0)).toBe(total);
+  expect(range.startDate <= range.endDate).toBe(true);
+});
+
+test("F-234: a weekly budget set on one device is shown with the same value after a reload and on the second device", async () => {
+  await usagePage(page, "Otto");
+  const week = (await gatewayTotal("otto", "week")).total;
+  const tokens = Math.max(1_000, week * 3);
+  await setBudget(page, "Weekly", tokens);
+  const shown = await meter(page);
+  expect(shown).toEqual({ used: week, tokens, words: "this week" });
+  await expect(page.getByTestId("usage-page")).toContainText("Shown only");
+  // The gateway keeps it, as the person's preference.
+  expect(await keptBudgets()).toEqual([
+    expect.objectContaining({ botId: "otto", routineId: null, period: "weekly", tokens, timeZone }),
+  ]);
+  // After a reload.
+  await page.reload();
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+  await usagePage(page, "Otto");
+  expect(await meter(page)).toEqual(shown);
+  // On the second device, which only reads: the same value, and no way to change it.
+  await usagePage(reader, "Otto");
+  expect(await meter(reader)).toEqual(shown);
+  await expect(reader.getByTestId("budget-edit")).toHaveCount(0);
+  await expect(reader.getByTestId("budget-new")).toHaveCount(0);
+  await shot(page, "usage-page");
+});
+
+test("F-234: a routine's budget counts that routine's runs, from its own tasks", async () => {
+  test.setTimeout(180_000);
+  const added = parseJsonOutput<{ id: string }>(
+    await openclaw([
+      "cron",
+      "add",
+      "--agent",
+      "otto",
+      "--every",
+      "7d",
+      "--display-name",
+      `Weekly cleanup ${STAMP}`,
+      "--message",
+      "Routine check-in.",
+      "--session",
+      "isolated",
+      `weekly-cleanup-${STAMP}`,
+      "--json",
+    ]),
+  );
+  routineId = added.id;
+  await openclaw(["cron", "run", routineId]);
+  const routineKey = `agent:otto:cron:${routineId}`;
+  const routineTotal = async () => {
+    const result = await gateway.request<{ sessions: Array<{ key: string; usage?: Json }> }>(
+      "sessions.usage",
+      { agentId: "otto", ...rangeParams(rangeFor("daily", Date.now(), timeZone)), limit: 200 },
+    );
+    return result.sessions
+      .filter((each) => each.key === routineKey || each.key.startsWith(`${routineKey}:`))
+      .reduce((sum, each) => sum + Number(each.usage?.totalTokens ?? 0), 0);
+  };
+  await expect.poll(routineTotal, { timeout: 90_000, intervals: [2_000] }).toBeGreaterThan(0);
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Usage", exact: true }).click();
+  await settings.getByTestId("budget-add").click();
+  const target = settings.getByTestId("budget-target");
+  await expect(target.locator("option", { hasText: `Weekly cleanup ${STAMP}` })).toHaveCount(1, {
+    timeout: 30_000,
+  });
+  await target.selectOption({ label: `Routine Weekly cleanup ${STAMP} (Otto)` });
+  const form = settings.getByTestId("budget-form");
+  await form.getByRole("radio", { name: "Daily" }).click();
+  await form.getByTestId("budget-tokens").fill("1000");
+  await form.getByTestId("budget-save").click();
+  const row = settings.locator(`[data-budget="routine:${routineId}"]`);
+  const expected = await routineTotal();
+  await expect(row).toContainText(
+    new RegExp(
+      `Routine Weekly cleanup ${STAMP} \\(Otto\\) · daily · ${expected >= 1000 ? "[\\d.]+k" : expected} of 1k tokens today`,
+    ),
+    { timeout: 60_000 },
+  );
+  expect(await keptBudgets()).toContainEqual(
+    expect.objectContaining({ botId: "otto", routineId, period: "daily", tokens: 1000 }),
+  );
+  await page.keyboard.press("Escape");
+});
+
+test("F-234: a Daily and a Weekly budget are each counted over their own days, as the gateway counts them", async () => {
+  await usagePage(page, "Otto");
+  await setBudget(page, "Daily", 1_000_000);
+  const today = await gatewayTotal("otto", "daily");
+  await expect
+    .poll(() => meter(page))
+    .toEqual({ used: today.total, tokens: 1_000_000, words: "today" });
+  await expect(page.getByTestId("budget")).toContainText("Resets at 00:00, your time.");
+  await setBudget(page, "Weekly", 1_000_000);
+  const week = await gatewayTotal("otto", "weekly");
+  await expect
+    .poll(() => meter(page))
+    .toEqual({ used: week.total, tokens: 1_000_000, words: "this week" });
+  await expect(page.getByTestId("budget")).toContainText("Resets Monday at 00:00, your time.");
+  // The two periods are the gateway's own: Monday to today, and today.
+  expect(rangeFor("weekly", Date.now(), timeZone).endDate).toBe(
+    rangeFor("daily", Date.now(), timeZone).startDate,
+  );
+  expect(week.total).toBeGreaterThanOrEqual(today.total);
+});
+
+test("F-396: the warning appears in the task and as a notification once the gateway's figure passes 80 percent, and a send still works", async () => {
+  test.setTimeout(420_000);
+  // A task of Juniper's own for this check.
+  const label = `Budget check ${STAMP}`;
+  await gatewayCall("sessions.create", { agentId: "main", label });
+  await botRow(page, "Juniper").first().click();
+  await expect(page.getByTestId("task").filter({ hasText: label })).toBeVisible({
+    timeout: 30_000,
+  });
+  await page.getByTestId("task").filter({ hasText: label }).first().click();
+  // A weekly budget the next run passes 80 percent of, and not 100.
+  const before = (await gatewayTotal("main", "week")).total;
+  const tokens = Math.max(1_000, Math.ceil((before + 100) / 0.8));
+  await usagePage(page, "Juniper");
+  await setBudget(page, "Weekly", tokens);
+  expect((await meter(page)).used).toBe(before);
+  await expect(page.getByTestId("budget-line")).toHaveCount(0);
+  await expect(page.getByTestId("budget-warned")).toHaveCount(0);
+  // The person sends; the run goes ahead and answers.
+  await page.getByTestId("composer-input").fill("Hello from the budget check.");
+  await page.getByTestId("composer-input").press("Enter");
+  await expect(page.getByTestId("transcript")).toContainText("Hello from the budget check.", {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("transcript")).toContainText(
+    "This is the scripted development model",
+    {
+      timeout: 60_000,
+    },
+  );
+  // Once the gateway's own figure includes the run, the line says what it reports.
+  await expect
+    .poll(async () => (await gatewayTotal("main", "week")).total, { timeout: 120_000 })
+    .toBeGreaterThan(before);
+  const after = (await gatewayTotal("main", "week")).total;
+  const percent = Math.floor((after / tokens) * 100);
+  expect(percent).toBeGreaterThanOrEqual(80);
+  expect(percent).toBeLessThan(100);
+  const line = page.getByTestId("budget-line");
+  await expect(line).toBeVisible({ timeout: 180_000 });
+  await expect(line).toHaveText(new RegExp(`^Juniper has used ${percent}% of its weekly budget: `));
+  await expect(page.getByTestId("budget-warned")).toContainText(
+    `Juniper has used ${percent}% of its weekly budget.`,
+  );
+  const notes = await page.evaluate(() => (window as unknown as { __notes: string[][] }).__notes);
+  expect(notes).toContainEqual([
+    `Juniper used ${percent}% of its budget`,
+    expect.stringContaining("weekly budget"),
+  ]);
+  await shot(page, "conversation-warned");
+  // Lowered below what was used: reached, said as a warning, and a send still goes ahead.
+  await setBudget(page, "Weekly", 1_000);
+  const note = page.getByTestId("budget-reached-note");
+  await expect(note).toHaveText(
+    /^Juniper has reached its weekly warning budget\. This is shown only: other apps, channels and Juniper's routines aren't stopped\.Raise budget$/,
+    { timeout: 60_000 },
+  );
+  await page.getByTestId("composer-input").fill("Still there?");
+  await page.getByTestId("composer-input").press("Enter");
+  await expect(page.getByTestId("transcript")).toContainText("Still there?", { timeout: 30_000 });
+  await expect
+    .poll(
+      async () =>
+        (await page.getByTestId("transcript").innerText()).split(
+          "This is the scripted development model",
+        ).length - 1,
+      { timeout: 60_000 },
+    )
+    .toBe(2);
+  await expect(page.getByText(/won't send|didn't start|was stopped/)).toHaveCount(0);
+  await shot(page, "composer-reached");
+  // The second device, which only reads, sees the same note and no Raise budget.
+  await botRow(reader, "Juniper").first().click();
+  await reader.getByTestId("task").filter({ hasText: label }).first().click();
+  await expect(reader.getByTestId("budget-reached-note")).toContainText(
+    "Juniper has reached its weekly warning budget.",
+    { timeout: 90_000 },
+  );
+  await expect(reader.getByTestId("raise-from-composer")).toHaveCount(0);
+});
+
+test("a read-only connection sees the figures and every budget, and cannot set or change one", async () => {
+  await usagePage(reader, "Otto");
+  const expected = await gatewayTotal("otto", "week");
+  await expect.poll(() => shownTokens(reader)).toMatchObject({ total: expected.total });
+  await expect(reader.getByTestId("budget-meter")).toBeVisible();
+  await expect(reader.getByTestId("budget-edit")).toHaveCount(0);
+  await reader.keyboard.press("ControlOrMeta+,");
+  const settings = reader.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Usage", exact: true }).click();
+  await expect(settings.getByTestId("budgets")).toContainText("Otto · weekly");
+  await expect(settings.getByTestId("budget-add")).toHaveCount(0);
+  // The host refuses the command even when a viewer sends it.
+  await expect(
+    hostCommand(reader, {
+      type: "changeBudget",
+      change: {
+        op: "set",
+        budget: { botId: "pip", routineId: null, period: "daily", tokens: 5_000, timeZone },
+      },
+    }),
+  ).resolves.toBeUndefined();
+  expect((await keptBudgets()).some((each) => each.botId === "pip")).toBe(false);
+  await reader.keyboard.press("Escape");
+});

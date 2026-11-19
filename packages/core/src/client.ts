@@ -207,7 +207,7 @@ import {
   type SidebarState,
 } from "./sidebar.ts";
 import { UsageEngine, type UsageReport, type UsageReportRequest } from "./usage-engine.ts";
-import { initialUsage, type BudgetChange } from "./usage.ts";
+import { initialUsage, type BudgetChange, type Routine } from "./usage.ts";
 import {
   archiveTask,
   deleteTask,
@@ -5200,6 +5200,13 @@ export class ClawtrateClient {
     if (this.options.readOnly) throw new Error("This host only reads; it does not change budgets.");
     await this.actionContext(options.owner ?? null).ensureWrite();
     await this.usage.changeBudget(change);
+  }
+
+  /** The routines a budget can be set for, read now and not kept. */
+  listRoutines(): Promise<Routine[]> {
+    if (this.state.connection.status !== "connected")
+      return Promise.reject(new Error("Not connected to the gateway."));
+    return this.usage.listRoutines();
   }
 
   /** Count every budget, and read the providers' limits, again now. */

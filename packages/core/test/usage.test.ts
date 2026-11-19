@@ -30,6 +30,7 @@ import {
   parseLimits,
   rangeFor,
   routineOfKey,
+  routinesOf,
   runsOfHistory,
   sentRunIds,
   tasksOf,
@@ -236,6 +237,42 @@ describe("the gateway's figures", () => {
     });
     // The development gateway's answer: a time and no providers.
     expect(parseLimits({ updatedAt: 5, providers: [] }).providers).toEqual([]);
+  });
+});
+
+describe("routines", () => {
+  it("F-234: lists the routines that run in tasks of their own, and leaves the heartbeat out", () => {
+    expect(
+      routinesOf({
+        jobs: [
+          {
+            id: "2d59561b",
+            name: "heartbeat-main",
+            agentId: "main",
+            sessionTarget: "main",
+            payload: { kind: "heartbeat" },
+          },
+          {
+            id: "f3ab2dfd",
+            name: "weekly-cleanup",
+            displayName: "Weekly cleanup",
+            agentId: "otto",
+            sessionTarget: "isolated",
+            payload: { kind: "agentTurn" },
+          },
+          {
+            id: "c0ffee",
+            name: "nightly",
+            effectiveAgentId: "pip",
+            payload: { kind: "agentTurn" },
+          },
+          { id: "bad id!", agentId: "otto" },
+        ],
+      }),
+    ).toEqual([
+      { id: "f3ab2dfd", name: "Weekly cleanup", botId: "otto" },
+      { id: "c0ffee", name: "nightly", botId: "pip" },
+    ]);
   });
 });
 

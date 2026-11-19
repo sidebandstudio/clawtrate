@@ -216,6 +216,7 @@ export function BotSettings({
             <div className="skeleton" style={{ height: 52, width: "100%" }} />
           </div>
         )}
+        {extraGroups}
       </div>
     );
   }

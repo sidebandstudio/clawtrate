@@ -23,6 +23,7 @@ import {
   parseLimits,
   rangeFor,
   rangeParams,
+  routinesOf,
   runsOfHistory,
   sentRunIds,
   shiftDate,
@@ -33,6 +34,7 @@ import {
   type BudgetCount,
   type BudgetPrefs,
   type DateRange,
+  type Routine,
   type TaskUsage,
   type UsageFigure,
   type UsagePeriod,
@@ -407,6 +409,11 @@ export class UsageEngine {
     if (this.limitsTimer) clearTimeout(this.limitsTimer);
     this.limitsTimer = null;
     return this.readLimits(this.generation);
+  }
+
+  /** The routines a budget can be set for, read now (`cron.list`, `operator.read`). */
+  async listRoutines(): Promise<Routine[]> {
+    return routinesOf(await this.ctx.request("cron.list", { limit: 100, includeDisabled: true }));
   }
 
   // Reports --------------------------------------------------------------------------------------

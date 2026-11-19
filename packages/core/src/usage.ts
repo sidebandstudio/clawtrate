@@ -389,6 +389,39 @@ export type UsageSources = {
   partial: boolean;
 };
 
+// Routines ------------------------------------------------------------------------------------
+
+/** A routine a budget can be set for: one that runs in tasks of its own. */
+export type Routine = { id: string; name: string; botId: string };
+/** Routines listed for the budget form. */
+export const MAX_ROUTINES = 64;
+
+/**
+ * The routines in a `cron.list` answer that run in tasks of their own
+ * (`agent:<bot>:cron:<id>`), so their usage can be counted apart. A job that
+ * runs in a bot's main task, such as the gateway's heartbeat, is left out.
+ */
+export function routinesOf(result: unknown): Routine[] {
+  const jobs = asRecord(result)?.jobs;
+  const out: Routine[] = [];
+  for (const each of Array.isArray(jobs) ? jobs : []) {
+    const job = asRecord(each);
+    if (!job || typeof job.id !== "string" || !PLAIN_ID.test(job.id)) continue;
+    if (job.sessionTarget === "main" || asRecord(job.payload)?.kind === "heartbeat") continue;
+    const botId = [job.agentId, job.effectiveAgentId].find(
+      (value): value is string => typeof value === "string" && PLAIN_ID.test(value),
+    );
+    if (!botId) continue;
+    const name =
+      short(job.displayName, MAX_ROUTINE_NAME_CHARS) ??
+      short(job.name, MAX_ROUTINE_NAME_CHARS) ??
+      job.id;
+    out.push({ id: job.id, name, botId });
+    if (out.length >= MAX_ROUTINES) break;
+  }
+  return out;
+}
+
 // Provider limits -----------------------------------------------------------------------------
 
 export type LimitWindow = {

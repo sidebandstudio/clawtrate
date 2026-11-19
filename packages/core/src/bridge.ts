@@ -25,6 +25,7 @@ import {
   MAX_ROUTINE_NAME_CHARS,
   validTimeZone,
   type BudgetChange,
+  type Routine,
   type UsagePeriod,
 } from "./usage.ts";
 
@@ -196,7 +197,9 @@ export type BridgeCommand =
   /** Set or remove a warning budget, kept with the gateway. */
   | { type: "changeBudget"; change: BudgetChange }
   /** Count the budgets and read the providers' limits again now. */
-  | { type: "refreshUsage" };
+  | { type: "refreshUsage" }
+  /** The routines a budget can be set for, read now. */
+  | { type: "listRoutines" };
 
 /** What each command answers with. */
 export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
@@ -241,7 +244,9 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                         ? ArchivedList
                                         : C extends { type: "readUsage" }
                                           ? UsageReport
-                                          : void;
+                                          : C extends { type: "listRoutines" }
+                                            ? Routine[]
+                                            : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -849,7 +854,8 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "changeBudget":
       return { type: "changeBudget", change: budgetChange(command.change) };
     case "refreshUsage":
-      return { type: "refreshUsage" };
+    case "listRoutines":
+      return { type: command.type };
     default:
       throw new Error("unknown command");
   }
@@ -1172,6 +1178,8 @@ class ViewerSession implements BridgeSession {
         return client.changeBudget(command.change, { owner });
       case "refreshUsage":
         return client.refreshUsage();
+      case "listRoutines":
+        return client.listRoutines();
     }
   }
 

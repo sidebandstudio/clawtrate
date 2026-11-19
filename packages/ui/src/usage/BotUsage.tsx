@@ -308,12 +308,14 @@ export function BotSettingsWithUsage(props: BotSettingsProps & { task: Task | nu
         ?.focus(),
     );
   };
+  // Opening the page puts focus on its title, or on the budget form's field when it opens with it.
+  const withForm = open && page.form;
   useEffect(() => {
-    if (open)
+    if (open && !withForm)
       requestAnimationFrame(() =>
         document.querySelector<HTMLElement>('[data-testid="usage-page"] [data-bs-focus]')?.focus(),
       );
-  }, [open]);
+  }, [open, withForm]);
   return (
     <BotSettings
       {...settings}
