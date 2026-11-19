@@ -41,6 +41,7 @@ Every document in the repository, by what you want to do.
 - [Provider accounts and T3 Code](research/provider-accounts-and-t3-code.md): how OpenClaw handles provider accounts, and how a bot can work with T3 Code.
 - [The setup flow](research/setup-flow.md): first pairing, setup codes, the gateway's identity, installing and removing OpenClaw, SSH from a shipped app, and Tailscale, from OpenClaw's source and live runs.
 - `research/setup-flow/`: the probe behind the setup flow note.
+- [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
 ## Writing docs
