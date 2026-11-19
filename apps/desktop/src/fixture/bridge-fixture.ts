@@ -52,6 +52,7 @@ import {
   withAccess,
   type AccountParams,
 } from "./accounts.ts";
+import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machines.ts";
 import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
@@ -458,7 +459,12 @@ function answerStrings(
 
 export function createFixtureBridge(
   name: SceneName,
-  options: { files?: FileParams; accounts?: AccountParams; usage?: UsageParams } = {},
+  options: {
+    files?: FileParams;
+    accounts?: AccountParams;
+    usage?: UsageParams;
+    machines?: MachineParams;
+  } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   /** Every command the interface sent, for tests that check what was asked of the host. */
@@ -529,11 +535,17 @@ export function createFixtureBridge(
   const railRefused = new Set<string>();
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
+  const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   async function apply(command: BridgeCommand): Promise<unknown> {
     const usage = usageCommand(command, () => state, set, usageParams);
     if (usage) {
       sent.push(command);
       return usage;
+    }
+    const machine = machineCommand(command, () => state, set);
+    if (machine) {
+      sent.push(command);
+      return machine;
     }
     const account = accountCommand(command, () => state, set, accountParams);
     if (account) {

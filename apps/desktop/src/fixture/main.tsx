@@ -24,6 +24,7 @@ import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
 import { accountParams } from "./accounts.ts";
 import { usageParams } from "./usage.ts";
+import { machineParams } from "./machines.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -79,6 +80,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   files: fileParams(params),
   accounts: accountParams(params),
   usage: usageParams(params),
+  machines: machineParams(params),
 });
 // Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.
 if (params.get("uview") === "usage")

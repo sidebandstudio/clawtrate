@@ -31,6 +31,7 @@ import {
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
 import { Connect } from "./Connect.tsx";
 import { ModelPair } from "./ModelPair.tsx";
+import { connectionKey, RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
 import {
   accountName,
@@ -54,7 +55,7 @@ import {
 export const WATCH_MS = 4_000;
 export const CHECK_MS = 30_000;
 
-type View = "main" | "account" | "change" | "connect";
+type View = "main" | "account" | "change" | "connect" | "runs";
 
 export function BotSettings({
   bot,
@@ -111,6 +112,13 @@ export function BotSettings({
     : null;
   const word = binding ? accountWord(binding) : null;
   const name = bot.name;
+  // Where the bot runs (controls.md section 14): read while the tab shows its first page or that page.
+  const placement = usePlacement(
+    bot.id,
+    connection,
+    visible && (view === "main" || view === "runs"),
+  );
+  const nameOf = (id: string) => bots.find((each) => each.id === id)?.name ?? id;
 
   // The tab reads the accounts when it is first shown, and again, once, for a bot the
   // last read did not have (one another client made since).
@@ -186,6 +194,39 @@ export function BotSettings({
         {usagePage}
       </div>
     );
+  // --- Where the bot runs (controls.md section 14): its own read, whatever the accounts do --
+  if (view === "runs") {
+    return (
+      <div ref={rootRef}>
+        <RunsOnPage
+          // Another bot, connection or access: the old page and any form on it go.
+          key={`${bot.id}\n${connectionKey(connection)}`}
+          botId={bot.id}
+          botName={name}
+          read={placement.read}
+          reload={placement.reload}
+          nameOf={nameOf}
+          connection={connection}
+          info={info}
+          announce={announce}
+          onBack={() => go("main", "[data-bs='runs-on']")}
+        />
+      </div>
+    );
+  }
+
+  const runsOnRow = (
+    <RunsOnRow
+      botName={name}
+      read={placement.read}
+      nameOf={nameOf}
+      onOpen={() => {
+        // The page reads the gateway each time it opens.
+        placement.reload();
+        go("runs");
+      }}
+    />
+  );
 
   if (!binding) {
     const failed = accounts.status === "error";
@@ -217,6 +258,7 @@ export function BotSettings({
           </div>
         )}
         {extraGroups}
+        {runsOnRow}
       </div>
     );
   }
@@ -351,6 +393,7 @@ export function BotSettings({
           <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
         )}
         {extraGroups}
+        {runsOnRow}
         {foot}
       </div>
     );

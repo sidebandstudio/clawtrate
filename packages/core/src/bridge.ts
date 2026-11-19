@@ -28,6 +28,16 @@ import {
   type Routine,
   type UsagePeriod,
 } from "./usage.ts";
+import {
+  DEFAULTS_CHOICES,
+  MAX_MACHINE_NAME_CHARS,
+  MAX_PATH_CHARS,
+  type ApprovalsFile,
+  type BotPlacement,
+  type ConfigSave,
+  type DefaultsChoice,
+  type MachinesView,
+} from "./machines.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -41,7 +51,7 @@ export type BridgeCommand =
   | { type: "closeSession"; key: string }
   /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
   /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
-  | { type: "requestAccess"; tier?: "admin" }
+  | { type: "requestAccess"; tier?: "admin" | "pairing" }
   /**
    * Send to a task this viewer has open. Files are not carried in the command:
    * they are added first (web upload path or Electron IPC) and named by id.
@@ -199,7 +209,30 @@ export type BridgeCommand =
   /** Count the budgets and read the providers' limits again now. */
   | { type: "refreshUsage" }
   /** The routines a budget can be set for, read now. */
-  | { type: "listRoutines" };
+  | { type: "listRoutines" }
+  // Where a bot runs and Machines (controls.md sections 14 and 15). Read now, never kept;
+  // writes are read back before they answer, and need admin (or pairing for names and removals).
+  | { type: "readPlacement"; botId: string }
+  | { type: "readMachines" }
+  | {
+      type: "setCommandMachine";
+      botId: string;
+      host: "gateway" | "node";
+      nodeId: string | null;
+      /** The configuration revision the page showed (`BotPlacement.configHash`). */
+      baseHash: string | null;
+    }
+  | { type: "setBotWorkspace"; botId: string; path: string }
+  | {
+      type: "setMachineDefaults";
+      machineId: string;
+      choice: DefaultsChoice;
+      expectedHash: string | null;
+    }
+  | { type: "renameMachine"; nodeId: string; name: string }
+  | { type: "removeMachine"; nodeId: string }
+  | { type: "renameDevice"; deviceId: string; name: string }
+  | { type: "removeDevice"; deviceId: string };
 
 /** What each command answers with. */
 export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
@@ -246,7 +279,17 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                           ? UsageReport | UsageBusy
                                           : C extends { type: "listRoutines" }
                                             ? Routine[]
-                                            : void;
+                                            : C extends { type: "readPlacement" }
+                                              ? BotPlacement
+                                              : C extends { type: "readMachines" }
+                                                ? MachinesView
+                                                : C extends { type: "setCommandMachine" }
+                                                  ? ConfigSave
+                                                  : C extends { type: "setBotWorkspace" }
+                                                    ? { workspace: string | null; asTyped: boolean }
+                                                    : C extends { type: "setMachineDefaults" }
+                                                      ? ApprovalsFile
+                                                      : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -552,8 +595,8 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return { type: "connect", url: command.url, token: token ?? null };
     }
     case "requestAccess":
-      return command.tier === "admin"
-        ? { type: "requestAccess", tier: "admin" }
+      return command.tier === "admin" || command.tier === "pairing"
+        ? { type: "requestAccess", tier: command.tier }
         : { type: "requestAccess" };
     case "refreshAccounts":
     case "cancelSignIn":
@@ -856,6 +899,58 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "refreshUsage":
     case "listRoutines":
       return { type: command.type };
+    case "readPlacement":
+      return { type: "readPlacement", botId: botId(command.botId) };
+    case "readMachines":
+      return { type: "readMachines" };
+    case "setCommandMachine": {
+      if (command.host !== "gateway" && command.host !== "node") throw new Error("invalid host");
+      return {
+        type: "setCommandMachine",
+        botId: botId(command.botId),
+        host: command.host,
+        nodeId: command.host === "node" ? id(command.nodeId, "machine") : null,
+        baseHash:
+          command.baseHash === null || command.baseHash === undefined
+            ? null
+            : id(command.baseHash, "hash"),
+      };
+    }
+    case "setBotWorkspace":
+      return {
+        type: "setBotWorkspace",
+        botId: botId(command.botId),
+        path: shortText(command.path, MAX_PATH_CHARS, "path"),
+      };
+    case "setMachineDefaults": {
+      if (!DEFAULTS_CHOICES.includes(command.choice as DefaultsChoice))
+        throw new Error("invalid choice");
+      return {
+        type: "setMachineDefaults",
+        machineId: id(command.machineId, "machine"),
+        choice: command.choice as DefaultsChoice,
+        expectedHash:
+          command.expectedHash === null || command.expectedHash === undefined
+            ? null
+            : id(command.expectedHash, "hash"),
+      };
+    }
+    case "renameMachine":
+      return {
+        type: "renameMachine",
+        nodeId: id(command.nodeId, "machine"),
+        name: shortText(command.name, MAX_MACHINE_NAME_CHARS, "name"),
+      };
+    case "removeMachine":
+      return { type: "removeMachine", nodeId: id(command.nodeId, "machine") };
+    case "renameDevice":
+      return {
+        type: "renameDevice",
+        deviceId: id(command.deviceId, "device"),
+        name: shortText(command.name, MAX_MACHINE_NAME_CHARS, "name"),
+      };
+    case "removeDevice":
+      return { type: "removeDevice", deviceId: id(command.deviceId, "device") };
     default:
       throw new Error("unknown command");
   }
@@ -986,7 +1081,7 @@ class ViewerSession implements BridgeSession {
         if (this.open.delete(command.key)) client.closeSession(command.key);
         return;
       case "requestAccess":
-        return client.requestAccess(command.tier === "admin" ? "admin" : "interactive");
+        return client.requestAccess(command.tier ?? "interactive");
       case "refreshAccounts":
         return client.refreshAccounts();
       case "checkLock":
@@ -1180,6 +1275,34 @@ class ViewerSession implements BridgeSession {
         return client.refreshUsage();
       case "listRoutines":
         return client.listRoutines();
+      case "readPlacement":
+        return client.readPlacement(command.botId);
+      case "readMachines":
+        return client.readMachines();
+      case "setCommandMachine":
+        // A machine without its id is refused, never read as the gateway's machine.
+        if (command.host === "node" && !command.nodeId) throw new Error("invalid machine");
+        return client.setCommandMachine(
+          command.botId,
+          command.host === "node" && command.nodeId
+            ? { host: "node", nodeId: command.nodeId }
+            : { host: "gateway" },
+          command.baseHash,
+        );
+      case "setBotWorkspace":
+        return client.setBotWorkspace(command.botId, command.path);
+      case "setMachineDefaults":
+        return client.setMachineDefaults(command.machineId, command.choice, command.expectedHash, {
+          owner,
+        });
+      case "renameMachine":
+        return client.renameMachine(command.nodeId, command.name);
+      case "removeMachine":
+        return client.removeMachine(command.nodeId);
+      case "renameDevice":
+        return client.renameDevice(command.deviceId, command.name, { owner });
+      case "removeDevice":
+        return client.removeDevice(command.deviceId);
     }
   }
 

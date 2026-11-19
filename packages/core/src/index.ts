@@ -31,6 +31,7 @@ export {
 } from "./usage-engine.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
+export * from "./machines.ts";
 export * from "./sidebar.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";

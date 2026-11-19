@@ -55,6 +55,12 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/scopes.ts:ADMIN_SCOPES": "static, five scopes",
   "packages/core/src/accounts-engine.ts:CERTAIN_REFUSALS": "static, seven error codes",
   "packages/core/src/accounts.ts:KIND_RECORDS": "static, the four kinds Clawtrate records",
+  "packages/core/src/machines.ts:NODE_APPROVALS_COMMANDS": "static, two command names",
+  "packages/core/src/machines.ts:DEFAULTS_CHOICES":
+    "static, the four choices of a machine's defaults",
+  "packages/core/src/machines.ts:KNOWN_HOSTS": "static, the four exec hosts",
+  "packages/core/src/machines.ts:readMachines>places":
+    "one read's command place per listed bot, at most `MAX_BOTS`, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>missing":
     "one creation's steps that did not land, at most four, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>errors":

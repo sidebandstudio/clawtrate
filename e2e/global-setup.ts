@@ -283,11 +283,13 @@ export default async function globalSetup() {
     process.env.CLAWTRATE_E2E_OTHERS = JSON.stringify(runningOthers([name], [sentinel]));
     // Every start is a fresh, seeded gateway.
     await startInstance(name);
+    // It also has a paired machine (`--with-node`), for Settings, Machines and "Where a bot runs".
     await startInstance(
       accounts,
       "--with-accounts",
       "--with-plugin",
       "clawtrate-dev-signin",
+      "--with-node",
       "--no-seed",
     );
     for (const instance of [name, accounts]) {
