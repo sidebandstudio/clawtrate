@@ -444,7 +444,7 @@ describe("the iPhone chat's rows", () => {
       text: "Only part of this task's history is loaded here, so earlier messages may be missing.",
     });
     expect(rows.find((row) => row.kind === "note" && row.id === "shortened:a2")?.text).toBe(
-      "Shortened here. Only the first part of this message is kept on this device.",
+      "Shortened here. Some of this message is missing from this view.",
     );
     const truncated = chatRows(
       task(KEY, at),
@@ -462,5 +462,29 @@ describe("the iPhone chat's rows", () => {
         (row) => row.kind === "note",
       ),
     ).toBe(false);
+  });
+
+  it("does not say only the first part is kept when a later block of the shortened message is whole", () => {
+    const mixed: TranscriptItem = {
+      id: "mixed",
+      role: "assistant",
+      timestamp: at,
+      model: null,
+      blocks: [
+        { kind: "text", text: `${"word ".repeat(500)}Missing tail of first block.` },
+        { kind: "text", text: "Final block is whole." },
+      ],
+    };
+    const bounded = enforceState({
+      ...initialState,
+      transcripts: { [KEY]: transcript([mixed]) },
+    }).transcripts[KEY]!;
+    const rows = chatRows(task(KEY, at, { status: "done" }), bounded, "Otto", NOW, LIVE);
+    expect(rows.some((row) => row.kind === "bot" && row.text === "Final block is whole.")).toBe(
+      true,
+    );
+    expect(rows.find((row) => row.kind === "note")?.text).toBe(
+      "Shortened here. Some of this message is missing from this view.",
+    );
   });
 });

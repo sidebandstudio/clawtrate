@@ -31,7 +31,7 @@ export const CONVERSATION_WORDS = {
   /** A message the gateway truncated when it stored it: the desktop's words for a truncated result. */
   truncated: "Truncated by the gateway. The rest was not sent.",
   /** A message this client cut to its bound: the gateway sent it whole. */
-  shortened: "Shortened here. Only the first part of this message is kept on this device.",
+  shortened: "Shortened here. Some of this message is missing from this view.",
   /** The task has older messages than were loaded: the desktop's words for a partial history. */
   earlier: "Only part of this task's history is loaded here, so earlier messages may be missing.",
   jumpToLatest: "Jump to latest",
