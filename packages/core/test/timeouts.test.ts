@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { agentEvent, KEY, openTask } from "./client-harness.ts";
-import { sleep, until } from "./fake-gateway.ts";
+import { GatewayError, sleep, until } from "./fake-gateway.ts";
 
 type Opened = Awaited<ReturnType<typeof openTask>>;
 
@@ -53,6 +53,43 @@ describe("tool calls that keep timing out (F-101)", () => {
     await until(() => task.gateway.calls("chat.abort").length === 1);
     expect(task.gateway.calls("chat.abort")[0]).toEqual({ sessionKey: KEY, runId: "run-x" });
     expect(task.transcript().runs[0]).toMatchObject({ state: "stopping", stoppedForTimeouts: 3 });
+    task.client.stop();
+  });
+
+  it("F-101: an automatic stop the gateway refuses leaves the run going, is not asked again, and a later Stop is not put down to the timeouts", async () => {
+    const task = await openTask();
+    let refuse = true;
+    task.gateway.handlers["chat.abort"] = () => {
+      if (refuse) throw new GatewayError({ code: "INVALID_REQUEST", message: "not now" });
+      setTimeout(
+        () =>
+          task.gateway.emit(
+            "agent",
+            agentEvent("run-x", 50, "lifecycle", {
+              phase: "end",
+              status: "cancelled",
+              aborted: true,
+            }),
+          ),
+        0,
+      );
+      return { ok: true, aborted: true, runIds: ["run-x"] };
+    };
+    task.gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
+    await until(() => task.transcript().runs[0]?.state === "running");
+    call(task, "c1", TIMED_OUT);
+    call(task, "c2", TIMED_OUT);
+    call(task, "c3", TIMED_OUT);
+    await until(() => task.transcript().runs[0]?.stoppedForTimeouts === 0);
+    expect(task.transcript().runs[0]!.state).toBe("running");
+    call(task, "c4", TIMED_OUT);
+    await sleep(30);
+    expect(task.gateway.calls("chat.abort")).toHaveLength(1);
+    // The person's own Stop later: its note is a plain stop's.
+    refuse = false;
+    await task.client.stopRun(KEY, "run-x");
+    await until(() => task.transcript().runs[0]?.state === "stopped");
+    expect(task.transcript().runs[0]!.stoppedForTimeouts).toBe(0);
     task.client.stop();
   });
 

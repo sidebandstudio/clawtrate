@@ -515,7 +515,9 @@ export type Run = {
   stoppedWith?: StoppedWith;
   /**
    * This client stopped the run because that many of its tool calls in a row timed out
-   * (`TIMEOUTS_IN_A_ROW`; F-101). Absent otherwise.
+   * (`TIMEOUTS_IN_A_ROW`; F-101). 0 once that stop failed (the gateway refused it): the run goes
+   * on, it is not stopped for its timeouts again, and a later Stop is not put down to them.
+   * Absent otherwise.
    */
   stoppedForTimeouts?: number;
   /**

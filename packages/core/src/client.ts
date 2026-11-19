@@ -4129,7 +4129,12 @@ export class ClawtrateClient {
         const count = timeoutsInARow(run);
         if (count >= TIMEOUTS_IN_A_ROW) {
           this.updateActivity(key, (activity) => markStoppedForTimeouts(activity, run.id, count));
-          void this.stopRun(key, run.id);
+          void this.stopRun(key, run.id).then(() => {
+            // The stop was refused or could not be asked: the run goes on, not as stopped for this.
+            const now = this.state.transcripts[key] && findRun(this.state.transcripts[key], run.id);
+            if (now && (now.state === "running" || now.state === "waiting"))
+              this.updateActivity(key, (activity) => markStoppedForTimeouts(activity, run.id, 0));
+          });
         }
       }
       const timerKey = `${key}\u0000${run.id}`;

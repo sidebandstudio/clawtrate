@@ -32,6 +32,16 @@ export function currentRun(transcript: Transcript | undefined): Run | undefined 
 export { questionPending };
 
 /**
+ * The status line while the gateway retries the model request by itself (F-082). Only a rate
+ * limit is called one; any other reason the gateway names is not put into words it did not
+ * give: the retry is said plainly, with its attempt.
+ */
+export function retryPhrase(retry: NonNullable<Run["retry"]>): string {
+  const attempt = `Retrying, attempt ${retry.attempt} of ${retry.of}`;
+  return retry.reason === "rate_limit" ? `Rate limited. ${attempt}` : attempt;
+}
+
+/**
  * The call whose running words the status line says: the latest to start
  * while it runs, then the earliest still running (7.8), by the engine's
  * reading of each call.
@@ -123,7 +133,7 @@ export function statusLineFor(
     view = {
       state: "thinking",
       badge: null,
-      phrase: `${run.retry.reason === "rate_limit" ? "Rate limited" : "The model provider is unavailable"}. Retrying, attempt ${run.retry.attempt} of ${run.retry.of}`,
+      phrase: retryPhrase(run.retry),
       tone: "live",
       startedAt: null,
       callId: null,
@@ -347,7 +357,8 @@ export function endingOf(run: Run, transcript?: Transcript): RunEnding | null {
       kind: "stopped",
       after: runDuration(run),
       elsewhere: run.stopRequestedAt === null && !commanded,
-      timeouts: run.stoppedForTimeouts ?? null,
+      // 0: the automatic stop failed, so this stop is not the timeouts'.
+      timeouts: run.stoppedForTimeouts ? run.stoppedForTimeouts : null,
     };
   }
   if (run.state === "failed") {

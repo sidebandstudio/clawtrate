@@ -578,4 +578,24 @@ describe("the status line while the gateway retries (F-082)", () => {
     });
     expect(statusLineFor(waiting, transcript([waiting]), live).phrase).toBe("Waiting for you");
   });
+
+  it("F-082: only a rate limit is called one; a retry for any other reason the gateway names is said plainly", () => {
+    for (const reason of ["output_limit", "overloaded", "timeout", "unknown"]) {
+      const retrying = run({ retry: { attempt: 3, of: 10, reason } });
+      const phrase = statusLineFor(retrying, transcript([retrying]), live).phrase;
+      expect(phrase).toBe("Retrying, attempt 3 of 10");
+      expect(phrase).not.toMatch(/unavailable|rate limit/i);
+    }
+  });
+});
+
+describe("a stop after timeouts (F-101)", () => {
+  it("F-101: when the automatic stop was refused, a later Stop's ending is a plain stop's", () => {
+    expect(
+      endingOf(run({ state: "stopped", stopRequestedAt: 1, stoppedForTimeouts: 0 })),
+    ).toMatchObject({ kind: "stopped", timeouts: null });
+    expect(
+      endingOf(run({ state: "stopped", stopRequestedAt: 1, stoppedForTimeouts: 3 })),
+    ).toMatchObject({ kind: "stopped", timeouts: 3 });
+  });
 });
