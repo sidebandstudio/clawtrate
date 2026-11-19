@@ -484,7 +484,7 @@ export function createFixtureBridge(
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);
   const accountParams = options.accounts ?? NO_ACCOUNT_PARAMS;
-  const routineParams = options.routines ?? { state: "ready" };
+  const routineParams = options.routines ?? { state: "none" };
   let state =
     fileParams.state === null
       ? initial

@@ -139,7 +139,9 @@ type Tip = { text: string; top: number; left: number };
 
 /** A routine run counts as working; anything more urgent the bot's tasks show wins (automation.md section 8). */
 function withRoutine(summary: BotSummary, running: Routine | null): BotSummary {
-  return running && !summary.state ? { ...summary, state: "working" } : summary;
+  return running && (!summary.state || summary.state === "stopped")
+    ? { ...summary, state: "working" }
+    : summary;
 }
 
 /**
@@ -1824,7 +1826,8 @@ export function Rail({
         </button>
         {query === null ? (
           <>
-            {onOpenRoutines && (
+            {/* Shown once the gateway has a routine: with nothing to create one from yet, an empty view offers nothing. */}
+            {onOpenRoutines && (routines.length > 0 || routinesOpen) && (
               <button
                 type="button"
                 className="icon-button"

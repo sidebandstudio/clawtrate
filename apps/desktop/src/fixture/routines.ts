@@ -3,8 +3,9 @@
 // engine answers the routine commands. Every name, instruction and result is
 // made up. Times are from the fixture's clock; next runs follow each schedule.
 //
-// Address parameters:
-//   routines=empty|error|loading|running|scheduler-off|many
+// Address parameters (without one, the gateway has no routines, as every
+// other scene's baseline was taken):
+//   routines=on|empty|error|loading|running|scheduler-off|many
 //     no routines, a failed read, still loading, Morning digest running now,
 //     the gateway's scheduler off, or Morning digest with 27 recorded runs
 
@@ -20,7 +21,7 @@ import type {
 } from "@clawtrate/core";
 
 export type RoutineParams = {
-  state: "ready" | "empty" | "error" | "loading" | "running" | "scheduler-off" | "many";
+  state: "none" | "ready" | "empty" | "error" | "loading" | "running" | "scheduler-off" | "many";
 };
 
 export function routineParams(params: URLSearchParams): RoutineParams {
@@ -34,7 +35,9 @@ export function routineParams(params: URLSearchParams): RoutineParams {
       state === "scheduler-off" ||
       state === "many"
         ? state
-        : "ready",
+        : state === "on"
+          ? "ready"
+          : "none",
   };
 }
 
@@ -231,7 +234,8 @@ export function fixtureRoutines(now: number, params: RoutineParams): RoutinesSta
     status: "loaded",
     error: null,
     schedulerOn: params.state !== "scheduler-off",
-    routines: params.state === "empty" ? [] : fixtureRoutineList(now, params),
+    routines:
+      params.state === "empty" || params.state === "none" ? [] : fixtureRoutineList(now, params),
     omitted: 0,
   };
 }
@@ -272,7 +276,13 @@ export function fixtureRuns(routine: Routine, now: number, params: RoutineParams
       }),
     ];
   const count = params.state === "many" ? 27 : routine.id === DIGEST ? 6 : 3;
-  const step = routine.schedule.kind === "every" ? routine.schedule.everyMs! : DAY;
+  // A cron schedule naming one weekday runs weekly; the others here run daily.
+  const step =
+    routine.schedule.kind === "every"
+      ? routine.schedule.everyMs!
+      : /\s\d$/u.test(routine.schedule.expr ?? "")
+        ? 7 * DAY
+        : DAY;
   return Array.from({ length: count }, (_, index) => {
     const runAt = routine.lastRunAt! - index * step;
     if (routine.id === DIGEST && index === 1)
