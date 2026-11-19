@@ -26,7 +26,7 @@ import {
 
 const ID = "6f1c2b9e-0d7a-4c3e-9b1f-2a8e5d4c3b21";
 const b64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
-const status = (extra: Record<string, unknown> = {}) =>
+const status_ = (extra: Record<string, unknown> = {}) =>
   JSON.stringify({ ...(statusJson({ port: 18789, home: "/srv/you" }) as object), ...extra });
 
 const wellFormed = (lines: string[] = []) =>
@@ -35,7 +35,7 @@ const wellFormed = (lines: string[] = []) =>
     `{"k":"uname","s":"${b64("Linux\n")}","m":"${b64("x86_64\n")}","n":"${b64("devbox\n")}"}`,
     `{"k":"program","i":0}`,
     `{"k":"version","exit":0,"v":"${b64("OpenClaw 2026.10.6 (fe06181)")}"}`,
-    `{"k":"status-default","exit":0,"v":"${b64(status())}"}`,
+    `{"k":"status-default","exit":0,"v":"${b64(status_())}"}`,
     ...lines,
     `{"k":"signs","state":1,"launchd":0,"systemd":1,"cstate":0,"claunchd":0,"csystemd":0}`,
     `{"k":"end","id":"${ID}"}`,
@@ -172,7 +172,7 @@ describe("the LOOK's output, parsed in memory", () => {
     ).toBeNull();
     expect(parseGatewayStatus("default", 1, "not json")).toBeNull();
     // A status that isn't JSON is a fact of its own, not a parse failure.
-    const broken = parseLookOutput(wellFormed().replace(b64(status()), b64("Error: boom")), ID);
+    const broken = parseLookOutput(wellFormed().replace(b64(status_()), b64("Error: boom")), ID);
     expect(broken).toMatchObject({
       ok: true,
       facts: { gateways: [{ profile: "default", unreadable: true }] },
@@ -180,9 +180,82 @@ describe("the LOOK's output, parsed in memory", () => {
   });
 });
 
+describe("a LOOK that is incomplete or inconsistent", () => {
+  const begin = `{"k":"begin","id":"${ID}"}`;
+  const end = `{"k":"end","id":"${ID}"}`;
+  const without = (key: string) =>
+    wellFormed()
+      .split("\n")
+      .filter((line) => !line.startsWith(`{"k":"${key}"`))
+      .join("\n");
+
+  it.each([
+    ["an empty frame", `${begin}\n${end}\n`],
+    ["no system line", without("uname")],
+    ["no signs line", without("signs")],
+    ["a program without its version", without("version")],
+    ["a program without its status", without("status-default")],
+    [
+      "Clawtrate's profile seen without its status",
+      wellFormed().replace(`"cstate":0`, `"cstate":1`),
+    ],
+  ])("is incomplete: %s", (_name, stdout) => {
+    expect(parseLookOutput(stdout, ID)).toEqual({ ok: false, reason: "incomplete" });
+  });
+
+  it("is malformed when it reports a program's answers without a program", () => {
+    expect(parseLookOutput(without("program"), ID)).toEqual({ ok: false, reason: "malformed" });
+  });
+
+  const service = (status: Record<string, unknown>, exit = 0) => {
+    const parsed = parseLookOutput(
+      wellFormed().replace(
+        `{"k":"status-default","exit":0,"v":"${b64(status_())}"}`,
+        `{"k":"status-default","exit":${exit},"v":"${b64(JSON.stringify(status))}"}`,
+      ),
+      ID,
+    );
+    if (!parsed.ok) throw new Error(parsed.reason);
+    return serviceOnPort(parsed.facts, 18789);
+  };
+  const base = () => JSON.parse(status_()) as Record<string, Record<string, unknown>>;
+
+  it("finds no service in a status that failed, or one of unknown kind or state", () => {
+    expect(service(base(), 1)).toEqual({ ok: false, reason: "cant-tell" });
+    const unknownRuntime = base();
+    unknownRuntime.service = { ...unknownRuntime.service, runtime: { pid: 4242 } };
+    expect(service(unknownRuntime)).toEqual({ ok: false, reason: "cant-tell" });
+    const noPid = base();
+    noPid.service = { ...noPid.service, runtime: { status: "running" } };
+    expect(service(noPid)).toEqual({ ok: false, reason: "cant-tell" });
+    const notLoaded = base();
+    notLoaded.service = { ...notLoaded.service, loaded: null };
+    expect(service(notLoaded)).toEqual({ ok: false, reason: "cant-tell" });
+    const otherKind = base();
+    otherKind.service = { ...otherKind.service, label: "supervisord" };
+    expect(service(otherKind)).toEqual({ ok: false, reason: "cant-tell" });
+    const noRpc = base();
+    delete noRpc.rpc;
+    expect(service(noRpc)).toEqual({ ok: false, reason: "cant-tell" });
+    expect(service(base())).toMatchObject({ ok: true, holdsPort: true });
+  });
+
+  it("finds no service when a status didn't parse", () => {
+    const parsed = parseLookOutput(
+      wellFormed().replace(
+        `{"k":"status-default","exit":0,"v":"${b64(status_())}"}`,
+        `{"k":"status-default","exit":1,"v":"${b64("Error")}"}`,
+      ),
+      ID,
+    );
+    if (!parsed.ok) throw new Error(parsed.reason);
+    expect(serviceOnPort(parsed.facts, 18789)).toEqual({ ok: false, reason: "cant-tell" });
+  });
+});
+
 describe("the gateway service on a port", () => {
   const facts = (extra: Record<string, unknown> = {}) => {
-    const parsed = parseLookOutput(wellFormed().replace(b64(status()), b64(status(extra))), ID);
+    const parsed = parseLookOutput(wellFormed().replace(b64(status_()), b64(status_(extra))), ID);
     if (!parsed.ok) throw new Error();
     return parsed.facts;
   };
@@ -199,8 +272,16 @@ describe("the gateway service on a port", () => {
         port: 18789,
       },
     });
-    const other = serviceOnPort(facts({ port: { listeners: [{ pid: 9 }] } }), 18789);
-    expect(other).toMatchObject({ ok: true, holdsPort: false });
+    // Another process on the port, alone or beside the service: not a found service.
+    for (const listeners of [[{ pid: 9 }], [{ pid: 4242 }, { pid: 9 }], []]) {
+      expect(
+        serviceOnPort(facts({ port: { listeners } }), 18789),
+        JSON.stringify(listeners),
+      ).toEqual({
+        ok: false,
+        reason: "cant-tell",
+      });
+    }
     expect(serviceOnPort(facts(), 18790)).toEqual({ ok: false, reason: "none" });
     expect(serviceOnPort(facts({ rpc: { ok: false } }), 18789)).toEqual({
       ok: false,

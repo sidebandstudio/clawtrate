@@ -12,7 +12,7 @@ export { parseDestination, type Destination } from "./destination.ts";
 export type { ConfigRefusal, RefusalCategory, Target } from "./person-config.ts";
 export type { SshFailure, UnreachableCause } from "./ssh-output.ts";
 export type { GatewayService, LookFacts, GatewayStatus, Version } from "./look.ts";
-export { serviceOnPort, sameService, PROGRAM_PLACES } from "./look.ts";
+export { serviceOnPort, sameService, PROGRAM_PLACES, type FoundService } from "./look.ts";
 export {
   BACKOFF_MS,
   BACKOFF_STEADY_MS,

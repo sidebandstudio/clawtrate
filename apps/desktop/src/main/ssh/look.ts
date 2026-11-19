@@ -107,7 +107,7 @@ export type LookFacts = {
 
 export type LookParse =
   | { ok: true; facts: LookFacts; noiseLines: number }
-  | { ok: false; reason: "no-begin" | "no-end" | "malformed" | "too-large" };
+  | { ok: false; reason: "no-begin" | "no-end" | "malformed" | "too-large" | "incomplete" };
 
 export const MAX_LOOK_OUTPUT = 64 * 1024;
 const MAX_DECODED = 32 * 1024;
@@ -258,9 +258,21 @@ export function parseLookOutput(stdout: string, requestId: string): LookParse {
       return { ok: false, reason: "malformed" };
     seen.add(key);
     switch (key) {
-      case "end":
+      case "end": {
         if (fact.id !== requestId) return { ok: false, reason: "malformed" };
+        // Every fact the script always prints, and each the program and the state it found call for.
+        const needed = ["uname", "signs"];
+        if (facts.program) needed.push("version", "status-default");
+        if (facts.signs.clawtrateState && facts.program) needed.push("status-clawtrate");
+        if (needed.some((name) => !seen.has(name))) return { ok: false, reason: "incomplete" };
+        if (
+          !facts.program &&
+          ["version", "status-default", "status-clawtrate"].some((n) => seen.has(n))
+        ) {
+          return { ok: false, reason: "malformed" };
+        }
         return { ok: true, facts, noiseLines: begin };
+      }
       case "uname": {
         const [os, machine, nodeName] = [decode(fact.s), decode(fact.m), decode(fact.n)].map((v) =>
           v === null ? null : v.trim(),
@@ -331,31 +343,52 @@ export type GatewayService = {
   port: number;
 };
 
-/** The gateway service a LOOK found on `port`, running and answering, or why not. */
+/** A gateway service a LOOK found, running and answering, whose own process is all that listens on its port. */
+export type FoundService = { ok: true; service: GatewayService; holdsPort: true };
+
+/**
+ * The gateway service a LOOK found on `port`, only from a complete and
+ * consistent status: the command succeeded, the service is of a known kind,
+ * loaded and running with a known process, `rpc.ok`, and that process is
+ * every listener on the port. A service that reports itself stopped is
+ * "not-running"; anything less certain is "cant-tell".
+ */
 export function serviceOnPort(
   facts: LookFacts,
   port: number,
-):
-  | { ok: true; service: GatewayService; holdsPort: boolean | null }
-  | { ok: false; reason: "none" | "not-running" } {
+): FoundService | { ok: false; reason: "none" | "not-running" | "cant-tell" } {
   for (const gateway of facts.gateways) {
-    if ("unreadable" in gateway || gateway.port !== port) continue;
-    if (!gateway.service || !gateway.configPath) continue;
-    if (gateway.rpcOk !== true || gateway.service.running === false)
+    if ("unreadable" in gateway) {
+      if (gateway.exit !== 0) return { ok: false, reason: "cant-tell" };
+      continue;
+    }
+    if (gateway.port !== port) continue;
+    const service = gateway.service;
+    if (gateway.exit !== 0 || !service || !gateway.configPath || service.label === "other") {
+      return { ok: false, reason: "cant-tell" };
+    }
+    if (service.running === false || gateway.rpcOk === false)
       return { ok: false, reason: "not-running" };
-    const servicePid = gateway.service.pid;
+    if (service.running !== true || service.loaded !== true || gateway.rpcOk !== true) {
+      return { ok: false, reason: "cant-tell" };
+    }
+    const pid = service.pid;
+    if (
+      pid === null ||
+      gateway.listenerPids.length === 0 ||
+      gateway.listenerPids.some((each) => each !== pid)
+    ) {
+      return { ok: false, reason: "cant-tell" };
+    }
     return {
       ok: true,
+      holdsPort: true,
       service: {
         profile: gateway.profile,
-        serviceLabel: gateway.service.label,
+        serviceLabel: service.label,
         configPath: gateway.configPath,
         port,
       },
-      holdsPort:
-        servicePid === null || gateway.listenerPids.length === 0
-          ? null
-          : gateway.listenerPids.includes(servicePid),
     };
   }
   return { ok: false, reason: "none" };

@@ -437,7 +437,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     if (!look.ok) throw new Error("look failed");
     const found = serviceOnPort(look.facts, gateway.port);
     if (!found.ok) throw new Error("no service");
-    const forward = transport.openForward(route, gateway.port, found.service);
+    const forward = transport.openForward(route, found);
     const states: ForwardState[] = [];
     forward.onState((state) => states.push(state));
     const upNow = () => forward.state.phase === "up";
@@ -503,7 +503,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     if (!look.ok) throw new Error("look failed");
     const found = serviceOnPort(look.facts, gateway.port);
     if (!found.ok) throw new Error("no service");
-    const forward = transport.openForward(route, gateway.port, found.service);
+    const forward = transport.openForward(route, found);
     await waitFor(() => forward.state.phase === "up", 20000, "the forward to come up");
     // Another gateway now answers on that port: another configuration behind it.
     stub.setStatus(
@@ -528,7 +528,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       "default",
       statusJson({ port: gateway.port, home: t.home, running: false, rpcOk: false }),
     );
-    const forward = transport.openForward(route, gateway.port, found.service);
+    const forward = transport.openForward(route, found);
     try {
       await waitFor(() => forward.state.phase === "waiting", 20000, "the forward to wait");
       expect(forward.state).toMatchObject({
@@ -548,7 +548,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     if (!look.ok) throw new Error("look failed");
     const found = serviceOnPort(look.facts, gateway.port);
     if (!found.ok) throw new Error("no service");
-    const forward = transport.openForward(route, gateway.port, found.service);
+    const forward = transport.openForward(route, found);
     await waitFor(() => forward.state.phase === "up", 20000, "the forward to come up");
     const original = sshd.hostKey;
     const other = join(root, "sshd", "host_other_ed25519");

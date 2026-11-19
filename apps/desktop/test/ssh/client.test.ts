@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { parseDestination } from "../../src/main/ssh/destination.ts";
+import { AppKnownHosts, fingerprintOf } from "../../src/main/ssh/known-hosts.ts";
 import { routeConfigText } from "../../src/main/ssh/route-config.ts";
 import { SshTransport } from "../../src/main/ssh/transport.ts";
 import { productionWorld, type SshWorld } from "../../src/main/ssh/world.ts";
@@ -118,6 +119,59 @@ describe.skipIf(process.platform === "win32")("the ssh client", () => {
       reason: "ssh-missing",
     });
     expect(started).toEqual([]);
+  });
+
+  it("reads the script's own exit status: a whole answer from a script that failed is not a LOOK", async () => {
+    // A stand-in ssh: answers -V, and otherwise prints a whole, well-formed LOOK for the id it is sent.
+    const make = (exit: number) => {
+      const world = worldWith("OpenSSH_9.9p2, LibreSSL 3.3.6", "darwin", `exit-${exit}`);
+      const b64 = (text: string) => Buffer.from(text).toString("base64");
+      writeFileSync(
+        world.ssh,
+        [
+          "#!/bin/sh",
+          'if [ "$1" = "-V" ]; then echo "OpenSSH_9.9p2, LibreSSL 3.3.6" >&2; exit 0; fi',
+          "id=$(head -n 1 | sed \"s/^request_id='\\(.*\\)'$/\\1/\")",
+          "cat >/dev/null",
+          `printf '{"k":"begin","id":"%s"}\\n' "$id"`,
+          `printf '{"k":"uname","s":"${b64("Linux")}","m":"${b64("x86_64")}","n":"${b64("devbox")}"}\\n'`,
+          `printf '{"k":"signs","state":0,"launchd":0,"systemd":0,"cstate":0,"claunchd":0,"csystemd":0}\\n'`,
+          `printf '{"k":"end","id":"%s"}\\n' "$id"`,
+          `exit ${exit}`,
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const transport = new SshTransport(world);
+      writeFileSync(world.personConfig, "Host devbox\n  HostName devbox.example\n");
+      const route = transport.prepareRoute("1", "devbox");
+      if (!route.ok) throw new Error(JSON.stringify(route));
+      const key = Buffer.concat([
+        Buffer.from([0, 0, 0, 11]),
+        Buffer.from("ssh-ed25519"),
+        Buffer.from([0, 0, 0, 32]),
+        Buffer.alloc(32, 1),
+      ]).toString("base64");
+      new AppKnownHosts(join(world.appDir, "known_hosts")).pin(
+        route.alias,
+        { type: "ssh-ed25519", key, fingerprint: fingerprintOf(key) },
+        route.endpoint,
+        new Date(0),
+        false,
+      );
+      return { transport, route };
+    };
+    const good = make(0);
+    expect(await good.transport.look(good.route)).toMatchObject({
+      ok: true,
+      facts: { program: null },
+    });
+    const failed = make(3);
+    expect(await failed.transport.look(failed.route)).toEqual({
+      ok: false,
+      kind: "cant-tell",
+      reason: "script-failed",
+    });
   });
 
   it("writes Windows paths with forward slashes, and uses Windows' bundled ssh in production", () => {

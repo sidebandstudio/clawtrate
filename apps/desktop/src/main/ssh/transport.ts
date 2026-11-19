@@ -29,7 +29,7 @@ import {
   parseKnownHostsLine,
 } from "./known-hosts.ts";
 import {
-  type GatewayService,
+  type FoundService,
   type LookFacts,
   lookScript,
   MAX_LOOK_OUTPUT,
@@ -156,7 +156,14 @@ export type LookResult =
   | {
       ok: false;
       kind: "cant-tell";
-      reason: "timed-out" | "too-large" | "no-begin" | "no-end" | "malformed";
+      reason:
+        | "timed-out"
+        | "too-large"
+        | "no-begin"
+        | "no-end"
+        | "malformed"
+        | "incomplete"
+        | "script-failed";
     };
 
 /** A route prepared again since, or forgotten: nothing is done with it. */
@@ -573,6 +580,8 @@ export class SshTransport {
     if (run.timedOut || run.cancelled) return { ok: false, kind: "cant-tell", reason: "timed-out" };
     if (run.overflow) return { ok: false, kind: "cant-tell", reason: "too-large" };
     if (run.exit === 255) return this.failed(route, classifySshFailure(run.stderr, run.exit));
+    // The script ends with exit 0 after its last fact; anything else is not a whole answer.
+    if (run.exit !== 0) return { ok: false, kind: "cant-tell", reason: "script-failed" };
     const parsed = parseLookOutput(run.stdout, script.requestId);
     if (!parsed.ok) return { ok: false, kind: "cant-tell", reason: parsed.reason };
     return { ok: true, facts: parsed.facts };
@@ -583,10 +592,14 @@ export class SshTransport {
    * loopback. It is usable only while its state is "up", which it reaches only
    * after a LOOK names `expected` on that port.
    */
-  openForward(route: Route, gatewayPort: number, expected: GatewayService): ForwardSupervisor {
+  openForward(route: Route, found: FoundService): ForwardSupervisor {
     if (!this.current(route)) throw new Error("The route was prepared again or forgotten.");
-    if (!isGatewayPort(gatewayPort) || expected.port !== gatewayPort)
-      throw new Error("Not a gateway port.");
+    // Only a service whose own process holds the port: what `serviceOnPort` returns as found.
+    if (found.ok !== true || found.holdsPort !== true)
+      throw new Error("Not a found gateway service.");
+    const expected = found.service;
+    const gatewayPort = expected.port;
+    if (!isGatewayPort(gatewayPort)) throw new Error("Not a gateway port.");
     if (this.forwards.size >= MAX_SSH_FORWARDS) throw new Error("Too many forwards at once.");
     const forward = new ForwardSupervisor({
       pickPort: freeLoopbackPort,
@@ -594,10 +607,9 @@ export class SshTransport {
       verify: async (): Promise<VerifyResult> => {
         const look = await this.look(route);
         if (look.ok) {
-          const found = serviceOnPort(look.facts, gatewayPort);
-          if (!found.ok)
-            return { kind: found.reason === "not-running" ? "not-running" : "cant-tell" };
-          return sameService(found.service, expected) ? { kind: "same" } : { kind: "different" };
+          const now = serviceOnPort(look.facts, gatewayPort);
+          if (!now.ok) return { kind: now.reason === "not-running" ? "not-running" : "cant-tell" };
+          return sameService(now.service, expected) ? { kind: "same" } : { kind: "different" };
         }
         if (look.kind === "failed") return { kind: "failed", failure: look.failure };
         return { kind: "cant-tell" };
