@@ -22,6 +22,7 @@ import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
 import { accountParams } from "./accounts.ts";
+import { machineParams } from "./machines.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -76,6 +77,7 @@ const sceneName = params.get("scene");
 const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   files: fileParams(params),
   accounts: accountParams(params),
+  machines: machineParams(params),
 });
 // For tests and manual checks: change the state from the console.
 Object.assign(window, { clawtrateFixture: bridge });
