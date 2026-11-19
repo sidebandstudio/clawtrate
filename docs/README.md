@@ -30,6 +30,7 @@ Every document in the repository, by what you want to do.
 - [Conversation](design/conversation.md): how a running turn looks, moves and reads.
 - [Work pane](design/work-pane.md): what sits beside the conversation, a task's files, what a bot made and the bot's computer.
 - [Bots](design/bots.md): creating a bot on an account, connecting accounts, a bot's settings and the optional T3 Code integration.
+- [Controls](design/controls.md): what each bot may do and who enforces it, saved approvals, activity, memory, where a bot runs, usage and warning budgets.
 - [Setting up](design/setup.md): the first run, where OpenClaw runs and what Clawtrate found there, connecting on this computer or over SSH, installing OpenClaw, setup codes and approvals.
 - [Prototype](design/prototype/README.md): static pages that show the design working.
 
