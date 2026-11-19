@@ -41,9 +41,9 @@ The prototype walks every path to its outcome: `prototype/notifications.html`, w
 ```
 the gateway's events          a run ends; an approval arrives; a question arrives; a run waits
   the host (main process)       decides, in the order of section 3, and shows or holds
-    a system notification         a bot's name and what happened (section 4)
+    a system notification         the bot's name, or "Clawtrate", and the kind of event (section 4)
       click                         the window, the bot, the task, the card (section 5)
-Settings (⌘,), Notifications  this computer: show, previews, budget warnings
+Settings (⌘,), Notifications  this computer: show, bot names, budget warnings
                               yours: quiet hours, a switch for each bot
 Work pane, Settings tab       Notifications: one row (bots.md §8), opening the bot's page
   the bot's page                its switch; the tasks with their own setting
@@ -81,12 +81,12 @@ No new tokens.
 
 ### Where each setting is kept
 
-| Setting                                            | Kept                                                                                      | Same on the person's other devices |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------- |
-| Show notifications, Show previews, Budget warnings | This computer: the host's own settings file, as `settings.md` §2 keeps the app's settings | No                                 |
-| Quiet hours                                        | `users.prefs`, key `clawtrate.notifications`, field `quiet`                               | Yes                                |
-| A bot's switch                                     | `users.prefs`, key `clawtrate.notifications`, field `bots`, by bot id; absent means on    | Yes                                |
-| A task's setting                                   | `users.prefs`, key `clawtrate.notifications.tasks`, by task key; absent means Same as bot | Yes                                |
+| Setting                                                              | Kept                                                                                      | Same on the person's other devices |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------- |
+| Show notifications, Show bot names in notifications, Budget warnings | This computer: the host's own settings file, as `settings.md` §2 keeps the app's settings | No                                 |
+| Quiet hours                                                          | `users.prefs`, key `clawtrate.notifications`, field `quiet`                               | Yes                                |
+| A bot's switch                                                       | `users.prefs`, key `clawtrate.notifications`, field `bots`, by bot id; absent means on    | Yes                                |
+| A task's setting                                                     | `users.prefs`, key `clawtrate.notifications.tasks`, by task key; absent means Same as bot | Yes                                |
 
 `quiet` has the shape the gateway's own browser push uses (research §5): `{enabled, startMinute, endMinute, timeZone}`, minutes from 0 to 1439 and an IANA zone, so a later phone design can read one value. Clawtrate never writes the gateway's `notifications.web.v1`.
 
@@ -118,7 +118,7 @@ No new tokens.
 
 ### Announcements
 
-The Settings dialog's polite live region (`bots.md` §2), and the Work pane's in the tab, announce only what was read back: "Notifications on this computer are on" or "off", "Previews are shown" or "hidden", "Budget warnings are on" or "off", "Quiet hours are on, 22:00 to 07:00" or "Quiet hours are off", "Otto's notifications are on" or "off", "This task: Off" (and the other two), "Couldn't save", "Changed on another of your devices". The status strip announces its own words (section 5).
+The Settings dialog's polite live region (`bots.md` §2), and the Work pane's in the tab, announce only what was read back: "Notifications on this computer are on" or "off", "Bot names are shown in notifications" or "Bot names are hidden in notifications", "Budget warnings are on" or "off", "Quiet hours are on, 22:00 to 07:00" or "Quiet hours are off", "Otto's notifications are on" or "off", "This task: Off" (and the other two), "Couldn't save", "Changed on another of your devices". The status strip announces its own words (section 5).
 
 ## 3. When a notification is shown
 
@@ -166,27 +166,26 @@ Every event that could notify is put through these steps, in this order; the fir
 
 ## 4. What a notification says
 
-A notification can be read by anyone who can see the screen, including, depending on the system's settings, a locked one. Electron gives the app no control over that and no reading of it (research §6), so what the notification says is the only control there is. **By default it carries the bot's name and the kind of event, and never a message's, a command's or a question's text, and never a task's title.** More is the person's explicit choice: Show previews (section 7), off by default, on this computer only.
+A notification can be read by anyone who can see the screen, on a locked screen too depending on the system's settings, and the system keeps it in its notification list after the banner has gone. Electron gives the app no control over either and no reading of them (research §6). So **no message text, task title, command, command argument, tool input, question text or approval title ever goes into a native notification.** Those stay in the task a click opens.
 
-The title is the bot's name. The body is one sentence for the kind; with previews on, a second line follows.
+**The title** is the bot's name. It is the name the gateway lists, passed through this device's own scrub of the credentials it holds, then cut to 40 characters with an ellipsis. The scrub takes out the shared token in this device's saved connection, its device token, and, while a sign-in lasts, the values that sign-in holds, each as `withoutSecret` (`packages/core/src/accounts.ts`) takes a value out, longest first. Neither step is protection: the scrub removes only what this device itself holds, and cutting only limits the length, so a name can still carry text someone gave the bot. The name stays because a person with several bots has to tell which one finished or waits. **"Show bot names in notifications"** (section 7), on this computer and on by default, says that a name can be read on a locked screen and stays in the system's notification list; with it off the title is "Clawtrate".
 
-| Event                                                      | Body                                                                                  | Second line with Show previews                     |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| A run ended with a reply                                   | "Finished."                                                                           | The task's title, a colon, the reply's first words |
-| A run failed                                               | "Its run failed."                                                                     | The task's title                                   |
-| An approval this device received: a command                | "Wants to run a command."                                                             | The task's title, a colon, the command             |
-| An approval this device received: another kind             | "Needs your approval."                                                                | The task's title, a colon, the request's title     |
-| A helper's approval                                        | "A helper of Otto wants to run a command." (or "needs your approval")                 | As above                                           |
-| An approval raised by a bot another bot messaged           | The asking bot as title: "Wants to run a command, for a message from Otto."           | As above                                           |
-| A question                                                 | "Asked you a question." or "Asked you 3 questions."                                   | The task's title, a colon, the first question      |
-| A question this app can't answer (`conversation.md` §13)   | "Asked something this app can't answer yet."                                          | The task's title                                   |
-| An approval this device only saw waiting, interactive tier | "Is waiting for an approval. It can be answered on the device that sent the message." | The task's title                                   |
-| The same, read-only                                        | "Is waiting for an approval. This device can only read."                              | The task's title                                   |
-| A budget at 80 percent                                     | "Used 82% of its weekly budget. Shown only: nothing was stopped."                     | None                                               |
+**The body** is a fixed sentence for the kind of event:
 
-- The words of a failure are never shown: nothing in the events is fit to read on a lock screen, and the turn error in the task says what the gateway reported (`conversation.md` §17).
-- A preview is cut at a word, with an ellipsis, so the whole notification stays within macOS's 256 bytes (research §6).
-- The notification is grouped by bot (`groupId`, on macOS and Windows) and has no buttons and no reply field: answering belongs to the card, where Deny is always visible and the full request can be read (`conversation.md` §12). Buttons would also need a signed app with a changed alert style on macOS (research §6).
+| Event                                                                   | Body                                                                            | With bot names off                                                  |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| A run ended with a visible reply                                        | "Finished."                                                                     | "A bot finished."                                                   |
+| A run failed                                                            | "Its run failed."                                                               | "A bot's run failed."                                               |
+| An approval whose pending record this device can see, for a command     | "Wants to run a command."                                                       | "A bot wants to run a command."                                     |
+| An approval whose pending record this device can see, of another kind   | "Needs your approval."                                                          | "A bot needs your approval."                                        |
+| A question                                                              | "Asked you a question."                                                         | "A bot asked you a question."                                       |
+| A question this app can't answer (`conversation.md` §13)                | "Asked something this app can't answer yet."                                    | "A bot asked something this app can't answer yet."                  |
+| A run waiting for approval, on a device without the request (section 3) | "A run is waiting for approval. This device doesn't have the approval request." | The same                                                            |
+| A budget's 80 percent warning (section 11)                              | "Reached 80% of its budget. Shown only: nothing was stopped."                   | "A bot reached 80% of its budget. Shown only: nothing was stopped." |
+
+- The title names the bot whose task holds the card: the parent bot for a helper's approval, the asking bot for one raised by a bot another bot messaged (`conversation.md` §12, "Where the card is").
+- **Native identifiers are opaque local identifiers.** Each notification gets a new local id, and each bot a group id (`groupId`, macOS and Windows) made for it on this computer. Neither is a task key, a bot id or any text from the gateway; the host's record (section 5) maps them to what they stand for.
+- The notification has no buttons and no reply field: answering belongs to the card, where Deny is always visible and the full request can be read (`conversation.md` §12). Buttons would also need a signed app with a changed alert style on macOS (research §6).
 - The system's own sound plays; the app sets no sound of its own.
 
 ## 5. Opening a notification
@@ -236,11 +235,11 @@ The Notifications section takes the place `settings.md` keeps for it in the sect
 
 **This computer**, a group word, then three switch rows of the choice-list kind:
 
-| Row                | Line under it                                                                                                                                                                          | Default |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| Show notifications | "When a bot finishes or waits for you."                                                                                                                                                | On      |
-| Show previews      | "Adds a task's title and the first words of a reply, a command or a question. Anyone who can see your screen can read them, also when it's locked, unless your system hides previews." | Off     |
-| Budget warnings    | "When a bot has used 80% of a budget."                                                                                                                                                 | On      |
+| Row                             | Line under it                                                                                                                                                                 | Default |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| Show notifications              | "When a bot finishes or waits for you."                                                                                                                                       | On      |
+| Show bot names in notifications | "A bot's name can be read on a locked screen and stays in your system's notification list." Off: "Notifications say "Clawtrate" and the kind of event, without a bot's name." | On      |
+| Budget warnings                 | "When a bot has used 80% of a budget."                                                                                                                                        | On      |
 
 Under them a note, neutral, in the words for the system:
 
@@ -315,15 +314,15 @@ Its words are section 4's ("Used 82% of its weekly budget. Shown only: nothing w
 
 ## 12. Widths, themes, keyboard, screen readers, motion
 
-| Concern       | Rule                                                                                                                                                                                                                                                          |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1440 and 1100 | Settings is the 800 × 640 dialog; the Notifications section scrolls inside it                                                                                                                                                                                 |
-| 800           | The same dialog at the window's width less 32 px                                                                                                                                                                                                              |
-| 390           | Settings is the sheet of `bots.md` §19: the list of sections first, the section replacing it with Back. Switch rows are 64 px; the time pair stays side by side. The Work pane is its full-width sheet, with the bot's page and the Details row as on desktop |
-| Themes        | Only the product's tokens, light and dark. The picture of a notification uses `--bg-raised`, `--border-strong` and `--text-*` in both                                                                                                                         |
-| Keyboard      | Every control in section 2's Input; the notification itself is the system's, and its keyboard path is the system's                                                                                                                                            |
-| Screen reader | A switch is named by its row ("Show previews", "Otto's notifications", "Quiet hours") and its line is its description; the time fields by "Quiet hours from" and "Quiet hours to"; the status strip is a `status` region. Announcements are section 2's       |
-| Motion        | A switch's thumb slides in `--dur-quick`; with reduced motion it moves without sliding. Nothing else here moves                                                                                                                                               |
+| Concern       | Rule                                                                                                                                                                                                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1440 and 1100 | Settings is the 800 × 640 dialog; the Notifications section scrolls inside it                                                                                                                                                                                             |
+| 800           | The same dialog at the window's width less 32 px                                                                                                                                                                                                                          |
+| 390           | Settings is the sheet of `bots.md` §19: the list of sections first, the section replacing it with Back. Switch rows are 64 px; the time pair stays side by side. The Work pane is its full-width sheet, with the bot's page and the Details row as on desktop             |
+| Themes        | Only the product's tokens, light and dark. The picture of a notification uses `--bg-raised`, `--border-strong` and `--text-*` in both                                                                                                                                     |
+| Keyboard      | Every control in section 2's Input; the notification itself is the system's, and its keyboard path is the system's                                                                                                                                                        |
+| Screen reader | A switch is named by its row ("Show bot names in notifications", "Otto's notifications", "Quiet hours") and its line is its description; the time fields by "Quiet hours from" and "Quiet hours to"; the status strip is a `status` region. Announcements are section 2's |
+| Motion        | A switch's thumb slides in `--dur-quick`; with reduced motion it moves without sliding. Nothing else here moves                                                                                                                                                           |
 
 ## 13. What each fact drives
 
@@ -332,7 +331,7 @@ Its words are section 4's ("Used 82% of its weekly budget. Shown only: nothing w
 | 1   | An approval request reaches only the device whose message started the run; another device's answer is refused; it waits for that device                      | The "can be answered on the device that sent the message" wording; no card elsewhere                | Research §1, tried            |
 | 2   | Every connection sees the lifecycle's `waiting-approval` and `approval-resolved`                                                                             | The waiting notification on other devices, and its withdrawal                                       | Research §1, tried            |
 | 3   | A question reaches every connection with `operator.questions`, also from another bot's task; a read-only device gets nothing that says it waits              | Questions notify on every interactive device; none on read-only                                     | Research §2, tried            |
-| 4   | Every connection sees `chat` `final` with the reply, `error`, `aborted`, and lifecycle `end` with its reason                                                 | Finished and failed; a stop not notified; previews of a reply                                       | Research §3, tried            |
+| 4   | Every connection sees `chat` `final` with the reply, `error`, `aborted`, and lifecycle `end` with its reason                                                 | Finished and failed; a stop not notified                                                            | Research §3, tried            |
 | 5   | `users.prefs`: per profile, read at read access, written at the interactive tier, compare-and-set, 4,096 bytes, `users.prefs.changed`, `no_durable_identity` | Where switches and quiet hours are kept; read-back; conflict; the 40-task bound; "on this computer" | Research §4, tried and source |
 | 6   | The gateway's own push: quiet hours in minutes with an IANA zone; dropped, not held                                                                          | The quiet-hours shape; Clawtrate holds waits itself                                                 | Research §5, source           |
 | 7   | Electron: no permission or Focus reading; `failed`; `click`; buttons need signing on macOS; no lock-screen option; nothing while not running                 | Section 10; the default text; no buttons; the failed note                                           | Research §6, documentation    |
@@ -368,13 +367,13 @@ So the first thing a builder does is check each: a toast from the NSIS install, 
 
 ### What each part uses
 
-| Part                   | Uses                                                                                                                                                                                         |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The decision           | The host: the gateway's events, the core's waiting state, your settings as last read, this computer's switches, the window's focus and the bot on screen (from the interface)                |
-| Showing                | Electron's `Notification` in the main process: `title`, `body`, `id` per task, `groupId` per bot, no `actions`; `close()` and on macOS `Notification.remove` to withdraw                     |
-| Opening                | `click` on the live object, the host's record, `gateway.identity.get`, the task list, then a bridge command to the interface: select the bot, open the task, focus the card or the run's end |
-| Settings and the pages | `users.prefs.get` and `users.prefs.set` with `expectedEntries`; `users.prefs.changed`; the host's settings file for this computer's switches                                                 |
-| Quiet hours            | The stored zone with `Intl.DateTimeFormat`; a minute timer; `powerMonitor` `resume`                                                                                                          |
+| Part                   | Uses                                                                                                                                                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The decision           | The host: the gateway's events, the core's waiting state, your settings as last read, this computer's switches, the window's focus and the bot on screen (from the interface)                                         |
+| Showing                | Electron's `Notification` in the main process: `title` (the scrubbed name or "Clawtrate"), a fixed `body`, an opaque local `id` and `groupId`, no `actions`; `close()` and on macOS `Notification.remove` to withdraw |
+| Opening                | `click` on the live object, the host's record, `gateway.identity.get`, the task list, then a bridge command to the interface: select the bot, open the task, focus the card or the run's end                          |
+| Settings and the pages | `users.prefs.get` and `users.prefs.set` with `expectedEntries`; `users.prefs.changed`; the host's settings file for this computer's switches                                                                          |
+| Quiet hours            | The stored zone with `Intl.DateTimeFormat`; a minute timer; `powerMonitor` `resume`                                                                                                                                   |
 
 ### What the host does
 
@@ -397,30 +396,30 @@ So the first thing a builder does is check each: a toast from the NSIS install, 
 2. The host's decision and showing, for replies, failures, and the waits this device has cards for, with this computer's switch.
 3. Opening, with every check of section 5.
 4. Your settings in `users.prefs` and Settings, Notifications; the bot's row and page; the task's setting.
-5. Waits seen only as a phase; quiet hours; previews.
+5. Waits seen only as a phase; quiet hours; the bot-names switch.
 6. Budget warnings moved to the host under section 11.
 
 ### The prototype's states and walks
 
 `prototype/notifications.html` takes `theme`, `width` and `motion`, and:
 
-| Parameter                        | Values                                                                                                                                                   |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `open`                           | `settings` (Settings, Notifications), `bot` (the bot's Notifications page), `details` (the task's setting), or none (the app with the notifications bar) |
-| `event`                          | `finished`, `failed`, `stopped`, `approval`, `question`, `marlow` (a question in Marlow's task for Pip's message), `budget`                              |
-| `device`                         | `sender` (the default), `other` (another device at the interactive tier), `read` (read-only)                                                             |
-| `focus`                          | `otto` or `pip`: the window is focused on that bot                                                                                                       |
-| `quiet`                          | `1`: quiet hours are on now                                                                                                                              |
-| `platform`                       | `none`: this build cannot show notifications (with `os=mac` or `os=windows`)                                                                             |
-| `quietset`                       | `1`: quiet hours are set, 22:00 to 07:00, and not on now                                                                                                 |
-| `os`                             | `mac` (the default), `windows`, `linux`                                                                                                                  |
-| `master`, `previews`, `budgetsw` | `0` or `1`: this computer's switches                                                                                                                     |
-| `bot`                            | `otto=off`: Otto's switch off. `task`: `on` or `off`, the setting of Otto's task "Weekly backup check"                                                   |
-| `click`                          | `gone`, `offline`, `othergw`, `stale`: what the host finds when the notification is clicked                                                              |
-| `prefs`                          | `reading`, `readfail`, `device` (`no_durable_identity`), `conflict`, `savefail`, `elsewhere` (a second device in Berlin)                                 |
-| `access`                         | `read`: a read-only connection for the settings                                                                                                          |
-| `failed`                         | `1`: the system refused the last notification                                                                                                            |
-| `tasks`                          | `full`: 40 tasks already have their own setting                                                                                                          |
+| Parameter                     | Values                                                                                                                                                   |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `open`                        | `settings` (Settings, Notifications), `bot` (the bot's Notifications page), `details` (the task's setting), or none (the app with the notifications bar) |
+| `event`                       | `finished`, `failed`, `stopped`, `approval`, `question`, `marlow` (a question in Marlow's task for Pip's message), `budget`                              |
+| `device`                      | `sender` (the default), `other` (another device at the interactive tier), `read` (read-only)                                                             |
+| `focus`                       | `otto` or `pip`: the window is focused on that bot                                                                                                       |
+| `quiet`                       | `1`: quiet hours are on now                                                                                                                              |
+| `platform`                    | `none`: this build cannot show notifications (with `os=mac` or `os=windows`)                                                                             |
+| `quietset`                    | `1`: quiet hours are set, 22:00 to 07:00, and not on now                                                                                                 |
+| `os`                          | `mac` (the default), `windows`, `linux`                                                                                                                  |
+| `master`, `names`, `budgetsw` | `0` or `1`: this computer's switches                                                                                                                     |
+| `bot`                         | `otto=off`: Otto's switch off. `task`: `on` or `off`, the setting of Otto's task "Weekly backup check"                                                   |
+| `click`                       | `gone`, `offline`, `othergw`, `stale`: what the host finds when the notification is clicked                                                              |
+| `prefs`                       | `reading`, `readfail`, `device` (`no_durable_identity`), `conflict`, `savefail`, `elsewhere` (a second device in Berlin)                                 |
+| `access`                      | `read`: a read-only connection for the settings                                                                                                          |
+| `failed`                      | `1`: the system refused the last notification                                                                                                            |
+| `tasks`                       | `full`: 40 tasks already have their own setting                                                                                                          |
 
 The walks the check clicks: each event for each device to its notification or to the reason it is not shown; each notification's click to what it opens, and each failed check of section 5; quiet hours holding a wait and showing it when they end, and not showing a reply; focus on Otto silencing Otto and not Pip; Linux silencing everything while focused; each switch in Settings saved and read back, failing, and changed elsewhere; the time pair refusing equal times; the bot's page and the task's setting, including the 40-task bound; the read-only connection with its access bar.
 
