@@ -437,10 +437,13 @@ export class AccountsEngine {
    */
   private async begin(signIn: SignInState, key: string | null, untilEnd: boolean): Promise<void> {
     const { ctx } = this;
-    const before = this.accountsOf(signIn.provider);
+    // What the provider has just before it starts, read fresh where the gateway answers: an
+    // account another client added since the last read is not this sign-in's.
     this.forgetSecrets();
     if (key !== null) this.holdSecret(key);
-    ctx.update((a) => ({ ...a, signIn: { ...signIn, known: before } }));
+    ctx.update((a) => ({ ...a, signIn: { ...signIn, known: this.accountsOf(signIn.provider) } }));
+    const before = await this.knownBefore(signIn.provider, signIn.forBot);
+    this.setSignIn(signIn.id, { known: before });
     try {
       await ctx.request("models.authLogin", {
         sessionId: signIn.id,
@@ -464,6 +467,22 @@ export class AccountsEngine {
     return new Promise<void>((resolve) => {
       void run(untilEnd ? () => undefined : resolve).finally(resolve);
     });
+  }
+
+  /** The provider's accounts as last read, and as the target bot's refreshed view lists them now. */
+  private async knownBefore(provider: string, botId: string): Promise<string[]> {
+    const known = new Set(this.accountsOf(provider));
+    try {
+      const view = readBotView(
+        await this.ctx.request("models.authStatus", { agentId: botId, refresh: true }),
+      );
+      if (!view.unavailable)
+        for (const profile of view.profiles)
+          if (profile.provider === provider && known.size < MAX_ACCOUNTS) known.add(profile.id);
+    } catch {
+      // The last read stands.
+    }
+    return [...known];
   }
 
   /** Accounts of a provider as last read: what a sign-in is compared against. */

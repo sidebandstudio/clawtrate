@@ -1793,3 +1793,20 @@ describe("changing a bot's account (F-473)", () => {
     client.stop();
   });
 });
+
+describe("what a sign-in is compared against (F-474)", () => {
+  it("F-474: an account another client added since the last read is not counted as the sign-in's", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    // Saved by someone else after Clawtrate last read the accounts.
+    fake.shared.push({ id: "acme:elsewhere", provider: "acme", type: "api_key" });
+    await client.startSignIn(CHOICES.device, null);
+    expect(accounts().signIn?.known).toContain("acme:elsewhere");
+    fake.answerDevice();
+    await until(() => accounts().signIn?.result != null);
+    expect(accounts().signIn).toMatchObject({
+      stage: "connected",
+      result: { added: ["acme:travel"] },
+    });
+    client.stop();
+  });
+});
