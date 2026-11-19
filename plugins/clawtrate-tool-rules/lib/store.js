@@ -561,10 +561,11 @@ export class DecisionLog {
   prune() {
     const cutoff = this.now() - this.retentionMs;
     this.#pruneOversize(cutoff);
-    const evictedExpired = this.evictedOldestAt !== null && this.evictedOldestAt < cutoff;
+    // Latched: a failed rewrite leaves it due, and said, until one succeeds.
+    this.expiryPending ||= this.evictedOldestAt !== null && this.evictedOldestAt < cutoff;
     const heldExpired = this.records.length > 0 && this.records[0].at < cutoff;
     // A record a failed write left off the disk is retried here too, on an idle gateway.
-    if (this.expiryPending || evictedExpired || heldExpired || this.unsaved > 0) {
+    if (this.expiryPending || heldExpired || this.unsaved > 0) {
       this.#maintain(true);
     }
   }

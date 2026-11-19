@@ -304,3 +304,32 @@ describe("a decision record that cannot be read at all", () => {
     expect(actual.readFileSync(file, "utf8")).toBe(original);
   });
 });
+
+describe("a record the cap evicted, when its expiry cannot be rewritten", () => {
+  it("stays said through a later append, until a rewrite removes it", () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    const file = join(dir, "decisions.jsonl");
+    const day = 86_400_000;
+    let now = 0;
+    const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+    // Twenty kept: an evicted line or two stays below a fifth, so no compaction rewrites it.
+    const log = new DecisionLog(dir, { now: () => now, max: 20 });
+    const first = log.add(fields);
+    now = 10 * day;
+    for (let i = 0; i < 20; i += 1) log.add(fields);
+    now = 31 * day;
+    io.renameFails = true;
+    log.prune();
+    expect(log.problem).toMatch(/cannot be written \(ENOSPC\)/);
+    // An append succeeds while rewrites still fail: the expired line is still there, and said.
+    log.add(fields);
+    expect(readFileSync(file, "utf8")).toContain(first);
+    expect(log.problem).toMatch(/cannot be written \(ENOSPC\)/);
+    io.renameFails = false;
+    log.prune();
+    expect(readFileSync(file, "utf8")).not.toContain(first);
+    expect(log.problem).toBeNull();
+  });
+});
