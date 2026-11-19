@@ -5,7 +5,7 @@
 // gateway, which forgets this one.
 
 import type { ConnectionState } from "@clawtrate/core";
-import { scopeWords } from "@clawtrate/ui/connect-words";
+import { isCleartext, scopeWords } from "@clawtrate/ui/connect-words";
 import { gatewayLabel } from "@clawtrate/ui/format";
 import {
   gatewayActions,
@@ -22,6 +22,7 @@ import { Modal, ScrollView, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BackIcon, CloseIcon } from "../components/icons.tsx";
 import { FONT_LICENSES } from "../font-licenses.ts";
+import { Cleartext } from "./Connect.tsx";
 import { Button, Dot, RoundButton, Txt } from "../components/ui.tsx";
 import { DEVICE_NAME } from "../host/index.ts";
 import { useRuntime } from "../runtime.ts";
@@ -148,6 +149,11 @@ export function Settings({
                   {connection.gatewayUrl ?? W.noAddress}
                 </Txt>
               </Fact>
+              {isCleartext(connection.gatewayUrl) && (
+                <View style={{ padding: S["space-3"] }}>
+                  <Cleartext />
+                </View>
+              )}
               <Fact label={W.state} testID="gateway-state">
                 <Dot tone={dot === "disconnected" ? "off" : dot} />
                 <Txt testID="gateway-state-text">{state}</Txt>

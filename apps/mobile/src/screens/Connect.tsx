@@ -1,16 +1,18 @@
 // The connection screens (visual-language.md, section 10, at phone size): the
-// welcome screen with the mark and its one action, the gateway's address, the
-// step list while it connects and loads, the
+// welcome screen with the mark and its one action, the gateway's address with the
+// notice for an unencrypted one, the step list while it connects and loads, the
 // pending approval with the exact scopes requested, and the notice for a gateway
 // on another protocol. Every word comes from `@clawtrate/ui/connect-words`, as on
 // the desktop, and nothing the gateway sent back shows a credential.
 
 import type { ConnectionError, ConnectionState, DiscoveryState } from "@clawtrate/core";
 import {
+  CLEARTEXT_WORDS,
   CONNECT_WORDS as W,
   countdownWords,
   failureTitle,
   footWords,
+  isCleartext,
   pairingLede,
   PRODUCT_NAME,
   protocolLede,
@@ -284,6 +286,7 @@ export function Address({
         label={W.address}
         onSubmit={submit}
       />
+      {isCleartext(url) && <Cleartext />}
       <Field
         testID="token-field"
         value={token}
@@ -316,6 +319,29 @@ export function Address({
         {W.hint}
       </Txt>
     </Column>
+  );
+}
+
+/** That a ws: address off this device is not encrypted: said before connecting, never refused. */
+export function Cleartext() {
+  const { c } = useTheme();
+  return (
+    <View
+      testID="cleartext"
+      accessible
+      accessibilityLabel={`${CLEARTEXT_WORDS.title}. ${CLEARTEXT_WORDS.body}`}
+      style={{
+        backgroundColor: c["warn-soft"],
+        borderRadius: S["radius-md"],
+        padding: S["space-3"],
+        gap: S["space-1"],
+      }}
+    >
+      <Txt weight="medium" size={S["text-md"]}>
+        {CLEARTEXT_WORDS.title}
+      </Txt>
+      <Txt size={S["text-sm"]}>{CLEARTEXT_WORDS.body}</Txt>
+    </View>
   );
 }
 

@@ -41,6 +41,30 @@ export const CONNECT_WORDS = {
   preparingIdentity: "Preparing device identity…",
 } as const;
 
+/**
+ * A connection that is not encrypted: a `ws:` address whose host is not this
+ * device. Clawtrate does not refuse it (a gateway on the person's own tailnet
+ * is the usual case), but says so before connecting and beside the address.
+ */
+export const CLEARTEXT_WORDS = {
+  title: "This connection is not encrypted",
+  body: "Clawtrate does not encrypt a ws:// connection, so the gateway's token and your conversations can be read on the way. Use it only on a network you trust, such as your own tailnet.",
+} as const;
+
+/** Whether a gateway address is unencrypted and leaves this device. */
+export function isCleartext(url: string | null | undefined): boolean {
+  if (!url) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "ws:") return false;
+  const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return !(host === "localhost" || host === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host));
+}
+
 /** A connection failure's title. */
 export function failureTitle(code: string | null | undefined): string {
   switch (code) {

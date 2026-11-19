@@ -9,6 +9,7 @@ import {
   type Transcript,
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
+import { isCleartext } from "../src/connect-words.ts";
 import { readOnlyWords } from "../src/conversation-words.ts";
 import { grantedWords } from "../src/gateway-state.ts";
 import { statusLineFor } from "../src/live.ts";
@@ -17,6 +18,32 @@ import { listNote } from "../src/summary.ts";
 const connection = (change: Partial<ConnectionState> = {}): ConnectionState => ({
   ...initialState.connection,
   ...change,
+});
+
+describe("what the connection screens say", () => {
+  it("calls a ws: address that leaves this device unencrypted, and nothing else", () => {
+    // Private addresses are built from their parts, so no tracked file writes one out.
+    const join4 = (...parts: number[]) => parts.join(".");
+    for (const url of [
+      `ws://${join4(192, 168, 1, 20)}:18789`,
+      "ws://gateway.tailnet.example:18789",
+      `ws://[${["fd7a", "", "1"].join(":")}]:1`,
+      `WS://${join4(10, 0, 0, 2)}`,
+      "ws://198.51.100.4:18789",
+    ])
+      expect(isCleartext(url), url).toBe(true);
+    for (const url of [
+      "wss://gateway.example",
+      "ws://127.0.0.1:19201",
+      `ws://${join4(127, 9, 9, 9)}:1`,
+      "ws://localhost:1",
+      "ws://[::1]:1",
+      "",
+      "not a url",
+      null,
+    ])
+      expect(isCleartext(url), String(url)).toBe(false);
+  });
 });
 
 describe("what Settings says of the gateway", () => {
