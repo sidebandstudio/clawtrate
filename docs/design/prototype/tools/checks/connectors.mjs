@@ -111,9 +111,10 @@ const STATES = [
   ["screen=add-server-unconfirmed&name=notes-home", ["Couldn't confirm the change.", "Check again"]],
   ["screen=add-server-changed&name=notes-home", ["The gateway's settings changed.", "Review the current entry before trying again."]],
   ["screen=add-server", ["Add a custom connector", "Type", "Remote HTTPS", "Command", "Name", "Server URL", "Headers", "Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved.", "Sign-in", "None", "Sign in with OAuth", "OpenClaw registers itself with the server when it signs in.", "Add to gateway"]],
-  ["screen=add-server&type=command", ["Command", "Arguments", "One per line. Each is passed as one argument, never through a shell.", "Working folder", "The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can.", "Continue"]],
+  ["screen=add-server&type=command", ["Command", "Arguments", "One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay, and an empty line is dropped. Nothing goes through a shell.", "Working folder", "The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can.", "Continue"]],
   ["screen=add-server&access=read", ["Read-only.", "Adding a custom connector needs admin access."]],
-  ["screen=command-confirm&name=search-index&cmd=/opt/example/bin/search-server&args=--stdio", ["Run this command on the gateway's machine?", "Home gateway will run, on its own machine (studio.example), as the user it runs as:", "/opt/example/bin/search-server", "--stdio", "with that user's access to files, programs and the network.", "Run it on the gateway"]],
+  ["screen=command-confirm&name=search-index&cmd=/opt/example/bin/search-server&args=%5B%22--stdio%22%5D", ["Run this command on the gateway's machine?", "Home gateway will run, on its own machine (studio.example), as the user it runs as:", "Program", "/opt/example/bin/search-server", "Arguments", "--stdio", "with that user's access to files, programs and the network.", "Add command server"]],
+  ["screen=command-confirm&name=search-index&cmd=/opt/example/bin/search-server&args=%5B%5D", ["No arguments"]],
   ["screen=add-server-saved&name=notes-work", ["Added notes-work.", "The gateway lists it. Its tools reach bots from their next run, unless a bot's settings deny them."]],
   ["screen=add-server-saved&name=search-index&type=command", ["Added search-index.", "The gateway will run it at a bot's next run."]],
   ["screen=add-server-refused&name=notes-work", ["Couldn't add notes-work:", "Expected http:// or https:// URL", "Nothing saved."]],
@@ -316,23 +317,43 @@ await walk("add a server started by a command, through its confirmation", "scree
   [typeIn("#c-command", "/opt/example/bin/search-server")],
   [typeIn("#c-args", "--stdio\n--index ./notes")],
   [submit, "command-confirm"],
-  [link("Run it on the gateway"), "add-server-saved"],
-], ["Added search-local.", "The gateway will run it at a bot's next run."]);
-{
-  const p = await open("screen=add-server&type=command");
+  [inConfirm("Add command server"), "add-server-saved"],
+], ["Added search-local.", "/opt/example/bin/search-server --stdio --index ./notes"]);
+for (const [width, label] of [[1440, "desktop"], [390, "phone"]]) {
+  const opts = { width, height: width === 390 ? 844 : 900 };
+  const p = await open("screen=add-server&type=command", opts);
   await p.fill("#c-name", "search-local");
   await submit(p);
   await p.waitForTimeout(50);
-  check("an empty command is refused by Clawtrate", (await text(p)).includes("Enter the command.") && (await screenOf(p)) === "add-server");
+  check(`${label}: an empty command is refused by Clawtrate`, (await text(p)).includes("Enter the command.") && (await screenOf(p)) === "add-server");
   await p.fill("#c-command", "/opt/example/bin/search-server");
-  await p.fill("#c-args", "--stdio\n--index ./notes");
+  await p.fill("#c-args", "");
+  await p.fill("#c-cwd", "/srv/notes");
   await submit(p);
   await at(p, "command-confirm");
-  const shown = await p.locator(".c-cmd").textContent();
-  check("the confirmation shows the exact command and every argument, one per line", shown === "/opt/example/bin/search-server\n--stdio\n--index ./notes");
+  const none = await text(p, ".c-confirm");
+  check(`${label}: a command with no arguments says "No arguments" and shows its working folder, and nothing else`, none.includes("No arguments") && none.includes("Working folder") && none.includes("/srv/notes") && !none.includes("--stdio"));
+  for (let i = 0; i < 8; i++) await p.keyboard.press("Tab");
+  check(`${label}: Tab stays inside the confirmation`, await p.evaluate(() => Boolean(document.activeElement?.closest(".c-confirm"))));
+  await p.keyboard.press("Shift+Tab");
+  check(`${label}: Shift-Tab stays inside the confirmation`, await p.evaluate(() => Boolean(document.activeElement?.closest(".c-confirm"))));
   await p.keyboard.press("Escape");
-  check("Escape in the confirmation is Cancel", await at(p, "add-server"));
+  check(`${label}: Escape is Cancel and returns focus to Continue, with the fields as typed`, (await at(p, "add-server")) && (await p.evaluate(() => document.activeElement?.id)) === "c-submit" && (await p.inputValue("#c-cwd")) === "/srv/notes" && (await p.inputValue("#c-command")) === "/opt/example/bin/search-server");
+  await p.fill("#c-args", "  --index ./my notes  \n\n--stdio\n   ");
+  await submit(p);
+  await at(p, "command-confirm");
+  const argsShown = await p.locator(".c-confirm .c-args li").allTextContents();
+  check(`${label}: an argument with spaces stays one argument, ends trimmed, empty lines dropped`, JSON.stringify(argsShown) === JSON.stringify(["--index ./my notes", "--stdio"]), JSON.stringify(argsShown));
+  await inConfirm("Add command server")(p);
+  check(`${label}: the write reads back the same program, arguments and folder`, (await at(p, "add-server-saved")) && (await text(p)).includes("/opt/example/bin/search-server --index ./my notes --stdio") && (await text(p)).includes("/srv/notes"));
   await p.close();
+  const q = await open("screen=browse", opts);
+  await q.locator("#chip-all").focus();
+  await q.keyboard.press("ArrowRight");
+  check(`${label}: Right Arrow on the categories moves to and chooses the next one`, (await at(q, "browse-category")) && (await q.evaluate(() => document.activeElement?.id)) === "chip-productivity");
+  await q.keyboard.press("ArrowLeft");
+  check(`${label}: Left Arrow goes back to All`, (await at(q, "browse")) && (await q.evaluate(() => document.activeElement?.id)) === "chip-all");
+  await q.close();
 }
 await walk("the connect card, opened and reopened", "screen=chat", [[link("Open in your browser"), "chat"], [link("Reopen"), "chat"]], ["Reopen", "Opened at 5:12 PM."]);
 await walk("the connect card in a shared task", "screen=chat", [[link("In a shared task"), "chat"]], ["Anyone who opens this link completes this sign-in."]);

@@ -67,6 +67,16 @@
     "team-notes": { kind: "remote", url: "https://teamnotes.example/mcp", headers: [], signin: "each", last: "notyet" },
   };
   const app = (id) => APPS.find((a) => a.id === id) || APPS[0];
+  // The command server the person typed, carried from the form to the confirmation and the write.
+  const reviewed = () => {
+    let args = [];
+    try {
+      args = JSON.parse(params.get("args") || "[]");
+    } catch {
+      args = [];
+    }
+    return { name: params.get("name") || "", command: params.get("cmd") || "", args: Array.isArray(args) ? args : [], cwd: params.get("cwd") || "" };
+  };
   const picked = (params.get("picked") || "").split(",").filter(Boolean);
 
   // Pieces -----------------------------------------------------------------------------
@@ -188,7 +198,7 @@
   const chips = (chosen) =>
     `<div class="c-chips" role="radiogroup" aria-label="Categories">` +
     [["", "All"], ...CATEGORIES]
-      .map(([slug, label]) => `<a class="c-chip" role="radio" aria-checked="${chosen === slug}" tabindex="${chosen === slug ? 0 : -1}" href="${go(slug ? "browse-category" : "browse", slug ? { cat: slug } : {})}">${label}</a>`)
+      .map(([slug, label]) => `<a class="c-chip" id="chip-${slug || "all"}" data-slug="${slug}" role="radio" aria-checked="${chosen === slug}" tabindex="${chosen === slug ? 0 : -1}" href="${go(slug ? "browse-category" : "browse", slug ? { cat: slug } : {})}">${label}</a>`)
       .join("") +
     `</div>`;
   const browseLoaded = () => {
@@ -340,7 +350,7 @@
             `<fieldset class="c-type"><legend>Type</legend><div class="c-seg" role="radiogroup" aria-label="Type">` +
             `<a role="radio" aria-checked="${remote}" href="${go("add-server", { type: "remote" })}">Remote HTTPS</a>` +
             `<a role="radio" aria-checked="${!remote}" href="${go("add-server", { type: "command" })}">Command</a></div></fieldset>` +
-            field("c-name", "Name", "", "Letters, digits, hyphens and underscores. Bots see it in tool names.", "notes-work") +
+            field("c-name", "Name", remote ? "" : reviewed().name, "Letters, digits, hyphens and underscores. Bots see it in tool names.", "notes-work") +
             (remote
               ? field("c-url", "Server URL", base ? base.url : "", "", "https://") +
                 `<fieldset class="c-headers"><legend>Headers</legend><div class="c-header-row"><input class="input" id="c-h-name" aria-label="Header name" placeholder="Name" value="${base ? "Authorization" : ""}" /><input class="input" id="c-h-value" type="password" aria-label="Header value" placeholder="Value" /></div>` +
@@ -349,11 +359,11 @@
                 radio("signin", "none", "None", !base) +
                 radio("signin", "oauth", "Sign in with OAuth", Boolean(base)) +
                 `<p class="c-line">OpenClaw registers itself with the server when it signs in.</p></fieldset>`
-              : field("c-command", "Command", "", "", "/path/to/server") +
-                `<label class="c-field"><span>Arguments</span><textarea class="input" id="c-args" rows="3" aria-describedby="c-args-hint" placeholder="One per line"></textarea><span class="c-line" id="c-args-hint">One per line. Each is passed as one argument, never through a shell.</span></label>` +
-                field("c-cwd", "Working folder", "", "Optional.", "") +
+              : field("c-command", "Command", reviewed().command, "", "/path/to/server") +
+                `<label class="c-field"><span>Arguments</span><textarea class="input" id="c-args" rows="3" aria-describedby="c-args-hint" placeholder="One per line">${esc(reviewed().args.join("\n"))}</textarea><span class="c-line" id="c-args-hint">One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay, and an empty line is dropped. Nothing goes through a shell.</span></label>` +
+                field("c-cwd", "Working folder", reviewed().cwd, "Optional.", "") +
                 `<p class="c-line">The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can.</p>`) +
-            `<div class="c-actions"><button type="submit" class="button" data-variant="primary" data-size="sm">${remote ? "Add to gateway" : "Continue"}</button></div>` +
+            `<div class="c-actions"><button type="submit" class="button" id="c-submit" data-variant="primary" data-size="sm">${remote ? "Add to gateway" : "Continue"}</button></div>` +
             `</form>`
           : `<p class="c-line">Adding a custom connector writes the gateway's settings.</p>`) +
         accessBar("Adding a custom connector needs admin access.") +
@@ -603,22 +613,30 @@
       return windowHtml({ title: name, back: go("server", { id: name }), body: note("warn", "Couldn't confirm the change.", "The gateway's settings couldn't be read back.", `<div class="c-actions">${link("Check again", "server", { id: name })}</div>`) });
     },
     "add-server": () => windowHtml(addServerForm()),
-    "command-confirm": () =>
-      windowHtml(addServerForm()) +
-      confirm(
-        "Run this command on the gateway's machine?",
-        `<p>Home gateway will run, on its own machine (<span class="mono">studio.example</span>), as the user it runs as:</p>` +
-          `<pre class="c-cmd">${esc([params.get("cmd") || "/opt/example/bin/search-server", ...(params.get("args") || "--stdio\n--index ./notes").split("\n")].join("\n"))}</pre>` +
-          `<p>It runs whenever a bot's run needs ${esc(params.get("name") || "search-index")}'s tools, with that user's access to files, programs and the network.</p>`,
-        [link("Cancel", "add-server", { type: "command" }, { variant: "quiet" }), link("Run it on the gateway", "add-server-saved", { name: params.get("name") || "search-index", type: "command" }, { variant: "primary" })],
-      ),
+    "command-confirm": () => {
+      const r = reviewed();
+      const carry = { type: "command", name: r.name, cmd: r.command, args: JSON.stringify(r.args), ...(r.cwd ? { cwd: r.cwd } : {}) };
+      return (
+        windowHtml(addServerForm()) +
+        confirm(
+          "Run this command on the gateway's machine?",
+          `<p>Home gateway will run, on its own machine (<span class="mono">studio.example</span>), as the user it runs as:</p>` +
+            `<dl class="c-cmd-facts"><div><dt>Program</dt><dd><code class="c-cmd" data-c="program">${esc(r.command)}</code></dd></div>` +
+            `<div><dt>Arguments</dt><dd>${r.args.length ? `<ol class="c-args" data-c="args">${r.args.map((a) => `<li><code class="c-cmd">${esc(a)}</code></li>`).join("")}</ol>` : `<span data-c="args">No arguments</span>`}</dd></div>` +
+            (r.cwd ? `<div><dt>Working folder</dt><dd><code class="c-cmd" data-c="cwd">${esc(r.cwd)}</code></dd></div>` : "") +
+            `</dl>` +
+            `<p>It runs whenever a bot's run needs ${esc(r.name)}'s tools, with that user's access to files, programs and the network.</p>`,
+          [link("Cancel", "add-server", { ...carry, focus: "c-submit" }, { variant: "quiet" }), link("Add command server", "add-server-saved", carry, { variant: "primary" })],
+        )
+      );
+    },
     "add-server-saved": () => {
       const name = params.get("name") || "notes-work";
       const cmd = params.get("type") === "command";
       return windowHtml({
         title: "Add a custom connector",
         body:
-          result("ok", "check", `Added ${esc(name)}.`, cmd ? "The gateway will run it at a bot's next run." : "The gateway lists it. Its tools reach bots from their next run, unless a bot's settings deny them.", link(`Open ${esc(name)}`, "server", { id: cmd ? "search-index" : "notes-work", last: "notyet" }, { variant: "primary" }) + (params.get("signin") === "oauth" ? link("Sign in", "signin-cli", { id: "notes-work", server: "1" }) : "")) +
+          result("ok", "check", `Added ${esc(name)}.`, cmd ? `The gateway will run it at a bot's next run.${params.get("cmd") ? ` Read back: <span class="mono">${esc([reviewed().command, ...reviewed().args].join(" "))}</span>${reviewed().cwd ? `, in <span class="mono">${esc(reviewed().cwd)}</span>` : ""}.` : ""}` : "The gateway lists it. Its tools reach bots from their next run, unless a bot's settings deny them.", link(`Open ${esc(name)}`, "server", { id: cmd ? "search-index" : "notes-work", last: "notyet" }, { variant: "primary" }) + (params.get("signin") === "oauth" ? link("Sign in", "signin-cli", { id: "notes-work", server: "1" }) : "")) +
           proto("the write", [link("Refused", "add-server-refused", { name }, { variant: "quiet" }), link("No answer", "add-server-checking", { name }, { variant: "quiet" }), link("Settings changed", "add-server-changed", { name }, { variant: "quiet" })]),
       });
     },
@@ -668,6 +686,42 @@
   // Focus: a confirmation's Cancel, else the section's title.
   const autofocus = root.querySelector(".c-confirm .c-actions .button[data-variant='quiet']") || root.querySelector("#c-section-title") || root.querySelector("#c-picker-title");
   if (autofocus) autofocus.focus({ preventScroll: true });
+
+  // Focus a named control when the address asks (a dialog that closed returns focus to its trigger).
+  if (params.get("focus")) document.getElementById(params.get("focus"))?.focus();
+
+  // Tab and Shift-Tab stay inside the top-most dialog.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Tab") return;
+    const top = root.querySelector(".c-confirm") || root.querySelector(".c-window");
+    if (!top) return;
+    const items = [...top.querySelectorAll("a[href], button:not([disabled]), input, textarea, select, [tabindex='0']")].filter((el) => el.offsetParent !== null && el.tabIndex !== -1);
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (!top.contains(document.activeElement)) {
+      event.preventDefault();
+      first.focus();
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+
+  // The category chips: one tab stop; Left and Right move and choose, Home and End go to the ends.
+  root.querySelector(".c-chips[role=radiogroup]")?.addEventListener("keydown", (event) => {
+    const chipsList = [...root.querySelectorAll(".c-chips .c-chip")];
+    const at = chipsList.indexOf(document.activeElement);
+    if (at < 0) return;
+    const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: chipsList.length - 1 }[event.key];
+    if (to === undefined) return;
+    event.preventDefault();
+    const next = chipsList[(to + chipsList.length) % chipsList.length];
+    location.href = `${next.getAttribute("href")}&focus=chip-${next.dataset.slug || "all"}`;
+  });
 
   // Escape closes the top-most surface.
   document.addEventListener("keydown", (event) => {
@@ -751,6 +805,11 @@
         const cmd = document.getElementById("c-command").value.trim();
         set("c-command", cmd ? "" : "Enter the command.");
         if (errors.length) return errors[0].focus();
+        // Each line is one argument, trimmed at its ends; empty lines are dropped.
+        const argList = document.getElementById("c-args").value.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+        const cwd = document.getElementById("c-cwd").value.trim();
+        location.href = go("command-confirm", { name, cmd, args: JSON.stringify(argList), ...(cwd ? { cwd } : {}) });
+        return;
         location.href = go("command-confirm", { name, cmd, args: document.getElementById("c-args").value.trim() || "" });
       }
     });

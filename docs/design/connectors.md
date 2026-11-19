@@ -120,7 +120,7 @@ Every change is written, then read back, and the screen says what the read-back 
 - The section list is a `nav`; a section's title takes focus when it opens.
 - The category chips are a radio group with one tab stop; Left and Right move and choose.
 - The search field is a `search` landmark; typing filters as it is typed, Escape clears it.
-- A confirmation puts focus on Cancel.
+- A confirmation puts focus on Cancel. In the window and in a confirmation, Tab and Shift-Tab stay inside; closing it returns focus to the control that opened it.
 
 ### Announcements
 
@@ -374,28 +374,29 @@ There is no Client ID and no Client Secret: the gateway has no field for either 
 
 "Add a custom connector", Type "Command". Only an admin connection reaches it; below admin the access bar takes the form's place.
 
-| Field          | Rule                                                                                                                          |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Name           | As section 12                                                                                                                 |
-| Command        | Required: "Enter the command." Clawtrate refuses an empty command; the gateway would accept one and do nothing with it (R§5). |
-| Arguments      | One per line, each passed as one argument, never through a shell                                                              |
-| Working folder | Optional                                                                                                                      |
+| Field          | Rule                                                                                                                                                                                           |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Name           | As section 12                                                                                                                                                                                  |
+| Command        | Required: "Enter the command." Clawtrate refuses an empty command; the gateway would accept one and do nothing with it (R§5). Spaces at its start and end are removed.                         |
+| Arguments      | One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay part of that argument, and a line left empty is dropped. Nothing goes through a shell. |
+| Working folder | Optional. Spaces at its start and end are removed; left empty, the entry has no `cwd`.                                                                                                         |
 
-Under the fields: "The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can."
+Under the fields: "The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can." "Continue" opens the confirmation.
 
-**The confirmation**, before anything is written (role `alertdialog`, focus on Cancel):
+**The confirmation**, before anything is written (role `alertdialog`, focus on Cancel). It shows the reviewed values, and those same values, no others, are what the write sends (section 12's contract):
 
 > **Run this command on the gateway's machine?**
 > Home gateway will run, on its own machine (`studio.example`), as the user it runs as:
-> `/opt/example/bin/search-server`
-> `--stdio`
-> `--index ./notes`
+> Program: `/opt/example/bin/search-server`
+> Arguments: `--stdio`, `--index ./notes`, each on its own line, or "No arguments"
+> Working folder: `/srv/notes`, shown only when one was given
 > It runs whenever a bot's run needs search-index's tools, with that user's access to files, programs and the network.
-> [Cancel] [Run it on the gateway]
+> [Cancel] [Add command server]
 
-The command and every argument are shown exactly as they will be saved, one per line, in mono, never shortened. The machine is the gateway's address as this device knows it, or "the gateway's machine" when that is all it knows.
+Each argument is shown on its own line, in mono, never shortened, so an argument with spaces in it reads as one. The machine is the gateway's address as this device knows it, or "the gateway's machine" when that is all it knows.
 
-"Run it on the gateway" writes and reads back by section 12's contract. The read-back shows the command and arguments as `config.get` returns them, and the result says: "**Added search-index.** The gateway will run it at a bot's next run." A failure to start (a missing program) shows on the server's page after that run, as the gateway reported it ("spawn … ENOENT").
+- Tab and Shift-Tab stay inside the confirmation, as in every dialog here. Cancel and Escape close it and put focus back on "Continue", with every field as it was typed.
+- "Add command server" writes `{command, args, cwd?}` and reads back by section 12's contract; the result compares the command, every argument and the working folder with what was confirmed.
 
 ## 14. Removing
 

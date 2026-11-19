@@ -680,6 +680,39 @@
   white-space: pre;
 }
 
+/* The command's reviewed values, one per row. */
+.c-cmd-facts {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 var(--space-3);
+}
+
+.c-cmd-facts dt {
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.c-cmd-facts dd {
+  margin: 2px 0 0;
+  font-size: var(--text-md);
+}
+
+.c-cmd-facts .c-cmd {
+  display: block;
+  margin: 0;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.c-args {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 /* The tool server form. */
 .c-form {
   display: grid;
