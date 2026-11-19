@@ -395,9 +395,15 @@ export class DecisionLog {
     this.byId = new Map();
     const keep = () => {
       for (const record of held) {
-        this.records.push(record);
+        const disk = this.byId.get(record.id);
+        // The same decision on disk: this writer's metadata, and the later of the two answers.
+        if (disk && (disk.answeredAt ?? -Infinity) > (record.answeredAt ?? -Infinity)) {
+          Object.assign(record, { answer: disk.answer, answeredAt: disk.answeredAt });
+        }
         this.byId.set(record.id, record);
       }
+      // In time order, the order within a millisecond kept.
+      this.records = [...this.byId.values()].sort((a, b) => a.at - b.at);
     };
     let text;
     try {
@@ -445,7 +451,7 @@ export class DecisionLog {
         this.extraLines += 1;
       } else {
         const record = pick(value);
-        this.records.push(record);
+        if (this.byId.has(record.id)) this.extraLines += 1;
         this.byId.set(record.id, record);
       }
     }

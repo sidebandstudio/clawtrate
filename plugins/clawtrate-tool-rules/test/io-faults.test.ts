@@ -333,3 +333,50 @@ describe("a record the cap evicted, when its expiry cannot be rewritten", () => 
     expect(log.problem).toBeNull();
   });
 });
+
+describe("decisions held while the record could not be read, and another writer's", () => {
+  const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+  const setUp = () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    const file = join(dir, "decisions.jsonl");
+    const first = new DecisionLog(dir, { now: () => 100 });
+    const seeded = Array.from({ length: 10 }, () => first.add(fields));
+    io.path = file;
+    // Unreadable at start and at the first decision, which is held in memory.
+    io.failures = 2;
+    const log = new DecisionLog(dir, { now: () => 110, max: 11 });
+    const held = log.add(fields);
+    expect(log.problem).toMatch(/cannot be read/);
+    return { dir, file, log, seeded, held };
+  };
+  const lines = (file: string) =>
+    actual
+      .readFileSync(file, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { id: string });
+
+  it("are merged in time order once it can be read, the oldest evicted first", () => {
+    const { file, log, seeded, held } = setUp();
+    const outside = { ...fields, id: "outside0000000000", at: 120 };
+    actual.appendFileSync(file, `${JSON.stringify(outside)}\n`);
+    log.prune();
+    expect(log.problem).toBeNull();
+    const listed = log.list({ limit: 50 }).records.map((r) => r.id);
+    expect(listed.slice(0, 2)).toEqual([outside.id, held]);
+    expect(listed).toHaveLength(11);
+    expect(listed).not.toContain(seeded[0]);
+    expect(lines(file).map((r) => r.id)).toEqual([...seeded.slice(1), held, outside.id]);
+  });
+
+  it("are written once when the other writer already copied the held one", () => {
+    const { file, log, seeded, held } = setUp();
+    const copy = log.list({ limit: 1 }).records[0];
+    actual.appendFileSync(file, `${JSON.stringify(copy)}\n`);
+    log.prune();
+    expect(log.problem).toBeNull();
+    expect(lines(file).map((r) => r.id)).toEqual([...seeded, held]);
+  });
+});
