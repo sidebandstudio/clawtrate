@@ -34,7 +34,9 @@ export type ForwardCause =
   /** The LOOK found no gateway service on that port, or answered in a way that couldn't be read. */
   | { kind: "cant-tell" }
   /** The other computer's SSH server refused to forward a connection to the gateway's port. */
-  | { kind: "forwarding-refused" };
+  | { kind: "forwarding-refused" }
+  /** `ssh` could not be started. */
+  | { kind: "spawn-failed" };
 
 export type ForwardState =
   | { phase: "starting"; attempt: number }
@@ -200,7 +202,14 @@ export class ForwardSupervisor {
       return;
     }
     if (generation !== this.generation || this.closed()) return;
-    const process = this.deps.start(port);
+    let process: ForwardProcess;
+    try {
+      process = this.deps.start(port);
+    } catch {
+      // A spawn that throws, or a full process table, is a state like any other failure.
+      this.fail({ kind: "spawn-failed" });
+      return;
+    }
     this.process = process;
     process.onExit((failure) => {
       if (generation !== this.generation || this.closed()) return;

@@ -3,6 +3,7 @@
 // OpenSSH 8.4 or later elsewhere. The clients here are stand-ins that only
 // print a version, so no real `ssh` runs.
 
+import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -95,6 +96,92 @@ describe.skipIf(process.platform === "win32")("the ssh client", () => {
       worldWith(version, platform, `${platform}-${version.length}-${Math.random()}`),
     );
     expect(await transport.checkClient()).toEqual(expected);
+  });
+
+  it("needs the version command to have worked, not only printed a version", async () => {
+    const world = worldWith("OpenSSH_9.9p2, LibreSSL 3.3.6", "darwin", "fails");
+    writeFileSync(world.ssh, "#!/bin/sh\necho 'OpenSSH_9.9p2, LibreSSL 3.3.6' >&2\nexit 1\n", {
+      mode: 0o755,
+    });
+    expect(await new SshTransport(world).checkClient()).toEqual({
+      ok: false,
+      kind: "not-supported-here",
+      reason: "ssh-version",
+    });
+  });
+
+  it("opens a forward only through the same gates as every other call", async () => {
+    const found = {
+      ok: true as const,
+      holdsPort: true as const,
+      service: {
+        profile: "default" as const,
+        serviceLabel: "LaunchAgent" as const,
+        configPath: "/srv/you/.openclaw/openclaw.json",
+        port: 18789,
+      },
+    };
+    // An unsupported client: nothing but the version command runs.
+    const started: string[][] = [];
+    const old = worldWith("OpenSSH_7.4p1, OpenSSL 1.0.2k-fips", "linux", "gate-old");
+    const oldTransport = new SshTransport(old, {
+      spawn: (file, args, env) => {
+        started.push([...args]);
+        return spawn(file, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+      },
+    });
+    writeFileSync(old.personConfig, "Host devbox\n  HostName devbox.example\n");
+    const oldRoute = oldTransport.prepareRoute("1", "devbox");
+    if (!oldRoute.ok) throw new Error();
+    expect(await oldTransport.openForward(oldRoute, found)).toEqual({
+      ok: false,
+      kind: "not-supported-here",
+      reason: "ssh-version",
+    });
+    expect(started).toEqual([["-V"]]);
+    // A supported client: no pin, no forward; a stale route or a service not found, no forward.
+    const world = worldWith("OpenSSH_9.9p2, LibreSSL 3.3.6", "darwin", "gate-new");
+    const transport = new SshTransport(world);
+    writeFileSync(world.personConfig, "Host devbox\n  HostName devbox.example\n");
+    const route = transport.prepareRoute("1", "devbox");
+    if (!route.ok) throw new Error();
+    expect(await transport.openForward(route, found)).toEqual({ ok: false, kind: "not-pinned" });
+    expect(
+      await transport.openForward(route, { ...found, holdsPort: false } as unknown as typeof found),
+    ).toEqual({ ok: false, kind: "not-a-found-service" });
+    transport.prepareRoute("1", "devbox");
+    expect(await transport.openForward(route, found)).toEqual({ ok: false, kind: "stale-route" });
+  });
+
+  it("turns a spawn that fails into a typed result, never an exception", async () => {
+    const world = worldWith("OpenSSH_9.9p2, LibreSSL 3.3.6", "darwin", "spawn");
+    const transport = new SshTransport(world, {
+      spawn: (file, args, env) => {
+        if (args[0] === "-V") return spawn(file, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+        throw new Error("spawn EAGAIN");
+      },
+    });
+    writeFileSync(world.personConfig, "Host devbox\n  HostName devbox.example\n");
+    const route = transport.prepareRoute("1", "devbox");
+    if (!route.ok) throw new Error();
+    expect(await transport.checkHostKey(route)).toMatchObject({
+      ok: false,
+      kind: "failed",
+      failure: { kind: "spawn-failed" },
+      note: { title: "ssh couldn't start" },
+    });
+    // A program that isn't there, started after the version was read.
+    const gone = worldWith("OpenSSH_9.9p2, LibreSSL 3.3.6", "darwin", "gone");
+    const goneTransport = new SshTransport(gone);
+    expect(await goneTransport.checkClient()).toEqual({ ok: true });
+    rmSync(gone.ssh);
+    writeFileSync(gone.personConfig, "Host devbox\n  HostName devbox.example\n");
+    const goneRoute = goneTransport.prepareRoute("1", "devbox");
+    if (!goneRoute.ok) throw new Error();
+    expect(await goneTransport.checkHostKey(goneRoute)).toMatchObject({
+      ok: false,
+      failure: { kind: "spawn-failed" },
+    });
   });
 
   it("is not supported here when the program is missing, and nothing else runs", async () => {

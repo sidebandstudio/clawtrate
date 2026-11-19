@@ -68,6 +68,8 @@ export type RunResult = {
   /** `stopWhen` said enough, and the process was ended. */
   stopped: boolean;
   cancelled: boolean;
+  /** `ssh` could not be started at all. */
+  spawnFailed: boolean;
 };
 
 export type RunOptions = {
@@ -89,7 +91,16 @@ export function runSsh(
 ): Promise<RunResult> {
   const maxStderr = options.maxStderr ?? 64 * 1024;
   return new Promise((resolve) => {
-    const child = table.start(world, args);
+    const none = { exit: null, stdout: "", stderr: "", timedOut: false, overflow: false };
+    let child: ChildProcess;
+    try {
+      child = table.start(world, args);
+    } catch {
+      // The program could not be started, or the table is full: a result, never an exception.
+      resolve({ ...none, stopped: false, cancelled: false, spawnFailed: true });
+      return;
+    }
+    let settled = false;
     let stdout = "";
     let stderr = "";
     let overflow = false;
@@ -127,11 +138,30 @@ export function runSsh(
     };
     if (options.signal?.aborted) abort();
     else options.signal?.addEventListener("abort", abort, { once: true });
-    child.once("error", () => {});
-    child.once("close", (code) => {
+    const done = (result: RunResult) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", abort);
-      resolve({ exit: code, stdout, stderr, timedOut, overflow, stopped, cancelled });
+      resolve(result);
+    };
+    child.once("error", () => {
+      // A spawn that failed may never close.
+      if (child.pid === undefined) {
+        done({ ...none, stopped, cancelled, spawnFailed: true });
+      }
+    });
+    child.once("close", (code) => {
+      done({
+        exit: code,
+        stdout,
+        stderr,
+        timedOut,
+        overflow,
+        stopped,
+        cancelled,
+        spawnFailed: false,
+      });
     });
   });
 }

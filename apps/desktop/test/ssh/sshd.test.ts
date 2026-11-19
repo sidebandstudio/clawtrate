@@ -19,7 +19,7 @@ import { basename, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { ForwardState } from "../../src/main/ssh/forward.ts";
-import { serviceOnPort } from "../../src/main/ssh/look.ts";
+import { type FoundService, serviceOnPort } from "../../src/main/ssh/look.ts";
 import type { Spawn } from "../../src/main/ssh/run.ts";
 import { defaultSpawn } from "../../src/main/ssh/run.ts";
 import { forwardNote, type Route, SshTransport } from "../../src/main/ssh/transport.ts";
@@ -77,6 +77,12 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
   let stub: ReturnType<typeof installStubOpenclaw>;
   let gateway: Awaited<ReturnType<typeof httpGateway>>;
   let route: Route;
+
+  const openForward = async (r: Route, found: FoundService) => {
+    const opened = await transport.openForward(r, found);
+    if (!opened.ok) throw new Error(`forward refused: ${opened.kind}`);
+    return opened.forward;
+  };
 
   const prepare = (id: string, typed: string): Route => {
     const result = transport.prepareRoute(id, typed);
@@ -437,7 +443,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     if (!look.ok) throw new Error("look failed");
     const found = serviceOnPort(look.facts, gateway.port);
     if (!found.ok) throw new Error("no service");
-    const forward = transport.openForward(route, found);
+    const forward = await openForward(route, found);
     const states: ForwardState[] = [];
     forward.onState((state) => states.push(state));
     const upNow = () => forward.state.phase === "up";
@@ -496,7 +502,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     if (!look.ok) throw new Error("look failed");
     const found = serviceOnPort(look.facts, gateway.port);
     if (!found.ok) throw new Error("no service");
-    const forward = transport.openForward(route, found);
+    const forward = await openForward(route, found);
     await waitFor(() => forward.state.phase === "up", 20000, "the forward to come up");
     // Another gateway now answers on that port: another configuration behind it.
     stub.setStatus(
@@ -521,7 +527,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       "default",
       statusJson({ port: gateway.port, home: t.home, running: false, rpcOk: false }),
     );
-    const forward = transport.openForward(route, found);
+    const forward = await openForward(route, found);
     try {
       await waitFor(() => forward.state.phase === "waiting", 20000, "the forward to wait");
       expect(forward.state).toMatchObject({
@@ -554,7 +560,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
       if (!look.ok) throw new Error("look failed");
       const found = serviceOnPort(look.facts, gateway.port);
       if (!found.ok) throw new Error("no service");
-      const forward = transport.openForward(strictRoute, found);
+      const forward = await openForward(strictRoute, found);
       const states: ForwardState[] = [];
       forward.onState((state) => states.push(state));
       await waitFor(() => forward.state.phase === "waiting", 20000, "the refusal");
@@ -581,7 +587,7 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     if (!look.ok) throw new Error("look failed");
     const found = serviceOnPort(look.facts, gateway.port);
     if (!found.ok) throw new Error("no service");
-    const forward = transport.openForward(route, found);
+    const forward = await openForward(route, found);
     await waitFor(() => forward.state.phase === "up", 20000, "the forward to come up");
     const original = sshd.hostKey;
     const other = join(root, "sshd", "host_other_ed25519");
@@ -604,14 +610,14 @@ describe.skipIf(!availability.ok)(title, { timeout: 60000 }, () => {
     if (!look.ok) throw new Error("look failed");
     const found = serviceOnPort(look.facts, gateway.port);
     if (!found.ok) throw new Error("no service");
-    const forward = transport.openForward(route, found);
-    expect(transport.openForward(route, found)).toBe(forward);
-    expect(() =>
-      transport.openForward(route, {
+    const forward = await openForward(route, found);
+    expect(await transport.openForward(route, found)).toEqual({ ok: true, forward });
+    expect(
+      await transport.openForward(route, {
         ...found,
         service: { ...found.service, configPath: "/srv/other.json" },
       }),
-    ).toThrow();
+    ).toEqual({ ok: false, kind: "forward-open" });
     // A LOOK and the forward in flight, and closeAll at once.
     const startedBefore = started.length;
     const inFlight = transport.look(route);

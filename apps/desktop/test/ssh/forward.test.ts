@@ -89,6 +89,7 @@ function harness(verifyResults: VerifyResult[] = [], probeResults: ProbeResult[]
     flush,
     pending: () => timers.map((timer) => timer.at - now),
     verifyCalls: () => verifyCalls,
+    deps,
     signals,
     async advance(ms: number) {
       now += ms;
@@ -254,6 +255,27 @@ describe("the forward's states", () => {
     await h.flush();
     expect(h.processes).toHaveLength(2);
     expect(h.pending()).toEqual([]);
+  });
+
+  it("turns a start that throws into a state, and tries again", async () => {
+    const h = harness([{ kind: "same" }]);
+    const realStart = h.deps.start;
+    let throws = true;
+    h.deps.start = (port) => {
+      if (throws) throw new Error("spawn EAGAIN");
+      return realStart(port);
+    };
+    h.forward.open();
+    await h.flush();
+    expect(h.forward.state).toMatchObject({
+      phase: "waiting",
+      cause: { kind: "spawn-failed" },
+      retryInMs: 1000,
+    });
+    throws = false;
+    await h.advance(1000);
+    await h.up();
+    expect(h.forward.state.phase).toBe("up");
   });
 
   it("picks another local port at once when its port was taken, a bounded number of times", async () => {

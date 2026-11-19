@@ -13,6 +13,8 @@ export type SshFailure =
   | { kind: "dropped"; exit: number }
   | { kind: "local-port-taken"; exit: number }
   | { kind: "timed-out" }
+  /** `ssh` could not be started: the program or the system refused it. */
+  | { kind: "spawn-failed" }
   | { kind: "ssh-stopped"; exit: number | null };
 
 /** The category of an `ssh` that exited with `exit` after writing `stderr`. */

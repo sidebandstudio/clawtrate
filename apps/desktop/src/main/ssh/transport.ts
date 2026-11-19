@@ -41,7 +41,7 @@ import {
 } from "./look.ts";
 import { type ConfigRefusal, resolveTarget, type Target } from "./person-config.ts";
 import { routeConfigText } from "./route-config.ts";
-import { endProcess, ProcessTable, runSsh, type Spawn } from "./run.ts";
+import { endProcess, ProcessTable, type RunResult, runSsh, type Spawn } from "./run.ts";
 import {
   classifySshFailure,
   forwardListening,
@@ -123,6 +123,12 @@ export function failureNote(
       };
     case "timed-out":
       return { title: "ssh stopped", sentence: "ssh didn't finish in time.", next: null };
+    case "spawn-failed":
+      return {
+        title: "ssh couldn't start",
+        sentence: "Clawtrate couldn't start ssh on this computer.",
+        next: null,
+      };
     default:
       return {
         title: "ssh stopped",
@@ -184,6 +190,16 @@ export type LookResult =
         | "malformed"
         | "incomplete"
         | "script-failed";
+    };
+
+export type OpenForwardResult =
+  | { ok: true; forward: ForwardSupervisor }
+  | NotSupportedHere
+  | StaleRoute
+  | AppFilesUnsafe
+  | {
+      ok: false;
+      kind: "not-pinned" | "not-a-found-service" | "forward-open" | "too-many-forwards";
     };
 
 /** A route prepared again since, or forgotten: nothing is done with it. */
@@ -256,6 +272,14 @@ export class SshTransport {
         timeoutMs: 5000,
         maxStdout: 4096,
       });
+      if (run.cancelled) {
+        this.client = null;
+        return { ok: false, kind: "not-supported-here", reason: "ssh-missing" } as const;
+      }
+      // The version command has to have worked, not only printed a version.
+      if (run.spawnFailed || run.exit !== 0) {
+        return { ok: false, kind: "not-supported-here", reason: "ssh-version" } as const;
+      }
       const version = parseSshVersion(run.stderr + run.stdout);
       const min = this.world.platform === "win32" ? MIN_WINDOWS_VERSION : MIN_VERSION;
       if (
@@ -408,9 +432,7 @@ export class SshTransport {
           label: keyLabel(pin.type),
           fingerprint: pin.fingerprint,
         };
-      const failure = run.timedOut
-        ? ({ kind: "timed-out" } as const)
-        : classifySshFailure(run.stderr, run.exit);
+      const failure = runFailure(run);
       if (failure.kind !== "host-key-changed" && failure.kind !== "host-key-unknown") {
         return this.failed(route, failure);
       }
@@ -504,10 +526,7 @@ export class SshTransport {
         .filter((line) => line.trim() !== "");
       const parsed = lines.length === 1 ? parseKnownHostsLine(lines[0]!) : null;
       if (!parsed || parsed.hosts !== route.alias) {
-        return this.failed(
-          route,
-          run.timedOut ? { kind: "timed-out" } : classifySshFailure(run.stderr, run.exit),
-        );
+        return this.failed(route, runFailure(run));
       }
       const capture: Capture = {
         id: randomUUID(),
@@ -609,7 +628,7 @@ export class SshTransport {
     );
     if (run.timedOut || run.cancelled) return { ok: false, kind: "cant-tell", reason: "timed-out" };
     if (run.overflow) return { ok: false, kind: "cant-tell", reason: "too-large" };
-    if (run.exit === 255) return this.failed(route, classifySshFailure(run.stderr, run.exit));
+    if (run.spawnFailed || run.exit === 255) return this.failed(route, runFailure(run));
     // The script ends with exit 0 after its last fact; anything else is not a whole answer.
     if (run.exit !== 0) return { ok: false, kind: "cant-tell", reason: "script-failed" };
     const parsed = parseLookOutput(run.stdout, script.requestId);
@@ -622,22 +641,29 @@ export class SshTransport {
    * loopback. It is usable only while its state is "up", which it reaches only
    * after a LOOK names `expected` on that port.
    */
-  openForward(route: Route, found: FoundService): ForwardSupervisor {
-    if (!this.current(route)) throw new Error("The route was prepared again or forgotten.");
-    // Only a service whose own process holds the port: what `serviceOnPort` returns as found.
-    if (found.ok !== true || found.holdsPort !== true)
-      throw new Error("Not a found gateway service.");
+  async openForward(route: Route, found: FoundService): Promise<OpenForwardResult> {
+    // The same gates as every other call: the route as prepared, a client this module supports, a pin.
+    if (!this.current(route)) return STALE;
+    if (found.ok !== true || found.holdsPort !== true || !isGatewayPort(found.service.port)) {
+      return { ok: false, kind: "not-a-found-service" };
+    }
+    const client = await this.checkClient();
+    if (!client.ok) return client;
+    const pinned = guarded(() => this.known.get(route.alias, route.endpoint));
+    if (pinned !== null && "kind" in pinned) return pinned;
+    if (pinned === null) return { ok: false, kind: "not-pinned" };
+    if (!this.current(route)) return STALE;
     const expected = found.service;
     const gatewayPort = expected.port;
-    if (!isGatewayPort(gatewayPort)) throw new Error("Not a gateway port.");
     const open = this.forwards.get(route.id);
     if (open && open.forward.state.phase !== "closed") {
       // One forward per route: the same one again, or none while another is open.
-      if (open.generation === route.generation && sameService(open.service, expected))
-        return open.forward;
-      throw new Error("Another forward is open for this route; close it first.");
+      if (open.generation === route.generation && sameService(open.service, expected)) {
+        return { ok: true, forward: open.forward };
+      }
+      return { ok: false, kind: "forward-open" };
     }
-    if (this.forwards.size >= MAX_SSH_FORWARDS) throw new Error("Too many forwards at once.");
+    if (this.forwards.size >= MAX_SSH_FORWARDS) return { ok: false, kind: "too-many-forwards" };
     const forward = new ForwardSupervisor({
       pickPort: freeLoopbackPort,
       start: (localPort) => this.startForward(route, localPort, gatewayPort),
@@ -664,7 +690,7 @@ export class SshTransport {
       }
     });
     forward.open();
-    return forward;
+    return { ok: true, forward };
   }
 
   private startForward(route: Route, localPort: number, gatewayPort: number): ForwardProcess {
@@ -705,11 +731,17 @@ export class SshTransport {
         for (const listener of listening) listener();
       }
     });
-    child.once("error", () => {});
-    child.once("close", (code) => {
-      const failure = classifySshFailure(tail, code);
+    let ended = false;
+    const exit = (failure: SshFailure) => {
+      if (ended) return;
+      ended = true;
       for (const listener of exits) listener(failure);
+    };
+    // A spawn that failed may never close.
+    child.once("error", () => {
+      if (child.pid === undefined) exit({ kind: "spawn-failed" });
     });
+    child.once("close", (code) => exit(classifySshFailure(tail, code)));
     return {
       pid: child.pid ?? null,
       onListening: (listener) => listening.push(listener),
@@ -830,6 +862,13 @@ async function guardedAsync<T>(run: () => Promise<T>): Promise<T | AppFilesUnsaf
     if (error instanceof UnsafeAppFile) return APP_FILES_UNSAFE;
     throw error;
   }
+}
+
+/** What a finished run that didn't do its job says, as a failure. */
+function runFailure(run: RunResult): SshFailure {
+  if (run.spawnFailed) return { kind: "spawn-failed" };
+  if (run.timedOut) return { kind: "timed-out" };
+  return classifySshFailure(run.stderr, run.exit);
 }
 
 /** A loopback port that was free a moment ago; `ExitOnForwardFailure` turns a lost race into a retry. */
