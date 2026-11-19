@@ -15,6 +15,8 @@ import {
   MAX_GRANTS_LISTED,
   MAX_PERMISSION_NAME,
   MAX_PERMISSION_TEXT,
+  fitJson,
+  jsonChars,
   readActivity,
   readRulesPlugin,
   readSavedApprovals,
@@ -798,6 +800,139 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
       { rulesListed: false, loaded: new Map() },
     );
     expect(cut.rows).toEqual([]);
+  });
+});
+
+describe("F-178 F-324: every answer fits its result frame once serialized", () => {
+  // Characters that grow when JSON escapes them: a control character takes six, a
+  // backslash and a quote two each. Bounds on length alone let such text outgrow the frame.
+  const heavy = '\u0001\\"'.repeat(2000);
+  const heavyId = (i: number) => `${"\u0001".repeat(40)}${i}`;
+  /** The frame less the envelope the web host wraps a result in. */
+  const FRAME = MAX_RESULT_CHARS - 512;
+
+  it("measures a string as JSON writes it, and cuts it to that measure", () => {
+    expect(jsonChars("a\\b\u0001")).toBe(1 + 2 + 1 + 6);
+    expect(fitJson(heavy, 100).length).toBeLessThan(100);
+    expect(jsonChars(fitJson(heavy, 100))).toBeLessThanOrEqual(100);
+    expect(fitJson("plain", 100)).toBe("plain");
+  });
+
+  it("saved approvals, a revoke and a removal, with text full of escapes", async () => {
+    const entries = Array.from({ length: 300 }, (_, i) => ({
+      ...LS_ENTRY,
+      id: heavyId(i),
+      pattern: heavy,
+      argPattern: heavy,
+      commandText: heavy,
+    }));
+    const grants = Array.from({ length: 500 }, (_, i) =>
+      grant({
+        grantId: heavyId(i),
+        cronJobId: heavyId(i),
+        agentId: "\u0001".repeat(21),
+        command: heavy,
+        cwd: heavy,
+        cronJobName: heavy,
+      }),
+    );
+    const file = {
+      ...approvalsFile(entries),
+      file: {
+        version: 1,
+        agents: {
+          ["\u0001".repeat(21)]: {
+            allowlist: entries,
+            mcpTools: entries.map(() => ({ server: heavy, tool: heavy, source: "allow-always" })),
+          },
+        },
+      },
+      hash: "h",
+    };
+    const gateway = fake({
+      "exec.approval.grants.list": () => ({ grants }),
+      "exec.approval.grants.revoke": () => {
+        throw new Error(heavy);
+      },
+      "exec.approvals.get": () => file,
+      "exec.approvals.set": () => {
+        throw new Error(heavy);
+      },
+    });
+    const read = await readSavedApprovals(gateway.ctx, { canApprove: true, canAdmin: true });
+    expect(JSON.stringify(read).length).toBeLessThan(FRAME);
+    const revoked = await revokeGrant(gateway.ctx, heavyId(0));
+    expect(JSON.stringify(revoked).length).toBeLessThan(FRAME);
+    const removed = await removeAllowlistEntry(gateway.ctx, {
+      agentId: "\u0001".repeat(21),
+      entryId: heavyId(0),
+      shownHash: "h",
+    });
+    expect(removed.outcome).toBe("still-listed");
+    expect(JSON.stringify(removed).length).toBeLessThan(FRAME);
+  });
+
+  it("an Activity page, joined to records and rules full of escapes", async () => {
+    const page = await readActivity(
+      fake({
+        "audit.activity.list": () => ({
+          events: Array.from({ length: 500 }, (_, i) =>
+            event({
+              eventId: heavyId(i),
+              toolCallId: heavyId(i),
+              runId: heavyId(i),
+              sessionKey: heavyId(0),
+              toolName: heavy,
+              agentId: "\u0001".repeat(21),
+            }),
+          ),
+          nextCursor: heavy,
+        }),
+        "config.get": () => ({ config: {} }),
+        "clawtrate-tool-rules.decisions.list": (params) => ({
+          records: Array.from({ length: 500 }, (_, i) => ({
+            id: heavyId(i),
+            runId: params.runId,
+            callId: params.runId,
+            decision: "block",
+            source: {
+              kind: "rule",
+              scope: heavy,
+              ruleId: heavy,
+              version: 1,
+              action: "never",
+            },
+          })),
+          hasMore: false,
+        }),
+        "clawtrate-tool-rules.get": () => ({
+          scopes: {
+            [heavy]: {
+              rules: [
+                {
+                  id: heavy,
+                  version: 1,
+                  tools: [heavy, heavy, heavy, heavy, heavy],
+                  target: { pattern: heavy },
+                },
+              ],
+            },
+          },
+        }),
+      }).ctx,
+      { cursor: null, agentId: null, status: null },
+      {
+        rulesListed: true,
+        loaded: new Map(
+          Array.from({ length: 500 }, (_, i) => [
+            heavyId(i),
+            [{ key: heavyId(0), callId: heavyId(i), runId: heavyId(i) }],
+          ]),
+        ),
+      },
+    );
+    expect(page.rows).toHaveLength(ACTIVITY_PAGE_RECORDS);
+    expect(JSON.stringify(page).length).toBeLessThan(FRAME);
   });
 });
 

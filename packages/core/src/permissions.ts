@@ -3,8 +3,9 @@
 // tool actions its audit log holds, with what a record made with each call says
 // caused it. Every read here is an answer, read again each time and kept
 // nowhere: the engine holds no list of grants, entries or activity, and no
-// history of its own. Each answer is bounded where it enters (the counts and
-// lengths below), so the largest one fits the web host's result frame.
+// history of its own. Each answer is bounded where it enters (the counts below,
+// and each string's length as JSON writes it), so the largest one fits the web
+// host's result frame.
 //
 // What the gateway established on a development instance (OpenClaw 2026.10.6):
 // a routine's grant is listed by `exec.approval.grants.list` (approvals scope)
@@ -44,15 +45,39 @@ export const MAX_ENTRY_DETAIL = 256;
 /** A tool's name or a bot's id, cut to this many characters. */
 export const MAX_PERMISSION_NAME = 128;
 
+/**
+ * How many characters a string takes inside a JSON answer, quotes aside. Every
+ * bound here counts these, not the string's own length: a backslash takes two,
+ * a control character six, so a bound on length alone could let an answer
+ * outgrow the frame it is sent in.
+ */
+export function jsonChars(text: string): number {
+  return JSON.stringify(text).length - 2;
+}
+
+/** The longest start of `text` that takes at most `max` characters inside JSON. */
+export function fitJson(text: string, max: number): string {
+  if (jsonChars(text) <= max) return text;
+  let used = 0;
+  let end = 0;
+  for (const char of text) {
+    const size = jsonChars(char);
+    if (used + size > max) break;
+    used += size;
+    end += char.length;
+  }
+  return text.slice(0, end);
+}
+
 const cut = (value: unknown, max = MAX_PERMISSION_TEXT): string | null =>
-  typeof value === "string" && value.length > 0 ? value.slice(0, max) : null;
+  typeof value === "string" && value.length > 0 ? fitJson(value, max) || null : null;
 /** An id kept whole or not at all: a cut id could name another record. */
 const wholeId = (value: unknown, max = MAX_PERMISSION_TEXT): string | null =>
-  typeof value === "string" && value.length > 0 && value.length <= max ? value : null;
+  typeof value === "string" && value.length > 0 && jsonChars(value) <= max ? value : null;
 const time = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 const errorText = (error: unknown): string =>
-  (error instanceof Error ? error.message : String(error)).slice(0, MAX_PERMISSION_TEXT);
+  fitJson(error instanceof Error ? error.message : String(error), MAX_PERMISSION_TEXT);
 const missingScope = (error: unknown): string | null => {
   const details = asRecord(asRecord(error)?.details);
   return typeof details?.missingScope === "string" ? details.missingScope : null;
@@ -109,7 +134,7 @@ export async function readRulesPlugin(
   } catch (error) {
     return { state: "stopped", reason: errorText(error) };
   }
-  const version = typeof answer?.version === "string" ? answer.version.slice(0, 32) : "";
+  const version = typeof answer?.version === "string" ? fitJson(answer.version, 32) : "";
   if (!version) return { state: "stopped", reason: "Its status named no version." };
   if (!versionAtLeast(version, RULES_PLUGIN_MIN_VERSION)) return { state: "old", version };
   const hook = asRecord(answer?.hook);
@@ -232,8 +257,16 @@ export function allowlistOf(file: unknown): { items: AllowlistEntry[]; omitted: 
     else omitted += 1;
   };
   for (const [rawId, value] of Object.entries(agents)) {
-    const agentId = rawId.slice(0, MAX_PERMISSION_NAME);
+    // Kept whole or not at all: Remove names the bot by it.
+    const agentId = wholeId(rawId, MAX_PERMISSION_NAME);
     const agent = asRecord(value);
+    if (!agentId) {
+      omitted += [agent?.allowlist, agent?.mcpTools].reduce<number>(
+        (sum, list) => sum + (Array.isArray(list) ? list.length : 0),
+        0,
+      );
+      continue;
+    }
     for (const raw of Array.isArray(agent?.allowlist) ? agent.allowlist : []) {
       const entry = asRecord(raw);
       const pattern = cut(entry?.pattern);
@@ -596,8 +629,9 @@ async function decisionsOf(
       answers.forEach((value, index) => {
         const answer = asRecord(value);
         const runId = chunk[index]!;
-        if (answer?.hasMore !== true) full.add(runId);
-        for (const raw of Array.isArray(answer?.records) ? answer.records : []) {
+        const records = Array.isArray(answer?.records) ? answer.records : [];
+        if (answer?.hasMore !== true && records.length <= DECISIONS_PER_RUN) full.add(runId);
+        for (const raw of records.slice(0, DECISIONS_PER_RUN)) {
           const record = asRecord(raw);
           const callId = wholeId(record?.callId, MAX_ACTIVITY_ID);
           const id = wholeId(record?.id, MAX_ACTIVITY_ID);
@@ -633,7 +667,7 @@ async function currentRules(ctx: PermissionsContext): Promise<CurrentRules | nul
           ? rule.tools
               .filter((each): each is string => typeof each === "string")
               .slice(0, MAX_CAUSE_TOOLS)
-              .map((each) => each.slice(0, MAX_PERMISSION_NAME))
+              .map((each) => fitJson(each, MAX_PERMISSION_NAME))
           : [];
         rules.set(`${scope}\u0000${rule.id}`, {
           version: rule.version,
@@ -671,7 +705,7 @@ function causeOf(decision: Decision | undefined, rules: CurrentRules | null): Ac
   if (source?.kind === "fallback" && typeof source.scope === "string")
     return {
       ...base,
-      source: { kind: "fallback", scope: source.scope.slice(0, MAX_PERMISSION_NAME) },
+      source: { kind: "fallback", scope: fitJson(source.scope, MAX_PERMISSION_NAME) },
     };
   if (source?.kind === "rules-lost") return { ...base, source: { kind: "rules-lost" } };
   const action = source?.action;
@@ -682,8 +716,8 @@ function causeOf(decision: Decision | undefined, rules: CurrentRules | null): Ac
     typeof source.version === "number" &&
     (action === "allow" || action === "ask" || action === "never")
   ) {
-    const scope = source.scope.slice(0, MAX_PERMISSION_NAME);
-    const ruleId = source.ruleId.slice(0, 64);
+    const scope = fitJson(source.scope, MAX_PERMISSION_NAME);
+    const ruleId = fitJson(source.ruleId, 64);
     // The rule's scope, id and version as recorded; its words only from the rules read now.
     const now = rules === null ? "unread" : (rules.get(`${scope}\u0000${ruleId}`) ?? null);
     return {
