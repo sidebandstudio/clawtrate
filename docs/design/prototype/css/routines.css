@@ -359,17 +359,11 @@
   margin: 6px 0 0;
   font-size: var(--text-base);
   line-height: 1.5;
+  white-space: pre-wrap;
 }
 
-.r-sched details {
+.r-returned-head {
   margin-top: 8px;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-
-.r-sched summary {
-  min-height: 28px;
-  cursor: pointer;
 }
 
 .r-run-foot {
@@ -421,8 +415,8 @@
 .r-cal {
   --hour: 28px;
   display: grid;
-  grid-template-columns: 52px repeat(var(--days), minmax(120px, 1fr));
-  min-width: calc(52px + var(--days) * 120px);
+  grid-template-columns: 52px repeat(var(--days), minmax(96px, 1fr));
+  min-width: calc(52px + var(--days) * 96px);
   background: var(--bg-list);
 }
 
@@ -504,10 +498,25 @@
   min-height: 8px;
 }
 
-.r-occ {
+.r-cal-day ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.r-cal-day li {
   position: absolute;
   left: 4px;
   right: 4px;
+}
+
+.r-cal-range {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.r-occ {
+  width: 100%;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -702,8 +711,11 @@
   padding-top: var(--space-4);
 }
 
-.r-convo .event-line a,
 .r-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
   color: var(--text);
   font-weight: var(--weight-medium);
   text-decoration: underline;
@@ -768,4 +780,53 @@
   .r-toolbar {
     flex-wrap: wrap;
   }
+}
+
+.r-zone-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.r-zone-list {
+  margin: 4px 0 var(--space-3);
+  padding-left: 20px;
+}
+
+[data-input="touch"] .r-run-how {
+  white-space: normal;
+}
+
+[data-input="touch"] .r-cal {
+  --hour: 48px;
+}
+
+[data-input="touch"] .r-occ {
+  height: 28px;
+}
+
+/* On the phone every control in the view has a 44 px hit area, past its drawn edge where it is smaller. */
+[data-input="touch"] .r-view :is(button, [role="switch"]) {
+  position: relative;
+}
+
+[data-input="touch"] .r-view :is(button, [role="switch"])::before {
+  content: "";
+  position: absolute;
+  top: min(0px, calc((100% - 44px) / 2));
+  bottom: min(0px, calc((100% - 44px) / 2));
+  left: min(0px, calc((100% - 44px) / 2));
+  right: min(0px, calc((100% - 44px) / 2));
+}
+
+[data-input="touch"] .r-occ {
+  overflow: visible;
+}
+
+.r-occ span {
+  min-width: 0;
+}
+
+[data-input="touch"] .r-view .event-line:has(.r-link) {
+  min-height: 44px;
 }
