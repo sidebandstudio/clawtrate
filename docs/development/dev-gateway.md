@@ -54,6 +54,14 @@ One plugin of an instance may also declare `botBrowsers`: which seeded bots get 
 pnpm dev-gateway start --instance browse --with-plugin clawtrate-computer
 ```
 
+[`plugins/clawtrate-tool-rules`](../../plugins/clawtrate-tool-rules/README.md), the rules plugin (what each bot may do without asking, after asking, or never), declares no setting and no tool, so it adds only its entry and its load path; every bot keeps the development config's denies:
+
+```bash
+pnpm dev-gateway start --instance rules --with-plugin clawtrate-tool-rules
+```
+
+Its rules are set from a connection with admin access (`clawtrate-tool-rules.set`), and its cards are the gateway's plugin approvals, answered from a client with `operator.approvals`. `pnpm scenarios` runs the rules checks on an instance of their own started this way, with an admin connection, Clawtrate's interactive tier, another device with approvals, one with read and write and a read-only one: rules lost with and without a copy (the check spoils the instance's own rules file and restores it), the methods' tiers and the empty event, an Ask's card and who receives it, Allow once and Deny, a Never, an Allow that does not pass an Ask, "Ask when nothing else decides", the limits, a Never on another spelling of a file's name, a card with approval forwarding on (to no destination) and with `cardDetails: "full"`, a routine's call, a setting changed while a card waits, the plugin turned off in the middle of a run, and a call in a run another bot's message started (`#message-read`). [The plugin's page](../../plugins/clawtrate-tool-rules/README.md#on-a-clawtrate-development-gateway) lists what each asserts. Turning the plugin off and on again, setting its `cardDetails`, or turning approval forwarding on, as the checks do, takes the config outside the contract until it is back.
+
 The default instance and `pnpm e2e` load no plugins. [The opening](../decisions.md#development-gateway) is described in `docs/decisions.md`.
 
 ## Scripted provider accounts
@@ -128,6 +136,7 @@ The scripted model can put a run into every situation the live conversation has 
 | `#message-slow`    | message your slow partner              | A message to the other bot, which takes 15 seconds; the call returns before it answers, and the reply arrives later in the same task.                                                                                           | Marlow or Pip                   |
 | `#message-fail`    | message your failing partner           | A message to the other bot, whose run ends in a model error.                                                                                                                                                                    | Marlow or Pip                   |
 | `#message-ask`     | message your partner who asks          | A message to the other bot, which asks its own user a question before replying.                                                                                                                                                 | Marlow or Pip                   |
+| `#message-read`    | message your partner who reads         | A message to the other bot, which reads its own instructions file before replying: a tool call in a run another bot's message started.                                                                                          | Marlow or Pip                   |
 | `#mcp`             | ask the coding agent                   | A call to the stand-in coding agent over MCP; the result carries a link.                                                                                                                                                        | any bot                         |
 | `#mcp-slow [N]`    | ask the coding agent something slow    | A call to the coding agent that takes N seconds (default 20) to reply.                                                                                                                                                          | any bot                         |
 | `#mcp-error`       | ask the coding agent to run the checks | A call to the coding agent that returns an error.                                                                                                                                                                               | any bot                         |

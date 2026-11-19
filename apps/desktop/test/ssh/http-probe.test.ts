@@ -8,7 +8,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { probeHttp } from "../../src/main/ssh/http-probe.ts";
-import { httpGateway } from "./harness.ts";
+import { freePort, httpGateway } from "./harness.ts";
 
 const servers: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -107,6 +107,26 @@ describe("the probe through a forward", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(connected).toBe(0);
     expect(gateway.requests.length).toBe(before);
+  });
+
+  it("waits for the listener when ssh says it listens before it has bound the port", async () => {
+    // OpenSSH logs "Local forwarding listening" before bind(): the probe can start before the port is open.
+    const port = await freePort();
+    const started = Date.now();
+    const probing = probeHttp(port, 18789, quiet, 5000);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const late = createServer((socket) =>
+      socket.once("data", () => socket.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")),
+    );
+    await new Promise<void>((resolve) => late.listen(port, "127.0.0.1", resolve));
+    servers.push(() => new Promise((done) => late.close(() => done())));
+    expect(await probing).toBe("http");
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it("is still no answer when the local port never opens", async () => {
+    const port = await freePort();
+    expect(await probeHttp(port, 18789, quiet, 400)).toBe("no-answer");
   });
 
   it("tells a refused forwarding and a closed gateway port by what the forward reported", async () => {
