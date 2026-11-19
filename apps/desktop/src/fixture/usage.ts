@@ -70,7 +70,10 @@ const WEEK: Record<
   pip: { input: 90_000, output: 22_000, cacheRead: 260_000, cacheWrite: 7_000, cost: 0.74 },
 };
 const SCALE: Record<UsagePeriod, number> = { today: 0.18, week: 1, month: 3.6 };
-const SOURCES: Record<string, Omit<UsageSources, "partial">> = {
+const SOURCES: Record<
+  string,
+  { people: number; routines: number; bots: number; unattributed: number }
+> = {
   otto: { people: 1_240_000, routines: 312_000, bots: 41_200, unattributed: 46_800 },
   main: { people: 2_239_000, routines: 0, bots: 0, unattributed: 0 },
   marlow: { people: 520_000, routines: 0, bots: 42_000, unattributed: 0 },
@@ -190,7 +193,7 @@ function report(
   const k = SCALE[command.period];
   const ids = command.botId ? [command.botId] : [...every];
   const total = figure(command.botId, command.period, params, at);
-  const sources = ids.reduce(
+  const summed = ids.reduce(
     (sum, id) => {
       const own = SOURCES[id];
       if (!own) return sum;
@@ -199,11 +202,17 @@ function report(
         routines: sum.routines + Math.round(own.routines * k),
         bots: sum.bots + Math.round(own.bots * k),
         unattributed: sum.unattributed + Math.round(own.unattributed * k),
-        partial: params.usage === "partial",
       };
     },
-    { people: 0, routines: 0, bots: 0, unattributed: 0, partial: params.usage === "partial" },
+    { people: 0, routines: 0, bots: 0, unattributed: 0 },
   );
+  // As the engine does: while the gateway is still counting, the rest of its total is no figure.
+  const counting = params.usage === "computing";
+  const sources: UsageSources = {
+    ...summed,
+    unattributed: counting ? null : summed.unattributed,
+    partial: params.usage === "partial" || counting,
+  };
   const tasks =
     command.botId === "otto"
       ? [
@@ -233,6 +242,8 @@ function report(
         ),
     tasks: command.detail ? tasks : null,
     tasksOmitted: command.detail && command.botId === "otto" ? 2 : 0,
+    tasksCapped: false,
+    detailCounting: command.detail && counting,
     sources: command.detail ? sources : null,
     detailError: null,
   };

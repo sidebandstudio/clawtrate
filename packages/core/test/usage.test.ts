@@ -894,6 +894,80 @@ describe("the usage engine", () => {
     engine.onClose();
   });
 
+  it("F-237: sources that can't be reconciled with the gateway's total are not shown, and the rest of a total still being counted is no figure", async () => {
+    const gateway = fakeGateway();
+    // The review's case: a 50-token total, while sessions.usage, read apart and still counting,
+    // already lists 60 tokens of a routine's.
+    const apart: typeof gateway.request = async (method, raw) => {
+      if (method === "usage.cost")
+        return { updatedAt: 1, totals: totals(30, 20), cacheStatus: fresh };
+      if (method === "sessions.usage")
+        return {
+          updatedAt: 1,
+          sessions: [{ key: "agent:otto:cron:job1", usage: totals(36, 24) }],
+          cacheStatus: { status: "refreshing", pendingFiles: 1 },
+        };
+      return gateway.request(method, raw);
+    };
+    const one = engineOn({ ...gateway, request: apart });
+    const report = await one.engine.readReport({
+      botId: "otto",
+      period: "week",
+      timeZone: NY,
+      detail: true,
+      bots: [],
+    });
+    expect(report.detailCounting).toBe(true);
+    expect(report.sources).toBeNull();
+    expect(report.detailError).toMatch(/don't agree yet/);
+    one.engine.onClose();
+    // A total still being counted: the named parts are shown as partial, the rest is not a figure.
+    const two = engineOn(fakeGateway({ counting: true }));
+    const counting = await two.engine.readReport({
+      botId: "marlow",
+      period: "week",
+      timeZone: NY,
+      detail: true,
+      bots: [],
+    });
+    expect(counting.sources).toEqual({
+      people: 700,
+      routines: 0,
+      bots: 200,
+      unattributed: null,
+      partial: true,
+    });
+    two.engine.onClose();
+  });
+
+  it("F-237: a task list the gateway capped says so, and the sources read from it are partial", async () => {
+    const gateway = fakeGateway();
+    const capped: typeof gateway.request = async (method, raw) => {
+      if (method !== "sessions.usage") return gateway.request(method, raw);
+      const { limit } = raw as { limit: number };
+      return {
+        updatedAt: 1,
+        cacheStatus: fresh,
+        sessions: Array.from({ length: limit }, (_, i) => ({
+          key: `agent:marlow:task-${i}`,
+          usage: totals(i < 10 ? 1 : 0, 0),
+        })),
+      };
+    };
+    const { engine } = engineOn({ ...gateway, request: capped });
+    const report = await engine.readReport({
+      botId: "marlow",
+      period: "week",
+      timeZone: NY,
+      detail: true,
+      bots: [],
+    });
+    expect(report.tasksCapped).toBe(true);
+    expect(report.tasksOmitted).toBe(2);
+    expect(report.sources?.partial).toBe(true);
+    engine.onClose();
+  });
+
   it("F-237: every bot's figures, each read the same way as its own page", async () => {
     const gateway = fakeGateway();
     const { engine } = engineOn(gateway);

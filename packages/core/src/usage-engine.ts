@@ -71,8 +71,8 @@ export const COUNT_AFTER_RUN_MS = 31_000;
 export const LIMITS_EVERY_MS = 5 * 60_000;
 /** Times a budget change is applied again after a conflict. */
 export const BUDGET_WRITE_ATTEMPTS = 4;
-/** Sessions one `sessions.usage` read asks for. */
-const SESSIONS_LIMIT = 200;
+/** Tasks one `sessions.usage` read asks for: the gateway lists at most this many. */
+export const SESSIONS_LIMIT = 200;
 
 /** A page's report: read now, not kept. */
 export type UsageReport = {
@@ -86,6 +86,14 @@ export type UsageReport = {
   /** The largest tasks' shares (`sessions.usage`), and how many more there are. */
   tasks: TaskUsage[] | null;
   tasksOmitted: number;
+  /**
+   * The gateway listed as many tasks as asked (`SESSIONS_LIMIT`), the most
+   * recently updated first: the tasks and the count of more cover those it
+   * listed, and there may be others.
+   */
+  tasksCapped: boolean;
+  /** The gateway said the tasks' figures are still being counted (`sessions.usage` `cacheStatus`). */
+  detailCounting: boolean;
   sources: UsageSources | null;
   /** Why the tasks or sources could not be read, or null. */
   detailError: string | null;
@@ -448,24 +456,39 @@ export class UsageEngine {
       bots,
       tasks: null,
       tasksOmitted: 0,
+      tasksCapped: false,
+      detailCounting: false,
       sources: null,
       detailError: null,
     };
     if (!request.detail) return report;
     try {
-      const tasks = tasksOf(
+      const listed = asRecord(
         await this.ctx.request("sessions.usage", { ...scope, ...params, limit: SESSIONS_LIMIT }),
       );
+      const tasks = tasksOf(listed);
       report.tasks = tasks.slice(0, MAX_REPORT_TASKS);
       report.tasksOmitted = Math.max(0, tasks.length - MAX_REPORT_TASKS);
-      const sources = await this.sources(tasks, figure.tokens.total, range);
-      // While the gateway is still counting, its total may not include what the histories show.
-      report.sources =
+      report.tasksCapped =
+        Array.isArray(listed?.sessions) && listed.sessions.length >= SESSIONS_LIMIT;
+      report.detailCounting =
+        stillCounting(listed?.cacheStatus) || tasks.some((task) => task.computing);
+      const counting =
         figure.counting ||
-        tasks.some((task) => task.computing) ||
-        (bots ?? []).some((each) => each.figure?.counting === true)
-          ? { ...sources, partial: true }
-          : sources;
+        report.detailCounting ||
+        (bots ?? []).some((each) => each.figure?.counting === true);
+      const sources = await this.sources(tasks, figure.tokens.total, range);
+      if (sources.people + sources.routines + sources.bots > figure.tokens.total)
+        // Read at different times, the parts and the total can't both be right: neither is shown.
+        report.detailError =
+          "The tasks' records and the gateway's total don't agree yet, so where the tokens came from isn't shown.";
+      else
+        report.sources = {
+          ...sources,
+          // The rest of a total the gateway is still counting is no figure of anything.
+          unattributed: counting ? null : sources.unattributed,
+          partial: sources.partial || counting || report.tasksCapped,
+        };
     } catch (error) {
       report.detailError = errorText(error);
     }

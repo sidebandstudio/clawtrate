@@ -5,6 +5,7 @@ import {
   budgetPercent,
   currentCount,
   rangeFor,
+  SESSIONS_LIMIT,
   type Budget,
   type BudgetCount,
   type BudgetInput,
@@ -14,6 +15,7 @@ import {
   type UsageFigure,
   type UsagePeriod,
   type UsageReport,
+  type UsageSources,
   type UsageState,
 } from "@clawtrate/core";
 import { clock } from "../bots/words.ts";
@@ -178,6 +180,48 @@ export function botBars(report: UsageReport, nameOf: (botId: string) => string):
     tokens: each.figure ? each.figure.tokens.total : null,
     note: each.figure ? soFar(each.figure.counting) : "",
   }));
+}
+
+const SOURCE_NAMES: Array<[keyof Omit<UsageSources, "partial">, string]> = [
+  ["people", "Messages from people"],
+  ["routines", "Routines"],
+  ["bots", "Messages from other bots"],
+  ["unattributed", "Not attributed"],
+];
+
+/** The source bars: each part the reads established, and the rest only once it is a figure. */
+export function sourceBars(sources: UsageSources): BarRow[] {
+  return SOURCE_NAMES.flatMap(([key, name]) => {
+    const tokens = sources[key];
+    return tokens === null ? [] : [{ name, tokens }];
+  });
+}
+
+/** What the source bars are short of, if anything. */
+export function sourcesNote(sources: UsageSources, counting: boolean): string {
+  if (counting)
+    return " Partial: the gateway is still counting, so these may grow, and the rest of its total isn't shown until it has finished.";
+  return sources.partial
+    ? " Partial: some tasks weren't read in full, so more may belong to a named source."
+    : "";
+}
+
+/** The tasks the page doesn't list by name, and when the gateway's list was capped, that it was. */
+export function moreTasks(omitted: number, capped: boolean): string {
+  const tasks = `${full(omitted)} more ${omitted === 1 ? "task" : "tasks"}`;
+  return capped ? `${tasks} of the ${full(SESSIONS_LIMIT)} listed` : tasks;
+}
+
+/** Said under the tasks when the gateway listed as many as it was asked for. */
+export const TASKS_CAPPED = `The gateway lists at most ${full(SESSIONS_LIMIT)} tasks at once, the most recently updated first: these are the largest of those, and there may be others.`;
+
+/** How many bots the state's list left out (the `bots[N<]` mark of a cut list). */
+export function botsLeftOut(cut: readonly string[] | undefined): number {
+  for (const path of cut ?? []) {
+    const match = /^bots\[(\d+)<\]$/.exec(path);
+    if (match) return Number(match[1]);
+  }
+  return 0;
 }
 
 /** A bot's or every bot's figure in a row's value: its total, its cost and when it is from. */

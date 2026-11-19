@@ -9,8 +9,8 @@ import {
   type ConnectionState,
   type HostInfo,
   type Routine,
+  MAX_BOTS,
   type UsagePeriod,
-  type UsageSources,
 } from "@clawtrate/core";
 import { useEffect, useState, type ReactNode } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
@@ -27,20 +27,17 @@ import {
 import {
   asOf,
   botBars,
+  botsLeftOut,
   budgetLine,
   figureLine,
+  full,
   kindWord,
   PARTIAL_COUNT,
   reportWindow,
+  sourceBars,
+  sourcesNote,
 } from "./words.ts";
 import "./usage.css";
-
-const SOURCES: Array<[keyof Omit<UsageSources, "partial">, string]> = [
-  ["people", "Messages from people"],
-  ["routines", "Routines"],
-  ["bots", "Messages from other bots"],
-  ["unattributed", "Not attributed"],
-];
 
 const day = (at: number) =>
   new Date(at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -259,6 +256,7 @@ function Budgets({
 
 /** Usage by bot and by source, for a period. */
 function ByBot({ bots }: { bots: readonly Bot[] }) {
+  const left = botsLeftOut(useClawtrateState().cut);
   const [period, setPeriod] = useState<UsagePeriod>("week");
   const report = useUsageReport(null, period, true, true);
   const r = report.report;
@@ -292,22 +290,18 @@ function ByBot({ bots }: { bots: readonly Bot[] }) {
           />
           <p className="b-hint" data-testid="usage-all-total">
             Every bot: {figureLine(r.figure)}.
+            {left > 0
+              ? ` ${full(left)} more ${left === 1 ? "bot isn't" : "bots aren't"} shown by name: Clawtrate lists at most ${full(MAX_BOTS)} bots.`
+              : ""}
           </p>
           <h4 className="b-group">By source</h4>
           {r.sources ? (
             <>
-              <Bars
-                testId="usage-sources"
-                rows={SOURCES.map(([key, words]) => ({ name: words, tokens: r.sources![key] }))}
-              />
+              <Bars testId="usage-sources" rows={sourceBars(r.sources)} />
               <p className="b-hint">
                 Messages from other bots counts only runs a send's result names. The rest is not
                 attributed, never charged to one message.
-                {r.sources.partial
-                  ? stillCounted(r)
-                    ? " Partial: the gateway is still counting, so these may not add up to its total yet."
-                    : " Partial: some tasks weren't read in full."
-                  : ""}
+                {sourcesNote(r.sources, stillCounted(r))}
               </p>
             </>
           ) : (

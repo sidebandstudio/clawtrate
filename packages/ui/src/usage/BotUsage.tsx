@@ -3,7 +3,7 @@
 // first, then its figures for a period, by source, by task, and the open
 // task's context. Every figure is the gateway's, with its source and its age.
 
-import type { Bot, Task, UsagePeriod, UsageSources } from "@clawtrate/core";
+import type { Bot, Task, UsagePeriod } from "@clawtrate/core";
 import { useEffect, useState, type ComponentProps } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
 import { BotSettings } from "../bots/BotSettings.tsx";
@@ -19,7 +19,11 @@ import {
   costValue,
   figureLine,
   full,
+  moreTasks,
   reportWindow,
+  sourceBars,
+  sourcesNote,
+  TASKS_CAPPED,
 } from "./words.ts";
 import "./usage.css";
 
@@ -60,13 +64,6 @@ function UsageRow({ bot, onOpen, visible }: { bot: Bot; onOpen: () => void; visi
     </>
   );
 }
-
-const SOURCE_NAMES: Array<[keyof Omit<UsageSources, "partial">, string]> = [
-  ["people", "Messages from people"],
-  ["routines", "Routines"],
-  ["bots", "Messages from other bots"],
-  ["unattributed", "Not attributed"],
-];
 
 /** A bot's Usage page. */
 export function BotUsagePage({
@@ -166,7 +163,7 @@ export function BotUsagePage({
     );
   const r = report.report!;
   const figure = r.figure;
-  const counting = figure.counting || (r.tasks ?? []).some((each) => each.computing);
+  const counting = figure.counting || r.detailCounting;
   const sources = r.sources;
   const context = task && task.botId === bot.id ? task : null;
   return (
@@ -214,19 +211,12 @@ export function BotUsagePage({
       <h4 className="b-group">By source</h4>
       {sources ? (
         <>
-          <Bars
-            rows={SOURCE_NAMES.map(([key, words]) => ({ name: words, tokens: sources[key] }))}
-            testId="usage-sources"
-          />
+          <Bars rows={sourceBars(sources)} testId="usage-sources" />
           <p className="b-hint">
             Messages from people: runs a person's message started. Routines: runs whose task is a
             routine's. Messages from other bots: runs a send's result names. The rest is not
             attributed, never charged to one message.
-            {sources.partial
-              ? counting
-                ? " Partial: the gateway is still counting, so these may not add up to its total yet."
-                : " Partial: some tasks weren't read in full, so more may belong to a named source."
-              : ""}
+            {sourcesNote(sources, counting)}
           </p>
         </>
       ) : (
@@ -247,18 +237,23 @@ export function BotUsagePage({
           ))}
           {r.tasksOmitted > 0 && (
             <div>
-              <dt>
-                {r.tasksOmitted} more {r.tasksOmitted === 1 ? "task" : "tasks"}
-              </dt>
+              <dt>{moreTasks(r.tasksOmitted, r.tasksCapped)}</dt>
               <dd>Not listed</dd>
             </div>
           )}
         </dl>
       ) : (
         <p className="b-hint" style={{ marginTop: 0 }}>
-          {r.tasks
-            ? `No task of ${name}'s used tokens ${period === "today" ? "today" : period === "week" ? "this week" : "in the last 30 days"}.`
-            : "Unavailable."}
+          {!r.tasks
+            ? "Unavailable."
+            : r.tasksCapped
+              ? `None of the tasks listed used tokens ${period === "today" ? "today" : period === "week" ? "this week" : "in the last 30 days"}.`
+              : `No task of ${name}'s used tokens ${period === "today" ? "today" : period === "week" ? "this week" : "in the last 30 days"}.`}
+        </p>
+      )}
+      {r.tasks && r.tasksCapped && (
+        <p className="b-hint" data-testid="usage-tasks-capped">
+          {TASKS_CAPPED}
         </p>
       )}
       <h4 className="b-group">Context</h4>

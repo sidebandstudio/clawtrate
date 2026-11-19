@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   barText,
   botBars,
+  botsLeftOut,
   budgetInput,
   budgetLine,
   budgetWindow,
@@ -14,7 +15,10 @@ import {
   costValue,
   deviceTimeZone,
   figureLine,
+  moreTasks,
   reportWindow,
+  sourceBars,
+  sourcesNote,
   warnedLine,
 } from "../src/usage/words.ts";
 
@@ -86,6 +90,8 @@ describe("every bot's bars", () => {
       ],
       tasks: null,
       tasksOmitted: 0,
+      tasksCapped: false,
+      detailCounting: false,
       sources: null,
       detailError: null,
     };
@@ -125,5 +131,32 @@ describe("a budget's window and a report's", () => {
     const target = { botId: "otto", routineId: null, routineName: null };
     expect(budgetInput(target, tokyo, "weekly", 5_000).timeZone).toBe("Asia/Tokyo");
     expect(budgetInput(target, null, "weekly", 5_000).timeZone).toBe(deviceTimeZone());
+  });
+});
+
+describe("sources and tasks", () => {
+  it("F-237: the rest of a total still being counted is not shown, and what is shown says it is partial", () => {
+    const counting = { people: 700, routines: 0, bots: 200, unattributed: null, partial: true };
+    expect(sourceBars(counting).map((bar) => bar.name)).toEqual([
+      "Messages from people",
+      "Routines",
+      "Messages from other bots",
+    ]);
+    expect(sourcesNote(counting, true)).toMatch(/still counting.*rest of its total isn't shown/);
+    expect(sourceBars({ ...counting, unattributed: 800, partial: false }).at(-1)).toEqual({
+      name: "Not attributed",
+      tokens: 800,
+    });
+  });
+
+  it("F-237: a count of more tasks after the gateway's cap says it covers the tasks listed", () => {
+    expect(moreTasks(2, false)).toBe("2 more tasks");
+    expect(moreTasks(192, true)).toBe("192 more tasks of the 200 listed");
+  });
+
+  it("F-237: bots the roster's bound left out are counted, so the page can say so", () => {
+    expect(botsLeftOut(["bots[8<]", "tasksByBot.otto[3<]"])).toBe(8);
+    expect(botsLeftOut(["bots[3].name"])).toBe(0);
+    expect(botsLeftOut(undefined)).toBe(0);
   });
 });

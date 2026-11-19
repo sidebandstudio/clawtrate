@@ -160,7 +160,7 @@ export type ReportState =
 export function stillCounted(report: UsageReport): boolean {
   return (
     report.figure.counting ||
-    (report.tasks ?? []).some((each) => each.computing) ||
+    report.detailCounting ||
     (report.bots ?? []).some((each) => each.figure?.counting === true)
   );
 }

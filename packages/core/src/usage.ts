@@ -416,8 +416,8 @@ export type UsageSources = {
   routines: number;
   /** Runs a send's result names, in turns the gateway marks `inter_session`. */
   bots: number;
-  /** The rest of the total. */
-  unattributed: number;
+  /** The rest of the total; null while the gateway is still counting the total, so there is no rest yet. */
+  unattributed: number | null;
   partial: boolean;
 };
 
