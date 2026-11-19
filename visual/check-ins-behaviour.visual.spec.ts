@@ -96,7 +96,7 @@ test("F-201: Every… sends the cadence chosen and the prompt that was edited, i
   await page.getByRole("menuitemradio", { name: "4 hours" }).click();
   await pip.getByText("What to check").click();
   await pip.getByRole("textbox", { name: "Prompt" }).fill("Look at the calendar for tomorrow.");
-  await expect(pip.getByTestId("prompt-note")).toContainText("may post a message");
+  await expect(pip.getByTestId("prompt-note")).toContainText("may answer every check-in");
   await pip
     .getByRole("textbox", { name: "Prompt" })
     .fill("Look at the calendar. If nothing needs attention, reply NO_REPLY.");
@@ -183,6 +183,9 @@ test("F-201: a save that could not be confirmed says so in its own dialog only, 
   const marlow = dialog(page, "Marlow");
   await marlow.getByRole("radio", { name: /^Daily/ }).click();
   await marlow.getByRole("button", { name: "Save", exact: true }).click();
+  // While it saves, Escape waits for the answer.
+  await page.keyboard.press("Escape");
+  await expect(marlow).toBeVisible();
   await expect(marlow.getByTestId("save-unknown")).toContainText("Not confirmed.");
   await expect(page.getByTestId("b-announcer")).not.toHaveText("Check-ins saved");
   await expect(block(page, "marlow")).toContainText("No check-ins");
@@ -329,5 +332,5 @@ test("F-201: an inherited custom prompt is what an empty prompt means, and no wo
     "Look over my inbox and tell me what's new.",
   );
   await expect(juniper).toContainText("Empty uses the prompt set as the gateway's default");
-  await expect(juniper.getByTestId("prompt-note")).toContainText("may post a message");
+  await expect(juniper.getByTestId("prompt-note")).toContainText("may answer every check-in");
 });

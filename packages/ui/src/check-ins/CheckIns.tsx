@@ -255,8 +255,10 @@ function CheckInsDialog({
     if (ended) outcomeRef.current?.scrollIntoView({ block: "nearest" });
   }, [ended, save?.status]);
 
+  // While a save is under way the dialog waits for its answer, Escape included.
   const close = () => {
-    if (saveId && !saving) void bridge.send({ type: "dismissCheckInSave", saveId }).catch(() => {});
+    if (saving) return;
+    if (saveId) void bridge.send({ type: "dismissCheckInSave", saveId }).catch(() => {});
     onClose();
   };
   const submit = () => {
@@ -394,8 +396,8 @@ function CheckInsDialog({
             />
             {promptWarning && (
               <p className="ci-hint" id="ci-prompt-note" data-testid="prompt-note">
-                This prompt doesn't ask for NO_REPLY when nothing needs attention, so check-ins may
-                post a message even when nothing does.
+                This prompt doesn't ask {bot.name} to reply NO_REPLY when nothing needs attention,
+                as the gateway's own prompt does, so {bot.name} may answer every check-in.
               </p>
             )}
             <p className="ci-hint" id="ci-prompt-hint">
