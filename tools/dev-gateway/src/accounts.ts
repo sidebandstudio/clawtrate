@@ -222,6 +222,21 @@ export function authContract(): Contract {
   };
 }
 
+/**
+ * What `models.authSetApiKey` writes into a scripted provider's entry: the id
+ * of the account it saved the key in (`globex:manual`), never the key, which
+ * stays in the account store.
+ */
+export function providerKeyRefContract(provider: AccountProvider): Contract {
+  return optional(
+    matching(
+      `an account id of ${provider}`,
+      (value) =>
+        typeof value === "string" && value.startsWith(`${provider}:`) && PROFILE_ID.test(value),
+    ),
+  );
+}
+
 /** The OpenClaw command that saves one account's credential, and what it reads on stdin. */
 export function saveAccountCommand(a: ScriptedAccount): { args: string[]; stdin: string } {
   const args = [

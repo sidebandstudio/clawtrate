@@ -105,7 +105,8 @@ describe("the sign-in plugin outside a development instance", () => {
     (await load(copy)).register(gateway);
     expect(gateway.warnings).toEqual([]);
     expect(gateway.providers.map((p) => [p.id, p.auth.map((m) => m.id)])).toEqual([
-      ["acme", ["device-code", "browser", "api-key"]],
+      ["acme", ["device-code", "browser", "host", "callback", "api-key"]],
+      ["globex", ["api-key"]],
     ]);
   });
 
@@ -187,7 +188,7 @@ describe("the sign-in plugin outside a development instance", () => {
     (await load(copy)).register(gateway);
     rmSync(join(stateDir, MARKER_FILE));
     const fetched = vi.spyOn(globalThis, "fetch");
-    for (const method of gateway.providers[0]!.auth) {
+    for (const method of gateway.providers.flatMap((provider) => provider.auth)) {
       await expect(
         method.run({ prompter: { text: async () => "clawtrate-dev-key.acme.x" } }),
         method.id,
@@ -264,5 +265,98 @@ describe("the sign-in plugin's requests", () => {
     ).rejects.toThrow(/must be the scripted model on 127\.0\.0\.1/);
     expect(fetched).not.toHaveBeenCalled();
     fetched.mockRestore();
+  });
+
+  /** The scripted side of a returning sign-in: a page, then the code the browser brings back. */
+  async function returning(tokens: Record<string, unknown>) {
+    return serve((body) => {
+      const fields = JSON.parse(body || "{}") as Record<string, unknown>;
+      if (fields.redirectUri !== undefined)
+        return {
+          status: 200,
+          body: JSON.stringify({
+            state: "s1",
+            authorizeUrl: `http://127.0.0.1:9/scripted/signin/browser/authorize?state=s1`,
+          }),
+        };
+      return {
+        status: 200,
+        body: JSON.stringify({ status: "approved", tokens, ...(fields.extra as object) }),
+      };
+    });
+  }
+
+  it("a sign-in on the gateway's machine shows the gateway's note with its port, and finishes when the browser comes back there", async () => {
+    const tokens = {
+      account: "acme:host",
+      access: "a",
+      refresh: "r",
+      expires: 1,
+      email: "x@acme.example",
+    };
+    const scripted = await returning(tokens);
+    const { method } = await registered(`${scripted.url}/scripted/signin`);
+    const notes: string[] = [];
+    const opened: string[] = [];
+    const run = method("host").run({
+      openUrl: async (url: string) => void opened.push(url),
+      prompter: { note: async (message: string) => void notes.push(message) },
+    });
+    await vi.waitFor(() => expect(notes).toHaveLength(1));
+    const redirectUri = String(
+      (JSON.parse(scripted.received[0]!) as { redirectUri: string }).redirectUri,
+    );
+    // A listener on the gateway's own machine, on loopback, and the port the note names.
+    expect(redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/);
+    const port = new URL(redirectUri).port;
+    expect(notes[0]).toContain(
+      `forward the port with: ssh -N -L ${port}:127.0.0.1:${port} user@gateway-host`,
+    );
+    expect(opened).toEqual(["http://127.0.0.1:9/scripted/signin/browser/authorize?state=s1"]);
+    // Another sign-in's state is refused, and the listener closes.
+    const refused = expect(run).rejects.toThrow(/another sign-in's state/);
+    expect((await fetch(`${redirectUri}?code=c1&state=other`)).status).toBe(200);
+    await refused;
+    await expect(fetch(redirectUri)).rejects.toThrow();
+  });
+
+  it("a returning sign-in brought back with its state saves the account; one approved as unconfirmed hands the gateway a setting it refuses", async () => {
+    const tokens = {
+      account: "acme:back",
+      access: "a",
+      refresh: "r",
+      expires: 1,
+      email: "x@acme.example",
+    };
+    for (const confirmed of [true, false]) {
+      const scripted = await serve((body) => {
+        const fields = JSON.parse(body || "{}") as Record<string, unknown>;
+        return fields.redirectUri !== undefined
+          ? {
+              status: 200,
+              body: JSON.stringify({ state: "s2", authorizeUrl: "http://127.0.0.1:9/a?state=s2" }),
+            }
+          : {
+              status: 200,
+              body: JSON.stringify({
+                status: "approved",
+                tokens,
+                ...(confirmed ? {} : { confirmed: false }),
+              }),
+            };
+      });
+      const { method } = await registered(`${scripted.url}/scripted/signin`);
+      const run = method("callback").run({ openUrl: async () => undefined, prompter: {} });
+      await vi.waitFor(() => expect(scripted.received).toHaveLength(1));
+      const redirectUri = (JSON.parse(scripted.received[0]!) as { redirectUri: string })
+        .redirectUri;
+      await fetch(`${redirectUri}?code=c2&state=s2`);
+      const result = (await run) as {
+        profiles: Array<{ profileId: string }>;
+        configPatch?: unknown;
+      };
+      expect(result.profiles[0]?.profileId).toBe("acme:back");
+      expect(result.configPatch !== undefined).toBe(!confirmed);
+    }
   });
 });

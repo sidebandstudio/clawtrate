@@ -27,15 +27,18 @@
 //   provider side (the plugin)
 //   POST /scripted/signin/device/start    {provider}        a device code to poll
 //   POST /scripted/signin/device/poll     {deviceCode}      pending, or the outcome
-//   POST /scripted/signin/browser/start   {provider}        a page to open
+//   POST /scripted/signin/browser/start   {provider, redirectUri?}  a page to open; with a
+//                                         loopback redirectUri, the browser goes back there
 //   POST /scripted/signin/browser/exchange {provider, code} the pasted code's outcome
 //   POST /scripted/signin/key/check       {provider, key}   the typed key's outcome
 //   POST /scripted/signin/refresh         {refresh}         a new access credential
 //
 //   the person (a test, or the pages)
 //   POST /scripted/signin/answer   {userCode | state, outcome, account?}
-//        outcome approve, refuse or expire; a browser sign-in answers with
-//        the code to paste and the address the browser would land on
+//        outcome approve, refuse, expire or unconfirmed (approved, then the
+//        gateway cannot apply what the sign-in returns); a browser sign-in
+//        answers with the code to paste and the address the browser would
+//        land on, or, for a returning one, the address on the gateway's machine
 //   POST /scripted/signin/key-outcome {key, outcome: refuse|expire|approve}
 //   GET  /scripted/signin/device?code=<userCode>     a page to approve or refuse
 //   GET  /scripted/signin/browser/authorize?state=<state>   the same
@@ -70,8 +73,16 @@ export type RequestRecord = {
   status: number;
 };
 
-export type Outcome = "approve" | "refuse" | "expire";
-const OUTCOMES: readonly Outcome[] = ["approve", "refuse", "expire"];
+/**
+ * How the person answers a sign-in. `unconfirmed` approves it, and the plugin
+ * then hands the gateway a provider setting its schema refuses, so the gateway
+ * saves the account and ends the sign-in saying it could not apply it.
+ */
+export type Outcome = "approve" | "refuse" | "expire" | "unconfirmed";
+const OUTCOMES: readonly Outcome[] = ["approve", "refuse", "expire", "unconfirmed"];
+const KEY_OUTCOMES: readonly Outcome[] = ["approve", "refuse", "expire"];
+/** Where a returning sign-in sends the browser: a listener on the gateway's machine, on loopback. */
+const LOOPBACK_CALLBACK = /^http:\/\/127\.0\.0\.1:\d{1,5}\/callback$/;
 
 type Tokens = {
   access: string;
@@ -93,6 +104,8 @@ type SignIn = {
   account: string | null;
   /** A browser sign-in's one-time authorization code, once approved. */
   code: string | null;
+  /** Where the browser goes back to: the gateway's own listener, or null for the landing page. */
+  redirectUri: string | null;
   createdAt: number;
   expiresAt: number;
   finished: boolean;
@@ -282,6 +295,7 @@ export class ScriptedAccounts {
       outcome: null,
       account: null,
       code: null,
+      redirectUri: null,
       createdAt: this.now(),
       expiresAt: this.now() + SIGNIN_LIFETIME_MS,
       finished: false,
@@ -302,7 +316,7 @@ export class ScriptedAccounts {
     if (!signIn) throw new Error("no such sign-in");
     if (signIn.finished || signIn.outcome) throw new Error("that sign-in was already answered");
     if (!OUTCOMES.includes(fields.outcome as Outcome)) {
-      throw new Error("outcome must be approve, refuse or expire");
+      throw new Error("outcome must be approve, refuse, expire or unconfirmed");
     }
     const name =
       typeof fields.account === "string" && fields.account !== ""
@@ -332,7 +346,9 @@ export class ScriptedAccounts {
   /** Where the browser would land after the provider's page: an address that does not open. */
   private redirect(signIn: SignIn, params: Record<string, string>): string {
     const query = new URLSearchParams({ ...params, state: signIn.secret });
-    return `${this.baseUrl()}/scripted/signin/browser/landed?${query}`;
+    return signIn.redirectUri
+      ? `${signIn.redirectUri}?${query}`
+      : `${this.baseUrl()}/scripted/signin/browser/landed?${query}`;
   }
 
   private outcomeOf(signIn: SignIn): "pending" | Outcome {
@@ -348,7 +364,11 @@ export class ScriptedAccounts {
       return { status: "refused", error: "The person refused the sign-in." };
     if (outcome === "expire")
       return { status: "expired", error: "The code expired before the sign-in finished." };
-    return { status: "approved", tokens: this.mint(signIn.provider, signIn.account!) };
+    return {
+      status: "approved",
+      tokens: this.mint(signIn.provider, signIn.account!),
+      ...(outcome === "unconfirmed" ? { confirmed: false } : {}),
+    };
   }
 
   private signInList() {
@@ -445,6 +465,11 @@ export class ScriptedAccounts {
         case "POST /scripted/signin/browser/start": {
           const f = await readFields(req);
           const s = this.startSignIn("browser", String(f.provider));
+          if (f.redirectUri !== undefined) {
+            if (typeof f.redirectUri !== "string" || !LOOPBACK_CALLBACK.test(f.redirectUri))
+              throw new Error("redirectUri must be http://127.0.0.1:<port>/callback");
+            s.redirectUri = f.redirectUri;
+          }
           sendJson(res, 200, {
             state: s.secret,
             authorizeUrl: `${this.baseUrl()}/scripted/signin/browser/authorize?state=${s.secret}`,
@@ -511,7 +536,7 @@ export class ScriptedAccounts {
         }
         case "POST /scripted/signin/key-outcome": {
           const f = await readFields(req);
-          if (!OUTCOMES.includes(f.outcome as Outcome)) {
+          if (!KEY_OUTCOMES.includes(f.outcome as Outcome)) {
             return fail(400, "outcome must be approve, refuse or expire");
           }
           this.keyOutcomes.set(String(f.key), f.outcome as Outcome);
