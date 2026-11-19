@@ -646,9 +646,32 @@ test("F-237: through a switch of host, Settings drops the old gateway's figures 
   });
   await expect(settings.getByTestId("usage-all")).toHaveCount(0);
   expect(await usageReads(page)).toBe(before);
+  // The new host's report is held, then answered with its own total.
+  await page.evaluate(() => {
+    const bridge = (
+      window as unknown as {
+        clawtrateFixture: { invoke(command: { type: string }): Promise<unknown> };
+      }
+    ).clawtrateFixture;
+    const original = bridge.invoke.bind(bridge);
+    bridge.invoke = (command) =>
+      command.type !== "readUsage"
+        ? original(command)
+        : new Promise((resolve) => {
+            (window as unknown as { releaseReport: () => void }).releaseReport = () =>
+              void original(command).then((report) => {
+                const answer = report as { figure: { tokens: { total: number } } };
+                answer.figure.tokens.total = 9_999;
+                resolve(answer);
+              });
+          });
+  });
   await setConnection({ status: "connected", connectedAt: Date.now() + 1 });
   await expect.poll(() => usageReads(page)).toBeGreaterThan(before);
-  await expect(settings.getByTestId("usage-all-total")).toContainText("Every bot:");
+  // While the new host's report is read, the old gateway's total stays hidden.
+  await expect(settings.getByTestId("usage-all")).toHaveCount(0);
+  await page.evaluate(() => (window as unknown as { releaseReport: () => void }).releaseReport());
+  await expect(settings.getByTestId("usage-all-total")).toContainText("Every bot: 9,999 tokens");
 });
 
 test("F-237: a period whose figures couldn't be read says so, and never shows another period's (fixture)", async ({
