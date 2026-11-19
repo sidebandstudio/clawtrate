@@ -430,6 +430,35 @@ test("F-157: device access is asked for by name only; with it alone, only this d
   await expect(list).toContainText("Desk");
 });
 
+test("F-157: a rename that completes after its form was cancelled leaves another form open", async ({
+  page,
+}) => {
+  await openFixture(page, `${PANE}&access=admin`, "light");
+  await openMachines(page);
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    const original = fixture.invoke.bind(fixture);
+    fixture.invoke = (command) =>
+      command.type === "renameDevice"
+        ? new Promise((resolve) => {
+            (window as unknown as { finishRename: () => void }).finishRename = () =>
+              resolve(undefined);
+          })
+        : original(command);
+  });
+  const list = page.getByTestId("device-list");
+  await list.getByRole("button", { name: "Rename" }).nth(1).click();
+  await page.getByRole("textbox", { name: /New name for Clawtrate on iPhone/ }).fill("Phone");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
+  await list.getByRole("button", { name: "Rename" }).first().click();
+  const other = page.getByRole("textbox", { name: /New name for Clawtrate on this Mac/ });
+  await other.fill("Desk");
+  await page.evaluate(() => (window as unknown as { finishRename: () => void }).finishRename());
+  await expect(settingsAnnouncer(page)).toHaveText("Renamed");
+  await expect(other).toHaveValue("Desk");
+});
+
 test("F-157: with admin, another device is renamed and a machine removed after a confirmation that promises nothing more", async ({
   page,
 }) => {

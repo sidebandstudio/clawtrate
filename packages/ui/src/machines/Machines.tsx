@@ -508,7 +508,8 @@ export function useMachinesSection({
           onSave={async (name) => {
             await bridge.invoke({ type: "renameMachine", nodeId: machine.id, name }).catch(failed);
             if (currentKey.current !== key) return;
-            setRenaming(null);
+            // Only its own form closes: another opened since stays as it is.
+            setRenaming((open) => (open === machine.id ? null : open));
             announce("Renamed");
             reload();
           }}
@@ -563,7 +564,7 @@ export function useMachinesSection({
                 .invoke({ type: "renameDevice", deviceId: device.id, name })
                 .catch(failed);
               if (currentKey.current !== key) return;
-              setRenaming(null);
+              setRenaming((open) => (open === device.id ? null : open));
               announce("Renamed");
               reload();
             }}
