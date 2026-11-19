@@ -29,7 +29,6 @@ const temp = () => {
 };
 
 describe("the handover files", () => {
-  // The photo is 2400 x 1600 pixels: made twice here, which takes a few seconds.
   it(
     "are made by the tool, the same each time, at the sizes the scenarios name",
     { timeout: 120_000 },

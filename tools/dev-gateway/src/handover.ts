@@ -106,13 +106,14 @@ export function ridgeProfile(): Buffer {
 }
 
 /**
- * A photo-like picture: sky, hills and grain, about 4 MB as a PNG, so its card
+ * A photo-like picture: sky, hills and grain, over 256 KB as a PNG, so its card
  * asks for the gateway's thumbnail rather than its own bytes. The grain is
- * fixed by a seed, so the bytes are the same at every start.
+ * fixed by a seed, so the bytes are the same at every start; it is small
+ * enough to make in a fraction of a second.
  */
 export function trailPhoto(): Buffer {
-  const width = 2400;
-  const height = 1600;
+  const width = 800;
+  const height = 560;
   let seed = 7;
   const grain = () => {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
@@ -120,7 +121,7 @@ export function trailPhoto(): Buffer {
   };
   const clamp = (value: number) => Math.max(0, Math.min(255, Math.round(value)));
   return encodePng(width, height, (x, y) => {
-    const hill = 900 + 160 * Math.sin(x / 260) + 60 * Math.sin(x / 70);
+    const hill = 320 + 55 * Math.sin(x / 90) + 20 * Math.sin(x / 24);
     const checker = (x + y) % 2 === 0 ? 6 : -6;
     const g = grain();
     if (y < hill) {
@@ -195,15 +196,16 @@ export function trailGuidePage(): string {
 
 // Seeding and forgetting ------------------------------------------------------
 
-/** Every file of the handover folder, with its bytes. */
+/** Every file of the handover folder, with its bytes: made once per process. */
+let made: Record<string, Buffer> | null = null;
 export function handoverFiles(): Record<string, Buffer> {
-  return {
+  return (made ??= {
     [HANDOVER.picture]: ridgeProfile(),
     [HANDOVER.photo]: trailPhoto(),
     [HANDOVER.audio]: trailChime(),
     [HANDOVER.large]: elevationLog(),
     [HANDOVER.gone]: Buffer.from(OLD_ROUTE_TEXT),
-  };
+  });
 }
 
 /**

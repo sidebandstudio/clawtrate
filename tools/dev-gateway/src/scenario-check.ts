@@ -3687,7 +3687,7 @@ const HANDOVER_CHECKS: ScenarioCheck[] = [
       );
       same(new Set(four.map((each) => each.messageSeq)).size, 1, "one message holds all four");
       h.observe(
-        `The 2400 x 1600 photo was attached as ${four[2]!.mimeType}, ${four[2]!.sizeBytes} bytes: the gateway fits pictures before it keeps them.`,
+        `The photo (${handoverFiles()[HANDOVER.photo]!.length} bytes as made) was attached as ${String(four[2]!.mimeType)}, ${String(four[2]!.sizeBytes)} bytes.`,
       );
 
       const large = await h.session(HANDOVER_BOT, "hand-large");
