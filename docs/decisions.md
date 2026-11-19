@@ -549,6 +549,13 @@ Read from `@openclaw/gateway-protocol` 2026.10.6 (`protocol.schema.json`, `conne
 - **Disconnect in Settings** is a new bridge command, `suspend`: it closes the connection and keeps the gateway, the device token and what is on screen, with the status `disconnected`, until Reconnect (`retry`). The strip says "Disconnected" with "Reconnect". The gateway menu's Disconnect still forgets the gateway and returns to the connection screen; Settings calls that one "Use another gateway" (F-457). The choice is saved with the gateway, so a restart stays disconnected until Reconnect (F-457).
 - **A dropped connection is still "reconnecting"**, never "connecting", as before; Settings tells an attempt in progress from a wait by `retryAt`, which the core now clears when each attempt starts.
 
+## Memory plugin on OpenClaw 2026.10.6
+
+- The built-in memory search backend returned a file reference and excerpt without a file revision. The plugin reports the stored hash and leaves searchability unconfirmed. It never requests a reindex.
+- The file-tool observation hook supplies the path argument and a success receipt for the built-in write and edit tools, without a canonical destination or file hash. The plugin keeps bounded, unversioned metadata for those receipts. Only the plugin's own confirmed writes can supply saver data for a specific revision. The gateway runs tool observation outside the RPC event broadcaster. The hook saves receipts through the gateway's bounded plugin store. The service emits the empty change event for plugin RPC mutations.
+- The gateway provisions local workspaces on first use. The plugin needs an existing workspace for writes and refuses a declared device-bridge workspace. It uses the caller-filtered bot roster and requires whole-roster access for shared folders, which have no session access key.
+- The root writer shares a lock with the plugin's note writes. Other writers do not share it, so the final check and publication can race with outside writes. The pinned filesystem SDK's containment checks also depend on the platform's available filesystem primitives.
+
 ## Not done yet
 
 - The Work pane shows the task's details; its Files and Computer tabs are empty states until those flows exist.
