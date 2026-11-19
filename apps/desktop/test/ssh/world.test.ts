@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SshTransport } from "../../src/main/ssh/transport.ts";
 import {
   childEnv,
+  guardPaths,
   guardWorld,
   isAutomatedRun,
   type SshWorld,
@@ -57,11 +58,9 @@ describe("the guard", () => {
     ["the known-hosts file", { personKnownHosts: join(realSsh, "known_hosts") }],
     ["the app's folder", { appDir: join(realSsh, "clawtrate") }],
     ["the home itself", { home: realSsh }],
-    ["a path climbing into it", { personConfig: join(realSsh, "..", ".ssh", "config") }],
-    ["the folder in another case", { personConfig: join(realSsh.toUpperCase(), "config") }],
+    ["a path climbing into it", { personConfig: `${realSsh}/../.ssh/config` }],
   ])("refuses %s inside the real home's .ssh, before anything is read", (_name, change) => {
     const bad = { ...world, ...change };
-    if (bad.personConfig.toUpperCase() === bad.personConfig && process.platform === "linux") return;
     expect(() => guardWorld(bad)).toThrow(SshWorldRefused);
     // The transport refuses to start: it makes no folder and starts nothing.
     const appDir = join(root, "never-made");
@@ -69,6 +68,24 @@ describe("the guard", () => {
       () => new SshTransport({ ...bad, appDir: bad.appDir === world.appDir ? appDir : bad.appDir }),
     ).toThrow(SshWorldRefused);
     expect(existsSync(appDir)).toBe(false);
+  });
+
+  it("compares names as this platform's file system does", () => {
+    const upper = { ...world, personConfig: join(realSsh.toUpperCase(), "CONFIG") };
+    if (process.platform === "linux") {
+      // Another folder on Linux, where names differ by case: nothing to refuse.
+      expect(() => guardWorld(upper)).not.toThrow();
+    } else {
+      expect(() => guardWorld(upper)).toThrow(SshWorldRefused);
+    }
+  });
+
+  it("folds case on macOS and Windows only, whichever system runs the test", () => {
+    const dir = join(root, "guarded", ".ssh");
+    const other = join(root, "GUARDED", ".SSH", "config");
+    expect(() => guardPaths([other], dir, "darwin")).toThrow(SshWorldRefused);
+    expect(() => guardPaths([other], dir, "win32")).toThrow(SshWorldRefused);
+    expect(() => guardPaths([other], dir, "linux")).not.toThrow();
   });
 
   it("refuses the real agent", () => {
