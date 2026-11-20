@@ -115,8 +115,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install chromium
       - run: pnpm visual
-      # What a failed check saw: the actual and difference pictures, traces and error contexts.
-      - if: failure()
+      # What a failed or flaky check saw: the first attempt's actual and difference pictures,
+      # traces and attachments, even when the retry passed. Passing attempts leave their
+      # folders empty, so this stays small.
+      - if: always()
         uses: actions/upload-artifact@v7
         with:
           name: visual-results
