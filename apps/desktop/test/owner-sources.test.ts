@@ -20,6 +20,7 @@ const SCANNED = ["packages/core/src", "apps/desktop/src/web-host", "apps/desktop
 const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
+  "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
   "packages/core/src/file-paths.ts:FILE_TOOLS": "static, four tool names",
   "packages/core/src/file-paths.ts:CHANGE_TOOLS": "static, three tool names",
   "packages/core/src/file-paths.ts:COMMAND_TOOLS": "static, one tool name",
