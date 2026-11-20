@@ -636,31 +636,37 @@
 
   // The permission card ---------------------------------------------------------
 
-  const raw = (cmd, p, kind) =>
+  // Two fixed request records, keyed by their own invocation IDs. Each card renders from its own
+  // record (its ID, task key, parameters, budget and outcome); a control updates only its own ID.
+  const REQS = {
+    c41d: { id: "c41d…", line: "Location requested", title: "Location requested on this iPhone", p: '{"desiredAccuracy":"balanced"}', accuracy: "balanced", timeoutMs: 30000, foot: "This request can be answered until 5:44:30 PM." },
+    e7a0: { id: "e7a0…", line: "Location requested again", title: "Location requested on this iPhone again", p: '{"desiredAccuracy":"precise"}', accuracy: "precise", timeoutMs: 70000, foot: "This request can be answered until 5:45:10 PM." },
+  };
+  const raw = (cmd, p, kind, req = REQS.c41d) =>
     `<details class="d-raw"><summary>Raw</summary><pre><code>${esc(
       JSON.stringify(
-        { id: "c41d…", nodeId: "6ad2…", command: cmd, paramsJSON: p, timeoutMs: 30000, ...(kind === "none" ? {} : { sessionKey: kind === "other" ? "agent:otto:dashboard:5b1e…" : "agent:otto:dashboard:9c2e…" }) },
+        { id: req.id, nodeId: "6ad2…", command: cmd, paramsJSON: p, timeoutMs: req.timeoutMs, ...(kind === "none" ? {} : { sessionKey: kind === "other" ? "agent:otto:dashboard:5b1e…" : "agent:otto:dashboard:9c2e…" }) },
         null,
         1,
       ),
     )}</code></pre></details>`;
 
-  function askCard({ title, kind, scope, foot, allowTo, denyTo, cmd, p, id = "ask" }) {
+  function askCard({ title, kind, scope, foot, allowTo, denyTo, cmd, p, req = REQS.c41d }) {
     return (
-      `<section class="card d-ask" data-state="pending" data-card="${id}" role="region" aria-label="${esc(title)}. Needs permission.">` +
+      `<section class="card d-ask" data-state="pending" data-card="${req.id.slice(0, 4)}" data-req="${req.id}" data-accuracy="${req.accuracy}" role="region" aria-label="${esc(title)}. Needs permission.">` +
       `<header class="request-head"><h3 class="request-title">${title}</h3><span class="tag" data-tone="warn">Needs permission</span></header>` +
       `<p data-named>${named(kind)}</p>` +
       `<p data-scope>${scope}</p>` +
-      `<details><summary>Show request</summary><dl><div><dt>Command</dt><dd>${cmd}</dd></div><div><dt>Parameters</dt><dd>${esc(p)}</dd></div></dl>${raw(cmd, p, kind)}</details>` +
+      `<details><summary>Show request</summary><dl><div><dt>Command</dt><dd>${cmd}</dd></div><div><dt>Parameters</dt><dd>${esc(p)}</dd></div></dl>${raw(cmd, p, kind, req)}</details>` +
       `<div class="d-actions">${act("Allow", allowTo, { variant: "primary", size: "md", attrs: `data-ask-allow aria-label="Allow, for ${esc(title)}"` })}<span class="spacer"></span>${act("Don't allow", denyTo, { variant: "quiet", size: "md", attrs: `data-ask-deny aria-label="Don't allow, for ${esc(title)}"` })}</div>` +
       (foot ? `<p class="d-ask-foot">${foot}</p>` : "") +
       `</section>`
     );
   }
-  const resolvedCard = ({ tag, tone, line, words, extra = "", cmd = "location.get", p = '{"desiredAccuracy":"balanced"}', kind = taskKind() }) =>
-    `<details class="card d-ask" data-state="resolved" data-tag="${tag}"><summary><span class="tag"${tone ? ` data-tone="${tone}"` : ""}>${tag}</span> ${line}</summary>` +
+  const resolvedCard = ({ tag, tone, line, words, extra = "", cmd = "location.get", req = REQS.c41d, p = req.p, kind = taskKind() }) =>
+    `<details class="card d-ask" data-state="resolved" data-tag="${tag}" data-card="${req.id.slice(0, 4)}" data-req="${req.id}" data-accuracy="${req.accuracy}"><summary><span class="tag"${tone ? ` data-tone="${tone}"` : ""}>${tag}</span> ${line}</summary>` +
     `<p data-words>${words}</p><p data-named>${named(kind)}</p>` +
-    `<dl><div><dt>Command</dt><dd>${cmd}</dd></div><div><dt>Parameters</dt><dd>${esc(p)}</dd></div></dl>${raw(cmd, p, kind)}</details>${extra}`;
+    `<dl><div><dt>Command</dt><dd>${cmd}</dd></div><div><dt>Parameters</dt><dd>${esc(p)}</dd></div></dl>${raw(cmd, p, kind, req)}</details>${extra}`;
 
   const taskKind = () => (["other", "none"].includes(params.get("task")) ? params.get("task") : "listed");
 
@@ -695,34 +701,49 @@
     ];
   };
 
+  // What a card that was answered says, from its own record.
+  const OUTCOME = {
+    allowed: (r) => ({ tag: "Allowed", tone: "accent", line: r.line, words: `Allowed. This iPhone got your location and sent it at 5:44 PM; the gateway accepted the answer. Location is allowed from now on.` }),
+    denied: (r) => ({ tag: "Not allowed", line: r.line, words: "Not allowed. This iPhone didn't run the request and sent the refusal <code>NOT_ALLOWED_ON_DEVICE</code>; the gateway accepted it. Location stays Denied until you change it." }),
+  };
+
   Object.assign(SCREENS, {
+    // second=1: two requests, each its own record; done=<id>:<outcome>,… holds what each card's own control did.
     "card-pending": () => {
-      const second = params.get("second") === "1";
-      const first = askCard({ ...LOC, kind: taskKind(), allowTo: go("card-sent", { said: "Location allowed", ...(second ? { second: "1" } : {}) }), denyTo: go("card-dontallow") });
-      const other = second
-        ? askCard({ ...LOC, id: "ask2", title: "Location requested on this iPhone again", foot: "This request can be answered until 5:45:10 PM.", p: '{"desiredAccuracy":"precise"}', kind: taskKind(), allowTo: go("card-sent", { second: "1", which: "2" }), denyTo: go("card-dontallow", { second: "1", which: "2" }) })
-        : "";
+      const two = params.get("second") === "1";
+      const ids = two ? ["c41d", "e7a0"] : ["c41d"];
+      const done = Object.fromEntries(list("done").map((x) => x.split(":")));
+      const withOutcome = (id, v) => [...ids.filter((k) => done[k] && k !== id).map((k) => `${k}:${done[k]}`), `${id}:${v}`].join(",");
+      const cards = ids
+        .map((id) => {
+          const r = REQS[id];
+          if (OUTCOME[done[id]]) return resolvedCard({ req: r, ...OUTCOME[done[id]](r) });
+          return askCard({
+            ...LOC,
+            title: r.title,
+            foot: r.foot,
+            p: r.p,
+            req: r,
+            kind: taskKind(),
+            allowTo: two ? go("card-pending", { second: "1", done: withOutcome(id, "allowed"), said: "Location allowed" }) : go("card-sent", { said: "Location allowed" }),
+            denyTo: two ? go("card-pending", { second: "1", done: withOutcome(id, "denied") }) : go("card-dontallow"),
+          });
+        })
+        .join("");
       return cardPlace(
-        first +
-          other +
-          proto(
-            link("The deadline passes", go("card-timedout")),
-            link("Allow, then the gateway ignores the answer", go("card-ignored")),
-            link("Allow, and no acknowledgement", go("card-unconfirmed")),
-            link("Turn off Location on this iPhone", go("card-turnedoff")),
-            link("Don't allow, and the gateway ignores it", go("card-dontallow", { ack: "ignored" })),
-          ),
+        cards +
+          (two
+            ? ""
+            : proto(
+                link("The deadline passes", go("card-timedout")),
+                link("Allow, then the gateway ignores the answer", go("card-ignored")),
+                link("Allow, and no acknowledgement", go("card-unconfirmed")),
+                link("Turn off Location on this iPhone", go("card-turnedoff")),
+                link("Don't allow, and the gateway ignores it", go("card-dontallow", { ack: "ignored" })),
+              )),
       );
     },
-    "card-sent": () => {
-      const second = params.get("second") === "1";
-      const resolved = resolvedCard({ tag: "Allowed", tone: "accent", line: "Location requested", words: "Allowed. This iPhone got your location and sent it at 5:44 PM; the gateway accepted the answer. Location is allowed from now on." });
-      // Answering one card answers only its request; the other keeps its own card.
-      const stillWaiting = second
-        ? askCard({ ...LOC, id: "ask2", title: "Location requested on this iPhone again", foot: "This request can be answered until 5:45:10 PM.", p: '{"desiredAccuracy":"precise"}', kind: taskKind(), allowTo: go("card-sent", { second: null }), denyTo: go("card-dontallow", { second: null }) })
-        : "";
-      return cardPlace(resolved + stillWaiting);
-    },
+    "card-sent": () => cardPlace(resolvedCard(OUTCOME.allowed(REQS.c41d))),
     "card-ignored": () =>
       cardPlace(resolvedCard({ tag: "Allowed", tone: "accent", line: "Location requested", words: "Allowed. This iPhone got your location and sent it at 5:44 PM, but the gateway ignored the answer: it was no longer waiting for this request. Location is allowed from now on." })),
     "card-unconfirmed": () =>

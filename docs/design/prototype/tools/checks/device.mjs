@@ -354,11 +354,29 @@ await walk("timed out: no Allow on the card; the app's row is the route, and cha
   [click('[data-allow="location"]'), "phone-on"],
   [async (p) => check("at 61 minutes, Allow on the row: Location Allowed, the request still closed, nothing sent", (await row(p, "location").getAttribute("data-local")) === "allowed" && (await text(p, '[data-record="t1"]')).includes("Didn't run it.") && (await text(p, '[data-record="t1"]')).includes("Sent nothing.")), null],
 ], phone);
-await walk("two requests: two cards; answering one leaves the other waiting", "screen=card-pending&second=1", [
-  [async (p) => check("two requests make two cards, each with its own deadline", (await p.locator('.d-ask[data-state="pending"]').count()) === 2 && (await text(p)).includes("5:45:10 PM")), null],
-  [click('[data-card="ask"] [data-ask-allow]'), "card-sent"],
-  [async (p) => check("the second card still waits after the first is answered", (await p.locator('.d-ask[data-state="pending"]').count()) === 1), null],
-], phone);
+// Each choice on each card first: the selected request is resolved with its own ID and accuracy; the other stays as it was.
+const cardsOf = (p) => p.evaluate(() => [...document.querySelectorAll(".d-ask")].map((c) => `${c.dataset.req}|${c.dataset.accuracy}|${c.dataset.state}|${c.dataset.tag || ""}|${c.querySelector(".d-raw code")?.textContent.includes(c.dataset.req) && c.querySelector(".d-raw code")?.textContent.includes(c.dataset.accuracy)}`).join(" ; "));
+p = await open("screen=card-pending&second=1", phone);
+check("two requests make two cards, each with its own ID, parameters and deadline", (await cardsOf(p)) === "c41d…|balanced|pending||true ; e7a0…|precise|pending||true" && !missing(await text(p, '[data-card="c41d"]'), ["5:44:30 PM"]) && !missing(await text(p, '[data-card="e7a0"]'), ["5:45:10 PM"]));
+await p.close();
+for (const [first, other] of [["c41d", "e7a0"], ["e7a0", "c41d"]]) {
+  for (const [choice, sel, tag] of [["Allow", "[data-ask-allow]", "Allowed"], ["Don't allow", "[data-ask-deny]", "Not allowed"]]) {
+    const q = await open("screen=card-pending&second=1", phone);
+    const acc = { c41d: "balanced", e7a0: "precise" };
+    await q.locator(`[data-card="${first}"] ${sel}`).click();
+    await at(q, "card-pending");
+    const after = await cardsOf(q);
+    const want = (id, state, t) => `${id}…|${acc[id]}|${state}|${t}|true`;
+    const expect1 = [first, other].sort().map((id) => (id === first ? want(id, "resolved", tag) : want(id, "pending", ""))).join(" ; ");
+    check(`${choice} on ${first} first: ${first} resolved with its own ID and accuracy; ${other} still pending with its own`, after === expect1, after);
+    await q.locator(`[data-card="${other}"] [data-ask-allow]`).click();
+    await at(q, "card-pending");
+    const end = await cardsOf(q);
+    const expect2 = [first, other].sort().map((id) => want(id, "resolved", id === first ? tag : "Allowed")).join(" ; ");
+    check(`then the remaining ${other} answered: both resolved, neither reopens, ${first} keeps its outcome`, end === expect2 && (await q.locator('.d-ask[data-state="pending"]').count()) === 0, end);
+    await q.close();
+  }
+}
 p = await open("screen=card-settings", phone);
 check("turned off in Settings: Open Settings, no Allow", (await text(p)).includes("Open Settings") && (await p.locator("[data-ask-allow]").count()) === 0);
 await p.close();
