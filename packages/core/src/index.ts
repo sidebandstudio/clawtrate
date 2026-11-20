@@ -83,3 +83,11 @@ export {
 } from "./client.ts";
 export type * from "./desktop-updates.ts";
 export { noDesktopUpdates } from "./no-desktop-updates.ts";
+
+export {
+  MEMORY_NOTES_WRITABLE,
+  ROOT_MEMORY,
+  type MemoryDocument,
+  type MemoryFile,
+  type MemoryList,
+} from "./memory.ts";
