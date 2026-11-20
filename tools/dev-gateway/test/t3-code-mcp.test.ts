@@ -137,4 +137,20 @@ describe("the scripted T3 Code stand-in", () => {
     expect(all.isError).not.toBe(true);
     t3.close();
   });
+
+  it("keeps the model a thread was launched with: its read and the listing report it", async () => {
+    const t3 = createT3Code(() => 0);
+    const launched = structured(
+      await t3.callTool("t3_thread_launch", { projectId: "proj-trail-guide", title: "x" }),
+    );
+    expect((launched.modelSelection as Rec).instanceId).toBe("claude");
+    const read = structured(await t3.callTool("t3_thread_read", { threadId: launched.threadId }));
+    expect((read.thread as Rec).providerInstanceId).toBe("claude");
+    const listed = structured(await t3.callTool("t3_thread_list", { allProjects: true }));
+    const byId = (id: unknown) =>
+      (listed.threads as Rec[]).find((each) => each.threadId === id)!.providerInstanceId;
+    expect(byId(launched.threadId)).toBe("claude");
+    expect(byId(SEEDED_THREAD)).toBe("codex");
+    t3.close();
+  });
 });

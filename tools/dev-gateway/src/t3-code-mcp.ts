@@ -89,6 +89,9 @@ type Thread = {
   items: Item[];
   queued: string[];
   clientRequestId: string | null;
+  /** The model it was launched with, as its launch reported it. */
+  instanceId: string;
+  model: string;
 };
 
 const PROJECTS = [
@@ -375,6 +378,8 @@ export function createT3Code(clock: () => number = Date.now) {
       items: [],
       queued: [],
       clientRequestId: null,
+      instanceId: "codex",
+      model: "stand-in-model",
     };
     threads.set(id, thread);
     return thread;
@@ -435,8 +440,8 @@ export function createT3Code(clock: () => number = Date.now) {
       status: threadStatus(thread),
       latestRunId: run?.runId ?? null,
       activeRunId: live?.runId ?? null,
-      providerInstanceId: "codex",
-      model: "stand-in-model",
+      providerInstanceId: thread.instanceId,
+      model: thread.model,
       runtimeMode: "auto-accept-edits",
       interactionMode: "default",
       branch: "main",
@@ -489,16 +494,17 @@ export function createT3Code(clock: () => number = Date.now) {
         const thread =
           replay ?? newThread(projectId ?? "scratch", String(args.title ?? "Untitled"));
         thread.clientRequestId = request;
+        if (!replay) {
+          thread.instanceId = String(selection.instanceId ?? selection.provider ?? "codex");
+          thread.model = String(selection.model ?? "stand-in-model");
+        }
         const message = typeof args.message === "string" && args.message ? args.message : null;
         const run = replay ? latest(thread) : message ? startRun(thread, message) : null;
         return ok({
           threadId: thread.threadId,
           link: link(thread),
           projectId: thread.projectId,
-          modelSelection: {
-            instanceId: String(selection.instanceId ?? selection.provider ?? "codex"),
-            model: String(selection.model ?? "stand-in-model"),
-          },
+          modelSelection: { instanceId: thread.instanceId, model: thread.model },
           runId: run?.runId ?? null,
           status: run?.status ?? null,
         });
@@ -582,8 +588,8 @@ export function createT3Code(clock: () => number = Date.now) {
             runId: run.runId,
             ordinal: run.ordinal,
             status: run.status,
-            providerInstanceId: "codex",
-            model: "stand-in-model",
+            providerInstanceId: thread.instanceId,
+            model: thread.model,
             requestedAt: run.requestedAt,
             startedAt: run.startedAt,
             completedAt: run.completedAt,
@@ -646,8 +652,8 @@ export function createT3Code(clock: () => number = Date.now) {
               link: record.link,
               status: record.status,
               latestRunId: record.latestRunId,
-              providerInstanceId: "codex",
-              model: "stand-in-model",
+              providerInstanceId: each.instanceId,
+              model: each.model,
               runtimeMode: "auto-accept-edits",
               interactionMode: "default",
               settled: record.settled,
