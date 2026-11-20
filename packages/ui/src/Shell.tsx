@@ -4,7 +4,7 @@ import { OpenTaskContext } from "./cards/index.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
-import { pressMark, useFocusOnCommit } from "./focus.ts";
+import { movedOn, pressMark, useFocusOnCommit } from "./focus.ts";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
 import {
   readPreference,
@@ -604,8 +604,13 @@ export function Shell({
           connection={state.connection}
           info={info}
           onClose={() => setNewBot(false)}
-          onCreated={(id) => {
+          onCreated={(id, from) => {
+            // A result for a dialog closed since (Escape, or reopened afresh) moves nothing.
+            if (!from.dialog?.isConnected) return;
             setNewBot(false);
+            // The person moved on while it was made: the dialog closes, and the task and focus
+            // stay theirs. The bot is in the list as the gateway reports it.
+            if (movedOn(from.mark)) return;
             selection.selectBot(id);
             // Its composer takes focus as the bot is committed, before the next key; in one
             // pane the move into the conversation goes to the composer as well.

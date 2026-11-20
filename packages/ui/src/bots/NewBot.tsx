@@ -6,7 +6,7 @@
 import type { AccountsState, Bot, ConnectionState, HostInfo } from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
-import { useFocusOnCommit } from "../focus.ts";
+import { pressMark, useFocusOnCommit } from "../focus.ts";
 import { Character, CHARACTER_COLORS, type BodyName } from "../Avatar.tsx";
 import { BackIcon, CloseIcon, LockIcon, PlusIcon } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
@@ -99,6 +99,12 @@ function onRadioKeys<T>(values: readonly T[], current: T, choose: (value: T) => 
   };
 }
 
+/**
+ * Where a create began: the person's presses then, and the dialog it began in. A result that
+ * comes back to a dialog since closed, or after the person moved on, opens nothing.
+ */
+export type CreatedFrom = { mark: number; dialog: Element | null };
+
 export function NewBot({
   accounts,
   bots,
@@ -112,7 +118,7 @@ export function NewBot({
   connection: ConnectionState;
   info: HostInfo;
   onClose: () => void;
-  onCreated: (botId: string) => void;
+  onCreated: (botId: string, from: CreatedFrom) => void;
 }) {
   const bridge = useBridge();
   const [draft, setDraftState] = useState<Draft>(() => recall<Kept>(KEPT)?.draft ?? freshDraft());
@@ -193,8 +199,13 @@ export function NewBot({
     (accounts.status === "ready" && shared.some((a) => a.id === draft.account));
   const creation = accounts.creation;
   const busy = creation?.status === "creating" || creation?.status === "checking";
+  const begun = (): CreatedFrom => ({
+    mark: pressMark(),
+    dialog: document.querySelector('[data-testid="new-bot"]'),
+  });
   const create = async () => {
     if (!draft.account || !listedChoice || !provider || !draft.model || busy) return;
+    const from = begun();
     announce("Creating the bot");
     try {
       const { botId, missing } = await bridge.invoke({
@@ -206,7 +217,8 @@ export function NewBot({
         model: draft.model,
         effort: draft.effort,
       });
-      remember(KEPT, null);
+      // The draft is let go only from the dialog it was made in: a newer one keeps its own.
+      if (from.dialog?.isConnected) remember(KEPT, null);
       // The bot exists; what did not land is said here, and finished by its id.
       if (missing.length > 0) {
         announce(`Created ${name}, not finished`);
@@ -214,7 +226,7 @@ export function NewBot({
       }
       announce(`Created ${name}`);
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
-      onCreated(botId);
+      onCreated(botId, from);
     } catch {
       announce("Could not create the bot");
     }
@@ -222,12 +234,13 @@ export function NewBot({
   const partial = creation?.status === "partial" ? creation : null;
   const finish = async () => {
     if (!partial?.botId) return;
+    const from = begun();
     try {
       const { botId, missing } = await bridge.invoke({ type: "finishBot", botId: partial.botId });
       if (missing.length > 0) return;
       announce(`Created ${partial.name}`);
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
-      onCreated(botId);
+      onCreated(botId, from);
     } catch {
       announce(`Could not finish ${partial.name}`);
     }
@@ -526,7 +539,7 @@ export function NewBot({
                   data-size="sm"
                   onClick={() => {
                     void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
-                    onCreated(partial.botId!);
+                    onCreated(partial.botId!, begun());
                   }}
                 >
                   Open {partial.name} as it is
