@@ -3,7 +3,7 @@
 // reports typed states for the update screens and installs nothing.
 // docs/decisions.md, "Updates and release signing", has its rules.
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   close as closeFile,
   createWriteStream,
@@ -110,7 +110,7 @@ export interface UpdateEngineOptions {
   readonly buildReleaseDate?: string | null;
   /** The running app's version, `app.getVersion()`. */
   readonly currentVersion: string;
-  /** A folder of the app's own for downloads; created 0700 if missing. */
+  /** The caller owns this offer's folder and removes abandoned downloads on startup. */
   readonly downloadDir: string;
   readonly platform: string;
   readonly arch: string;
@@ -257,7 +257,7 @@ export class UpdateEngine {
     const { releaseDate, file } = found;
     const dir = this.options.downloadDir;
     const name = `Clawtrate-${version}-${this.key}.${FILE_EXTENSION[this.key]}`;
-    const partial = join(dir, `${name}.partial`);
+    const partial = join(dir, `${name}.${randomUUID()}.partial`);
     const target = join(dir, name);
     const progress = (received: number) =>
       this.report({ kind: "downloading", version, releaseDate, received, total: file.size });
@@ -270,7 +270,6 @@ export class UpdateEngine {
     try {
       try {
         await mkdir(dir, { recursive: true, mode: 0o700 });
-        await rm(partial, { force: true });
       } catch {
         throw new DownloadFailed("write-failed");
       }

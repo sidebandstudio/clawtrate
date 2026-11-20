@@ -3,7 +3,8 @@
 // and the write callback can report ENOSPC, so no
 // disk is filled.
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import type { ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bytes, engineFor, feedFor, feedServer, json, payload, tempDir } from "./harness.ts";
@@ -70,6 +71,48 @@ afterEach(async () => {
 const downloads = () => (existsSync(dir.path) ? readdirSync(dir.path) : []);
 
 describe("the download file", () => {
+  it("keeps overlapping downloads of the same offer in separate partial files", async () => {
+    const file = payload(4096);
+    const firstResponse = Promise.withResolvers<ServerResponse>();
+    let requests = 0;
+    server.route(
+      "/feed.json",
+      json(feedFor(server.origin, "0.2.0", { size: file.body.length, sha512: file.sha512 })),
+    );
+    server.route("/files/app.zip", (_request, response) => {
+      response.writeHead(200, { "content-length": file.body.length });
+      if (++requests === 1) {
+        response.write(file.body.subarray(0, 1024));
+        firstResponse.resolve(response);
+      } else {
+        response.end(file.body);
+      }
+    });
+    const first = engineFor(server, dir.path).engine;
+    const second = engineFor(server, dir.path).engine;
+    await Promise.all([first.check(), second.check()]);
+    const pending = first.download();
+    const response = await firstResponse.promise;
+    try {
+      await vi.waitFor(
+        () => {
+          expect(statSync(sink.opened[0]!).size).toBe(1024);
+        },
+        { timeout: 5000 },
+      );
+      const ready = await second.download();
+      expect(ready.kind).toBe("ready");
+      expect(new Set(sink.opened).size).toBe(2);
+    } finally {
+      response.end(file.body.subarray(1024));
+      await pending;
+    }
+    const ready = await pending;
+    expect(ready.kind).toBe("ready");
+    if (ready.kind === "ready") expect(readFileSync(ready.path)).toEqual(file.body);
+    expect(downloads()).toHaveLength(1);
+  });
+
   it("is never opened when the declared length is not the feed's", async () => {
     const file = payload();
     server.route(
