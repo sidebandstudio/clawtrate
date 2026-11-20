@@ -686,6 +686,32 @@ describe("approvals through the client (F-163, F-165, F-166, F-168)", () => {
     expect(transcript().approvals[0]).toMatchObject({ reason: "timeout", inferred: false });
     client.stop();
   });
+
+  const isFor = (call: unknown, id: string) => (call as { id?: string }).id === id;
+
+  it("reads each pending approval's outcome at its own deadline, even when an earlier one stays pending", async () => {
+    const gateway = approvalGateway();
+    const now = Date.now();
+    gateway.handlers["exec.approval.list"] = () => [
+      { ...execItem("ap-1", { toolCallId: "call_1" }), expiresAtMs: now + 150 },
+      { ...execItem("ap-2", { toolCallId: "call_2" }), expiresAtMs: now + 450 },
+    ];
+    // The gateway still holds both: no read changes anything in the task.
+    gateway.handlers["approval.get"] = (params) => ({
+      approval: {
+        id: (params as { id: string }).id,
+        status: "pending",
+        presentation: { kind: "exec" },
+      },
+    });
+    const { client, transcript } = await openTask(INTERACTIVE_SCOPES, gateway);
+    await until(() => transcript().approvals.length === 2);
+    // The first at its own deadline; the later one at its own, with no other change to the task.
+    await until(() => gateway.calls("approval.get").some((call) => isFor(call, "ap-2")), 3_000);
+    expect(gateway.calls("approval.get")[0]).toEqual({ id: "ap-1" });
+    expect(transcript().approvals.map((each) => each.status)).toEqual(["pending", "pending"]);
+    client.stop();
+  });
 });
 
 describe("decisions, node plans and origins (F-166, F-167, F-098)", () => {

@@ -3070,6 +3070,8 @@ export class ClawtrateClient {
             )
               void this.lookUpOutcome(approval.id);
           }
+          // The next deadline, whatever these reads say: a request still held changes nothing.
+          this.scheduleApprovalExpiry(key);
         },
         // setTimeout fires at once past 2^31-1 ms; re-check at that horizon instead.
         Math.min(MAX_TIMER_MS, Math.max(0, next - now)),
