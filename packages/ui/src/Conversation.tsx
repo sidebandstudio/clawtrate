@@ -29,6 +29,7 @@ import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTu
 import { ActionScope, ItemFeed, RunFeed, RunLine, showAction } from "./actions/index.ts";
 import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { FindBar } from "./Find.tsx";
+import { useFocusOnCommit } from "./focus.ts";
 import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
 import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
@@ -801,15 +802,17 @@ export function Conversation({
     return () => window.removeEventListener("keydown", onKey);
   }, [inert, canFind, finding]);
 
+  const focusOnCommit = useFocusOnCommit();
   const closeFind = useCallback(() => {
     setFinding(false);
     const opener = findOpener.current;
     findOpener.current = null;
-    requestAnimationFrame(() => {
-      if (opener?.isConnected && opener !== document.body) opener.focus();
-      else sectionRef.current?.querySelector<HTMLElement>(".transcript")?.focus();
-    });
-  }, []);
+    focusOnCommit(() =>
+      opener?.isConnected && opener !== document.body
+        ? opener
+        : sectionRef.current?.querySelector<HTMLElement>(".transcript"),
+    );
+  }, [focusOnCommit]);
 
   const pillName = bot
     ? task

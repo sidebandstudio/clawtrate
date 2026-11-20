@@ -4,6 +4,7 @@
 
 import { createContext, useContext } from "react";
 import { readView, viewKeys, writeView } from "../actions/view-state.ts";
+import { stillAt } from "../focus.ts";
 
 /** What "Open file" asks the pane to show. */
 export type FileRequest = {
@@ -71,10 +72,11 @@ export function stepElement(callId: string): HTMLElement | null {
  * Bring a call into view the way section 10 says: open its fold and the call
  * itself through the conversation's view state, on its Readable view so
  * "Back to <file>" is there, then scroll its line just under the protected
- * band, fill it for 1.6 s and move focus to its summary. False when the
+ * band, fill it for 1.6 s and move focus to its summary: unless the person has
+ * moved on from `from` (where focus was when they asked) by then. False when the
  * conversation does not show the call.
  */
-export function revealStep(taskKey: string, callId: string): boolean {
+export function revealStep(taskKey: string, callId: string, from: Element | null): boolean {
   const fold = readView(taskKey, viewKeys.member(callId));
   const shown =
     stepElement(callId) !== null ||
@@ -99,7 +101,10 @@ export function revealStep(taskKey: string, callId: string): boolean {
       const clear = () => delete step.dataset.flash;
       step.addEventListener("animationend", clear, { once: true });
       step.addEventListener("focusout", clear, { once: true });
-      (step.querySelector<HTMLElement>(":scope > summary") ?? step).focus({ preventScroll: true });
+      if (stillAt(from))
+        (step.querySelector<HTMLElement>(":scope > summary") ?? step).focus({
+          preventScroll: true,
+        });
     }),
   );
   return true;

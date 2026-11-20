@@ -46,6 +46,7 @@ import {
 import type { RawContent } from "../cards/raw.ts";
 import type { StepRawState } from "../cards/useCards.ts";
 import { useStepHandover } from "../cards/context.tsx";
+import { stillAt } from "../focus.ts";
 import { ChevronIcon, FileIcon } from "../icons.tsx";
 import { useNow } from "../StatusLine.tsx";
 import { KindIcon } from "./icons.tsx";
@@ -431,8 +432,10 @@ function ActionDetail({ call }: { call: ActionCall }) {
     }
   }, [view, raw]);
   const choose = (next: string, focus: boolean) => {
+    // Focus moves now, as the key is handled: a key pressed straight after (Tab) acts from the
+    // tab it reached, and nothing a frame later takes focus back.
+    if (focus) document.getElementById(`${id}-tab-${next}`)?.focus();
     setView(next);
-    if (focus) requestAnimationFrame(() => document.getElementById(`${id}-tab-${next}`)?.focus());
   };
   const onKey = (event: KeyboardEvent) => {
     const order = ["readable", "raw"];
@@ -673,9 +676,12 @@ export function ActionGroup({ members, revision }: { members: FeedMember[]; revi
       details.open = true;
     }
     if (!state.focused) return;
-    // Focus goes to the same control as on the card, once the view it is in is drawn.
+    // Focus goes to the same control as on the card, once the view it is in is drawn: unless
+    // the person has moved on by then.
     const control = state.control ?? null;
+    const from = document.activeElement;
     const focus = () => {
+      if (!stillAt(from)) return;
       const named = control
         ? [...details.querySelectorAll<HTMLElement>("button, [role=tab], a, summary")].find(
             (each) =>

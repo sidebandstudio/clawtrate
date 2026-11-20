@@ -9,6 +9,7 @@ import {
   type ApprovalDecision,
 } from "@clawtrate/core";
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useFocusOnCommit } from "../focus.ts";
 import { useCardEnv, useMinuteClock } from "./context.tsx";
 import {
   allowLabel,
@@ -310,6 +311,7 @@ function PendingApproval({
   const [checking, setChecking] = useState(false);
   const alwaysButton = useRef<HTMLButtonElement>(null);
   const saveButton = useRef<HTMLButtonElement>(null);
+  const focusOnCommit = useFocusOnCommit();
   const phase = decisionPhase(card);
   const sendable = sendableDecisions(card, whole !== null && fullOpen);
   const name = env.bot?.name ?? "The bot";
@@ -361,11 +363,11 @@ function PendingApproval({
 
   const openForm = () => {
     setFormOpen(true);
-    requestAnimationFrame(() => saveButton.current?.focus());
+    focusOnCommit(() => saveButton.current);
   };
   const closeForm = () => {
     setFormOpen(false);
-    requestAnimationFrame(() => alwaysButton.current?.focus());
+    focusOnCommit(() => alwaysButton.current);
   };
 
   // ⌘↵ inside the card is Allow once, or Allow and save with the form open. Deny has no shortcut.

@@ -4,6 +4,7 @@ import { OpenTaskContext } from "./cards/index.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
+import { useFocusOnCommit } from "./focus.ts";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
 import {
   readPreference,
@@ -95,6 +96,7 @@ export function Shell({
   const routinesOpen = routines !== null;
   const conversationVisible = routines === null;
   const selection = useSelection(state, interactive, conversationVisible);
+  const focusOnCommit = useFocusOnCommit();
   const { bot, task } = selection;
   const [panelOpen, setPanelOpen] = useState(() => readPreference("panel") === "open");
   // In the one-pane layout the rail and the conversation take turns.
@@ -389,8 +391,10 @@ export function Shell({
   const showInChat = useCallback(
     (stepId: string, from: { path: string }) => {
       const callId = stepId.startsWith("tool:") ? stepId.slice(5) : stepId;
+      // The step takes focus only if the person is still where they asked from.
+      const focused = document.activeElement;
       const reveal = () => {
-        const found = taskKey !== null && revealStep(taskKey, callId);
+        const found = taskKey !== null && revealStep(taskKey, callId, focused);
         setChatNote("");
         requestAnimationFrame(() =>
           setChatNote(
@@ -603,10 +607,10 @@ export function Shell({
           onCreated={(id) => {
             setNewBot(false);
             selection.selectBot(id);
-            openDetail();
-            requestAnimationFrame(() =>
-              document.querySelector<HTMLElement>(".composer-input")?.focus(),
-            );
+            // Its composer takes focus as the bot is committed, before the next key; in one
+            // pane the move into the conversation goes to the composer as well.
+            openDetail({ composer: true });
+            focusOnCommit(() => document.querySelector<HTMLElement>(".composer-input"));
           }}
         />
       )}
