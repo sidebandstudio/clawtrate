@@ -500,7 +500,12 @@ it.each(["missing", "changed", "replaced", "check", "choice", "quit"])(
     }
     if (event === "check") await service.check("stable");
     if (event === "choice") await service.chooseTrack("nightly");
-    if (event === "quit") service.shutdown();
+    if (event === "quit") {
+      service.shutdown();
+      const revision = service.get().revision;
+      service.shutdown();
+      expect(service.get().revision).toBe(revision);
+    }
     expect(await service.recheckVerified(id)).toBe(false);
     if (["missing", "changed", "replaced"].includes(event))
       expect(service.get().state).toMatchObject({ reason: "artifact-changed" });

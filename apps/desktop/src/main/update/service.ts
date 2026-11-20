@@ -151,6 +151,7 @@ export class DesktopUpdateService {
   }
 
   shutdown(): void {
+    if (this.closed) return;
     this.closed = true;
     this.engine?.cancel();
     this.engine = null;
