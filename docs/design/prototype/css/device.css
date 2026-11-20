@@ -1,0 +1,774 @@
+/* The screens of docs/design/device-node.md: This Mac and This iPhone, the
+   owner's choice, the permission card, Machines' block for other devices, the
+   share sheet and the two Shortcuts actions. Built from existing tokens; no
+   colour token is added. Reuses the Settings frame of bots.css, the step list
+   and the host's stand-in of setup.css, and the approval card's frame of
+   conversation.css. */
+
+.d-root {
+  position: relative;
+  display: flex;
+  height: 100%;
+  background: var(--bg-pane);
+  color: var(--text);
+}
+
+.d-root > .b-settings {
+  flex: 1;
+}
+
+.d-root .b-section-body {
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  padding-bottom: var(--space-8);
+}
+
+.d-root .b-section-body > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.d-lead {
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+  max-width: 62ch;
+}
+
+.d-root .b-group {
+  margin: var(--space-2) 0 calc(-1 * var(--space-2));
+}
+
+/* The switch row at the top of the page. */
+.d-switch-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+}
+
+.d-switch-row h4 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.d-switch-row p {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.d-switch-row .b-switch[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* new: the node's state, one line with a dot. */
+.d-state {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+
+.d-state::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translateY(-1px);
+  background: var(--text-faint);
+}
+
+.d-state[data-tone="ok"]::before {
+  background: var(--accent-line);
+}
+
+.d-state[data-tone="warn"]::before {
+  background: var(--warn);
+}
+
+.d-state[data-tone="danger"]::before {
+  background: var(--danger);
+}
+
+.d-state small {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+/* new: one app this device can offer, with its two facts. */
+.d-apps {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.d-app {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+  min-height: 64px;
+  padding: 10px 14px;
+  background: var(--bg-bubble);
+}
+
+.d-apps > li:first-child .d-app {
+  border-radius: var(--radius-md) var(--radius-md) 4px 4px;
+}
+
+.d-apps > li:last-child .d-app {
+  border-radius: 4px 4px var(--radius-md) var(--radius-md);
+}
+
+.d-apps > li:only-child .d-app {
+  border-radius: var(--radius-md);
+}
+
+[data-input="touch"] .d-app {
+  min-height: 72px;
+}
+
+.d-glyph {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--bg-selected);
+  color: var(--text-muted);
+}
+
+.d-app-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.d-app-name {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.d-fact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.d-fact b {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.d-fact .c-mark,
+.d-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.d-mark .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.d-fact[data-tone="warn"] b {
+  color: var(--warn);
+}
+
+.d-fact[data-tone="danger"] b {
+  color: var(--danger);
+}
+
+.d-app-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: end;
+}
+
+.d-value {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+
+.d-app[aria-disabled="true"] {
+  opacity: 0.6;
+}
+
+/* Small blocks of plain words. */
+.d-never {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.d-never b {
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+
+.d-root details.d-told {
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  padding: 4px 14px;
+}
+
+.d-told summary {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.d-told table {
+  width: 100%;
+  margin: 4px 0 10px;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.d-told th,
+.d-told td {
+  padding: 6px 8px 6px 0;
+  border-top: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.d-told code,
+.d-root code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}
+
+/* The prototype's stand-in for events from outside the app. Not product. */
+.d-proto {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.d-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.d-actions .spacer {
+  flex: 1;
+}
+
+/* A dialog drawn over a page: the confirmation of bots.md. */
+.d-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--bg-scrim);
+}
+
+.d-dialog {
+  width: min(460px, 100%);
+  max-height: calc(100% - 32px);
+  overflow: auto;
+  padding: var(--space-6);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+}
+
+.d-dialog h2 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-strong);
+}
+
+.d-dialog h2:focus {
+  outline: none;
+}
+
+.d-dialog p {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.d-dialog p b {
+  color: var(--text);
+}
+
+.d-dialog .d-actions {
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+}
+
+.d-dialog label.d-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: var(--text-md);
+  line-height: 1.45;
+}
+
+[data-width="phone"] .d-dialog .d-actions {
+  flex-direction: column-reverse;
+  align-items: stretch;
+}
+
+/* The conversation behind a card: a plain column, as visual-language.md §8. */
+.d-chat {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
+.d-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 0 var(--space-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.d-chat-head .avatar {
+  --size: 28px;
+}
+
+.d-chat-head b {
+  font-weight: var(--weight-medium);
+}
+
+.d-chat-head span {
+  color: var(--text-faint);
+  font-size: var(--text-md);
+}
+
+.d-chat-body {
+  flex: 1;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 10px;
+  padding: var(--space-6);
+}
+
+[data-width="phone"] .d-chat-head,
+[data-width="phone"] .d-chat-body {
+  padding-left: var(--space-4);
+  padding-right: var(--space-4);
+}
+
+.d-msg-you {
+  justify-self: end;
+  max-width: 70%;
+  padding: 9px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  font-size: var(--text-base);
+}
+
+.d-msg-bot {
+  max-width: 640px;
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 1.55;
+}
+
+.d-event {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.d-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px var(--space-6);
+  background: var(--warn-soft);
+  font-size: var(--text-md);
+}
+
+.d-banner .spacer {
+  flex: 1;
+}
+
+/* new: the permission card, in the approval card's frame. */
+.card.d-ask {
+  max-width: 560px;
+  padding: 16px 18px;
+}
+
+.card.d-ask[data-state="pending"] {
+  box-shadow: inset 0 0 0 1.5px var(--warn-line);
+}
+
+.d-ask .request-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.d-ask .request-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-strong);
+}
+
+.d-ask .tag {
+  flex: none;
+}
+
+.d-ask p {
+  margin: 8px 0 0;
+  font-size: var(--text-base);
+  line-height: 1.5;
+}
+
+.d-ask .d-ask-foot {
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.d-ask .d-actions {
+  margin-top: 14px;
+}
+
+.d-ask details {
+  margin-top: 10px;
+  font-size: var(--text-sm);
+}
+
+.d-ask details summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.d-ask dl {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+.d-ask dl div {
+  display: flex;
+  gap: 10px;
+}
+
+.d-ask dt {
+  min-width: 88px;
+  color: var(--text-faint);
+}
+
+.d-ask dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+[data-width="phone"] .d-ask .d-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+[data-width="phone"] .d-ask .d-actions .button {
+  min-height: 48px;
+}
+
+[data-width="phone"] .d-ask .d-actions .spacer {
+  display: none;
+}
+
+/* The iPhone's other app, behind the share sheet and Siri: a stand-in. */
+.d-other {
+  position: relative;
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 56px 20px 20px;
+  background: var(--bg-rail);
+}
+
+.d-other-caption {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.d-other-tile {
+  height: 120px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+}
+
+/* new: the share sheet. */
+.d-share {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 20;
+  display: grid;
+  gap: 12px;
+  max-height: calc(100% - 64px);
+  overflow: auto;
+  padding: 14px 16px 18px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+}
+
+.d-share-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
+.d-share-head h2 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-strong);
+  text-align: center;
+}
+
+.d-share-head h2:focus {
+  outline: none;
+}
+
+.d-share-head > :last-child {
+  justify-self: end;
+}
+
+.d-to {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  width: 100%;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-base);
+  text-align: left;
+  text-decoration: none;
+}
+
+.d-to .avatar {
+  --size: 28px;
+}
+
+.d-to .d-to-label {
+  color: var(--text-faint);
+}
+
+.d-to .icon:last-child {
+  margin-left: auto;
+  color: var(--text-faint);
+}
+
+.d-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.d-chips li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+  font-size: var(--text-sm);
+}
+
+.d-chips li span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.d-chips li small {
+  color: var(--text-faint);
+}
+
+.d-share textarea,
+.d-composer textarea {
+  width: 100%;
+  min-height: 72px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-lg);
+  resize: none;
+}
+
+.d-share .d-actions .button {
+  flex: 1;
+  min-height: 48px;
+}
+
+/* The composer the share sheet's "Open in Clawtrate" fills. */
+.d-composer {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  margin-top: auto;
+  padding: 10px;
+  border-radius: 24px;
+  background: var(--bg-bubble);
+}
+
+.d-composer .d-actions {
+  justify-content: flex-end;
+}
+
+/* new: Siri's or Shortcuts' panel, a stand-in. */
+.d-sys {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  top: 72px;
+  z-index: 20;
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--text-base);
+}
+
+.d-sys-caption {
+  margin: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed var(--border-strong);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.d-sys h2 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-strong);
+}
+
+.d-sys h2:focus {
+  outline: none;
+}
+
+.d-sys p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.d-sys blockquote {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  overflow-wrap: anywhere;
+}
+
+.d-sys ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.d-sys .d-actions .button {
+  flex: 1;
+  min-height: 44px;
+}
+
+/* Settings, Machines: the request rows. */
+.d-request {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+}
+
+.d-request h4 {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.d-request p {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.d-request p[data-tone="warn"] {
+  color: var(--warn);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .d-root * {
+    transition: none !important;
+  }
+}
+
+[data-motion="reduce"] .d-root * {
+  transition: none !important;
+}
