@@ -67,8 +67,6 @@ export type ActionEnv = {
   lost: boolean;
   /** Approvals are not sent on this connection. */
   readOnly: boolean;
-  /** The reasoning effort the task asks for, when its row records one. */
-  effort: string | null;
   /** The feed has been drawn once: a card or row drawn now arrived live, and rises in (7.4). */
   arriving: () => boolean;
 };
@@ -861,54 +859,12 @@ export function ThoughtLine({
 // The run line -------------------------------------------------------------------------
 
 /** "Worked for 1m 12s · 14 actions", after everything the run put in the transcript (7.7). */
-export function RunLineView({
-  runId,
-  line,
-  model,
-  provider = null,
-  modelFrom = null,
-  effort = null,
-}: {
-  runId: string;
-  line: RunLine;
-  model: string | null;
-  /** The provider the gateway reported with the model. */
-  provider?: string | null;
-  /** Which report the model comes from: the run's `model` event, or its history row. */
-  modelFrom?: "lifecycle" | "history" | null;
-  /** The effort the task asked for when this app started the turn, as its row named it (25.5). */
-  effort?: { effort: string; from: "thinkingLevel" | "thinkingDefault" } | null;
-}) {
+export function RunLineView({ runId, line }: { runId: string; line: RunLine }) {
   const env = useActionEnv();
   const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.run(runId), false);
-  const named = model ? (provider ? `${provider}/${model}` : model) : null;
-  const record = `${named ?? actionWords.RUN_LINE.modelNotReported} · ${actionWords.RUN_LINE.effort(effort?.effort ?? null)}`;
-  const disclosure = useRawDisclosure();
-  // What the record is made of, each part labelled; a part with nothing behind it is absent.
-  const events: Array<[string, unknown]> = [];
-  if (model)
-    events.push(
-      modelFrom === "history"
-        ? ["Model, from the history row", provider ? { provider, model } : { model }]
-        : [
-            "Model, as the gateway sends it",
-            provider ? { phase: "model", provider, model } : { phase: "model", model },
-          ],
-    );
-  if (effort)
-    events.push([
-      "The task's effort when this turn was sent, from its row",
-      { [effort.from]: effort.effort },
-    ]);
-  const raw: RawContent = {
-    state: "loaded",
-    events,
-    ids: [
-      { label: "Run", value: runId },
-      { label: "Session", value: env.sessionKey },
-    ],
-    ...(events.length ? {} : { notes: ["The gateway reported no model for this turn."] }),
-  };
+  // No model or effort is stated here: the gateway's record of a run carries its model on some
+  // turns and no effort on any, and a record shown for some turns only would say more than it
+  // knows about the others (conversation.md 25.5).
   return (
     <details
       className="run-line"
@@ -917,7 +873,7 @@ export function RunLineView({
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary className="event-line" title={record} aria-label={line.text}>
+      <summary className="event-line" aria-label={line.text}>
         <span className="run-label">{line.label}</span>
         <span aria-hidden="true">·</span>
         <span className="run-count">
@@ -944,15 +900,10 @@ export function RunLineView({
         <ChevronIcon className="chevron" />
       </summary>
       <p className="run-record">
-        <span>{record}</span>
-        <span aria-hidden="true">·</span>
+        <span>Run</span>
         <span className="mono">{runId}</span>
         <CopyButton what="run id" text={runId} />
       </p>
-      {/* Raw takes the card's own styles, on the stage rather than on a card's surface. */}
-      <div className="card run-raw">
-        <CardFoot disclosure={disclosure} raw={raw} />
-      </div>
     </details>
   );
 }

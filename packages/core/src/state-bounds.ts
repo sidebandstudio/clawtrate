@@ -31,12 +31,10 @@ import {
   type StoredOrder,
 } from "./accounts.ts";
 import {
-  MAX_REQUESTED_EFFORTS,
   MAX_TASK_MODEL_ERROR_CHARS,
   MAX_TASK_MODEL_EVENTS,
   MAX_TASK_MODEL_ID_CHARS,
   MAX_TASK_MODELS,
-  type RequestedEffort,
   type TaskModelChoice,
   type TaskModelEvent,
   type TaskModelView,
@@ -342,8 +340,6 @@ export const RUN: Bound = flagged<Run>()({
   anchorItemId: ID,
   phase: NAME,
   model: NAME,
-  provider: NAME,
-  modelFrom: ENUM,
   text: text(MAX_RUN_TEXT_CHARS),
   textSource: ENUM,
   textItemId: ID,
@@ -1038,10 +1034,6 @@ export const TASK_MODEL: Bound = object<TaskModelView>()({
     at: NUMBER,
   }),
   events: list(MAX_TASK_MODEL_EVENTS, taskModelEvent),
-  requested: list(
-    MAX_REQUESTED_EFFORTS,
-    object<RequestedEffort>()({ runId: taskModelId, effort: taskModelId, from: ENUM }),
-  ),
 });
 
 /** Every part of the state but the transcripts, and the transcripts as one map. */

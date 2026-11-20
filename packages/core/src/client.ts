@@ -2277,9 +2277,6 @@ export class ClawtrateClient {
     message = this.outgoing(key, messageId)!;
 
     let result: RawRecord | null;
-    // The effort the task asks for as this message starts a turn, for the turn's record (25.5).
-    // A steer joins a turn as it is.
-    const asked = message.mode === "steer" ? null : this.taskModels.effortAsked(key);
     try {
       const params = this.sendParams(
         key,
@@ -2335,7 +2332,6 @@ export class ClawtrateClient {
     const runId = typeof result?.runId === "string" ? result.runId : null;
     const messageSeq = typeof result?.messageSeq === "number" ? result.messageSeq : null;
     const steeredInto = message.mode === "steer" ? message.runId : null;
-    if (asked && runId) this.taskModels.recordRequested(key, runId, asked);
     // A stop command (`/stop`) is answered `{ok, aborted, runIds}` before any
     // run or turn is recorded: the gateway handled it, and no run or history
     // row will follow.

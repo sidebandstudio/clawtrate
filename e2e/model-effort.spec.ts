@@ -251,18 +251,11 @@ test("F-042 F-044 F-045: a task's model changed during a turn is held, saved whe
   });
   await expect.poll(async () => (await row()).status, { timeout: 60_000 }).not.toBe("running");
 
-  // The turn's record names the model the gateway reported, and the effort this app asked for.
+  // The turn's run line states no effort: the gateway reported none for the run (25.5).
   const runLine = page.getByTestId("run-line").last();
-  await expect(runLine.locator("summary")).toHaveAttribute(
-    "title",
-    /^acme\/dev-2 · low effort requested$/,
-    { timeout: 30_000 },
-  );
+  await expect(runLine).toBeVisible({ timeout: 30_000 });
   await runLine.locator("summary").click();
-  await runLine.getByRole("button", { name: "Raw" }).click();
-  await expect(runLine.getByRole("region", { name: "What the gateway sent" })).toContainText(
-    '"thinkingDefault": "low"',
-  );
+  await expect(runLine).not.toContainText(/effort/);
   await shots(page, "task-record", DESKTOP_AND_PHONE);
   await chip(page).click();
   await shots(page, "task-chip-menu", [
@@ -271,16 +264,12 @@ test("F-042 F-044 F-045: a task's model changed during a turn is held, saved whe
   ]);
   await page.keyboard.press("Escape");
 
-  // After a reload: the line and the requested effort are this device's record, read back.
+  // After a reload: the line is this device's record, read back.
   await page.reload();
   await openQuill(page);
   await expect(modelLines(page).first()).toHaveText(
     "Model changed to acme/dev-2 · from the next turn",
     { timeout: 30_000 },
-  );
-  await expect(page.getByTestId("run-line").last().locator("summary")).toHaveAttribute(
-    "title",
-    "acme/dev-2 · low effort requested",
   );
   await shots(page, "task-line", DESKTOP_AND_PHONE);
 });

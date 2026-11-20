@@ -36,16 +36,6 @@ const SCENES: Scene[] = [
     },
   },
   {
-    name: "model-record",
-    rows: "F-044 F-045",
-    scene: "model-set",
-    prepare: async (page) => {
-      await runLine(page).locator("summary").click();
-      await runLine(page).getByRole("button", { name: "Raw" }).click();
-      await page.getByTestId("model-line").scrollIntoViewIfNeeded();
-    },
-  },
-  {
     name: "model-held",
     rows: "F-045",
     scene: "model-held",
@@ -161,23 +151,15 @@ test.describe("a task's model and effort, behaviour", () => {
     await expect(chip(page).locator(".model-chip-held")).toHaveCount(0);
   });
 
-  test("F-044: the turn's record names the model the gateway reported and the effort asked for, on hover and opened, and Raw holds both", async ({
+  test("F-044: a turn's run line states no model and no effort the gateway did not report for it", async ({
     page,
   }) => {
     await openFixture(page, `scene=model-set&${OTTO_DISK}`, "light");
     const summary = runLine(page).locator("summary");
-    await expect(summary).toHaveAttribute("title", "acme/dev-1 · low effort requested");
+    await expect(summary).not.toHaveAttribute("title");
     await summary.press("Enter");
-    await expect(runLine(page).locator(".run-record")).toContainText(
-      "acme/dev-1 · low effort requested",
-    );
-    await expect(runLine(page).locator(".run-record")).not.toContainText("used");
-    await runLine(page).getByRole("button", { name: "Raw" }).click();
-    const raw = runLine(page).getByRole("region", { name: "What the gateway sent" });
-    await expect(raw).toContainText("Model, from the history row");
-    await expect(raw).toContainText('"provider": "acme"');
-    await expect(raw).toContainText("The task's effort when this turn was sent, from its row");
-    await expect(raw).toContainText('"thinkingDefault": "low"');
+    await expect(runLine(page)).not.toContainText(/effort|acme\/dev/);
+    await expect(runLine(page).getByRole("button", { name: "Raw" })).toHaveCount(0);
   });
 
   test("F-045: a refused change says why, in Details and as a line, and the chip shows what the gateway has", async ({

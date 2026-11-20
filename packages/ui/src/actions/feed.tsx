@@ -46,7 +46,6 @@ import {
   useStepHandover,
   type CardRef,
 } from "../cards/index.ts";
-import { useClawtrateState } from "../bridge.tsx";
 import { fullDate } from "../format.ts";
 import { Markdown } from "../Markdown.tsx";
 import { MessageUnit } from "../Messages.tsx";
@@ -399,7 +398,6 @@ export function ActionScope({
   engineRuns,
   lost,
   readOnly,
-  effort = null,
   ctx: given,
   children,
 }: {
@@ -408,8 +406,6 @@ export function ActionScope({
   engineRuns: Run[];
   lost: boolean;
   readOnly: boolean;
-  /** The reasoning effort the task asks for, for the run line's record. */
-  effort?: string | null;
   ctx: ReadingContext;
   children: ReactNode;
 }) {
@@ -557,10 +553,9 @@ export function ActionScope({
       rawState,
       lost,
       readOnly,
-      effort,
       arriving: () => drawn.current,
     };
-  }, [taskKey, transcript.runs, transcript.sessionKey, ctx, rawState, lost, readOnly, effort]);
+  }, [taskKey, transcript.runs, transcript.sessionKey, ctx, rawState, lost, readOnly]);
 
   useKeepFocus();
   // Cards drawn with the feed's first drawing are not arrivals; later ones are.
@@ -770,23 +765,8 @@ export function RunLine({ run }: { run: Run }) {
   // Read as the cards read it, with what the gateway said of the task's tools.
   const ctx = useContext(ActionEnvContext)?.ctx;
   const line = isTerminal(run.state) ? runLineOf(run, calls, ctx, drawn?.account) : null;
-  // What the turn ran with (conversation.md 25.5): the model the gateway reported, and the effort
-  // this app asked for when it started the turn.
-  const taskKey = useContext(ActionEnvContext)?.taskKey;
-  const requested = useClawtrateState().taskModels[taskKey ?? ""]?.requested.find(
-    (each) => each.runId === run.id,
-  );
   if (!line) return null;
-  return (
-    <RunLineView
-      runId={run.id}
-      line={line}
-      model={run.model}
-      provider={run.provider ?? null}
-      modelFrom={run.modelFrom ?? null}
-      effort={requested ?? null}
-    />
-  );
+  return <RunLineView runId={run.id} line={line} />;
 }
 
 /** The calls of a run, for the status line's phrase. */

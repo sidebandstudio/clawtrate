@@ -95,11 +95,7 @@ const ranOn = (state: ClawtrateState, model: string): ClawtrateState => {
       ...state.transcripts,
       [OPEN_TASK]: {
         ...transcript,
-        runs: transcript.runs.map((run) =>
-          run.state === "completed"
-            ? { ...run, provider: "acme", model, modelFrom: "history" as const }
-            : run,
-        ),
+        runs: transcript.runs.map((run) => (run.state === "completed" ? { ...run, model } : run)),
       },
     },
   };
@@ -124,7 +120,6 @@ const line = (
 });
 
 function view(state: ClawtrateState, change: Partial<TaskModelView>): TaskModelView {
-  const runs = state.transcripts[OPEN_TASK]?.runs ?? [];
   return {
     catalog: "ready",
     catalogError: null,
@@ -134,9 +129,6 @@ function view(state: ClawtrateState, change: Partial<TaskModelView>): TaskModelV
     pending: null,
     refused: null,
     events: [],
-    requested: runs
-      .filter((run) => run.state === "completed")
-      .map((run) => ({ runId: run.id, effort: "low", from: "thinkingDefault" as const })),
     ...change,
   };
 }

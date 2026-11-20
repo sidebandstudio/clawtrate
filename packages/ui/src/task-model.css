@@ -109,31 +109,6 @@ p.model-chip {
   color: var(--warn);
 }
 
-/* The turn's record's Raw (25.5): a card's Raw, on the stage. */
-.card.run-raw {
-  margin-top: 0;
-  padding: 0 6px 6px;
-  background: transparent;
-}
-
-.card.run-raw .card-actions {
-  min-height: 24px;
-  font-size: var(--text-xs);
-}
-
-.card.run-raw .card-actions .spacer {
-  display: none;
-}
-
-.card.run-raw .raw-panel {
-  margin-top: 4px;
-  background: var(--bg-bubble);
-}
-
-.card.run-raw .raw-panel .code-block:not([data-tone]) {
-  background: var(--bg-pane);
-}
-
 /* One pane: Back takes the header's left side, and the task's Details hold the control. */
 @container app (max-width: 687px) {
   .model-chip {

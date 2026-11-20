@@ -454,7 +454,7 @@ When a run with at least one action ends, one quiet line follows everything the 
 
 - It counts actions, not cards: a fold of six counts six, and a Messaged card counts one. An approval that belongs to no tool call is not an action.
 - Durations read `48s`, `1m 12s`, `1h 04m`, from the run's start and end as the gateway reported them. A duration the gateway did not report is left out ("14 actions"), never shown as zero.
-- **Opened** (level 1), it shows the run's record on one line of 12 px text: the model, the effort requested for the task or turn ("low effort requested"; the gateway does not dependably report the effort a turn used, so the line never says "used"), "effort not reported" when there is none, and the run id with a copy button named "Copy run id". The model and effort are also the line's tooltip.
+- **Opened** (level 1), it shows the run's id on one line of 12 px text, with a copy button named "Copy run id". It states no model and no effort for the turn: section 25.5 says why.
 - A run with no action has no line. A run whose only steps were reasoning has its "Thought for 8s" line over the reply instead (7.5), and nothing more.
 - While the run is active there is no run line: the status line carries the phrase and the elapsed time (section 5). A run that was mid-way when the connection dropped gets its line when the gateway reports its end.
 - It is a `summary` whose name is its text.
@@ -1615,11 +1615,7 @@ Its tooltip, and the line's accessible name, add what it was and when: "Was acme
 
 ### 25.5 The turn's record
 
-Section 7.7's run line, opened, reads the turn's record: "acme/dev-2 · high effort requested", the run id and its copy button, and "Raw". The same record is the run line's tooltip on the desktop. On touch, tapping the run line opens it.
-
-- **The model** is the run's `lifecycle` `phase:"model"` `{provider, model}`, or, after it, the history row's `provider` and `model`: "acme/dev-2". Neither: "model not reported".
-- **The effort** is what the task asked the gateway for when this app sent the message that started the turn, as the task's row named it then: its own level (`thinkingLevel`, which a change of effort writes), or else the default the row reports (`thinkingDefault`): "high effort requested". A turn this app did not start, or one it started on another device: "effort not reported". The record never says "used".
-- **Raw** (section 9) holds what the record is made of, each part labelled: "Model, as the gateway sends it", the lifecycle event's `{"phase":"model","provider":"acme","model":"dev-2"}` or the history row's `{"provider":"acme","model":"dev-2"}`; and "The task's effort when this turn was sent, from its row", `{"thinkingLevel":"high"}` or `{"thinkingDefault":"low"}`. A part with nothing behind it is absent, never "none".
+A turn states no model and no effort of its own. What the gateway reports for one run is its model, on some turns only: the run's `lifecycle` `phase:"model"` `{provider, model}`, or the history row's `provider` and `model`, and the run's end receipt names the requested and effective model refs (`terminalReceipt {requested, effective}`). It reports no effort for a run: the effort a run used is in the gateway's debug log only (`embedded run start: … thinking=…`), which is not part of its protocol. The task's effort when a message was sent is not the turn's either: a message can carry its own (`/think:off`), and the gateway applies a change of model when a run settles. And a record placed on the run line would exist only for turns with actions (section 7.7), where a turn with none has no line. So the run line, opened, gives the run's id and nothing more, and the task's current model and effort are the chip's and the Details' (25.1). Each turn's model and effort (F-044) waits for a place every turn has, and for a gateway that reports a run's effort.
 
 ### 25.6 Access
 

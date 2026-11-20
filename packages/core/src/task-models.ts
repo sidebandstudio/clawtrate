@@ -1,15 +1,14 @@
 // A task's model and effort (docs/design/conversation.md, section 25): the
 // models the gateway lists for one task, a change saved with `sessions.patch`
 // at `operator.write` or held while a turn of the task is active and saved once
-// it settles, the line each change leaves, and the effort each turn this app
-// started asked for. The engine's state is `ClawtrateState.taskModels`, one
-// view per followed task. The client wires it in (`client.ts`).
+// it settles, and the line each change leaves. The engine's state is
+// `ClawtrateState.taskModels`, one view per followed task. The client wires it
+// in (`client.ts`).
 //
-// The gateway records no change of a task's model or effort, and no public
-// field reports the effort a turn used. So the lines, and the effort each turn
-// this app started asked for (as the task's row named it then), are this app's
-// own record, kept on this device in the host's storage, one key per gateway,
-// for the most recent `MAX_LOGGED_TASKS` tasks.
+// The gateway records no change of a task's model or effort, so the lines are
+// this app's own record, kept on this device in the host's storage, one key per
+// gateway, for the most recent `MAX_LOGGED_TASKS` tasks. No public field reports
+// the effort a turn used, and none is kept here for one.
 
 import { parseModelRef, readCatalog, type CatalogModel } from "./accounts.ts";
 import type { KeyValueStore } from "./host.ts";
@@ -20,8 +19,6 @@ import type { Task } from "./types.ts";
 export const MAX_TASK_MODELS = 32;
 /** The lines kept for one task, newest last. */
 export const MAX_TASK_MODEL_EVENTS = 16;
-/** The turns whose requested effort is kept for one task, newest last: as many as its run list. */
-export const MAX_REQUESTED_EFFORTS = 32;
 /** The tasks whose lines and efforts the storage keeps, most recently changed last. */
 export const MAX_LOGGED_TASKS = 64;
 /** The storage key's prefix; the gateway's identity follows it. */
@@ -76,17 +73,6 @@ export type TaskModelEvent = {
   sessionId: string | null;
 };
 
-/**
- * The effort a turn this app started asked for (25.5): the task's own level
- * (`thinkingLevel`, which a change of effort writes) or, with none, the
- * default its row reported (`thinkingDefault`), when the message was sent.
- */
-export type RequestedEffort = {
-  runId: string;
-  effort: string;
-  from: "thinkingLevel" | "thinkingDefault";
-};
-
 export type TaskModelView = {
   catalog: "idle" | "loading" | "ready" | "error";
   catalogError: string | null;
@@ -100,7 +86,6 @@ export type TaskModelView = {
   /** The last refusal, until the next change. */
   refused: { error: string; at: number } | null;
   events: TaskModelEvent[];
-  requested: RequestedEffort[];
 };
 
 export const emptyTaskModel: TaskModelView = {
@@ -112,7 +97,6 @@ export const emptyTaskModel: TaskModelView = {
   pending: null,
   refused: null,
   events: [],
-  requested: [],
 };
 
 /** What the engine needs from the client. */
@@ -253,7 +237,7 @@ export function taskModelLine(event: TaskModelEvent, word: (level: string) => st
   return `${parts.join(", ")} · from the next turn`;
 }
 
-type LogEntry = { events: TaskModelEvent[]; requested: RequestedEffort[] };
+type LogEntry = { events: TaskModelEvent[] };
 
 /** One stored line, read back as untrusted: anything of the wrong shape is dropped. */
 function readEvent(value: unknown): TaskModelEvent | null {
@@ -302,16 +286,7 @@ function readLog(value: string | null): Array<[string, LogEntry]> {
       .slice(-MAX_TASK_MODEL_EVENTS)
       .map(readEvent)
       .filter((each): each is TaskModelEvent => each !== null);
-    const requested = (Array.isArray(entry.requested) ? entry.requested : [])
-      .slice(-MAX_REQUESTED_EFFORTS)
-      .flatMap((each): RequestedEffort[] => {
-        const raw = asRecord(each);
-        const runId = shortId(raw?.runId);
-        const effort = shortId(raw?.effort);
-        const from = raw?.from === "thinkingLevel" ? "thinkingLevel" : "thinkingDefault";
-        return runId && effort ? [{ runId, effort, from }] : [];
-      });
-    out.push([key, { events, requested }]);
+    out.push([key, { events }]);
   }
   return out;
 }
@@ -320,14 +295,6 @@ const mergeEvents = (a: TaskModelEvent[], b: TaskModelEvent[]) => {
   const byId = new Map<string, TaskModelEvent>();
   for (const event of [...a, ...b]) byId.set(event.id, event);
   return [...byId.values()].sort((x, y) => x.at - y.at).slice(-MAX_TASK_MODEL_EVENTS);
-};
-const mergeRequested = (a: RequestedEffort[], b: RequestedEffort[]) => {
-  const byId = new Map<string, RequestedEffort>();
-  for (const each of [...a, ...b]) {
-    byId.delete(each.runId);
-    byId.set(each.runId, each);
-  }
-  return [...byId.values()].slice(-MAX_REQUESTED_EFFORTS);
 };
 
 /** Write access is missing: the chip is not offered then, so this is not asked for (25.6). */
@@ -442,36 +409,6 @@ export class TaskModelsEngine {
         catalogError: cut(errorText(error), MAX_TASK_MODEL_ERROR_CHARS),
       }));
     }
-  }
-
-  /**
-   * The effort the task asks the gateway for now, as its row names it: its own
-   * level, else the default the gateway reports for it. Taken when a message
-   * that starts a turn is sent. Nothing is added to the message itself: a
-   * `chat.send` that carries `thinking` and is stopped at once stays listed by
-   * the gateway as a cancelled pending input.
-   */
-  effortAsked(key: string): Pick<RequestedEffort, "effort" | "from"> | null {
-    const task = this.ctx.task(key);
-    if (task?.effort) return { effort: task.effort, from: "thinkingLevel" };
-    if (task?.effortDefault) return { effort: task.effortDefault, from: "thinkingDefault" };
-    return null;
-  }
-
-  /** What a turn asked for, by the run the gateway named for it. */
-  recordRequested(
-    key: string,
-    runId: string,
-    asked: Pick<RequestedEffort, "effort" | "from">,
-  ): void {
-    const kept = shortId(runId);
-    const effort = shortId(asked.effort);
-    if (!kept || !effort || !this.ctx.get()[key]) return;
-    this.patch(key, (view) => ({
-      ...view,
-      requested: mergeRequested(view.requested, [{ runId: kept, effort, from: asked.from }]),
-    }));
-    this.persist(key);
   }
 
   /**
@@ -772,13 +709,12 @@ export class TaskModelsEngine {
         this.patch(job.key, (view) => ({
           ...view,
           events: mergeEvents(entry.events, view.events),
-          requested: mergeRequested(entry.requested, view.requested),
         }));
     }
     if (job.persist) {
       const view = this.ctx.get()[job.key]!;
       const rest = tasks.filter(([k]) => k !== job.key);
-      rest.push([job.key, { events: view.events, requested: view.requested }]);
+      rest.push([job.key, { events: view.events }]);
       await this.ctx.storage.set(
         job.storageKey,
         JSON.stringify({ v: 1, tasks: rest.slice(-MAX_LOGGED_TASKS) }),

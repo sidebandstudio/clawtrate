@@ -482,23 +482,18 @@ describe("a task's model and effort", () => {
     expect(r.patches()).toEqual([]);
   });
 
-  it("F-044 F-045: the lines and the requested efforts outlive the engine, read back from this device's record", async () => {
+  it("F-045: the lines outlive the engine, read back from this device's record", async () => {
     const r = rig();
     await opened(r);
     await r.engine.choose(KEY, { model: "acme/dev-2", effort: null });
-    expect(r.engine.effortAsked(KEY)).toEqual({ effort: "low", from: "thinkingDefault" });
-    r.engine.recordRequested(KEY, "run-1", { effort: "low", from: "thinkingDefault" });
     await until(() =>
-      (r.storage.data.get("clawtrate.task-models:gateway-1") ?? "").includes("run-1"),
+      (r.storage.data.get("clawtrate.task-models:gateway-1") ?? "").includes("acme/dev-2"),
     );
     // A new engine, as after a restart, on the same storage.
     const again = rig();
     for (const [key, value] of r.storage.data) await again.storage.set(key, value);
     await opened(again);
     await until(() => again.view().events.length === 1);
-    expect(again.view().requested).toEqual([
-      { runId: "run-1", effort: "low", from: "thinkingDefault" },
-    ]);
     expect(again.view().events[0]?.model).toBe("acme/dev-2");
   });
 
@@ -538,7 +533,6 @@ describe("a task's model and effort", () => {
                   sessionId: "session-1",
                 },
               ],
-              requested: [],
             },
           ],
         ],
@@ -584,7 +578,7 @@ describe("a task's model and effort", () => {
     const r = rig();
     await r.storage.set("clawtrate.task-models:gateway-1", "{not json");
     await opened(r);
-    expect(r.view()).toMatchObject({ events: [], requested: [] });
+    expect(r.view()).toMatchObject({ events: [] });
     expect(emptyTaskModel.events).toEqual([]);
   });
 });
@@ -625,27 +619,14 @@ describe("the client around a task's model", () => {
     return gateway;
   }
 
-  it("F-044: a turn this app starts records the effort the task asked for, as its row named it, and the message carries nothing more", async () => {
+  it("F-044: a turn this app starts sends no effort of its own and keeps no record of one", async () => {
     const { client, gateway } = await openTask({ gateway: gatewayWithTask() });
     await until(() => client.state.taskModels[KEY]?.catalog === "ready");
     client.sendMessage(KEY, "hello");
     await until(() => gateway.calls("chat.send").length === 1);
     expect(gateway.calls("chat.send")[0]).not.toHaveProperty("thinking");
-    await until(() => client.state.taskModels[KEY]?.requested.length === 1);
-    expect(client.state.taskModels[KEY]?.requested).toEqual([
-      { runId: "run-1", effort: "low", from: "thinkingDefault" },
-    ]);
-    // Once the task has a level of its own, that is what the next turn asks for.
-    gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
-    gateway.emit("agent", agentEvent("run-1", 2, "lifecycle", { phase: "end" }));
-    await until(() => !client.state.transcripts[KEY]!.runs.some((run) => run.state === "running"));
-    await expect(client.setTaskModel(KEY, null, "high")).resolves.toBe("saved");
-    client.sendMessage(KEY, "again");
-    await until(() => client.state.taskModels[KEY]?.requested.length === 2);
-    expect(client.state.taskModels[KEY]?.requested[1]).toMatchObject({
-      effort: "high",
-      from: "thinkingLevel",
-    });
+    // The gateway reports no effort for a run, so none is kept for one.
+    expect(Object.keys(client.state.taskModels[KEY]!)).not.toContain("requested");
     client.stop();
   });
 

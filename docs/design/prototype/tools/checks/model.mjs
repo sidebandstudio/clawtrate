@@ -98,15 +98,10 @@ await p.close();
 
 // The turn's record ----------------------------------------------------------------------------------
 p = await open("record=open");
-check("25.5 the run line's tooltip is the record", await p.evaluate(() => document.querySelector("#t-run > summary").title === "acme/dev-2 · low effort requested"));
-check("25.5 opened, it shows the record and the run id, and says requested, never used", await p.evaluate(() => {
-  const text = document.querySelector("#t-run .run-record").textContent;
-  return text.includes("acme/dev-2") && text.includes("low effort requested") && text.includes("run-7c41d09e") && !text.includes("used");
-}));
-await p.click("[data-t-raw]");
-check("25.5 Raw holds the model as the gateway sends it and what was sent, each labelled", await p.evaluate(() => {
-  const raw = document.querySelector(".t-raw");
-  return !raw.hidden && raw.textContent.includes("Model, as the gateway sends it") && raw.textContent.includes('"phase":"model"') && raw.textContent.includes("The task's effort when this turn was sent, from its row") && raw.textContent.includes('"thinkingDefault":"low"');
+check("25.5 the run line has no record as its tooltip", await p.evaluate(() => !document.querySelector("#t-run > summary").title));
+check("25.5 opened, it gives the run id and states no model and no effort", await p.evaluate(() => {
+  const text = document.querySelector("#t-run").textContent;
+  return text.includes("run-7c41d09e") && !/effort|acme\/dev/.test(text) && !document.querySelector("[data-t-raw]");
 }));
 await p.close();
 
