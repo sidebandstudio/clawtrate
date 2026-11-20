@@ -1,9 +1,6 @@
 import type { ClawtrateState } from "../packages/core/src/types.ts";
-import {
-  MAX_TRACKED_TASKS,
-  MAX_OUTBOX,
-  MAX_NAME_CHARS,
-} from "../packages/core/src/state-bounds.ts";
+import { MAX_OUTBOX_PER_TASK, MAX_TRACKED_TASKS } from "../packages/core/src/client.ts";
+import { MAX_NAME_CHARS } from "../packages/core/src/state-bounds.ts";
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { expect, test } from "@playwright/test";
 import { contextFor, openFixture, settle, showList, SIZES, OTTO_DISK } from "./fixture.ts";
@@ -143,12 +140,12 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
               };
             });
           },
-          { tasks: MAX_TRACKED_TASKS, messages: MAX_OUTBOX },
+          { tasks: MAX_TRACKED_TASKS, messages: MAX_OUTBOX_PER_TASK },
         );
         await page.getByRole("button", { name: "Open Updates" }).click();
         await page.getByRole("button", { name: "Restart to Update" }).click();
         const dialog = page.getByRole("alertdialog");
-        const count = (MAX_TRACKED_TASKS * MAX_OUTBOX) / 2;
+        const count = (MAX_TRACKED_TASKS * MAX_OUTBOX_PER_TASK) / 2;
         const description = dialog.locator("#b-confirm-details");
         await expect(description).toHaveText(
           new RegExp(
