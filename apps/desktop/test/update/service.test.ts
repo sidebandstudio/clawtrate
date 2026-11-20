@@ -269,6 +269,8 @@ it("gives same-version offers separate private destinations and removes the olde
   server.route("/files/app.zip", bytes(other.body));
   const second = await offer(service);
   expect(second).not.toBe(first);
+  expect((await service.download(first)).state).toMatchObject({ kind: "offered", offerId: second });
+  expect(server.requests).toEqual(["/stable", "/files/app.zip", "/stable"]);
   expect(existsSync(old)).toBe(false);
   await service.download(second);
   const fresh = join(updates, second);
