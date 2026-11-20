@@ -489,6 +489,24 @@ test.describe("message actions", () => {
 test.describe("message actions on a phone", () => {
   test.use(contextFor(PHONE, "light"));
 
+  test("F-066: a second finger on a message is no touch and hold: nothing opens once the fingers lift", async ({
+    page,
+  }) => {
+    await open(page);
+    const turn = answer(page);
+    await turn.scrollIntoViewIfNeeded();
+    const bubble = turn.locator(".msg > .bubble").last();
+    const box = (await bubble.boundingBox())!;
+    const actions = turn.getByTestId("message-actions");
+    const at = { clientX: box.x + 30, clientY: box.y + 20 };
+    await bubble.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 1, ...at });
+    await bubble.dispatchEvent("pointerdown", { pointerType: "touch", pointerId: 2, ...at });
+    await bubble.dispatchEvent("pointerup", { pointerType: "touch", pointerId: 2, ...at });
+    await bubble.dispatchEvent("pointerup", { pointerType: "touch", pointerId: 1, ...at });
+    await page.waitForTimeout(900);
+    await expect(actions).not.toHaveAttribute("data-open", "true");
+  });
+
   test("F-066: touch and hold on a message shows its actions, each with a 44 px hit area", async ({
     page,
   }) => {

@@ -175,6 +175,8 @@ export function MessageActions({
     let timer: ReturnType<typeof setTimeout> | null = null;
     const onDown = (event: PointerEvent) => {
       if (event.pointerType !== "touch") return;
+      // A second finger makes it no touch and hold: the first one's wait ends too.
+      if (timer) return cancel();
       if ((event.target as Element).closest(".msg-actions, button, a, summary")) return;
       timer = setTimeout(() => {
         measure();
