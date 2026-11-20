@@ -10,6 +10,11 @@ import { UpdateEngine } from "../../src/main/update/engine.ts";
 import { DesktopUpdateService } from "../../src/main/update/service.ts";
 import { bytes, feedFor, feedServer, json, payload, tempDir, type FeedServer } from "./harness.ts";
 
+import { rename } from "node:fs/promises";
+vi.mock(import("node:fs/promises"), async (original) => {
+  const actual = await original();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
 let server: FeedServer;
 let dir: ReturnType<typeof tempDir>;
 let updates: string;
@@ -224,6 +229,34 @@ it.each(["check", "download"] as const)(
   },
 );
 
+it("keeps the old preference file until an atomic replacement and on a commit failure", async () => {
+  const prefs = store(),
+    path = join(dir.path, "preferences.json");
+  await prefs.set("selectedTrack", "stable");
+  const old = readFileSync(path);
+  const entered = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  vi.mocked(rename).mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    throw Error("rename refused");
+  });
+  const saving = prefs.set("selectedTrack", "nightly");
+  try {
+    expect(
+      await Promise.race([entered.promise.then(() => "rename"), saving.then(() => "complete")]),
+    ).toBe("rename");
+    expect(readFileSync(path)).toEqual(old);
+    expect(JSON.parse(readFileSync(path + ".next", "utf8"))).toEqual({ selectedTrack: "nightly" });
+  } finally {
+    release.resolve();
+  }
+  await expect(saving).rejects.toThrow("rename refused");
+  expect(readFileSync(path)).toEqual(old);
+  expect(existsSync(path + ".next")).toBe(false);
+  await prefs.set("selectedTrack", "nightly");
+  expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ selectedTrack: "nightly" });
+});
 it("a failed file-store write cannot slip into a later successful save", async () => {
   const prefs = store();
   const service = await start({ store: prefs });
@@ -631,7 +664,18 @@ it("a nightly-only build stays idle and checks only its one configured source", 
   });
   expect((await service.chooseTrack("stable")).outcome).toBe("invalid");
   expect(server.requests).toEqual([]);
-  expect((await service.check("nightly")).snapshot.state.kind).toBe("offered");
+  const checked = await service.check("nightly");
+  expect(checked).toMatchObject({
+    outcome: "accepted",
+    snapshot: {
+      runningTrack: "stable",
+      selectedTrack: "nightly",
+      lastCheck: { track: "nightly", readAt: expect.stringMatching(/Z$/) },
+      state: { kind: "offered" },
+    },
+  });
+  const again = await start({ feeds: { stable: null, nightly: server.origin + "/nightly" } });
+  expect(again.get().lastCheck).toEqual(checked.snapshot.lastCheck);
   expect(server.requests).toEqual(["/nightly"]);
 });
 
