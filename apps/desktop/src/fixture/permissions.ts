@@ -218,7 +218,7 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
           config,
           hash: `fixture-${hash}`,
           configRevisionHash: `fixture-${hash}`,
-          appliedConfigHash: `fixture-${hash}`,
+          appliedConfigHash: `fixture-${applied ?? hash}`,
         },
         botId,
       ),
@@ -251,6 +251,8 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
     };
   };
   const view = (botId: string): BotPermissions => permissionsView(facts(botId));
+  // `write=stored`: the revision the gateway reports in use stays the one before the save.
+  let applied: number | null = null;
   const apply = (write: ConfigWrite) => {
     config = structuredClone(config);
     merge(config, write.patch, write.replacePaths, "");
@@ -284,15 +286,7 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
         { outcome: "failed", error: "invalid config", view: view(command.botId) },
         600,
       );
-    if (params.write === "stored")
-      return delay<PermissionWrite>(
-        {
-          outcome: "stored",
-          error: "the gateway reports it isn't using the stored revision yet",
-          view: view(command.botId),
-        },
-        600,
-      );
+    if (params.write === "stored") applied = hash;
     if (params.write === "lost")
       return delay<PermissionWrite>(
         {
@@ -333,11 +327,15 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
       }
     }
     const after = view(command.botId);
-    const result: PermissionWrite = {
-      outcome: choiceShown(after, line, command.choice) ? "saved" : "not-shown",
-      error: null,
-      view: after,
-    };
+    const readBack = choiceShown(after, line, command.choice);
+    const result: PermissionWrite =
+      readBack && params.write === "stored"
+        ? {
+            outcome: "stored",
+            error: "the gateway reports it isn't using the stored revision yet",
+            view: after,
+          }
+        : { outcome: readBack ? "saved" : "not-shown", error: null, view: after };
     return delay(result, 600);
   };
 }
