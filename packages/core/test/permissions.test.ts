@@ -171,6 +171,29 @@ describe("F-178: the rules plugin's state, from its status method", () => {
     });
   });
 
+  it("reports each of the plugin's five enforcement modes, and no mode for a failed, future or hookless status", async () => {
+    const at = (patch: Record<string, unknown>) =>
+      readRulesPlugin(fake({ "clawtrate-tool-rules.status": () => status(patch) }).ctx, true);
+    for (const enforcing of ["rules", "kept-copy", "ask-every-call", "nothing"])
+      expect(await at({ enforcing }), enforcing).toMatchObject({ state: "running", enforcing });
+    expect(await at({ enforcing: "not-enforced" })).toMatchObject({ state: "not-enforcing" });
+    const unknown = {
+      state: "stopped",
+      reason: "The plugin's status didn't identify an enforcement mode.",
+    };
+    expect(await at({ enforcing: "rules-v2" })).toEqual(unknown);
+    expect(await at({ hook: { lastCallAt: 1 } })).toEqual(unknown);
+    const failed = await readRulesPlugin(
+      fake({
+        "clawtrate-tool-rules.status": () => {
+          throw new Error("status failed");
+        },
+      }).ctx,
+      true,
+    );
+    expect(failed).toEqual({ state: "stopped", reason: "status failed" });
+  });
+
   it("is old below 1.0.0", async () => {
     const read = await readRulesPlugin(
       fake({ "clawtrate-tool-rules.status": () => status({ version: "0.9.0" }) }).ctx,
@@ -884,6 +907,7 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
             ])
           : decisions([]),
       "clawtrate-tool-rules.get": () => rules(2),
+      "clawtrate-tool-rules.status": () => ({ decisions: { state: "kept" } }),
     });
     const page = await readActivity(
       gateway.ctx,
@@ -910,7 +934,7 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
       },
     });
     // A record of the same call id under another run does not join: nothing joins, so not recorded.
-    expect(routine!.cause).toEqual({ kind: "not-recorded" });
+    expect(routine!.cause).toEqual({ kind: "none-in-records" });
     expect(
       gateway.calls
         .filter((each) => each.method.endsWith("decisions.list"))
@@ -954,7 +978,7 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
       answer: "deny",
       source: { kind: "fallback", scope: "*" },
     });
-    expect(page.rows[1]!.cause).toEqual({ kind: "not-recorded" });
+    expect(page.rows[1]!.cause).toEqual({ kind: "none-in-records" });
     expect(page.nextCursor).toBeNull();
   });
 
@@ -1019,6 +1043,94 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
       kind: "not-read",
       reason: "Clawtrate's rules plugin says the decision record cannot be read (EACCES).",
     });
+  });
+
+  it("a cause comes from a matching record only, and an absence only from a status the plugin documents", async () => {
+    const page = (statusAnswer: () => unknown, records: Record<string, unknown>[]) =>
+      readActivity(
+        fake({
+          "audit.activity.list": () => ({ events: [event({ toolCallId: BLOCKED_CALL })] }),
+          "config.get": () => ({ config: {} }),
+          "clawtrate-tool-rules.decisions.list": () => decisions(records),
+          "clawtrate-tool-rules.get": () => ({ scopes: {} }),
+          "clawtrate-tool-rules.status": statusAnswer,
+        }).ctx,
+        { cursor: null, agentId: null, status: null },
+        { rulesListed: true, loaded: new Map() },
+      ).then((read) => read.rows[0]!.cause);
+    const blocked = record({
+      decision: "block",
+      source: { kind: "rule", scope: "otto", ruleId: "r1", version: 1, action: "never" },
+    });
+    const failing = () => ({
+      decisions: { state: "failing", reason: "the decision record cannot be read (EACCES)" },
+    });
+    // Failing, and no record: not read, in the plugin's words.
+    expect(await page(failing, [])).toEqual({
+      kind: "not-read",
+      reason: "Clawtrate's rules plugin says the decision record cannot be read (EACCES).",
+    });
+    // Failing, and a matching record: the record still counts.
+    expect(await page(failing, [blocked])).toMatchObject({ kind: "recorded", decision: "block" });
+    // A status that fails, or names no documented state, and no record: not read.
+    const unread = {
+      kind: "not-read",
+      reason: "The plugin's decision record status couldn't be read.",
+    };
+    expect(
+      await page(() => {
+        throw new Error("status failed");
+      }, []),
+    ).toEqual(unread);
+    expect(await page(() => ({ decisions: { state: "later" } }), [])).toEqual(unread);
+    // A complete list, kept, with no record for the call: only an absence in the records read.
+    expect(await page(() => ({ decisions: { state: "kept" } }), [])).toEqual({
+      kind: "none-in-records",
+    });
+  });
+
+  it("two decision records sharing a run and call across tasks each give only their own task's row a cause", async () => {
+    const page = await readActivity(
+      fake({
+        "audit.activity.list": () => ({
+          events: [
+            event({ eventId: "a", toolCallId: BLOCKED_CALL, sessionKey: "agent:otto:task-a" }),
+            event({ eventId: "b", toolCallId: BLOCKED_CALL, sessionKey: "agent:otto:task-b" }),
+            event({ eventId: "c", toolCallId: BLOCKED_CALL, sessionKey: "agent:otto:task-c" }),
+          ],
+        }),
+        "config.get": () => ({ config: {} }),
+        "clawtrate-tool-rules.decisions.list": () =>
+          decisions([
+            record({
+              id: "rec-a",
+              sessionKey: "agent:otto:task-a",
+              decision: "block",
+              source: { kind: "rules-lost" },
+            }),
+            record({
+              id: "rec-b",
+              sessionKey: "agent:otto:task-b",
+              decision: "block",
+              source: { kind: "rules-lost" },
+            }),
+          ]),
+        "clawtrate-tool-rules.get": () => ({ scopes: {} }),
+        "clawtrate-tool-rules.status": () => ({ decisions: { state: "kept" } }),
+      }).ctx,
+      { cursor: null, agentId: null, status: null },
+      { rulesListed: true, loaded: new Map() },
+    );
+    expect(
+      page.rows.map((row) => [
+        row.sessionKey,
+        row.cause.kind === "recorded" ? row.cause.recordId : row.cause.kind,
+      ]),
+    ).toEqual([
+      ["agent:otto:task-a", "rec-a"],
+      ["agent:otto:task-b", "rec-b"],
+      ["agent:otto:task-c", "none-in-records"],
+    ]);
   });
 
   it("without the plugin's methods nothing is joined and the plugin is not asked", async () => {

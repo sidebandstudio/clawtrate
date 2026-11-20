@@ -5,10 +5,12 @@
 // command, path, id and record here is made up.
 //
 // Address parameters:
-//   rules=running|absent|stopped|failed|lost|old|unchecked
+//   rules=running|absent|stopped|failed|lost|kept|nothing|future|old|unchecked
 //                                                the rules plugin (default running; stopped: it
 //                                                answers that it enforces nothing; failed: its
-//                                                status fails; lost: its rules file is lost)
+//                                                status fails; lost: its rules file is lost; kept:
+//                                                it enforces a kept copy; nothing: no rules saved;
+//                                                future: a mode it doesn't document)
 //   saved=empty|error|loading|more|expiring|omitted-only|edge
 //                                                saved approvals (default: two grants and two entries;
 //                                                more: three more, one of a routine that is gone;
@@ -22,10 +24,11 @@
 //                                                confirmation opened, or moved past the rows shown
 //   saved=long                                   two entries whose long patterns share their shown start
 // A hello later than the scene's (connectedAt in the future) reads the file as another revision.
-//   audit=empty|off|error|loading|end|older-error|fail-once
+//   audit=empty|off|error|loading|end|older-error|fail-once|causes
 //                                                activity (default: a page with older ones after it;
 //                                                older-error: an older page fails; fail-once: the
-//                                                first page fails once)
+//                                                first page fails once; causes: the record's every
+//                                                kind of absence)
 
 import {
   auditCallId,
@@ -96,6 +99,20 @@ function plugin(now: number, params: PermissionParams): Promise<RulesPluginState
         lastCallAt: now - 2 * MINUTE,
         enforcing: "ask-every-call",
         keptCopyReadAt: null,
+      });
+    case "kept":
+    case "nothing":
+      return Promise.resolve({
+        state: "running",
+        answeredAt: now - MINUTE,
+        lastCallAt: now - 2 * MINUTE,
+        enforcing: params.rules === "kept" ? "kept-copy" : "nothing",
+        keptCopyReadAt: params.rules === "kept" ? now - 3 * HOUR : null,
+      });
+    case "future":
+      return Promise.resolve({
+        state: "stopped",
+        reason: "The plugin's status didn't identify an enforcement mode.",
       });
     case "old":
       return Promise.resolve({ state: "old", version: "0.9.0" });
@@ -379,12 +396,31 @@ function older(now: number): Log[] {
 }
 
 /** Rows as the engine gives them: a call a loaded task holds is "Show in chat". */
-function rows(state: ClawtrateState, logs: Log[], agentId: string | null, status: string | null) {
+/** With `audit=causes`, the first rows' causes are each kind of absence the engine gives. */
+const ABSENCES: ActivityRow["cause"][] = [
+  { kind: "none-in-records" },
+  { kind: "not-read", reason: "The plugin's decision record status couldn't be read." },
+  {
+    kind: "not-read",
+    reason: "Clawtrate's rules plugin says the decision record cannot be read (EACCES).",
+  },
+];
+
+function rows(
+  state: ClawtrateState,
+  logs: Log[],
+  agentId: string | null,
+  status: string | null,
+  causes = false,
+  /** The plugin's methods were listed: an absence then is one in the records read. */
+  listed = true,
+) {
   const loaded = new Set<string>();
   for (const [key, transcript] of Object.entries(state.transcripts))
     for (const item of transcript.items)
       for (const block of item.blocks)
         if (block.kind === "tool-call") loaded.add(`${key}\u0000${block.callId}`);
+  let absence = 0;
   return logs
     .filter((each) => (!agentId || each.agentId === agentId) && (!status || each.status === status))
     .map(({ call, ...each }): ActivityRow => {
@@ -393,7 +429,17 @@ function rows(state: ClawtrateState, logs: Log[], agentId: string | null, status
         call && each.sessionKey && loaded.has(`${each.sessionKey}\u0000${call}`)
           ? { key: each.sessionKey, callId: call, runId: each.runId }
           : null;
-      return { ...each, id: `${each.runId}\u0000${callId ?? each.recordId}`, callId, inChat };
+      const absent: ActivityRow["cause"] =
+        each.cause.kind === "not-recorded" && listed ? { kind: "none-in-records" } : each.cause;
+      const cause =
+        causes && each.cause.kind !== "recorded" ? (ABSENCES[absence++] ?? absent) : absent;
+      return {
+        ...each,
+        cause,
+        id: `${each.runId}\u0000${callId ?? each.recordId}`,
+        callId,
+        inChat,
+      };
     });
 }
 
@@ -586,7 +632,14 @@ export function permissionCommand(
         params.audit === "empty" || params.audit === "off" ? [] : first ? log(now) : older(now);
       const page: ActivityPage = {
         readAt: now,
-        rows: rows(get(), logs, command.agentId, command.status),
+        rows: rows(
+          get(),
+          logs,
+          command.agentId,
+          command.status,
+          params.audit === "causes",
+          params.rules !== "absent",
+        ),
         // Each first page names its own cursor, so a test can tell which page Show older continues.
         nextCursor:
           first && !["empty", "off", "end"].includes(params.audit ?? "")

@@ -68,11 +68,11 @@ export function pluginWords(plugin: RulesPluginState | "checking" | { failed: st
   if ("failed" in plugin) return `Couldn't check Clawtrate's rules plugin. ${plugin.failed}`;
   switch (plugin.state) {
     case "unavailable":
-      return "Rules methods unavailable on this gateway.";
+      return "This connection didn't list the rules plugin's status method.";
     case "stopped":
       return `Couldn't read Clawtrate's rules plugin's status. ${plugin.reason}`;
     case "not-enforcing":
-      return `Rules plugin answered at ${clockTime(plugin.answeredAt)}: it isn't enforcing rules, because its hook isn't registered or its service isn't running.`;
+      return `Rules plugin answered at ${clockTime(plugin.answeredAt)}. It reports that it isn't enforcing rules.`;
     case "old":
       return `Clawtrate's rules plugin is version ${plugin.version}; these rules need 1.0.0 or newer.`;
     case "running": {
@@ -84,7 +84,7 @@ export function pluginWords(plugin: RulesPluginState | "checking" | { failed: st
         plugin.enforcing === "kept-copy"
           ? ` Its rules file can't be read; it enforces the copy it read${plugin.keptCopyReadAt === null ? "" : ` at ${clockTime(plugin.keptCopyReadAt)}`}.`
           : plugin.enforcing === "ask-every-call"
-            ? " Its rules file can't be read and it holds no earlier copy, so it asks before every tool call it sees, other than ask_user."
+            ? " Its rules file can't be read and it holds no earlier copy. It requires approval for calls that reach its hook, except ask_user."
             : plugin.enforcing === "nothing"
               ? " No rules are saved in it."
               : "";
@@ -169,6 +169,7 @@ const ANSWER_WORDS = {
 
 export function causeWords(cause: ActivityCause, botName: (id: string) => string): string {
   if (cause.kind === "not-recorded") return "Cause not recorded";
+  if (cause.kind === "none-in-records") return "No cause in the records read";
   if (cause.kind === "not-read") return `Cause not read. ${cause.reason}`;
   const source = cause.source;
   const by =
@@ -1122,10 +1123,7 @@ function ActivityPart({
         </p>
       )}
       {pluginListed === false && rows.length > 0 && (
-        <p className="b-hint">
-          Causes come only from Clawtrate's rules plugin's decision record, which this gateway
-          doesn't have.
-        </p>
+        <p className="b-hint">This connection didn't list the rules plugin's status method.</p>
       )}
       {list}
       {ready && rows.length > 0 && ready.nextCursor && (

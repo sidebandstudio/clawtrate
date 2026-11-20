@@ -162,7 +162,7 @@ test.afterAll(async () => {
   }
 });
 
-test("F-324: at the read tier, a call Otto's rule blocked shows its recorded cause and the rule's version now, a routine's call shows Cause not recorded, and Show in chat opens the call in its task", async () => {
+test("F-324: at the read tier, a call Otto's rule blocked shows its recorded cause and the rule's version now, a routine's call shows No cause in the records read, and Show in chat opens the call in its task", async () => {
   test.setTimeout(240_000);
   // The rules plugin runs, and says so first.
   await permissions("Rules");
@@ -244,7 +244,7 @@ test("F-324: at the read tier, a call Otto's rule blocked shows its recorded cau
     .filter({ hasText: "A routine's run" })
     .filter({ hasText: "read" })
     .first();
-  await expect(routineRow).toContainText("Cause not recorded");
+  await expect(routineRow).toContainText("No cause in the records read");
   await expect(routineRow).toContainText("Ran");
 
   // Show in chat: Settings closes and the blocked call is in view in its task, focused.

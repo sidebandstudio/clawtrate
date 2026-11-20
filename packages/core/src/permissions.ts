@@ -142,18 +142,25 @@ export async function readRulesPlugin(
   if (!versionAtLeast(version, RULES_PLUGIN_MIN_VERSION)) return { state: "old", version };
   const hook = asRecord(answer?.hook);
   const enforcing = answer?.enforcing;
+  const UNKNOWN = "The plugin's status didn't identify an enforcement mode.";
+  if (typeof hook?.registered !== "boolean") return { state: "stopped", reason: UNKNOWN };
   // An answer that it enforces nothing is an answer, not silence.
-  if (hook?.registered !== true || enforcing === "not-enforced")
-    return { state: "not-enforcing", answeredAt: ctx.now(), lastCallAt: time(hook?.lastCallAt) };
+  if (!hook.registered || enforcing === "not-enforced")
+    return { state: "not-enforcing", answeredAt: ctx.now(), lastCallAt: time(hook.lastCallAt) };
+  // Only the plugin's documented modes; any other is not taken for one of them.
+  if (
+    enforcing !== "rules" &&
+    enforcing !== "kept-copy" &&
+    enforcing !== "ask-every-call" &&
+    enforcing !== "nothing"
+  )
+    return { state: "stopped", reason: UNKNOWN };
   const rules = asRecord(answer?.rules);
   return {
     state: "running",
     answeredAt: ctx.now(),
     lastCallAt: time(hook.lastCallAt),
-    enforcing:
-      enforcing === "rules" || enforcing === "kept-copy" || enforcing === "ask-every-call"
-        ? enforcing
-        : "nothing",
+    enforcing,
     keptCopyReadAt: rules?.state === "lost" ? time(rules.keptCopyReadAt) : null,
   };
 }
@@ -759,6 +766,8 @@ export type RecordedRule = {
  */
 export type ActivityCause =
   | { kind: "not-recorded" }
+  /** The plugin's records were read whole for the call's run, and none of them gives a cause. */
+  | { kind: "none-in-records" }
   | { kind: "not-read"; reason: string }
   | {
       kind: "recorded";
@@ -858,6 +867,8 @@ export function activityRows(events: unknown[]): Omit<ActivityRow, "cause" | "in
 type Decision = {
   id: string;
   callId: string;
+  /** The task the plugin recorded the decision in, when it names one. */
+  sessionKey: string | null;
   decision: string;
   source: Record<string, unknown> | null;
   answer: string | null;
@@ -866,8 +877,8 @@ type Decision = {
 async function decisionsOf(
   ctx: PermissionsContext,
   runIds: string[],
-): Promise<{ byCall: Map<string, Decision>; full: Set<string> } | string> {
-  const byCall = new Map<string, Decision>();
+): Promise<{ byCall: Map<string, Decision[]>; full: Set<string> } | string> {
+  const byCall = new Map<string, Decision[]>();
   /** Runs whose every record was read: an unmatched call there was not decided by a record. */
   const full = new Set<string>();
   for (let i = 0; i < runIds.length; i += DECISION_READS_AT_ONCE) {
@@ -881,28 +892,39 @@ async function decisionsOf(
       answers.forEach((value, index) => {
         const answer = asRecord(value);
         const runId = chunk[index]!;
-        const records = Array.isArray(answer?.records) ? answer.records : [];
+        if (!Array.isArray(answer?.records)) throw new Error(STATUS_UNREAD);
+        const records = answer.records as unknown[];
         if (answer?.hasMore !== true && records.length <= DECISIONS_PER_RUN) full.add(runId);
         for (const raw of records.slice(0, DECISIONS_PER_RUN)) {
           const record = asRecord(raw);
           const callId = wholeId(record?.callId, MAX_ACTIVITY_ID);
           const id = wholeId(record?.id, MAX_ACTIVITY_ID);
           if (!record || !callId || !id || record.runId !== runId) continue;
-          byCall.set(`${runId}\u0000${callId}`, {
-            id,
-            callId,
-            decision: typeof record.decision === "string" ? record.decision : "none",
-            source: asRecord(record.source),
-            answer: typeof record.answer === "string" ? record.answer : null,
-          });
+          const key = `${runId}\u0000${callId}`;
+          byCall.set(key, [
+            ...(byCall.get(key) ?? []),
+            {
+              id,
+              callId,
+              sessionKey: wholeId(record.sessionKey, MAX_ACTIVITY_ID),
+              decision: typeof record.decision === "string" ? record.decision : "none",
+              source: asRecord(record.source),
+              answer: typeof record.answer === "string" ? record.answer : null,
+            },
+          ]);
         }
       });
     } catch (error) {
-      return errorText(error);
+      return error instanceof Error && error.message === STATUS_UNREAD
+        ? STATUS_UNREAD
+        : errorText(error);
     }
   }
   return { byCall, full };
 }
+
+/** What a call says when the plugin's own word on its record can't be read or isn't one it gives. */
+const STATUS_UNREAD = "The plugin's decision record status couldn't be read.";
 
 type CurrentRules = Map<string, { version: number; tools: string[]; pattern: string | null }>;
 
@@ -935,11 +957,12 @@ async function currentRules(ctx: PermissionsContext): Promise<CurrentRules | nul
 }
 
 function causeOf(decision: Decision | undefined, rules: CurrentRules | null): ActivityCause {
+  // Read and found nothing, or a record whose decision is none: only an absence in these records.
   if (
     !decision ||
     (decision.decision !== "block" && decision.decision !== "ask" && decision.decision !== "allow")
   )
-    return { kind: "not-recorded" };
+    return { kind: "none-in-records" };
   const source = decision.source;
   const answer =
     decision.answer === "allow-once" ||
@@ -1053,12 +1076,14 @@ export async function readActivity(
     if (typeof decisions !== "string") {
       const [current, status] = await Promise.all([
         decisions.byCall.size > 0 ? currentRules(ctx) : Promise.resolve(null),
-        ctx.request(RULES_STATUS_METHOD, {}).then(asRecord, () => null),
+        ctx.request(RULES_STATUS_METHOD, {}).then(asRecord, () => null as null),
       ]);
       rules = current;
       const kept = asRecord(status?.decisions);
       if (kept?.state === "failing")
         recordFailing = `Clawtrate's rules plugin says ${cut(kept.reason, 256) ?? "its decision record is failing"}.`;
+      // A status that couldn't be read, or names no state it documents: no absence is known.
+      else if (kept?.state !== "kept") recordFailing = STATUS_UNREAD;
     }
   }
   const unread = typeof decisions === "string" ? decisions : null;
@@ -1072,17 +1097,27 @@ export async function readActivity(
       if (row.callId && decisions !== null) {
         if (typeof decisions === "string") cause = { kind: "not-read", reason: decisions };
         else {
-          const found = decisions.byCall.get(`${row.runId}\u0000${row.callId}`);
-          cause = found
-            ? causeOf(found, rules)
-            : recordFailing
-              ? { kind: "not-read", reason: recordFailing }
-              : decisions.full.has(row.runId)
+          // Only a record of this row's own task: one from another task never gives its cause.
+          const candidates = (decisions.byCall.get(`${row.runId}\u0000${row.callId}`) ?? []).filter(
+            (each) =>
+              each.sessionKey === null ||
+              row.sessionKey === null ||
+              each.sessionKey === row.sessionKey,
+          );
+          const found = candidates.length === 1 ? candidates[0] : undefined;
+          cause =
+            candidates.length > 1
+              ? { kind: "not-read", reason: "More than one decision record could be this call's." }
+              : found
                 ? causeOf(found, rules)
-                : {
-                    kind: "not-read",
-                    reason: `This run has more than ${DECISIONS_PER_RUN} decision records; only the newest were read.`,
-                  };
+                : recordFailing
+                  ? { kind: "not-read", reason: recordFailing }
+                  : decisions.full.has(row.runId)
+                    ? causeOf(found, rules)
+                    : {
+                        kind: "not-read",
+                        reason: `This run has more than ${DECISIONS_PER_RUN} decision records; only the newest were read.`,
+                      };
         }
       }
       return { ...row, cause, inChat: chatTarget(row, options.loaded) };

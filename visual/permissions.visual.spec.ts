@@ -49,9 +49,7 @@ const SCENES: Scene[] = [
     query: `${ADMIN}&rules=stopped`,
     ready: permissions(
       "Rules",
-      pluginSays(
-        /^Rules plugin answered at .+: it isn't enforcing rules, because its hook isn't registered or its service isn't running\.$/,
-      ),
+      pluginSays(/^Rules plugin answered at .+\. It reports that it isn't enforcing rules\.$/),
     ),
   },
   {
@@ -75,7 +73,7 @@ const SCENES: Scene[] = [
     ready: permissions(
       "Rules",
       pluginSays(
-        /Its rules file can't be read and it holds no earlier copy, so it asks before every tool call it sees, other than ask_user\.$/,
+        /Its rules file can't be read and it holds no earlier copy\. It requires approval for calls that reach its hook, except ask_user\.$/,
       ),
     ),
   },
@@ -581,7 +579,7 @@ test.describe("behaviour", () => {
     await expect(all.nth(3)).toContainText("Pip · Plan the week");
     // A routine's call no record joins: cause not recorded.
     await expect(all.nth(2)).toContainText("A routine's run");
-    await expect(all.nth(2)).toContainText("Cause not recorded");
+    await expect(all.nth(2)).toContainText("No cause in the records read");
     // A cause whose source could not be read says so, and the tag is the audit record's own.
     await expect(all.nth(4)).toContainText("Started");
     await expect(all.nth(4)).toContainText("Cause not read.");
@@ -754,6 +752,52 @@ test.describe("behaviour", () => {
     await expect(older).toBeEnabled();
     await older.click();
     await expect(page.getByTestId("activity-row")).toHaveCount(7);
+  });
+
+  test("F-324: the rules line says what the plugin answered in each mode, and Activity says what its records establish", async ({
+    page,
+  }) => {
+    const modes: Array<[string, string | RegExp]> = [
+      ["running", /^Rules plugin answered at .+\. Last tool call seen .+\.$/],
+      ["kept", /Its rules file can't be read; it enforces the copy it read at .+\.$/],
+      [
+        "lost",
+        /Its rules file can't be read and it holds no earlier copy\. It requires approval for calls that reach its hook, except ask_user\.$/,
+      ],
+      ["nothing", /No rules are saved in it\.$/],
+      ["stopped", /^Rules plugin answered at .+\. It reports that it isn't enforcing rules\.$/],
+      [
+        "failed",
+        "Couldn't read Clawtrate's rules plugin's status. The gateway didn't answer within 60 seconds.",
+      ],
+      [
+        "future",
+        "Couldn't read Clawtrate's rules plugin's status. The plugin's status didn't identify an enforcement mode.",
+      ],
+      ["absent", "This connection didn't list the rules plugin's status method."],
+    ];
+    for (const [mode, words] of modes) {
+      await openFixture(page, `${ADMIN}&rules=${mode}`, "light");
+      await permissions("Rules", pluginSays(words))(page);
+    }
+    // Without the plugin's methods, Activity says so, and no row claims an absence in its records.
+    await permissions("Activity", rows)(page);
+    await expect(page.getByTestId("activity-part")).toContainText(
+      "This connection didn't list the rules plugin's status method.",
+    );
+    await expect(page.getByText("No cause in the records read")).toHaveCount(0);
+    // Each kind of absence the records give, in its own words.
+    await openFixture(page, `${ADMIN}&audit=causes`, "light");
+    await permissions("Activity", rows)(page);
+    const all = page.getByTestId("activity-row");
+    await expect(all.nth(0)).toContainText("No cause in the records read");
+    await expect(all.nth(2)).toContainText(
+      "Cause not read. The plugin's decision record status couldn't be read.",
+    );
+    await expect(all.nth(4)).toContainText(
+      "Cause not read. Clawtrate's rules plugin says the decision record cannot be read (EACCES).",
+    );
+    await expect(all.nth(1)).toContainText("Recorded:");
   });
 
   test("permissions: it opens on Saved approvals, and its parts are one radio group with one tab stop, moved by the arrows", async ({
