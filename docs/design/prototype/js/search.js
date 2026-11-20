@@ -676,7 +676,8 @@
         const v = Object.values(each.per);
         const c = (s) => v.filter((x) => x.state === s).length;
         g.state = "searching";
-        g.lines.unshift(`Searching ${plural(each.asked.length, "bot")}… ${c("done") + c("failed")} answered, ${c("searching")} in progress, ${c("queued")} queued.`);
+        // A bot that failed is counted apart, never as answered.
+        g.lines.unshift(`Searching ${plural(each.asked.length, "bot")}… ${c("done")} answered, ${c("failed") ? `${c("failed")} couldn't search, ` : ""}${c("searching")} in progress, ${c("queued")} queued.`);
       } else if (reply.truncated) g.actions.push({ key: "act:each", label: "Search each bot for more", act: () => searchEach(q, 0) });
       return g;
     }
@@ -697,7 +698,7 @@
       const rows = byTime(e.reply.results).map((r) => messageRow(r, e.reply));
       const f = flags(e.reply);
       const line = e.reply.truncated
-        ? `${name} · ${rows.length} returned. More match; add words to narrow them.`
+        ? `${name} · ${rows.length} returned. More match; add words to narrow them.${f.length ? ` ${f.join(" ")}` : ""}`
         : f.length
           ? `${name} · ${rows.length ? `${rows.length} returned` : "none returned"}. ${f.join(" ")}`
           : rows.length

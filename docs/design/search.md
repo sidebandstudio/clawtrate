@@ -190,16 +190,16 @@ The task title on a message row comes from the task list; for a task the list do
 | `indexing`                       | "6 matches returned, newest first." and "Some messages are still being indexed." Never "All". | as above                   |
 | `archivedTranscriptsExcluded: 4` | adds "4 tasks have archived transcript content that wasn't searched." Never "All".            | as above                   |
 
-**Search each bot for more** asks again once for each bot, with `scope.agentId`, 25 each, in the rail's order: at most 24 bots per action, 4 requests at a time. While it runs, the group's first line is "Searching 4 bots… 2 answered, 2 in progress, 0 queued.", and the first search's rows stay until every asked bot has answered or failed; nothing says "No matches in … Messages" meanwhile. Then the first line is "4 of 4 bots answered. 30 messages returned.", "Not asked: <names>." follows when the roster had more bots, and the rows are shown under one line per bot, from that bot's own reply:
+**Search each bot for more** asks again once for each bot, with `scope.agentId`, 25 each, in the rail's order: at most 24 bots per action, 4 requests at a time. While it runs, the group's first line is "Searching 4 bots… 2 answered, 2 in progress, 0 queued.", and a bot that failed is counted apart ("Searching 4 bots… 2 answered, 1 couldn't search, 1 in progress, 0 queued."), and the first search's rows stay until every asked bot has answered or failed; nothing says "No matches in … Messages" meanwhile. Then the first line is "4 of 4 bots answered. 30 messages returned.", "Not asked: <names>." follows when the roster had more bots, and the rows are shown under one line per bot, from that bot's own reply:
 
-| A bot's reply                   | Its line                                                                          |
-| ------------------------------- | --------------------------------------------------------------------------------- |
-| No `truncated`, no other flag   | "Juniper · all 3 matches", or "Marlow · no matches"                               |
-| `truncated`                     | "Otto · 25 returned. More match; add words to narrow them."                       |
-| `indexing` or the archive count | "Juniper · none returned. Some messages are still being indexed." (zero hits too) |
-| Failed or timed out             | "Pip · couldn't search: <the gateway's message>", with "Try again for Pip"        |
+| A bot's reply                   | Its line                                                                                                               |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| No `truncated`, no other flag   | "Juniper · all 3 matches", or "Marlow · no matches"                                                                    |
+| `truncated`                     | "Otto · 25 returned. More match; add words to narrow them." Append this bot's indexing and archive lines when present. |
+| `indexing` or the archive count | "Juniper · none returned. Some messages are still being indexed." (zero hits too)                                      |
+| Failed or timed out             | "Pip · couldn't search: <the gateway's message>", with "Try again for Pip"                                             |
 
-A bot that failed is not counted as answered. With more than 24 bots the rest are named under "Not asked", with "Search the next 6 bots"; the prototype's `bots=30` draws it. A new query starts again from the first search.
+A bot that failed is not counted as answered. A bot's indexing and archive lines are kept whether it returned matches or none, and with `truncated` too. With more than 24 bots the rest are named under "Not asked", with "Search the next 6 bots"; the prototype's `bots=30` draws it. A new query starts again from the first search.
 
 **What it cannot find.** Inside one bot, matches beyond what that bot's search returns. The gateway would return some of them for a narrower set of that bot's tasks (research §7), but nothing reaches all of them, and the palette does not walk a bot's tasks in batches to collect a list it still could not call complete. The bot's line asks for more words instead. It also cannot find text the gateway does not index (section 5) or messages in archived tasks.
 

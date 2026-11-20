@@ -370,6 +370,18 @@ await p.waitForTimeout(700);
 m = await groupText(p, "messages");
 check("R3 after widening: how many bots answered and how many messages came back", m.includes("4 of 4 bots answered. 30 messages returned.") && m.includes("Juniper · no matches") && m.includes("Marlow · all 2 matches") && m.includes("Otto · 25 returned. More match; add words to narrow them.") && m.includes("Pip · all 3 matches"));
 check("F-268 searching each bot found what the first search left out", m.includes("Saved a backup copy as the March draft"));
+const widening = await open("palette=open&q=backup&each=1&src=eachfail&bots=30", undefined, { clock: true });
+await widening.clock.pauseAt(new Date("2026-11-18T22:00:05Z"));
+const progress = new Set();
+for (let i = 0; i < 120; i++) {
+  await widening.clock.runFor(10);
+  const first = await widening.evaluate(() => document.querySelector('.s-group[data-group="messages"] .s-line')?.textContent || "");
+  if (first.startsWith("Searching")) progress.add(first);
+}
+const failedApart = [...progress].filter((l) => l.includes("couldn't search"));
+const sums = failedApart.map((l) => [...l.matchAll(/(\d+) (?:answered|couldn't search|in progress|queued)/g)].reduce((n, x) => n + Number(x[1]), 0));
+check("R3 while widening, a failed bot is never counted as answered", failedApart.length > 0 && failedApart.every((l) => / \d+ answered, 1 couldn't search, /.test(l)) && sums.every((n) => n === 24), [...progress].join(" / "));
+await widening.close();
 check("S12 the live region says how many bots answered, as Messages' limit, with no combined count", (await live(p)).includes("4 of 4 bots answered. 30 messages returned.") && !/\d+ results?:/.test(await live(p)), await live(p));
 await p.close();
 
@@ -392,6 +404,10 @@ await p.close();
 p = await open("palette=open&q=backup&each=1&src=indexing");
 await settle(p);
 check("R3 each bot's flags are its own, zero hits included", (await groupText(p, "messages")).includes("Juniper · none returned. Some messages are still being indexed."));
+await p.close();
+p = await open("palette=open&q=backup&each=1&src=indexing,archive");
+await settle(p);
+check("R3 a truncated bot's reply keeps its indexing and archive lines", (await groupText(p, "messages")).includes("Otto · 25 returned. More match; add words to narrow them. Some messages are still being indexed. 4 tasks have archived transcript content that wasn't searched."));
 await p.close();
 
 p = await open("palette=open&q=backup&each=1&bots=30");
