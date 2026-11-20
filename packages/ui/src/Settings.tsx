@@ -264,7 +264,7 @@ export function Settings({
   );
 
   const accountsSection = useAccountsSection({
-    refreshOnOpen: !initialUpdates || section !== "updates",
+    refreshOnOpen: section !== "updates",
     accounts,
     bots,
     connection,

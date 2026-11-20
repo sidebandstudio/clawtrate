@@ -17,4 +17,9 @@ test("F-030: opening Updates reads no accounts until another section opens", asy
   await page.keyboard.press("Escape");
   await page.keyboard.press("ControlOrMeta+,");
   await expect.poll(counts).toBe(initial + 2);
+  await page.getByRole("button", { name: "Updates", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("ControlOrMeta+,");
+  await expect(page.getByRole("heading", {name: "Updates", exact: true})).toBeFocused();
+  expect(await counts()).toBe(initial + 2);
 });
