@@ -1,0 +1,200 @@
+import { expect, test, type Page } from "@playwright/test";
+import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
+import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { devGateway } from "./global-setup.ts";
+
+const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
+const agentId = "otto";
+const name = "MEMORY.md";
+const original = "Keep a weekly release log.";
+const revised = "Update the release log on Friday.";
+const added = "Review the release checklist on Monday.";
+let gateway: OperatorSession;
+
+async function root() {
+  return (
+    await gateway.request<{ file: { hash?: string; content?: string } }>("agents.files.get", {
+      agentId,
+      name,
+    })
+  ).file;
+}
+
+async function approve() {
+  await expect
+    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000 })
+    .toMatch(/^Approved /m);
+}
+
+async function openMemory(page: Page) {
+  await page.goto(process.env.CLAWTRATE_E2E_URL!);
+  const connect = page.getByRole("button", { name: "Use the development gateway" });
+  const bots = page.getByTestId("bot");
+  await expect
+    .poll(async () => (await connect.isVisible()) || (await bots.count()) >= 4, { timeout: 20_000 })
+    .toBe(true);
+  if (await connect.isVisible()) {
+    await connect.click();
+    await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible();
+    await approve();
+  }
+  await page
+    .getByTestId("bot-list")
+    .getByRole("button", { name: /^Otto\b/ })
+    .click();
+  if (!(await page.getByTestId("work-panel").isVisible()))
+    await page.keyboard.press("ControlOrMeta+\\");
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Memory", exact: true }).click();
+  const memory = page.getByTestId("memory-page");
+  await expect(memory.getByRole("heading", { name: "Root memory" })).toBeVisible();
+  return memory;
+}
+
+async function askMemory() {
+  const { key } = await gateway.request<{ key: string }>("sessions.create", { agentId });
+  const run = await gateway.send(key, "What do you remember about me?");
+  expect((await gateway.terminal(String(run.runId))).state).toBe("final");
+  const history = await gateway.request("chat.history", { sessionKey: key, limit: 6 });
+  return JSON.stringify(history);
+}
+
+test.describe.configure({ mode: "serial" });
+
+test.beforeAll(async () => {
+  gateway = await openOperator(
+    openInstance(INSTANCE),
+    "Memory checks",
+    ["operator.admin", "operator.read", "operator.write"],
+    [],
+  );
+  const { hash } = await root();
+  await gateway.request("agents.files.set", {
+    agentId,
+    name,
+    content: original,
+    ...(hash ? { expectedHash: hash } : { expectedMissing: true }),
+  });
+});
+
+test.afterAll(async () => gateway?.close());
+
+test("F-211: reads a bot's stored memory, scope, and revision without requesting admin", async ({
+  page,
+}) => {
+  const memory = await openMemory(page);
+  const item = memory.getByRole("listitem").filter({ hasText: original });
+  await expect(item).toContainText("MEMORY.md · Otto only");
+  await expect(item).toContainText(`Revision ${(await root()).hash?.slice(0, 7)}, changed `);
+  await expect(item).toContainText("Who saved this revision isn't recorded.");
+  await expect(item).toContainText("Search for this revision is unconfirmed.");
+  await expect(memory.getByRole("button", { name: "Request admin access" })).toBeVisible();
+  await expect(memory.getByRole("button", { name: "Edit", exact: true })).toHaveCount(0);
+});
+
+test("F-212: edits a root item after an explicit admin request", async ({ page }) => {
+  const memory = await openMemory(page);
+  const access = memory.getByRole("button", { name: "Request admin access" });
+  await access.click();
+  await expect(memory.getByText("Waiting for the gateway's owner.")).toBeVisible();
+  await approve();
+  await expect(page.getByTestId("admin-bar")).toContainText("Admin access granted.", {
+    timeout: 30_000,
+  });
+  const item = memory.getByRole("listitem").filter({ hasText: original });
+  await item.getByRole("button", { name: "Edit", exact: true }).click();
+  await memory.getByLabel("Memory text").fill(revised);
+  await memory.getByRole("button", { name: "Save memory" }).click();
+  await expect(memory.getByText(revised, { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect.poll(async () => (await root()).content, { timeout: 30_000 }).toBe(revised);
+  expect(await askMemory()).toContain(revised);
+});
+
+test("F-377: adds root memory and a separate Markdown note", async ({ page }) => {
+  const memory = await openMemory(page);
+  await memory.getByRole("button", { name: "Add memory" }).click();
+  await memory.getByLabel("Memory text").fill(added);
+  await memory.getByRole("button", { name: "Save memory" }).click();
+  await expect(memory.getByRole("listitem").filter({ hasText: added })).toBeVisible({
+    timeout: 15_000,
+  });
+  expect((await root()).content).toContain(added);
+  expect(await askMemory()).toContain(added);
+
+  await memory.getByRole("button", { name: "Add memory" }).click();
+  await memory.getByLabel("Save in").selectOption("note");
+  await memory.getByLabel("Note filename").fill("release.md");
+  await memory.getByLabel("Memory text").fill("Separate release notes.");
+  await memory.getByRole("button", { name: "Save memory" }).click();
+  await memory.getByRole("button", { name: "memory/release.md" }).click();
+  await expect(memory.getByText("Separate release notes.", { exact: true })).toBeVisible();
+  const note = await gateway.request("clawtrate-memory.read", {
+    agentId,
+    path: "memory/release.md",
+  });
+  expect(note).toMatchObject({ content: "Separate release notes.", loadedIntoNewTasks: false });
+});
+
+test("F-375: confirms deletion and removes an item from the bot's next new private task", async ({
+  page,
+}) => {
+  const memory = await openMemory(page);
+  const item = memory.getByRole("listitem").filter({ hasText: added });
+  await item.getByRole("button", { name: "Delete", exact: true }).click();
+  const confirm = page.getByRole("alertdialog", { name: "Delete this memory?" });
+  await expect(confirm).toContainText(added);
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(item).toBeVisible();
+  await item.getByRole("button", { name: "Delete", exact: true }).click();
+  await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(item).toHaveCount(0);
+  const reply = await askMemory();
+  expect(reply).toContain(revised);
+  expect(reply).not.toContain(added);
+
+  await memory.getByRole("button", { name: "memory/release.md" }).click();
+  await memory
+    .getByRole("listitem")
+    .filter({ hasText: "Separate release notes." })
+    .getByRole("button", { name: "Delete", exact: true })
+    .click();
+  await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(memory.getByRole("button", { name: "memory/release.md" })).toHaveCount(0);
+  await expect(
+    gateway.request("clawtrate-memory.read", { agentId, path: "memory/release.md" }),
+  ).rejects.toThrow(/does not exist/);
+});
+
+test("F-216: a bot replies to the ordinary memory question with the memory it received", async ({
+  page,
+}) => {
+  await openMemory(page);
+  await page.getByRole("button", { name: "Hide work panel" }).click();
+  const plus = page.locator(".rail-top").getByRole("button", { name: "New", exact: true });
+  await plus.click();
+  await page.getByRole("menuitem", { name: "New task for Otto" }).click();
+  const composer = page.getByTestId("composer-input");
+  await composer.fill("What do you remember about me?");
+  await composer.press("Enter");
+  await expect(page.getByTestId("memory-page")).toBeHidden();
+  await expect(page.getByTestId("message").filter({ hasText: revised })).toBeVisible({
+    timeout: 30_000,
+  });
+});
+
+test("F-212: a concurrent write keeps the gateway's revision and leaves the draft available", async ({
+  page,
+}) => {
+  const memory = await openMemory(page);
+  const item = memory.getByRole("listitem").filter({ hasText: revised });
+  await item.getByRole("button", { name: "Edit", exact: true }).click();
+  const { hash } = await root();
+  const newer = "Another editor saved this revision.";
+  await gateway.request("agents.files.set", { agentId, name, content: newer, expectedHash: hash });
+  const editor = memory.getByLabel("Memory text");
+  await editor.fill("My unsaved draft.");
+  await memory.getByRole("button", { name: "Save memory" }).click();
+  await expect(memory.getByRole("alert")).toBeVisible();
+  await expect(editor).toHaveValue("My unsaved draft.");
+  expect((await root()).content).toBe(newer);
+});

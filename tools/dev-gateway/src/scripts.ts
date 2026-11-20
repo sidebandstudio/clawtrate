@@ -164,6 +164,15 @@ export function planReply(
 
   const raw = messageText(messages[lastUserIndex]!);
   const prompt = normalizePrompt(raw);
+  if (prompt === "What do you remember about me?") {
+    const memory = messages
+      .filter((message) => message.role === "system")
+      .map(messageText)
+      .join("\n")
+      .match(/^## .*\/MEMORY\.md\s*\n([\s\S]*?)(?=^## |(?![\s\S]))/m)?.[1]
+      ?.trim();
+    return [{ kind: "text", text: memory || "I have no root memory for this task." }];
+  }
   const after = messages.slice(lastUserIndex + 1);
   // Each assistant message after the user's turn is one completed round.
   const roundIndex = after.filter((m) => m.role === "assistant").length;

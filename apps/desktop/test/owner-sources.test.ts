@@ -19,6 +19,7 @@ const SCANNED = ["packages/core/src", "apps/desktop/src/web-host", "apps/desktop
 /** Collections kept outside the registry's fields: why each one is bounded. */
 const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
+  "packages/core/src/memory.ts:ROOT_MEMORY": "static, two workspace filenames",
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
   "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
   "packages/core/src/file-paths.ts:FILE_TOOLS": "static, four tool names",
