@@ -181,3 +181,7 @@ Where it matters which bot you ask:
 - **Questions and approvals** need a client with the right scopes. The read-only preview does not show them yet; answer from a client with `operator.questions` or `operator.approvals`.
 
 After `start`, the seed has left finished examples, played through a paired client called "Clawtrate seed" that answers and approves as the user and is unpaired afterwards: Juniper's "Show your work" (reasoning and steps), "A step that fails" and "Hand off to the coding agent" (an MCP call); Pip's "Ask Marlow about the plan" (a bot-to-bot exchange) and "Which route on Saturday" (an answered question); Marlow's "Notes for Pip", where Pip's message arrived; and Otto's "List the workspace (approved)" (a resolved approval).
+
+### Scheduled jobs
+
+`pnpm dev-gateway routines --instance <name>` adds the [sample routines](../../tools/dev-gateway/src/routines.ts) when their names are absent. The development gateway's scheduler is off. To run a sample immediately, use `openclaw --profile clawtrate-dev-<name> gateway call cron.run --params '{"id":"<id>","mode":"force"}'`.

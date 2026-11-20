@@ -9,7 +9,7 @@ import {
   type Budget,
   type ConnectionState,
   type HostInfo,
-  type Routine,
+  type BudgetRoutine,
   MAX_BOTS,
   type UsagePeriod,
 } from "@clawtrate/core";
@@ -126,7 +126,7 @@ function Budgets({
   // The saved budget whose form is open, opened from its own row.
   const [editing, setEditing] = useState<string | null>(null);
   const [target, setTarget] = useState<string>("");
-  const [routines, setRoutines] = useState<Routine[] | null>(null);
+  const [routines, setRoutines] = useState<BudgetRoutine[] | null>(null);
   // A failed read of the routines is said, and asked again with Try again: never an empty list.
   const [routinesError, setRoutinesError] = useState<string | null>(null);
   useEffect(() => {
