@@ -1301,7 +1301,9 @@ describe("the iOS app", () => {
       await steps("long-home-largest", [
         tap({ id: "back" }),
         waitFor({ id: "home" }, 20_000),
-        scrollTo({ id: "pin-name-pip" }, "UP"),
+        // The long pinned name can be taller than the screen: its short neighbour brings the
+        // row of tiles into view, and the layout reads both.
+        scrollTo({ id: "pin-name-marlow" }, "UP"),
       ]);
       const pin = await heightOf("pin-name-pip", LONG_PIN);
       expect(pin).toBeGreaterThan(1.8 * (await heightOf("pin-name-marlow", "Mo")));
