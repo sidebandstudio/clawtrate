@@ -1,6 +1,6 @@
 // The engine stays in main. Its address, release date and bounds come from the build.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BUILD_FEED_ADDRESS,
@@ -49,7 +49,7 @@ describe("only the desktop main process can reach the engine", () => {
   it("no renderer, preload or web host entry imports the update module", () => {
     for (const entry of entries) {
       expect(existsSync(entry), entry).toBe(true);
-      const into = [...reached(entry)].filter((file) => file.startsWith(`${UPDATE}/`));
+      const into = [...reached(entry)].filter((file) => file.startsWith(`${UPDATE}${sep}`));
       expect(
         into.map((file) => relative(APP, file)),
         relative(APP, entry),
