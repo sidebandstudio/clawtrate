@@ -507,9 +507,9 @@ describe("the update engine against a local feed", () => {
       },
     }).engine;
     const outer = engine.check();
+    expect(inner).toBe(outer);
     const result = await outer;
     expect(await inner).toBe(result);
-    expect(inner).toBe(outer);
     expect(server.requests).toEqual(["/feed.json"]);
   });
 });

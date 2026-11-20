@@ -181,14 +181,13 @@ export class UpdateEngine {
 
   private exclusive(work: () => Promise<UpdateState>): Promise<UpdateState> {
     if (this.busy) return this.busy;
-    // The work starts a microtask later, after `busy` is set, so an observer
-    // that asks for a check from inside `onState` gets this same promise.
-    const run: Promise<UpdateState> = Promise.resolve()
-      .then(work)
-      .finally(() => {
-        if (this.busy === run) this.busy = null;
-      });
+    // Publish the shared promise before work synchronously reports its first state.
+    const { promise, resolve } = Promise.withResolvers<UpdateState>();
+    const run = promise.finally(() => {
+      this.busy = null;
+    });
     this.busy = run;
+    resolve(work());
     return run;
   }
 
