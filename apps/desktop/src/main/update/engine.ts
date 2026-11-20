@@ -409,6 +409,8 @@ export class UpdateEngine {
         if (error instanceof DownloadFailed) throw error;
         throw new FetchRefused(transfer.cause());
       }
+      transfer.done();
+      if (transfer.signal.aborted) throw new FetchRefused(transfer.cause());
       if (received !== file.size) throw new DownloadFailed("size-mismatch");
       if (hash.digest("base64") !== file.sha512) throw new DownloadFailed("hash-mismatch");
       if (received !== reported) progress(received);
@@ -435,7 +437,6 @@ export class UpdateEngine {
       await rm(partial, { force: true }).catch(() => undefined);
       return this.report(failure("download", error));
     }
-    transfer.done();
     return this.report({ kind: "ready", version, releaseDate, path: target });
   }
 }
