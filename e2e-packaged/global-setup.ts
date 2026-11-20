@@ -430,12 +430,21 @@ export default async function globalSetup() {
 async function debuggingPort(userData: string, app: ChildProcess): Promise<number> {
   const portFile = join(userData, "DevToolsActivePort");
   const deadline = Date.now() + 30_000;
-  while (!existsSync(portFile)) {
+  let text: string;
+  for (;;) {
+    try {
+      text = readFileSync(portFile, "utf8");
+      break;
+    } catch (error) {
+      // Not written yet, or Chromium still holds it open (EBUSY on Windows): wait and read again.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "EBUSY") throw error;
+    }
     if (app.exitCode !== null) throw new Error(`the app exited with ${app.exitCode}`);
     if (Date.now() > deadline) throw new Error("the app did not open its debugging port");
     await sleep(200);
   }
-  const port = Number(readFileSync(portFile, "utf8").split("\n")[0]);
+  const port = Number(text.split("\n")[0]);
   if (!Number.isInteger(port) || port <= 0 || FORBIDDEN_PORTS.includes(port)) {
     throw new Error(`unexpected debugging port ${port}`);
   }
