@@ -46,6 +46,7 @@ Every document in the repository, by what you want to do.
 - `research/setup-flow/`: the probe behind the setup flow note.
 - [Group chats](research/group-chats.md): what a group of bots can be on the gateway, from OpenClaw's source and a development instance: one task per bot, sending to several, who sees what, mentions, stopping, where a group can be kept, and approvals.
 - `research/group-chats/`: the probe behind the group chats note.
+- [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
 ## Writing docs
