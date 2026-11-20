@@ -121,6 +121,13 @@ import {
   type CheckInSetting,
   type CheckInsState,
 } from "./check-ins.ts";
+import {
+  MAX_LOOK_OTHER_CHARS,
+  MAX_LOOK_OTHERS,
+  type SetupFailure,
+  type SetupLook,
+  type SetupState,
+} from "./setup.ts";
 import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
 import type {
   Bot,
@@ -1083,6 +1090,27 @@ export const ROUTINES: Bound = object<RoutinesState>()({
   }),
 });
 
+/** Setting up on the host's computer (`setup.ts`): fixed facts and a few short names. */
+const setupLook = object<SetupLook>()({
+  outcome: ENUM,
+  reason: ENUM,
+  version: NAME,
+  profile: NAME,
+  listens: ENUM,
+  service: ENUM,
+  port: NUMBER,
+  authMode: ENUM,
+  access: ENUM,
+  others: list(MAX_LOOK_OTHERS, text(MAX_LOOK_OTHER_CHARS)),
+});
+const setup = object<SetupState>()({
+  phase: ENUM,
+  step: NUMBER,
+  slow: FLAG,
+  look: setupLook,
+  failure: object<SetupFailure>()({ kind: ENUM, exitCode: NUMBER, port: NUMBER, reason: ENUM }),
+});
+
 /** Every part of the state but the transcripts, and the transcripts as one map. */
 export const STATE: Bound = flagged<ClawtrateState>()({
   connection,
@@ -1098,6 +1126,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   retention: retentionAlarm,
   sidebar,
   checkIns: CHECK_INS,
+  setup,
   turnLimitMinutes: NUMBER,
   usage: USAGE,
 });
