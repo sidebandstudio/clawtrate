@@ -132,7 +132,7 @@ export function useDesktopUpdateSnapshot(host: DesktopUpdates) {
   useEffect(() => store.connect(), [store]);
   return {
     ...reading,
-    pending: reading.localChoice ?? reading.snapshot?.pendingTrack ?? null,
+    pending: reading.snapshot?.pendingTrack ?? reading.localChoice,
     check: store.check,
     download: store.download,
     chooseTrack: store.chooseTrack,
