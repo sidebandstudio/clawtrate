@@ -41,6 +41,7 @@ export const COMPUTER_STATES = [
   "unsettled",
   "conflict",
   "stuck",
+  "stuck-refused",
   "active",
   "elsewhere",
   "elsewhere-taking",
@@ -398,8 +399,41 @@ export function computerFixture(
         },
       });
     },
-    stopTask: async () => {
+    // The conversation's Stop, played: each run stopping, then its own end (or, for
+    // `stuck-refused`, the gateway's refusal, which puts it back as it was).
+    stopTask: async (key) => {
+      const runIds = (get().transcripts[key]?.runs ?? [])
+        .filter((run) => run.state === "running" || run.state === "waiting")
+        .map((run) => run.id);
+      const update = (change: (run: Run) => Run) => {
+        const t = get().transcripts[key];
+        if (!t) return;
+        set({
+          ...get(),
+          transcripts: {
+            ...get().transcripts,
+            [key]: {
+              ...t,
+              runs: t.runs.map((run) => (runIds.includes(run.id) ? change(run) : run)),
+            },
+          },
+        });
+      };
+      update((run) => ({ ...run, state: "stopping", stopRequestedAt: Date.now() }));
       await wait(200);
+      if (mode === "stuck-refused")
+        update((run) => ({
+          ...run,
+          state: "waiting",
+          stopRequestedAt: null,
+          stopError: "The gateway refused to stop this run.",
+        }));
+      else
+        setTimeout(
+          () => update((run) => ({ ...run, state: "stopped", endedAt: Date.now() })),
+          1200,
+        );
+      return { runIds, aborted: null };
     },
     log: () => {},
   });
@@ -469,7 +503,7 @@ export function computerFixture(
         event("draining", gen);
         if (mode === "draining") return forever;
         await wait(params.takeRace ? 1500 : 700);
-        if (mode === "busy" || mode === "stuck")
+        if (mode === "busy" || mode === "stuck" || mode === "stuck-refused")
           return { state: "busy", reason: "bot-still-acting", runningCalls: 1, generation: gen };
         if (mode === "unsettled")
           return { state: "busy", reason: "browser-not-quiet", runningCalls: 0, generation: gen };

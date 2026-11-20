@@ -12,13 +12,14 @@ import {
   MAX_QUEUED_INPUTS,
   parseFrame,
   pictureAge,
+  stopProgress,
   streamUrl,
   type ComputerContext,
   type ComputerState,
 } from "../src/computer.ts";
 import type { WebSocketLike } from "../src/host.ts";
 import { utf8Bytes } from "../src/bytes.ts";
-import type { QuestionCard } from "../src/runs.ts";
+import type { QuestionCard, Run } from "../src/runs.ts";
 
 const KEY = "agent:pip:trip";
 const TAB = "TAB0000000000000000000000000000A";
@@ -194,7 +195,7 @@ function harness(handlers: Record<string, Handler> = {}, options: { write?: bool
     answer: async (key, id, answers) => {
       answered.push({ key, id, answers });
     },
-    stopTask: vi.fn(async () => {}),
+    stopTask: vi.fn(async () => ({ runIds: [], aborted: false })),
     log: (_level, message) => logs.push(message),
   };
   const views = new ComputerViews(ctx);
@@ -919,12 +920,54 @@ describe("leaving (section 17, How a view ends; section 18, Leaving while in con
     expect(h.state().panes).toEqual({});
   });
 
-  it("F-149: Stop in this task stops the task's runs through the conversation's Stop, and says so", async () => {
+  it("F-149: Stop in this task goes through the conversation's Stop and keeps only what the gateway answered", async () => {
     const h = harness();
+    h.ctx.stopTask = vi.fn(async () => ({ runIds: ["run-1"], aborted: null }));
     await ready(h);
     await h.views.stopTask(h.viewer);
     expect(h.ctx.stopTask).toHaveBeenCalledWith(KEY);
-    expect(h.pane().stopped).toBe(true);
+    expect(h.pane().stop).toEqual({
+      sending: false,
+      runIds: ["run-1"],
+      aborted: null,
+      error: null,
+    });
+    const refusedStop = harness();
+    refusedStop.ctx.stopTask = vi.fn(async () => {
+      throw refused("FORBIDDEN", "not_allowed");
+    });
+    await ready(refusedStop);
+    await refusedStop.views.stopTask(refusedStop.viewer);
+    expect(refusedStop.pane().stop).toMatchObject({
+      sending: false,
+      error: "refused: not_allowed",
+    });
+  });
+
+  it("F-149: says Stopped only from each run's own end; a refused stop, one still stopping and an abort of nothing are not a stop", () => {
+    const run = (state: Run["state"], stopError: string | null = null) => ({
+      id: "run-1",
+      state,
+      stopError,
+    });
+    const asked = { sending: false, runIds: ["run-1"], aborted: null, error: null };
+    expect(stopProgress(null, [])).toEqual({ kind: "none" });
+    expect(stopProgress({ ...asked, sending: true }, [run("running")])).toEqual({
+      kind: "sending",
+    });
+    // Accepted, the run still stopping: the composer's own Stop says Stopping.
+    expect(stopProgress(asked, [run("stopping")])).toEqual({ kind: "stopping" });
+    // Refused: the run goes back to running, with the gateway's refusal.
+    expect(stopProgress(asked, [run("running", "Not allowed.")])).toEqual({
+      kind: "refused",
+      error: "Not allowed.",
+    });
+    expect(stopProgress(asked, [run("stopped")])).toEqual({ kind: "stopped" });
+    expect(stopProgress(asked, [run("completed")])).toEqual({ kind: "ended" });
+    expect(stopProgress(asked, [])).toEqual({ kind: "stopping" });
+    const none = { sending: false, runIds: [], aborted: false, error: null };
+    expect(stopProgress(none, [])).toEqual({ kind: "nothing" });
+    expect(stopProgress({ ...none, aborted: true }, [])).toEqual({ kind: "accepted" });
   });
 });
 

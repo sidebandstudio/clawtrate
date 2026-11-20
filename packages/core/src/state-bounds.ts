@@ -117,10 +117,12 @@ import {
   MAX_COMPUTER_TABS,
   MAX_COMPUTER_TEXT,
   MAX_CONTROL_RECORDS,
+  MAX_STOPPED_RUNS,
   type ComputerControl,
   type ComputerLease,
   type ComputerPane,
   type ComputerState,
+  type ComputerStop,
   type ComputerTab,
   type ComputerView,
   type ControlRecord,
@@ -925,7 +927,12 @@ const computerPane = object<ComputerPane>()({
   shown: ID,
   view: computerView,
   control: computerControl,
-  stopped: FLAG,
+  stop: object<ComputerStop>()({
+    sending: FLAG,
+    runIds: list(MAX_STOPPED_RUNS, ID),
+    aborted: FLAG,
+    error: COMPUTER_TEXT,
+  }),
 });
 const controlRecord = object<ControlRecord>()({
   agentId: ID,

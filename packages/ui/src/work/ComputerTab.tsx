@@ -13,6 +13,7 @@ import {
   computerWords as words,
   lineOf,
   pictureAge,
+  stopProgress,
   recentActions,
   type Bot,
   type ClawtrateBridge,
@@ -192,6 +193,8 @@ export function ComputerTab(props: ComputerTabProps) {
   };
 
   const held = heldLine(name, pane, full);
+  // What "Stop <Bot> in this task" did, read from the runs it named: Stopped only from their end.
+  const stopped = stopProgress(pane?.stop ?? null, transcript?.runs ?? []);
   const status = control?.status ?? "none";
   const banner =
     question &&
@@ -199,7 +202,7 @@ export function ComputerTab(props: ComputerTabProps) {
     pane.tabs.length > 0 &&
     interactive &&
     connection.canAnswer &&
-    !pane.stopped &&
+    !["sending", "stopping", "stopped"].includes(stopped.kind) &&
     !["maybe-held", "checking", "unverified", "releasing", "unconfirmed"].includes(status) ? (
       <div
         className="computer-banner"
@@ -234,11 +237,7 @@ export function ComputerTab(props: ComputerTabProps) {
 
   const stuck =
     pane && control && control.busyCount >= 3 && interactive ? (
-      <StuckLine
-        name={name}
-        stopped={pane.stopped}
-        onStop={() => send({ type: "computerStopTask" })}
-      />
+      <StuckLine name={name} progress={stopped} onStop={() => send({ type: "computerStopTask" })} />
     ) : null;
 
   return (
@@ -382,11 +381,11 @@ function ReleaseAgain() {
 
 function StuckLine({
   name,
-  stopped,
+  progress,
   onStop,
 }: {
   name: string;
-  stopped: boolean;
+  progress: ReturnType<typeof stopProgress>;
   onStop: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -395,15 +394,35 @@ function StuckLine({
   useEffect(() => {
     if (confirming) cancelRef.current?.focus();
   }, [confirming]);
-  if (stopped)
+  const said =
+    progress.kind === "sending" || progress.kind === "stopping"
+      ? words.stoppingLine(name)
+      : progress.kind === "stopped"
+        ? words.stoppedLine(name)
+        : progress.kind === "ended"
+          ? words.endedBeforeStopLine(name)
+          : progress.kind === "accepted"
+            ? words.stopAcceptedLine(name)
+            : progress.kind === "nothing"
+              ? words.nothingToStopLine(name)
+              : null;
+  if (said)
     return (
-      <p className="files-alert" data-tone="quiet" role="status" data-testid="computer-stopped">
-        {words.stoppedLine(name)}
+      <p
+        className="files-alert"
+        data-tone="quiet"
+        role="status"
+        data-testid="computer-stopped"
+        data-stop={progress.kind}
+      >
+        {progress.kind === "sending" || progress.kind === "stopping" ? glyph("working") : null}
+        {said}
       </p>
     );
   return (
     <>
       <p className="files-alert" role="alert" data-testid="computer-stuck">
+        {progress.kind === "refused" && <>{words.stopRefusedLine(name, progress.error)} </>}
         {words.stuckLine(name)}
         <button
           ref={openerRef}

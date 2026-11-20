@@ -85,6 +85,16 @@ export const stopConfirmLine = (bot: string) =>
   `Stop ${bot}'s runs in this task? Steps already done stay done. ${bot}'s other tasks and other bots keep going.`;
 export const stoppedLine = (bot: string) =>
   `Stopped ${bot}'s runs in this task. Its other tasks and other bots keep going.`;
+/** Asked, and not yet ended by the runs themselves (`stopProgress`). */
+export const stoppingLine = (bot: string) => `Stopping ${bot}'s runs in this task…`;
+export const endedBeforeStopLine = (bot: string) =>
+  `${bot}'s runs in this task ended before the stop took effect.`;
+export const stopRefusedLine = (bot: string, error: string) =>
+  `Couldn't stop ${bot}'s runs in this task. ${error}`;
+export const nothingToStopLine = (bot: string) =>
+  `Nothing of ${bot}'s was running in this task, so nothing was stopped.`;
+export const stopAcceptedLine = (bot: string) =>
+  `The gateway took the stop for this task. It shows here once ${bot}'s run ends.`;
 
 export const controlEndedLine = (cause: "expired" | "revoked" | null) =>
   cause === "expired"

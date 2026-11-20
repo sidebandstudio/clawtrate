@@ -23,7 +23,7 @@
 import { toBase64 } from "./bytes.ts";
 import type { WebSocketLike } from "./host.ts";
 import { asRecord, botIdFromSessionKey, type RawRecord } from "./mapping.ts";
-import type { QuestionAnswer, QuestionCard } from "./runs.ts";
+import { isTerminal, type QuestionAnswer, type QuestionCard, type Run } from "./runs.ts";
 
 // What the plugin is and what it promises (plugins/clawtrate-computer/README.md) -----------
 
@@ -49,6 +49,48 @@ export const MAX_QUEUED_INPUTS = 32;
 export const MAX_INPUT_TEXT = 2000;
 /** How often a view and a held tab are renewed, at most (the plugin asks for well within `renewWithinMs`). */
 export const RENEW_EVERY_MS = 5_000;
+/** Runs a "Stop <Bot> in this task" names, at most. */
+export const MAX_STOPPED_RUNS = 8;
+
+/** What the conversation's Stop answers for a task (`ComputerContext.stopTask`). */
+export type StopAnswer = {
+  /** The runs it asked the gateway to stop. */
+  runIds: string[];
+  /** With no run to name, `chat.abort` for the task: whether it aborted anything; null otherwise. */
+  aborted: boolean | null;
+};
+
+export type ComputerStop = {
+  /** On its way. */
+  sending: boolean;
+  runIds: string[];
+  aborted: boolean | null;
+  /** The request itself failed. */
+  error: string | null;
+};
+
+/**
+ * Where a "Stop <Bot> in this task" is, from the runs it named as the task holds them: stopped
+ * only once each run's own end says so. A refused stop puts the run back to running with its
+ * error (`revertStop`); an abort that aborted nothing is no stop.
+ */
+export function stopProgress(
+  stop: ComputerStop | null,
+  runs: readonly Pick<Run, "id" | "state" | "stopError">[],
+):
+  | { kind: "none" }
+  | { kind: "sending" | "stopping" | "stopped" | "ended" | "nothing" | "accepted" }
+  | { kind: "refused"; error: string } {
+  if (!stop) return { kind: "none" };
+  if (stop.sending) return { kind: "sending" };
+  if (stop.error) return { kind: "refused", error: stop.error };
+  if (stop.runIds.length === 0) return { kind: stop.aborted === true ? "accepted" : "nothing" };
+  const named = stop.runIds.map((id) => runs.find((run) => run.id === id));
+  const refused = named.find((run) => run && !isTerminal(run.state) && run.stopError);
+  if (refused) return { kind: "refused", error: refused.stopError! };
+  if (named.some((run) => !run || !isTerminal(run.state))) return { kind: "stopping" };
+  return named.every((run) => run!.state === "stopped") ? { kind: "stopped" } : { kind: "ended" };
+}
 /**
  * The share of the lease's deadline (`renewWithinMs`) after the last confirmed renewal at which
  * "You have control" stops being said here: shorter than the lease, so it never outlives it.
@@ -222,8 +264,8 @@ export type ComputerPane = {
   shown: string | null;
   view: ComputerView | null;
   control: ComputerControl;
-  /** "Stop <Bot> in this task" stopped its runs. */
-  stopped: boolean;
+  /** "Stop <Bot> in this task": what was asked and what the gateway answered (`stopProgress`). */
+  stop: ComputerStop | null;
 };
 
 export type ControlRecord = {
@@ -413,7 +455,8 @@ export type ComputerContext = {
   /** How a question of the task ended, if it did. */
   questionStatus(key: string, questionId: string): QuestionCard["status"] | null;
   answer(key: string, questionId: string, answers: Record<string, QuestionAnswer[]>): Promise<void>;
-  stopTask(key: string): Promise<void>;
+  /** The conversation's Stop for the task's runs; which runs it asked to stop, or the abort's answer. */
+  stopTask(key: string): Promise<StopAnswer>;
   log(level: "debug" | "info" | "warn" | "error", message: string): void;
 };
 
@@ -665,7 +708,7 @@ export class ComputerViews {
           shown: null,
           view: null,
           control: kept,
-          stopped: false,
+          stop: null,
         },
       },
     }));
@@ -1650,12 +1693,30 @@ export class ComputerViews {
 
   // Stuck ---------------------------------------------------------------------------------------
 
-  /** "Stop <Bot> in this task", after its confirmation: the conversation's Stop. */
+  /**
+   * "Stop <Bot> in this task", after its confirmation: the conversation's Stop. Only what the
+   * gateway answers is kept; whether the runs stopped is read from the runs themselves.
+   */
   async stopTask(viewer: string): Promise<void> {
     const pane = this.pane(viewer);
     if (!pane) return;
-    await this.ctx.stopTask(pane.key);
-    this.patch(viewer, (p) => ({ ...p, stopped: true }));
+    const key = pane.key;
+    const sent: ComputerStop = { sending: true, runIds: [], aborted: null, error: null };
+    this.patch(viewer, (p) => ({ ...p, stop: sent }));
+    let stop: ComputerStop;
+    try {
+      const answer = await this.ctx.stopTask(key);
+      stop = {
+        sending: false,
+        runIds: answer.runIds.slice(0, MAX_STOPPED_RUNS),
+        aborted: answer.aborted,
+        error: null,
+      };
+    } catch (error) {
+      stop = { sending: false, runIds: [], aborted: null, error: refusal(error).message };
+    }
+    // Its own pane's task only: a pane shown for another task since is not changed.
+    this.patch(viewer, (p) => (p.key === key && p.stop === sent ? { ...p, stop } : p));
   }
 }
 

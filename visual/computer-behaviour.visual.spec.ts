@@ -388,10 +388,41 @@ test.describe("the computer button, recovery and the machine", () => {
     );
     await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
     await confirm.getByRole("button", { name: "Stop", exact: true }).click();
-    await expect(computerPanel(page).getByTestId("computer-stopped")).toContainText(
-      "Stopped Juniper's runs in this task.",
+    // Accepted, the run still stopping: Stopping, never Stopped, until the run's own end.
+    const line = computerPanel(page).getByTestId("computer-stopped");
+    await expect(line).toHaveText("Stopping Juniper's runs in this task…");
+    await expect(line).toHaveText(
+      "Stopped Juniper's runs in this task. Its other tasks and other bots keep going.",
     );
     expect(await sentOf(page, "computerStopTask")).toHaveLength(1);
+  });
+
+  test("F-149: a stop the gateway refuses says so, keeps the run as it was and offers Stop again; it never says Stopped", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=stuck-refused`, "light");
+    await openFull(page);
+    await take(page);
+    for (let i = 0; i < 2; i++) {
+      await expect(controlBar(page)).toContainText("Juniper is still acting");
+      await controlBar(page).getByRole("button", { name: "Try again" }).click();
+    }
+    await expect(controlBar(page)).toContainText("Juniper is still acting");
+    await page.keyboard.press("Escape");
+    await computerPanel(page)
+      .getByTestId("computer-stuck")
+      .getByRole("button", { name: "Stop Juniper in this task" })
+      .click();
+    await computerPanel(page)
+      .getByRole("alertdialog", { name: "Stop Juniper in this task?" })
+      .getByRole("button", { name: "Stop", exact: true })
+      .click();
+    const stuck = computerPanel(page).getByTestId("computer-stuck");
+    await expect(stuck).toContainText(
+      "Couldn't stop Juniper's runs in this task. The gateway refused to stop this run.",
+    );
+    await expect(stuck.getByRole("button", { name: "Stop Juniper in this task" })).toBeVisible();
+    await expect(page.getByText(/Stopped Juniper's runs/)).toHaveCount(0);
   });
 
   test("F-147 F-148 F-150: the machine keeps the approval target, where commands ran and the setting apart; a node that is not connected says so with Check again", async ({

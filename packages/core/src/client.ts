@@ -272,6 +272,7 @@ import {
   type ClosedCode,
   type ComputerFrame,
   type ComputerInput,
+  type StopAnswer,
 } from "./computer.ts";
 import { readMachine, type MachineFacts } from "./machine.ts";
 import {
@@ -5940,16 +5941,20 @@ export class ClawtrateClient {
   }
 
   /** "Stop <Bot> in this task": the conversation's Stop, for every run of the task still going. */
-  private async stopTask(key: string): Promise<void> {
+  private async stopTask(key: string): Promise<StopAnswer> {
     const runs = (this.state.transcripts[key]?.runs ?? []).filter(
       (run) => run.state === "running" || run.state === "waiting",
     );
     if (runs.length === 0) {
       await this.ensureScope(WRITE_SCOPE, null);
-      await this.request("chat.abort", { sessionKey: key });
-      return;
+      const result = asRecord(await this.request("chat.abort", { sessionKey: key }));
+      // `aborted: false`, or no answer that says so, is no stop.
+      return { runIds: [], aborted: result?.aborted === true };
     }
+    // Each as the conversation's Stop: stopping until the run's end, back to running with the
+    // gateway's refusal (`revertStop`).
     for (const run of runs) await this.stopRun(key, run.id);
+    return { runIds: runs.map((run) => run.id), aborted: null };
   }
 
   /** A viewer id for a bridge session: its pane in `state.computer.panes`. */
