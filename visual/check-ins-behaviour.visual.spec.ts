@@ -334,13 +334,18 @@ test("F-201: an earlier save's late answer does not unlock a later save the host
   await page.evaluate(() => {
     const w = window as unknown as {
       clawtrateFixture: ClawtrateBridge;
-      held: Array<{ saveId: string; release: () => void }>;
+      held: Array<{ saveId: string; disconnect: () => void }>;
     };
     w.held = [];
     const send = w.clawtrateFixture.send;
     w.clawtrateFixture.send = (command) =>
       command.type === "saveCheckIn"
-        ? new Promise<void>((release) => w.held.push({ saveId: command.saveId, release }))
+        ? new Promise<void>((_, reject) =>
+            w.held.push({
+              saveId: command.saveId,
+              disconnect: () => reject(new Error("Connection closed")),
+            }),
+          )
         : send(command);
   });
   const held = () =>
@@ -359,10 +364,13 @@ test("F-201: an earlier save's late answer does not unlock a later save the host
   await marlow.getByRole("button", { name: "Save", exact: true }).click();
   await expect.poll(held).toHaveLength(2);
   await page.evaluate(() =>
-    (window as unknown as { held: Array<{ release: () => void }> }).held[0]!.release(),
+    (window as unknown as { held: Array<{ disconnect: () => void }> }).held[0]!.disconnect(),
   );
   await expect(marlow.getByRole("button", { name: "Saving…" })).toBeVisible();
   await expect(marlow.getByRole("radio", { name: /^Off/ })).toBeDisabled();
+  await publish((await held())[1]!);
+  await expect(marlow.getByTestId("save-unknown")).toBeVisible();
+  await expect(marlow.getByTestId("save-failed")).toHaveCount(0);
 });
 
 test("F-201: As needed sends every 30m, and the bot is then shown checking in every 30 minutes", async ({

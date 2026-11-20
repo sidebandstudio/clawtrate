@@ -283,9 +283,10 @@ function CheckInsDialog({
     change({ saveId: id, refused: null });
     bridge
       .send({ type: "saveCheckIn", saveId: id, botId: bot.id, ...draftToSave(draft) })
-      .catch((error: unknown) =>
-        change({ refused: error instanceof Error ? error.message : String(error) }),
-      )
+      .catch((error: unknown) => {
+        const refused = error instanceof Error ? error.message : String(error);
+        change((current) => (current.saveId === id ? { refused } : {}));
+      })
       .finally(() => {
         // A later save owns the lock now; this one's late answer must not release it.
         if (submitting.current !== id) return;
