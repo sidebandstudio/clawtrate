@@ -371,8 +371,15 @@ it("reads saved preferences even when the download folder cannot be cleaned", as
 it.each(["check", "download"] as const)(
   "retires %s throughout a delayed track save",
   async (operation) => {
-    const prefs = store(),
-      service = await start({ store: prefs });
+    const prefs = store();
+    const secondSubscriber: DesktopUpdateSnapshot[] = [];
+    const service = await start({
+      store: prefs,
+      changed(snapshot) {
+        snapshots.push(snapshot);
+        secondSubscriber.push(snapshot);
+      },
+    });
     const id = await offer(service);
     const reached = Promise.withResolvers<void>(),
       hold = Promise.withResolvers<void>();
@@ -407,6 +414,16 @@ it.each(["check", "download"] as const)(
       snapshot: { selectedTrack: "nightly", pendingTrack: null },
     });
     expect(existsSync(updates)).toBe(false);
+    expect(secondSubscriber.slice(boundary)).toEqual(snapshots.slice(boundary));
+    expect(
+      secondSubscriber.slice(boundary).map((s) => [s.pendingTrack, s.selectedTrack, s.state.kind]),
+    ).toEqual([
+      ["nightly", "stable", "not-checked"],
+      [null, "nightly", "not-checked"],
+    ]);
+    expect(server.requests).toEqual(
+      operation === "check" ? ["/stable", "/stable"] : ["/stable", "/files/app.zip"],
+    );
     const revisions = snapshots.map((s) => s.revision);
     expect(revisions.every((r, i) => i === 0 || revisions[i - 1]! < r)).toBe(true);
   },
