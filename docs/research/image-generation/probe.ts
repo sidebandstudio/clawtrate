@@ -10,11 +10,9 @@
 // state folder shortened to <state>. `expiry` waits for a download ticket to
 // expire (about five minutes). Nothing here leaves loopback.
 
-import {
-  openInstance,
-  openOperator,
-  readDevConnection,
-} from "../../../tools/dev-gateway/src/cli.ts";
+import { openInstance, openOperator } from "../../../tools/dev-gateway/src/cli.ts";
+import { provenEndpoint } from "../../../tools/dev-gateway/src/endpoint.ts";
+import { readRunRecord } from "../../../tools/dev-gateway/src/state-guard.ts";
 import { IMAGE_PROMPT } from "../../../tools/dev-gateway/src/scenarios.ts";
 import { outcomeMarker } from "../../../tools/dev-gateway/src/scripted-images.ts";
 
@@ -22,15 +20,54 @@ type JsonRecord = Record<string, unknown>;
 const [name, ...steps] = process.argv.slice(2);
 if (!name) throw new Error("usage: probe.ts <instance> [tools|invoke|avatar|expiry]...");
 const inst = openInstance(name);
-const connection = readDevConnection(inst.connectionFile);
-if (!connection) throw new Error(`instance ${name} has no connection file; start it first`);
+const run = readRunRecord(inst.runFile);
+if (!run) throw new Error(`instance ${name} has no run file; start it first`);
+const expectedRunId = run.runId;
+
+function currentConnection() {
+  const endpoint = provenEndpoint({
+    instance: inst.name,
+    home: inst.home,
+    runDir: inst.runDir,
+    checkout: inst.checkout,
+    identify: inst.identify,
+    expectedRunId,
+  });
+  if ("refusal" in endpoint) throw new Error(`instance ${name}: ${endpoint.refusal}`);
+  return endpoint;
+}
+const connection = currentConnection();
 const origin = connection.url.replace("ws://", "http://");
+
+function sameConnection() {
+  const current = currentConnection();
+  if (current.url !== connection.url || current.token !== connection.token) {
+    throw new Error(`instance ${name}: the development gateway connection changed`);
+  }
+  return current;
+}
+
+function gatewayAddress(address: string): URL {
+  const url = new URL(address, origin);
+  if (url.protocol !== "http:" || url.origin !== origin || url.username || url.password) {
+    throw new Error("the probe requires a URL on the proven development gateway");
+  }
+  return url;
+}
+
+function gatewayFetch(address: string, init?: RequestInit): Promise<Response> {
+  sameConnection();
+  return fetch(gatewayAddress(address), { ...init, redirect: "error" });
+}
+
 const print = (label: string, value: unknown) =>
   console.log(`${label}: ${JSON.stringify(value).replaceAll(inst.stateDir, "<state>")}`);
 const attempt = (promise: Promise<unknown>) =>
   promise.catch((error: unknown) => ({ refused: String(error) }));
 
-const writer = await openOperator(inst, "Clawtrate image probe", ["operator.read", "operator.write"], ["tool-events"]);
+const probeOperator = (label: string, scopes: string[], caps: string[]) =>
+  openOperator(inst, label, scopes, caps, sameConnection);
+const writer = await probeOperator("Clawtrate image probe", ["operator.read", "operator.write"], ["tool-events"]);
 const stamp = Date.now().toString(36);
 
 /** A new task of Juniper's that has run `#image`, and its picture's artifact once it is there. */
@@ -51,6 +88,7 @@ const invoke = (sessionKey: string, args: JsonRecord, op = writer) =>
   attempt(op.request("tools.invoke", { name: "image_generate", args, sessionKey }, 120_000));
 
 for (const step of steps) {
+  sameConnection();
   if (step === "tools") {
     const key = `agent:main:probe-tools-${stamp}`;
     const sent = (await writer.send(key, "#text")) as JsonRecord;
@@ -68,15 +106,15 @@ for (const step of steps) {
     const path = String(((rec(rec(foreground.output).details).paths as string[]) ?? [])[0]);
     const route = `${origin}/__openclaw__/assistant-media?source=${encodeURIComponent(path)}`;
     const bearer = { authorization: `Bearer ${connection.token}` };
-    const served = await fetch(route, { headers: bearer });
+    const served = await gatewayFetch(route, { headers: bearer });
     print("assistant media route", {
-      withoutToken: (await fetch(route)).status,
+      withoutToken: (await gatewayFetch(route)).status,
       withToken: served.status,
       type: served.headers.get("content-type"),
       bytes: (await served.arrayBuffer()).byteLength,
     });
-    const meta = (await (await fetch(`${route}&meta=1`, { headers: bearer })).json()) as JsonRecord;
-    const ticketed = await fetch(`${route}&mediaTicket=${encodeURIComponent(String(meta.mediaTicket))}`);
+    const meta = (await (await gatewayFetch(`${route}&meta=1`, { headers: bearer })).json()) as JsonRecord;
+    const ticketed = await gatewayFetch(`${route}&mediaTicket=${encodeURIComponent(String(meta.mediaTicket))}`);
     print("assistant media route, meta=1", { ...meta, mediaTicket: typeof meta.mediaTicket, ticketWithoutToken: ticketed.status });
     print("the never-created task's history", ((await writer.request("chat.history", { sessionKey: never, limit: 5 })) as JsonRecord).messages);
     // A task bound to a saved session, with no messages yet.
@@ -95,16 +133,16 @@ for (const step of steps) {
     const { key } = await taskWithPicture("invoke-history");
     print("invoke, the same prompt on a task with history", await invoke(key, { prompt: IMAGE_PROMPT }));
     print("invoke, a new prompt on a task with history", await invoke(key, { prompt: "A green hill under a sun" }));
-    const reader = await openOperator(inst, "Clawtrate image probe (reader)", ["operator.read"], []);
+    const reader = await probeOperator("Clawtrate image probe (reader)", ["operator.read"], []);
     print("invoke, read only", await invoke(key, { prompt: IMAGE_PROMPT }, reader));
     await reader.close();
   }
   if (step === "avatar" || step === "expiry") {
-    const admin = await openOperator(inst, "Clawtrate image probe (admin)", ["operator.admin"], []);
+    const admin = await probeOperator("Clawtrate image probe (admin)", ["operator.admin"], []);
     const { key, artifact } = await taskWithPicture(step);
     const download = (await writer.request("artifacts.download", { sessionKey: key, artifactId: artifact.id })) as JsonRecord;
-    const address = String(download.url);
-    const bytes = Buffer.from(await (await fetch(`${origin}${address}`)).arrayBuffer());
+    const ticket = gatewayAddress(String(download.url));
+    const bytes = Buffer.from(await (await gatewayFetch(ticket.href)).arrayBuffer());
     const invoked = (await invoke(`agent:main:probe-path-${stamp}`, { prompt: IMAGE_PROMPT })) as JsonRecord;
     const path = String(((rec(rec(invoked.output).details).paths as string[]) ?? [])[0]);
     const sources: Record<string, string> =
@@ -112,10 +150,10 @@ for (const step of steps) {
         ? {
             "the downloaded bytes as a data: URL": `data:image/png;base64,${bytes.toString("base64")}`,
             "the path tools.invoke named": path,
-            "the gateway's media path": address.split("?")[0]!,
-            "the ticketed address": `${origin}${address}`,
+            "the gateway's media path": ticket.pathname,
+            "the ticketed address": ticket.href,
           }
-        : { "the ticketed address": `${origin}${address}` };
+        : { "the ticketed address": ticket.href };
     if (step === "avatar") {
       // Saved, and shown only up to the gateway's encoded-length limit for a data URL.
       for (const decoded of [2_097_152, 2_098_176]) {
@@ -133,9 +171,9 @@ for (const step of steps) {
       const wait = Date.parse(String(download.expiresAt)) - Date.now() + 20_000;
       await new Promise((resolve) => setTimeout(resolve, wait));
       const stored = await pictureOf(admin);
-      print("after the ticket expired", { stillStored: stored === `${origin}${address}`, fetched: (await fetch(stored)).status });
+      print("after the ticket expired", { stillStored: stored === ticket.href, fetched: (await gatewayFetch(stored)).status });
       const again = (await writer.request("artifacts.download", { sessionKey: key, artifactId: artifact.id })) as JsonRecord;
-      print("a new download after the expiry", { fetched: (await fetch(`${origin}${String(again.url)}`)).status });
+      print("a new download after the expiry", { fetched: (await gatewayFetch(String(again.url))).status });
     }
     await admin.close();
   }

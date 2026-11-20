@@ -1926,8 +1926,9 @@ export async function openOperator(
   displayName: string,
   scopes: string[],
   caps: string[],
+  readConnection?: () => DevConnection,
 ): Promise<OperatorSession> {
-  const connection = readDevConnection(inst.connectionFile);
+  const connection = readConnection ? readConnection() : readDevConnection(inst.connectionFile);
   if (!connection) throw new Error(`${label(inst)} has no connection file; start it first`);
   return OperatorSession.open({
     url: connection.url,
@@ -1936,6 +1937,7 @@ export async function openOperator(
     caps,
     displayName,
     approvePairing: async (requestId) => {
+      readConnection?.();
       await must(inst, ["devices", "approve", requestId]);
     },
   });
