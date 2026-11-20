@@ -249,6 +249,7 @@ a: users.self and b: users.self: {"profile":{"id":"gateway-owner","displayName":
 - The 128 keys are shared with every other preference this person keeps on the gateway, Clawtrate's and others'.
 - `{status:"no_durable_identity"}` is what a connection made with the shared token alone gets (`gateway-capabilities.md`, "users.prefs"); the paired devices here all had a profile.
 - The record is the person's: another person on the same gateway would not see it.
+- Removing the member record did not stop or delete its task. The removed member's active run reached final. (`replaced`: Marlow's `#slow 4` run was active when the record was rewritten without Marlow, by compare-and-set; the run ended `final` and the task still described.)
 
 ## 8. What a deleted bot, an archived task and a deleted task leave
 
