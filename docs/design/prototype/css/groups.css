@@ -1,0 +1,500 @@
+/* Group chats: the components docs/design/group-chats.md adds. Every value is
+   a token from tokens.css. New components are marked "new"; the rest places
+   existing components (bubbles, status lines, the shelf, dialogs) in a group. */
+
+/* new: the combined avatar. Two, three, or a grid of four, each character
+   ringed in the surface colour so they read apart. */
+.g-stack {
+  --stack: 40px;
+  --ring: var(--presence-surface, var(--bg-rail, var(--bg-pane)));
+  position: relative;
+  flex: none;
+  width: var(--stack);
+  height: var(--stack);
+}
+
+[data-input="touch"] .g-stack {
+  --stack: 44px;
+}
+
+.g-stack > .avatar,
+.g-stack > .g-more {
+  position: absolute;
+  width: var(--cell);
+  height: var(--cell);
+  border-radius: 50%;
+  background: var(--ring);
+  box-shadow: 0 0 0 1.5px var(--ring);
+}
+
+.g-stack[data-count="2"] {
+  --cell: 65%;
+}
+.g-stack[data-count="2"] > :nth-child(1) {
+  top: 0;
+  left: 0;
+}
+.g-stack[data-count="2"] > :nth-child(2) {
+  right: 0;
+  bottom: 0;
+}
+
+.g-stack[data-count="3"] {
+  --cell: 55%;
+}
+.g-stack[data-count="3"] > :nth-child(1) {
+  top: 0;
+  left: 22.5%;
+}
+.g-stack[data-count="3"] > :nth-child(2) {
+  bottom: 0;
+  left: 0;
+}
+.g-stack[data-count="3"] > :nth-child(3) {
+  right: 0;
+  bottom: 0;
+}
+
+.g-stack[data-count="4"] {
+  --cell: 48%;
+}
+.g-stack[data-count="4"] > :nth-child(1) {
+  top: 0;
+  left: 0;
+}
+.g-stack[data-count="4"] > :nth-child(2) {
+  top: 0;
+  right: 0;
+}
+.g-stack[data-count="4"] > :nth-child(3) {
+  bottom: 0;
+  left: 0;
+}
+.g-stack[data-count="4"] > :nth-child(4) {
+  right: 0;
+  bottom: 0;
+}
+
+.g-more {
+  display: grid;
+  place-items: center;
+  background: var(--bg-selected) !important;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.g-stack > .glyph {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  box-shadow: 0 0 0 2px var(--ring);
+  border-radius: 50%;
+}
+
+.title-pill .g-stack {
+  --stack: 22px;
+}
+
+.g-empty .g-stack {
+  --stack: 56px;
+}
+
+/* The group's glyph on a member task in its bot's list. */
+.g-task-mark {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--text-faint);
+}
+
+/* Transcript -------------------------------------------------------------------- */
+
+.g-first {
+  margin: 0 0 var(--space-4);
+  padding: 0 14px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Your bubbles in a group take the neutral form of your colour. */
+.g-column .msg[data-role="user"] .bubble {
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+}
+
+.g-column .turn[data-waiting="true"] .msg[data-role="user"] .bubble {
+  background: var(--bg-bubble);
+  color: var(--text);
+}
+
+/* new: the speaker over a bot's first bubble, its avatar at the foot of its last. */
+.g-speaker {
+  margin: var(--space-4) 0 2px 44px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}
+
+.g-said {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.g-said > .g-foot {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-left: 14px;
+}
+
+.g-said > .g-foot .avatar {
+  width: 22px;
+  height: 22px;
+}
+
+.g-said .msg {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.g-said .bubble {
+  max-width: 100%;
+}
+
+.g-said .icon-button {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  opacity: 0;
+}
+
+.g-said:hover .icon-button,
+.g-said .icon-button:focus-visible,
+.g-said .icon-button[aria-expanded="true"],
+[data-input="touch"] .g-said .icon-button {
+  opacity: 1;
+}
+
+.g-said + .turn,
+.g-status + .turn,
+.g-line + .turn {
+  margin-top: var(--space-4);
+}
+
+/* new: where your message went, one line under it that opens to each target. */
+.g-went {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-top: 4px;
+}
+
+.g-went > button {
+  min-height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.g-went > button:hover {
+  background: var(--bg-hover);
+}
+
+.g-went [data-tone="danger"] {
+  color: var(--danger);
+}
+
+.g-went ul {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  list-style: none;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.g-went li b {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.g-went .link-button {
+  min-height: 24px;
+  font-size: var(--text-xs);
+}
+
+/* A line about a member, in the column. */
+.g-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: var(--space-4) 0 0;
+  padding: 8px 12px 8px 14px;
+  border-radius: var(--radius-md);
+  background: var(--warn-soft);
+  font-size: var(--text-sm);
+}
+
+.g-line > span {
+  flex: 1 1 260px;
+}
+
+.g-line .button {
+  background: var(--bg-selected);
+}
+
+.g-status {
+  display: grid;
+  justify-items: start;
+}
+
+/* The empty group. */
+.g-empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin: 12vh auto 0;
+  max-width: 420px;
+  text-align: center;
+}
+
+.g-empty h1 {
+  margin: 6px 0 0;
+  font-size: var(--text-title-sm, 20px);
+  font-weight: var(--weight-medium);
+}
+
+.g-empty p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+/* Composer --------------------------------------------------------------------- */
+
+/* new: the To line, at the top of the pill. Chips show the targets; they are text. */
+.g-to {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-height: 32px;
+  padding: 2px 8px 0;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.g-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+  color: var(--text);
+}
+
+.g-chip .avatar {
+  width: 18px;
+  height: 18px;
+}
+
+.g-chip[data-everyone] {
+  padding-left: 9px;
+}
+
+.g-chip[data-skipped] {
+  text-decoration: line-through;
+  color: var(--text-faint);
+}
+
+.g-column .composer-inner {
+  position: relative;
+}
+
+.g-column .composer-box {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.g-column .composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+/* The count of bots a message goes to, and what each costs. */
+.g-cost {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.g-to[data-tone="warn"] {
+  color: var(--warn);
+}
+
+/* new: the mention list, opening upward from the pill. */
+.g-mentions {
+  position: absolute;
+  bottom: calc(100% - 8px);
+  left: 0;
+  z-index: 5;
+  min-width: 220px;
+}
+
+.g-mentions .avatar {
+  width: 20px;
+  height: 20px;
+}
+
+/* Dialogs ---------------------------------------------------------------------- */
+
+.g-making {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.g-making li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  font-size: var(--text-md);
+}
+
+.g-making .avatar {
+  width: 24px;
+  height: 24px;
+}
+
+.g-making li[data-done] {
+  color: var(--text-muted);
+}
+
+.g-picked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  font-size: var(--text-md);
+  color: var(--text-faint);
+}
+
+.g-hint {
+  margin: 10px 2px 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.g-hint b {
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.g-members {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.g-members li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  border-top: 1px solid var(--border);
+}
+
+.g-members li:first-child {
+  border-top: 0;
+}
+
+.g-members .avatar {
+  width: 28px;
+  height: 28px;
+}
+
+.g-members .g-name {
+  flex: 1;
+  font-weight: var(--weight-medium);
+}
+
+.g-section {
+  margin: 18px 0 6px;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.g-name-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.g-name-row h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 17px;
+  font-weight: var(--weight-medium);
+}
+
+.g-name-row input {
+  flex: 1;
+}
+
+.g-stage-note {
+  margin: var(--space-4) auto 0;
+  max-width: 520px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.b-choice .avatar {
+  width: 28px;
+  height: 28px;
+}
+
+/* Text in a group's bubbles keeps its line breaks: a quote is one line per line. */
+.g-column .bubble {
+  white-space: pre-line;
+}
+
+/* A task's tool card in the column, without the list's own marks. */
+.g-steps {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* New group's name filter, beside the chosen chips. */
+.g-filter {
+  flex: 1 1 120px;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
