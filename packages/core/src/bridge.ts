@@ -2,6 +2,8 @@
 // the renderer. The host owns the gateway connection; the renderer receives state
 // snapshots and sends commands. Transport is IPC in Electron and a WebSocket on the web.
 
+import { utf8Length } from "./encoding.ts";
+import { MAX_MEMORY_BYTES, type MemoryDocument, type MemoryList } from "./memory.ts";
 import type { DesktopUpdates } from "./desktop-updates.ts";
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -145,6 +147,17 @@ export type BridgeCommand =
   | { type: "listTaskFiles"; key: string }
   /** One of a task's files, by the path its list gave, from the reader its place allows. */
   | { type: "readTaskFile"; key: string; path: string }
+  | { type: "listMemory"; botId: string }
+  | { type: "readMemory"; botId: string; path: string }
+  | {
+      type: "writeMemory";
+      botId: string;
+      path: string;
+      /** The gateway identity that supplied the draft, from `gateway.identity.get`. */
+      gatewayId: string | null;
+      expectedHash: string | null;
+      content: string | null;
+    }
   /** One page of a folder of a bot's workspace ("" is its root). */
   | { type: "listWorkspace"; botId: string; path: string; offset: number }
   /**
@@ -393,7 +406,15 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                                                 type: "setMachineDefaults";
                                                                               }
                                                                             ? ApprovalsFile
-                                                                            : void;
+                                                                            : C extends {
+                                                                                  type: "listMemory";
+                                                                                }
+                                                                              ? MemoryList
+                                                                              : C extends {
+                                                                                    type: "readMemory";
+                                                                                  }
+                                                                                ? MemoryDocument
+                                                                                : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -1084,6 +1105,38 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "readTaskFile":
     case "readCheckoutDiff":
       return { type: command.type, key: sessionKey(command.key), path: filePath(command.path) };
+    case "listMemory":
+      return { type: command.type, botId: botId(command.botId) };
+    case "readMemory":
+    case "writeMemory": {
+      const path = filePath(command.path);
+      if (
+        path !== "MEMORY.md" &&
+        path !== "USER.md" &&
+        (!/^memory\/.+\.md$/i.test(path) || path.length > 512 || path.split("/").includes(".."))
+      )
+        throw new Error("invalid memory path");
+      const target = { botId: botId(command.botId), path };
+      if (command.type === "readMemory") return { type: command.type, ...target };
+      const { content, expectedHash, gatewayId } = command;
+      if (
+        content !== null &&
+        (typeof content !== "string" || utf8Length(content) > MAX_MEMORY_BYTES)
+      )
+        throw new Error("The memory file exceeds the edit limit.");
+      if (
+        expectedHash !== null &&
+        (typeof expectedHash !== "string" || !/^[a-f0-9]{64}$/i.test(expectedHash))
+      )
+        throw new Error("invalid memory revision");
+      return {
+        type: command.type,
+        ...target,
+        content,
+        expectedHash,
+        gatewayId: gatewayId === null ? null : id(gatewayId, "gateway identity"),
+      };
+    }
     case "listWorkspace":
       return {
         type: "listWorkspace",
@@ -1556,6 +1609,18 @@ class ViewerSession implements BridgeSession {
         return client.readTaskFile(this.mine(command.key), command.path, this.fileOptions());
       case "readCheckoutDiff":
         return client.readCheckoutDiff(this.mine(command.key), command.path, this.fileOptions());
+      case "listMemory":
+        return client.listMemory(command.botId);
+      case "readMemory":
+        return client.readMemory(command.botId, command.path);
+      case "writeMemory":
+        return client.writeMemory(
+          command.botId,
+          command.path,
+          command.gatewayId,
+          command.expectedHash,
+          command.content,
+        );
       case "listWorkspace":
         return client.listWorkspace(
           command.botId,

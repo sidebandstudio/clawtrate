@@ -496,7 +496,8 @@ export function routineCommand(
   switch (command.type) {
     case "createRoutine": {
       if (!admin()) return Promise.resolve({ status: "not-sent", reason: "admin" });
-      if (!bound(command.gateway)) return Promise.resolve({ status: "not-sent", reason: "gateway" });
+      if (!bound(command.gateway))
+        return Promise.resolve({ status: "not-sent", reason: "gateway" });
       const input: NewRoutine = command.input;
       const made = base({
         ...input,
@@ -528,7 +529,8 @@ export function routineCommand(
       return later(300, () => kept(command.id) ?? null);
     case "updateRoutine": {
       if (!admin()) return Promise.resolve({ status: "not-sent", reason: "admin" });
-      if (!bound(command.gateway)) return Promise.resolve({ status: "not-sent", reason: "gateway" });
+      if (!bound(command.gateway))
+        return Promise.resolve({ status: "not-sent", reason: "gateway" });
       const routine = kept(command.id);
       if (!routine) return Promise.resolve({ status: "deleted" });
       const end = outcome();
