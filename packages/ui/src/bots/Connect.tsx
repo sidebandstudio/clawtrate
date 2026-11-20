@@ -36,7 +36,12 @@ import {
 
 /** A label step left before Done, kept until the app quits so it comes back (section 6). */
 const LABEL_KEPT = "connect-label";
-type KeptLabel = { account: string; byKey: boolean };
+/**
+ * What the naming screen says of how its account came to be listed: nothing
+ * when the read confirmed it, otherwise the outcome it came from.
+ */
+type Unconfirmed = { title: string; text: string } | null;
+type KeptLabel = { account: string; byKey: boolean; unconfirmed?: Unconfirmed };
 
 /** The label step left open, when its account is still on the gateway. */
 export function keptLabel(accounts: AccountsState): KeptLabel | null {
@@ -60,7 +65,7 @@ export type ConnectView = {
 type Where =
   | { view: "methods" }
   | { view: "flow"; method: string }
-  | { view: "label"; account: string; byKey: boolean }
+  | { view: "label"; account: string; byKey: boolean; unconfirmed?: Unconfirmed }
   | { view: "same"; provider: string }
   /** A key the gateway took whose account the read after it didn't show. */
   | { view: "key-check"; provider: string; known: string[] };
@@ -117,7 +122,9 @@ export function useConnect({
   const setWhere = (next: Where) => {
     remember(
       LABEL_KEPT,
-      next.view === "label" ? { account: next.account, byKey: next.byKey } : null,
+      next.view === "label"
+        ? { account: next.account, byKey: next.byKey, unconfirmed: next.unconfirmed ?? null }
+        : null,
     );
     setWhereState(next);
   };
@@ -534,14 +541,21 @@ export function useConnect({
       backLabel: "Back to sign-in methods",
       body: (
         <>
-          <Result
-            tone="ok"
-            mark="check"
-            title={where.byKey ? "Key saved" : `Connected to ${who}`}
-            focus={false}
-          >
-            {where.byKey ? "Your gateway keeps the key." : "Your gateway keeps the sign-in."}
-          </Result>
+          {where.unconfirmed ? (
+            // Not confirmed by the read: the outcome it came from stays on this screen.
+            <Result tone="warn" mark="clock" title={where.unconfirmed.title} focus={false}>
+              {where.unconfirmed.text}
+            </Result>
+          ) : (
+            <Result
+              tone="ok"
+              mark="check"
+              title={where.byKey ? "Key saved" : `Connected to ${who}`}
+              focus={false}
+            >
+              {where.byKey ? "Your gateway keeps the key." : "Your gateway keeps the sign-in."}
+            </Result>
+          )}
           <p className="b-hint" role="status" style={{ textAlign: "center" }} data-testid="landed">
             {landedText}
           </p>
@@ -752,7 +766,17 @@ export function useConnect({
               type="button"
               className="button"
               data-size="sm"
-              onClick={() => setWhere({ view: "label", account: added, byKey: sign.byKey })}
+              onClick={() =>
+                setWhere({
+                  view: "label",
+                  account: added,
+                  byKey: sign.byKey,
+                  unconfirmed: {
+                    title: "Listed, not finished",
+                    text: `The gateway lists this ${who} account, but the sign-in did not finish. It may not be ready to use.`,
+                  },
+                })
+              }
             >
               Name it
             </button>
@@ -1071,7 +1095,17 @@ export function useConnect({
         data-size="lg"
         disabled={!current.result || several}
         onClick={() =>
-          added ? setWhere({ view: "label", account: added, byKey: current.byKey }) : finish(null)
+          added
+            ? setWhere({
+                view: "label",
+                account: added,
+                byKey: current.byKey,
+                unconfirmed: {
+                  title: "Saved, not confirmed",
+                  text: current.error ?? "The gateway saved the sign-in, but couldn't confirm it.",
+                },
+              })
+            : finish(null)
         }
       >
         Continue

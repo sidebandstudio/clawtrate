@@ -832,7 +832,7 @@ test("F-474: on the gateway's machine and back to the gateway, refused, expired 
   await page.keyboard.press("Escape");
 });
 
-test("F-474: saved, not confirmed: the gateway saved the sign-in and says it could not apply it; Continue names the account it now lists", async () => {
+test("F-474: saved, not confirmed: the gateway saved the sign-in and says it could not apply it; Continue names the account it now lists, still not confirmed", async () => {
   const settings = await startFromSettings(/^Acme \(scripted\) · a link and a code/);
   const code = settings.locator(".b-code code");
   await expect(code).toBeVisible({ timeout: 20_000 });
@@ -857,6 +857,10 @@ test("F-474: saved, not confirmed: the gateway saved the sign-in and says it cou
     acme: { api: "openai-completions" },
   });
   await settings.getByRole("button", { name: "Continue" }).click();
+  // The naming screen keeps the outcome: never a green "Connected to" the read didn't confirm.
+  await expect(settings.getByRole("textbox", { name: "Label" })).toBeVisible();
+  await expect(settings.getByRole("heading", { name: "Saved, not confirmed" })).toBeVisible();
+  await expect(settings.getByRole("heading", { name: /^Connected to/ })).toHaveCount(0);
   await settings.getByRole("textbox", { name: "Label" }).fill("Unsure");
   await settings.getByRole("button", { name: "Done" }).click();
   await expect(settings.getByRole("button", { name: /^Acme · Unsure/ })).toBeVisible({

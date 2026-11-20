@@ -1112,6 +1112,31 @@ for (const [method, query, href, destination] of [
   });
 }
 
+test("F-474: a sign-in saved but not confirmed stays not confirmed on the naming screen", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=unconfirmed`, "light");
+  await startMethod(page, /^xAI · /);
+  await expect(page.getByRole("heading", { name: "Saved, not confirmed" })).toBeVisible();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Saved, not confirmed" })).toBeVisible();
+  await expect(page.getByText(/^Your sign-in was saved, but/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Connected to/ })).toHaveCount(0);
+});
+
+test("F-474: an account listed after a sign-in that failed is named as listed, not finished", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=failed&saved=1`, "light");
+  await startMethod(page, /^xAI · /);
+  await expect(page.getByRole("heading", { name: "Couldn't connect" })).toBeVisible();
+  await page.getByRole("button", { name: "Name it" }).click();
+  await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Listed, not finished" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /^Connected to/ })).toHaveCount(0);
+});
+
 test("F-474: too late to cancel: Cancel reads Saving…, disabled, and Back keeps the sign-in while the gateway saves", async ({
   page,
 }) => {
