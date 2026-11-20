@@ -483,12 +483,13 @@
       }
       S.waiting = 0;
       S.removal = null;
-      S.addFrom = S.inUse || S.last || "home";
+      // The gateway to go back to: the one in use, or the last one, only while it is still saved.
+      S.addFrom = [S.inUse, S.last].find((id) => id && S.order.includes(id)) || null;
       if (settingsDialog.open) settingsDialog.close();
       S.last = S.addFrom;
       S.inUse = null;
       S.conn = "adding";
-      showEmpty("Adding a gateway", `${esc(gw(S.addFrom).name)} stays saved.`);
+      showEmpty("Adding a gateway", S.addFrom ? `${esc(gw(S.addFrom).name)} stays saved.` : "");
       $("#new-button").hidden = true;
       strip("");
       renderMenu();
@@ -499,12 +500,12 @@
     function standStep(step) {
       const head =
         `<div class="s-confirm"><span class="s-stand-mark">Prototype stand-in for setup</span><h2 id="s-stand-title">${step === "first" ? "Where does OpenClaw run?" : "Setup runs here"}</h2>` +
-        `<p>Adding a gateway. ${esc(gw(S.addFrom).name)} stays saved; Cancel tries to reconnect to it.</p>`;
+        `<p>${S.addFrom ? `Adding a gateway. ${esc(gw(S.addFrom).name)} stays saved; Cancel tries to reconnect to it.` : "Adding a gateway."}</p>`;
       const body =
         step === "first"
           ? `<div class="s-stand-choices">${button("This computer", 'data-s="stand-next" data-s-step')}${button("Another computer", 'data-s="stand-next"')}${button("Have a setup code?", 'data-s="stand-next"', "quiet")}</div>`
           : `<p style="margin-top:8px">Setup's own screens follow (<a href="setup.html">setup.html</a>): the look, the host's confirmations, pairing read-only. Choose how it ends:</p>` +
-            `<div class="s-stand-choices">${button("Paired: a new gateway", 'data-s="add-new" data-s-step')}${button("Paired: the same gateway", 'data-s="add-same"')}` +
+            `<div class="s-stand-choices">${button("Paired: a new gateway", 'data-s="add-new" data-s-step')}${S.order.includes("home") ? button("Paired: the same gateway", 'data-s="add-same"') : ""}` +
             `${button("Paired: no identity", 'data-s="add-noid"')}${button("Paired, then setup failed", 'data-s="add-failedpaired"')}${button("Setup failed before pairing", 'data-s="add-failed"')}</div>`;
       stand.innerHTML = head + body + `<div class="b-actions">${button("Cancel", 'data-s="add-cancel"', "quiet")}</div></div>`;
     }
@@ -525,7 +526,16 @@
           showResult();
         });
       } else {
-        // Every other ending saves nothing and returns to the gateway that was in use, through the normal gate.
+        // Every other ending saves nothing and returns to the gateway that was in use, through the normal gate;
+        // with none still saved, to the list, not connected.
+        if (!S.addFrom) {
+          S.conn = "none";
+          showEmpty("Not connected", "Choose a gateway to use.");
+          strip("");
+          renderMenu();
+          announce("No gateway was saved on this device");
+          return showResult();
+        }
         const back = () =>
           connectTo(
             S.addFrom,
@@ -758,19 +768,20 @@
       if (S.page && gw(S.page) && S.order.includes(S.page) && S.page !== S.inUse) return gatewayPage(gw(S.page));
       // After pairing, the warning about the gateway's record stays whether or not the way back works.
       const paired = { failedpaired: "Setup had already paired with that gateway, so its record of this device may remain there; on that gateway's computer, openclaw devices list shows it. ", noid: "Clawtrate couldn't read the new gateway's identity. Setup had already paired, so the gateway's device record may remain. " }[S.added] || "";
+      const again = S.addFrom ? `Clawtrate is connected to ${esc(gw(S.addFrom).name)} again.` : "";
       const addedText = {
-        new: ["ok", "check", "Added Lab gateway", "Clawtrate is connected to it, read-only. Home gateway stays saved: switch back from the gateway menu."],
+        new: ["ok", "check", "Added Lab gateway", `Clawtrate is connected to it, read-only.${S.addFrom ? ` ${esc(gw(S.addFrom).name)} stays saved: switch back from the gateway menu.` : ""}`],
         // The saved entry the new address's identity matched (Home gateway in this fixture).
         same: ["ok", "check", "Home gateway is already here", "Clawtrate didn't add a second entry. A second way to reach one gateway is a route, in Settings, Gateway."],
-        noid: ["warn", "warning", "No gateway was saved on this device.", `${paired}Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
-        failed: ["warn", "warning", "No gateway was saved on this device.", `Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
-        cancelled: ["warn", "warning", "No gateway was saved on this device.", `Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
-        failedpaired: ["warn", "warning", "No gateway was saved on this device.", `${paired}Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
+        noid: ["warn", "warning", "No gateway was saved on this device.", `${paired}${again}`],
+        failed: ["warn", "warning", "No gateway was saved on this device.", again],
+        cancelled: ["warn", "warning", "No gateway was saved on this device.", again],
+        failedpaired: ["warn", "warning", "No gateway was saved on this device.", `${paired}${again}`],
       }[S.added];
       const added =
         addedText && S.conn === "refused"
           ? `<div class="s-result" data-testid="add-result">${D.result("warn", "warning", addedText[2], `${paired}Clawtrate can't use ${esc(gw(S.addFrom).name)}: the address saved for it refused this connection's protocol.`)}</div>`
-          : addedText && S.conn === "connected"
+          : addedText && (S.conn === "connected" || (S.conn === "none" && !S.addFrom))
           ? `<div class="s-result" data-testid="add-result">${D.result(...addedText)}</div>`
           : S.added && S.returnFailed
             ? `<div class="s-result" data-testid="add-result">${D.result("danger", "warning", "No gateway was saved on this device.", `${paired}Clawtrate couldn't reach ${esc(gw(S.addFrom).name)}.`)}<div class="b-actions" style="justify-content:center">${button("Retry", 'data-s="retry-return"', "primary")}</div></div>`

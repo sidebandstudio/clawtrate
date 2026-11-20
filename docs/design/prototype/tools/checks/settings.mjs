@@ -384,6 +384,18 @@ for (const [kind, waiting] of [["unsent", "1"], ["unconfirmed", "unconfirmed"]])
   }
 }
 
+{
+  // CodeRabbit 2: after the gateway in use is removed, Add then Cancel returns to the list, not to the removed gateway.
+  const p = await open("remove=home");
+  await click(p, '#confirm-dialog [data-s="confirm-ok"]', 200);
+  await press(p, "button", "Add gateway…");
+  const stand = await text(p, "#s-stand");
+  await press(p, "button", "Cancel", 1900);
+  const t = await text(p, settings);
+  check("walk: add after removing the gateway in use, Cancel: no reconnect to the removed gateway", !stand.includes("Home gateway stays saved") && !/Home gateway/.test(await footer(p)) && !(await rail(p)).includes("Otto") && t.includes("No gateway was saved on this device.") && t.includes("Not connected. Choose a gateway to use.") && !t.includes("connected to Home gateway again") && (await p.evaluate(() => window.settingsProto.S.order.join(","))) === "studio", `${stand.slice(0, 120)} | ${t.slice(0, 200)}`);
+  await p.close();
+}
+
 // Part 5: removing (section 7) ------------------------------------------------------------------------------
 
 const REMOVED_WORDS = [
