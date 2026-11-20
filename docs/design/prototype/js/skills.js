@@ -115,7 +115,7 @@
     // Visibility first: an entry this connection can't read is not found, removed or not.
     if (!s || !readable(s)) return { error: "INVALID_REQUEST", code: "SKILL_LIBRARY_NOT_FOUND" };
     if (s.removed) return { removed: true, slug: s.slug };
-    return { canEdit: gwCanEdit(s), rev: s.rev, slug: s.slug, description: s.description, body: s.body, extra: [...s.extra], raw: s.raw, files: s.files.map((f) => ({ ...f })), shared: s.shared, enabled: s.enabled, saved: s.saved, owner: s.owner, ownerLabel: s.ownerLabel };
+    return { canEdit: gwCanEdit(s), md: markdown(s), rev: s.rev, slug: s.slug, description: s.description, body: s.body, extra: [...s.extra], raw: s.raw, files: s.files.map((f) => ({ ...f })), shared: s.shared, enabled: s.enabled, saved: s.saved, owner: s.owner, ownerLabel: s.ownerLabel };
   };
   // Another device's save, on the gateway's side.
   function otherSave(id) {
@@ -257,16 +257,31 @@
     if (K.page === "new") return Boolean(K.draft.slug || K.draft.description || K.draft.body);
     return K.draft.description !== K.read.description || K.draft.body !== K.read.body;
   };
-  const sizeOf = (d) => bytes(markdown({ slug: d.slug || "x", description: d.description, body: d.body, extra: K.read?.extra || [] }));
+  // The read SKILL.md with only the spans the person changed replaced (section 4): the exact
+  // description scalar when Use when… changed, the exact body when Instructions changed.
+  const editMarkdown = (r, d) => {
+    const m = /^(---\n[\s\S]*?\n---\n\n?)([\s\S]*)$/.exec(r.md);
+    let head = m[1];
+    let body = m[2];
+    if (d.description !== r.description) head = head.replace(/^(description: ).*$/m, (_, key) => key + d.description);
+    if (d.body !== r.body) body = `${d.body}\n`;
+    return head + body;
+  };
+  // What is checked against the limit: the bytes of the SKILL.md that would be sent.
+  const serialized = (d) => (K.page !== "new" && K.read?.md ? editMarkdown(K.read, d) : markdown({ slug: d.slug || "x", description: d.description, body: d.body, extra: [] }));
+  const sizeOf = (d) => bytes(serialized(d));
+  // The gateway checks the parsed description's length in UTF-16 code units, not bytes.
+  const DESC_MAX = 1024;
+  const descCount = (d) => (d.description.length >= 900 ? `${d.description.length.toLocaleString("en-US")} of 1,024 characters.` : "");
   const problems = (d) => {
     const out = {};
     if (K.page === "new" && d.slug && !NAME.test(d.slug)) out.name = "Use lowercase letters, digits and hyphens, starting with a letter or digit, up to 63 characters.";
     if (K.page === "new" && !d.slug) out.nameMissing = true;
     if (!d.description.trim()) out.descMissing = true;
     if (/\n/.test(d.description)) out.desc = "Keep Use when… on one line.";
-    if (bytes(d.description) > 1024) out.desc = `Too long: ${bytes(d.description).toLocaleString("en-US")} of 1,024 bytes.`;
+    if (d.description.length > DESC_MAX) out.desc = "Use when… is too long (maximum 1,024 characters).";
     if (!d.body.trim()) out.bodyMissing = true;
-    if (sizeOf(d) > LIMIT) out.body = "Too long for the gateway: SKILL.md may be at most 1,048,576 bytes, frontmatter included. Letters outside English count as more than one byte.";
+    if (sizeOf(d) > LIMIT) out.body = "SKILL.md can be at most 1,048,576 UTF-8 bytes, including the frontmatter.";
     return out;
   };
   const saveable = () => dirty() && !K.pending && !K.gone && online() && Object.keys(problems(K.draft)).length === 0;
@@ -341,7 +356,7 @@
       );
     return (
       `<div class="k-field"><label class="k-label" for="k-desc">Use when…</label><input class="input" id="k-desc" data-k-field="description" value="${esc(d.description)}" aria-describedby="k-desc-help"${frozen} />` +
-      `<p class="${pr.desc ? "b-field-error" : "b-hint"}" id="k-desc-help">${pr.desc || (pr.descMissing ? "Say when a bot should use this skill." : bytes(d.description) >= 900 ? `${bytes(d.description).toLocaleString("en-US")} of 1,024 bytes.` : "When a bot should use it. The gateway shows this to the bot.")}</p></div>` +
+      `<p class="${pr.desc ? "b-field-error" : "b-hint"}" id="k-desc-help">${pr.desc || (pr.descMissing ? "Say when a bot should use this skill." : descCount(d) || "When a bot should use it. The gateway shows this to the bot.")}</p></div>` +
       `<div class="k-field"><label class="k-label" for="k-body">Instructions</label><textarea class="input k-editor" id="k-body" data-k-field="body" rows="12" spellcheck="false" aria-describedby="k-body-help"${frozen}>${esc(d.body)}</textarea>` +
       `<p class="${pr.body ? "b-field-error" : "b-hint"}" id="k-body-help">${pr.body || (pr.bodyMissing ? "Write what the bot should do." : "Plain text. Shown to the bot as written.")}</p></div>`
     );
@@ -455,7 +470,7 @@
       el.className = error ? "b-field-error" : "b-hint";
       el.textContent = error || hint;
     };
-    set("#k-desc-help", pr.desc, pr.descMissing ? "Say when a bot should use this skill." : bytes(d.description) >= 900 ? `${bytes(d.description).toLocaleString("en-US")} of 1,024 bytes.` : "When a bot should use it. The gateway shows this to the bot.");
+    set("#k-desc-help", pr.desc, pr.descMissing ? "Say when a bot should use this skill." : descCount(d) || "When a bot should use it. The gateway shows this to the bot.");
     set("#k-body-help", pr.body, pr.bodyMissing ? "Write what the bot should do." : "Plain text. Shown to the bot as written.");
     if (K.page === "new") set("#k-slug-help", K.nameTaken && d.slug === K.nameTaken ? `You already have a skill called ${K.nameTaken}. Choose another name.` : pr.name, "Lowercase letters, digits and hyphens, starting with a letter or digit, up to 63 characters.");
   }
@@ -467,9 +482,9 @@
     if (K.pending) return;
     if (K.page === "new") return saveNew();
     const base = over ? K.compare.theirs : K.read;
-    const sub = { id: K.page, base: base.rev, description: K.draft.description, body: K.draft.body, extra: [...base.extra], files: base.files.map((f) => ({ ...f })) };
+    const sub = { id: K.page, base: base.rev, description: K.draft.description, body: K.draft.body, extra: [...base.extra], files: base.files.map((f) => ({ ...f })), content: editMarkdown(base, K.draft) };
     const mode = takeMode("save");
-    sent.push({ method: "skills.library.save", skillId: sub.id, expectedRevision: sub.base, retainFiles: sub.files.map((f) => f.path) });
+    sent.push({ method: "skills.library.save", skillId: sub.id, expectedRevision: sub.base, content: sub.content, retainFiles: sub.files.map((f) => f.path) });
     K.pending = "Saving…";
     K.status = null;
     rerender();

@@ -191,14 +191,32 @@ check("S2 an address in a skill is text, never a link, and the page never asks f
 await typeInto(p, "#k-body", "Call the forecast service and say it in one line.");
 await p.click('[data-k="save"]');
 await wait(p);
+{
+  const before = await p.evaluate(() => window.skills.G.skills.find((s) => s.id === "weather").history.at(-1).md);
+  const sentMd = await p.evaluate(() => window.skills.sent.filter((r) => r.method === "skills.library.save").at(-1).content);
+  const head = (md) => /^---\n[\s\S]*?\n---\n/.exec(md)[0];
+  check("S4 R9 a body-only save sends the read frontmatter byte for byte, the description field included", head(sentMd) === head(before) && head(sentMd).includes("description: Use when asked about the weather for a walk.\n") && sentMd.endsWith("\nCall the forecast service and say it in one line.\n"));
+}
 g = await gwRead(p, "weather");
 check("F-361 S5 R1 a text-only save keeps every other frontmatter line on the gateway", g.extra.join("\n") === 'user-invocable: false\nmetadata: {"openclaw":{"requires":{"bins":["curl"],"env":["WEATHER_API_KEY"]}}}' && g.body === "Call the forecast service and say it in one line.");
 await p.close();
 p = await open(LIB + "&skill=kitchen");
+await typeInto(p, "#k-desc", "é".repeat(900));
+check("S4 R9 a 900-code-unit, 1,800-byte Use when… is counted in characters and stays saveable", (await text(p, "#k-desc-help")) === "900 of 1,024 characters." && !(await p.evaluate(() => document.querySelector('[data-k="save"]').disabled)) && (await p.evaluate(() => new TextEncoder().encode(document.querySelector("#k-desc").value).length)) === 1800);
+await typeInto(p, "#k-desc", "a".repeat(1025));
+check("S4 R9 a 1,025-code-unit Use when… is refused before sending, in characters", (await text(p, "#k-desc-help")) === "Use when… is too long (maximum 1,024 characters)." && (await p.evaluate(() => document.querySelector('[data-k="save"]').disabled)));
 await typeInto(p, "#k-desc", "Use when timing anything in the kitchen.");
 await p.click('[data-k="save"]');
 await wait(p);
 check("S5 R1 a save keeps the files of its base", (await gwRead(p, "kitchen")).files.map((f) => f.path).join(",") === "references/times.md,scripts/timer.sh");
+check(
+  "S4 R9 a description-only save replaces only the description scalar; the body bytes and every file are sent as read",
+  await p.evaluate(() => {
+    const r = window.skills.sent.filter((x) => x.method === "skills.library.save").at(-1);
+    const before = window.skills.G.skills.find((s) => s.id === "kitchen").history[0].md;
+    return r.content === before.replace("description: Use when timing a recipe.", "description: Use when timing anything in the kitchen.") && r.retainFiles.join(",") === "references/times.md,scripts/timer.sh";
+  }),
+);
 await p.close();
 p = await open(LIB + "&skill=notes");
 t = await dialog(p);
@@ -476,7 +494,7 @@ await p.close();
 p = await open(LIB + "&skill=new&big=1");
 await typeInto(p, "#k-slug", "long-one");
 await typeInto(p, "#k-desc", "Use when long.");
-check("S6 over the gateway's limit in bytes: said before sending", (await text(p, "#k-body-help")) === "Too long for the gateway: SKILL.md may be at most 1,048,576 bytes, frontmatter included. Letters outside English count as more than one byte." && (await p.evaluate(() => document.querySelector('[data-k="save"]').disabled)));
+check("S6 R9 over the file limit in UTF-8 bytes of the serialized SKILL.md: said before sending", (await text(p, "#k-body-help")) === "SKILL.md can be at most 1,048,576 UTF-8 bytes, including the frontmatter." && (await p.evaluate(() => document.querySelector('[data-k="save"]').disabled)));
 await p.close();
 
 // Removing (section 7) and sharing (section 8) -------------------------------------------------------
