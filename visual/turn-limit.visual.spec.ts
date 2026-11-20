@@ -26,6 +26,9 @@ test.describe("the turn time limit", () => {
     const limit = settings.getByLabel("Turn time limit");
     await expect(limit).toHaveValue("50");
     await expect(limit).toHaveAccessibleDescription(/50 by default/);
+    // A stop at the limit is asked of the gateway, and the note names the limit once it confirms.
+    await expect(limit).toHaveAccessibleDescription(/asks the gateway to stop/);
+    await expect(limit).not.toHaveAccessibleDescription(/is stopped so it does not hang/);
     await limit.fill("0");
     await page.keyboard.press("Enter");
     await expect(settings.getByRole("alert")).toHaveText(

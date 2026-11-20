@@ -123,9 +123,9 @@ function ConversationPane({ announce }: { announce: (text: string) => void }) {
         </span>
       </label>
       <p className="b-hint" id="turn-limit-note">
-        Minutes. 50 by default. A turn that runs longer is stopped so it does not hang, and ends
-        with a note naming the limit. Send a message to pick up where it left off. It applies to
-        turns this device starts.
+        Minutes. 50 by default. At the limit Clawtrate asks the gateway to stop the turn so it does
+        not hang, and once the gateway confirms, the turn ends with a note naming the limit. Send a
+        message to pick up where it left off. It applies to turns this device starts.
       </p>
       {error && (
         <div className="form-error" role="alert">
