@@ -14,8 +14,9 @@
 //   &tab=files             the Work pane's tab
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
 //   ?setup=first           the desktop's first screen and a state of setup (setup.ts)
+//   &usage=…, &budget=…, &plimit=…, &uview=usage     usage and budgets (usage.ts)
 
-import { App, BridgeProvider, rosterKey, rosterScope } from "@clawtrate/ui";
+import { App, BridgeProvider, requestUsagePage, rosterKey, rosterScope } from "@clawtrate/ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createFixtureBridge, GATEWAY_ID, GATEWAY_URL, isScene } from "./bridge-fixture.ts";
@@ -23,6 +24,8 @@ import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
 import { accountParams } from "./accounts.ts";
+import { usageParams } from "./usage.ts";
+import { machineParams } from "./machines.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -78,7 +81,12 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   files: fileParams(params),
   accounts: accountParams(params),
   setup: params.get("setup"),
+  usage: usageParams(params),
+  machines: machineParams(params),
 });
+// Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.
+if (params.get("uview") === "usage")
+  requestUsagePage(params.get("bot") ?? OPEN_BOT, params.get("budget") === "invalid");
 // For tests and manual checks: change the state from the console.
 Object.assign(window, { clawtrateFixture: bridge });
 

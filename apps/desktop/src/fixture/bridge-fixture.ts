@@ -52,10 +52,12 @@ import {
   withAccess,
   type AccountParams,
 } from "./accounts.ts";
+import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machines.ts";
 import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
 import { isSetupState, setupCommand, setupInfo, SETUP_STATES } from "./setup.ts";
+import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -459,7 +461,13 @@ function answerStrings(
 export function createFixtureBridge(
   name: SceneName,
   /** `setup`: the desktop's first screen and a state of setup (`setup.ts`), over the connect scene. */
-  options: { files?: FileParams; accounts?: AccountParams; setup?: string | null } = {},
+  options: {
+    files?: FileParams;
+    accounts?: AccountParams;
+    setup?: string | null;
+    usage?: UsageParams;
+    machines?: MachineParams;
+  } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   /** Every command the interface sent, for tests that check what was asked of the host. */
@@ -493,6 +501,9 @@ export function createFixtureBridge(
   // Every scene with bots has the gateway's accounts; the address can give it more access.
   if (state.bots.length > 0)
     state = withAccess({ ...state, accounts: fixtureAccounts(now, accountParams) }, accountParams);
+  // And the usage the gateway reports, with this person's budgets.
+  const usageParams = options.usage ?? NO_USAGE_PARAMS;
+  if (state.bots.length > 0) state = { ...state, usage: fixtureUsage(now, usageParams) };
   const listeners = new Set<(state: ClawtrateState) => void>();
   const set = (next: ClawtrateState) => {
     state = next;
@@ -529,7 +540,18 @@ export function createFixtureBridge(
   const railRefused = new Set<string>();
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
+  const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   async function apply(command: BridgeCommand): Promise<unknown> {
+    const usage = usageCommand(command, () => state, set, usageParams);
+    if (usage) {
+      sent.push(command);
+      return usage;
+    }
+    const machine = machineCommand(command, () => state, set);
+    if (machine) {
+      sent.push(command);
+      return machine;
+    }
     const account = accountCommand(command, () => state, set, accountParams);
     if (account) {
       sent.push(command);

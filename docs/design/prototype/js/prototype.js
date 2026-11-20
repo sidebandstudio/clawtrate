@@ -87,6 +87,7 @@
         link("conversation.html", "Scripted run") +
         link("work.html", "Work pane") +
         link("bots.html", "Bots") +
+        link("routines.html", "Routines") +
         link("setup.html", "Setup") +
         `<span class="gap"></span><span id="proto-extra"></span>` +
         seg("Theme", "theme", [["light", "Light"], ["dark", "Dark"]]) +
