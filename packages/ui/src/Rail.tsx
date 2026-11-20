@@ -38,7 +38,7 @@ import {
   SearchIcon,
   SectionIcon,
   SettingsIcon,
-  RefreshIcon,
+  DownloadIcon,
   SortIcon,
   StarIcon,
   TrashIcon,
@@ -1717,6 +1717,17 @@ export function Rail({
     );
   };
 
+  const updateButton = updateEntry && (
+          <button
+            type="button"
+            className="icon-button update-entry"
+            aria-label="Open Updates"
+            title="Open Updates"
+            onClick={() => onOpenSettings("updates")}
+          >
+            <DownloadIcon />
+          </button>
+  );
   return (
     <nav className="rail" aria-label="Bots" inert={inert}>
       <div className="rail-top">
@@ -1732,6 +1743,7 @@ export function Rail({
           <SettingsIcon />
           <span className="status-dot" data-status={dot} />
         </button>
+        {updateButton}
         {query === null ? (
           <>
             <button
@@ -1955,17 +1967,7 @@ export function Rail({
             <span>{words}</span>
           </span>
         </button>
-        {updateEntry && (
-          <button
-            type="button"
-            className="icon-button update-entry"
-            aria-label="Open Updates"
-            title="Open Updates"
-            onClick={() => onOpenSettings("updates")}
-          >
-            <RefreshIcon />
-          </button>
-        )}
+        {updateButton}
       </div>
       {menu?.kind === "gateway" && (
         <Menu

@@ -70,7 +70,10 @@ export function App({
       if (opener?.isConnected && !opener.closest("[inert]")) opener.focus();
       // The control that opened it is gone (another gateway was chosen): the
       // first control on the screen now showing.
-      else document.querySelector<HTMLElement>(FIRST_CONTROL)?.focus();
+      else {
+        const gateway = opener?.classList.contains("update-entry") && [...document.querySelectorAll<HTMLElement>(".rail-status,.gateway-pill")].find(el=>el.getClientRects().length);
+        (gateway || document.querySelector<HTMLElement>(FIRST_CONTROL))?.focus();
+      }
     });
   }, []);
   useEffect(() => {

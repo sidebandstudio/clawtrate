@@ -12,6 +12,7 @@ const states = [
   "nofile",
   "faildl",
   "preferences",
+  "storage","history","invalid","unsupported","pending","prior-time","only-nightly","long-host",
   "dev",
   "no-source",
   "no-updater",
@@ -27,27 +28,31 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
       test.use(contextFor(size, theme));
       for (const state of states)
         for (const tracks of ["one", "two"]) {
+          if (["pending"].includes(state) && tracks==="one")continue;
+          if(["prior-time","only-nightly","long-host","invalid","unsupported"].includes(state) && tracks==="two")continue;
           if (state === "nightly-build" && tracks === "two") continue;
           if (tracks === "one" && ["refused", "other-current"].includes(state)) continue;
           if (tracks === "two" && ["dev", "no-source", "no-updater"].includes(state)) continue;
-          test(`F-231 F-030 Updates ${state} ${tracks} tracks`, async ({ page }) => {
+          test(`F-231 F-030: Updates ${state} ${tracks} tracks`, async ({ page }) => {
             const query =
-              state === "nightly-build"
+              state==="only-nightly"?"not-checked":state==="long-host"?"not-checked&longhost=1":state==="prior-time"?"nothing-newer&lastTrack=nightly":state === "nightly-build"
                 ? "not-checked&buildTrack=nightly"
                 : state === "refused"
                   ? "not-checked&save=failed"
                   : state === "other-current"
                     ? "nothing-newer&track=nightly"
                     : state;
-            await openFixture(page, `scene=main&updates=${query}&tracks=${tracks}`, theme);
+            await openFixture(page, `scene=main&updates=${query}&tracks=${state==="only-nightly"?"nightly":tracks}`, theme);
             await showList(page);
             const footer = page.getByRole("button", { name: "Open Updates" });
             if (actionable.has(state)) {
               await expect(footer).toBeVisible();
               if (state === "offered" && tracks === "two")
-                await expect(page.locator(".rail-footer")).toHaveScreenshot(
+                await expect(page.locator(size.phone?".rail-top":".rail-footer")).toHaveScreenshot(
                   `updates/footer-${size.name}-${theme}.png`,
                 );
+              await expect(page.locator(size.phone?".rail-status":".gateway-pill")).toBeVisible();
+              await expect(footer).toHaveCount(1);
               await footer.click();
             } else {
               await expect(footer).toHaveCount(0);
@@ -60,14 +65,14 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
               await stable.focus();
               await page.keyboard.press("ArrowRight");
               await expect(stable).toBeChecked();
-              await expect(page.locator("dd").last()).toHaveText(
+              await expect(page.getByRole("group",{name:"Update status"})).toContainText(
                 "Couldn't save the track. Stable is still selected.",
               );
             }
             await settle(page);
             expect(
               await page
-                .locator(".updates-section dd")
+                .locator(".updates-section dd,.update-source")
                 .evaluateAll((rows) => rows.every((row) => row.scrollWidth <= row.clientWidth)),
             ).toBe(true);
             await expect(page.getByRole("dialog")).toHaveScreenshot(
@@ -78,7 +83,7 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
     });
   }
 
-test("F-030 opens Updates from the footer and keeps keyboard focus on the chosen track", async ({
+test("F-030: opens Updates from the footer and keeps keyboard focus on the chosen track", async ({
   page,
 }) => {
   await openFixture(page, "scene=main&updates=offered", "light");
@@ -93,7 +98,7 @@ test("F-030 opens Updates from the footer and keeps keyboard focus on the chosen
   const nightly = group.getByRole("radio", { name: "Nightly" });
   await expect(nightly).toBeChecked();
   await expect(nightly).toBeFocused();
-  await expect(page.locator(".updates-section dd").last()).toHaveText("Not checked yet.");
+  await expect(page.locator(".updates-section dd,.update-source").last()).toHaveText("Not checked yet.");
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Open Updates" })).toHaveCount(0);
 });

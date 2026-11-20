@@ -20,12 +20,15 @@
 .updates-section progress {
   width: 100%;
 }
-@container app (max-width: 687px) {
-  .rail-footer:has(.update-entry) {
-    display: flex;
-    justify-content: flex-end;
-  }
-  .rail-footer:has(.update-entry) .gateway-pill {
-    display: none;
-  }
+
+.update-source {overflow-wrap:anywhere;}
+.update-result {margin-block-start:14px;}
+.update-result .b-actions {margin-block-start:14px;}
+.updates-section .b-note {margin-block:12px;}
+.updates-section .b-note p {margin:0;}
+.update-result progress {display:block; margin-top:6px;}
+.rail-top .update-entry {display:none;}
+@container app (max-width:687px) {
+ .rail-top .update-entry {display:grid;margin-right:auto;}
+ .rail-top:has(.update-entry) .rail-status {margin-right:0;}
 }
