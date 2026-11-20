@@ -90,7 +90,10 @@ const states = [
   ["view=draft&access=read", ["Read-only.", "Request approvals access to see drafts", "Request approvals access"]],
   ["view=draft&access=read&req=requested", ["Waiting for the gateway's owner.", "openclaw devices approve"]],
   ["view=draft&p=unchecked", ["Clawtrate couldn't check the drafts plugin. Drafts may be unavailable.", "Send email"]],
-  ["view=draft&p=absent", ["It wasn't held as a draft", "Drafts methods unavailable on this gateway."]],
+  ["view=draft&p=absent", ["Drafts methods unavailable on this gateway."]],
+  ["view=draft&p=old&d=sent", ["Clawtrate's drafts plugin is version 0.9; drafts need 1.0 or newer.", "Answered", "Sent from otto@example.com"]],
+  ["view=draft&p=old&d=norecord", ["Clawtrate's drafts plugin is version 0.9; drafts need 1.0 or newer.", "Couldn't read this draft. The gateway still lists it as waiting."]],
+  ["view=draft&d=stillon", ["Drafts on for Otto. This draft is still waiting for you."]],
   ["view=draft&p=old", ["Clawtrate's drafts plugin is version 0.9; drafts need 1.0 or newer."]],
   ["view=secret", ["Otto asks for a secret", "PRICE_TRACKER_KEY", "To read prices from the store's API for your tracker.", "Saving sends the value to the gateway's store. The answer the bot gets contains a reference and status. Saving replaces any value already stored under this name.", "Allowed hosts", "api.example.com", "When the gateway's egress proxy is enabled, it can substitute the value in supported requests to these hosts. Settings can use the reference separately.", "Secret value", PLAIN, "Save to the gateway", "Skip", "About filling this field", "Raw"]],
   ["view=secret&s=hosts", ["api.example.com", "api.example.net"]],
@@ -306,7 +309,20 @@ p = await walk("Edit → a file changes during the second hold → Send", "view=
 check("walk: a file changed during the second hold is not vetoed by the plugin", !(await text(p)).includes("report.txt changed after Otto asked") && !(await text(p)).includes("Not sent"));
 await p.close();
 (await walk("Disable drafts → off, this draft still waits", "view=draft", [tap('[data-d="disable"]'), tap('[data-d="disable-yes"]')], ["Drafts off for Otto. This draft is still waiting for you."])).close();
-(await walk("Disable drafts, refused → unknown → Read again", "view=draft", [answer("refused"), tap('[data-d="disable"]'), tap('[data-d="disable-yes"]'), pause(500), tap('[data-d="disable-read"]')], ["Drafts off for Otto."])).close();
+p = await walk("Disable drafts, refused → unknown → Read again still fails", "view=draft", [answer("refused"), tap('[data-d="disable"]'), tap('[data-d="disable-yes"]'), pause(500), tap('[data-d="disable-read"]')], ["Couldn't confirm the setting. Read it again."]);
+check("walk: a failed read says neither on nor off", !(await text(p)).includes("Drafts off for Otto") && !(await text(p)).includes("Drafts on for Otto"));
+await bar(p, "answer", "applied");
+await click(p, '[data-d="disable-read"]');
+check("walk: a read that answers shows the value it read: On", await waitText(p, ["Drafts on for Otto. This draft is still waiting for you."]));
+await p.close();
+for (const q of ["view=draft&p=absent", "view=draft&p=old"]) {
+  p = await open(q);
+  check(`${q}: a status supplies no send history`, !(await text(p)).includes("It wasn't held as a draft") && (await p.locator('[data-testid="draft"], [data-testid="draft-resolved"]').count()) === 0);
+  await p.close();
+}
+p = await open("view=drafts&p=unchecked");
+check("Settings, Drafts: without the plugin's settings read no sending tools are listed", !(await text(p)).includes("Sending tools") && !(await text(p)).includes("mail_send"));
+await p.close();
 (await walk("Read-only: Request approvals access → waiting", "view=draft&access=read", [tap('[data-d="request"]')], ["Waiting for the gateway's owner."])).close();
 p = await open("view=draft", { chrome: "1" });
 await p.locator('[data-d="edit"]').focus();
@@ -513,7 +529,7 @@ p = await b.newPage();
 await p.goto(pageUrl("gallery.html") + "?chrome=1&section=drafts");
 await p.waitForTimeout(100);
 const links = await p.evaluate(() => [...document.querySelectorAll('#drafts a[href^="drafts.html"]')].map((a) => a.getAttribute("href")));
-check("gallery: the Drafts and the Vault section links to every state", links.length === 95, String(links.length));
+check("gallery: the Drafts and the Vault section links to every state", links.length === 96, String(links.length));
 check("gallery: the section says draft examples use a proposed plugin", (await text(p, "#drafts")).includes(PROPOSED));
 check("the prototype bar links to the drafts page", await p.evaluate(() => [...document.querySelectorAll("#proto-bar a")].some((a) => a.getAttribute("href") === "drafts.html")));
 await p.close();

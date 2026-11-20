@@ -283,6 +283,7 @@
       decision = `<p class="d-say" data-tone="warn">Couldn't confirm what happened. The gateway no longer lists this draft, and Otto's ${noun(kind)} tool hasn't reported back.</p>`;
     if (st === "stillwaiting") decision = `<p class="d-say">Your decision wasn't applied. The draft is still waiting.</p>`;
     if (st === "disabled") decision = `<p class="d-say" data-tone="accent">Drafts off for Otto. This draft is still waiting for you.</p>`;
+    if (st === "stillon") decision = `<p class="d-say">Drafts on for Otto. This draft is still waiting for you.</p>`;
     if (st === "disableunknown")
       decision = `<p class="d-say" data-tone="warn">Couldn't confirm the setting. Read it again. ${button("Read again", 'data-d="disable-read" data-size="sm"')}</p>`;
     if (st === "norecord") decision = `<p class="d-say" data-tone="warn">Couldn't read this draft. The gateway still lists it as waiting.</p>`;
@@ -430,8 +431,15 @@
     const kind = S.kind;
     const st = S.d;
     if (S.access === "read") return accessBar("Request approvals access to see drafts", "approvals");
-    if (S.p === "absent" || S.p === "old")
-      return `<div class="d-line">${icon("message")} Otto used <code>${TOOL[kind]}</code>. It wasn't held as a draft; its result is on its action card.</div><div class="b-note" data-tone="warn">${icon("warning")}<div><p>${PLUGIN_WORDS[S.p]}</p></div></div>`;
+    if (S.p === "absent" || S.p === "old") {
+      // A status says nothing of what was sent. The note stands alone; a result observed separately stays, and a
+      // held approval whose plugin record can't be read is section 3's missing-record card.
+      const note = `<div class="b-note" data-tone="warn">${icon("warning")}<div><p>${PLUGIN_WORDS[S.p]}</p></div></div>`;
+      const done = finished(kind);
+      if (done) return note + done;
+      if (st === "norecord") return note + pendingCard(kind);
+      return note;
+    }
     if (["edit", "editsaving", "editfailed", "editunconfirmed"].includes(st)) return editCard(kind);
     if (st === "editwaiting") return waitingCard(kind);
     const done = finished(kind);
@@ -621,11 +629,12 @@
         );
       }).join("");
     }
-    html += `<h4 class="d-group">Sending tools</h4>`;
-    html += `<div class="d-toolrow"><code>${TOOL.email}</code><br />To from <code>to</code>, Cc from <code>cc</code>, Subject from <code>subject</code>, Body from <code>body</code>, files from <code>attachments</code>, From from <code>from</code>.</div>`;
-    html += `<div class="d-toolrow"><code>${TOOL.slack}</code><br />Workspace from <code>workspace</code>, To from <code>to</code>, Thread from <code>thread</code>, Body from <code>text</code>.</div>`;
-    html += `<div class="d-toolrow"><code>message</code><br />Destination as given, from <code>target</code>, <code>targets</code>, <code>accountId</code>, <code>replyTo</code> and <code>threadId</code>; Clawtrate can't name it. Body from <code>message</code>.</div>`;
-    html += `<p class="d-hint">A tool not on this list never makes a draft; its calls follow the bot's rules.</p>`;
+    // The sending tools come from the plugin's settings read; without that read there is nothing to list.
+    if (running) html += `<h4 class="d-group">Sending tools</h4>`;
+    if (running) html += `<div class="d-toolrow"><code>${TOOL.email}</code><br />To from <code>to</code>, Cc from <code>cc</code>, Subject from <code>subject</code>, Body from <code>body</code>, files from <code>attachments</code>, From from <code>from</code>.</div>`;
+    if (running) html += `<div class="d-toolrow"><code>${TOOL.slack}</code><br />Workspace from <code>workspace</code>, To from <code>to</code>, Thread from <code>thread</code>, Body from <code>text</code>.</div>`;
+    if (running) html += `<div class="d-toolrow"><code>message</code><br />Destination as given, from <code>target</code>, <code>targets</code>, <code>accountId</code>, <code>replyTo</code> and <code>threadId</code>; Clawtrate can't name it. Body from <code>message</code>.</div>`;
+    if (running) html += `<p class="d-hint">A tool not on this list never makes a draft; its calls follow the bot's rules.</p>`;
     return settings(html, "Drafts");
   }
 
@@ -935,7 +944,9 @@
           go({ d: "disabled" }, "Drafts off for Otto.");
         }, 300);
       case "disable-read":
-        return go({ d: "disabled" }, "Drafts off for Otto.");
+        // A read that still fails leaves the value unknown; a read that answers shows the value it read.
+        if (S.answer === "refused" || S.answer === "noanswer") return go({ d: "disableunknown" }, "Couldn't confirm the setting");
+        return go({ d: S.drafts.otto ? "stillon" : "disabled" }, `Drafts ${S.drafts.otto ? "on" : "off"} for Otto.`);
       case "request":
         return go({ req: "requested" });
       case "s-save":

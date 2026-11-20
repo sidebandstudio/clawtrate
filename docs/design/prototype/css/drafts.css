@@ -46,8 +46,7 @@
   flex-direction: column;
 }
 
-.d-transcript > .card,
-.d-transcript > .d-line {
+.d-transcript > .card {
   margin-top: 12px;
 }
 
@@ -287,11 +286,6 @@
 .d-resolved .d-time {
   margin-left: auto;
   color: var(--text-faint);
-  font-size: var(--text-sm);
-}
-
-.d-line {
-  color: var(--text-muted);
   font-size: var(--text-sm);
 }
 
