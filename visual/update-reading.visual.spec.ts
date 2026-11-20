@@ -4,13 +4,19 @@ import type {
   DesktopUpdateState,
   DesktopUpdateReply,
   DesktopUpdates,
+  UpdateTrack,
 } from "../packages/core/src/desktop-updates.ts";
 import { openFixture } from "./fixture.ts";
 
 type Probe = {
   active: number;
   commands: string[];
-  emit: (revision: number, state: DesktopUpdateState, pending?: boolean) => void;
+  emit: (
+    revision: number,
+    state: DesktopUpdateState,
+    pending?: UpdateTrack | null,
+    selected?: UpdateTrack,
+  ) => void;
   finish: (revision: number, state: DesktopUpdateState) => void;
   read: () => void;
   mutations: number;
@@ -52,9 +58,8 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
           active: 0,
           commands: [],
           mutations: 0,
-          emit: (revision, state, pending = false) => {
-            for (const fn of listeners)
-              fn({ ...s, revision, state, pendingTrack: pending ? "nightly" : null });
+          emit: (revision, state, pendingTrack = null, selectedTrack = "stable") => {
+            for (const fn of listeners) fn({ ...s, revision, state, pendingTrack, selectedTrack });
           },
           read: () => first.resolve({ ...s, revision: 3 }),
           finish: (revision, state) => {
@@ -151,10 +156,18 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("radio", { name: "Nightly" })).toBeFocused();
   await expect(page.locator(".update-result dd")).toHaveText("Not checked yet.");
-  await page.evaluate(() => window.updateProbe.emit(8, { kind: "not-checked" }, true));
+  await page.evaluate(() => window.updateProbe.emit(8, { kind: "not-checked" }, "nightly"));
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("Space");
   await expect(radio).toBeChecked();
+  // Another caller can start a new choice before this window receives its old reply.
+  await page.evaluate(() =>
+    window.updateProbe.emit(10, { kind: "not-checked" }, "stable", "nightly"),
+  );
+  await expect(status).toHaveText("Saving Stable as the update track…");
+  await expect(page.getByRole("radio", { name: "Nightly" })).toBeChecked();
+  await page.evaluate(() => window.updateProbe.finish(9, { kind: "not-checked" }));
+  await expect(status).toHaveText("Saving Stable as the update track…");
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Open Updates" })).toHaveCount(0);
   expect(await page.evaluate(() => window.updateProbe.commands)).toEqual([
@@ -163,4 +176,16 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
     "choose nightly",
   ]);
   expect(await page.evaluate(() => window.updateProbe.active)).toBe(1);
+  await page.evaluate(() => window.updateProbe.emit(11, { kind: "not-checked" }));
+  await page.keyboard.press("ControlOrMeta+,");
+  await page.getByRole("button", { name: "Check for Updates" }).click();
+  await page.evaluate(() => window.updateProbe.emit(12, { kind: "checking" }));
+  await page.keyboard.press("Escape");
+  const entry = page.getByRole("button", { name: "Open Updates" });
+  await expect(entry).toHaveCount(0);
+  await page.evaluate(() =>
+    window.updateProbe.finish(13, { kind: "failed", stage: "check", reason: "timed-out" }),
+  );
+  await entry.click();
+  await expect(page.locator(".update-result dd")).toHaveText("Couldn't check for updates.");
 });
