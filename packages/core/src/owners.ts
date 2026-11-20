@@ -46,7 +46,7 @@ import {
   MAX_SAVE_BYTES,
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
-import { emptyActivity } from "./runs.ts";
+import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   MAX_WAITING_ID_CHARS,
@@ -165,7 +165,11 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
     max: FOREIGN_SESSIONS,
-    each: ID + jsonLength(emptyActivity) + FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
+    each:
+      ID +
+      jsonLength(emptyActivity) +
+      MAX_QUEUE_ALIASES * 2 * ID +
+      FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
     row: "foreignRuns",
   },
   foreignEpochs: { max: MAX_FOREIGN_EPOCHS, each: ID + N, row: "bookkeeping" },
