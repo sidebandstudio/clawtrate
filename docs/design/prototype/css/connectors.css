@@ -1,0 +1,1049 @@
+/* Connectors: the components docs/design/connectors.md adds. Every value is a
+   token from tokens.css. New components are marked "new"; everything else
+   places an existing one (the dialog and its frame, the note, the result, the
+   access bar, the command block, the step list) in a new screen.
+
+   The window sits inside the prototype's frame, so its narrow layout follows
+   the frame's width (a container query), not the browser window's. */
+
+.c-app {
+  position: relative;
+  height: 100%;
+  container: c-frame / inline-size;
+}
+
+.c-app .mono {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+/* The app behind the window: the rail and an empty main pane. */
+.c-shell {
+  display: grid;
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+  height: 100%;
+}
+
+.c-rail {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4) var(--space-3);
+  background: var(--bg-rail);
+}
+
+.c-bots {
+  display: grid;
+  gap: 4px;
+  margin: 48px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.c-bots li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 8px;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.c-bots .avatar {
+  width: 28px;
+  height: 28px;
+}
+
+.c-rail-foot {
+  display: grid;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.c-connect-apps {
+  justify-content: flex-start;
+  width: 100%;
+}
+
+.c-gateway {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0 8px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.c-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-line);
+}
+
+.c-main {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: var(--space-4);
+  min-width: 0;
+  background: var(--bg);
+}
+
+.c-empty {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--text-md);
+}
+
+/* The window: the Settings frame of bots.md §7, inside a scrim. */
+.c-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  background: var(--bg-scrim);
+}
+
+.c-scrim-top {
+  z-index: 20;
+}
+
+.c-window {
+  display: flex;
+  width: min(800px, calc(100% - 48px));
+  height: min(640px, calc(100% - 48px));
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-pane);
+  box-shadow: var(--shadow-pop);
+  color: var(--text);
+}
+
+.c-frame {
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.c-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 10px;
+  background: var(--bg-rail);
+}
+
+.c-nav-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.c-nav-head .c-close {
+  display: none;
+}
+
+.c-nav-title {
+  margin: 4px 10px 12px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.c-nav-item {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+
+.c-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.c-nav-item[aria-current="page"] {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+.c-nav-item .icon {
+  display: none;
+  margin-left: auto;
+  color: var(--text-faint);
+}
+
+.c-section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.c-section-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  min-height: 56px;
+  padding: 12px 12px 0 var(--space-6);
+}
+
+.c-section-head h3 {
+  flex: 1;
+  margin: 0;
+  font-size: var(--text-title-sm);
+  font-weight: var(--weight-medium);
+  line-height: 1.25;
+}
+
+.c-section-head h3:focus {
+  outline: none;
+}
+
+.c-section-head .c-back {
+  margin-left: -6px;
+}
+
+.c-to-nav {
+  display: none;
+}
+
+.c-section-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px var(--space-6) var(--space-6);
+}
+
+.c-section-foot {
+  flex: none;
+  padding: 0 var(--space-6) var(--space-5);
+}
+
+/* new: a connector's initial. Every connector has the same one. */
+.c-initial {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-bubble);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--text);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+}
+
+.c-initial[data-size="sm"] {
+  width: 28px;
+  height: 28px;
+  font-size: var(--text-md);
+}
+
+.c-initial[data-size="lg"] {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-title-sm);
+}
+
+/* new: catalog rows, in one --bg-bubble block like the choice list. */
+.c-rows {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  list-style: none;
+}
+
+.c-rows > li + li {
+  box-shadow: inset 0 1px 0 var(--border);
+}
+
+.c-row,
+.c-account {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 0 14px 0 0;
+}
+
+.c-account {
+  padding: 12px 14px;
+}
+
+.c-row-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px 0 12px 14px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.c-row-main:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
+}
+
+.c-row-text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.c-row-name {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.c-row-sub {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+.c-account-state {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  -webkit-line-clamp: unset;
+}
+
+.c-row-end {
+  flex: none;
+}
+
+.c-grey-row {
+  height: 64px;
+}
+
+.c-grey,
+.c-grey-row {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  animation: c-shimmer 1.6s ease-in-out infinite;
+}
+
+[data-motion="reduce"] .c-grey,
+[data-motion="reduce"] .c-grey-row {
+  animation: none;
+}
+
+@keyframes c-shimmer {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+/* new: the state pill. Never green, never the accent. */
+.c-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-pane);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.c-pill[data-tone="warn"] {
+  background: var(--warn-soft);
+  box-shadow: none;
+  color: var(--warn);
+}
+
+.c-pill[data-tone="danger"] {
+  background: var(--danger-soft);
+  box-shadow: none;
+  color: var(--danger);
+}
+
+/* new: the category chips, one radio group in a scrolling row. */
+.c-chips {
+  display: flex;
+  gap: 8px;
+  margin: var(--space-4) 0 var(--space-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.c-chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+
+.c-chip[aria-checked="true"] {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+.c-chip.c-grey {
+  width: 72px;
+}
+
+.c-search {
+  position: relative;
+}
+
+.c-search .input {
+  width: 100%;
+  padding-left: 38px;
+}
+
+.c-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  color: var(--text-faint);
+  transform: translateY(-50%);
+}
+
+/* Text ---------------------------------------------------------------------------------- */
+
+.c-line,
+.c-faint {
+  margin: 8px 2px 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text-faint);
+}
+
+.c-line[data-tone="warn"],
+.c-warn {
+  color: var(--warn);
+}
+
+.c-text {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.c-state {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-base);
+  line-height: 1.45;
+}
+
+.c-state[data-tone="warn"] {
+  color: var(--warn);
+}
+
+.c-section-body .b-group:first-child {
+  margin-top: 0;
+}
+
+.c-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: var(--text-md);
+  line-height: 1.45;
+}
+
+.c-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.c-hero-name {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.c-hero .c-faint {
+  margin: 2px 0 0;
+}
+
+.c-readme {
+  white-space: normal;
+}
+
+.c-facts {
+  margin-top: var(--space-2);
+}
+
+.c-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: var(--space-4);
+}
+
+.c-access {
+  margin-top: var(--space-5);
+}
+
+.c-access .c-proto {
+  margin-top: 10px;
+}
+
+.c-fold {
+  margin-top: var(--space-4);
+}
+
+.c-fold > summary {
+  margin: 0 2px 8px;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.c-details summary {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.c-result {
+  margin-top: var(--space-4);
+}
+
+.c-result .empty-mark[data-tone="ok"] {
+  color: var(--text);
+}
+
+.c-result .empty-mark[data-tone="danger"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.c-steps .command-line {
+  margin-top: 8px;
+}
+
+/* The sign-in page's button, with its host beside it. */
+.c-open {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: var(--space-3);
+}
+
+.c-host {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* A sign-in address in full, before it is opened. */
+.c-address {
+  position: relative;
+  margin-top: var(--space-3);
+  padding: 10px 44px 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+}
+
+.c-address p {
+  margin: 0;
+}
+
+.c-address-host {
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.c-address-full {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.c-address .copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.c-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* new: the removal list, "Goes" and "Stays". */
+.c-goes h4 {
+  margin: var(--space-3) 0 6px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text-faint);
+}
+
+.c-goes ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.c-goes li {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 8px;
+  font-size: var(--text-md);
+  line-height: 1.4;
+}
+
+.c-goes li[data-mark="goes"] {
+  color: var(--text);
+}
+
+.c-goes li[data-mark="goes"] .icon,
+.c-goes li[data-mark="done"] .icon {
+  color: var(--text-muted);
+}
+
+.c-goes li[data-mark="stays"] .icon {
+  color: var(--text-faint);
+}
+
+/* A confirmation over the window. */
+.c-confirm {
+  width: min(420px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  overflow-y: auto;
+  padding: var(--space-6);
+  border-radius: var(--radius-lg);
+  background: var(--bg-pane);
+  box-shadow: var(--shadow-pop);
+}
+
+.c-confirm h2 {
+  margin: 0 0 8px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.c-confirm p {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.c-confirm .c-actions {
+  justify-content: flex-end;
+}
+
+.c-cmd {
+  margin: 0 0 var(--space-3);
+  padding: 12px 14px;
+  overflow-x: auto;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  white-space: pre;
+}
+
+/* The command's reviewed values, one per row. */
+.c-cmd-facts {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 var(--space-3);
+}
+
+.c-cmd-facts dt {
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.c-cmd-facts dd {
+  margin: 2px 0 0;
+  font-size: var(--text-md);
+}
+
+.c-cmd-facts .c-cmd {
+  display: block;
+  margin: 0;
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.c-args {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The tool server form. */
+.c-form {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.c-form fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.c-form legend,
+.c-field > span:first-child {
+  margin-bottom: 6px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.c-field {
+  display: grid;
+}
+
+.c-field .input,
+.c-header-row .input {
+  width: 100%;
+}
+
+.c-field textarea.input {
+  height: auto;
+  padding-top: 10px;
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  resize: vertical;
+}
+
+.c-error {
+  margin-top: 4px;
+  font-size: var(--text-sm);
+  color: var(--danger);
+}
+
+.c-error:empty {
+  display: none;
+}
+
+.c-header-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.c-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  font-size: var(--text-md);
+}
+
+.c-seg {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+}
+
+.c-seg a {
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+
+.c-seg a[aria-checked="true"] {
+  background: var(--bg-pane);
+  box-shadow: var(--shadow-button);
+  color: var(--text);
+}
+
+/* The conversation and its connect card. */
+.c-chat {
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  width: min(var(--transcript-max), 100% - 48px);
+  height: 100%;
+  padding: var(--space-6) 0;
+}
+
+.c-chat-head {
+  display: flex;
+  justify-content: center;
+}
+
+.c-chat-title {
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.c-transcript {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.c-bubble {
+  justify-self: end;
+  max-width: 70%;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bubble-user);
+  color: var(--bubble-user-text);
+  font-size: var(--text-base);
+}
+
+/* new: the connect card, in the action-card family. */
+.c-card {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 12px;
+  max-width: 560px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+}
+
+.c-card-title,
+.c-card-text {
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: 1.45;
+}
+
+.c-card-text {
+  margin-top: 4px;
+  color: var(--text-muted);
+}
+
+.c-card-text.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+/* The picker: a dialog of its own. */
+.c-picker {
+  width: min(560px, calc(100% - 48px));
+  height: auto;
+  max-height: calc(100% - 48px);
+}
+
+.c-picker-body {
+  overflow-y: auto;
+  padding: var(--space-6);
+}
+
+.c-picker-body h2 {
+  margin: 0;
+  font-size: var(--text-title-sm);
+  font-weight: var(--weight-medium);
+}
+
+.c-picker-body .c-search {
+  margin-top: var(--space-4);
+}
+
+.c-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.c-tile {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 14px 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-bubble);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.c-tile input {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  margin: 0;
+}
+
+.c-tile:has(input:checked) {
+  background: var(--bg-selected);
+  box-shadow: inset 0 0 0 1.5px var(--border-strong);
+}
+
+.c-picker-actions {
+  justify-content: flex-end;
+}
+
+/* Prototype controls: not product. */
+.c-proto {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--space-5);
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
+.c-proto > span {
+  margin-right: 4px;
+}
+
+/* The one-pane layout: below 688 px the window is a sheet, one pane at a time. */
+@container c-frame (max-width: 687px) {
+  .c-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .c-main {
+    display: none;
+  }
+
+  .c-shell:has(.c-chat) .c-rail {
+    display: none;
+  }
+
+  .c-shell:has(.c-chat) .c-main {
+    display: grid;
+  }
+
+  .c-scrim {
+    align-items: end;
+  }
+
+  .c-window {
+    width: 100%;
+    height: calc(100% - 8px);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+
+  .c-picker {
+    height: calc(100% - 8px);
+    max-height: none;
+  }
+
+  .c-frame {
+    grid-template-columns: 1fr;
+  }
+
+  .c-frame[data-pane="section"] .c-nav,
+  .c-frame[data-pane="nav"] .c-section {
+    display: none;
+  }
+
+  .c-nav {
+    gap: 8px;
+    padding: 16px var(--space-4);
+    background: var(--bg-pane);
+  }
+
+  .c-nav-head .c-close {
+    display: grid;
+  }
+
+  .c-nav-title {
+    margin: 2px 0 16px;
+    font-size: var(--text-title-sm);
+  }
+
+  .c-nav-item {
+    height: 52px;
+    padding: 0 16px;
+    border-radius: var(--radius-md);
+    background: var(--bg-bubble);
+    color: var(--text);
+    font-size: var(--text-base);
+  }
+
+  .c-nav-item[aria-current="page"] {
+    background: var(--bg-bubble);
+  }
+
+  .c-nav-item .icon {
+    display: block;
+  }
+
+  .c-to-nav {
+    display: grid;
+  }
+
+  .c-section-head,
+  .c-section-body,
+  .c-section-foot {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+
+  .c-row,
+  .c-account {
+    min-height: 72px;
+  }
+
+  .c-tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .c-scrim-top {
+    align-items: end;
+    padding-bottom: 12px;
+  }
+
+  .c-confirm .c-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .c-header-row {
+    grid-template-columns: 1fr;
+  }
+}

@@ -635,3 +635,4 @@ The packages, in this order, each with checks of its security and failure cases 
 - A relay of Clawtrate's own: this design has none, and nothing in it depends on one.
 - "Another computer" over SSH on iPhone.
 - The pairing screen itself, which `visual-language.md` §10 keeps as it is.
+- The question "What do you use every day?" (F-004), asked once after the app first opens: `connectors.md` §15.
