@@ -2099,6 +2099,30 @@ describe("which account a sign-in made, and who can use it (F-474)", () => {
     client.stop();
   });
 
+  it("F-474: a candidate is offered only once every bot's view is read, so one chosen at once is said to be inherited", async () => {
+    const { client, accounts, fake } = await accountsClient();
+    await client.startSignIn(CHOICES.device, null);
+    // The full read after the sign-in is held back at its last request, the model list.
+    const list = fake.gateway.handlers["models.list"]!;
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let asked = false;
+    fake.gateway.handlers["models.list"] = async (params) => {
+      asked = true;
+      await held;
+      return list(params);
+    };
+    fake.answerDevice();
+    await until(() => asked);
+    expect(accounts().signIn?.stage).toBe("checking");
+    expect(accounts().signIn?.result).toBeNull();
+    release();
+    await until(() => accounts().signIn?.stage === "several");
+    await client.chooseSignInAccount("acme:travel");
+    expect(accounts().signIn?.result).toMatchObject({ added: ["acme:travel"], landed: "shared" });
+    client.stop();
+  });
+
   it("F-474: a shadowing bot prevents the every-bot claim", async () => {
     const { client, accounts, fake } = await accountsClient();
     await client.startSignIn(CHOICES.device, null);

@@ -992,6 +992,23 @@ export class AccountsEngine {
       result.readFailed = true;
     }
     if (ctx.get().signIn?.id !== id) return;
+    // Every bot's view is read before the result is shown, so the candidates offered and what is
+    // said of who can use them come from the same, finished read.
+    try {
+      await this.load();
+    } finally {
+      if (ctx.get().signIn?.id === id) this.forgetSecrets();
+    }
+    if (ctx.get().signIn?.id !== id) return;
+    // Shared only while the merged views still show it inherited with no other copy beside it.
+    const merged = first ? ctx.get().accounts.find((each) => each.id === first) : undefined;
+    if (
+      result.landed === "shared" &&
+      (ctx.get().status !== "ready" || !merged || merged.unclear || merged.keptBy !== null)
+    ) {
+      result.landed = "unclear";
+      result.keptBy = null;
+    }
     const ended = ctx.get().signIn!;
     // The gateway's answer names no account: any new id in the read after it is a candidate the
     // person may label, never the sign-in's account (`several`, even for one). The outcome of a
@@ -1005,19 +1022,6 @@ export class AccountsEngine {
             ? "several"
             : "refreshed";
     this.setSignIn(id, { result, stage, saving: false, cancelling: false }, true);
-    try {
-      await this.load();
-    } finally {
-      if (ctx.get().signIn?.id === id) this.forgetSecrets();
-    }
-    // Shared only while the merged views still show it inherited with no other copy beside it.
-    const merged = first ? ctx.get().accounts.find((each) => each.id === first) : undefined;
-    if (
-      ctx.get().signIn?.id === id &&
-      result.landed === "shared" &&
-      (ctx.get().status !== "ready" || !merged || merged.unclear || merged.keptBy !== null)
-    )
-      this.setSignIn(id, { result: { ...result, landed: "unclear", keptBy: null } }, true);
   }
 
   /** Every bot bound to an account of `provider`: was it locked, and is it still? */
