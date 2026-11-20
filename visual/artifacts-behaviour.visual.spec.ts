@@ -529,6 +529,33 @@ test.describe("a Page", () => {
     expect(away).toEqual([]);
   });
 
+  test("F-115: Escape closes only Export after a click on its note, and restores focus to Export", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await page.locator(".transcript").hover();
+    await page.mouse.wheel(0, -10000);
+    await page.getByTestId("page-card").nth(0).getByRole("button").click();
+    const view = page.getByTestId("page-view");
+    const opening = view.getByRole("button", { name: "Export…" });
+    await opening.click();
+    const dialog = page.getByTestId("page-export");
+    await expect(dialog.getByRole("radio")).toHaveCount(2);
+    // The view's Close and Export… are covered while Export is open.
+    await expect(view.getByRole("button", { name: "Close the page (Esc)" })).toHaveAttribute(
+      "inert",
+      "",
+    );
+    await dialog.locator(".page-export-note").click();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(view).toBeVisible();
+    await expect(opening).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(view).toHaveCount(0);
+  });
+
   test("F-115: a failed artifact listing still shows the transcript's Page rows", async ({
     page,
   }) => {

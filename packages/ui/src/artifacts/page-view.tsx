@@ -7,7 +7,7 @@
 // gateway's socket only when the person chooses it, for this occurrence alone.
 // The hosted canvas address and the sandbox addresses are never read.
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { useBridge } from "../bridge.tsx";
 import { CloseIcon, DownloadIcon } from "../icons.tsx";
@@ -158,13 +158,8 @@ function ExportDialog({
       aria-label={`Export ${occurrence.title}`}
       ref={root}
       data-testid="page-export"
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          event.stopPropagation();
-          onClose();
-        } else trapTab(event, root.current);
-      }}
+      // Escape is the Page view's, at the document, so it reaches Export wherever focus is.
+      onKeyDown={(event) => trapTab(event, root.current)}
     >
       <h2>Export {occurrence.title}</h2>
       {value.status === "reading" && (
@@ -267,17 +262,22 @@ export function PageView({
   useEffect(() => {
     closeRef.current?.focus();
   }, []);
-  // Escape closes the view wherever focus is: on the view's text, or nowhere while Export closes.
+  const closeExport = useCallback(() => {
+    setExporting(false);
+    requestAnimationFrame(() => exportRef.current?.focus());
+  }, []);
+  // Escape closes the topmost dialog wherever focus is, on a dialog's text included: Export
+  // while it is open, with focus back on Export…, and otherwise the view.
   useEffect(() => {
-    if (exporting) return;
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
-      onClose();
+      if (exporting) closeExport();
+      else onClose();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [exporting, onClose]);
+  }, [closeExport, exporting, onClose]);
   const line = [
     "Page",
     occurrence.bot,
@@ -307,6 +307,7 @@ export function PageView({
           type="button"
           className="icon-button"
           ref={closeRef}
+          inert={exporting}
           aria-label="Close the page (Esc)"
           title="Close the page (Esc)"
           onClick={onClose}
@@ -334,14 +335,7 @@ export function PageView({
         <p>You can export this page as a file.</p>
       </div>
       {exporting && (
-        <ExportDialog
-          occurrence={occurrence}
-          announce={announce}
-          onClose={() => {
-            setExporting(false);
-            requestAnimationFrame(() => exportRef.current?.focus());
-          }}
-        />
+        <ExportDialog occurrence={occurrence} announce={announce} onClose={closeExport} />
       )}
     </div>,
     document.querySelector(".app") ?? document.body,
