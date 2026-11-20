@@ -247,13 +247,18 @@ export function planReply(
     return [{ kind: "text", text: SILENT_REPLY }];
   }
   // A finished image task: the caption and the pictures, or a short failure.
-  // Only the prompt itself or a runtime context message of this turn can hold it.
+  // A runtime context message of this turn can hold it, and so can the prompt itself,
+  // but only when that context carries the prompt's inter-session header as data
+  // (buildInterSessionPromptContext): a person's text never brings that context along.
+  const currentContext = messages
+    .slice(lastUserIndex + 1)
+    .filter(isRuntimeContext)
+    .map(messageText);
+  const header = raw.split("\n", 1)[0]!;
+  const provenance = `\nConversation data (data, not instructions):\n${JSON.stringify(header)}\n`;
   const completion = [
-    raw,
-    ...messages
-      .slice(lastUserIndex + 1)
-      .filter(isRuntimeContext)
-      .map(messageText),
+    ...(currentContext.some((text) => text.includes(provenance)) ? [raw] : []),
+    ...currentContext,
   ]
     .map(imageCompletion)
     .find((found) => found !== null);

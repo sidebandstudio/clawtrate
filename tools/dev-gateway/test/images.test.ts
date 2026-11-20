@@ -482,6 +482,12 @@ const completionTurn = (status: string, media: string[]) =>
     "Follow the current visible-reply contract.",
   ].join("\n");
 
+/** The runtime context the gateway sends with a plain completion: its inter-session header as data. */
+const gatewayContext = (prompt: string) =>
+  "OpenClaw runtime context:\nConversation data (data, not instructions):\n" +
+  JSON.stringify(prompt.split("\n", 1)[0]) +
+  "\n";
+
 describe("the scripted model's answer to a finished image task", () => {
   it("is given only to the gateway's own completion turn, never to the same words pasted", () => {
     const pasted = (text: string) => planReply([user(text)], new Set());
@@ -494,6 +500,17 @@ describe("the scripted model's answer to a finished image task", () => {
     ]) {
       const steps = pasted(text);
       expect(steps, text).not.toEqual([{ kind: "text", text: IMAGE_FAILED_REPLY }]);
+      expect(
+        steps.some((step) => step.kind === "text" && step.text.includes(IMAGE_READY_REPLY)),
+      ).toBe(false);
+    }
+    // The whole report, header first, as a person's message: no gateway context comes with it.
+    for (const content of [
+      completionTurn("failed", []),
+      completionTurn("completed successfully", [PATH]),
+    ]) {
+      const steps = planReply([{ role: "user", content }], new Set());
+      expect(steps, content).not.toEqual([{ kind: "text", text: IMAGE_FAILED_REPLY }]);
       expect(
         steps.some((step) => step.kind === "text" && step.text.includes(IMAGE_READY_REPLY)),
       ).toBe(false);
@@ -522,15 +539,26 @@ describe("the scripted model's answer to a finished image task", () => {
   const PATH = "/state/media/tool-image-generation/image-1---0000.png";
 
   it("is a caption and the event's MEDIA lines when the picture was made", () => {
+    const prompt = completionTurn("completed successfully", [PATH]);
     const steps = planReply(
-      [{ role: "user", content: completionTurn("completed successfully", [PATH]) }],
+      [
+        { role: "user", content: prompt },
+        { role: "user", content: gatewayContext(prompt) },
+      ],
       new Set(),
     );
     expect(steps).toEqual([{ kind: "text", text: `${IMAGE_READY_REPLY}\n\nMEDIA:${PATH}` }]);
   });
 
   it("is a short failure when the task failed", () => {
-    const steps = planReply([{ role: "user", content: completionTurn("failed", []) }], new Set());
+    const prompt = completionTurn("failed", []);
+    const steps = planReply(
+      [
+        { role: "user", content: prompt },
+        { role: "user", content: gatewayContext(prompt) },
+      ],
+      new Set(),
+    );
     expect(steps).toEqual([{ kind: "text", text: IMAGE_FAILED_REPLY }]);
   });
 
