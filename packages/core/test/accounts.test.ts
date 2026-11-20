@@ -21,6 +21,7 @@ import {
   MAX_SECRET_CHARS,
   parseModelRef,
   readBotView,
+  readKeyProviders,
   retainedOrder,
   signInAddress,
   unlockCommand,
@@ -78,8 +79,8 @@ describe("the accounts as each bot sees them", () => {
       [CHOICES.callback, "paste", "subscription"],
     ]);
     expect(accounts().keyProviders).toEqual([
-      { provider: "acme", hasKey: true, method: CHOICES.key },
-      { provider: "globex", hasKey: false, method: null },
+      { provider: "acme", replaces: null, method: CHOICES.key },
+      { provider: "globex", replaces: null, method: null },
     ]);
     expect(accounts().models.find((m) => m.provider === "globex")).toMatchObject({
       available: false,
@@ -1026,11 +1027,94 @@ describe("sign-ins, through the gateway's own methods", () => {
     fake.failStatusFor = "main";
     expect(await client.saveApiKey("globex", "made-up-key-direct-0001", null)).toEqual({
       profileId: null,
+      warning: null,
     });
     expect(accounts().write).toMatchObject({ what: "key", status: "unverified" });
     expect(accounts().write?.error).toMatch(/reading its accounts afterwards failed/);
     expect(fake.prefs["clawtrate.account-kind.globex:direct"]).toBeUndefined();
     client.stop();
+  });
+
+  it("a key saved directly with the gateway's warning keeps the warning, and is not called saved", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    const save = fake.gateway.handlers["models.authSetApiKey"]!;
+    const warning =
+      "API key saved, but the Gateway has not confirmed applying the provider settings. Run `openclaw gateway restart` to apply them.";
+    fake.gateway.handlers["models.authSetApiKey"] = (params) => ({
+      ...(save(params) as object),
+      warning,
+    });
+    expect(await client.saveApiKey("globex", "made-up-key-direct-0002", null)).toEqual({
+      profileId: "globex:manual",
+      warning,
+    });
+    expect(accounts().write).toMatchObject({ what: "key", status: "unverified", error: warning });
+    client.stop();
+  });
+
+  it("a key the gateway stored and then failed on is read again before anything is said", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.gateway.handlers["models.authSetApiKey"] = (params) => {
+      const { provider } = params as { provider: string };
+      // Its order: the key is persisted, then the provider settings fail.
+      fake.shared.push({ id: `${provider}:manual`, provider, type: "api_key" });
+      throw new GatewayError({
+        code: "UNAVAILABLE",
+        message:
+          "API key saved, but provider settings could not be applied: invalid. Reopen Models and save the key again.",
+      });
+    };
+    const reads = fake.gateway.calls("models.authStatus").length;
+    await expect(client.saveApiKey("globex", "made-up-key-direct-0003", null)).rejects.toThrow(
+      /may have kept the key before this error\. Its accounts now list globex:manual\./,
+    );
+    expect(fake.gateway.calls("models.authStatus").length).toBeGreaterThan(reads);
+    expect(accounts().write).toMatchObject({ what: "key", status: "unverified" });
+    client.stop();
+  });
+
+  it("a key saved while the connection drops is not accepted from the list cached before it", async () => {
+    const gateway = new AccountsGateway();
+    gateway.shared.push({ id: "globex:team", provider: "globex", type: "api_key" });
+    const { client, fake, accounts } = await accountsClient({ gateway });
+    expect(accounts().accounts.some((a) => a.id === "globex:team")).toBe(true);
+    // The gateway answers with an account the cached list already has, then the connection goes.
+    fake.gateway.handlers["models.authSetApiKey"] = () => ({
+      provider: "globex",
+      profileId: "globex:team",
+    });
+    // The answer arrives, and the connection goes at once, not back before the save is decided.
+    fake.gateway.afterReply = (method) => {
+      if (method !== "models.authSetApiKey") return;
+      fake.gateway.refuseConnections = true;
+      fake.gateway.dropAll();
+    };
+    expect(await client.saveApiKey("globex", "made-up-key-direct-0004", null)).toEqual({
+      profileId: null,
+      warning: null,
+    });
+    expect(accounts().write).toMatchObject({ what: "key", status: "unverified" });
+    client.stop();
+  });
+
+  it("a new key is said to replace one only for the key the provider's settings name", () => {
+    const capability = { provider: "globex", apiKeySupported: true, loginOptions: [] };
+    const view = (source: string) =>
+      readBotView({
+        providers: [
+          {
+            provider: "globex",
+            profiles: [{ profileId: "globex:team", type: "api_key", source }],
+          },
+        ],
+        providerCapabilities: [capability],
+      });
+    expect(readKeyProviders(view("config"))).toEqual([
+      { provider: "globex", replaces: "globex:team", method: null },
+    ]);
+    // A key the gateway has otherwise does not establish which one the new key is written to.
+    for (const source of ["saved", "inherited", "external"])
+      expect(readKeyProviders(view(source))[0]?.replaces).toBeNull();
   });
 
   it("too late to cancel: the gateway refuses because it is saving", async () => {

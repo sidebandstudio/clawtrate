@@ -281,7 +281,7 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                               : C extends { type: "dismissSignIn" }
                                 ? { dismissed: boolean }
                                 : C extends { type: "saveApiKey" }
-                                  ? { profileId: string | null }
+                                  ? { profileId: string | null; warning: string | null }
                                   : C extends { type: "changeBotAccount" }
                                     ? AccountChangeResult
                                     : C extends { type: "createBot" | "finishBot" }

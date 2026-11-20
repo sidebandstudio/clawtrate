@@ -1152,7 +1152,7 @@ test("F-474: too late to cancel: Cancel reads Saving…, disabled, and Back keep
   await expect(page.getByRole("heading", { name: "Sign in to xAI", level: 2 })).toBeVisible();
 });
 
-test("F-475: the key path says a new key replaces the one the gateway has, only where it has one; the key is sent once and kept nowhere on the page", async ({
+test("F-475: the key path says a new key replaces one only for the key the gateway's provider settings name; the key is sent once and kept nowhere on the page", async ({
   page,
 }) => {
   await openFixture(page, ADMIN, "light");
@@ -1162,7 +1162,7 @@ test("F-475: the key path says a new key replaces the one the gateway has, only 
   await newBot(page).locator("details.b-disclosure summary").click();
   const provider = page.getByRole("combobox", { name: "Provider" });
   const replaces = page.getByText(
-    "This replaces the Anthropic key your gateway already has. Bots that use it switch to the new key. To keep both, add the second on the gateway's machine.",
+    "This replaces the key your gateway's Anthropic settings name, Anthropic · Lab key. To keep both, add the second on the gateway's machine.",
   );
   await provider.selectOption("openai");
   await expect(page.getByText(/This replaces the/)).toHaveCount(0);
@@ -1181,4 +1181,23 @@ test("F-475: the key path says a new key replaces the one the gateway has, only 
   expect(saves).toHaveLength(1);
   expect(saves[0]).toMatchObject({ provider: "anthropic", key });
   expect(await page.content()).not.toContain(key);
+});
+
+test("F-475: a key saved with the gateway's warning keeps the warning on the naming screen, not Key saved", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&keywarn=1`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Connect another account" }).click();
+  await newBot(page).locator("details.b-disclosure summary").click();
+  await page.getByRole("combobox", { name: "Provider" }).selectOption("openai");
+  await page.getByTestId("api-key").fill("made-up-key-for-the-fixture-0002");
+  await page.getByRole("button", { name: "Save key" }).click();
+  await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Saved, not confirmed" })).toBeVisible();
+  await expect(
+    page.getByText(/^API key saved, but the Gateway has not confirmed applying/),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Key saved" })).toHaveCount(0);
 });

@@ -3921,7 +3921,7 @@ export class ClawtrateClient {
     provider: string,
     key: string,
     botId: string | null,
-  ): Promise<{ profileId: string | null }> {
+  ): Promise<{ profileId: string | null; warning: string | null }> {
     return this.accounts.saveKey(provider, key, botId);
   }
 

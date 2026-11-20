@@ -161,7 +161,9 @@ const SCENES: Scene[] = [
       await connectStep(page);
       await page.getByText("Use an API key instead").click();
       await page.getByRole("combobox", { name: "Provider" }).selectOption("anthropic");
-      await expect(page.getByText(/This replaces the Anthropic key/)).toBeVisible();
+      await expect(
+        page.getByText(/This replaces the key your gateway.s Anthropic settings name/),
+      ).toBeVisible();
     },
   },
   {

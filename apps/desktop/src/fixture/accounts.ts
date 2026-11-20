@@ -16,6 +16,7 @@
 //                             several (two new accounts appeared while it ran), callback (a
 //                             browser sign-in whose callback the gateway takes itself)
 //   keyread=fail              a key saved directly whose read afterwards fails
+//   keywarn=1                 a key saved directly with the gateway's warning
 //   keyfails=1                xAI's key goes through a sign-in that refuses it
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
@@ -55,6 +56,7 @@ export type AccountParams = {
   keyfails: boolean;
   /** A key saved directly whose read afterwards fails; Check again reads it. */
   keyread: boolean;
+  keywarn: boolean;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -74,6 +76,7 @@ export function accountParams(params: URLSearchParams): AccountParams {
     defacct: params.get("defacct") === "1",
     keyfails: params.get("keyfails") === "1",
     keyread: params.get("keyread") === "fail",
+    keywarn: params.get("keywarn") === "1",
     labels:
       params.get("labels") === "none" || params.get("labels") === "same"
         ? (params.get("labels") as "none" | "same")
@@ -95,6 +98,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   labels: null,
   keyfails: false,
   keyread: false,
+  keywarn: false,
 };
 
 const MINUTE = 60_000;
@@ -318,10 +322,10 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         : []),
     ],
     keyProviders: [
-      { provider: "openai", hasKey: false, method: null },
-      { provider: "anthropic", hasKey: !none, method: null },
-      { provider: "xai", hasKey: false, method: params.keyfails ? "xai/xai-api-key" : null },
-      { provider: "openrouter", hasKey: false, method: null },
+      { provider: "openai", replaces: null, method: null },
+      { provider: "anthropic", replaces: none ? null : "anthropic:manual", method: null },
+      { provider: "xai", replaces: null, method: params.keyfails ? "xai/xai-api-key" : null },
+      { provider: "openrouter", replaces: null, method: null },
     ],
     models: [
       {
@@ -978,7 +982,7 @@ export function accountCommand(
           },
         }));
         later(300, () => signIn({ stage: "failed", error: "xAI refused the key." }));
-        return Promise.resolve({ profileId: null });
+        return Promise.resolve({ profileId: null, warning: null });
       }
       const id = `${command.provider}:manual`;
       const add = () =>
@@ -1002,10 +1006,16 @@ export function accountCommand(
             at: Date.now(),
           },
         }));
-        return Promise.resolve({ profileId: null });
+        return Promise.resolve({ profileId: null, warning: null });
       }
       add();
-      return Promise.resolve({ profileId: id });
+      return Promise.resolve({
+        profileId: id,
+        // The gateway's own words when it saved the key and didn't confirm applying it.
+        warning: params.keywarn
+          ? "API key saved, but the Gateway has not confirmed applying the provider settings. Run `openclaw gateway restart` to apply them."
+          : null,
+      });
     }
     case "setAccountLabel":
       put((a) => ({

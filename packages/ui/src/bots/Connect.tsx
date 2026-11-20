@@ -253,6 +253,7 @@ export function useConnect({
       </li>
     );
     const kp = accounts.keyProviders.find((each) => each.provider === keyProvider);
+    const replaced = kp?.replaces ? accounts.accounts.find((a) => a.id === kp.replaces) : undefined;
     const saveKey = async () => {
       const key = keyRef.current?.value ?? "";
       if (!key.trim()) {
@@ -266,17 +267,23 @@ export function useConnect({
       setSaving(true);
       try {
         if (kp?.method) setWhere({ view: "flow", method: kp.method });
-        const { profileId } = await bridge.invoke({
+        const { profileId, warning } = await bridge.invoke({
           type: "saveApiKey",
           provider: keyProvider,
           key,
           botId: forBot,
         });
         if (!kp?.method) {
-          // Saved only when the read after it shows the account; otherwise it says so.
+          // Saved only when the read after it shows the account; otherwise it says so. The
+          // gateway's warning stays with it.
           if (profileId) {
-            announce("Key saved");
-            setWhere({ view: "label", account: profileId, byKey: true });
+            announce(warning ? "Key saved, not confirmed" : "Key saved");
+            setWhere({
+              view: "label",
+              account: profileId,
+              byKey: true,
+              unconfirmed: warning ? { title: "Saved, not confirmed", text: warning } : null,
+            });
           } else setWhere({ view: "key-check", provider: keyProvider, known });
         }
       } catch (error) {
@@ -373,12 +380,12 @@ export function useConnect({
                   {keyError}
                 </p>
               )}
-              {kp?.hasKey && !kp.method && (
-                <Note tone="warn">
+              {kp?.replaces && !kp.method && (
+                <Note tone="warn" testId="key-replaces">
                   <p>
-                    This replaces the {providerName(keyProvider)} key your gateway already has. Bots
-                    that use it switch to the new key. To keep both, add the second on the gateway's
-                    machine.
+                    This replaces the key your gateway's {providerName(keyProvider)} settings name,{" "}
+                    {replaced ? accountName(replaced, accounts) : kp.replaces}. To keep both, add
+                    the second on the gateway's machine.
                   </p>
                 </Note>
               )}

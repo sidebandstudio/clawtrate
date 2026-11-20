@@ -878,7 +878,7 @@ const signInMethod = object<SignInMethod>()({
   flow: ENUM,
   group: ENUM,
 });
-const keyProvider = object<KeyProvider>()({ provider: ID, hasKey: FLAG, method: ID });
+const keyProvider = object<KeyProvider>()({ provider: ID, replaces: ID, method: ID });
 const catalogModel = object<CatalogModel>()({
   provider: ID,
   id: ID,

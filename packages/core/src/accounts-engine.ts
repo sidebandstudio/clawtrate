@@ -136,6 +136,8 @@ export class AccountsEngine {
   private readonly ctx: AccountsContext;
   private loading: Promise<void> | null = null;
   private loadAgain = false;
+  /** Reads of the gateway that completed: a later count shows a read made after a write. */
+  private reads = 0;
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
   private signInAbort: AbortController | null = null;
   /**
@@ -197,6 +199,7 @@ export class AccountsEngine {
         .then(readCatalog, () => ctx.get().models);
       const at = ctx.now();
       ctx.update((a) => this.compose(a, config, views, catalog, at));
+      this.reads += 1;
     } catch (error) {
       // While a sign-in lasts, its typed values are taken out of whatever comes back.
       const message = this.scrub(errorText(error));
@@ -963,7 +966,7 @@ export class AccountsEngine {
     provider: string,
     key: string,
     botId: string | null,
-  ): Promise<{ profileId: string | null }> {
+  ): Promise<{ profileId: string | null; warning: string | null }> {
     this.requireAdmin("Connecting an account");
     if (typeof key !== "string" || key.trim().length === 0 || key.length > MAX_SECRET_CHARS)
       throw new Error("Enter a key.");
@@ -1002,7 +1005,10 @@ export class AccountsEngine {
         this.dropTyped(id);
       }
       const after = this.ctx.get().signIn;
-      return { profileId: after?.id === id ? (after.result?.added[0] ?? null) : null };
+      return {
+        profileId: after?.id === id ? (after.result?.added[0] ?? null) : null,
+        warning: null,
+      };
     }
     const forBot = this.signInTarget(botId);
     const before = this.accountsOf(provider);
@@ -1015,52 +1021,84 @@ export class AccountsEngine {
     });
     // Held while this save lasts, like a sign-in's: every answer and log line is scrubbed of it.
     this.holdSecret(key);
-    try {
-      const answer = asRecord(
-        await this.ctx.request("models.authSetApiKey", { provider, apiKey: key, agentId: forBot }),
-      );
-      const named = typeof answer?.profileId === "string" ? answer.profileId : null;
-      // Saved only when the read after it shows the account, as for every sign-in.
+    /** Read the accounts again; what they show of the provider, only from a read made now. */
+    const reread = async () => {
+      const count = this.reads;
       await this.load();
       const read = this.ctx.get();
-      const added = read.accounts
-        .filter((a) => a.provider === provider && !before.includes(a.id))
-        .map((a) => a.id);
+      // A cached list, while disconnected or after a failed read, establishes nothing.
+      if (this.reads === count || read.status !== "ready") return null;
+      return read.accounts.filter((a) => a.provider === provider);
+    };
+    try {
+      let answer: RawRecord | null;
+      try {
+        answer = asRecord(
+          await this.ctx.request("models.authSetApiKey", {
+            provider,
+            apiKey: key,
+            agentId: forBot,
+          }),
+        );
+      } catch (error) {
+        // The gateway can store the key and then fail (its settings, its refresh): what it now
+        // has is read before anything is said.
+        const message = this.scrub(withoutSecret(errorText(error), key));
+        const listed = await reread();
+        const added = listed?.filter((a) => !before.includes(a.id)).map((a) => a.id) ?? [];
+        const said = `${message} The gateway may have kept the key before this error. ${
+          listed === null
+            ? "Reading its accounts again failed, so Clawtrate can't say what it has now."
+            : added.length > 0
+              ? `Its accounts now list ${added.join(", ")}.`
+              : "Its accounts show no new account for this provider; a key that replaced one would not show as new."
+        }`;
+        this.setWrite({
+          what: "key",
+          target: provider,
+          status: added.length > 0 ? "unverified" : "failed",
+          error: said,
+          at: this.ctx.now(),
+        });
+        // No `cause`: the gateway's own error may carry the key; only its cleaned words leave.
+        // eslint-disable-next-line preserve-caught-error
+        throw new Error(said);
+      }
+      const named = typeof answer?.profileId === "string" ? answer.profileId : null;
+      // The gateway's warning: the key was saved and something after it was not confirmed.
+      const warning =
+        typeof answer?.warning === "string" && answer.warning.trim()
+          ? this.scrub(withoutSecret(answer.warning, key))
+          : null;
+      // Saved only when a read made after it shows the account, as for every sign-in.
+      const listed = await reread();
+      const added = listed?.filter((a) => !before.includes(a.id)).map((a) => a.id) ?? [];
       const shown =
-        read.status !== "ready"
+        listed === null
           ? null
           : named
-            ? read.accounts.some((a) => a.id === named)
+            ? listed.some((a) => a.id === named)
               ? named
               : null
             : added.length === 1
               ? added[0]!
               : null;
       if (shown) await this.recordKind(shown, "typed-key");
+      const read = this.ctx.get();
       this.setWrite({
         what: "key",
         target: provider,
-        status: shown ? "saved" : "unverified",
-        error: shown
-          ? null
-          : read.status !== "ready"
-            ? `The gateway took the key, but reading its accounts afterwards failed${read.error ? `: ${read.error}` : ""}.`
-            : "The gateway took the key, but its accounts don't show it yet.",
+        status: shown && !warning ? "saved" : "unverified",
+        error: warning
+          ? warning
+          : shown
+            ? null
+            : listed === null
+              ? `The gateway took the key, but reading its accounts afterwards failed${read.error ? `: ${read.error}` : ""}.`
+              : "The gateway took the key, but its accounts don't show it yet.",
         at: this.ctx.now(),
       });
-      return { profileId: shown };
-    } catch (error) {
-      const message = withoutSecret(errorText(error), key);
-      this.setWrite({
-        what: "key",
-        target: provider,
-        status: "failed",
-        error: message,
-        at: this.ctx.now(),
-      });
-      // No `cause`: the gateway's own error may carry the key; only its cleaned words leave.
-      // eslint-disable-next-line preserve-caught-error
-      throw new Error(message);
+      return { profileId: shown, warning };
     } finally {
       this.forgetSecrets();
     }

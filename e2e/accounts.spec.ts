@@ -381,7 +381,7 @@ test("F-474 F-475: an API key typed into the key path reaches the gateway once a
   await disclosure.locator("summary").click();
   await settings.getByRole("combobox", { name: "Provider" }).selectOption("acme");
   // Acme's key goes through its own sign-in, which adds an account: nothing is replaced.
-  await expect(settings.getByText(/This replaces the Acme key/)).toHaveCount(0);
+  await expect(settings.getByText(/This replaces the key/)).toHaveCount(0);
   const field = settings.getByTestId("api-key");
   await field.fill(TYPED_KEY);
   await settings.getByRole("button", { name: "Save key" }).click();
@@ -1137,7 +1137,7 @@ test("F-475: a key for a provider the gateway already keys says it replaces that
   };
   // Globex has a token and no key: nothing to replace.
   let settings = await keyPath();
-  await expect(settings.getByText(/This replaces the Globex key/)).toHaveCount(0);
+  await expect(settings.getByText(/This replaces the key/)).toHaveCount(0);
   await settings.getByTestId("api-key").fill(first);
   await settings.getByRole("button", { name: "Save key" }).click();
   await expect(settings.getByRole("heading", { name: "Key saved" })).toBeVisible({
@@ -1159,10 +1159,10 @@ test("F-475: a key for a provider the gateway already keys says it replaces that
   const session = `agent:${created.agentId}:keyed`;
   expect(await runOn(session, await lastSeq())).toEqual(["globex:first"]);
 
-  // Now the gateway has a Globex key: the form says the new one replaces it.
+  // Now the gateway's Globex settings name that key: the form says the new one replaces it.
   settings = await keyPath();
   const note = settings.getByText(
-    "This replaces the Globex key your gateway already has. Bots that use it switch to the new key. To keep both, add the second on the gateway's machine.",
+    "This replaces the key your gateway's Globex settings name, Globex · Direct. To keep both, add the second on the gateway's machine.",
   );
   await expect(note).toBeVisible();
   await shots("connect-key-replace");

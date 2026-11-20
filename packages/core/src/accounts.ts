@@ -158,8 +158,13 @@ export type SignInMethod = {
 
 export type KeyProvider = {
   provider: string;
-  /** The gateway already has a key for it: a new one replaces it. */
-  hasKey: boolean;
+  /**
+   * The key a new one replaces, only where the gateway establishes it: the one
+   * `api_key` account its provider settings name (`source: "config"`), which
+   * `models.authSetApiKey` writes to (OpenClaw 2026.10.6,
+   * `saveModelProviderApiKey`). Otherwise null, and nothing is said.
+   */
+  replaces: string | null;
   /** A sign-in method of kind `secret` that takes the key, when the gateway offers one. */
   method: string | null;
 };
@@ -718,9 +723,12 @@ export function readKeyProviders(view: BotView | undefined): KeyProvider[] {
     const secret = (Array.isArray(capability.loginOptions) ? capability.loginOptions : [])
       .map(asRecord)
       .find((option) => option?.kind === "secret");
+    const named = view.profiles.filter(
+      (p) => p.provider === provider && p.type === "api_key" && p.source === "config",
+    );
     out.push({
       provider,
-      hasKey: view.keyed.includes(provider),
+      replaces: named.length === 1 ? named[0]!.id : null,
       method: str(secret?.id),
     });
   }
