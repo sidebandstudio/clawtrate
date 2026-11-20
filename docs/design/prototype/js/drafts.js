@@ -588,7 +588,7 @@
       ? `<div class="composer-shelf"><div class="shelf-row" data-tone="warn">${icon("approval")}<span class="shelf-text">${secret ? "Otto asked you for a secret" : `Otto has a draft waiting for you`}</span><span class="spacer"></span>${button("Review", 'data-d="review" data-size="sm"')}</div></div>`
       : "";
     return (
-      `<div class="d-page" data-view="${S.view}">` +
+      `<div class="d-page" data-view="${esc(S.view)}">` +
       `<header class="d-head"><span class="avatar" data-bot="otto" style="--size: 26px; width: 26px; height: 26px"></span><h1>Disk almost full on the media box</h1><span class="d-where">Otto</span></header>` +
       `<div class="d-scroll"><div class="d-transcript" id="transcript">` +
       (secret ? "" : proposedLine) +
@@ -616,7 +616,7 @@
       `<button type="button" class="b-nav-item" data-d="nav-drafts"${S.view === "drafts" ? ' aria-current="page"' : ""}>${icon("approval")}Drafts</button>` +
       `<button type="button" class="b-nav-item" data-d="nav-vault"${S.view === "vault" ? ' aria-current="page"' : ""}>${icon("lock")}Vault</button></nav>`;
     return (
-      `<div class="d-page" data-view="${S.view}"><div class="b-settings d-settings" data-pane="${S.pane}">${nav}` +
+      `<div class="d-page" data-view="${esc(S.view)}"><div class="b-settings d-settings" data-pane="${S.pane}">${nav}` +
       `<section class="b-section" aria-labelledby="section-title"><header class="b-section-head">` +
       `<button type="button" class="icon-button b-back" data-d="to-nav" aria-label="Back to Settings">${icon("back")}</button>` +
       `<h3 id="section-title" tabindex="-1">${titleText}</h3></header><div class="b-section-body">${sectionHtml}</div></section></div>${vaultDialog()}</div>`
@@ -682,7 +682,7 @@
       saveunread: ["warn", "Couldn't confirm the save. The Vault couldn't be read."],
       removed: ["accent", "Removed from the Vault."],
       removedrefresh: ["accent", "Removed from the Vault. The gateway couldn't refresh settings that used it."],
-      removednoreply: ["warn", `${S.item} is no longer listed in the Vault.`],
+      removednoreply: ["warn", `${esc(S.item)} is no longer listed in the Vault.`],
     }[v];
     if (said) html += `<p class="d-say" data-tone="${said[0]}">${said[1]}${["saved", "savedrefresh", "listedonly", "listedother"].includes(v) ? ` <code>${esc(nm)}</code>` : ""}</p>`;
     if (v === "saveunread") html += `<div class="b-actions">${button("Try again", 'data-d="v-retry" data-size="sm"')}</div>`;

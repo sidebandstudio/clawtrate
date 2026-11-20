@@ -589,6 +589,18 @@ check("gallery: the page header links to the drafts page", await p.evaluate(() =
 await p.close();
 void absent;
 
+// Part 5: sequences and inputs the closing review didn't walk ----------------------------------------
+// A value from the address is content: drawn as text, never as markup.
+p = await open(`view=${encodeURIComponent('"><i data-probe="view">x</i>')}`);
+check(
+  "a view from the address is drawn as text, never as markup",
+  (await p.locator("[data-probe]").count()) === 0 && (await p.evaluate(() => document.querySelector(".d-page")?.dataset.view)) === '"><i data-probe="view">x</i>',
+);
+await p.close();
+p = await open(`view=vault&v=removednoreply&item=${encodeURIComponent('<i data-probe="item">X</i>')}`);
+check("an item name from the address is drawn as text in the removal notice", (await p.locator("[data-probe]").count()) === 0 && (await text(p)).includes('<i data-probe="item">X</i> is no longer listed in the Vault.'));
+await p.close();
+
 await b.close();
 console.log(out.join("\n"));
 console.log(`${out.filter((l) => l.startsWith("ok")).length} ok, ${failed} failed`);
