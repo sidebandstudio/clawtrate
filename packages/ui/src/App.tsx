@@ -5,7 +5,7 @@ import { ConnectScreen } from "./ConnectScreen.tsx";
 import { readPreference, useBubbles, useTheme } from "./preferences.ts";
 import { screenFor } from "./screen.ts";
 import { Settings } from "./Settings.tsx";
-import {useDesktopUpdateSnapshot} from "./update-reading.ts";
+import { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { showUpdateFooter } from "./Updates.tsx";
 import { Shell } from "./Shell.tsx";
 
@@ -71,7 +71,11 @@ export function App({
       // The control that opened it is gone (another gateway was chosen): the
       // first control on the screen now showing.
       else {
-        const gateway = opener?.classList.contains("update-entry") && [...document.querySelectorAll<HTMLElement>(".rail-status,.gateway-pill")].find(el=>el.getClientRects().length);
+        const gateway =
+          opener?.classList.contains("update-entry") &&
+          [...document.querySelectorAll<HTMLElement>(".rail-status,.gateway-pill")].find(
+            (el) => el.getClientRects().length,
+          );
         (gateway || document.querySelector<HTMLElement>(FIRST_CONTROL))?.focus();
       }
     });
@@ -131,7 +135,7 @@ export function App({
           bubbles={bubbles}
           onBubbles={setBubbles}
           onUnreadCount={onUnreadCount}
-          updateEntry={showUpdateFooter(updated.snapshot,updated.pending)}
+          updateEntry={showUpdateFooter(updated.snapshot, updated.pending)}
           onOpenSettings={openSettings}
           inert={settingsOpen}
           onCaughtUp={setCaughtUp}

@@ -14,7 +14,7 @@ import {
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type {useDesktopUpdateSnapshot} from "./update-reading.ts";
+import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
 import { useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
@@ -199,7 +199,15 @@ export function Settings({
     </button>
   );
 
-  const accountsSection = useAccountsSection({ refreshOnOpen:!initialUpdates || section!=="updates",accounts, bots, connection, info, announce, toNav });
+  const accountsSection = useAccountsSection({
+    refreshOnOpen: !initialUpdates || section !== "updates",
+    accounts,
+    bots,
+    connection,
+    info,
+    announce,
+    toNav,
+  });
   const usageSection = useUsageSection({ bots, connection, info, announce, toNav });
   const machinesSection = useMachinesSection({
     active: section === "machines",
@@ -350,9 +358,7 @@ export function Settings({
                   title: "Updates",
                   back: toNav,
                   foot: null,
-                  body: (
-                    <Updates {...updateReading} />
-                  ),
+                  body: <Updates {...updateReading} />,
                 }
               : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (

@@ -1718,15 +1718,15 @@ export function Rail({
   };
 
   const updateButton = updateEntry && (
-          <button
-            type="button"
-            className="icon-button update-entry"
-            aria-label="Open Updates"
-            title="Open Updates"
-            onClick={() => onOpenSettings("updates")}
-          >
-            <DownloadIcon />
-          </button>
+    <button
+      type="button"
+      className="icon-button update-entry"
+      aria-label="Open Updates"
+      title="Open Updates"
+      onClick={() => onOpenSettings("updates")}
+    >
+      <DownloadIcon />
+    </button>
   );
   return (
     <nav className="rail" aria-label="Bots" inert={inert}>

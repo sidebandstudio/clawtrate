@@ -21,14 +21,34 @@
   width: 100%;
 }
 
-.update-source {overflow-wrap:anywhere;}
-.update-result {margin-block-start:14px;}
-.update-result .b-actions {margin-block-start:14px;}
-.updates-section .b-note {margin-block:12px;}
-.updates-section .b-note p {margin:0;}
-.update-result progress {display:block; margin-top:6px;}
-.rail-top .update-entry {display:none;}
+.update-source {
+  overflow-wrap: anywhere;
+}
+.update-result {
+  margin-block-start: 14px;
+}
+.update-result .b-actions {
+  margin-block-start: 14px;
+}
+.updates-section .b-note {
+  margin-block: 12px;
+}
+.updates-section .b-note p {
+  margin: 0;
+}
+.update-result progress {
+  display: block;
+  margin-top: 6px;
+}
+.rail-top .update-entry {
+  display: none;
+}
 @container app (max-width:687px) {
- .rail-top .update-entry {display:grid;margin-right:auto;}
- .rail-top:has(.update-entry) .rail-status {margin-right:0;}
+  .rail-top .update-entry {
+    display: grid;
+    margin-right: auto;
+  }
+  .rail-top:has(.update-entry) .rail-status {
+    margin-right: 0;
+  }
 }

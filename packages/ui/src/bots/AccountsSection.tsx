@@ -47,7 +47,7 @@ export function useAccountsSection({
   toNav,
 }: {
   accounts: AccountsState;
-  refreshOnOpen:boolean;
+  refreshOnOpen: boolean;
   bots: readonly Bot[];
   connection: ConnectionState;
   info: HostInfo;
@@ -69,12 +69,12 @@ export function useAccountsSection({
   const admin = connection.canAdmin;
 
   // Settings reads the accounts when it opens, and so the locks of the bots on them.
-  const refreshed=useRef(false);
+  const refreshed = useRef(false);
   useEffect(() => {
-    if(!refreshOnOpen || refreshed.current) return;
-    refreshed.current=true;
+    if (!refreshOnOpen || refreshed.current) return;
+    refreshed.current = true;
     void bridge.send({ type: "refreshAccounts" }).catch(() => {});
-  }, [bridge,refreshOnOpen]);
+  }, [bridge, refreshOnOpen]);
 
   const focusTitle = () =>
     requestAnimationFrame(() => document.querySelector<HTMLElement>("#b-section-title")?.focus());
