@@ -14,6 +14,7 @@ import {
   productionUpdateEngine,
 } from "../../src/main/update/index.ts";
 import { buildAddressProblem, checkFeedAddress } from "../../src/main/update/address.ts";
+import { parseReleaseDate } from "../../src/main/update/feed.ts";
 import { isNewer, parseVersion, type Version } from "../../src/main/update/version.ts";
 import { feedServer, tempDir } from "./harness.ts";
 
@@ -222,5 +223,18 @@ describe("versions", () => {
       expect(parseVersion(text), text).toBeNull();
     }
     expect(parseVersion(1)).toBeNull();
+  });
+});
+
+describe("release dates", () => {
+  it("requires a calendar date and preserves optional fractional seconds", () => {
+    for (const date of ["2026-02-30", "2025-02-29", "2026-04-31"]) {
+      expect(parseReleaseDate(`${date}T00:00:00Z`)).toBeNull();
+    }
+    for (const fraction of ["", ".1", ".12", ".123"]) {
+      expect(parseReleaseDate(`2024-02-29T00:00:00${fraction}Z`)).toBe(
+        `2024-02-29T00:00:00.${fraction.slice(1).padEnd(3, "0")}Z`,
+      );
+    }
   });
 });

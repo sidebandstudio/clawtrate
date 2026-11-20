@@ -49,7 +49,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
 export function parseReleaseDate(value: unknown): string | null {
   if (typeof value !== "string" || !ISO_UTC.test(value)) return null;
   const time = Date.parse(value);
-  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+  if (!Number.isFinite(time)) return null;
+  const canonical = new Date(time).toISOString();
+  // Date.parse rolls some impossible dates (and 24:00) into the next day.
+  return canonical.slice(0, 19) === value.slice(0, 19) ? canonical : null;
 }
 
 /**
