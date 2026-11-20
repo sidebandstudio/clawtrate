@@ -1,4 +1,5 @@
-import type { spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { nativeUnsigned } from "../packaging/check-unsigned.ts";
 import { requireUnsignedEnvironment } from "../packaging/unsigned-environment.ts";
@@ -18,9 +19,30 @@ it("refuses signing and notarization variables even when empty, before packaging
     "APPLE_TEAM_ID",
     "APPLE_KEYCHAIN",
     "APPLE_KEYCHAIN_PROFILE",
+    "SIGNTOOL_PATH",
+    "SIGNTOOL_TIMEOUT",
+    "USE_SYSTEM_SIGNCODE",
+    "USE_SYSTEM_OSSLSIGNCODE",
+    "ELECTRON_BUILDER_OSSL_SIGNCODE_PATH",
+    "ELECTRON_BUILDER_WINDOWS_KITS_PATH",
   ])
-    expect(() => requireUnsignedEnvironment({ [name]: "" })).toThrow();
-  expect(() => requireUnsignedEnvironment({ TRACK: "stable" })).not.toThrow();
+    for (const value of ["", "unused"])
+      expect(() => requireUnsignedEnvironment({ [name]: value })).toThrow(
+        "The unsigned workflow refuses signing or notarization variables.",
+      );
+  for (const value of ["", "stable"])
+    expect(() => requireUnsignedEnvironment({ TRACK: value })).not.toThrow();
+});
+it("refuses a Windows signing-tool setting before the build wrapper checks version or epoch", () => {
+  const wrapper = fileURLToPath(new URL("../packaging/candidate-build.ts", import.meta.url));
+  const result = spawnSync(process.execPath, [wrapper, "staging", "bad", "--unsigned-only"], {
+    env: { ...process.env, SOURCE_DATE_EPOCH: "", SIGNTOOL_PATH: "unused" },
+    encoding: "utf8",
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(
+    "Error: The unsigned workflow refuses signing or notarization variables.",
+  );
 });
 it("requires a successful native readback on the final staged file", () => {
   const inspect = (key: "mac-x64" | "win-x64", output: string, status = 0) => {
