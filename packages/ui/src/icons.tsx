@@ -257,3 +257,19 @@ export const MoreIcon = (props: IconProps) => (
     <circle cx="12.5" cy="8" r="0.6" fill="currentColor" />
   </Icon>
 );
+
+export const SmileIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="M5.6 9.4c.6.9 1.4 1.35 2.4 1.35s1.8-.45 2.4-1.35" />
+    <circle cx="6" cy="6.6" r="0.5" fill="currentColor" />
+    <circle cx="10" cy="6.6" r="0.5" fill="currentColor" />
+  </Icon>
+);
+
+export const ReplyIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M6.5 4 3 7.5 6.5 11" />
+    <path d="M3.5 7.5h5.75A3.75 3.75 0 0 1 13 11.25V12.5" />
+  </Icon>
+);

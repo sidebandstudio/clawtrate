@@ -107,6 +107,97 @@ test.describe("sending", () => {
     await expect(field(page)).toHaveValue("The next thought");
   });
 
+  test("F-106: Enter while the prior send is still being taken leaves the draft with an explicit notice", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+        sentTexts: string[];
+        releaseFirst?: () => void;
+      };
+      const fixture = w.clawtrateFixture;
+      const original = fixture.invoke.bind(fixture);
+      w.sentTexts = [];
+      fixture.invoke = (command: unknown) => {
+        const each = command as { type: string; text?: string };
+        if (each.type !== "sendMessage") return original(command);
+        w.sentTexts.push(each.text ?? "");
+        // The first send's answer is held until the check releases it.
+        if (w.sentTexts.length === 1)
+          return new Promise<void>((resolve) => (w.releaseFirst = resolve)).then(() =>
+            original(command),
+          );
+        return original(command);
+      };
+    });
+    const sent = () =>
+      page.evaluate(() => (window as unknown as { sentTexts: string[] }).sentTexts);
+    await field(page).fill("First words");
+    await page.keyboard.press("Enter");
+    await expect(field(page)).toHaveValue("");
+    await page.keyboard.type("Second words");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".composer-shelf [role=alert]")).toContainText(
+      "This message is still in the composer.",
+    );
+    await expect(field(page)).toHaveValue("Second words");
+    expect(await sent()).toEqual(["First words"]);
+    await page.evaluate(() => (window as unknown as { releaseFirst: () => void }).releaseFirst());
+    await expect(page.getByTestId("outgoing")).toHaveCount(1);
+    await field(page).focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(sent).toEqual(["First words", "Second words"]);
+    await expect(field(page)).toHaveValue("");
+  });
+
+  test("F-074: Enter while a file is still being added leaves the draft with an explicit notice", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: {
+          attach: (file: unknown) => Promise<unknown>;
+          invoke: (c: unknown) => Promise<unknown>;
+        };
+        sentTexts: string[];
+        releaseFile?: () => void;
+      };
+      const fixture = w.clawtrateFixture;
+      const attach = fixture.attach.bind(fixture);
+      const invoke = fixture.invoke.bind(fixture);
+      w.sentTexts = [];
+      // The host takes the file when the check says so.
+      fixture.attach = (file: unknown) =>
+        new Promise<void>((resolve) => (w.releaseFile = resolve)).then(() => attach(file));
+      fixture.invoke = (command: unknown) => {
+        const each = command as { type: string; text?: string };
+        if (each.type === "sendMessage") w.sentTexts.push(each.text ?? "");
+        return invoke(command);
+      };
+    });
+    const sent = () =>
+      page.evaluate(() => (window as unknown as { sentTexts: string[] }).sentTexts);
+    await page
+      .locator('.composer input[type="file"]')
+      .setInputFiles([{ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") }]);
+    await expect(page.locator(".attachments .chip")).toHaveCount(1);
+    await field(page).fill("With the notes");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".composer-shelf [role=alert]")).toContainText(
+      "This message is still in the composer.",
+    );
+    await expect(field(page)).toHaveValue("With the notes");
+    expect(await sent()).toEqual([]);
+    await page.evaluate(() => (window as unknown as { releaseFile: () => void }).releaseFile());
+    await expect(page.locator(".attachments .chip[aria-busy=true]")).toHaveCount(0);
+    await field(page).focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(sent).toEqual(["With the notes"]);
+  });
+
   test("F-073: a refused send gives its words and files back, ahead of anything typed since", async ({
     page,
   }) => {
@@ -219,6 +310,27 @@ test.describe("sending", () => {
     await page.keyboard.press("ControlOrMeta+l");
     await expect(field(page)).toHaveValue("Disk almost full on the media box");
     await expect(field(page)).toBeFocused();
+  });
+
+  test("F-466: Cmd/Ctrl+L appends the selected text after an existing draft, on a new line, and focuses the field", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await field(page).fill("About this:");
+    await page.evaluate(() => {
+      const heading = document.querySelector(".task-line")!;
+      const range = document.createRange();
+      range.selectNodeContents(heading);
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+      (document.querySelector(".transcript") as HTMLElement).focus();
+    });
+    await expect(field(page)).not.toBeFocused();
+    await page.keyboard.press("ControlOrMeta+l");
+    await expect(field(page)).toHaveValue("About this:\nDisk almost full on the media box");
+    await expect(field(page)).toBeFocused();
+    // Nothing was sent: the words wait in the field.
+    await expect(page.getByTestId("outgoing")).toHaveCount(0);
   });
 
   test("F-073: an unsent draft is kept per task", async ({ page }) => {
@@ -345,7 +457,40 @@ test.describe("sending", () => {
     await expect(send).toBeEnabled();
     await send.click();
     await expect(page.getByTestId("outgoing")).toHaveCount(1);
+    await expect(page.getByTestId("outgoing")).toContainText("notes.txt");
     await expect(chips).toHaveCount(0);
+  });
+
+  test("F-074 F-285: the gateway's own file ceiling, and a message too large as sent, each hold Send with the reason", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    const input = page.locator('.composer input[type="file"]');
+    // The fixture's gateway advertises what OpenClaw 2026.10.6 does: files up to 18.6 MB.
+    await input.setInputFiles([
+      { name: "scan.pdf", mimeType: "application/pdf", buffer: Buffer.alloc(19 * 1024 * 1024) },
+    ]);
+    const chips = page.locator(".attachments .chip");
+    await expect(chips).toContainText("19.0 MB. Files can be up to 18.6 MB.");
+    const send = page.getByRole("button", { name: "Send", exact: true });
+    await expect(send).toBeDisabled();
+    await page.getByRole("button", { name: "Remove scan.pdf" }).click();
+    // Four files of 5 MB each fit, one by one, but not together once encoded for the request.
+    await input.setInputFiles(
+      [1, 2, 3, 4].map((n) => ({
+        name: `part-${n}.pdf`,
+        mimeType: "application/pdf",
+        buffer: Buffer.alloc(5 * 1024 * 1024),
+      })),
+    );
+    await expect(chips).toHaveCount(4);
+    const reason = "26.7 MB to send with its files. A message can carry up to 25 MB.";
+    await expect(page.locator(".attachments-note")).toHaveText(reason);
+    await expect(send).toBeDisabled();
+    await expect(send).toHaveAttribute("title", reason);
+    await page.getByRole("button", { name: "Remove part-4.pdf" }).click();
+    await expect(page.locator(".attachments-note")).toHaveCount(0);
+    await expect(send).toBeEnabled();
   });
 });
 
@@ -665,7 +810,7 @@ test.describe("Stop", () => {
   }) => {
     await open(page, "run-working");
     await expect(page.getByRole("button", { name: "Stop Otto" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Steer this turn" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Request a steer" })).toBeVisible();
     await page.getByTestId("transcript").focus();
     await answers(page, "hold");
     await page.keyboard.press("ControlOrMeta+.");
@@ -687,7 +832,7 @@ test.describe("Stop", () => {
     );
     await open(page, "run-stopped-elsewhere");
     await expect(page.getByTestId("stop-note")).toContainText(
-      "from another device or session. Completed actions are not undone.",
+      "with no local Stop confirmed. Completed actions are not undone.",
     );
   });
 
@@ -772,15 +917,16 @@ test.describe("Stop", () => {
     await expect(page.getByTestId("incomplete")).toHaveCount(0);
   });
 
-  test("F-100: a run that reached its time limit ends with a card naming the limit", async ({
+  test("F-100: a run Clawtrate stopped at its time limit ends with a card naming the limit and who stopped it", async ({
     page,
   }) => {
     await open(page, "run-turn-limit");
     const card = page.getByTestId("turn-error");
     await expect(card).toContainText("Otto's turn reached its 50 minute limit");
     await expect(card).toContainText(
-      "The gateway ended the turn so it would not hang. Send a message to pick up where it left off.",
+      "Clawtrate stopped it at the Turn time limit in Settings, and the gateway confirmed.",
     );
+    await expect(card).not.toContainText("The gateway ended the turn");
   });
 });
 
@@ -793,20 +939,102 @@ test.describe("steering, queueing and holding", () => {
     await expect(page.getByRole("button", { name: "How to send: Steer" })).toBeVisible();
     await page.keyboard.press("Enter");
     const steer = page.getByTestId("outgoing").filter({ hasText: "Skip the photos folder" });
-    await expect(steer.locator(".msg-caption")).toHaveText("Steer");
+    await expect(steer.locator(".msg-caption")).toHaveText("Steer requested");
   });
 
-  test("F-096 F-106: a typed Stop now and a quick second message are steers, said as such, and nothing claims a stop or a reply each", async ({
+  test("F-101: a run stopped after three tool calls in a row timed out says so, in the stop note's form", async ({
+    page,
+  }) => {
+    await open(page, "run-stopped-timeouts");
+    const note = page.getByTestId("stop-note");
+    await expect(note.locator("b")).toHaveText("Stopped after 3 tool calls in a row timed out.");
+    await expect(note).toContainText("The machine Otto works on may not be responding.");
+    await expect(note.locator(".glyph")).toHaveAttribute("data-state", "stopped");
+  });
+
+  test("F-296: when some of the run's actions are no longer kept, the Stop note says other bots' work may continue", async ({
+    page,
+  }) => {
+    await open(page, "run-stopped-with");
+    const note = page.getByTestId("stop-note");
+    await expect(note).not.toContainText("Some actions are no longer shown.");
+    await setRun(page, { omittedTools: 3 });
+    await expect(note).toContainText(
+      "Some actions are no longer shown. Other bots' work may continue.",
+    );
+  });
+
+  test("F-298 F-296: after a Stop the note lists what stopped with the run, named, and what may not have been delivered", async ({
+    page,
+  }) => {
+    await open(page, "run-stopped-with");
+    const note = page.getByTestId("stop-note");
+    await expect(note.locator("p")).toContainText("Completed actions are not undone.");
+    await expect(note.getByTestId("stopped-with").getByRole("listitem")).toHaveText([
+      "Stopped with it: 1 helper run and Marlow's run for this message.",
+      "The message to Pip may or may not have been delivered.",
+    ]);
+    // A plain stop claims nothing more.
+    await open(page, "run-stopped");
+    await expect(page.getByTestId("stop-note")).toBeVisible();
+    await expect(page.getByTestId("stopped-with")).toHaveCount(0);
+  });
+
+  test("F-097: with two runs active and nothing tying them, Stop is not offered, and a typed Stop now keeps the words", async ({
     page,
   }) => {
     await open(page, "run-working");
+    await expect(page.getByRole("button", { name: "Stop Otto" })).toBeVisible();
+    // A second run beside it, as after a reconnect that missed the first one's end.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        const first = transcript.runs.find((run: Run) => run.id === "run-live")!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              runs: [...transcript.runs, { ...first, id: "run-current", steps: [] }],
+            },
+          },
+        };
+      });
+    });
+    await expect(page.getByRole("button", { name: "Stop Otto" })).toHaveCount(0);
     await field(page).fill("Stop now");
     await page.keyboard.press("Enter");
-    const typed = page.getByTestId("outgoing").filter({ hasText: "Stop now" });
-    await expect(typed.locator(".msg-caption")).toHaveText("Steer");
-    await expect(page.getByTestId("status-phrase")).not.toHaveText("Stopping…");
-    await expect(page.getByRole("button", { name: "Stop Otto" })).toBeVisible();
-    await expect(page.getByTestId("stop-note")).toHaveCount(0);
+    await expect(page.locator(".composer-shelf [role=alert]")).toContainText(
+      "Couldn't ask for Stop.",
+    );
+    await expect(field(page)).toHaveValue("Stop now");
+  });
+
+  test("F-097: a typed Stop now during a run stops it as Stop does, and is not sent as words", async ({
+    page,
+  }) => {
+    await open(page, "run-working");
+    await answers(page, "hold");
+    await field(page).fill("Stop now.");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("status-phrase")).toHaveText("Stopping…");
+    await expect(page.getByRole("button", { name: "Stop Otto" })).toHaveCount(0);
+    await expect(field(page)).toHaveValue("");
+    await expect(page.getByTestId("outgoing").filter({ hasText: "Stop now" })).toHaveCount(0);
+    await expect(announcer(page)).toHaveText("Stopping");
+    await answers(page, "release");
+    await expect(page.getByTestId("stop-note")).toContainText("Completed actions are not undone.");
+    // With no run, the same words are an ordinary message.
+    await field(page).fill("Stop now");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("outgoing").filter({ hasText: "Stop now" })).toHaveCount(1);
   });
 
   test("F-061: the mode word's menu is keyboard operable; Queue after this turn queues as a shelf row", async ({
@@ -819,8 +1047,8 @@ test.describe("steering, queueing and holding", () => {
     await page.keyboard.press("Enter");
     const menu = page.getByRole("menu", { name: "How to send" });
     await expect(menu).toBeVisible();
-    await expect(menu.getByRole("menuitemradio", { name: /Steer this turn/ })).toBeFocused();
-    await expect(menu.getByRole("menuitemradio", { name: /Steer this turn/ })).toHaveAttribute(
+    await expect(menu.getByRole("menuitemradio", { name: /Request a steer/ })).toBeFocused();
+    await expect(menu.getByRole("menuitemradio", { name: /Request a steer/ })).toHaveAttribute(
       "aria-checked",
       "true",
     );
@@ -857,7 +1085,7 @@ test.describe("steering, queueing and holding", () => {
     await row.getByRole("button", { name: "Send now" }).click();
     await expect(row).toHaveCount(0);
     const sent = page.getByTestId("outgoing").filter({ hasText: "Then send me a summary." });
-    await expect(sent.locator(".msg-caption")).toHaveText("Steer");
+    await expect(sent.locator(".msg-caption")).toHaveText("Steer requested");
 
     await open(page, "run-queued");
     await page.getByTestId("shelf-row").getByRole("button", { name: "Cancel" }).click();
@@ -973,6 +1201,57 @@ test.describe("steering, queueing and holding", () => {
 });
 
 test.describe("keyboard", () => {
+  test("F-072: inside a pending approval or question card Cmd/Ctrl+Enter answers that card and sends nothing; outside it, it sends", async ({
+    page,
+  }) => {
+    const record = () =>
+      page.evaluate(() => {
+        const w = window as unknown as {
+          clawtrateFixture: Record<string, (command: unknown) => Promise<unknown>>;
+          sent: Array<{ type: string }>;
+        };
+        w.sent = [];
+        const fixture = w.clawtrateFixture;
+        const invoke = fixture.invoke!.bind(fixture);
+        const send = fixture.send!.bind(fixture);
+        fixture.invoke = (command) => (w.sent.push(command as { type: string }), invoke(command));
+        fixture.send = (command) => (w.sent.push(command as { type: string }), send(command));
+      });
+    const types = () =>
+      page.evaluate(() =>
+        (window as unknown as { sent: Array<{ type: string }> }).sent.map((each) => each.type),
+      );
+
+    // An approval: ⌘↵ on its Deny button is Allow once, and the draft stays unsent.
+    await openFixture(page, "scene=approval-pending&panel=closed", "light");
+    await record();
+    await field(page).fill("A draft that must not go");
+    const approval = page.getByTestId("approval-card");
+    await approval.getByRole("button", { name: "Deny" }).focus();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await expect(approval.locator(".tag")).toHaveText("Allowed once");
+    expect(await types()).toEqual(["resolveApproval"]);
+    await expect(field(page)).toHaveValue("A draft that must not go");
+    await expect(page.getByTestId("outgoing")).toHaveCount(0);
+
+    // A question: ⌘↵ inside the card sends its answer, not the draft.
+    await openFixture(page, "scene=question-single&panel=closed", "light");
+    await record();
+    await field(page).fill("Another draft that stays");
+    const question = page.getByTestId("question-card");
+    await question.getByRole("radio").first().click();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await expect(question).toHaveAttribute("data-state", "answered");
+    expect(await types()).toEqual(["answerQuestion"]);
+    await expect(field(page)).toHaveValue("Another draft that stays");
+
+    // Outside any card the same keys send the draft.
+    await page.getByTestId("transcript").focus();
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await expect(field(page)).toHaveValue("");
+    expect(await types()).toEqual(["answerQuestion", "sendMessage"]);
+  });
+
   test("F-097 F-102: focus is never left on a control that has gone", async ({ page }) => {
     await open(page, "run-working");
     await page.getByRole("button", { name: "Stop Otto" }).focus();
@@ -1182,6 +1461,127 @@ test.describe("errors and resync", () => {
     await expect(page.getByTestId("status-line")).toBeVisible();
   });
 
+  test("F-301: a failure's Raw is not in the state the window holds until it is opened", async ({
+    page,
+  }) => {
+    await open(page, "run-failed");
+    const held = () =>
+      page.evaluate(() =>
+        JSON.stringify(
+          (
+            window as unknown as { clawtrateFixture: { getState: () => unknown } }
+          ).clawtrateFixture.getState(),
+        ),
+      );
+    // The event's own fields, such as its sequence number, are not in the state.
+    expect(await held()).not.toContain('"seq":14');
+    expect(await held()).toContain('"holds":"chat-event"');
+  });
+
+  test("F-301: Copy request ID puts exactly the request id that Raw shows on the clipboard, and says so", async ({
+    page,
+  }) => {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await open(page, "run-failed");
+    const card = page.getByTestId("turn-error");
+    const raw = card.getByRole("button", { name: "Raw" });
+    await expect(raw).toHaveAttribute("aria-expanded", "false");
+    await raw.click();
+    await expect(raw).toHaveAttribute("aria-expanded", "true");
+    const shown = (await card.getByTestId("request-id").textContent())!;
+    expect(shown).toBe("b3f0c2a1-4d5e-4f60-8a71-92c3d4e5f607");
+    // Raw is read when it is opened, and labelled as exactly what it holds.
+    await expect(card.getByTestId("turn-error-raw")).toContainText(
+      "The chat event that ended the turn, as received",
+    );
+    await expect(card.getByTestId("run-raw")).toContainText('"errorKind": "provider"');
+    await page.evaluate(() => navigator.clipboard.writeText("something else"));
+    await card.getByRole("button", { name: "Copy request ID" }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(shown);
+    await expect(page.getByTestId("card-announcer")).toHaveText("Copied request ID");
+    // A failure Clawtrate decided itself has no request of its own to copy.
+    await open(page, "run-turn-limit");
+    await expect(page.getByTestId("turn-error")).toBeVisible();
+    await expect(
+      page.getByTestId("turn-error").getByRole("button", { name: "Copy request ID" }),
+    ).toHaveCount(0);
+  });
+
+  test("F-301: when the clipboard refuses, Copy request ID opens Raw with the request ID selected and the failure read", async ({
+    page,
+  }) => {
+    await open(page, "run-failed");
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText: () => Promise.reject(new Error("denied")) },
+      });
+      document.execCommand = () => false;
+    });
+    const card = page.getByTestId("turn-error");
+    await card.getByRole("button", { name: "Copy request ID" }).click();
+    await expect(page.getByTestId("card-announcer")).toHaveText(
+      "Couldn't copy. The text is selected.",
+    );
+    await expect(card.getByRole("button", { name: "Raw" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    await expect
+      .poll(() => page.evaluate(() => window.getSelection()?.toString()))
+      .toBe("b3f0c2a1-4d5e-4f60-8a71-92c3d4e5f607");
+    // The failure itself is read too, as opening Raw reads it.
+    await expect(card.getByTestId("run-raw")).toContainText('"errorKind": "provider"');
+  });
+
+  test("F-100 F-296: a run stopped at its turn limit says what happened to the other bots' runs it started", async ({
+    page,
+  }) => {
+    await open(page, "run-turn-limit");
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (f: (s: ClawtrateState) => ClawtrateState) => void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              runs: transcript.runs.map((run) => ({
+                ...run,
+                omittedTools: 2,
+                stoppedWith: {
+                  helpers: 0,
+                  bots: [],
+                  uncertain: [],
+                  refused: ["agent:marlow:main"],
+                  unanswered: [],
+                  omitted: 0,
+                  recipientsAsked: true,
+                },
+              })),
+            },
+          },
+        };
+      });
+    });
+    const card = page.getByTestId("turn-error");
+    await expect(card).toContainText("turn reached its");
+    await expect(card.getByTestId("stopped-with")).toHaveText(
+      "The gateway refused to stop Marlow's run for this message.",
+    );
+    await expect(card).toContainText(
+      "Some actions are no longer shown. Other bots' work may continue.",
+    );
+  });
+
   test("F-102: Try again sends the failed turn's message again with its files", async ({
     page,
   }) => {
@@ -1365,7 +1765,7 @@ test.describe("errors and resync", () => {
     await expect(page.getByTestId("status-strip")).toContainText("Synced");
     await expect(page.locator(".app")).not.toHaveAttribute("data-connection", "lost");
     await expect(page.getByTestId("status-phrase")).toHaveText("Reading backup-2026-11-15.log");
-    await expect(field(page)).toHaveAttribute("placeholder", "Steer Otto");
+    await expect(field(page)).toHaveAttribute("placeholder", "Message Otto");
   });
 
   test("F-107: after a reconnect the conversation catches up without showing a message twice", async ({

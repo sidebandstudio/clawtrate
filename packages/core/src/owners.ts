@@ -142,9 +142,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: 3 * ID + MAX_RUN_TEXT_CHARS,
     row: "streamBaselines",
   },
-  // Raw payloads: their content is the table's budget; these are their keys.
+  // Raw payloads: their content is the table's budget; these are their keys. Each retained step
+  // and each retained run's failure has one, and one incoming entry before the table prunes.
   "raw.entries": {
-    max: T * MAX_STEPS_PER_TASK,
+    max: T * (MAX_STEPS_PER_TASK + MAX_RUN_LIST) + 1,
     each: 3 * ID + 1 + N,
     row: "rawPayloads",
     opaque: "the raw table's budget, `MAX_RAW_BYTES`",

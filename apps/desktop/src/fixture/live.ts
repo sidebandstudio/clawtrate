@@ -18,6 +18,7 @@ import {
   type Run,
   type Step,
   type Transcript,
+  type TranscriptBlock,
 } from "@clawtrate/core";
 import { OPEN_TASK } from "./data.ts";
 
@@ -49,9 +50,25 @@ export const LIVE_SCENES = [
   "stopped-not-sent",
   "queued-refused",
   "offline-send",
+  "message-actions",
+  "message-actions-read",
+  "message-thread-question",
+  "message-thread-failed",
+  "run-stopped-with",
+  "run-stopped-timeouts",
 ] as const;
 
 export type LiveScene = (typeof LIVE_SCENES)[number];
+
+/** The chat error event the failed scene's run ended with, as its Raw reads it (F-301). */
+export const FAILED_EVENT = {
+  runId: "run-live",
+  sessionKey: "agent:otto:disk-space",
+  seq: 14,
+  state: "error",
+  errorMessage: "The model provider is overloaded.",
+  errorKind: "provider",
+};
 
 const SECOND = 1000;
 const REQUEST_ID = "7c41d09e-52b3-4e8a-9f10-3d6b2a7e9c41";
@@ -248,6 +265,65 @@ function question(now: number): QuestionCard {
 }
 
 /** The scene's state, from the loaded fixture state. */
+/**
+ * The open task as history gives it to a connection that reacts and replies: each message names
+ * the gateway's row id, the bot's report has reactions, and a later message of yours replies to
+ * an earlier answer of Otto's (F-066, F-067, F-283).
+ */
+function withMessages(state: ClawtrateState): ClawtrateState {
+  return withTranscript(state, (transcript) => {
+    const items = transcript.items.map((each, index) => {
+      if (each.role === "system") return each;
+      const messageId = `row-${index + 1}`;
+      if (each.role === "user") return { ...each, messageId };
+      // The bot's turn: each bubble is a row of its own. The second answer had a progress
+      // bubble before its call, a row of its own too, so the turn shows two.
+      const blocks: TranscriptBlock[] =
+        index === 3
+          ? [{ kind: "text", text: "I'll write that down so I don't forget." }, ...each.blocks]
+          : each.blocks;
+      const texts = blocks.filter((block) => block.kind === "text").length;
+      let n = 0;
+      return {
+        ...each,
+        messageId,
+        blocks: blocks.map((block) =>
+          block.kind === "text"
+            ? { ...block, messageId: ++n === texts ? messageId : `${messageId}-${n}` }
+            : block,
+        ),
+      };
+    });
+    const answers = items.filter((each) => each.role === "assistant");
+    const replied = answers[0]!;
+    const last = items.at(-1)!;
+    const reply = {
+      id: "row-reply:99",
+      role: "user" as const,
+      timestamp: (last.timestamp ?? Date.now()) + 60_000,
+      blocks: [{ kind: "text" as const, text: "Could you read the system log another way?" }],
+      model: null,
+      messageId: "row-reply",
+      replyTo: {
+        id: replied.messageId!,
+        text: "Nothing alarming that I can see from here. The system log is outside my workspace…",
+        sender: "Otto",
+      },
+    };
+    const report = answers.at(-1)!;
+    return {
+      ...transcript,
+      items: [...items, reply],
+      reactions: {
+        [report.messageId!]: [
+          { emoji: "👍", count: 2, mine: true },
+          { emoji: "🎉", count: 1, mine: false },
+        ],
+      },
+    };
+  });
+}
+
 export function liveScene(
   name: LiveScene,
   base: ClawtrateState,
@@ -318,6 +394,75 @@ export function liveScene(
       };
     case "composer":
       return { initial: interactive(base), steps: [] };
+    case "message-actions":
+      return { initial: interactive(withMessages(base)), steps: [] };
+    case "message-actions-read":
+      return { initial: withMessages(base), steps: [] };
+    case "message-thread-failed":
+      // A reply the gateway refused: in its thread as in the transcript, failed, with recovery.
+      return {
+        initial: withTranscript(interactive(withMessages(base)), (transcript) => ({
+          ...transcript,
+          // After the reply: an answer history does not mark as a reply, then one it does.
+          items: [
+            ...transcript.items,
+            {
+              id: "row-after:100",
+              role: "assistant",
+              timestamp: now - 50 * SECOND,
+              blocks: [
+                {
+                  kind: "text",
+                  text: "Starting the nightly rotation now.",
+                  messageId: "row-after",
+                },
+              ],
+              model: null,
+              messageId: "row-after",
+            },
+            {
+              id: "row-delivered:101",
+              role: "assistant",
+              timestamp: now - 40 * SECOND,
+              blocks: [
+                {
+                  kind: "text",
+                  text: "I can read it through the journal instead.",
+                  messageId: "row-delivered",
+                },
+              ],
+              model: null,
+              messageId: "row-delivered",
+              replyTo: { id: "row-2", text: "Nothing alarming that I can see…", sender: "Otto" },
+            },
+          ],
+          outbox: [
+            message("msg-reply", "Could you check the backups too?", now - 20 * SECOND, {
+              replyToId: "row-2",
+              status: "failed",
+              error: "The gateway refused the message.",
+              runId: null,
+            }),
+          ],
+        })),
+        steps: [],
+      };
+    case "message-thread-question":
+      // Replies in a thread while the run waits on a question: held, as any message is (F-468).
+      return {
+        initial: withMessages(
+          withRun(
+            base,
+            now,
+            {
+              state: "waiting",
+              pendingCards: [{ id: "question-1", kind: "question", since: now - 5 * SECOND }],
+            },
+            { questions: [question(now)] },
+          ),
+        ),
+        steps: [],
+      };
     case "run-thinking":
       return { initial: withRun(base, now, {}), steps: [] };
     case "run-working":
@@ -427,6 +572,52 @@ export function liveScene(
         }),
         steps: [],
       };
+    case "run-stopped-with":
+      // As the gateway reported what stopped with it: helpers and Marlow's run.
+      return {
+        initial: withRun(base, now, {
+          state: "stopped",
+          stopRequestedAt: now - 2 * SECOND,
+          endedAt: now - 2 * SECOND,
+          text: REPLY,
+          steps: [readStep(now - 30 * SECOND, { status: "done", endedAt: now - 29 * SECOND })],
+          stoppedWith: {
+            helpers: 1,
+            bots: ["agent:marlow:main"],
+            uncertain: ["agent:pip:main"],
+            refused: [],
+            unanswered: [],
+            omitted: 0,
+            recipientsAsked: true,
+          },
+        }),
+        steps: [],
+      };
+    case "run-stopped-timeouts":
+      // Three commands in a row ran out of time; the client stopped the run.
+      return {
+        initial: withRun(base, now, {
+          state: "stopped",
+          stopRequestedAt: now - 2 * SECOND,
+          endedAt: now - 2 * SECOND,
+          stoppedForTimeouts: 3,
+          steps: [1, 2, 3].map((n) =>
+            toolStep(
+              `call_timeout_${n}`,
+              "exec",
+              { command: "sleep 5" },
+              now - (12 - 3 * n) * SECOND,
+              {
+                status: "failed",
+                endedAt: now - (11 - 3 * n) * SECOND,
+                failureKind: "overall-timeout",
+                error: "Command timed out after 1 seconds.",
+              },
+            ),
+          ),
+        }),
+        steps: [],
+      };
     case "run-stopped-elsewhere":
       return {
         initial: withRun(base, now, { state: "stopped", endedAt: now - 2 * SECOND, text: REPLY }),
@@ -450,10 +641,13 @@ export function liveScene(
           state: "failed",
           endedAt: now - 2 * SECOND,
           text: REPLY,
+          // The id this client gave the chat.send frame that started the run.
+          requestId: "b3f0c2a1-4d5e-4f60-8a71-92c3d4e5f607",
           error: {
             message:
               "The model provider is overloaded. Nothing ran after step 1, and steps already completed are not undone.",
             kind: "provider",
+            raw: { holds: "chat-event", chars: JSON.stringify(FAILED_EVENT).length },
           },
           lifecycle: lifecycleOf(now, {
             phase: "error",
@@ -466,9 +660,10 @@ export function liveScene(
     case "run-turn-limit":
       return {
         initial: withRun(base, now, {
-          state: "failed",
+          state: "stopped",
+          stopRequestedAt: now - 3 * SECOND,
           endedAt: now - 2 * SECOND,
-          error: { message: "Stopped at the 50-minute turn limit.", kind: "turn-limit" },
+          turnLimit: 50,
         }),
         steps: [],
       };
@@ -622,7 +817,11 @@ export function liveCommand(
             ...transcript,
             outbox: [
               ...transcript.outbox,
-              message(id, command.text, now, { runId: id, attachments }),
+              message(id, command.text, now, {
+                runId: id,
+                attachments,
+                ...(command.replyToId ? { replyToId: command.replyToId } : {}),
+              }),
             ],
             runs: [
               ...transcript.runs,
@@ -648,6 +847,7 @@ export function liveCommand(
           outbox: [
             ...transcript.outbox,
             message(id, command.text, now, {
+              ...(command.replyToId ? { replyToId: command.replyToId } : {}),
               mode: command.mode === "queue" ? "queue" : "steer",
               status: asking ? "held" : "sent",
               runId: active.id,
@@ -783,6 +983,80 @@ export function liveCommand(
       return Promise.resolve();
     case "createTask":
       return Promise.resolve({ key: "agent:otto:new-task" });
+    case "setTurnLimit":
+      set({ ...get(), turnLimitMinutes: command.minutes });
+      return Promise.resolve();
+    case "readComposerMenu":
+      // As the gateway lists them for Otto: its skills and commands, or the bots and a routine.
+      return Promise.resolve(
+        command.trigger === "/"
+          ? [
+              {
+                kind: "skill",
+                name: "healthcheck",
+                description: "Check the health of this machine and its services.",
+                insert: "/healthcheck",
+              },
+              {
+                kind: "skill",
+                name: "weather",
+                description: "Get the weather for a place.",
+                insert: "/weather",
+              },
+              {
+                kind: "command",
+                name: "status",
+                description: "Show the session's status.",
+                insert: "/status",
+              },
+              {
+                kind: "command",
+                name: "compact",
+                description: "Compact the session's context.",
+                insert: "/compact",
+              },
+            ]
+          : [
+              ...get().bots.map((bot) => ({
+                kind: "bot" as const,
+                name: bot.name,
+                description: null,
+                insert: `@${bot.name}`,
+              })),
+              {
+                kind: "routine",
+                name: "Morning disk check",
+                description: null,
+                insert: "@Morning disk check",
+              },
+            ],
+      );
+    case "setReaction":
+      // As the gateway answers: the message's reactions now, this person's marked.
+      update((transcript) => {
+        const list = transcript.reactions?.[command.messageId] ?? [];
+        const existing = list.find((each) => each.emoji === command.emoji);
+        const next = command.remove
+          ? list.flatMap((each) =>
+              each.emoji !== command.emoji || !each.mine
+                ? [each]
+                : each.count > 1
+                  ? [{ ...each, count: each.count - 1, mine: false }]
+                  : [],
+            )
+          : existing
+            ? list.map((each) =>
+                each.emoji === command.emoji && !each.mine
+                  ? { ...each, count: each.count + 1, mine: true }
+                  : each,
+              )
+            : [...list, { emoji: command.emoji, count: 1, mine: true }];
+        const reactions = { ...transcript.reactions };
+        if (next.length > 0) reactions[command.messageId] = next;
+        else delete reactions[command.messageId];
+        return { ...transcript, reactions };
+      });
+      return Promise.resolve();
     default:
       return undefined;
   }

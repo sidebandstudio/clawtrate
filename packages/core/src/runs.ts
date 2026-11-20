@@ -14,7 +14,7 @@ import {
   type SettlingRecord,
 } from "./approvals.ts";
 import { projectArgs, projectDetails } from "./actions.ts";
-import { asRecord, type RawRecord } from "./mapping.ts";
+import { asRecord, liveTextFromChatMessage, type RawRecord } from "./mapping.ts";
 import { filePathsOf } from "./file-paths.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
 import {
@@ -31,6 +31,7 @@ import {
   MAX_QUEUE_ALIAS_COUNT,
   MAX_STEER_ALIAS_COUNT,
   MAX_STEPS_PER_TASK,
+  MAX_STOPPED_NAMED,
 } from "./state-bounds.ts";
 
 export type RunState =
@@ -257,7 +258,152 @@ function settleFiles(step: Step, details: RawRecord | null, isError: boolean): S
  * How a run failed. `kind` is the gateway's own classification where it sends
  * one (`chat` `errorKind`, for example `timeout`), never parsed from the text.
  */
-export type RunError = { message: string; kind: string | null };
+/** Tool calls in a row that time out before this client stops the run (F-101). */
+export const TIMEOUTS_IN_A_ROW = 3;
+
+/** Whether a finished tool step ran out of time, as its own result says. */
+export function timedOut(step: Step): boolean {
+  if (step.kind !== "tool" || step.status === "running") return false;
+  const details = step.details as Record<string, unknown> | null | undefined;
+  return (
+    details?.timedOut === true ||
+    (typeof step.failureKind === "string" && /timeout/i.test(step.failureKind))
+  );
+}
+
+/**
+ * How many of a run's latest finished tool calls in a row timed out: counted back from the
+ * last one to finish, up to a call that finished in time (F-101). A call still running or
+ * waiting for its approval has not finished, so it neither counts nor breaks the count.
+ */
+export function timeoutsInARow(run: Run): number {
+  const finished = run.steps
+    .filter((step) => step.kind === "tool" && !isOpenStep(step))
+    .sort((a, b) => (a.endedAt ?? a.startedAt ?? 0) - (b.endedAt ?? b.startedAt ?? 0));
+  let count = 0;
+  for (let i = finished.length - 1; i >= 0 && timedOut(finished[i]!); i -= 1) count += 1;
+  return count;
+}
+
+/** The run is being stopped because its tool calls kept timing out. */
+export function markStoppedForTimeouts(
+  activity: TaskActivity,
+  runId: string,
+  count: number,
+): TaskActivity {
+  return updateRun(activity, runId, (run) => ({ ...run, stoppedForTimeouts: count }));
+}
+
+/** The run passed the "Turn time limit" of that many minutes, and is being stopped (F-100). */
+export function markTurnLimit(
+  activity: TaskActivity,
+  runId: string,
+  minutes: number,
+): TaskActivity {
+  return updateRun(activity, runId, (run) => ({ ...run, turnLimit: minutes }));
+}
+
+/**
+ * What this client's Stop of a run did to what the run started, each as the gateway said. The
+ * recipients come from the run's own record (its `sessions_send` results), however the stop's
+ * end reached this client. Processes are not here: the gateway's process list does not say which
+ * run started a process, so none is stopped with a run.
+ */
+export type StoppedWith = {
+  /** Helper runs the gateway aborted with it (`chat.abort` `runIds` other than the run's own). */
+  helpers: number;
+  /** The session keys of other bots' runs this run's messages started, aborted with it. */
+  bots: string[];
+  /** Session keys of messages to other bots whose run could not be stopped or named. */
+  uncertain: string[];
+  /** Session keys of recipients' runs whose stop the gateway refused. */
+  refused: string[];
+  /** Session keys of recipients' runs whose stop got no answer: they may still be going. */
+  unanswered: string[];
+  /** Names not kept past `MAX_STOPPED_NAMED` of a kind; every one of them was still asked. */
+  omitted: number;
+  /** The recipients have been asked to stop (once per run). */
+  recipientsAsked: boolean;
+};
+
+/** A stop's record before anything is known of what it ended: a new one each time. */
+const noCompanions = (): StoppedWith => ({
+  helpers: 0,
+  bots: [],
+  uncertain: [],
+  refused: [],
+  unanswered: [],
+  omitted: 0,
+  recipientsAsked: false,
+});
+
+/** Record what a Stop also ended, or could not end. */
+export function noteStoppedWith(
+  activity: TaskActivity,
+  runId: string,
+  change: (current: StoppedWith) => StoppedWith,
+): TaskActivity {
+  return updateRun(activity, runId, (run) => {
+    const next = change(run.stoppedWith ?? noCompanions());
+    let omitted = next.omitted;
+    const keep = (list: string[]) => {
+      omitted += Math.max(0, list.length - MAX_STOPPED_NAMED);
+      return list.slice(0, MAX_STOPPED_NAMED);
+    };
+    return {
+      ...run,
+      stoppedWith: {
+        helpers: next.helpers,
+        bots: keep(next.bots),
+        uncertain: keep(next.uncertain),
+        refused: keep(next.refused),
+        unanswered: keep(next.unanswered),
+        omitted,
+        recipientsAsked: next.recipientsAsked,
+      },
+    };
+  });
+}
+
+/**
+ * A `/stop` typed in this task stopped these runs: each counts as stopped by this client, so what
+ * it started is stopped too, as after Stop.
+ */
+export function markStopAsked(activity: TaskActivity, runIds: string[], now: number): TaskActivity {
+  let next = activity;
+  for (const runId of runIds) {
+    next = updateRun(requestStop(next, runId, now), runId, (run) =>
+      run.state === "stopped" && run.stopRequestedAt === null
+        ? { ...run, stopRequestedAt: now }
+        : run,
+    );
+  }
+  return next;
+}
+
+export type RunError = {
+  message: string;
+  kind: string | null;
+  /**
+   * What the gateway sent that said the run failed, named, and its JSON length: the content
+   * itself is never in the state. It is kept beside the step payloads (`RawTable`, under
+   * `runErrorRawId`) and read with `readRunRaw` when Raw is opened (F-301). Absent when nothing
+   * the gateway sent established the failure here (one of this client's own, or one read from
+   * history).
+   */
+  raw?: RunErrorRaw;
+};
+
+/** What a failed run's Raw holds (F-301). */
+export type RunErrorRaw = {
+  /** Exactly what it is: `chat-event`, `lifecycle-data` or `send-answer`. */
+  holds: "chat-event" | "lifecycle-data" | "send-answer";
+  /** Its JSON length. Past `MAX_RAW_ENTRY_CHARS` it was not kept. */
+  chars: number;
+};
+
+/** Where a failed run's Raw is kept in the raw table: not a step id, so no step's drop takes it. */
+export const runErrorRawId = (runId: string) => `run-error\u0000${runId}`;
 
 /**
  * What the run's terminal lifecycle event said, as sent: `stopReason`, and for
@@ -365,6 +511,36 @@ export type Run = {
    * order, newest last, at most `MAX_PREAMBLES_PER_RUN`. Absent until one arrives.
    */
   preambles?: Preamble[];
+  /**
+   * The id of the request frame of the `chat.send` that started this run, as this client
+   * set it: what "Copy request ID" copies and Raw shows (F-301). Absent for a run this
+   * client did not start, or whose send's frame has not left.
+   */
+  requestId?: string;
+  /**
+   * What stopped with this run when this client stopped it, as the gateway reported each
+   * (F-296, F-297, F-298). Absent until a Stop of this client's is confirmed.
+   */
+  stoppedWith?: StoppedWith;
+  /**
+   * This client stopped the run because that many of its tool calls in a row timed out
+   * (`TIMEOUTS_IN_A_ROW`; F-101). 0 once that stop failed (the gateway refused it): the run goes
+   * on, it is not stopped for its timeouts again, and a later Stop is not put down to them.
+   * Absent otherwise.
+   */
+  stoppedForTimeouts?: number;
+  /**
+   * The run passed the "Turn time limit" (F-100), in minutes, and this client asked the gateway
+   * to stop it, as any Stop: it is `stopping` until the gateway confirms. 0 when the limit was
+   * reached but did not stop it (no one current run, no write access, or the gateway refused):
+   * the limit is not asked again and no later stop is put down to it. Absent otherwise.
+   */
+  turnLimit?: number;
+  /**
+   * The gateway is retrying the model request by itself (`run_status` `retrying`): which attempt
+   * of how many, and why (`rate_limit`, …). Absent once the model answers again (F-082).
+   */
+  retry?: { attempt: number; of: number; reason: string | null };
   /** Paths of fields cut to their bound; a cut `text` is not extended by later deltas. */
   cut?: string[];
 };
@@ -465,6 +641,8 @@ export type OutgoingMessage = {
   error: string | null;
   /** Files sent with it, without their content. */
   attachments: OutgoingAttachmentInfo[];
+  /** The gateway's id of the message this one replies to (`chat.send` `replyToId`, F-067). */
+  replyToId?: string;
 };
 
 export type OutgoingAttachmentInfo = { fileName: string; mimeType: string; sizeBytes: number };
@@ -635,6 +813,16 @@ export { MAX_STEPS_PER_TASK };
  * is readable once the gateway's history holds it; until then it is
  * `not-available-yet`, never presented as recoverable.
  */
+/**
+ * A failed run's Raw, read when it is opened (`readRunRaw`, F-301): what the gateway sent that
+ * failed it, as received and named by what it is; or that it was too large to keep; or that it
+ * is not kept here, which never says whether the gateway sent anything.
+ */
+export type RunRawRead =
+  | { status: "available"; holds: RunErrorRaw["holds"]; payload: unknown }
+  | { status: "too-large"; holds: RunErrorRaw["holds"]; chars: number; limit: number }
+  | { status: "not-kept"; holds: RunErrorRaw["holds"] | null };
+
 export type StepRead =
   | { status: "available"; raw: StepRaw }
   | { status: "not-available-yet"; reason: string }
@@ -732,9 +920,13 @@ export class RawTable {
     return this.perTask.get(capId(sessionKey, MAX_ID_CHARS)) ?? 0;
   }
 
-  /** Drop the payloads of these steps of a task. */
-  dropSteps(sessionKey: string, stepIds: Iterable<string>): void {
-    for (const stepId of stepIds) this.drop(this.key(sessionKey, stepId));
+  /** Keep of a task's payloads only those under these ids: its retained steps and failed runs. */
+  retainTask(sessionKey: string, ids: Iterable<string>): void {
+    const task = capId(sessionKey, MAX_ID_CHARS);
+    const kept = new Set(Array.from(ids, (id) => this.key(sessionKey, id)));
+    for (const [key, entry] of this.entries) {
+      if (entry.task === task && !kept.has(key)) this.drop(key);
+    }
   }
 
   clearTask(sessionKey: string): void {
@@ -786,9 +978,29 @@ export function capError(text: string): string {
 }
 
 function capRunError(error: RunError | null): RunError | null {
-  return error && error.message.length > MAX_ERROR_CHARS
-    ? { ...error, message: capError(error.message) }
-    : error;
+  if (!error) return error;
+  const capped =
+    error.message.length > MAX_ERROR_CHARS ? { ...error, message: capError(error.message) } : error;
+  return capped;
+}
+
+/**
+ * Keep what the gateway sent that failed the run, whole, beside the step payloads, and name it
+ * for the state (F-301). One larger than a raw entry is not kept, and its Raw says so.
+ */
+function rawEvent(
+  ctx: EngineContext,
+  runId: string,
+  holds: RunErrorRaw["holds"],
+  payload: RawRecord,
+): RunErrorRaw {
+  ctx.raw.set(ctx.sessionKey, runErrorRawId(runId), {
+    source: "live",
+    runId,
+    call: payload,
+    result: null,
+  });
+  return { holds, chars: jsonLength(payload) };
 }
 
 export function capText(text: string): StepText {
@@ -897,12 +1109,28 @@ export function findRun(activity: TaskActivity, runId: string): Run | undefined 
  * take it as the answer. A pending question holds every outgoing message, and
  * this is the one definition of it: the engine and the interface both use it.
  */
-export function questionPending(activity: TaskActivity, run: Run): boolean {
+export function questionPending(activity: TaskActivity, run?: Run): boolean {
   return (
-    activity.questions.some(
-      (question) => question.status === "pending" && question.runId === run.id,
-    ) || [...run.pendingCards, ...run.suspendedCards].some((card) => card.kind === "question")
+    activity.questions.some((question) => question.status === "pending") ||
+    (run !== undefined &&
+      [...run.pendingCards, ...run.suspendedCards].some((card) => card.kind === "question"))
   );
+}
+
+/**
+ * The run Stop aborts, or null when no one current run is established. A steer's or a queued
+ * turn's own run id stands for the run it belongs to; every active run is counted the same way,
+ * so a steer the gateway acknowledged under an id of its own is not a second candidate. With two
+ * runs active and nothing tying them (an older run whose end a reconnect missed, beside the one
+ * the gateway runs now), Stop is withheld until the gateway establishes which one is current.
+ */
+export function runningRunId(activity: TaskActivity, asked: string): string | null {
+  const canonical = (id: string) => activity.steerAliases[id] ?? activity.queueAliases[id] ?? id;
+  const direct = canonical(asked);
+  const active = new Set(
+    activity.runs.filter((run) => isActive(run.state)).map((run) => canonical(run.id)),
+  );
+  return active.size === 1 && active.has(direct) ? direct : null;
 }
 
 /** The task's run that is running, waiting or stopping, if any. */
@@ -912,6 +1140,18 @@ export function activeRun(activity: TaskActivity): Run | undefined {
 
 function replaceRun(activity: TaskActivity, run: Run): TaskActivity {
   return { ...activity, runs: activity.runs.map((each) => (each.id === run.id ? run : each)) };
+}
+
+/** The request frame that started a run left with this id (F-301). */
+export function noteRunRequest(
+  activity: TaskActivity,
+  runId: string,
+  requestId: string,
+): TaskActivity {
+  return updateRun(activity, runId, (run) => ({
+    ...run,
+    requestId: capId(requestId, MAX_ID_CHARS),
+  }));
 }
 
 function updateRun(activity: TaskActivity, runId: string, fn: (run: Run) => Run): TaskActivity {
@@ -1229,6 +1469,8 @@ export function revertStop(activity: TaskActivity, runId: string, error: string)
           state: run.suspendedCards.length > 0 ? "waiting" : "running",
           pendingCards: [...run.suspendedCards, ...run.pendingCards],
           suspendedCards: [],
+          stopRequestedAt: null,
+          ...(run.turnLimit === undefined ? {} : { turnLimit: 0 }),
           stopError: error,
         }
       : run,
@@ -1248,11 +1490,11 @@ export function registerSteerAlias(
   targetId: string,
 ): TaskActivity {
   if (aliasId === targetId) return activity;
-  // Its events may have come first: a run showing something of its own is its own run, and no
-  // alias is recorded; an empty one was only the bare acknowledgement, and goes.
+  // Its events or a history read may have come first: a run showing something of its own is its
+  // own run, and no alias is recorded; an empty one (the bare acknowledgement, or history's
+  // in-flight id with nothing under it) is only the steer, and goes.
   const shown = findRun(activity, aliasId);
-  if (shown && (shown.steps.length > 0 || shown.text || shown.origin !== "gateway"))
-    return activity;
+  if (shown && (shown.steps.length > 0 || shown.text || shown.origin === "local")) return activity;
   return {
     ...activity,
     runs: shown ? activity.runs.filter((run) => run !== shown) : activity.runs,
@@ -1345,7 +1587,8 @@ export function settleRunFromSendAnswer(
     if (status === "ok") return finishRun(run, "completed", ctx, null, endedAt);
     if (status === "error") {
       const message = str(answer.summary) ?? "The gateway reported an error.";
-      return finishRun(run, "failed", ctx, { message, kind: "gateway" }, endedAt);
+      const raw = rawEvent(ctx, run.id, "send-answer", answer);
+      return finishRun(run, "failed", ctx, { message, kind: "gateway", raw }, endedAt);
     }
     return run;
   });
@@ -1691,7 +1934,8 @@ export function settleQuestionsOfEndedRuns(activity: TaskActivity): TaskActivity
   const questions = activity.questions.map((question) => {
     if (question.status !== "pending" || !question.runId) return question;
     const run = findRun(activity, question.runId);
-    if (!run || !isTerminal(run.state)) return question;
+    // Only an end the gateway established closes it; an inferred one leaves it to the gateway.
+    if (!run || !isTerminal(run.state) || !run.outcomeKnown) return question;
     changed = true;
     return { ...question, status: "closed" as const, submitting: false };
   });
@@ -1810,6 +2054,7 @@ export function applyChatEvent(
         return finishRun({ ...run, ending: endingOf(payload, run.ending) }, "failed", ctx, {
           message: str(payload.errorMessage) ?? "The run failed.",
           kind: str(payload.errorKind),
+          raw: rawEvent(ctx, run.id, "chat-event", payload),
         });
       default:
         return run;
@@ -1851,11 +2096,26 @@ export function applyAgentEvent(
   const ts = num(payload.ts) ?? ctx.now;
   next = updateRun(next, runId, (run) => {
     if (seq !== null && (run.lastSeq === null || seq > run.lastSeq)) run = { ...run, lastSeq: seq };
+    // The model answered again: a retry it was waiting on is over.
+    if (run.retry && (stream === "assistant" || stream === "thinking" || stream === "tool")) {
+      const { retry: _over, ...rest } = run;
+      run = rest;
+    }
     switch (stream) {
       case "lifecycle":
         return applyLifecycle(run, data, ts, ctx);
-      case "run_status":
-        return { ...run, phase: str(data.phase) ?? run.phase };
+      case "run_status": {
+        const phase = str(data.phase) ?? run.phase;
+        // The gateway retries a failed model request by itself and says which attempt (F-082).
+        const attempt = num(data.attempt);
+        const of = num(data.maxAttempts);
+        const retry =
+          phase === "retrying" && attempt !== null && of !== null
+            ? { attempt, of, reason: str(data.reason) }
+            : undefined;
+        const { retry: _was, ...rest } = run;
+        return retry ? { ...rest, phase, retry } : { ...rest, phase };
+      }
       case "thinking":
         return applyThinking(run, data, payload, ts, ctx);
       case "assistant":
@@ -2042,7 +2302,11 @@ function terminalFromLifecycle(
         run,
         "failed",
         ctx,
-        { message: message ?? "The run timed out.", kind: "timeout" },
+        {
+          message: message ?? "The run timed out.",
+          kind: "timeout",
+          raw: rawEvent(ctx, run.id, "lifecycle-data", data),
+        },
         at,
       );
     case "blocked":
@@ -2052,7 +2316,11 @@ function terminalFromLifecycle(
         run,
         "failed",
         ctx,
-        { message: message ?? "The run failed.", kind: reason },
+        {
+          message: message ?? "The run failed.",
+          kind: reason,
+          raw: rawEvent(ctx, run.id, "lifecycle-data", data),
+        },
         at,
       );
   }
@@ -2402,7 +2670,7 @@ export function runsFromHistory(
   messages: unknown,
   inFlight: string | RawRecord | null,
   ctx: EngineContext,
-  options: { windowCut?: boolean } = {},
+  options: { windowCut?: boolean; busy?: boolean } = {},
 ): Run[] {
   const snapshot = typeof inFlight === "string" ? { runId: inFlight } : inFlight;
   const inFlightRunId = str(snapshot?.runId);
@@ -2608,8 +2876,22 @@ export function runsFromHistory(
     runs.set(inFlightRunId, text && !run.text ? { ...run, text } : run);
   }
 
+  // The newest run of the rows; the queued turn the gateway reports in flight is not one of them.
+  const newest = [...runs.keys()].filter((id) => id !== inFlightRunId).at(-1);
   return [...runs.values()].map((built) => {
     if (built.id === inFlightRunId) return built;
+    const lastRow = lastAssistant.get(built.id);
+    const lastStop = str(lastRow?.stopReason);
+    const endShown =
+      lastStop === "stop" ||
+      lastStop === "length" ||
+      lastStop === "aborted" ||
+      lastStop === "error" ||
+      asRecord(lastRow?.openclawAbort)?.aborted === true;
+    // The newest run, its rows stopping short of an end, while the gateway has a turn of the
+    // task in flight or queued: the gateway has not said it ended (it may wait on an approval
+    // or a question, with a steer queued behind it). It stays open until its end is said.
+    if (options.busy && built.id === newest && !endShown) return built;
     // Its end is its last row's time, not one its lifecycle reported.
     const run: Run = { ...built, endFromRows: true };
     const last = lastAssistant.get(run.id);
@@ -2618,7 +2900,9 @@ export function runsFromHistory(
       return finishRun(run, "stopped", ctx, null, run.endedAt);
     }
     if (stopReason === "error") {
-      const message = str(last?.errorMessage) ?? "The run failed.";
+      // The gateway writes the failure as the run's last row; its text is the error itself.
+      const message =
+        str(last?.errorMessage) || liveTextFromChatMessage(last).trim() || "The run failed.";
       return finishRun(run, "failed", ctx, { message, kind: null }, run.endedAt);
     }
     // Only a final reply establishes completion. A last row that stops for a
@@ -2823,8 +3107,20 @@ function mergedAnchor(
  * terminal event lost in a gap is recovered. Pure: the caller commits the raw
  * payloads of the steps reported in `fromHistory`, so a step and its raw
  * lookup always come from the same source.
+ *
+ * A history that only infers a run's end (`outcomeKnown: false`: rows that stop at a tool call,
+ * with the run not in flight) does not end a live run while the gateway has another turn of the
+ * task in flight or queued (`busy`): then the gateway has not said this one ended. A steer into a
+ * run waiting on an approval or a question is such a case: OpenClaw 2026.10.6 keeps that run
+ * waiting and holds the steer as a queued turn of its own, which `chat.history` reports as the
+ * run in flight. The run ends when its own end arrives, or history's rows establish it.
  */
-export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext): HistoryMerge {
+export function mergeHistoryRuns(
+  live: Run[],
+  history: Run[],
+  ctx: EngineContext,
+  busy = false,
+): HistoryMerge {
   const liveById = new Map(live.map((run) => [run.id, run]));
   const historyIds = new Set(history.map((run) => run.id));
   const fromHistory = new Set<string>();
@@ -2834,9 +3130,10 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
       for (const step of fromRun.steps) fromHistory.add(step.id);
       return fromRun;
     }
+    const inferredOnly = !fromRun.outcomeKnown && busy;
     const { steps, omittedSteps, omittedTools, omittedToolsAtEnd } = mergeSteps(
       current,
-      fromRun,
+      inferredOnly && !isTerminal(current.state) ? keepOpenSteps(current, fromRun) : fromRun,
       fromHistory,
     );
     let run: Run = {
@@ -2854,7 +3151,7 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
     };
     // An end this client only inferred gives way to the end history establishes.
     if (isTerminal(fromRun.state) && fromRun.outcomeKnown) run = reopenInferred(run);
-    if (!isTerminal(run.state) && isTerminal(fromRun.state)) {
+    if (!isTerminal(run.state) && isTerminal(fromRun.state) && !inferredOnly) {
       run = {
         ...finishRun(
           run,
@@ -2877,10 +3174,24 @@ export function mergeHistoryRuns(live: Run[], history: Run[], ctx: EngineContext
 }
 
 /**
+ * History's copy of a run whose end it only infers, while the gateway still runs the task: a
+ * call it closed only because of that inferred end is the live one, still open, so its own
+ * result closes it when it arrives. A call history holds a result for is history's.
+ */
+function keepOpenSteps(live: Run, history: Run): Run {
+  const open = new Map(live.steps.filter(isOpenStep).map((step) => [step.id, step]));
+  return {
+    ...history,
+    steps: history.steps.map((step) => (closedByRunEnd(step) ? (open.get(step.id) ?? step) : step)),
+  };
+}
+
+/**
  * Runs that were active before a reload and that the gateway no longer has in
  * flight, with no transcript row, have ended without saying how. They settle
  * (`stopped` if a stop was pending, otherwise `completed`) with
- * `outcomeKnown: false`, so none waits forever.
+ * `outcomeKnown: false`, so none waits forever; but not while the gateway has a turn of the
+ * task in flight or queued (`busy`), since then it has not said that nothing runs.
  */
 export function settleVanishedRuns(
   runs: Run[],
@@ -2888,9 +3199,11 @@ export function settleVanishedRuns(
   historyRunIds: ReadonlySet<string>,
   inFlightRunId: string | null,
   ctx: EngineContext,
+  busy = false,
 ): Run[] {
   return runs.map((run) => {
     if (!activeBefore.has(run.id) || isTerminal(run.state) || run.state === "queued") return run;
+    if (busy && run.id !== inFlightRunId && !historyRunIds.has(run.id)) return run;
     if (historyRunIds.has(run.id) || run.id === inFlightRunId) return run;
     const settled = finishRun(run, run.state === "stopping" ? "stopped" : "completed", ctx);
     return { ...settled, outcomeKnown: false };
