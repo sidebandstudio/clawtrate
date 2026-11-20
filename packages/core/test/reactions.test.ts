@@ -127,4 +127,26 @@ describe("reactions (F-283)", () => {
     expect(gateway.calls("session.reactions.set")).toEqual([]);
     client.stop();
   });
+
+  it("F-283: a task reopened while a reaction waited, no longer showing its message, gets no reaction", async () => {
+    const gateway = grantingGateway();
+    let rows = ["m1"];
+    gateway.handlers["chat.history"] = () => history(rows)();
+    gateway.handlers["session.reactions.list"] = () => ({ reactions: {} });
+    const self = deferred<unknown>();
+    gateway.handlers["users.self"] = () => self.promise;
+    gateway.handlers["session.reactions.set"] = () => ({ reactions: summary("👍", "me") });
+    const { client } = await openTask({ gateway });
+    const reacting = client.setReaction(KEY, "m1", "👍", false);
+    await until(() => gateway.calls("users.self").length > 0);
+    // The task is closed and opened again; its history now holds other rows.
+    rows = ["m2"];
+    client.closeSession(KEY);
+    client.openSession(KEY);
+    await until(() => client.state.transcripts[KEY]?.status === "ready");
+    self.resolve({ profile: { id: "me" } });
+    await expect(reacting).rejects.toThrow("That message is no longer shown here.");
+    expect(gateway.calls("session.reactions.set")).toEqual([]);
+    client.stop();
+  });
 });

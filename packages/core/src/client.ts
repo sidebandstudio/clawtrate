@@ -3402,12 +3402,22 @@ export class ClawtrateClient {
       throw new Error("Choose one emoji.");
     if (this.options.readOnly) throw new Error("This host only reads; it does not react.");
     const generation = this.generation;
+    // The opening of the task the message was chosen in; a scope upgrade keeps it.
+    const incarnation = this.incarnations.get(key);
     await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
     if (this.selfId === null) await this.readSelf(generation);
-    // After every wait, immediately before the write: its viewer is still here.
+    // After every wait, immediately before the write: its viewer is still here, and the same
+    // opening of the task still shows the message.
     this.checkNotWithdrawn(options.owner);
+    const now = this.state.transcripts[key];
+    if (
+      generation !== this.generation ||
+      this.incarnations.get(key) !== incarnation ||
+      !now ||
+      !shownMessageIds(now).has(messageId)
+    )
+      throw new Error("That message is no longer shown here.");
     // Any change of the task's reactions after the request is newer than its answer.
-    const incarnation = this.incarnations.get(key);
     const before = this.state.transcripts[key]?.reactions;
     let answer: RawRecord | null;
     try {
