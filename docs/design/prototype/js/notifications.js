@@ -145,6 +145,7 @@
     budgetHolds: {}, // budget warnings held, one per budget id and period start
     warned: new Set(), // budget warnings attempted, by budget and period start (kept across restarts)
     budgetPercent: { "bot:otto": 82, "bot:juniper": 85 }, // the current count, for the click's destination
+    budgetRemoved: {}, // budgets removed after their warning was posted
     runs: new Set(), // runs already notified as finished or failed
     why: "", // what the host decided when nothing was shown
     saving: null,
@@ -533,6 +534,7 @@
     S.sel = { bot: ev.bot, task: ev.task };
     S.view = "detail";
     S.opened = S.click === "itemgone" ? null : ev;
+    if (ev.kind === "budget" && S.budgetRemoved[ev.budget]) setStrip({ tone: "warn", text: "Clawtrate couldn't find that item in this task." });
     if (S.click === "itemgone") {
       // The confirmed task no longer has the card: nothing of it is drawn as pending.
       delete S.pendingCards[ev.task];
@@ -717,7 +719,18 @@
       body += CT.turnError({ title: "Otto couldn't finish this turn", reason: "The model request failed. Nothing ran.", retry: S.access !== "read" && S.device !== "read" }).replace('class="card turn-error"', 'class="card turn-error" id="n-target" tabindex="-1"');
     } else if (ev?.kind === "budget") {
       body += turn("assistant", CT.msg({ html: `<p>${esc(t.reply)}</p>` }));
-      body += `<div class="event-line" data-side="center" id="n-target" tabindex="-1" data-testid="budget-line">Otto has used 82% of its weekly budget: 1.64M of 2M tokens.</div>`;
+      // The current count decides the destination: the line at 80-99%, the note above the composer at 100% or more.
+      const b = bot(ev.bot);
+      const budget = BUDGETS[ev.budget];
+      const percent = S.budgetPercent[ev.budget];
+      const kind = budget.period === "weekly" ? "weekly" : "daily";
+      const million = (n) => `${(n / 1e6).toFixed(2).replace(/\.?0+$/, "")}M`;
+      if (S.budgetRemoved[ev.budget]) {
+        // Neither the line nor the note: the click says the item is missing.
+      } else if (percent >= 100)
+        body += `<div class="b-note n-budget-note" id="n-target" tabindex="-1" data-testid="budget-note">${icon("warning")}<div><p>${b.name} has reached its ${kind} warning budget. Runs continue when this warning appears: nothing stops ${b.name}, here or in other apps, channels or routines.</p></div></div>`;
+      else
+        body += `<div class="event-line" data-side="center" id="n-target" tabindex="-1" data-testid="budget-line">${b.name} has used ${percent}% of its ${kind} budget: ${million((budget.limit * percent) / 100)} of ${million(budget.limit)} tokens.</div>`;
     } else {
       body += turn("assistant", CT.msg({ html: `<p>${esc(t.reply)}</p>`, id: ev?.kind === "finished" ? "n-target" : "" }).replace('id="n-target"', 'id="n-target" tabindex="-1"'));
     }

@@ -333,6 +333,19 @@ await opens("a wait on a read-only device: conversation.md §3's note", "event=a
 await opens("a question: the card, focused", "event=question", { pill: "Heat pump vs. gas furnace", words: ["Which matters more to you: running cost or upfront price?"], focus: "n-target" });
 await opens("a question in another bot's task: that bot and task", "event=marlow", { pill: "Notes for Pip", words: ["Marlow is working on a message from Pip.", "Should the plan keep Saturday morning free?"], focus: "n-target" });
 await opens("a budget warning: the bot's open task, at the line", "event=budget", { pill: "Disk almost full", words: ["Otto has used 82% of its weekly budget: 1.64M of 2M tokens."], focus: "n-target" });
+p = await open("event=budget&quiet=1&budgetend=over100");
+await p.evaluate(() => window.notif.quietEnds());
+await p.waitForTimeout(60);
+await click(p, "[data-n-open]");
+await p.waitForTimeout(150);
+check("fix 7: a held warning released at 104% opens the note above the composer, with no 82% line", (await focusedId(p)) === "n-target" && (await text(p, '[data-testid="budget-note"]')).includes("Otto has reached its weekly warning budget.") && !(await text(p, "#transcript")).includes("82%"));
+await p.close();
+p = await open("event=budget");
+await p.evaluate(() => { window.notif.S.budgetRemoved["bot:otto"] = true; });
+await click(p, "[data-n-open]");
+await p.waitForTimeout(150);
+check("fix 7: a warning whose budget was later removed opens the task with the missing-item outcome", (await text(p, "#status-strip")).includes("Clawtrate couldn't find that item in this task.") && !(await p.$('[data-testid="budget-line"], [data-testid="budget-note"]')));
+await p.close();
 
 p = await open("event=marlow");
 await click(p, "[data-n-open]");
