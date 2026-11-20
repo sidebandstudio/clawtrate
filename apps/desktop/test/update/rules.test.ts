@@ -208,7 +208,21 @@ describe("versions", () => {
     expect(isNewer(v("0.9.0"), v("0.10.0"))).toBe(false);
   });
 
-  it("reads MAJOR.MINOR.PATCH and nothing else", () => {
+  it.each([
+    ["1.10.0", "1.9.0", true],
+    ["1.0.0-nightly.20261102.1", "1.0.0-nightly.20261101.11", true],
+    ["1.0.0-nightly.20261101.10", "1.0.0-nightly.20261101.9", true],
+    ["1.0.0", "1.0.0-nightly.20261101.1", true],
+    ["1.0.1-nightly.20261101.1", "1.0.0", true],
+    ["1.0.0-nightly.20261101.1", "1.0.0", false],
+    ["1.0.0", "1.0.0", false],
+    ["1.0.0-nightly.20261101.1", "1.0.0-nightly.20261101.1", false],
+    ["0.9.0", "1.0.0", false],
+  ] as const)("%s against %s is newer: %s", (a, b, expected) => {
+    expect(isNewer(v(a), v(b))).toBe(expected);
+  });
+
+  it("refuses versions outside the stable and nightly grammar", () => {
     for (const text of [
       "1",
       "1.0",
@@ -218,6 +232,10 @@ describe("versions", () => {
       " 1.0.0",
       "v1.0.0",
       "1.0.0.0",
+      "1.0.0-nightly.20260230.1",
+      "1.0.0-nightly.20261101.01",
+      "1.0.0-nightly.20261101.1234567890123",
+      "1.0.0-nightly.20261101.2\n",
       "9999999.0.0",
     ]) {
       expect(parseVersion(text), text).toBeNull();
