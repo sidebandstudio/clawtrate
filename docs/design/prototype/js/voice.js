@@ -59,6 +59,7 @@
   const LANGS = [["", "Provider default"], ["en", "English"], ["es", "Español"], ["fr", "Français"], ["de", "Deutsch"], ["ja", "日本語"]];
   const DEVICES = ["System Default", "MacBook Pro Microphone", "USB Microphone"];
   const MEMO_ADDRESS = "https://media.example.net/pip/route-saturday.mp3";
+  const LOCAL_ADDRESS = "http://192.168.1.20:8080/pip/route-saturday.mp3";
   const REFUSAL = INJECT ? '<u data-inject="refusal">Realtime voice provider "openai" is not configured.</u>' : 'Realtime voice provider "openai" is not configured.';
   const CAPTION = INJECT ? '<s data-inject="caption">Is the media box still nearly full?</s>' : "Is the media box still nearly full?";
   // The fixture clock: 5:36 PM. Times are seconds since midnight.
@@ -123,14 +124,14 @@
       notes: {}, // bot -> the last word on its saved settings
       temp: {}, // bot -> a speed for now (read-only, or settings that can't be read)
     },
-    memo: { kind: pick("memo", ["grant", "expired", "wrongroute", "redirect", "big", "fail", "address", "scheme", "nohttp", "two"], "inline"), state: "idle", at: 0, which: null },
+    memo: { kind: pick("memo", ["grant", "expired", "wrongroute", "redirect", "big", "fail", "address", "localaddr", "scheme", "nohttp", "two"], "inline"), state: "idle", at: 0, which: null, attempt: null, task: null, duration: {} },
     notices: [],
     seq: 0,
     sent: [],
     flags: { closeFail: false, createFail: false, voiceFail: false, dictFail: false, sendFail: false, prefFail: false, prefConflict: false },
     noVoices: false,
     os_prompt: null,
-    io: { micOpens: 0, micOpensUnauthorized: 0, briefOpens: 0, appends: 0, appendsUnauthorized: 0, deviceFrames: 0, creates: [], closes: [], completes: [], sets: [], downloads: 0, hostFetches: 0, plays: 0, opens: [], prefWrites: [] },
+    io: { micOpens: 0, micOpensUnauthorized: 0, briefOpens: 0, appends: 0, appendsUnauthorized: 0, deviceFrames: 0, creates: [], closes: [], completes: [], sets: [], downloads: 0, downloadRequests: [], hostFetches: 0, plays: 0, opens: [], prefWrites: [] },
   };
   S.sel.task = p("task") && taskOf(p("task")) ? p("task") : bot(S.sel.bot).tasks[0].id;
   if (taskOf(S.sel.task).b.id !== S.sel.bot) S.sel.bot = taskOf(S.sel.task).b.id;
@@ -313,39 +314,37 @@
   function memoCards() {
     if (S.memo.kind === "two")
       return (
-        memoCard("m1", "Saturday route.m4a", "0:24") +
-        memoCard("m2", "Saturday route, short.m4a", "0:09") +
+        memoCard("m1", "Saturday route.m4a") +
+        memoCard("m2", "Saturday route, short.m4a") +
         turnHtml("assistant", `<div class="memo" data-testid="attachment"><span class="memo-name">invoice.pdf<small>PDF · 84 KB</small></span></div>`)
       );
-    return memoCard("m1", "Saturday route.m4a", "0:24");
+    return memoCard("m1", "Saturday route.m4a");
   }
-  function memoCard(id, name, dur) {
+  function memoCard(id, name) {
     const m = S.memo;
     const mine = m.which === id;
     const state = mine ? m.state : "idle";
     const sp = memoSpeed();
     let body = "";
-    if (m.kind === "address") {
+    if (m.kind === "address" || m.kind === "localaddr") {
       const open = S.os === "iphone" ? ["Open outside Clawtrate", "Opens outside Clawtrate."] : ["Open in browser", "Opens in your browser."];
       body =
-        `<p>This voice memo is at an address Clawtrate doesn't open by itself:</p><p class="mono v-address" data-testid="memo-address">${esc(MEMO_ADDRESS)}</p>` +
+        `<p>This voice memo is at an address Clawtrate doesn't open by itself:</p><p class="mono v-address" data-testid="memo-address">${esc(m.kind === "localaddr" ? LOCAL_ADDRESS : MEMO_ADDRESS)}</p>` +
         `<div class="memo-head">${button(open[0], `data-v="memo-open" data-k="memo-open" aria-describedby="memo-leave"`)}<span class="v-faint" id="memo-leave">${esc(open[1])}</span></div>`;
     } else if (m.kind === "scheme") {
       body = `<p>This voice memo is at an address Clawtrate doesn't open:</p><p class="mono v-address" data-testid="memo-address">ftp://media.example.net/pip/route-saturday.mp3</p>`;
-    } else if (m.kind === "nohttp" && S.os === "iphone") {
-      body = `<p>This voice memo can't be played on this iPhone yet: ${esc(GATEWAY)} offers it as a download, and the iPhone app doesn't make downloads yet.</p>`;
     } else {
       const playing = state === "playing";
       const label = state === "loading" ? "Loading voice memo" : playing ? "Pause voice memo" : "Play voice memo";
       body =
         `<div class="memo-head">` +
         `<button type="button" class="icon-button" data-v="memo-play" data-memo="${id}" data-k="memo-play-${id}" aria-label="${label}"${state === "loading" ? ' aria-busy="true"' : ""}>${icon(playing ? "pause" : "play")}</button>` +
-        `<span class="memo-name">${esc(name)}<small data-testid="memo-time">${mine && (playing || state === "paused") ? `0:${String(m.at).padStart(2, "0")} / ${dur}` : dur}</small></span>` +
+        `<span class="memo-name">${esc(name)}<small data-testid="memo-time">${m.duration[id] ? (mine && (playing || state === "paused") ? `0:${String(m.at).padStart(2, "0")} / ${m.duration[id]}` : m.duration[id]) : ""}</small></span>` +
         `<button type="button" class="speed" data-v="memo-speed" data-k="memo-speed-${id}" aria-label="Speed ${sp.rate}×, ${esc(sp.where)}">${sp.rate}×</button>` +
         `</div>`;
       if (state === "error") body += `<p data-testid="memo-error">${esc(m.error)}</p>${m.retry ? button("Try again", `data-v="memo-retry" data-k="memo-retry"`) : ""}`;
       if (sp.temp) body += `<p class="v-faint" data-testid="memo-speed-note">${esc(`${sp.rate}× for now, on this device.`)}</p>`;
-      body += `<p class="v-faint" data-testid="memo-note">No text came with this recording.</p><p class="v-faint" data-testid="no-highlight">Words aren't highlighted: the gateway gives no timing for each word.</p>`;
+      body += `<p class="v-faint" data-testid="memo-note">This recording has no verified transcript</p><p class="v-faint" data-testid="no-highlight">Words aren't highlighted: the gateway gives no timing for each word.</p>`;
     }
     return turnHtml("assistant", `<div class="memo" data-testid="memo" data-memo="${id}" data-state="${state}">${body}</div>`);
   }
@@ -1488,6 +1487,13 @@
         insertFinal(d, data.text);
         break;
       }
+      case "memoMeta": {
+        // The duration, once the player has read it from the selected bytes.
+        const m = S.memo;
+        if (data.attempt !== m.attempt || data.item !== m.which) return;
+        m.duration[data.item] = data.duration;
+        break;
+      }
       case "historyRead":
         S.historyRead[data.task || S.sel.task] = true;
         break;
@@ -1500,9 +1506,17 @@
         return;
       }
       case "memoAnswer": {
+        // Only the answer for this attempt, this item and this task; a retired attempt's answer is discarded.
         const m = S.memo;
-        if (m.state !== "loading") return;
+        if (m.state !== "loading" || data.attempt !== m.attempt || data.item !== m.which || m.task !== S.sel.task) return;
         const kind = m.kind;
+        if (kind === "nohttp" && S.os === "iphone") {
+          // The selected reply is a checked HTTP grant, and the iPhone makes no HTTP downloads yet.
+          m.state = "error";
+          m.error = `This voice memo can't be played on this iPhone yet: ${GATEWAY} offers it as a download, and the iPhone app doesn't make downloads yet.`;
+          m.retry = false;
+          break;
+        }
         if (kind === "expired" || kind === "wrongroute") {
           m.state = "error";
           m.error = `Clawtrate didn't fetch this voice memo: ${GATEWAY}'s answer isn't a download it fetches by itself.`;
@@ -1521,7 +1535,7 @@
           m.error = "Couldn't load the voice memo.";
           m.retry = true;
         } else {
-          if (kind === "grant") S.io.hostFetches += 1;
+          if (kind === "grant" || kind === "two") S.io.hostFetches += 1;
           m.state = "playing";
           m.at = 3;
           S.io.plays += 1;
@@ -1541,16 +1555,19 @@
     if (S.call && liveCall(S.call)) return; // a call has the audio
     if (m.which === which && m.state === "playing") return (m.state = "paused"), render();
     if (m.which === which && m.state === "paused") return (m.state = "playing"), (S.io.plays += 1), render();
-    if (m.state === "loading") return;
-    m.which = which;
-    m.state = "loading";
+    if (m.which === which && m.state === "loading") return;
+    // A new attempt for exactly this task and item; any earlier one is retired.
+    const attempt = ++S.seq;
+    Object.assign(m, { which, state: "loading", attempt, task: S.sel.task });
     S.io.downloads += 1; // artifacts.download for this item, now
+    S.io.downloadRequests.push({ item: which, attempt, task: S.sel.task });
     render();
-    later(() => ev("memoAnswer"), 150);
+    later(() => ev("memoAnswer", { item: which, attempt }), 150);
+    later(() => ev("memoMeta", { item: which, attempt, duration: which === "m2" ? "0:09" : "0:24" }), 200);
   }
   function pauseMemo() {
     if (S.memo.state === "playing") S.memo.state = "paused";
-    if (S.memo.state === "loading") S.memo.state = "idle";
+    if (S.memo.state === "loading") Object.assign(S.memo, { state: "idle", attempt: null });
   }
 
   // Settings › Voice (section 12) --------------------------------------------------------------------------
@@ -1637,7 +1654,7 @@
     else if (S.dictAttempt && S.sel.task !== task) retireAttempt();
     if (S.draining && S.draining.task !== task) S.draining.frozen = true;
     S.callAfterDrain = null;
-    if (S.memo.state === "loading") S.memo.state = "idle"; // a pending play is dropped
+    if (S.memo.state === "loading") Object.assign(S.memo, { state: "idle", attempt: null }); // a pending play is retired
     S.sel = { bot: b.id, task };
     S.view = "detail";
   }
@@ -2001,9 +2018,24 @@
       case "memo-retry":
         S.memo.state = "idle";
         return render();
-      case "memo-open":
-        S.io.opens.push(MEMO_ADDRESS);
-        return;
+      case "memo-open": {
+        if (S.memo.kind !== "localaddr") {
+          S.io.opens.push(MEMO_ADDRESS);
+          return;
+        }
+        const d = $("#confirm-dialog");
+        S.secondOpener = el;
+        d.innerHTML =
+          `<div class="b-confirm" data-testid="link-confirm"><h2 id="confirm-title">Open this address?</h2>` +
+          `<p class="mono v-address" data-testid="link-address">${esc(LOCAL_ADDRESS)}</p><p data-testid="link-warning">This address may be on your own network.</p><p class="v-faint">Opens in your browser.</p>` +
+          `<div class="b-actions">${button("Cancel", 'data-v="second-cancel" data-k="link-cancel"', "quiet")}${button("Open", 'data-v="link-open" data-k="link-open" data-variant="primary"')}</div></div>`;
+        d.showModal();
+        return $('[data-v="second-cancel"]', d).focus();
+      }
+      case "link-open":
+        $("#confirm-dialog").close();
+        S.io.opens.push(LOCAL_ADDRESS);
+        return S.secondOpener?.focus();
       case "notice-dismiss":
         S.notices = S.notices.filter((n) => n.id !== el.dataset.notice);
         render();

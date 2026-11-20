@@ -37,6 +37,7 @@ const click = async (p, sel) => {
   await p.click(sel, { force: true });
   await wait(p, 40);
 };
+const memoAnswer = async (p) => ev(p, "memoAnswer", (await io(p)).downloadRequests.at(-1));
 const rowLabels = (p) => q(p, () => [...document.querySelectorAll(".composer-row > *")].map((x) => x.getAttribute("aria-label")).join("|"));
 
 // 1. The full destination, and consent before any opening of the microphone ----------------------------
@@ -778,10 +779,14 @@ p = await open("auto=0&bot=pip");
 await p.hover('[data-v="memo-play"]');
 check("7 nothing downloads at render or on hover", (await io(p)).downloads === 0);
 await click(p, '[data-v="memo-play"]');
-check("7 Play asks for this item once", (await io(p)).downloads === 1 && (await q(p, () => document.querySelector('[data-v="memo-play"]').getAttribute("aria-label"))) === "Loading voice memo");
-await ev(p, "memoAnswer");
+s = await io(p);
+check("7 Play requests this exact item and attempt", s.downloads === 1 && s.downloadRequests.length === 1 && s.downloadRequests[0].item === "m1" && s.downloadRequests[0].task === "p1" && Number.isInteger(s.downloadRequests[0].attempt) && (await q(p, () => document.querySelector('[data-v="memo-play"]').getAttribute("aria-label"))) === "Loading voice memo");
+check("7 no duration before the player has read it", (await text(p, '[data-testid="memo-time"]')) === "");
+await memoAnswer(p);
+await ev(p, "memoMeta", { ...(await io(p)).downloadRequests.at(-1), duration: "0:24" });
+check("7 …the duration once read from the selected bytes", (await text(p, '[data-testid="memo-time"]')).endsWith("0:24"));
 check("7 returned bytes play, with no HTTP request", (await io(p)).plays === 1 && (await io(p)).hostFetches === 0);
-check("7 no text joined; no highlighting", (await text(p, '[data-testid="memo-note"]')) === "No text came with this recording." && (await text(p, '[data-testid="no-highlight"]')) === "Words aren't highlighted: the gateway gives no timing for each word.");
+check("7 no text joined; no highlighting", (await text(p, '[data-testid="memo-note"]')) === "This recording has no verified transcript" && (await text(p, '[data-testid="no-highlight"]')) === "Words aren't highlighted: the gateway gives no timing for each word.");
 await q(p, () => window.voice.S.consent.add("gw-7f3a|call|openai|OpenAI Realtime Voice"));
 await click(p, '[data-v="call"]');
 check("7 a call pauses the memo", (await q(p, () => window.voice.S.memo.state)) === "paused");
@@ -797,22 +802,35 @@ for (const [kind, words, fetches] of [
 ]) {
   p = await open(`auto=0&bot=pip&memo=${kind}`);
   await click(p, '[data-v="memo-play"]');
-  await ev(p, "memoAnswer");
+  await memoAnswer(p);
   s = await io(p);
   check(`7 ${kind}: ${words ? "not played, said why" : "the host fetches the grant, then plays"}`, s.hostFetches === fetches && (words ? s.plays === 0 && (await text(p, '[data-testid="memo-error"]')) === words : s.plays === 1));
   await p.close();
 }
 p = await open("auto=0&bot=pip&memo=fail");
 await click(p, '[data-v="memo-play"]');
-await ev(p, "memoAnswer");
+await memoAnswer(p);
 await click(p, '[data-v="memo-retry"]');
 check("7 Try again returns to Play and asks for nothing until Play", (await io(p)).downloads === 1 && (await q(p, () => document.querySelector('[data-v="memo-play"]').getAttribute("aria-label"))) === "Play voice memo");
 await p.close();
 p = await open("auto=0&bot=pip");
 await click(p, '[data-v="memo-play"]');
+const firstPlay = (await io(p)).downloadRequests.at(-1);
 await click(p, '[data-v-bot="otto"]');
-await ev(p, "memoAnswer");
+await ev(p, "memoAnswer", firstPlay);
 check("7 a play still waiting is dropped when the task changes", (await io(p)).plays === 0);
+await p.close();
+p = await open("auto=0&bot=pip&memo=two");
+await click(p, '[data-memo="m1"][data-v="memo-play"]');
+const oldPlay = (await io(p)).downloadRequests.at(-1);
+await click(p, '[data-v-bot="otto"]');
+await click(p, '[data-v-bot="pip"]');
+await click(p, '[data-memo="m2"][data-v="memo-play"]');
+await ev(p, "memoAnswer", oldPlay);
+check("7 after cancel and Play on another item, old answer does not fetch or play", (await io(p)).plays === 0 && (await io(p)).hostFetches === 0);
+check("7 late answer cannot play a newer request", (await io(p)).plays === 0 && (await io(p)).hostFetches === 0);
+await memoAnswer(p);
+check("7 …the newer request's own answer plays its own item", (await io(p)).plays === 1 && (await q(p, () => window.voice.S.memo.which)) === "m2");
 await p.close();
 p = await open("bot=pip&memo=address");
 check("7 an address: the full address as text, with the leaving words; nothing fetched", await q(p, () =>
@@ -827,12 +845,23 @@ await p.close();
 p = await open("bot=pip&memo=scheme");
 check("7 another scheme: text only, no button", await q(p, () => !document.querySelector('[data-v="memo-open"]') && document.querySelector('[data-testid="memo-address"]').textContent.startsWith("ftp://")));
 await p.close();
-p = await open("bot=pip&memo=nohttp&os=iphone");
-check("7 a grant on the iPhone: not played yet, said why", (await has(p, '[data-testid="memo"]', "can't be played on this iPhone yet")) && (await io(p)).downloads === 0);
+p = await open("auto=0&bot=pip&memo=nohttp&os=iphone");
+const before7 = !(await has(p, '[data-testid="memo"]', "can't be played on this iPhone yet"));
+await click(p, '[data-v="memo-play"]');
+await memoAnswer(p);
+check("7 the unavailable message appears only after this Play's checked grant", before7 && (await has(p, '[data-testid="memo"]', "can't be played on this iPhone yet")) && (await io(p)).downloads === 1 && (await io(p)).hostFetches === 0 && (await io(p)).plays === 0);
+await p.close();
+p = await open("bot=pip&memo=localaddr");
+await click(p, '[data-v="memo-open"]');
+check("7 a local-network address: the link rule's confirmation, with its address and warning, before any handoff", await q(p, () =>
+  document.querySelector("#confirm-dialog").open && document.querySelector('[data-testid="link-address"]').textContent === "http://192.168.1.20:8080/pip/route-saturday.mp3" &&
+  document.querySelector('[data-testid="link-warning"]').textContent === "This address may be on your own network." && window.voice.S.io.opens.length === 0));
+await click(p, '[data-v="link-open"]');
+check("7 …Open hands it off once", (await io(p)).opens.join() === "http://192.168.1.20:8080/pip/route-saturday.mp3");
 await p.close();
 p = await open("bot=pip&memo=two");
 check("7 two clips and an attachment in one run: no text joined to either", await q(p, () =>
-  document.querySelectorAll('[data-testid="memo"]').length === 2 && [...document.querySelectorAll('[data-testid="memo-note"]')].every((x) => x.textContent === "No text came with this recording.") &&
+  document.querySelectorAll('[data-testid="memo"]').length === 2 && [...document.querySelectorAll('[data-testid="memo-note"]')].every((x) => x.textContent === "This recording has no verified transcript") &&
   !document.body.textContent.includes("made from")));
 await p.close();
 p = await open("bot=pip&access=read");
