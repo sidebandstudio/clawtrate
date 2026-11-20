@@ -467,18 +467,32 @@ check("5 Connecting until the create and its ready", (await phase(p)) === "Conne
 await ev(p, "create", { ok: true, provider: "openai" });
 await ev(p, "ready", { id: "vs9" });
 check("5 a ready of another relay is ignored", (await phase(p)) === "Connecting to Otto…");
+{
+  const p2 = await open("auto=0&seen=1");
+  await click(p2, '[data-v="call"]');
+  await ev(p2, "ready", { id: "vs1" });
+  await ev(p2, "create", { ok: true, provider: "openai" });
+  check("5 matching ready before create is retained", await q(p2, () => window.voice.S.call.ready === true && window.voice.S.io.micOpens === 1));
+  await p2.close();
+}
 await ev(p, "ready", { id: "vs1" });
 check("5 a ready relay without a live track isn't Listening", (await phase(p)) === "Opening the microphone…" && (await live(p)) !== "Voice chat with Otto started");
 await ev(p, "capture");
 check("5 a live track and the ready relay: Listening, announced", (await phase(p)) === "Listening" && (await live(p)) === "Voice chat with Otto started");
 await ev(p, "caption", { id: "voice:vs1:1", role: "user", text: "Hello", final: true });
 check("5 a caption alone isn't speaking", (await phase(p)) === "Listening");
-await ev(p, "responseStarted");
+await ev(p, "responseStarted", { relay: "vs1", response: "r1" });
 check("5 responseStarted: Thinking", (await phase(p)) === "Thinking");
-await ev(p, "playbackStart");
+await ev(p, "playbackStart", { relay: "vs1", response: "r1" });
 check("5 local playback: Otto is speaking", (await phase(p)) === "Otto is speaking");
-await ev(p, "playbackEnd");
+await ev(p, "playbackEnd", { relay: "vs1" });
 check("5 drained: Listening", (await phase(p)) === "Listening");
+await ev(p, "responseStarted", { relay: "vs9", response: "x" });
+await ev(p, "playbackStart", { relay: "vs9", response: "x" });
+check("5 foreign response and playback events leave phase alone", (await phase(p)) === "Listening");
+await ev(p, "responseStarted", { relay: "vs1", response: "r2" });
+await ev(p, "audioDone", { relay: "vs1", response: "r2" });
+check("5 audioDone with nothing played settles Thinking", (await phase(p)) === "Listening");
 await click(p, '[data-v="transcript"]');
 check("5 the disclosure is named Hide transcript when open; captions are a silent log", await q(p, () =>
   document.querySelector('[data-v="transcript"]').getAttribute("aria-label") === "Hide transcript" &&
@@ -488,6 +502,13 @@ check("5 another voice session's captions never touch this band", !(await has(p,
 check("5 a final caption isn't saved before its history row", await q(p, () => document.querySelector('[data-testid="caption"]').dataset.saved === "false"));
 await ev(p, "history", { id: "voice:vs1:1", role: "user", text: "Hello" });
 check("5 …the matching history row marks it Saved", await q(p, () => document.querySelector('[data-testid="caption"]').dataset.saved === "true") && (await text(p, '[data-testid="captions-note"]')) === "Live captions. Saved turns appear in this task.");
+await ev(p, "caption", { id: "voice:vs1:2", role: "assistant", text: "Yes.", final: true });
+await ev(p, "history", { id: "voice:vs1:2", role: "assistant", text: "Yes.", task: "j1" });
+await ev(p, "history", { id: "voice:vs1:2", role: "assistant", text: "Yes.", voice: false });
+check("5 same ID in another task or in typed history never marks Saved", await q(p, () => [...document.querySelectorAll('[data-testid="caption"]')].at(-1).dataset.saved === "false"));
+check("5 history in the wrong task cannot mark a caption saved", (await p.locator('[data-testid="caption"]').last().getAttribute("data-saved")) === "false");
+await ev(p, "caption", { relay: "vs1", item: "i3", role: "user", text: "partial words", final: false });
+check("5 a partial with no persistence id is matched by its relay and item", await q(p, () => [...document.querySelectorAll('[data-testid="caption"]')].at(-1).textContent.includes("partial words")));
 await ev(p, "close", { id: "vs1" });
 check("5 a close event ends the call; an ordinary close isn't put down to the schedule", (await live(p)) === "Voice chat ended" && !(await q(p, () => document.body.textContent.includes("30 minutes"))));
 await p.close();
@@ -508,6 +529,8 @@ await ev(p, "ready", { id: "vs1" });
 await wait(p, 2200);
 await click(p, '[data-v="hangup"]');
 await ev(p, "closeResult", { ok: true });
+check("5 before a history read, a held call shows only its time", /^Voice chat · 0:0[1-3]$/.test(await text(p, '[data-testid="call-line"]')));
+await ev(p, "historyRead", { task: "o1" });
 check("5 a short silent call keeps its measured time, with no turns made up", await q(p, () => {
   const l = document.querySelector('[data-testid="call-line"]').textContent;
   return /^Voice chat · 0:0[1-3] · No saved turns found$/.test(l) && document.querySelector('[data-v="line"]').disabled;
@@ -522,6 +545,11 @@ check("5 …a line opens only its own session's turns", await q(p, () => {
   const t = document.querySelector("#line-vsA-turns").textContent;
   return t.includes("First call, first turn.") && t.includes("First call, reply.") && !t.includes("Second call");
 }));
+await p.close();
+p = await open("line=tworelay");
+check("5 a two-relay call: each interval its own line, the whole call on this device's record", await q(p, () =>
+  [...document.querySelectorAll('[data-testid="call-line"]')].map((x) => x.textContent).join("|") === "Voice chat · 0:08|Voice chat · 2:06" &&
+  document.querySelector('[data-testid="line-note"]').textContent === "The whole call: 2:14 on this device"));
 await p.close();
 p = await open("line=noid");
 check("5 spoken rows with no voice id: shown singly, marked spoken, no line", await q(p, () => document.querySelectorAll('[data-testid="spoken-turn"]').length === 2 && !document.querySelector('[data-testid="call-line"]')));
@@ -813,12 +841,12 @@ for (let i = 0; i < 2; i++) {
 check("8 the band's actions in reading order", order.join() === "transcript,call-settings,hangup", order.join());
 await p.focus('[data-v="mute"]');
 await ev(p, "caption", { id: "voice:vs1:1", role: "user", text: "Hi", final: false });
-await ev(p, "responseStarted");
+await ev(p, "responseStarted", { relay: "vs1", response: "r1" });
 check("8 an update keeps focus where it was", (await q(p, () => document.activeElement.dataset.k)) === "mute");
 await p.click(".composer-input");
 await p.keyboard.type("abc def");
 await q(p, () => document.querySelector(".composer-input").setSelectionRange(3, 3));
-await ev(p, "playbackStart");
+await ev(p, "playbackStart", { relay: "vs1", response: "r1" });
 check("8 …and the field's caret", await q(p, () => document.activeElement.classList.contains("composer-input") && document.activeElement.selectionStart === 3));
 await click(p, '[data-v="call-settings"]');
 check("8 the call's settings are a modal dialog, focus inside", await q(p, () => document.querySelector("#call-settings-dialog").open && document.querySelector("#call-settings-dialog").contains(document.activeElement)));

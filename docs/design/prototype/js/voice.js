@@ -112,6 +112,9 @@
     held: {}, // voiceSessionId -> seconds this device counted
     heldEmpty: {}, // task -> [{vs, secs}] calls this device held with no saved turn found
     lineNotes: {},
+    historyRead: {}, // task -> true once a history read for it came back
+    callRecords: {}, // first relay id -> the whole call's time on this device, when it had a replacement
+    earlyReady: null, // a ready that came before its create's reply
     openLine: null,
     prefs: {
       mode: p("prefs") === "none" ? "device" : p("prefs") === "unknown" ? "unknown" : "gateway",
@@ -283,7 +286,7 @@
         body += turnHtml(r.role, `<p>${esc(r.text)}</p>`, ' data-testid="typed-turn"');
       }
     }
-    for (const e of S.heldEmpty[taskId] || []) body += lineHtml(e.vs, [], b, e);
+    for (const e of S.heldEmpty[taskId] || []) body += lineHtml(e.vs, [], b, { ...e, task: taskId });
     return `<div class="transcript-inner"><h1 class="task-line">${esc(t.title)}</h1>${body}</div>`;
   }
   function lineHtml(vs, rows, b, empty) {
@@ -291,10 +294,10 @@
     const open = S.openLine === id;
     const secs = S.held[vs];
     let label;
-    if (empty) label = `Voice chat · ${mmss(empty.secs)} · No saved turns found`;
+    if (empty) label = `Voice chat · ${mmss(empty.secs)}${S.historyRead[empty.task] ? " · No saved turns found" : ""}`;
     else if (secs !== undefined) label = `Voice chat · ${mmss(secs)}`;
     else label = `Voice chat · ${rows.length} turns · ${clock(rows[0].ts).replace(/ (AM|PM)$/, "")}–${clock(rows.at(-1).ts)}`;
-    const note = S.lineNotes[vs];
+    const note = S.lineNotes[vs] || (S.callRecords[vs] !== undefined ? `The whole call: ${mmss(S.callRecords[vs])} on this device` : "");
     return (
       `<div class="call-line" data-testid="call-line" data-vs="${esc(vs)}"><button type="button" data-v="line" data-line="${esc(id)}" data-k="${esc(id)}" aria-expanded="${open}" aria-controls="${esc(id)}-turns"${rows.length ? "" : " disabled"}>${icon("chevron")}${esc(label)}</button></div>` +
       (note ? `<p class="call-line-note" data-testid="line-note">${esc(note)}</p>` : "") +
@@ -867,7 +870,7 @@
       }
     }
     S.dict = null;
-    S.held = false;
+    S.holding = false;
     if (why) notify("Dictation stopped.", why, null, d.task);
     render();
     say(why ? `Dictation stopped. ${why}` : d.inserted ? "Dictation stopped. The text is in your message." : "Dictation stopped.");
@@ -992,13 +995,19 @@
     later(() => ev("closeResult", { ok: !S.flags.closeFail }), 200);
   }
 
+  // Each relay interval keeps its own measured time; a call with a replacement also keeps its whole time (section 10).
   function leaveLine(c, confirmed) {
-    const vs = c.relayIds[0];
-    if (!vs) return;
-    S.held[vs] = c.secs;
-    const saved = (S.history[c.task] || []).some((r) => voiceIdOf(r) === vs || c.relayIds.includes(voiceIdOf(r)));
-    if (!saved && !(S.heldEmpty[c.task] || []).some((e) => e.vs === vs)) (S.heldEmpty[c.task] ||= []).push({ vs, secs: c.secs });
-    if (!confirmed) S.lineNotes[vs] = `Ended on this device. ${GATEWAY} did not confirm the previous session ended.`;
+    const ids = c.relayIds.filter((id) => (c.starts || {})[id] !== undefined || id === c.relayIds[0]);
+    if (!ids.length) return;
+    ids.forEach((vs, k) => {
+      const start = (c.starts || {})[vs] ?? 0;
+      const end = k + 1 < ids.length ? (c.starts || {})[ids[k + 1]] ?? c.secs : c.secs;
+      S.held[vs] = Math.max(0, end - start);
+      const saved = (S.history[c.task] || []).some((r) => r.voice && voiceIdOf(r) === vs);
+      if (!saved && !(S.heldEmpty[c.task] || []).some((e) => e.vs === vs)) (S.heldEmpty[c.task] ||= []).push({ vs, secs: S.held[vs] });
+    });
+    if (ids.length > 1) S.callRecords[ids[0]] = c.secs;
+    if (!confirmed) S.lineNotes[ids[0]] = `Ended on this device. ${GATEWAY} did not confirm the previous session ended.`;
   }
 
   function endCall(confirmed) {
@@ -1109,44 +1118,69 @@
           return;
         }
         c.relayIds.push(relay.id);
+        c.starts = { [relay.id]: 0 };
         c.state = "live";
         c.voices = S.noVoices ? [] : VOICES.slice();
         c.canChange = !S.noVoices;
         // The current voice is the create's or get's readback; a catalog cannot identify it.
         c.voice = data.voice === undefined ? (c.requestedVoice && c.voices.includes(c.requestedVoice) ? c.requestedVoice : "Alloy") : data.voice;
         if (c.requestedVoice && !c.voices.includes(c.requestedVoice)) c.voiceGone = c.requestedVoice;
+        if (S.earlyReady === relay.id) {
+          S.earlyReady = null;
+          return ev("ready", { id: relay.id });
+        }
         later(() => ev("ready", { id: relay.id }), 120);
         break;
       }
       case "ready": {
-        // Only the ready of this call's own relay, matched by id.
+        // A ready before its create's reply is kept until its id is known; then only this call's own relay counts.
+        if (c && ["creating", "permission"].includes(c.state) && c.relay && !c.relay.id) {
+          S.earlyReady = data.id;
+          return;
+        }
         if (!c || c.state !== "live" || data.id !== c.relayIds.at(-1) || c.ready) return;
         c.ready = true;
         if (openMic(callAudioOk(c))) later(() => ev("capture"), 60);
         break;
       }
       case "responseStarted":
-        if (c && c.ready) c.thinking = true;
+        if (!c || !c.ready || data.relay !== c.relayIds.at(-1)) return;
+        c.thinking = true;
+        c.response = data.response;
+        break;
+      case "audioDone":
+        // The response's audio is done: Thinking settles when nothing played.
+        if (!c || data.relay !== c.relayIds.at(-1) || data.response !== c.response) return;
+        if (!c.playing) c.thinking = false;
         break;
       case "playbackStart":
-        if (c && c.ready && c.state === "live") (c.thinking = false), (c.playing = true);
+        if (!c || !c.ready || c.state !== "live" || data.relay !== c.relayIds.at(-1) || (c.response !== undefined && data.response !== c.response)) return;
+        c.thinking = false;
+        c.playing = true;
         break;
       case "playbackEnd":
       case "clear":
-        if (c) c.playing = false;
+        if (!c || data.relay !== c.relayIds.at(-1)) return;
+        c.playing = false;
         break;
       case "caption": {
-        // Only this call's own relay; another voice session's captions never touch the band.
-        if (!c || !data.id || !data.id.startsWith(`voice:${c.relayIds.at(-1)}:`)) return;
-        const x = c.captions.find((y) => y.id === data.id);
-        if (x) Object.assign(x, { text: data.text ?? x.text, final: Boolean(data.final) });
-        else c.captions.push({ id: data.id, role: data.role, text: data.text, final: Boolean(data.final), saved: false });
+        // Only this call's own relay; a partial may have no persistence id, and is matched by relay and item.
+        const relay = c && c.relayIds.at(-1);
+        if (!c || (data.id ? !data.id.startsWith(`voice:${relay}:`) : data.relay !== relay)) return;
+        const key = data.item !== undefined ? `${relay}:${data.item}` : data.id;
+        const x = c.captions.find((y) => (data.item !== undefined && y.key === key) || (data.id && y.id === data.id));
+        const savedRow = (row) => row.voice && row.id === data.id;
+        if (x) Object.assign(x, { text: data.text ?? x.text, final: Boolean(data.final), id: data.id || x.id });
+        else c.captions.push({ key, id: data.id || null, role: data.role, text: data.text, final: Boolean(data.final), saved: false });
+        const y = x || c.captions.at(-1);
+        if (y.final && y.id && (S.history[c.task] || []).some(savedRow)) y.saved = true; // history came first
         break;
       }
       case "history": {
         const task = data.task || (c && c.task) || S.sel.task;
         (S.history[task] ||= []).push({ id: data.id, role: data.role, text: data.text, ts: data.ts ?? NOW, voice: data.voice !== false });
-        if (c) for (const x of c.captions) if (x.id === data.id) x.saved = true;
+        // Saved needs the finalized caption's id, the call's own task and realtime-voice provenance.
+        if (c && task === c.task && data.voice !== false) for (const x of c.captions) if (x.final && x.id === data.id) x.saved = true;
         if (S.heldEmpty[task]) S.heldEmpty[task] = S.heldEmpty[task].filter((e) => !String(data.id).startsWith(`voice:${e.vs}:`));
         break;
       }
@@ -1309,6 +1343,7 @@
         const ch = c && c.change;
         if (!ch || ch.phase !== "completing" || !S.connected || data.voiceSessionId !== ch.replacement || data.gen !== ch.gen) return;
         c.relayIds.push(ch.replacement);
+        (c.starts ||= {})[ch.replacement] = c.secs;
         c.voice = ch.voice;
         c.change = null;
         c.voiceMsg = `Voice changed to ${ch.voice} for this session.`;
@@ -1428,6 +1463,9 @@
         insertFinal(d, data.text);
         break;
       }
+      case "historyRead":
+        S.historyRead[data.task || S.sel.task] = true;
+        break;
       case "dictClosed":
         S.draining = null;
         return;
@@ -1578,7 +1616,7 @@
     const c = newCall(task, S.providerId);
     const id = `vs${c.attempt}`;
     S.relays.push({ id, attempt: c.attempt, gen: S.gen, state: "open", expiresAt: NOW + 1800 - 134, task });
-    Object.assign(c, { state: "live", ready: true, capture: true, relayIds: [id], secs: 134, clockAt: NOW, expiresAt: NOW + 1800 - 134, voices: VOICES.slice(), canChange: true, voice: "Alloy" });
+    Object.assign(c, { state: "live", ready: true, capture: true, relayIds: [id], starts: { [id]: 0 }, secs: 134, clockAt: NOW, expiresAt: NOW + 1800 - 134, voices: VOICES.slice(), canChange: true, voice: "Alloy" });
     S.io.micOpens += 1;
     S.call = c;
     return c;
@@ -1611,7 +1649,16 @@
         { role: "user", text: "A spoken turn with no voice id.", ts: T(17, 31), voice: true },
         { role: "assistant", text: "Its reply, also without one.", ts: T(17, 32), voice: true },
       ];
-    if (line === "empty") S.heldEmpty.o1 = [{ vs: "vsE", secs: 7 }];
+    if (line === "empty") (S.heldEmpty.o1 = [{ vs: "vsE", secs: 7 }]), (S.historyRead.o1 = true);
+    if (line === "tworelay") {
+      // One call with a voice change: a short first interval, then the replacement's.
+      S.history.o1 = [
+        { id: "voice:vsA:1", role: "user", text: "Before the change.", ts: T(17, 31), voice: true },
+        { id: "voice:vsB:1", role: "assistant", text: "After the change.", ts: T(17, 32), voice: true },
+      ];
+      Object.assign(S.held, { vsA: 8, vsB: 126 });
+      S.callRecords.vsA = 134;
+    }
     if (p("page") === "settings") setTimeout(openSettings, 0);
     if (p("shortcut")) setTimeout(() => shortcut(p("shortcut"), p("shortcutbot")), 0);
     if (!st) return;
@@ -1648,12 +1695,15 @@
     if (st === "muted") (c.muted = true), (c.capture = false);
     if (st === "speaking") (c.playing = true), (c.captions = [{ id: `voice:${c.relayIds[0]}:1`, role: "user", text: CAPTION, final: true, saved: false }]);
     if (st === "thinking") c.thinking = true;
-    if (st === "transcript")
-      (c.transcriptOpen = true),
-        (c.captions = [
-          { id: `voice:${c.relayIds[0]}:1`, role: "user", text: CAPTION, final: true, saved: true },
-          { id: `voice:${c.relayIds[0]}:2`, role: "assistant", text: REPLY, final: false, saved: false },
-        ]);
+    if (st === "transcript") {
+      // The Saved mark rests on the seeded history row with the same id, task and provenance.
+      S.history[t] = [{ id: `voice:${c.relayIds[0]}:1`, role: "user", text: CAPTION, ts: NOW, voice: true }];
+      c.transcriptOpen = true;
+      c.captions = [
+        { key: `voice:${c.relayIds[0]}:1`, id: `voice:${c.relayIds[0]}:1`, role: "user", text: CAPTION, final: true, saved: true },
+        { key: `${c.relayIds[0]}:2`, id: null, role: "assistant", text: REPLY, final: false, saved: false },
+      ];
+    }
     if (st === "micgone") (c.capture = false), (c.micStopped = "unplugged"), (S.storedMic = "USB Microphone");
     if (st === "revoked") (c.capture = false), (c.micStopped = "revoked"), (S.mic = "denied");
     if (st === "background") (c.capture = false), (c.muted = true), (c.background = true);
@@ -1728,9 +1778,10 @@
       const k = el.dataset.bar;
       const c = S.call;
       if (k === "speak" && c && c.ready) {
-        ev("responseStarted");
-        ev("playbackStart");
-        later(() => ev("playbackEnd"), 600);
+        const relay = c.relayIds.at(-1);
+        ev("responseStarted", { relay, response: "r1" });
+        ev("playbackStart", { relay, response: "r1" });
+        later(() => ev("playbackEnd", { relay }), 600);
       }
       if (k === "caption" && c && c.ready) ev("caption", { id: `voice:${c.relayIds.at(-1)}:${c.captions.length + 1}`, role: "user", text: CAPTION, final: true });
       if (k === "saved" && c && c.captions.length) {
@@ -2033,18 +2084,18 @@
     if (S.dict) return stopDictation();
     pressMic();
     clearTimeout(S.holdTimer);
-    S.holdTimer = setTimeout(() => (S.held = Boolean(S.dict)), 400);
+    S.holdTimer = setTimeout(() => (S.holding = Boolean(S.dict)), 400);
   });
   document.addEventListener("keyup", (event) => {
     // Releasing either key ends a hold, whichever goes first.
     if (!["d", "D", "Meta", "Control"].includes(event.key)) return;
     clearTimeout(S.holdTimer);
-    if (S.held && S.dict) stopDictation();
-    S.held = false;
+    if (S.holding && S.dict) stopDictation();
+    S.holding = false;
   });
   window.addEventListener("blur", () => {
-    if (S.held && S.dict) stopDictation();
-    S.held = false;
+    if (S.holding && S.dict) stopDictation();
+    S.holding = false;
   });
   // Press and hold the microphone button: the same; a cancelled gesture stops its capture.
   document.addEventListener("pointerdown", (event) => {
@@ -2053,13 +2104,13 @@
     S.pressTimer = setTimeout(() => {
       S.suppressClick = true;
       pressMic();
-      S.held = Boolean(S.dict);
+      S.holding = Boolean(S.dict);
     }, 400);
   });
   const endHold = () => {
     clearTimeout(S.pressTimer);
-    if (S.held && S.dict) stopDictation();
-    S.held = false;
+    if (S.holding && S.dict) stopDictation();
+    S.holding = false;
   };
   document.addEventListener("pointerup", endHold);
   document.addEventListener("pointercancel", endHold);
