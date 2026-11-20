@@ -221,6 +221,7 @@ import {
   MAX_PENDING_APPROVAL_COUNT,
   MAX_REACTIONS_PER_MESSAGE,
   MAX_RUN_TEXT_CHARS,
+  MAX_STEPS_PER_TASK,
   MAX_TASK_LINE_CHARS,
   MAX_TRACKED_TASKS as TRACKED_TASKS,
   MAX_UNROUTED,
@@ -404,8 +405,10 @@ function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
 /** Sessions nobody has open whose runs are followed for bot-to-bot cards, and runs of each. */
 export const FOREIGN_SESSIONS = 16;
 export const FOREIGN_RUNS_PER_SESSION = 4;
-/** Deleted sessions' names kept so a history read a deletion supersedes is dropped; the oldest give way. */
-export const MAX_FOREIGN_DELETES = 512;
+/** Recipient sessions with a read on their way at once, and reads of one session at once. */
+export const MAX_FOREIGN_READ_SESSIONS = MAX_TRACKED_TASKS * MAX_STEPS_PER_TASK;
+/** Reads of one session on their way at once: at most the runs a task's steps name. */
+export const MAX_FOREIGN_READS_PER_SESSION = MAX_STEPS_PER_TASK;
 const MAX_TIMER_MS = 2_147_483_647;
 /** Whole reads (`readStepRaw`, `readHistoryItem`, `readApprovalText`) in flight at once; past it one is refused. */
 export const MAX_FULL_READS = 4;
@@ -779,12 +782,13 @@ export class ClawtrateClient {
   /** Steps of foreign runs are not kept, so neither are their payloads: this table keeps nothing. */
   private readonly foreignRaw = new RawTable(0, 0);
   /**
-   * Sessions nobody has open whose deletion a read on its way must still see,
-   * newest kept (`MAX_FOREIGN_DELETES`): a deletion settles the session's
-   * followed runs, and an answer that predates it rebuilds nothing. A session
-   * alive again clears its own.
+   * Recipient reads on their way, by session, at most
+   * `MAX_FOREIGN_READ_SESSIONS` sessions and `MAX_FOREIGN_READS_PER_SESSION`
+   * reads of one: each read carries a token, and a deletion of the session
+   * cancels its reads' tokens, so an answer that predates the deletion is
+   * dropped whatever happened to other sessions meanwhile.
    */
-  private readonly foreignDeleted = new Set<string>();
+  private readonly foreignReads = new Map<string, Set<{ cancelled: boolean }>>();
   /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
   private readonly spawnedBy = new Map<string, string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3208,8 +3212,6 @@ export class ClawtrateClient {
   ): void {
     // Kept under the id cap, as the state keeps ids.
     const sessionKey = capId(rawKey, MAX_ID_CHARS);
-    // The session is alive again: its deletion no longer supersedes a read.
-    this.foreignDeleted.delete(sessionKey);
     const before = this.foreign.get(sessionKey) ?? emptyActivity;
     let next = fn(before, { sessionKey, now: this.now(), raw: this.foreignRaw });
     if (next === before) return;
@@ -3269,11 +3271,9 @@ export class ClawtrateClient {
       );
       this.foreign.delete(sessionKey);
     }
-    // A deletion a read on its way must still see, however many deletions follow it.
-    this.foreignDeleted.delete(sessionKey);
-    this.foreignDeleted.add(sessionKey);
-    while (this.foreignDeleted.size > MAX_FOREIGN_DELETES)
-      this.foreignDeleted.delete(this.foreignDeleted.keys().next().value as string);
+    // A deletion supersedes every read of this session on its way.
+    for (const token of this.foreignReads.get(sessionKey) ?? []) token.cancelled = true;
+    this.foreignReads.delete(sessionKey);
   }
 
   /** A run this task does not hold: a followed foreign session's, or another task's. */
@@ -3578,89 +3578,108 @@ export class ClawtrateClient {
       pairs: ReadonlyArray<readonly [string, string]>;
     } | null = null,
   ): Promise<void> {
-    // What this read may settle was active before it was asked, so a run whose
-    // live start arrives while the request is pending outlives a stale answer.
-    const activeBefore = new Set(
-      (this.foreign.get(sessionKey)?.runs ?? [])
-        .filter((run) => ids.has(run.id) && !isTerminal(run.state))
-        .map((run) => run.id),
-    );
-    let history: RawRecord | null;
-    try {
-      history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
-    } catch {
-      return;
+    // The read carries its own invalidation token: a deletion of this session
+    // cancels it, however many deletions of other sessions follow, and nothing
+    // else does. Admission stays within the map and per-session caps.
+    const token = { cancelled: false };
+    let tokens = this.foreignReads.get(sessionKey);
+    if (!tokens) {
+      if (this.foreignReads.size >= MAX_FOREIGN_READ_SESSIONS) return;
+      tokens = new Set();
+      this.foreignReads.set(sessionKey, tokens);
     }
-    if (
-      generation !== this.generation ||
-      this.tracked(sessionKey) ||
-      (senderKey !== undefined && !this.tracked(senderKey)) ||
-      // A deletion of this session while the read was on its way supersedes it.
-      this.foreignDeleted.has(sessionKey)
-    )
-      return;
-    const aliases = Object.fromEntries([
-      ...(terminal?.pairs ?? []),
-      ...historyQueuePairs(history?.messages),
-    ]);
-    const { messages, inFlight } = throughRunAliases(
-      history?.messages,
-      asRecord(history?.inFlightRun),
-      aliases,
-    );
-    const ctx = { sessionKey, now: this.now(), raw: this.foreignRaw };
-    const pendingInputs = asRecord(history?.pendingInputs)?.items;
-    const busy = inFlight !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
-    const found = runsFromHistory(messages, inFlight, ctx, { busy }).filter((run) =>
-      ids.has(run.id),
-    );
-    const historyIds = new Set(found.map((run) => run.id));
-    // Ends history does not establish: a busy read leaves the newest rows' run
-    // open, and an end history holds only in its rows' shape is never a reply.
-    // A terminal row naming such a run must still settle it.
-    const inferred = new Set(
-      found
-        .filter((run) => !run.outcomeKnown || (busy && !isTerminal(run.state)))
-        .map((run) => run.id),
-    );
-    const inFlightId = typeof inFlight?.runId === "string" ? inFlight.runId : null;
-    const ended = terminal
-      ? new Map([...ids].map((id) => [id, terminal.phase] as const))
-      : undefined;
-    this.updateForeign(sessionKey, (activity) => {
-      // A pair is one run: history under the gateway's id is the run the sender
-      // follows under the send's id. Renamed, never dropped: a foreign run keeps
-      // no steps, so nothing of a run still under way is lost with it.
-      const aliased = (terminal?.pairs ?? []).reduce((next, [gateway, client]) => {
-        if (gateway === client || next.queueAliases[gateway] === client) return next;
-        const shown = findRun(next, gateway);
-        const runs =
-          shown && !findRun(next, client)
-            ? next.runs.map((run) => (run === shown ? { ...run, id: client } : run))
-            : next.runs;
-        return { ...next, runs, queueAliases: { ...next.queueAliases, [gateway]: client } };
-      }, activity);
-      const followed = aliased.runs.filter((run) => ids.has(run.id));
-      const merged = mergeHistoryRuns(followed, found, ctx, busy).runs;
-      // A row said the run ended, but idle history cannot say how: settle it as
-      // vanished rather than leave the card working, unless a turn is in flight.
-      const runs = settleVanishedRuns(
-        merged,
-        activeBefore,
-        historyIds,
-        inFlightId,
-        ctx,
-        busy,
-        ended,
-        inferred,
+    if (tokens.size >= MAX_FOREIGN_READS_PER_SESSION) return;
+    tokens.add(token);
+    try {
+      // What this read may settle was active before it was asked, so a run whose
+      // live start arrives while the request is pending outlives a stale answer.
+      const activeBefore = new Set(
+        (this.foreign.get(sessionKey)?.runs ?? [])
+          .filter((run) => ids.has(run.id) && !isTerminal(run.state))
+          .map((run) => run.id),
       );
-      const settled =
-        runs.length === merged.length && runs.every((run, i) => run === merged[i]) ? merged : runs;
-      return {
-        ...aliased,
-        runs: [...aliased.runs.filter((run) => !ids.has(run.id)), ...settled],
-      };
-    });
+      let history: RawRecord | null;
+      try {
+        history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
+      } catch {
+        return;
+      }
+      if (
+        generation !== this.generation ||
+        this.tracked(sessionKey) ||
+        (senderKey !== undefined && !this.tracked(senderKey)) ||
+        // A deletion of this session while the read was on its way supersedes it.
+        token.cancelled
+      )
+        return;
+      const aliases = Object.fromEntries([
+        ...(terminal?.pairs ?? []),
+        ...historyQueuePairs(history?.messages),
+      ]);
+      const { messages, inFlight } = throughRunAliases(
+        history?.messages,
+        asRecord(history?.inFlightRun),
+        aliases,
+      );
+      const ctx = { sessionKey, now: this.now(), raw: this.foreignRaw };
+      const pendingInputs = asRecord(history?.pendingInputs)?.items;
+      const busy = inFlight !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
+      const found = runsFromHistory(messages, inFlight, ctx, { busy }).filter((run) =>
+        ids.has(run.id),
+      );
+      const historyIds = new Set(found.map((run) => run.id));
+      // Ends history does not establish: a busy read leaves the newest rows' run
+      // open, and an end history holds only in its rows' shape is never a reply.
+      // A terminal row naming such a run must still settle it.
+      const inferred = new Set(
+        found
+          .filter((run) => !run.outcomeKnown || (busy && !isTerminal(run.state)))
+          .map((run) => run.id),
+      );
+      const inFlightId = typeof inFlight?.runId === "string" ? inFlight.runId : null;
+      const ended = terminal
+        ? new Map([...ids].map((id) => [id, terminal.phase] as const))
+        : undefined;
+      this.updateForeign(sessionKey, (activity) => {
+        // A pair is one run: history under the gateway's id is the run the sender
+        // follows under the send's id. Renamed, never dropped: a foreign run keeps
+        // no steps, so nothing of a run still under way is lost with it.
+        const aliased = (terminal?.pairs ?? []).reduce((next, [gateway, client]) => {
+          if (gateway === client || next.queueAliases[gateway] === client) return next;
+          const shown = findRun(next, gateway);
+          const runs =
+            shown && !findRun(next, client)
+              ? next.runs.map((run) => (run === shown ? { ...run, id: client } : run))
+              : next.runs;
+          return { ...next, runs, queueAliases: { ...next.queueAliases, [gateway]: client } };
+        }, activity);
+        const followed = aliased.runs.filter((run) => ids.has(run.id));
+        const merged = mergeHistoryRuns(followed, found, ctx, busy).runs;
+        // A row said the run ended, but idle history cannot say how: settle it as
+        // vanished rather than leave the card working, unless a turn is in flight.
+        const runs = settleVanishedRuns(
+          merged,
+          activeBefore,
+          historyIds,
+          inFlightId,
+          ctx,
+          busy,
+          ended,
+          inferred,
+        );
+        const settled =
+          runs.length === merged.length && runs.every((run, i) => run === merged[i])
+            ? merged
+            : runs;
+        return {
+          ...aliased,
+          runs: [...aliased.runs.filter((run) => !ids.has(run.id)), ...settled],
+        };
+      });
+    } finally {
+      tokens.delete(token);
+      if (tokens.size === 0) this.foreignReads.delete(sessionKey);
+    }
   }
 
   /** Copy the state of every recipient run a task's `sessions_send` results name, where it is known. */
@@ -4936,7 +4955,7 @@ export class ClawtrateClient {
     this.recipients.clear();
     this.spawnedBy.clear();
     this.foreign.clear();
-    this.foreignDeleted.clear();
+    this.foreignReads.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();

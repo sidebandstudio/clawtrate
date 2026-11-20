@@ -29,7 +29,7 @@ import {
   FOREIGN_RUNS_PER_SESSION,
   FOREIGN_SESSIONS,
   MAX_ACCESS_WAITERS,
-  MAX_FOREIGN_DELETES,
+  MAX_FOREIGN_READ_SESSIONS,
   MAX_OPENED_READS,
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
@@ -172,7 +172,12 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
       FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
     row: "foreignRuns",
   },
-  foreignDeleted: { max: MAX_FOREIGN_DELETES, each: ID, row: "bookkeeping" },
+  foreignReads: {
+    max: MAX_FOREIGN_READ_SESSIONS,
+    each: ID + MAX_STEPS_PER_TASK * N,
+    row: "bookkeeping",
+  },
+  "foreignReads.*": { max: MAX_STEPS_PER_TASK, each: N, row: null },
   "foreign.*.runs": {
     max: FOREIGN_RUNS_PER_SESSION,
     each: runWithoutSteps,

@@ -641,10 +641,11 @@ describe("a recipient session nobody has open (F-122)", () => {
     await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
     gateway.emit("sessions.changed", { sessionKey: PEER, runId: "peer-r", phase: "end" });
     await until(() => peerReads === 1);
-    // The deletion settles the card; many deletions of other sessions follow it.
+    // The deletion settles the card; enough deletions of other sessions follow
+    // it to turn the deletions kept over, and the read must outlive them.
     gateway.emit("sessions.changed", { sessionKey: PEER, reason: "delete" });
     await until(() => transcript().linkedRuns["peer-r"]?.state === "cancelled");
-    for (let i = 0; i < 70; i += 1)
+    for (let i = 0; i < 520; i += 1)
       gateway.emit("sessions.changed", { sessionKey: `agent:marlow:extra-${i}`, reason: "delete" });
     // The held answer is the session's old snapshot, with the run still in flight.
     held.resolve({ messages: [], inFlightRun: { runId: "peer-r" } });
