@@ -2319,6 +2319,47 @@ function terminalFromLifecycle(
   }
 }
 
+/**
+ * The gateway's `agent.wait` record of a run, asked with no wait. A record of a run that ended
+ * (`ok`, `error`, or a `timeout` with an end, as OpenClaw 2026.10.6's `isTerminalAgentWaitTimeout`
+ * reads it) settles the run as its terminal lifecycle event would. A bare `timeout` (the run is
+ * still going, or the gateway does not know it) and `pending` (still queued) leave it as it is.
+ */
+export function settleRunFromWait(
+  activity: TaskActivity,
+  runId: string,
+  answer: RawRecord,
+  ctx: EngineContext,
+): TaskActivity {
+  const status = str(answer.status);
+  const ended =
+    status === "ok" ||
+    status === "error" ||
+    (status === "timeout" &&
+      answer.pendingError !== true &&
+      (num(answer.endedAt) !== null ||
+        str(answer.stopReason) !== null ||
+        str(answer.livenessState) !== null ||
+        classifyLifecycleTerminal("end", answer) === "hard_timeout"));
+  if (!ended) return activity;
+  // OpenClaw reads a run its revoked access cut short as aborted (`resolveAgentRunWaitTerminalFacts`).
+  const facts =
+    status !== "ok" && str(answer.stopReason) === "auth-revoked"
+      ? { ...answer, stopReason: "aborted" }
+      : answer;
+  return updateRun(activity, runId, (run) => {
+    // An end established already is final; an inferred one gives way to the gateway's.
+    if (run.state === "queued" || (isTerminal(run.state) && run.outcomeKnown)) return run;
+    return terminalFromLifecycle(
+      reopenInferred(run),
+      status === "error" ? "error" : "end",
+      facts,
+      num(answer.endedAt) ?? ctx.now,
+      ctx,
+    );
+  });
+}
+
 function endingOf(data: RawRecord, previous: RunEnding | null): RunEnding {
   return {
     stopReason: str(data.stopReason) ?? previous?.stopReason ?? null,
