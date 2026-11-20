@@ -34,6 +34,8 @@
 //   queuedstop   a later input from another device, then a task-wide Stop; a run-specific Stop
 //   cards        a question and an approval from device A, as B and a read-only device see them
 //   order        two replies: the order their runs end against their saved timestamps
+//   ownqueued    a task-wide abort by the device whose input is queued; a run-specific abort
+//   replaced     an old sessionId alone against a task already replaced; a member removed mid-run
 //   guard        a send to a task deleted after the check, unguarded and guarded
 //   delbot     a member bot deleted (admin): what is left of its task
 
@@ -558,6 +560,63 @@ const experiments: Record<string, () => Promise<void>> = {
     const g5 = await call(a, "chat.send", { sessionKey: k5, message: "#text", idempotencyKey: randomUUID(), sessionId: sid5, expectedLeafEntryId: null });
     out("guarded send while the task runs", g5);
     out("ends", await ends(a, [String(busy.runId), ...(g5.ok ? [String(rec(g5.result).runId)] : [])], 60_000));
+  },
+
+  async ownqueued() {
+    const a = await device("a");
+    const b = await device("b");
+    const stamp = Date.now();
+    const k = await newTask(a, "main", `Group ownqueued ${stamp}`);
+    await subscribe(a, k);
+    await subscribe(b, k);
+    const first = rec((await call(a, "chat.send", { sessionKey: k, message: "#slow 8", idempotencyKey: randomUUID() })).result);
+    await sleep(1500);
+    const queued = rec((await call(b, "chat.send", { sessionKey: k, message: "#text", idempotencyKey: randomUUID() })).result);
+    out("A's run, then B's input queued behind it", { first: first.runId, queued: queued.runId });
+    out("B stops the task (task-wide)", await call(b, "chat.abort", { sessionKey: k }));
+    out("ends", await ends(a, [String(first.runId), String(queued.runId)], 60_000));
+    // A run-specific request names only its run.
+    const k2 = await newTask(a, "main", `Group ownqueued2 ${stamp}`);
+    await subscribe(a, k2);
+    const f2 = rec((await call(a, "chat.send", { sessionKey: k2, message: "#slow 6", idempotencyKey: randomUUID() })).result);
+    await sleep(1500);
+    const q2 = rec((await call(a, "chat.send", { sessionKey: k2, message: "#text", idempotencyKey: randomUUID() })).result);
+    out("A's run and A's later input", { first: f2.runId, later: q2.runId });
+    out("A stops the first run by its id", await call(a, "chat.abort", { sessionKey: k2, runId: f2.runId }));
+    out("ends", await ends(a, [String(f2.runId), String(q2.runId)], 60_000));
+  },
+
+  async replaced() {
+    const a = await device("a");
+    const b = await device("b");
+    const stamp = Date.now();
+    const describe = async (k: string) => rec(rec((await call(a, "sessions.describe", { key: k })).result).session);
+    const k = await newTask(a, "main", `Group replaced ${stamp}`);
+    await subscribe(a, k);
+    const old = String((await describe(k)).sessionId);
+    await call(b, "sessions.patch", { key: k, expectedSessionId: old, archived: true });
+    await call(b, "sessions.delete", { key: k, archivedOnly: true });
+    const r = rec((await call(b, "chat.send", { sessionKey: k, message: "#text", idempotencyKey: randomUUID() })).result);
+    await sleep(2500);
+    const now = String((await describe(k)).sessionId);
+    out("a replacement made at the key", { old, now, run: r.runId });
+    const alone = await call(a, "chat.send", { sessionKey: k, message: "#text", idempotencyKey: randomUUID(), sessionId: old });
+    out("the old sessionId alone, into the replacement", alone);
+    if (alone.ok) out("its end", await ends(a, [String(rec(alone.result).runId)], 60_000));
+    out("the old sessionId with expectedLeafEntryId null", await call(a, "chat.send", { sessionKey: k, message: "#text", idempotencyKey: randomUUID(), sessionId: old, expectedLeafEntryId: null }));
+    // A member removed from the group record while its run is active.
+    const m = await newTask(a, "marlow", `Group removed ${stamp}`);
+    const j = await newTask(a, "main", `Group removed J ${stamp}`);
+    await subscribe(a, m);
+    const key = `clawtrate.group.probe${stamp}`;
+    const rec0 = { v: 1, name: "Probe", members: [{ agentId: "main", sessionKey: j }, { agentId: "marlow", sessionKey: m }] };
+    await call(a, "users.prefs.set", { entries: { [key]: rec0 }, expectedEntries: { [key]: null } });
+    const run = rec((await call(a, "chat.send", { sessionKey: m, message: "#slow 4", idempotencyKey: randomUUID() })).result);
+    await sleep(800);
+    out("record written without Marlow", await call(a, "users.prefs.set", { entries: { [key]: { ...rec0, members: rec0.members.slice(0, 1) } }, expectedEntries: { [key]: rec0 } }));
+    out("Marlow's run after", await ends(a, [String(run.runId)], 60_000));
+    out("Marlow's task after", { exists: !!(await describe(m)).sessionId });
+    await call(a, "users.prefs.set", { entries: { [key]: null } });
   },
 
   async delbot() {
