@@ -3,7 +3,7 @@ import { runUpdatePowerShell } from "./private-update-directory.ts";
 import type { VerifiedArtifact } from "./update/install.ts";
 
 // One native call holds the directory entries and the read-only image open
-// until CreateProcessW has mapped it. No shell resolves the executable name.
+// through the per-user setup process. Elevated handoff stays unavailable.
 const native = String.raw`
 $ErrorActionPreference='Stop'
 Add-Type -TypeDefinition @'
@@ -116,6 +116,7 @@ public static class VerifiedInstaller {
   static extern bool CreateProcessW(string image, StringBuilder args, IntPtr ps, IntPtr ts,
     bool inherit, uint flags, IntPtr env, string cwd, ref Startup startup, out ProcessInfo info);
   [DllImport("kernel32")] static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32")] static extern uint WaitForSingleObject(IntPtr handle, uint timeout);
 
   [DllImport("kernel32", CharSet=CharSet.Unicode, SetLastError=true)]
   static extern bool GetVolumeNameForVolumeMountPointW(string root, StringBuilder volume, uint length);
@@ -142,7 +143,7 @@ public static class VerifiedInstaller {
     return current;
   }
 
-  public static string Run(string path, long size, string app, string expectedVersion, bool launch) {
+  public static string Run(string path, long size, string app, string expectedVersion, int ownerPid, bool launch) {
     if (!System.Text.RegularExpressions.Regex.IsMatch(path, @"^[A-Za-z]:\\") ||
         !System.Text.RegularExpressions.Regex.IsMatch(app, @"^[A-Za-z]:\\")) return "installation-context";
     if (new DriveInfo(Path.GetPathRoot(path)).DriveType != DriveType.Fixed ||
@@ -151,14 +152,16 @@ public static class VerifiedInstaller {
     if (!String.Equals(Path.GetFileName(app), "Clawtrate.exe", StringComparison.OrdinalIgnoreCase))
       return "installation-context";
     var locks = new Stack<SafeFileHandle>();
+    var appLocks = new Stack<SafeFileHandle>();
     try {
       string imagePath = LockParents(path, locks);
       string runningPath, scope;
       try {
-        runningPath = LockParents(app, locks);
+        runningPath = LockParents(app, appLocks);
         scope = Scope(dir);
       } catch { return "installation-context"; }
       if (scope == null) return "installation-context";
+      if (scope != "/currentuser") return "no-installer-path";
       using (var running = CreateFileW(runningPath, 0x80000000, 1, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero))
       using (var image = CreateFileW(imagePath, 0x80000000, 1, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero)) {
         Info info;
@@ -175,32 +178,46 @@ public static class VerifiedInstaller {
           string publisher = TrustedPublisher(imagePath, image);
           if (publisher == null) return "authenticode-trust";
           // Read under the same namespace and image locks as WinVerifyTrust.
-          var metadata = System.Diagnostics.FileVersionInfo.GetVersionInfo(path);
+          var metadata = System.Diagnostics.FileVersionInfo.GetVersionInfo(imagePath);
           if (metadata.ProductName != "Clawtrate" || metadata.OriginalFilename != "ClawtrateSetup.exe")
             return "installer-product";
           if (metadata.ProductVersion != expectedVersion) return "installer-version";
           string identity = info.volume + "." + info.indexHigh + "." + info.indexLow;
+          using (var owner = System.Diagnostics.Process.GetProcessById(ownerPid)) {
+          // Acquire the process handle before asking the app to quit, never reacquire it by PID.
+          IntPtr ownerHandle = owner.Handle;
           Console.WriteLine("proof " + identity + " " + file.Length + " " + digest + " " + runningPublisher + " " + publisher);
           if (!launch) return "ok";
           Console.Out.Flush();
           if (Console.ReadLine() != "launch") return "installer-failed";
+          Console.WriteLine("waiting");
+          Console.Out.Flush();
+          if (WaitForSingleObject(ownerHandle, 30000) != 0) return "quit-blocked";
+          running.Dispose();
+          if (Scope(dir) != scope) return "installation-context";
+          Environment.SetEnvironmentVariable("CLAWTRATE_EXITED_INSTALL_DIR", dir);
           var startup = new Startup { size = Marshal.SizeOf(typeof(Startup)) };
-          var args = new StringBuilder("\"" + path + "\" /S --updated --force-run " + scope + " /D=" + dir);
+          var args = new StringBuilder("\"" + imagePath + "\" /S --updated --force-run " + scope + " /D=" + dir);
           ProcessInfo child;
           if (!CreateProcessW(imagePath, args, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero,
                               Environment.SystemDirectory, ref startup, out child)) return "installer-failed";
           CloseHandle(child.thread);
-          CloseHandle(child.process);
+          // The installed app's directory must be replaceable. The original candidate
+          // and its full volume-qualified namespace stay held through all setup reads.
+          while (appLocks.Count > 0) appLocks.Pop().Dispose();
+          try { WaitForSingleObject(child.process, UInt32.MaxValue); }
+          finally { CloseHandle(child.process); }
           return "ok";
+          }
         }
       }
     } catch (IOException) { return "artifact-changed"; }
-    finally { while (locks.Count > 0) locks.Pop().Dispose(); }
+    finally { while (appLocks.Count > 0) appLocks.Pop().Dispose(); while (locks.Count > 0) locks.Pop().Dispose(); }
   }
 }
 '@
 [VerifiedInstaller]::Run($env:CLAWTRATE_UPDATE_FILE,[long]$env:CLAWTRATE_UPDATE_SIZE,$env:CLAWTRATE_RUNNING_IMAGE,
-    $env:CLAWTRATE_UPDATE_VERSION, ($env:CLAWTRATE_INSTALL_MODE -eq 'launch'))
+    $env:CLAWTRATE_UPDATE_VERSION, [int]$env:CLAWTRATE_OWNER_PID, ($env:CLAWTRATE_INSTALL_MODE -eq 'launch'))
 `;
 
 export async function windowsInstall(
@@ -208,20 +225,23 @@ export async function windowsInstall(
   publisher: string,
   launch: boolean,
   signal?: AbortSignal,
+  requestQuit?: () => void,
 ) {
   const failure = launch ? "installer-failed" : "inspection-failed";
+  let authorized = false;
   try {
     const task = runUpdatePowerShell(
       native,
       {
         CLAWTRATE_UPDATE_FILE: file.path,
         CLAWTRATE_UPDATE_SIZE: String(file.size),
+        CLAWTRATE_OWNER_PID: String(process.pid),
         CLAWTRATE_UPDATE_VERSION: file.version,
         CLAWTRATE_RUNNING_IMAGE: process.execPath,
         CLAWTRATE_INSTALL_MODE: launch ? "launch" : "inspect",
       },
       120000,
-      signal,
+      launch ? undefined : signal,
     );
     let pending = "";
     let checked = false;
@@ -230,24 +250,33 @@ export async function windowsInstall(
       /* exit or abort closes the pipe */
     });
     task.child.stdout?.on("data", (chunk: Buffer | string) => {
-      if (checked) return;
       pending += chunk.toString();
-      const newline = pending.indexOf("\n");
-      if (newline < 0) return;
-      const fields = pending.slice(0, newline).trimEnd().split(" ");
-      if (fields[0] !== "proof") return;
-      checked = true;
-      const [, identity, size, digest, runningPin, candidatePin] = fields;
-      if (
-        fields.length !== 6 ||
-        identity !== file.identity ||
-        size !== String(file.size) ||
-        digest !== file.sha512
-      )
-        refusal = "artifact-changed";
-      else if (runningPin !== publisher) refusal = "running-publisher-mismatch";
-      else if (candidatePin !== publisher) refusal = "publisher-mismatch";
-      if (launch) task.child.stdin?.end(!refusal && !signal?.aborted ? "launch\n" : "");
+      while (pending.includes("\n")) {
+        const newline = pending.indexOf("\n");
+        const line = pending.slice(0, newline).trimEnd();
+        pending = pending.slice(newline + 1);
+        if (line === "waiting" && authorized && !signal?.aborted) {
+          requestQuit?.();
+          requestQuit = undefined;
+        }
+        const fields = line.split(" ");
+        if (checked || fields[0] !== "proof") continue;
+        checked = true;
+        const [, identity, size, digest, runningPin, candidatePin] = fields;
+        if (
+          fields.length !== 6 ||
+          identity !== file.identity ||
+          size !== String(file.size) ||
+          digest !== file.sha512
+        )
+          refusal = "artifact-changed";
+        else if (runningPin !== publisher) refusal = "running-publisher-mismatch";
+        else if (candidatePin !== publisher) refusal = "publisher-mismatch";
+        if (launch) {
+          authorized = !refusal && !signal?.aborted;
+          task.child.stdin?.end(authorized ? "launch\n" : "");
+        }
+      }
     });
     const { stdout } = await task;
     if (refusal) return refusal;
@@ -256,6 +285,8 @@ export async function windowsInstall(
       case "ok":
         return checked && !signal?.aborted ? null : failure;
       case "authenticode-trust":
+      case "quit-blocked":
+      case "no-installer-path":
       case "installer-product":
       case "installer-version":
       case "publisher-mismatch":
@@ -267,6 +298,6 @@ export async function windowsInstall(
         return failure;
     }
   } catch {
-    return failure;
+    return authorized ? ("handoff-unconfirmed" as const) : failure;
   }
 }

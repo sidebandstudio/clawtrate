@@ -128,3 +128,27 @@ it.each([
     dir.remove();
   }
 });
+
+it("keeps signed Windows setup unavailable pending the installed sharing trial", async () => {
+  vi.stubGlobal("__CLAWTRATE_WINDOWS_PUBLISHER__", "AB".repeat(32));
+  const { startDesktopUpdates } = await import("../../src/main/update/build-info.ts");
+  const dir = tempDir();
+  try {
+    const service = await startDesktopUpdates({
+      version: "1.0.0",
+      packaged: true,
+      platform: "win32",
+      arch: "x64",
+      downloadDir: join(dir.path, "updates"),
+      store: { get: async () => null, set: async () => {} },
+      changed() {},
+      quitAfterLaunch() {},
+    });
+    expect(service.get().install).toEqual({
+      kind: "unavailable-in-this-build",
+      reason: "no-installer-path",
+    });
+  } finally {
+    dir.remove();
+  }
+});

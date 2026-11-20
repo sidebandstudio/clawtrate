@@ -114,3 +114,23 @@ it.each([
   );
   expect(await pending).toBe(reason);
 });
+
+it("requests quit only after the owner holds the process and package and reports a blocked exit", async () => {
+  const native = nativeStandIn(),
+    quit = vi.fn();
+  const pending = windowsInstall(file, pin, true, new AbortController().signal, quit);
+  const [script, env] = vi.mocked(runUpdatePowerShell).mock.lastCall!;
+  expect(env.CLAWTRATE_OWNER_PID).toBe(String(process.pid));
+  expect(script.indexOf("WaitForSingleObject(ownerHandle, 30000)")).toBeLessThan(
+    script.indexOf("if (!CreateProcessW"),
+  );
+  expect(script.indexOf("WaitForSingleObject(child.process, UInt32.MaxValue)")).toBeLessThan(
+    script.lastIndexOf("locks.Pop().Dispose()"),
+  );
+  native.stdout.emit("data", proof.join(" ") + "\n");
+  expect(quit).not.toHaveBeenCalled();
+  native.stdout.emit("data", "waiting\nwaiting\n");
+  expect(quit).toHaveBeenCalledTimes(1);
+  native.finish("quit-blocked");
+  expect(await pending).toBe("quit-blocked");
+});
