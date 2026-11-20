@@ -69,8 +69,13 @@
   ];
   // The twelve tiles of "What do you use every day?": the catalog's featured apps.
   const TILES = ["Quillnote", "Tasktide", "Calendrop", "Boxwharf", "Chartwick", "Postlark", "Ledgerkin", "Docklet", "Mapwhistle", "Tunebarrow", "Sketchpond", "Huddlewick"];
+  // The tasks a server's tool listing can be read for (tools.effective takes one task).
+  const TASKS = [
+    { key: "pip-errands", label: `Pip's task "Errands"`, short: "Pip's task", time: "5:12 PM" },
+    { key: "juniper-handoff", label: `Juniper's task "Weekly handoff"`, short: "Juniper's task", time: "5:14 PM" },
+  ];
   const SERVERS = {
-    "notes-work": { kind: "remote", url: "https://notes.example/mcp", headers: ["Authorization", "X-Workspace"], signin: "oauth", last: "tools" },
+    "notes-work": { kind: "remote", url: "https://notes.example/mcp", headers: ["Authorization", "X-Workspace"], signin: "oauth", last: "tools", otherTask: "stale" },
     "search-index": { kind: "command", command: "/opt/example/bin/search-server", args: ["--stdio", "--index", "./notes"], last: "unavailable" },
     "team-notes": { kind: "remote", url: "https://teamnotes.example/mcp", headers: [], signin: "each", last: "notyet" },
     "notes-profile": { kind: "remote", url: "https://notes.example/mcp", headers: [], signin: "oauth", authProfile: true, last: "tools" },
@@ -184,7 +189,7 @@
   };
   const keepHere = (extra) => {
     const here = {};
-    for (const key of ["id", "q", "cat", "type", "last", "card"]) if (params.get(key)) here[key] = params.get(key);
+    for (const key of ["id", "q", "cat", "type", "last", "card", "task"]) if (params.get(key)) here[key] = params.get(key);
     return { ...here, ...extra };
   };
   const granted = () => (req === "granted" ? note("", "Admin access granted.", "You can change this now.") : "");
@@ -346,12 +351,18 @@
   const serverPage = () => {
     const name = params.get("id") || "notes-work";
     const s = serverOf(name);
-    const last = params.get("last") || s.last || "notyet";
+    // The task whose listing is shown (section 9): by default the most recent task of the bot last opened.
+    const task = TASKS.find((t) => t.key === params.get("task")) || TASKS[0];
+    const last = params.get("last") || (task === TASKS[0] ? s.last : s.otherTask) || "notyet";
+    const notice = (words) => `<p class="c-state">The gateway hasn't listed this server's tools for this task.</p><details class="c-details"><summary>The gateway's notice</summary><p class="c-faint" data-c="notice">${esc(words)}</p></details><p class="c-faint" data-c="read-at">Read at ${task.time}.</p>`;
     const lastRun = {
-      tools: `<p class="c-state">Gateway tool listing for Pip's task, read at 5:12 PM: 8 tools</p><details class="c-details"><summary>The tools</summary><p class="mono c-faint">${esc(name)}__search, ${esc(name)}__read_page, ${esc(name)}__add_page, …</p></details>`,
-      notyet: `<p class="c-state">The gateway hasn't listed this server's tools for this task.</p><details class="c-details"><summary>The gateway's notice</summary><p class="c-faint">MCP servers "${esc(name)}" are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.</p></details>`,
-      unavailable: `<p class="c-state" data-tone="warn">Gateway tool listing for Pip's task, read at 5:12 PM:</p><p class="mono c-warn">${esc(`MCP server "${name}": ${s.kind === "command" ? `spawn ${s.command} ENOENT` : s.diagnostic || "fetch failed | connect ECONNREFUSED"}; server unavailable.`)}</p>`,
-      none: `<p class="c-state">Not reported: the gateway's tool listing for this task doesn't mention this server.</p>`,
+      tools: `<p class="c-state">Gateway tool listing for ${esc(task.short)}, read at ${task.time}: 8 tools</p><details class="c-details"><summary>The tools</summary><p class="mono c-faint">${esc(name)}__search, ${esc(name)}__read_page, ${esc(name)}__add_page, …</p></details>`,
+      notyet: notice(`MCP servers "${name}" are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.`),
+      notlisted: notice(`MCP servers "${name}" are connected, but their tools aren't listed for this session yet.`),
+      stale: notice(`MCP servers "${name}" changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them.`),
+      failed: note("danger", `Couldn't read the gateway's tool listing for ${task.short}.`, "", `<div class="c-actions">${link("Check again", "server", { id: name, task: task.key, last: "tools" })}</div>`),
+      unavailable: `<p class="c-state" data-tone="warn">Gateway tool listing for ${esc(task.short)}, read at ${task.time}:</p><p class="mono c-warn">${esc(`MCP server "${name}": ${s.kind === "command" ? `spawn ${s.command} ENOENT` : s.diagnostic || "fetch failed | connect ECONNREFUSED"}; server unavailable.`)}</p>`,
+      none: `<p class="c-state">Not reported: the gateway's tool listing for this task doesn't mention this server.</p><p class="c-faint" data-c="read-at">Read at ${task.time}.</p>`,
     }[last];
     const rowsList = [
       ["Name on the gateway", `<span class="mono">${esc(name)}</span>`],
@@ -374,12 +385,13 @@
       body:
         facts(rowsList) +
         group("Gateway tool listing") +
-        `<p class="c-line">For Pip's task "Errands", the most recent task of the bot you last opened.</p>` +
+        `<label class="c-field c-task"><span>Task</span><select class="input" id="c-task" data-server="${esc(name)}">${TASKS.map((t) => `<option value="${t.key}"${t === task ? " selected" : ""}>${esc(t.label)}</option>`).join("")}</select></label>` +
+        (task === TASKS[0] ? `<p class="c-line">The most recent task of the bot you last opened.</p>` : "") +
         lastRun +
-        `<p class="c-line">A listing shows what the gateway has discovered for this task. A bot's tool rules still decide what it is offered.</p>` +
+        (last === "failed" ? "" : `<p class="c-line">This is the gateway's tool listing for this task as of the time shown. It doesn't establish that a tool ran or will run.</p>`) +
         group("Sign-in") +
         `<p class="c-state" data-c="signin">Not reported.</p>` +
-        `<p class="c-line">The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.</p>` +
+        `<p class="c-line">The gateway doesn't report whether it's signed in to this server, or for whom.</p>` +
         (s.signin === "each" ? `<p class="c-line">Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender. Clawtrate offers no sign-in for it.</p>` : "") +
         (cliEligible(s) && admin ? `<div class="c-actions">${link("Sign in", "signin-cli", { id: name, server: "1" })}</div>` : "") +
         (cliEligible(s)
@@ -992,6 +1004,10 @@
     });
   }
 
+  // The task selector: choosing a task reads that task's listing.
+  document.getElementById("c-task")?.addEventListener("change", (event) => {
+    location.href = go("server", { id: event.target.dataset.server, task: event.target.value });
+  });
   root.querySelector("[data-remove]")?.addEventListener("click", (event) => store.set("removing", event.currentTarget.dataset.remove));
 
   // A live tool result arrives: the card is drawn from it, in this page only.

@@ -103,7 +103,7 @@ const STATES = [
   ["screen=removed-unconfirmed&id=tasktide", ["Couldn't confirm the removal.", "Check again"]],
   ["screen=browse&readonly=1", ["This gateway's settings are read-only.", "Plugins and tool servers can't be changed here."]],
   ["screen=connector&id=tasktide&readonly=1", ["This gateway's settings are read-only."]],
-  ["screen=server&id=notes-work", ["notes-work", "Name on the gateway", "Added by address", "https://notes.example/mcp", "Authorization", "Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.", "Signs in with OAuth", "Gateway tool listing", "Gateway tool listing for Pip's task, read at 5:12 PM: 8 tools", "A listing shows what the gateway has discovered for this task. A bot's tool rules still decide what it is offered.", "Sign-in", "Not reported.", "The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.", "Sign in", "Accounts", "A second name for the same server, with its own sign-in. Bots tell them apart by name.", "Add another account", "Remove…"]],
+  ["screen=server&id=notes-work", ["notes-work", "Name on the gateway", "Added by address", "https://notes.example/mcp", "Authorization", "Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.", "Signs in with OAuth", "Gateway tool listing", "Gateway tool listing for Pip's task, read at 5:12 PM: 8 tools", "This is the gateway's tool listing for this task as of the time shown. It doesn't establish that a tool ran or will run.", "Sign-in", "Not reported.", "The gateway doesn't report whether it's signed in to this server, or for whom.", "Sign in", "Accounts", "A second name for the same server, with its own sign-in. Bots tell them apart by name.", "Add another account", "Remove…"]],
   ["screen=server&id=notes-work&last=notyet", ["The gateway hasn't listed this server's tools for this task."]],
   ["screen=server&id=notes-work&last=unavailable", ["Gateway tool listing for Pip's task, read at 5:12 PM:", "server unavailable"]],
   ["screen=server&id=notes-work&last=none", ["Not reported: the gateway's tool listing for this task doesn't mention this server."]],
@@ -160,6 +160,36 @@ for (const [query, words] of STATES) {
   await w.close();
 }
 
+// Change 9: the listing is for a named, selectable task, and says only what the listing says.
+{
+  const p = await open("screen=server&id=notes-work");
+  const sel = async () => p.evaluate(() => document.getElementById("c-task").selectedOptions[0].textContent);
+  check("the listing names its task, chosen by default", (await sel()) === `Pip's task "Errands"` && (await text(p)).includes("Gateway tool listing for Pip's task, read at 5:12 PM: 8 tools"));
+  check("the listing's sentence claims no run", (await text(p)).includes("This is the gateway's tool listing for this task as of the time shown. It doesn't establish that a tool ran or will run.") && !/A bot's run shows|last run|ran at|last used/.test(await text(p)));
+  await p.selectOption("#c-task", "juniper-handoff");
+  await at(p, "server");
+  const t = await text(p);
+  check("choosing another task reads that task's listing and time", (await sel()) === `Juniper's task "Weekly handoff"` && t.includes("changed since the current runtime catalog was discovered") && t.includes("Read at 5:14 PM.") && !t.includes("8 tools") && !t.includes("5:12 PM"), t.slice(0, 400));
+  await p.close();
+  const notices = [
+    ["notyet", "are configured but not connected for this session yet."],
+    ["notlisted", "are connected, but their tools aren't listed for this session yet."],
+    ["stale", "changed since the current runtime catalog was discovered."],
+  ];
+  const seen = new Set();
+  for (const [last, words] of notices) {
+    const n = await open(`screen=server&id=notes-work&last=${last}`);
+    const w = await n.locator('[data-c="notice"]').textContent();
+    seen.add(w);
+    check(`the ${last} notice is its own words, as text, naming only this server`, w.includes(words) && w.includes('"notes-work"') && !/search-index|team-notes|notes-profile/.test(w) && (await n.locator('[data-c="notice"] *').count()) === 0 && (await text(n)).includes("The gateway hasn't listed this server's tools for this task."));
+    await n.close();
+  }
+  check("the three notices are distinct responses", seen.size === 3);
+  await walk("the listing can't be read, then Check again", "screen=server&id=notes-work&last=failed", [[link("Check again"), "server"]], ["Gateway tool listing for Pip's task, read at 5:12 PM: 8 tools"]);
+  const f = await open("screen=server&id=notes-work&last=failed");
+  check("a refused listing names its task, and claims no listing", (await text(f)).includes("Couldn't read the gateway's tool listing for Pip's task.") && !(await text(f)).includes("as of the time shown"));
+  await f.close();
+}
 // Ruling 7: no screen claims a run, a time of use or every bot that has something.
 {
   const claims = [];
