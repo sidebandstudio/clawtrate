@@ -39,6 +39,14 @@ import {
   type TaskModelEvent,
   type TaskModelView,
 } from "./task-models.ts";
+import {
+  MAX_ROUTINE_TEXT_CHARS,
+  MAX_ROUTINES,
+  MAX_ROUTINE_RUN_TEXT_CHARS,
+  type Routine,
+  type RoutineSchedule,
+  type RoutinesState,
+} from "./routines.ts";
 import type {
   ApprovalAttempts,
   ApprovalCard,
@@ -1035,6 +1043,50 @@ export const TASK_MODEL: Bound = object<TaskModelView>()({
   }),
   events: list(MAX_TASK_MODEL_EVENTS, taskModelEvent),
 });
+// Routines (routines.ts): the list only; runs and their conversations are never kept.
+const routineSchedule = object<RoutineSchedule>()({
+  kind: ENUM,
+  expr: NAME,
+  tz: NAME,
+  everyMs: NUMBER,
+  at: NAME,
+  name: NAME,
+});
+const routine = object<Routine>()({
+  id: ID,
+  botId: ID,
+  name: NAME,
+  enabled: FLAG,
+  schedule: routineSchedule,
+  payload: ENUM,
+  text: text(MAX_ROUTINE_TEXT_CHARS),
+  target: ENUM,
+  sharedSessionKey: ID,
+  delivery: ENUM,
+  deliveryChannel: NAME,
+  nextRunAt: NUMBER,
+  lastRunAt: NUMBER,
+  lastEndedAt: NUMBER,
+  lastStatus: ENUM,
+  lastError: text(MAX_ROUTINE_RUN_TEXT_CHARS),
+  runningAt: NUMBER,
+  deleteAfterRun: FLAG,
+  gated: FLAG,
+  updatedAt: NUMBER,
+});
+export const ROUTINES: Bound = object<RoutinesState>()({
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  schedulerOn: FLAG,
+  routines: list(MAX_ROUTINES, routine),
+  omitted: NUMBER,
+  revision: NUMBER,
+  removed: object<NonNullable<RoutinesState["removed"]>>()({
+    id: ID,
+    ranOnce: FLAG,
+    runAt: NUMBER,
+  }),
+});
 
 /** Every part of the state but the transcripts, and the transcripts as one map. */
 export const STATE: Bound = flagged<ClawtrateState>()({
@@ -1048,6 +1100,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   creations: list(MAX_CREATIONS, CREATION),
   accounts: ACCOUNTS,
   taskModels: map(MAX_TRACKED_TASKS, MAX_ID_CHARS, TASK_MODEL),
+  routines: ROUTINES,
   retention: retentionAlarm,
   sidebar,
   turnLimitMinutes: NUMBER,

@@ -45,6 +45,7 @@ const WALKED = new Set([
   "PendingSaves",
   "AccountsEngine",
   "TaskModelsEngine",
+  "RoutinesEngine",
   "UsageEngine",
   "MachinesEngine",
   "WaitingIndex",

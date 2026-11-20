@@ -19,7 +19,7 @@ import type { Task } from "./types.ts";
 export const MAX_TASK_MODELS = 32;
 /** The lines kept for one task, newest last. */
 export const MAX_TASK_MODEL_EVENTS = 16;
-/** The tasks whose lines and efforts the storage keeps, most recently changed last. */
+/** The tasks whose lines the storage keeps, most recently changed last. */
 export const MAX_LOGGED_TASKS = 64;
 /** The storage key's prefix; the gateway's identity follows it. */
 export const TASK_MODEL_LOG_PREFIX = "clawtrate.task-models:";
@@ -370,7 +370,7 @@ export class TaskModelsEngine {
     this.ctx.update((all) => (all[key] ? { ...all, [key]: change(all[key]) } : all));
   }
 
-  /** A task is followed: its view, its lines and efforts from the storage, and its models. */
+  /** A task is followed: its view, its lines from the storage, and its models. */
   open(key: string): void {
     if (this.ctx.get()[key]) return;
     this.openings.set(key, (this.nextOpening += 1));

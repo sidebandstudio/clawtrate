@@ -29,6 +29,7 @@ import {
   FOREIGN_RUNS_PER_SESSION,
   FOREIGN_SESSIONS,
   MAX_ACCESS_WAITERS,
+  MAX_FOREIGN_READ_SESSIONS,
   MAX_OPENED_READS,
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
@@ -45,7 +46,7 @@ import {
   MAX_SAVE_BYTES,
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
-import { emptyActivity } from "./runs.ts";
+import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   MAX_WAITING_ID_CHARS,
@@ -164,9 +165,19 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
     max: FOREIGN_SESSIONS,
-    each: ID + jsonLength(emptyActivity) + FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
+    each:
+      ID +
+      jsonLength(emptyActivity) +
+      MAX_QUEUE_ALIASES * 2 * ID +
+      FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
     row: "foreignRuns",
   },
+  foreignReads: {
+    max: MAX_FOREIGN_READ_SESSIONS,
+    each: ID + MAX_STEPS_PER_TASK * N,
+    row: "bookkeeping",
+  },
+  "foreignReads.*": { max: MAX_STEPS_PER_TASK, each: N, row: null },
   "foreign.*.runs": {
     max: FOREIGN_RUNS_PER_SESSION,
     each: runWithoutSteps,
@@ -246,7 +257,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },
   // A task's model and effort (`task-models.ts`): the save on its way for each followed task, which
-  // a message to that task waits for. Its view, lines and efforts are the state's `taskModels`.
+  // a message to that task waits for. Its view and lines are the state's `taskModels`.
   "taskModels.saves": { max: T, each: ID, row: "bookkeeping" },
   // Reads and writes of this device's record still to make: one per followed task, only for the
   // present gateway (others are dropped when one is queued), each its gateway's key and the task's.
@@ -275,6 +286,7 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "accounts.ctx": "the client's own functions, handed to the accounts engine",
   "accounts.signInAbort": "a handle that ends the one sign-in request that waits",
   "taskModels.ctx": "the client's own functions, handed to the task models engine",
+  "routines.ctx": "the client's own functions, handed to the routines engine",
   "usage.ctx": "the client's own functions, handed to the usage engine",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
 };
@@ -288,6 +300,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   fileTransfers: "FileTransfers",
   accounts: "AccountsEngine",
   taskModels: "TaskModelsEngine",
+  routines: "RoutinesEngine",
   usage: "UsageEngine",
   machines: "MachinesEngine",
   waiting: "WaitingIndex",

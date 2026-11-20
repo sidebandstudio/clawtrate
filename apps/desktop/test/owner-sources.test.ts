@@ -19,6 +19,7 @@ const SCANNED = ["packages/core/src", "apps/desktop/src/web-host", "apps/desktop
 /** Collections kept outside the registry's fields: why each one is bounded. */
 const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
+  "packages/core/src/memory.ts:ROOT_MEMORY": "static, two workspace filenames",
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
   "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
   "packages/core/src/file-paths.ts:FILE_TOOLS": "static, four tool names",
@@ -87,6 +88,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/types.ts:initialState.unroutedApprovals":
     "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.creations": "static, an empty list copied on write",
+  "packages/core/src/routines.ts:initialRoutinesState.routines":
+    "the empty list before the first read; the state replaces it, never grows it",
   "packages/core/src/accounts.ts:initialAccountsState.accounts":
     "static, an empty list copied on write",
   "packages/core/src/accounts.ts:initialAccountsState.methods":
@@ -141,6 +144,12 @@ const ALLOWED: Record<string, string> = {
     "one list read; the bounded cards of that list that belong to the task",
   "packages/core/src/client.ts:backfillQuestions>pendingBefore":
     "one list read; the task's pending questions, at most `MAX_PENDING_QUESTIONS_PER_TASK`",
+  "packages/core/src/client.ts:readRecipientRuns>historyIds":
+    "one history read; the run ids that read established, at most 40 messages' runs, dropped when it returns",
+  "packages/core/src/client.ts:readRecipientRuns>activeBefore":
+    "one history read; the run ids active before it was asked, at most the named ids', dropped when it returns",
+  "packages/core/src/client.ts:readRecipientRuns>inferred":
+    "one history read; the run ids whose end that read does not establish, at most 40 messages' runs, dropped when it returns",
   // The renderer's side of the web bridge, in a browser tab, not the host.
   "packages/core/src/remote-bridge.ts:createRemoteBridge>listeners":
     "renderer; one per subscription, removed by its unsubscribe",

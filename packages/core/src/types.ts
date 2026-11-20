@@ -3,6 +3,7 @@
 
 import type { TaskModelView } from "./task-models.ts";
 import { initialAccountsState, type AccountsState } from "./accounts.ts";
+import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
@@ -374,10 +375,14 @@ export type ClawtrateState = {
   /**
    * Each followed task's model and effort as this app handles them
    * (`task-models.ts`): the models the gateway lists for it, a change held or
-   * on its way, its last refusal, the lines its changes left and the effort
-   * each turn this app started asked for.
+   * on its way, its last refusal and the lines its changes left.
    */
   taskModels: Record<string, TaskModelView>;
+  /**
+   * The gateway's scheduled jobs, check-in jobs left out (`routines.ts`): read
+   * on every connect from `cron.list` and kept current by the `cron` event.
+   */
+  routines: RoutinesState;
   /**
    * A secondary alarm: roughly what the state takes, against the arithmetic
    * bound of `state-bounds.ts`. The bound holds by construction; `near` only
@@ -487,6 +492,7 @@ export const initialState: ClawtrateState = {
   creations: [],
   accounts: initialAccountsState,
   taskModels: {},
+  routines: initialRoutinesState,
   retention: { estimated: 0, bound: 0, near: false },
   sidebar: { status: "unknown", prefs: null },
   usage: initialUsage,
