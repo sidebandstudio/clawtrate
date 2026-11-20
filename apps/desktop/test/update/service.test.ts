@@ -51,7 +51,7 @@ const start = (overrides: Partial<Parameters<typeof DesktopUpdateService.start>[
     ...overrides,
   });
 async function offer(service: DesktopUpdateService) {
-  const {snapshot:{ state }} = await service.check();
+  const {snapshot:{ state }} = await service.check(service.get().selectedTrack);
   if (state.kind !== "offered") throw Error(JSON.stringify(state));
   return state.offerId;
 }
@@ -112,9 +112,9 @@ it.each(["check", "download"] as const)(
       (stage === "check" ? json(document("1.1.0", "stable")) : bytes(fixture.body))(req, res);
     });
     const id = stage === "download" ? await offer(service) : "old";
-    const pending = stage === "check" ? service.check() : service.download(id);
+    const pending = stage === "check" ? service.check(service.get().selectedTrack) : service.download(id);
     await entered.promise;
-    const replies = await Promise.all([service.check(), service.download(id)]);
+    const replies = await Promise.all([service.check(service.get().selectedTrack), service.download(id)]);
     expect(replies.map((r) => r.outcome)).toEqual(["busy", "busy"]);
     expect(service.get()).not.toHaveProperty("outcome");
     await service.chooseTrack("nightly");
@@ -133,13 +133,13 @@ it.each(["check", "download"] as const)(
 it("refuses a feed for another track and records only completed reads", async () => {
   const service = await start();
   server.route("/stable", (_req, res) => res.destroy());
-  expect((await service.check()).snapshot.lastCheckedAt).toBeNull();
+  expect((await service.check(service.get().selectedTrack)).snapshot.lastCheckedAt).toBeNull();
   for (const [version, track] of [
     [nightly, "nightly"],
     [nightly, "stable"],
   ] as const) {
     server.route("/stable", json(document(version, track)));
-    expect((await service.check()).snapshot).toMatchObject({
+    expect((await service.check(service.get().selectedTrack)).snapshot).toMatchObject({
       lastCheckedAt: expect.stringMatching(/Z$/),
       state: { kind: "failed", reason: "wrong-track" },
     });
@@ -161,7 +161,7 @@ it("reports the running version when the selected track offers an older build", 
   const service = await start({ version: "2.0.0-nightly.20261102.1" });
   expect(service.get().selectedTrack).toBe("nightly");
   await service.chooseTrack("stable");
-  expect((await service.check()).snapshot).toMatchObject({
+  expect((await service.check(service.get().selectedTrack)).snapshot).toMatchObject({
     runningVersion: "2.0.0-nightly.20261102.1",
     state: { kind: "nothing-newer" },
   });
@@ -170,10 +170,10 @@ it("describes a single source, development copies and invalid running versions",
   const single = await start({ feeds: { stable: server.origin + "/stable", nightly: null } });
   expect(single.get().tracks).toHaveLength(1);
   expect((await single.chooseTrack("nightly")).snapshot.selectedTrack).toBe("stable");
-  expect((await (await start({ packaged: false })).check()).snapshot.state).toMatchObject({
+  expect((await (await start({ packaged: false })).check("stable")).snapshot.state).toMatchObject({
     reason: "development-build",
   });
-  expect((await (await start({ version: "bad" })).check()).snapshot).toMatchObject({
+  expect((await (await start({ version: "bad" })).check("stable")).snapshot).toMatchObject({
     runningTrack: null,
     runningVersion: null,
     state: { reason: "invalid-version" },
@@ -198,7 +198,7 @@ it.each(["check", "download"] as const)(
         return result;
       });
     try {
-      const pending = id ? service.download(id) : service.check();
+      const pending = id ? service.download(id) : service.check(service.get().selectedTrack);
       await completed.promise;
       if (id) expect(readdirSync(updates)).toHaveLength(1);
       const change = service.chooseTrack("nightly");
@@ -228,7 +228,7 @@ it("a failed file-store write cannot slip into a later successful save", async (
   expect(await prefs.get("selectedTrack")).toBe("nightly");
   rmSync(path, { recursive: true });
   renameSync(path + ".saved", path);
-  await service.check();
+  await service.check(service.get().selectedTrack);
   expect((await start()).get().selectedTrack).toBe("nightly");
 });
 
@@ -282,7 +282,7 @@ it("marks the command busy before notifying a throwing observer", async () => {
   const service = await start({
     changed: (s) => {
       if (s.state.kind === "checking") replies.push(service.download("stale"));
-      if (s.state.kind === "downloading") replies.push(service.check());
+      if (s.state.kind === "downloading") replies.push(service.check(service.get().selectedTrack));
       throw Error("renderer gone");
     },
   });
@@ -304,4 +304,14 @@ it("neither startup nor track selection schedules a later check", async () => {
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("refuses a check for a selection another caller has changed", async () => {
+  const service = await start();
+  await service.chooseTrack("nightly");
+  expect((await service.check("stable")).outcome).toBe("stale");
+  expect((await service.check({})).outcome).toBe("invalid");
+  expect(server.requests).toEqual([]);
+  expect((await service.check("nightly")).outcome).toBe("accepted");
+  expect(server.requests).toEqual(["/nightly"]);
 });

@@ -252,7 +252,7 @@ async function main(): Promise<void> {
     },
   });
   ipcMain.handle("clawtrate:update:get", () => updates.get());
-  ipcMain.handle("clawtrate:update:check", () => updates.check());
+  ipcMain.handle("clawtrate:update:check", (_event, track: unknown) => updates.check(track));
   ipcMain.handle("clawtrate:update:track", (_event, track: unknown) => updates.chooseTrack(track));
   ipcMain.handle("clawtrate:update:download", (_event, id: unknown) => updates.download(id));
 

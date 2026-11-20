@@ -126,9 +126,11 @@ export class DesktopUpdateService {
     return clearUpdateDirectory(this.options.downloadDir);
   }
 
-  async check(): Promise<DesktopUpdateReply> {
+  async check(expectedTrack: unknown): Promise<DesktopUpdateReply> {
     if (this.switching || this.work) return this.reply("busy");
+    if (expectedTrack !== "stable" && expectedTrack !== "nightly") return this.reply("invalid");
     const { runningVersion, selectedTrack } = this.snapshot;
+    if (expectedTrack !== selectedTrack) return this.reply("stale");
     if (!this.options.packaged) this.publish(failed("development-build"));
     else if (!runningVersion || !selectedTrack) this.publish(failed("invalid-version"));
     else {

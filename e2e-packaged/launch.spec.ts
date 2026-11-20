@@ -125,7 +125,7 @@ test("opens its window from the packaged app on the connect screen", async () =>
     await page.evaluate(() =>
       (
         window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
-      ).clawtrateHost.desktopUpdates.check(),
+      ).clawtrateHost.desktopUpdates.check("stable"),
     ),
   ).toMatchObject({snapshot:{
     lastCheckedAt: null,

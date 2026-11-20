@@ -31,7 +31,7 @@ const api: DesktopHostApi = {
   platform: process.platform,
   desktopUpdates: {
     get: () => ipcRenderer.invoke("clawtrate:update:get"),
-    check: () => ipcRenderer.invoke("clawtrate:update:check"),
+    check: (track) => ipcRenderer.invoke("clawtrate:update:check",track),
     chooseTrack: (track) => ipcRenderer.invoke("clawtrate:update:track", track),
     download: (id) => ipcRenderer.invoke("clawtrate:update:download", id),
     subscribe(listener) {
