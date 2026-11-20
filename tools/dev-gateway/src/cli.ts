@@ -2212,16 +2212,6 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   // The selector is validated before any command runs or any path is built.
   const selected = selectInstance(values.instance, env);
   const [command, ...rest] = positionals;
-  if (command === "list" || command === "prune") {
-    if (selected !== null) {
-      throw new Error(
-        `${command} covers every instance on this machine; it does not take --instance or CLAWTRATE_DEV_INSTANCE`,
-      );
-    }
-    if (command === "list") list({ json: values.json });
-    else await prune();
-    return;
-  }
   const known = [
     "start",
     "up",
@@ -2233,6 +2223,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     "approve",
     "lock",
     "unlock",
+    "list",
+    "prune",
   ];
   if (!command || !known.includes(command)) {
     console.log(USAGE);
@@ -2243,6 +2235,16 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     if (values[option] && command !== "start" && command !== "up") {
       throw new Error(`--${option} is a start option; ${command} does not take it`);
     }
+  }
+  if (command === "list" || command === "prune") {
+    if (selected !== null) {
+      throw new Error(
+        `${command} covers every instance on this machine; it does not take --instance or CLAWTRATE_DEV_INSTANCE`,
+      );
+    }
+    if (command === "list") list({ json: values.json });
+    else await prune();
+    return;
   }
   const inst = openInstance(selected);
   const runId = values["run-id"];

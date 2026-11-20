@@ -16,7 +16,7 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   browserPorts,
   devConfig,
@@ -322,6 +322,18 @@ describe("what --with-images adds to the config", () => {
       await expect(main([command, "--instance", "probe", "--with-images"], {})).rejects.toThrow(
         `--with-images is a start option; ${command} does not take it`,
       );
+    }
+  });
+
+  it.each(["list", "prune"])("rejects --with-images before running %s", async (command) => {
+    vi.stubEnv("HOME", temp());
+    vi.stubEnv("USERPROFILE", process.env.HOME);
+    try {
+      await expect(main([command, "--with-images"], {})).rejects.toThrow(
+        `--with-images is a start option; ${command} does not take it`,
+      );
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

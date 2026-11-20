@@ -128,7 +128,13 @@ export function startScriptedImages(options: {
   const hanging = new Set<ServerResponse>();
 
   const server = createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const url = URL.parse(req.url ?? "/", "http://127.0.0.1");
+    if (!url) {
+      sendJson(res, 400, {
+        error: { message: "invalid request target", type: "invalid_request_error" },
+      });
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/scripted/images/requests") {
       sendJson(res, 200, { requests });
       return;

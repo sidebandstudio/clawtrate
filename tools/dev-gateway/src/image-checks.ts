@@ -106,13 +106,14 @@ async function imageRun(
   same([details.async, details.status], [true, "started"], "the tool's answer");
   const taskId = String(details.taskId);
   expect(/^tool:image_generate:[0-9a-f-]{36}$/.test(taskId), `task id ${taskId}`);
-  const completion = await op.terminal(completionRun(taskId, outcome), 120_000);
+  const terminal = await op.terminalEvent(completionRun(taskId, outcome), 120_000);
+  const completion = rec(terminal.payload);
   same(completion.sessionKey, key, "the completion run's task");
   expect(
     op.events.some((event) => event.seq > from && rec(event.payload).runId === completion.runId),
     "the completion run's events",
   );
-  return { key, taskId, completion, since, from };
+  return { key, taskId, completion, completedAt: terminal.at, since, from };
 }
 
 /** The task's history, read again until `found` finds what it waits for (at most 30 s). */
@@ -164,8 +165,12 @@ function failureCheck(
     name,
     covers: [`#image-${kind}`],
     async run(ctx) {
-      const { key, completion, since } = await imageRun(ctx, kind, `#image-${kind}`, "error");
-      const completed = Date.now();
+      const { key, completion, completedAt, since } = await imageRun(
+        ctx,
+        kind,
+        `#image-${kind}`,
+        "error",
+      );
       same(replyText(rec(completion.message)), IMAGE_FAILED_REPLY, "the completion turn's reply");
       const { messages } = await historyUntil(ctx, key, "the failure's reply", (m) =>
         m.some((x) => x.role === "assistant" && replyText(x) === IMAGE_FAILED_REPLY)
@@ -185,7 +190,7 @@ function failureCheck(
           `the gateway closed the unanswered request after ${waited} ms, not after about ${HANG_TIMEOUT_MS}`,
         );
         expect(
-          Date.parse(request.closedAt) <= completed,
+          Date.parse(request.closedAt) <= completedAt,
           "the completion ended before the gateway gave up on the request",
         );
       }
