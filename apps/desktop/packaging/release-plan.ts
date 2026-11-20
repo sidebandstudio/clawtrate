@@ -4,8 +4,14 @@ import { lstatSync, readFileSync, readdirSync, renameSync, writeFileSync } from 
 import { join } from "node:path";
 
 import { MAX_DOWNLOAD_BYTES, MAX_FEED_BYTES } from "../src/main/update/engine.ts";
-import { FEED_FORMAT, FILE_KEYS, parseReleaseDate, type FileKey } from "../src/main/update/feed.ts";
-import { parseVersion, versionTrack } from "../src/main/update/version.ts";
+import {
+  FEED_FORMAT,
+  FILE_KEYS,
+  parseFeed,
+  parseReleaseDate,
+  type FileKey,
+} from "../src/main/update/feed.ts";
+import { isNewer, parseVersion, versionTrack } from "../src/main/update/version.ts";
 import { artifactName, makeFeed, sha512Base64 } from "./feed.ts";
 
 function fullCommit(commit: string) {
@@ -20,6 +26,8 @@ export interface Candidate {
   buildDate: string;
   feedUrl: string;
   otherFeedUrl?: string;
+  currentFeed?: string;
+  otherFeed?: string;
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -55,6 +63,39 @@ export function plan(candidate: Candidate) {
   const address = localFeedAddress(feedUrl);
   const addresses = feedAddresses(track, feedUrl, candidate.otherFeedUrl);
   if (!addresses) issues.push("Expected distinct, canonical HTTPS feed addresses.");
+
+  const compared: string[] = [];
+  if (
+    parsed?.length === 5 &&
+    validDate &&
+    String(parsed[3]) !== buildDate.slice(0, 10).replaceAll("-", "")
+  )
+    issues.push("Nightly version day differs from the UTC build date.");
+  if (validTrack && parsed) {
+    for (const [name, path, endpoint] of [
+      [track, candidate.currentFeed, feedUrl],
+      [track === "stable" ? "nightly" : "stable", candidate.otherFeed, candidate.otherFeedUrl],
+    ] as const) {
+      if (path === undefined) continue;
+      const doc = json(path);
+      // An unconfigured other track can still supply a local comparison file.
+      const first = Object.values(object(doc.files))[0];
+      const url = endpoint ?? object(first).url;
+      const origin = typeof url === "string" ? localFeedAddress(url) : null;
+      const previous = origin && parseFeed(JSON.stringify(doc), origin, null, undefined, name);
+      if (!previous?.ok) {
+        issues.push(name + ": invalid published comparison feed.");
+        continue;
+      }
+      compared.push(name);
+      if (doc.version === version) issues.push(name + ": feed already names this version.");
+      else if (!isNewer(parsed, previous.feed.version))
+        issues.push(name + ": candidate must be newer than the supplied release.");
+    }
+  }
+  const comparison = compared.length
+    ? "Compared with the supplied " + compared.join(" and ") + " feed."
+    : "The version was not compared with any published release.";
 
   const allowed = new Set(["update-feed.json", "release-plan.json"]);
   const feed = json(join(dir, "update-feed.json"));
@@ -125,6 +166,7 @@ export function plan(candidate: Candidate) {
     verdict: issues.length ? "refused" : "complete and consistent",
     issues,
     ownerChecks,
+    comparison,
   };
 }
 
@@ -156,7 +198,18 @@ export function assemble(candidate: Candidate) {
 }
 
 export function runPlan(args: string[], print = console.log) {
-  const [mode, dir, track, version, commit, buildDate, feedUrl, otherFeedUrl] = args;
+  const [
+    mode,
+    dir,
+    track,
+    version,
+    commit,
+    buildDate,
+    feedUrl,
+    otherFeedUrl,
+    currentFeed,
+    otherFeed,
+  ] = args;
   if (
     !(mode === "assemble" || mode === "check") ||
     !dir ||
@@ -165,10 +218,10 @@ export function runPlan(args: string[], print = console.log) {
     !commit ||
     !buildDate ||
     !feedUrl ||
-    args.length > 8
+    args.length > 10
   ) {
     console.error(
-      "Usage: release-plan.ts assemble|check DIR TRACK VERSION COMMIT ISO_DATE TRACK_URL [OTHER_URL|-]",
+      "Usage: release-plan.ts assemble|check DIR TRACK VERSION COMMIT ISO_DATE TRACK_URL [OTHER_URL|-] [CURRENT_FEED|-] [OTHER_FEED|-]",
     );
     return 1;
   }
@@ -180,6 +233,8 @@ export function runPlan(args: string[], print = console.log) {
       commit,
       buildDate,
       feedUrl,
+      ...(currentFeed && currentFeed !== "-" ? { currentFeed } : {}),
+      ...(otherFeed && otherFeed !== "-" ? { otherFeed } : {}),
       ...(otherFeedUrl && otherFeedUrl !== "-" ? { otherFeedUrl } : {}),
     };
     if (mode === "assemble") assemble(candidate);
@@ -190,7 +245,7 @@ export function runPlan(args: string[], print = console.log) {
     print(
       [record.track, record.version, record.verdict].join(" ") +
         "\n" +
-        [record.ownerChecks, ...record.issues].join("\n"),
+        [record.ownerChecks, record.comparison, ...record.issues].join("\n"),
     );
     return record.issues.length ? 1 : 0;
   } catch {

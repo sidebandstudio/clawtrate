@@ -286,3 +286,37 @@ it("compares both compiled feed addresses including absence and rejects ambiguou
     ).toThrow();
   }
 });
+
+it("compares the supplied track feeds offline, including stale, reused and superseding versions", () => {
+  const feed = read("update-feed.json");
+  const current = path("published.json");
+  const check = (version: string, track: string, candidate = c) => {
+    write("published.json", { ...feed, version, track });
+    return plan({
+      ...candidate,
+      ...(candidate.track === track ? { currentFeed: current } : { otherFeed: current }),
+    });
+  };
+  expect(plan(c).comparison).toContain("not compared with any published release");
+  expect(check(c.version, "stable").issues).toContain("stable: feed already names this version.");
+  expect(check("0.2.1", "stable").issues).toContain(
+    "stable: candidate must be newer than the supplied release.",
+  );
+  expect(check("0.2.1-nightly.20261119.1", "nightly").issues).toContain(
+    "nightly: candidate must be newer than the supplied release.",
+  );
+  expect(check("0.2.0-nightly.20261119.9", "nightly").comparison).toContain("supplied nightly");
+  const nightly = { ...c, track: "nightly", version: "0.2.0-nightly.20261119.9" };
+  expect(check("0.2.0", "stable", nightly).issues).toContain(
+    "stable: candidate must be newer than the supplied release.",
+  );
+  expect(check("0.2.0-nightly.20261119.10", "nightly", nightly).issues).toContain(
+    "nightly: candidate must be newer than the supplied release.",
+  );
+  expect(plan({ ...c, currentFeed: path("missing") }).issues).toContain(
+    "stable: invalid published comparison feed.",
+  );
+  expect(plan({ ...nightly, buildDate: "2026-11-20T00:00:00.000Z" }).issues).toContain(
+    "Nightly version day differs from the UTC build date.",
+  );
+});
