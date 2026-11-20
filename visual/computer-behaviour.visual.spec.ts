@@ -4,7 +4,7 @@
 // The fixture answers with the engine itself and a scripted computer plugin.
 // Test names carry the parity rows they prove.
 import { expect, test, type Page } from "@playwright/test";
-import { contextFor, openFixture, SIZES } from "./fixture.ts";
+import { contextFor, NOW, openFixture, SIZES } from "./fixture.ts";
 import {
   COMPUTER,
   computerPanel,
@@ -215,23 +215,29 @@ test.describe("the full view on the desktop", () => {
     page,
   }) => {
     // The fixture's stream sends one frame and, with nothing typed, no other, while its
-    // renewals go on answering: after 10 s the picture is the last one, by itself.
+    // renewals go on answering. The fixture's clock is fixed: the check moves it on.
     await openFixture(page, `${COMPUTER}&computer=watching`, "light");
     await watch(page);
     const badge = computerPanel(page).locator(".screen-live");
     await expect(badge).toHaveText("Live");
-    await expect(badge).toHaveText(/^Last picture, 1\d s ago$/, { timeout: 14_000 });
+    await page.clock.setFixedTime(new Date(NOW.getTime() + 9_000));
+    await page.waitForTimeout(1_500);
+    await expect(badge).toHaveText("Live");
+    await page.clock.setFixedTime(new Date(NOW.getTime() + 12_000));
+    await expect(badge).toHaveText("Last picture, 12 s ago");
     await expect(computerPanel(page).getByTestId("computer-tile")).toHaveAccessibleName(
-      /^Juniper's browser, last picture, 1\d s ago: /,
+      /^Juniper's browser, last picture, 12 s ago: /,
     );
     expect((await pane(page))?.view?.status).toBe("live");
     await computerPanel(page)
       .getByRole("button", { name: "Open Juniper's browser full window" })
       .click();
-    await expect(fullView(page).locator(".screen-age")).toHaveText(/^Last picture, 1\d s ago$/);
+    await expect(fullView(page).locator(".screen-age")).toHaveText("Last picture, 12 s ago");
     await expect(fullView(page).getByTestId("screen-frame")).toHaveAccessibleName(
-      /^Juniper's browser, last picture, 1\d s ago$/,
+      "Juniper's browser, last picture, 12 s ago",
     );
+    await page.clock.setFixedTime(new Date(NOW.getTime() + 75_000));
+    await expect(fullView(page).locator(".screen-age")).toHaveText("Last picture, 1 min ago");
   });
 
   test("F-142: another device's take that is still waiting for the bot is asking for control, never has control", async ({
