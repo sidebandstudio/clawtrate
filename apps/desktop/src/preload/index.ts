@@ -1,5 +1,5 @@
 // Exposes a narrow, typed IPC surface to the renderer. No Node or Electron
-// objects cross the bridge, only plain data, six functions and the platform name.
+// objects cross the bridge, only plain data, host actions and the platform name.
 
 import type {
   AttachmentInfo,
@@ -12,6 +12,8 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 
 export type DesktopHostApi = {
   platform: string;
+  starWithCli(): Promise<boolean>;
+  openProjectPage(): Promise<boolean>;
   hello(): Promise<{ info: HostInfo; state: ClawtrateState }>;
   /** Resolves with the command's answer (see `BridgeResultFor`). */
   send(command: BridgeCommand): Promise<unknown>;
@@ -26,6 +28,8 @@ export type DesktopHostApi = {
 
 const api: DesktopHostApi = {
   platform: process.platform,
+  starWithCli: () => ipcRenderer.invoke("clawtrate:star"),
+  openProjectPage: () => ipcRenderer.invoke("clawtrate:open-project"),
   hello: () => ipcRenderer.invoke("clawtrate:hello"),
   send: (command) => ipcRenderer.invoke("clawtrate:command", command),
   attach: (file) => ipcRenderer.invoke("clawtrate:attach", file),

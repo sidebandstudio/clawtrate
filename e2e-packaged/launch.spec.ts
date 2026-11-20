@@ -125,18 +125,17 @@ test("opens its window from the packaged app on the connect screen", async () =>
   }));
   expect(page_.require).toBe("undefined");
   expect(page_.process).toBe("undefined");
-  // The whole bridge: six functions and the platform name. `attach` hands a file's
-  // bytes to the main process for a later message, `save` hands it the bytes of a file
-  // the Work pane holds to save where the person chooses, and `setBadge` gives it the
-  // number of unread tasks for the dock badge; anything else here is a regression.
+  // Keep the preload surface explicit. Each project action takes no arguments.
   expect(page_.host).toEqual([
     "attach",
     "hello",
     "onState",
+    "openProjectPage",
     "platform",
     "save",
     "send",
     "setBadge",
+    "starWithCli",
   ]);
   expect(page_.csp).toContain("default-src 'self'");
   expect(page_.csp).toContain("script-src 'self'");

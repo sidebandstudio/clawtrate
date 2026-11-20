@@ -291,7 +291,10 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                       ? ApprovalsFile
                                                       : void;
 
+export const PROJECT_URL = "https://github.com/sidebandstudio/clawtrate";
+
 export type HostInfo = {
+  canStarWithCli?: boolean;
   kind: "desktop" | "web";
   version: string;
   /**
@@ -327,6 +330,9 @@ export type ClawtrateBridge = {
    * save dialog). Absent where the host has none: a browser downloads instead.
    */
   save?(file: { name: string; data: ArrayBuffer }): Promise<SaveResult>;
+  /** Desktop-only actions on the fixed project repository. Neither accepts a target. */
+  starWithCli?(): Promise<boolean>;
+  openProjectPage?(): Promise<boolean>;
 };
 
 /**
