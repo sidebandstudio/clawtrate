@@ -458,17 +458,17 @@ Every row was run on a development gateway (research, the section named) unless 
 
 ## 15. Parity rows
 
-Statuses unchanged, except as the maintainers ruled for F-363 (`todo`, as it was).
+All five statuses remain `todo`.
 
 The targets are the maintainers' rulings on this design's proposals:
 
 | Row   | Target                                                                                                                                                                               |
 | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| F-198 | same; note: a successful personal-library creation appears as a "Saved a skill" card. The existing task needs an explicit attach to hold the new skill.                              |
+| F-198 | same; note: a successful personal-library creation appears as a “Saved a skill” card. The existing task needs an explicit attach to hold the new skill.                              |
 | F-199 | same; note: the library's default-selection setting, a task's pinned revisions and a bot's configured skill filter are separate. Changing the bot's filter needs admin access.       |
 | F-361 | same; note: a task that already holds the skill keeps its pinned revision until updated. An update applies from that task's next turn.                                               |
-| F-362 | same; note: "Remove skill" takes the skill out of the library. Tasks that hold it keep their pinned revisions. Learned workshop skills are archived and restored with admin access.  |
-| F-363 | better: a person can share a skill they own with eligible profiles on this gateway from its page ("Share on this gateway", "Stop sharing"). Sharing provides no public link or sync. |
+| F-362 | same; note: “Remove skill” takes the skill out of the library. Tasks that hold it keep their pinned revisions. Learned workshop skills are archived and restored with admin access.  |
+| F-363 | better: a person can share a skill they own with eligible profiles on this gateway from its page (“Share on this gateway”, “Stop sharing”). Sharing provides no public link or sync. |
 
 The gateway dependency cells state the facts of section 14, each marked live or source as the research found it. F-361's name field stays in its target; this version keeps a skill's name fixed once it is made in Clawtrate, and renaming is deferred (section 17).
 
