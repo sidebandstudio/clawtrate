@@ -59,6 +59,7 @@ function unavailable(
 export class DesktopUpdateService {
   private engine: UpdateEngine | null = null;
   private work: Promise<void> | null = null;
+  private pendingInstall: DesktopUpdateSnapshot["install"] | null = null;
   private switching = false;
   private closed = false;
   private readonly shutdownSignal = new AbortController();
@@ -123,7 +124,7 @@ export class DesktopUpdateService {
 
   private publish(state: DesktopUpdateState) {
     let install = idleCapability(this.options.installer);
-    if (state.kind === "verified") install = this.snapshot.install;
+    if (state.kind === "verified") install = this.pendingInstall ?? install;
     else if (state.kind === "failed" && state.reason === "artifact-changed")
       install = { kind: "unavailable-in-this-build", reason: state.reason };
     else if (
@@ -132,6 +133,7 @@ export class DesktopUpdateService {
       state.reason !== "installer-failed"
     )
       install = { kind: "unavailable-in-this-build", reason: state.reason };
+    this.pendingInstall = null;
     this.snapshot = { ...this.snapshot, state, install, revision: this.snapshot.revision + 1 };
     try {
       this.options.changed(this.snapshot);
@@ -197,6 +199,7 @@ export class DesktopUpdateService {
   shutdown(): void {
     if (this.closed) return;
     this.closed = true;
+    this.pendingInstall = null;
     this.shutdownSignal.abort();
     this.engine?.cancel();
     this.engine = null;
@@ -234,6 +237,25 @@ export class DesktopUpdateService {
 
   private clearDownloads() {
     return clearUpdateDirectory(this.options.downloadDir);
+  }
+
+  private runWork(
+    engine: UpdateEngine,
+    initial: DesktopUpdateState,
+    run: () => Promise<DesktopUpdateState | undefined>,
+    failure: DesktopUpdateState,
+  ): Promise<void> {
+    const work = Promise.resolve()
+      .then(run)
+      .catch(() => failure)
+      .then((state) => {
+        // Observers can act on the terminal state as soon as they receive it.
+        this.work = null;
+        if (this.engine === engine && state) this.publish(state);
+      });
+    this.work = work;
+    this.publish(initial);
+    return work;
   }
 
   async check(expectedTrack: unknown): Promise<DesktopUpdateReply> {
@@ -275,63 +297,53 @@ export class DesktopUpdateService {
       },
     });
     this.engine = engine;
-    this.work = (async () => {
-      try {
-        await this.clearDownloads();
-      } catch {
-        if (this.engine === engine) {
-          this.snapshot = { ...this.snapshot, preferenceIssue: "update-folder-unavailable" };
-          this.publish({ kind: "not-checked" });
-        }
-        return;
-      }
-      if (this.engine !== engine) return;
-      const result = await engine.check();
-      if (this.engine !== engine) return;
-      this.clearIssue("update-folder-unavailable");
-      const lastCheck = checkedAt ? { track: selectedTrack, readAt: checkedAt } : null;
-      if (lastCheck) this.snapshot = { ...this.snapshot, lastCheck };
-      switch (result.kind) {
-        case "available":
-          this.publish({
-            kind: "offered",
-            version: result.version,
-            releaseDate: result.releaseDate,
-            offerId,
-          });
-          break;
-        case "up-to-date":
-          this.publish({ kind: "nothing-newer" });
-          break;
-        case "not-configured":
-          this.publish(failed("not-configured"));
-          break;
-        case "failed":
-          this.publish(failed(result.cause));
-          break;
-      }
-      if (lastCheck) {
+    await this.runWork(
+      engine,
+      { kind: "checking" },
+      async () => {
         try {
-          await this.options.store.set("lastCheck", JSON.stringify(lastCheck));
-          if (this.snapshot.preferenceIssue === "last-check-not-saved" && !this.closed) {
-            this.clearIssue("last-check-not-saved");
-            this.publish(this.snapshot.state);
-          }
+          await this.clearDownloads();
         } catch {
-          if (this.closed || this.snapshot.lastCheck !== lastCheck) return;
-          this.snapshot = { ...this.snapshot, preferenceIssue: "last-check-not-saved" };
-          this.publish(this.snapshot.state);
+          if (this.engine === engine) {
+            this.snapshot = { ...this.snapshot, preferenceIssue: "update-folder-unavailable" };
+            return { kind: "not-checked" };
+          }
+          return;
         }
-      }
-    })()
-      .catch(() => {
-        if (this.engine === engine) this.publish(failed("unreachable"));
-      })
-      .finally(() => {
-        this.work = null;
-      });
-    this.publish({ kind: "checking" });
-    await this.work;
+        if (this.engine !== engine) return;
+        const result = await engine.check();
+        if (this.engine !== engine) return;
+        this.clearIssue("update-folder-unavailable");
+        const lastCheck = checkedAt ? { track: selectedTrack, readAt: checkedAt } : null;
+        if (lastCheck) {
+          this.snapshot = { ...this.snapshot, lastCheck };
+          this.publish(this.snapshot.state);
+          try {
+            await this.options.store.set("lastCheck", JSON.stringify(lastCheck));
+            if (!this.closed) this.clearIssue("last-check-not-saved");
+          } catch {
+            if (!this.closed && this.snapshot.lastCheck === lastCheck)
+              this.snapshot = { ...this.snapshot, preferenceIssue: "last-check-not-saved" };
+          }
+        }
+        switch (result.kind) {
+          case "available":
+            return {
+              kind: "offered",
+              version: result.version,
+              releaseDate: result.releaseDate,
+              offerId,
+            };
+          case "up-to-date":
+            return { kind: "nothing-newer" };
+          case "not-configured":
+            return failed("not-configured");
+          case "failed":
+            return failed(result.cause);
+        }
+      },
+      failed("unreachable"),
+    );
     if (this.engine !== engine) return this.reply("superseded");
     return this.reply("accepted");
   }
@@ -345,26 +357,24 @@ export class DesktopUpdateService {
     if (!engine || state.kind !== "offered" || state.offerId !== id) return this.reply("stale");
     const expected = engine.offeredBytes;
     if (expected === null) return this.reply("stale");
-    const reportFailure = (reason: DesktopUpdateFailure) => {
-      this.publish({
-        kind: "failed",
-        stage: "download",
-        reason,
-        retry: "check",
-        lastOffer: { version: state.version, releaseDate: state.releaseDate },
-      });
-    };
-    this.work = Promise.resolve()
-      .then(async () => {
+    const downloadFailure = (reason: DesktopUpdateFailure): DesktopUpdateState => ({
+      kind: "failed",
+      stage: "download",
+      reason,
+      retry: "check",
+      lastOffer: { version: state.version, releaseDate: state.releaseDate },
+    });
+    await this.runWork(
+      engine,
+      { kind: "downloading", version: state.version, received: 0, expected },
+      async () => {
         if (this.engine !== engine) return;
         try {
           await prepareUpdateDirectory(this.options.downloadDir, state.offerId);
         } catch {
-          if (this.engine === engine) {
+          if (this.engine === engine)
             this.snapshot = { ...this.snapshot, preferenceIssue: "update-folder-unavailable" };
-            reportFailure("write-failed");
-          }
-          return;
+          return downloadFailure("write-failed");
         }
         if (this.engine !== engine) return;
         const result = await engine.download();
@@ -383,31 +393,23 @@ export class DesktopUpdateService {
               ? await installer.inspect(file).catch(() => "no-installer-path" as const)
               : "artifact-changed";
             if (this.engine !== engine) return;
-            if (reason === "artifact-changed") {
-              reportFailure(reason);
-              return;
-            }
+            if (reason === "artifact-changed") return downloadFailure(reason);
             install = reason
               ? { kind: "unavailable-in-this-build", reason }
               : { kind: "restart-available", offerId: id };
           }
-          this.snapshot = { ...this.snapshot, install };
-          this.publish({
+          this.pendingInstall = install;
+          return {
             kind: "verified",
             offerId: state.offerId,
             version: result.version,
             size: expected,
-          });
-        } else if (result.kind === "failed") reportFailure(result.cause);
-      })
-      .catch(() => {
-        if (this.engine === engine) reportFailure("write-failed");
-      })
-      .finally(() => {
-        this.work = null;
-      });
-    this.publish({ kind: "downloading", version: state.version, received: 0, expected });
-    await this.work;
+          };
+        }
+        if (result.kind === "failed") return downloadFailure(result.cause);
+      },
+      downloadFailure("write-failed"),
+    );
     return this.reply(this.engine === engine ? "accepted" : "superseded");
   }
 

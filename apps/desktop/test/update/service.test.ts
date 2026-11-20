@@ -327,6 +327,33 @@ it("gives same-version offers separate private destinations and removes the olde
   expect(readFileSync(join(fresh, readdirSync(fresh)[0]!))).toEqual(other.body);
 });
 
+it("accepts a download as soon as an observer sees the offer", async () => {
+  const prefs = store();
+  const saving = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  vi.spyOn(prefs, "set").mockImplementationOnce(async () => {
+    saving.resolve();
+    await finish.promise;
+  });
+  let download: Promise<DesktopUpdateReply> | undefined;
+  const service = await start({
+    store: prefs,
+    changed: ({ state }) => {
+      if (state.kind === "offered") download = service.download(state.offerId);
+    },
+  });
+  const check = service.check("stable");
+  await saving.promise;
+  const stateWhileSaving = service.get().state.kind;
+  finish.resolve();
+  await check;
+  expect(await download).toMatchObject({
+    outcome: "accepted",
+    snapshot: { state: { kind: "verified" } },
+  });
+  expect(stateWhileSaving).toBe("checking");
+});
+
 it("marks the command busy before notifying a throwing observer", async () => {
   const replies: Promise<DesktopUpdateReply>[] = [];
   const service = await start({
@@ -832,6 +859,40 @@ it.each(["changed", "replaced", "truncated", "symlink", "hardlink"])(
     expect(await store().get("attempt")).toBeNull();
   },
 );
+
+it("accepts Restart from the first eligible verified snapshot after inspection", async () => {
+  const installer = installStandIn();
+  const entered = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  installer.inspect = vi.fn(async () => {
+    entered.resolve();
+    await release.promise;
+    return null;
+  });
+  let restart: Promise<DesktopUpdateReply> | undefined;
+  const service = await start({
+    installer,
+    changed: ({ state, install }) => {
+      if (state.kind === "verified" && install.kind === "restart-available")
+        restart = service.restart(install.offerId);
+    },
+  });
+  const id = await offer(service);
+  const download = service.download(id);
+  await entered.promise;
+  const during = service.get();
+  const early = await service.restart(id);
+  release.resolve();
+  await download;
+  expect(during.state.kind).toBe("downloading");
+  expect(during.install.kind).toBe("unavailable-in-this-build");
+  expect(early.outcome).toBe("busy");
+  expect(await restart).toMatchObject({
+    outcome: "accepted",
+    snapshot: { state: { kind: "handing-off" } },
+  });
+  expect(installer.launch).toHaveBeenCalledTimes(1);
+});
 
 it("pins Restart to the displayed verified offer across a new check of the same track", async () => {
   const installer = installStandIn();
