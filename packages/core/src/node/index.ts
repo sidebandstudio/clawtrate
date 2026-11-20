@@ -23,8 +23,8 @@ async function writePrivateFile(path: string, contents: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temp = `${path}.${process.pid}.tmp`;
   await writeFile(temp, contents, { mode: 0o600 });
+  await chmod(temp, 0o600);
   await rename(temp, path);
-  await chmod(path, 0o600);
 }
 
 /** A key/value store persisted as one JSON file with owner-only permissions. */
