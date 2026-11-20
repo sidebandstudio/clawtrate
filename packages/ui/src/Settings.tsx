@@ -15,6 +15,8 @@ import {
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
+import { Updates } from "./Updates.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
@@ -69,7 +71,8 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = "gateway" | "accounts" | "conversation" | "usage" | "machines" | "checkins";
+type Section =
+  "gateway" | "accounts" | "conversation" | "usage" | "machines" | "checkins" | "updates";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
@@ -77,6 +80,7 @@ const SECTIONS: Array<[Section, string]> = [
   ["usage", "Usage"],
   ["machines", "Machines"],
   ["checkins", "Check-ins"],
+  ["updates", "Updates"],
 ];
 
 /** How long a bot's turn may run before Clawtrate stops it, in minutes; 50 by default (F-100). */
@@ -148,6 +152,8 @@ export function Settings({
   accounts,
   checkIns,
   bots,
+  initialUpdates,
+  updateReading,
   onClose,
 }: {
   connection: ConnectionState;
@@ -155,15 +161,17 @@ export function Settings({
   accounts: AccountsState;
   checkIns: CheckInsState | undefined;
   bots: readonly Bot[];
+  initialUpdates: boolean;
+  updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
   onClose: () => void;
 }) {
   const send = useCommand();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [section, setSectionState] = useState<Section>(
-    () => recall<Section>(SHOWN_LAST) ?? "gateway",
+  const [section, setSectionState] = useState<Section>(() =>
+    initialUpdates ? "updates" : (recall<Section>(SHOWN_LAST) ?? "gateway"),
   );
   // On a phone the list comes first; a section replaces it.
-  const [pane, setPane] = useState<"nav" | "section">("nav");
+  const [pane, setPane] = useState<"nav" | "section">(initialUpdates ? "section" : "nav");
   const [announcer, announce] = useAnnouncer();
   const setSection = (next: Section) => {
     remember(SHOWN_LAST, next);
@@ -259,7 +267,15 @@ export function Settings({
     </button>
   );
 
-  const accountsSection = useAccountsSection({ accounts, bots, connection, info, announce, toNav });
+  const accountsSection = useAccountsSection({
+    refreshOnOpen: !initialUpdates || section !== "updates",
+    accounts,
+    bots,
+    connection,
+    info,
+    announce,
+    toNav,
+  });
   const usageSection = useUsageSection({ bots, connection, info, announce, toNav });
   const machinesSection = useMachinesSection({
     active: section === "machines",
@@ -423,7 +439,14 @@ export function Settings({
               ? usageSection
               : section === "machines"
                 ? machinesSection
-                : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+                : section === "updates"
+                  ? {
+                      title: "Updates",
+                      back: toNav,
+                      foot: null,
+                      body: <Updates {...updateReading} />,
+                    }
+                  : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">
@@ -463,7 +486,7 @@ export function Settings({
           {closeButton}
           {content}
         </section>
-        {announcer}
+        {section !== "updates" && announcer}
       </div>
     </Dialog>
   );
