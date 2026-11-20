@@ -49,6 +49,11 @@ export const MAX_QUEUED_INPUTS = 32;
 export const MAX_INPUT_TEXT = 2000;
 /** How often a view and a held tab are renewed, at most (the plugin asks for well within `renewWithinMs`). */
 export const RENEW_EVERY_MS = 5_000;
+/**
+ * The share of the lease's deadline (`renewWithinMs`) after the last confirmed renewal at which
+ * "You have control" stops being said here: shorter than the lease, so it never outlives it.
+ */
+export const CONFIRM_WITHIN = 0.75;
 /** A release with no answer within this is "not confirmed". */
 export const RELEASE_DEADLINE_MS = 10_000;
 /** A renewal or a check with no answer within this changes nothing. */
@@ -149,6 +154,12 @@ export type ControlStatus =
   | "draining"
   /** The gateway granted control, and each renewal confirms it. */
   | "granted"
+  /**
+   * A renewal was refused or not answered, or none confirmed the lease within
+   * `CONFIRM_WITHIN`: input has stopped, and whether control is still held is not
+   * known until a renewal or Check reads it.
+   */
+  | "unverified"
   /** Refused: the bot is still acting (at the drain deadline). */
   | "busy"
   /** Refused: something the bot started has not settled. */
@@ -445,6 +456,8 @@ type LiveLease = {
   inputs: Input[];
   sending: boolean;
   answer: { questionId: string; itemId: string; option: number } | null;
+  /** Ends "You have control" when no renewal has confirmed the lease for a while (`armCutoff`). */
+  cutoff: Timer | null;
 };
 
 type LiveTake = {
@@ -661,7 +674,8 @@ export class ComputerViews {
     if (!live) return;
     this.abandonTake(live);
     const pane = this.pane(viewer);
-    if (live.lease && pane?.control.status === "granted") this.release(viewer, { leaving: true });
+    if (live.lease && (pane?.control.status === "granted" || pane?.control.status === "unverified"))
+      this.release(viewer, { leaving: true });
     else if (
       live.lease &&
       (pane?.control.status === "releasing" || pane?.control.status === "unconfirmed")
@@ -1050,7 +1064,8 @@ export class ComputerViews {
     live.renewTimer = null;
     const pane = this.pane(live.viewer);
     const viewing = live.view && !live.view.ended && live.view.streamId;
-    const holding = live.lease && pane?.control.status === "granted";
+    const holding =
+      live.lease && (pane?.control.status === "granted" || pane?.control.status === "unverified");
     if (!viewing && !holding) return;
     // Well within the shorter of the two deadlines: the view's and the held tab's.
     const within = Math.min(
@@ -1066,7 +1081,10 @@ export class ComputerViews {
     const pane = this.pane(live.viewer);
     if (!pane || !this.ctx.online()) return;
     const view = live.view && !live.view.ended && live.view.streamId ? live.view : null;
-    const lease = live.lease && pane.control.status === "granted" ? live.lease : null;
+    const lease =
+      live.lease && (pane.control.status === "granted" || pane.control.status === "unverified")
+        ? live.lease
+        : null;
     if (!view && !lease) return;
     const targetId = lease?.targetId ?? view!.targetId;
     const key = lease?.key ?? pane.key;
@@ -1093,21 +1111,52 @@ export class ComputerViews {
       if (useView && live.view === useView && !useView.ended && answer?.streamRenewed !== true)
         this.endView(live, "gateway-ended", null);
       // "You have control" holds only while each renewal confirms the lease.
-      if (
-        lease &&
-        live.lease === lease &&
-        this.pane(live.viewer)?.control.status === "granted" &&
-        answer?.leaseRenewed !== true
-      )
-        this.leaseEnded(live, null);
+      const status = this.pane(live.viewer)?.control.status;
+      if (lease && live.lease === lease && (status === "granted" || status === "unverified")) {
+        if (answer?.leaseRenewed !== true) this.leaseEnded(live, null);
+        else {
+          this.armCutoff(live, lease);
+          if (status === "unverified") {
+            this.patchControl(live.viewer, { status: "granted", stillHeld: true });
+            this.reschedule(live);
+          }
+        }
+      }
     } catch (error) {
       const why = refusal(error);
       if (why.reason === "tab_not_in_bots_browser") {
         if (useView && live.view === useView) this.endView(live, "tab-closed", null);
         if (lease && live.lease === lease) this.leaseEnded(live, null);
         void this.readTabs(live.viewer);
+        return;
       }
+      // Refused for another reason, or not answered: nothing confirms the lease now.
+      if (lease && live.lease === lease) this.unverified(live, lease);
     }
+  }
+
+  /**
+   * The local cutoff: when no renewal has confirmed the lease for `CONFIRM_WITHIN` of its
+   * deadline, input stops and the bar says control isn't confirmed, before the gateway's own
+   * expiry (or its event) could arrive.
+   */
+  private armCutoff(live: Live, lease: LiveLease): void {
+    if (lease.cutoff) clearTimeout(lease.cutoff);
+    lease.cutoff = setTimeout(
+      () => {
+        lease.cutoff = null;
+        if (live.lease === lease) this.unverified(live, lease);
+      },
+      Math.floor(lease.renewWithinMs * CONFIRM_WITHIN),
+    );
+  }
+
+  /** Control is not confirmed: input stops now; renewals go on, and Check reads it. */
+  private unverified(live: Live, lease: LiveLease): void {
+    if (this.pane(live.viewer)?.control.status !== "granted") return;
+    lease.inputs.length = 0;
+    this.patchControl(live.viewer, { status: "unverified", stillHeld: false });
+    this.reschedule(live);
   }
 
   // Taking control ----------------------------------------------------------------------------
@@ -1186,7 +1235,9 @@ export class ComputerViews {
         inputs: [],
         sending: false,
         answer: null,
+        cutoff: null,
       };
+      this.armCutoff(live, live.lease);
       this.patchControl(viewer, {
         status: "granted",
         busyReason: null,
@@ -1318,6 +1369,7 @@ export class ComputerViews {
     const status = pane.control.status;
     if (
       status !== "granted" &&
+      status !== "unverified" &&
       status !== "unconfirmed" &&
       !(status === "releasing" && pane.control.outOfSight)
     )
@@ -1406,7 +1458,8 @@ export class ComputerViews {
   async check(viewer: string): Promise<void> {
     const live = this.lives.get(viewer);
     const lease = live?.lease;
-    if (!live || !lease || this.pane(viewer)?.control.status !== "unconfirmed") return;
+    const checked = this.pane(viewer)?.control.status;
+    if (!live || !lease || (checked !== "unconfirmed" && checked !== "unverified")) return;
     try {
       const answer = asRecord(
         await deadline(
@@ -1418,8 +1471,9 @@ export class ComputerViews {
           RENEW_DEADLINE_MS,
         ),
       );
-      if (live.lease !== lease || this.pane(viewer)?.control.status !== "unconfirmed") return;
+      if (live.lease !== lease || this.pane(viewer)?.control.status !== checked) return;
       if (answer?.leaseRenewed === true) {
+        this.armCutoff(live, lease);
         this.patchControl(viewer, { status: "granted", stillHeld: true, outOfSight: false });
         this.reschedule(live);
       } else this.leaseEnded(live, null);
@@ -1437,6 +1491,8 @@ export class ComputerViews {
     if (lease) {
       lease.inputs.length = 0;
       lease.answer = null;
+      if (lease.cutoff) clearTimeout(lease.cutoff);
+      lease.cutoff = null;
     }
     const pane = this.pane(live.viewer);
     if (!pane) return;
@@ -1506,7 +1562,11 @@ export class ComputerViews {
         const s = pane.control.status;
         if (
           lease &&
-          (s === "granted" || s === "releasing" || s === "unconfirmed" || s === "answering")
+          (s === "granted" ||
+            s === "unverified" ||
+            s === "releasing" ||
+            s === "unconfirmed" ||
+            s === "answering")
         )
           this.patchControl(live.viewer, {
             status: "maybe-held",

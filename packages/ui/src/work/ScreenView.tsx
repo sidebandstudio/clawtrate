@@ -61,7 +61,14 @@ function useAppWidth(): number {
 }
 
 /** Until the gateway confirms a release, control may still be held: no "Watching", no Take control. */
-const holdingStates = ["draining", "granted", "releasing", "unconfirmed", "answering"];
+const holdingStates = [
+  "draining",
+  "granted",
+  "unverified",
+  "releasing",
+  "unconfirmed",
+  "answering",
+];
 
 export function ScreenView(props: ScreenViewProps) {
   const { bot, pane, frames } = props;
@@ -500,6 +507,18 @@ function ControlBar(props: ScreenViewProps & { phone: boolean }) {
         "alert",
       );
       break;
+    case "unverified":
+      body = bar(
+        "unconfirmed",
+        <>
+          <span>{words.unverifiedLine(name)}</span>
+          <span className="spacer" />
+          {button("Check", props.onCheck, undefined, "primary")}
+          {button("Give back control", () => props.onRelease(null), undefined, "release")}
+        </>,
+        "alert",
+      );
+      break;
     case "answering":
       body = bar(
         undefined,
@@ -595,8 +614,12 @@ function ControlBar(props: ScreenViewProps & { phone: boolean }) {
           undefined,
           <span>
             {elsewhere.holder === "elsewhere"
-              ? words.elsewhereLine(name)
-              : words.otherWindowLine(name)}
+              ? elsewhere.state === "draining"
+                ? words.takingElsewhereLine(name)
+                : words.elsewhereLine(name)
+              : elsewhere.state === "draining"
+                ? words.takingOtherWindowLine(name)
+                : words.otherWindowLine(name)}
           </span>,
         );
       else if (props.phone)

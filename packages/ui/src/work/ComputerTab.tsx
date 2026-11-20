@@ -198,7 +198,7 @@ export function ComputerTab(props: ComputerTabProps) {
     interactive &&
     connection.canAnswer &&
     !pane.stopped &&
-    !["maybe-held", "checking", "releasing", "unconfirmed"].includes(status) ? (
+    !["maybe-held", "checking", "unverified", "releasing", "unconfirmed"].includes(status) ? (
       <div
         className="computer-banner"
         role="region"
@@ -274,6 +274,7 @@ export function ComputerTab(props: ComputerTabProps) {
           onOpen={() => setFull(true)}
           onChoose={(targetId) => send({ type: "computerChoose", targetId })}
           onRelease={() => send({ type: "computerRelease", answer: null })}
+          onCheck={() => send({ type: "computerCheck" })}
           onRetry={() => send({ type: "computerTabs" })}
           onRequestAccess={props.onRequestAccess}
         />
@@ -476,6 +477,7 @@ type ScreenProps = {
   onOpen: () => void;
   onChoose: (targetId: string) => void;
   onRelease: () => void;
+  onCheck: () => void;
   onRetry: () => void;
   /** Absent on a host pinned to the read tier: it never asks for more access. */
   onRequestAccess: (() => void) | null;
@@ -525,15 +527,23 @@ function elsewhereOf(
 ): string | null {
   const tab = pane?.tabs.find((each) => each.targetId === pane.shown);
   if (tab?.lease) {
-    if (tab.lease.holder === "elsewhere") return words.elsewhereLine(name);
-    if (tab.lease.holder === "this-device") return words.otherWindowLine(name);
+    // A take still draining is not control: nobody holds it yet.
+    const taking = tab.lease.state === "draining";
+    if (tab.lease.holder === "elsewhere")
+      return taking ? words.takingElsewhereLine(name) : words.elsewhereLine(name);
+    if (tab.lease.holder === "this-device")
+      return taking ? words.takingOtherWindowLine(name) : words.otherWindowLine(name);
     return null;
   }
   if (pane?.availability === "ready") return null;
   const record = computer?.control.find(
     (each) => each.agentId === botId && (each.state === "granted" || each.state === "draining"),
   );
-  return record ? words.elsewhereLine(name) : null;
+  return record
+    ? record.state === "draining"
+      ? words.takingElsewhereLine(name)
+      : words.elsewhereLine(name)
+    : null;
 }
 
 function ScreenSection(props: ScreenProps) {
@@ -644,6 +654,7 @@ function Tile({
   onWatch,
   onNoteSeen,
   onRelease,
+  onCheck,
   onChoose,
   onShowLive,
 }: ScreenProps & { pane: ComputerPane }) {
@@ -770,7 +781,15 @@ function Tile({
           </button>
         </p>
       )}
-      {elsewhere && control.status !== "granted" && (
+      {control.status === "unverified" && !full && (
+        <p className="screen-caption" role="alert" data-testid="computer-tile-control">
+          {words.unverifiedLine(name)}{" "}
+          <button type="button" className="link-button" onClick={onCheck}>
+            Check
+          </button>
+        </p>
+      )}
+      {elsewhere && control.status !== "granted" && control.status !== "unverified" && (
         <p className="screen-caption" role="status" data-testid="computer-elsewhere">
           {elsewhere}
         </p>

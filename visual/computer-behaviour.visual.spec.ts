@@ -235,6 +235,17 @@ test.describe("the full view on the desktop", () => {
     await expect(fullView(page).locator(".screen-age")).toHaveText("Last picture, 1 min ago");
   });
 
+  test("F-142: another device's take that is still waiting for the bot is asking for control, never has control", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=elsewhere-taking`, "light");
+    await tileReady(page);
+    await expect(computerPanel(page).getByTestId("computer-elsewhere")).toHaveText(
+      "Someone on another device is asking for control of Juniper's browser.",
+    );
+    await expect(page.getByText(/has control of Juniper's browser/)).toHaveCount(0);
+  });
+
   test("leaving the Computer tab while in control gives control back first, then ends the view", async ({
     page,
   }) => {

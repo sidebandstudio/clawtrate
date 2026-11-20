@@ -43,6 +43,7 @@ export const COMPUTER_STATES = [
   "stuck",
   "active",
   "elsewhere",
+  "elsewhere-taking",
   "releasefail",
   "releaseunknown",
   "complexquestion",
@@ -436,9 +437,11 @@ export function computerFixture(
             lease:
               mode === "elsewhere" && i === 0
                 ? { state: "granted", mine: false }
-                : generation.current && i === shownTab
-                  ? { state: "granted", mine: true }
-                  : null,
+                : mode === "elsewhere-taking" && i === 0
+                  ? { state: "draining", mine: false }
+                  : generation.current && i === shownTab
+                    ? { state: "granted", mine: true }
+                    : null,
           })),
         };
       }

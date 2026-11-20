@@ -1023,3 +1023,88 @@ describe("Live only while a usable picture is recent (F-142, section 17)", () =>
     expect(h.pane().view).toMatchObject({ frame: 2, capturedAt: null });
   });
 });
+
+describe("control only while renewals confirm it (F-142, section 18)", () => {
+  it("F-142: a refused renewal stops input at once and says control isn't confirmed; a renewal that confirms it gives it back", async () => {
+    vi.useFakeTimers();
+    let answer: "refuse" | "renew" = "renew";
+    const h = harness({
+      "clawtrate-computer.view.renew": (p) => {
+        if (answer === "refuse") throw refused("UNAVAILABLE", "gateway_busy");
+        return {
+          ok: true,
+          renewWithinMs: 20_000,
+          streamRenewed: true,
+          leaseRenewed: p.generation === GEN,
+        };
+      },
+    });
+    await granted(h);
+    expect(h.views.input(h.viewer, { kind: "text", text: "a" })).toBe(true);
+    answer = "refuse";
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.pane().control.status).toBe("unverified");
+    expect(h.views.input(h.viewer, { kind: "text", text: "b" })).toBe(false);
+    answer = "renew";
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.pane().control).toMatchObject({ status: "granted", stillHeld: true });
+    expect(h.views.input(h.viewer, { kind: "text", text: "c" })).toBe(true);
+  });
+
+  it("F-142: with renewals unanswered, input stops by the local cutoff, before the lease's own deadline and with no expiry event", async () => {
+    vi.useFakeTimers();
+    const h = harness({
+      "clawtrate-computer.control.take": (p) => ({
+        state: "granted",
+        generation: GEN,
+        renewWithinMs: 6_000,
+        targetId: p.targetId,
+        guarantee: [],
+      }),
+      "clawtrate-computer.view.renew": () => never(),
+    });
+    await granted(h);
+    await vi.advanceTimersByTimeAsync(4_400);
+    expect(h.pane().control.status).toBe("granted");
+    // 0.75 of the 6 s deadline since the grant, the last confirmation: before any renewal gave up.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(h.pane().control.status).toBe("unverified");
+    expect(h.views.input(h.viewer, { kind: "text", text: "after the cutoff" })).toBe(false);
+    // Still not "ended": nothing established that either.
+    await vi.advanceTimersByTimeAsync(21_000);
+    expect(h.pane().control.status).toBe("unverified");
+  });
+
+  it("F-142: Check reads it: renewed is You still have control, not renewed is control ended; giving it back works from there", async () => {
+    vi.useFakeTimers();
+    let renewed = true;
+    let refuse = true;
+    const h = harness({
+      "clawtrate-computer.view.renew": (p) => {
+        if (refuse) throw refused("UNAVAILABLE", "gateway_busy");
+        return {
+          ok: true,
+          renewWithinMs: 20_000,
+          streamRenewed: true,
+          leaseRenewed: renewed && p.generation === GEN,
+        };
+      },
+    });
+    await live(h);
+    refuse = false;
+    await h.views.take(h.viewer);
+    refuse = true;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.pane().control.status).toBe("unverified");
+    refuse = false;
+    await h.views.check(h.viewer);
+    expect(h.pane().control).toMatchObject({ status: "granted", stillHeld: true });
+    refuse = true;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(h.pane().control.status).toBe("unverified");
+    refuse = false;
+    renewed = false;
+    await h.views.check(h.viewer);
+    expect(h.pane().control.status).toBe("ended");
+  });
+});

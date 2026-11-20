@@ -63,6 +63,11 @@ export const elsewhereLine = (bot: string) =>
 /** Another window or tab of this same app holds the lease: the plugin sees one device. */
 export const otherWindowLine = (bot: string) =>
   `Another window of this app has control of ${bot}'s browser.`;
+/** A take elsewhere is still waiting for the bot (`draining`): nobody has control yet. */
+export const takingElsewhereLine = (bot: string) =>
+  `Someone on another device is asking for control of ${bot}'s browser.`;
+export const takingOtherWindowLine = (bot: string) =>
+  `Another window of this app is asking for control of ${bot}'s browser.`;
 
 export const waitingLine = (bot: string) =>
   `Waiting for ${bot} to finish what it's doing in the browser…`;
@@ -91,6 +96,9 @@ export const releasingLine = "Giving control back…";
 export const unconfirmedLine = (bot: string) =>
   `Giving control back wasn't confirmed. This device may still have control of ${bot}'s browser.`;
 export const stillHeldLine = "You still have control.";
+/** No renewal confirmed the lease (`unverified`): input has stopped until one does. */
+export const unverifiedLine = (bot: string) =>
+  `The gateway hasn't confirmed that you still have control of ${bot}'s browser. Input has stopped.`;
 export const answerNotSentLine =
   "Your answer wasn't sent. Answer in the chat once control is given back.";
 export const answeringLine = "Sending your answer…";
