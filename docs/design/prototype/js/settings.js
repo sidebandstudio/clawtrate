@@ -25,7 +25,6 @@
     home: { id: "home", name: "Home gateway", route: "gateway.local", kind: "address", last: "Today, 5:41 PM", identity: "2a47552309d7", drafts: 0 },
     studio: { id: "studio", name: "Studio gateway", route: "devbox, over SSH", kind: "ssh", last: "Nov 18, 4:02 PM", identity: "7be0c914a2f1", drafts: 2, access: "Read-only" },
     lab: { id: "lab", name: "Lab gateway", route: "198.51.100.7", kind: "address", last: "Just now", identity: "c41d9a06e7b3", drafts: 0, access: "Read-only" },
-    noid: { id: "noid", name: "198.51.100.7", route: "198.51.100.7", kind: "address", last: "Just now", identity: null, drafts: 0, access: "Read-only" },
   };
   const task = (id, title, at, when, preview, extra = {}) => ({ id, title, at, when, preview, unread: false, status: "idle", ...extra });
   // Each gateway's own bots. Bots, tasks and transcripts are in memory only, so a switch loads them again.
@@ -35,7 +34,6 @@
       { id: "pip", name: "Pip", label: "Planning", tasks: [task("sp1", "Studio move checklist", 990, "4:30 PM", "Twelve things, in the order they need doing.", { ask: "What do I need to do before the studio move?" })] },
     ],
     lab: () => [{ id: "juniper", name: "Juniper", label: "Research", tasks: [task("lj1", "Sensor calibration notes", 1000, "4:40 PM", "The drift is within the spec.", { ask: "Is the drift within spec?" })] }],
-    noid: () => [{ id: "pip", name: "Pip", label: "Planning", tasks: [task("np1", "Main", 1000, "4:40 PM", "Ready when you are.", { ask: "Hello" })] }],
   };
 
   const S = {
@@ -46,7 +44,7 @@
     waiting: ["1", "unconfirmed"].includes(p("waiting")) ? 1 : 0, // a message to Otto on the gateway in use
     waitKind: p("waiting") === "unconfirmed" ? "unconfirmed" : "unsent", // not yet sent, or sent and not confirmed
     page: p("gw") || null, // a gateway's page in Settings
-    added: null, // how adding ended: added, same, noid, nothing
+    added: null, // how adding ended: new, same, noid, failed, failedpaired, cancelled
     removal: null, // { id, outcome, items }
     os: ["mac", "windows", "linux"].includes(p("os")) ? p("os") : "mac",
     web: p("host") === "web", // the web preview host: one host, shared by every browser that uses it
@@ -417,9 +415,13 @@
     function openAdd(confirmed) {
       closeGatewayMenu();
       if (S.waiting && S.inUse && !confirmed) {
+        const from = esc(gw(S.inUse).name);
         return confirmBox({
           title: "Add a gateway?",
-          text: `${S.waiting} message to Otto hasn't been sent to ${esc(gw(S.inUse).name)} yet. Adding a gateway disconnects from it while setup runs, which discards the message: it isn't kept as a draft. Runs on ${esc(gw(S.inUse).name)} keep going.`,
+          text:
+            S.waitKind === "unconfirmed"
+              ? `${S.waiting} message to Otto was sent to ${from} and isn't confirmed yet. Adding a gateway stops following it. ${from} may still have it.`
+              : `${S.waiting} message to Otto hasn't been sent to ${from} yet. Adding a gateway disconnects from it while setup runs, which discards the message: it isn't kept as a draft. Runs on ${from} keep going.`,
           label: "Add gateway",
           run: () => openAdd(true),
         });
@@ -442,7 +444,7 @@
     function standStep(step) {
       const head =
         `<div class="s-confirm"><span class="s-stand-mark">Prototype stand-in for setup</span><h2 id="s-stand-title">${step === "first" ? "Where does OpenClaw run?" : "Setup runs here"}</h2>` +
-        `<p>Adding a gateway. ${esc(gw(S.addFrom).name)} stays saved; Cancel goes back to it.</p>`;
+        `<p>Adding a gateway. ${esc(gw(S.addFrom).name)} stays saved; Cancel tries to reconnect to it.</p>`;
       const body =
         step === "first"
           ? `<div class="s-stand-choices">${button("This computer", 'data-s="stand-next" data-s-step')}${button("Another computer", 'data-s="stand-next"')}${button("Have a setup code?", 'data-s="stand-next"', "quiet")}</div>`
@@ -461,14 +463,14 @@
         D.B.settings.pane = "section";
         rs(true);
       };
-      if (how === "new" || how === "noid") {
-        const id = how === "new" ? "lab" : "noid";
-        if (!S.order.includes(id)) S.order.push(id);
-        connectTo(id, () => {
-          announce(`Added ${gw(id).name}`);
+      if (how === "new") {
+        if (!S.order.includes("lab")) S.order.push("lab");
+        connectTo("lab", () => {
+          announce(`Added ${gw("lab").name}`);
           showResult();
         });
       } else {
+        // Every other ending saves nothing and returns to the gateway that was in use, through the normal gate.
         const back = () =>
           connectTo(
             S.addFrom,
@@ -699,21 +701,24 @@
 
     CT.botsSectionViews.gateways = () => {
       if (S.page && gw(S.page) && S.order.includes(S.page) && S.page !== S.inUse) return gatewayPage(gw(S.page));
+      // After pairing, the warning about the gateway's record stays whether or not the way back works.
+      const paired = { failedpaired: "Setup had already paired with that gateway, so its record of this device may remain there; on that gateway's computer, openclaw devices list shows it. ", noid: "Clawtrate couldn't read the new gateway's identity. Setup had already paired, so the gateway's device record may remain. " }[S.added] || "";
       const addedText = {
         new: ["ok", "check", "Added Lab gateway", "Clawtrate is connected to it, read-only. Home gateway stays saved: switch back from the gateway menu."],
-        same: ["ok", "check", "Home gateway is already here", "This address leads to Home gateway. Clawtrate keeps its saved pairing and didn't add a second entry. A second way to reach one gateway is a route, in Settings, Gateway."],
-        noid: ["warn", "warning", "Added 198.51.100.7", "Lab gateway didn't say who it is, so Clawtrate keeps it under its address."],
+        // The saved entry the new address's identity matched (Home gateway in this fixture).
+        same: ["ok", "check", "Home gateway is already here", "Clawtrate didn't add a second entry. A second way to reach one gateway is a route, in Settings, Gateway."],
+        noid: ["warn", "warning", "No gateway was saved on this device.", `${paired}Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
         failed: ["warn", "warning", "No gateway was saved on this device.", `Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
         cancelled: ["warn", "warning", "No gateway was saved on this device.", `Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
-        failedpaired: ["warn", "warning", "No gateway was saved on this device.", `Setup had already paired with that gateway, so its record of this device may remain there; on that gateway's computer, openclaw devices list shows it. Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
+        failedpaired: ["warn", "warning", "No gateway was saved on this device.", `${paired}Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
       }[S.added];
       const added =
         addedText && S.conn === "refused"
-          ? `<div class="s-result" data-testid="add-result">${D.result("warn", "warning", addedText[2], `Clawtrate can't use ${esc(gw(S.addFrom).name)}: the address saved for it refused this connection's protocol.`)}</div>`
+          ? `<div class="s-result" data-testid="add-result">${D.result("warn", "warning", addedText[2], `${paired}Clawtrate can't use ${esc(gw(S.addFrom).name)}: the address saved for it refused this connection's protocol.`)}</div>`
           : addedText && S.conn === "connected"
           ? `<div class="s-result" data-testid="add-result">${D.result(...addedText)}</div>`
           : S.added && S.returnFailed
-            ? `<div class="s-result" data-testid="add-result">${D.result("danger", "warning", "No gateway was saved on this device.", `Clawtrate couldn't reach ${esc(gw(S.addFrom).name)}.`)}<div class="b-actions" style="justify-content:center">${button("Retry", 'data-s="retry-return"', "primary")}</div></div>`
+            ? `<div class="s-result" data-testid="add-result">${D.result("danger", "warning", "No gateway was saved on this device.", `${paired}Clawtrate couldn't reach ${esc(gw(S.addFrom).name)}.`)}<div class="b-actions" style="justify-content:center">${button("Retry", 'data-s="retry-return"', "primary")}</div></div>`
             : "";
       const row = (id) => {
         const g = gw(id);
@@ -905,7 +910,10 @@
       if (!S.waiting) return go();
       confirmBox({
         title,
-        text: `${S.waiting} message to Otto hasn't been sent yet. Restarting discards it: it isn't kept as a draft. Runs on ${esc(inUseName())} keep going.`,
+        text:
+          S.waitKind === "unconfirmed"
+            ? `${S.waiting} message to Otto was sent to ${esc(inUseName())} and isn't confirmed yet. Restarting stops following it. ${esc(inUseName())} may still have it.`
+            : `${S.waiting} message to Otto hasn't been sent yet. Restarting discards it: it isn't kept as a draft. Runs on ${esc(inUseName())} keep going.`,
         label: "Restart",
         run: go,
       });

@@ -283,7 +283,7 @@ const SWITCHED = 1700; // connecting, then the identity check
 async function addWalk(name, choice, words, rows, railWord, query = "") {
   const p = await open(`open=settings&section=gateways${query}`);
   await press(p, "button", "Add gateway…");
-  const [ok0, miss0] = await has(p, "#s-stand", ["Prototype stand-in for setup", "Where does OpenClaw run?", "Adding a gateway. Home gateway stays saved; Cancel goes back to it.", "This computer", "Another computer"]);
+  const [ok0, miss0] = await has(p, "#s-stand", ["Prototype stand-in for setup", "Where does OpenClaw run?", "Adding a gateway. Home gateway stays saved; Cancel tries to reconnect to it.", "This computer", "Another computer"]);
   check(`walk: add, ${name}: the handoff to setup, and what stays`, ok0 && /Adding a gateway/.test(await rail(p)) && !/Otto/.test(await rail(p)), miss0);
   if (choice !== "Cancel") {
     await press(p, "button", "Another computer");
@@ -298,8 +298,12 @@ async function addWalk(name, choice, words, rows, railWord, query = "") {
   return p;
 }
 await (await addWalk("a new gateway", "Paired: a new gateway", ["Added Lab gateway", "Clawtrate is connected to it, read-only. Home gateway stays saved: switch back from the gateway menu.", "198.51.100.7 · In use"], 3, "Juniper")).close();
-await (await addWalk("the same gateway", "Paired: the same gateway", ["Home gateway is already here", "This address leads to Home gateway. Clawtrate keeps its saved pairing and didn't add a second entry.", "gateway.local · In use"], 2, "Otto")).close();
-await (await addWalk("no identity", "Paired: no identity", ["Added 198.51.100.7", "didn't say who it is, so Clawtrate keeps it under its address."], 3, "Pip")).close();
+await (await addWalk("the same gateway", "Paired: the same gateway", ["Home gateway is already here", "Clawtrate didn't add a second entry.", "gateway.local · In use"], 2, "Otto")).close();
+{
+  const p = await addWalk("no identity", "Paired: no identity", ["No gateway was saved on this device.", "Clawtrate couldn't read the new gateway's identity. Setup had already paired, so the gateway's device record may remain.", "Clawtrate is connected to Home gateway again.", "gateway.local · In use"], 2, "Otto");
+  check("walk: add, no identity: nothing added, Home's rail, not the new gateway's", !(await text(p, '[data-testid="gateway-list"]')).includes("198.51.100.7") && (await footer(p)).includes("Home gateway") && !(await text(p, settings)).includes("Added 198.51.100.7"));
+  await p.close();
+}
 await (await addWalk("setup failed before pairing", "Setup failed before pairing", ["No gateway was saved on this device.", "Clawtrate is connected to Home gateway again."], 2, "Otto")).close();
 await (await addWalk("paired, then setup failed", "Paired, then setup failed", ["No gateway was saved on this device.", "Setup had already paired with that gateway, so its record of this device may remain there", "Clawtrate is connected to Home gateway again."], 2, "Otto")).close();
 await (await addWalk("cancelled", "Cancel", ["No gateway was saved on this device.", "Clawtrate is connected to Home gateway again."], 2, "Otto")).close();
@@ -312,12 +316,48 @@ await (await addWalk("cancelled", "Cancel", ["No gateway was saved on this devic
   await p.close();
 }
 {
-  const p = await open("waiting=1");
-  await click(p, ".gateway-pill");
-  await click(p, '#gateway-menu [data-s="add"]');
-  const [ok, miss] = await has(p, confirm, ["Add a gateway?", "1 message to Otto hasn't been sent to Home gateway yet.", "which discards the message: it isn't kept as a draft."]);
-  check("walk: add from the menu with a message waiting: asks first", ok, miss);
+  const warn = "Setup had already paired with that gateway, so its record of this device may remain there";
+  const p = await addWalk("paired, then setup failed, the return fails twice", "Paired, then setup failed", [warn, "Clawtrate couldn't reach Home gateway.", "Retry"], 2, "Can't reach Home gateway", "&returnfail=2");
+  await click(p, '[data-testid="add-result"] [data-s="retry-return"]', 1200);
+  check("walk: add after pairing, return fails: a failed Retry keeps the pairing warning", (await text(p, settings)).includes("Clawtrate couldn't reach Home gateway.") && (await text(p, settings)).includes(warn));
+  await click(p, '[data-testid="add-result"] [data-s="retry-return"]', SWITCHED);
+  check("walk: add after pairing, return fails: a Retry that succeeds keeps the pairing warning", (await rail(p)).includes("Otto") && (await text(p, settings)).includes("Clawtrate is connected to Home gateway again.") && (await text(p, settings)).includes(warn));
   await p.close();
+}
+// What waits to be sent, or was sent and isn't confirmed, worded for Add gateway and for both restarts.
+const WAIT = {
+  unsent: {
+    add: "1 message to Otto hasn't been sent to Home gateway yet. Adding a gateway disconnects from it while setup runs, which discards the message: it isn't kept as a draft. Runs on Home gateway keep going.",
+    restart: "1 message to Otto hasn't been sent yet. Restarting discards it: it isn't kept as a draft. Runs on Home gateway keep going.",
+  },
+  unconfirmed: {
+    add: "1 message to Otto was sent to Home gateway and isn't confirmed yet. Adding a gateway stops following it. Home gateway may still have it.",
+    restart: "1 message to Otto was sent to Home gateway and isn't confirmed yet. Restarting stops following it. Home gateway may still have it.",
+  },
+};
+for (const [kind, waiting] of [["unsent", "1"], ["unconfirmed", "unconfirmed"]]) {
+  {
+    const p = await open(`waiting=${waiting}`);
+    await click(p, ".gateway-pill");
+    await click(p, '#gateway-menu [data-s="add"]');
+    const [ok, miss] = await has(p, confirm, ["Add a gateway?", WAIT[kind].add]);
+    check(`walk: add from the menu, a message ${kind}: asks first, in its own words`, ok && (kind === "unsent" || !(await text(p, confirm)).includes("discards")), miss);
+    await p.close();
+  }
+  {
+    const p = await open(`open=settings&section=system&hw=pending&waiting=${waiting}`);
+    await press(p, "button", "Restart now");
+    const [ok, miss] = await has(p, confirm, ["Restart Clawtrate?", WAIT[kind].restart]);
+    check(`walk: Restart now, a message ${kind}: asks first, in its own words`, ok && (kind === "unsent" || !(await text(p, confirm)).includes("discards")), miss);
+    await p.close();
+  }
+  {
+    const p = await open(`open=settings&section=updates&feed=1&install=1&upd=ready&waiting=${waiting}`);
+    await press(p, "button", "Restart to Update");
+    const [ok, miss] = await has(p, confirm, ["Restart to update?", WAIT[kind].restart]);
+    check(`walk: Restart to Update, a message ${kind}: asks first, in its own words`, ok && (kind === "unsent" || !(await text(p, confirm)).includes("discards")), miss);
+    await p.close();
+  }
 }
 
 // Part 5: removing (section 7) ------------------------------------------------------------------------------
