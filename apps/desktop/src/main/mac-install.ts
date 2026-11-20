@@ -83,15 +83,13 @@ type Stage = (
   submitted: () => void,
 ) => Promise<void>;
 
-const observedUpdaters = new WeakSet<object>();
+// Native errors can still arrive after the operation ends.
+const ignoreLateError = () => {};
 const stageWithElectron: Stage = async (url, signal, handed, submitted) => {
   const { autoUpdater } = await import("electron");
   signal.throwIfAborted();
-  if (!observedUpdaters.has(autoUpdater)) {
-    // Native errors can still arrive after the operation ends.
-    autoUpdater.on("error", () => {});
-    observedUpdaters.add(autoUpdater);
-  }
+  if (!autoUpdater.listeners("error").includes(ignoreLateError))
+    autoUpdater.on("error", ignoreLateError);
   await new Promise<void>((resolve, reject) => {
     let finished = false;
     let checking = false;
