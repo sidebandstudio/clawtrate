@@ -2,16 +2,57 @@
 
 import { createFileStore } from "@clawtrate/core/node";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Lets a test hold the next file read's result after the read itself has happened.
+const readGate = vi.hoisted(() => ({
+  hold: null as null | ((read: Promise<string>) => Promise<string>),
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof fsPromises>();
+  const readFile = (...args: Parameters<typeof actual.readFile>) => {
+    const read = actual.readFile(...args) as Promise<string>;
+    const hold = readGate.hold;
+    readGate.hold = null;
+    return hold ? hold(read) : read;
+  };
+  return { ...actual, readFile };
+});
 
 const dirs: string[] = [];
 
-/** A folder holding `state.json` with `contents`, then made read-only, so no write can land. */
-function readOnlyStore(contents: Record<string, string>) {
+/** An empty temporary folder of this test's own. */
+function tempDir() {
   const dir = mkdtempSync(join(tmpdir(), "clawtrate-file-store-"));
   dirs.push(dir);
+  return dir;
+}
+
+/** Holds the next file read's result, settled or failed, until `release` is called. */
+function holdNextRead() {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let read!: Promise<string>;
+  readGate.hold = (pending) => {
+    read = pending;
+    return released.then(() => pending);
+  };
+  return {
+    release,
+    /** Resolves once the held read has itself finished. */
+    finished: async () => {
+      await vi.waitFor(() => expect(read).toBeDefined());
+      await read.catch(() => {});
+    },
+  };
+}
+
+/** A folder holding `state.json` with `contents`, then made read-only, so no write can land. */
+function readOnlyStore(contents: Record<string, string>) {
+  const dir = tempDir();
   const path = join(dir, "state.json");
   writeFileSync(path, JSON.stringify(contents));
   chmodSync(dir, 0o500);
@@ -62,3 +103,36 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     });
   },
 );
+
+describe("a first read that finishes after a write", () => {
+  it("does not bring back the old value over a write that landed", async () => {
+    const path = join(tempDir(), "state.json");
+    writeFileSync(path, JSON.stringify({ connection: "old" }));
+    const store = createFileStore(path);
+    const gate = holdNextRead();
+    const firstGet = store.get("connection");
+    await gate.finished();
+    await store.set("connection", "new");
+    gate.release();
+    expect(await firstGet).toBe("new");
+    expect(await store.get("connection")).toBe("new");
+    await store.set("turn-limit-minutes", "20");
+    const onDisk = JSON.parse(readFileSync(path, "utf8")) as Record<string, string>;
+    expect(onDisk).toEqual({ connection: "new", "turn-limit-minutes": "20" });
+  });
+
+  it("does not empty a new file over a write that landed", async () => {
+    const path = join(tempDir(), "state.json");
+    const store = createFileStore(path);
+    const gate = holdNextRead();
+    const firstGet = store.get("connection");
+    await gate.finished();
+    await store.set("connection", "new");
+    gate.release();
+    expect(await firstGet).toBe("new");
+    expect(await store.get("connection")).toBe("new");
+    await store.set("turn-limit-minutes", "20");
+    const onDisk = JSON.parse(readFileSync(path, "utf8")) as Record<string, string>;
+    expect(onDisk).toEqual({ connection: "new", "turn-limit-minutes": "20" });
+  });
+});

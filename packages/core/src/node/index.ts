@@ -38,11 +38,13 @@ export function createFileStore(path: string): KeyValueStore {
 
   const load = async () => {
     if (cache) return cache;
+    // A write can land while this read is in flight; the first value to fill the cache wins.
     try {
-      cache = JSON.parse(await readFile(path, "utf8")) as Record<string, string>;
+      const loaded = JSON.parse(await readFile(path, "utf8")) as Record<string, string>;
+      cache ??= loaded;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      cache = {};
+      cache ??= {};
     }
     return cache;
   };
