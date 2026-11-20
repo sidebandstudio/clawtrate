@@ -96,7 +96,7 @@ export class UpdateReading {
         current.revision !== reply.snapshot.revision ||
         current.pendingTrack ||
         current.preferenceIssue ||
-        current.state.kind !== "not-checked"
+        (current.state.kind !== "not-checked" && current.revision !== snapshot.revision)
       )
         return;
       if (reply.outcome === "stale" || reply.outcome === "superseded") {

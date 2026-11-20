@@ -147,3 +147,18 @@ it("F-231: a track choice masks the old offer immediately and rejects overlappin
     },
   });
 });
+
+it("F-231: explains a refused offer when its snapshot has no new result", async () => {
+  const h = harness();
+  const offer: DesktopUpdateSnapshot = {
+    ...base,
+    state: { kind: "offered", version: "2.0.0", releaseDate: "2026-11-01", offerId: "stale" },
+  };
+  h.event(offer);
+  const pending = h.reader.download("stale");
+  h.reply.resolve({ outcome: "stale", snapshot: offer });
+  await pending;
+  expect(h.reader.get().message).toBe("This offer is no longer current.");
+  h.event({ ...offer, revision: 4 });
+  expect(h.reader.get().message).toBeNull();
+});
