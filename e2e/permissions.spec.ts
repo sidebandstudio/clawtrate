@@ -295,7 +295,7 @@ test.afterAll(async () => {
   }
 });
 
-test("F-176 F-333: the page shows the rules plugin's own state and the gateway's settings, locks what the gateway denies for every bot, and asks for admin only when asked", async () => {
+test("F-176: the page shows the rules plugin's own state and the gateway's settings, locks what the gateway denies for every bot, and asks for admin only when asked", async () => {
   test.setTimeout(180_000);
   const view = await permissions("Juniper");
   await expect(view.getByTestId("rules-plugin")).toContainText(/^Rules plugin answered at /);
@@ -333,7 +333,7 @@ test("F-176 F-333: the page shows the rules plugin's own state and the gateway's
   );
 });
 
-test("F-176 F-330 F-335: Never on one line and Ask on another, chosen on the page and read back: the denied write never runs, and the read pauses at a card that runs that one call once", async () => {
+test("F-176 F-330: Never on one line and Ask on another, chosen on the page and read back: the denied write never runs, and the read pauses at a card that runs that one call once", async () => {
   test.setTimeout(240_000);
   await permissions("Pip");
   await openLine("files");
@@ -383,7 +383,10 @@ test("F-176 F-330 F-335: Never on one line and Ask on another, chosen on the pag
   expect(reads[1]!.text).toMatch(/Denied by user\. The tool call did not run\./);
 });
 
-test("F-333 F-336: a tool the gateway's settings deny for every bot stays Never and locked whatever the bot's own Allow or Ask, and its call is refused with no card to approve", async () => {
+// F-333 and F-336 name a fixture with the review on and returning allow; the development
+// gateway has no review that answers (exec auto-review asks the model), so this check claims
+// neither row.
+test("a tool the gateway's settings deny for every bot stays Never and locked whatever the bot's own Allow or Ask, and its call is refused with no card to approve", async () => {
   test.setTimeout(240_000);
   const every = (await config()).tools as Json;
   const deny = [...(every.deny as string[])];

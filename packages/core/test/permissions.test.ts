@@ -254,7 +254,7 @@ describe("what a bot may do", () => {
     expect(botTools(gw, "pip").deny).toBeUndefined();
   });
 
-  it("F-176 F-335: Ask writes a whole-tool Ask to the bot's scope at the version read, keeping its other rules, then takes the deny off", async () => {
+  it("F-176: Ask writes a whole-tool Ask to the bot's scope at the version read, keeping its other rules, then takes the deny off", async () => {
     const gw = new Gateway();
     gw.scopes.pip = {
       version: 3,
@@ -354,7 +354,7 @@ describe("what a bot may do", () => {
     ]);
   });
 
-  it("F-333 F-336: a tool the gateway's settings deny for every bot reads Never with the padlock, whatever the bot's own allow or Ask, and no choice can be made", async () => {
+  it("a tool the gateway's settings deny for every bot reads Never with the padlock, whatever the bot's own allow or Ask, and no choice can be made", async () => {
     const gw = new Gateway();
     (gw.config.tools as Json).deny = ["web_search", "web_fetch", "browser", "node_inference"];
     gw.scopes.otto = {

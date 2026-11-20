@@ -38,13 +38,13 @@ const SCENES: Scene[] = [
       );
     },
   },
-  { name: "page", ids: "F-176 F-177 F-222 F-333", query: q(""), ready },
+  { name: "page", ids: "F-176 F-177 F-222", query: q(""), ready },
   { name: "page-read-only", ids: "F-176", query: q("", "read"), ready },
   { name: "page-stopped", ids: "F-176", query: q("rules=stopped"), ready },
   { name: "page-never-read", ids: "F-176", query: q("rules=stopped&read=none"), ready },
   { name: "page-no-plugin", ids: "F-176", query: q("rules=noplugin"), ready },
   { name: "page-lost", ids: "F-176", query: q("rules=lost"), ready },
-  { name: "page-gateway-deny", ids: "F-333 F-336", query: q("override=1"), ready },
+  { name: "page-gateway-deny", ids: "F-176", query: q("override=1"), ready },
   {
     name: "page-loading",
     ids: "F-176",
@@ -66,7 +66,7 @@ const SCENES: Scene[] = [
   { name: "line-files", ids: "F-176 F-177", query: q(""), ready: line("files") },
   { name: "line-exec", ids: "F-176 F-414", query: q(""), ready: line("exec") },
   { name: "line-connector", ids: "F-222", query: q(""), ready: line("server:coder") },
-  { name: "line-locked", ids: "F-333", query: q("override=1"), ready: line("web") },
+  { name: "line-locked", ids: "F-176", query: q("override=1"), ready: line("web") },
   { name: "line-read-only", ids: "F-176", query: q("", "read"), ready: line("files") },
   {
     name: "line-saved-never",
