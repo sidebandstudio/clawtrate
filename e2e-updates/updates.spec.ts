@@ -5,6 +5,7 @@ import { once } from "node:events";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   statSync,
   mkdtempSync,
   readdirSync,
@@ -158,6 +159,9 @@ const test = base.extend<{ desktopApp: TestApp }>({
         rendererRequests,
       });
     } finally {
+      const failure = join(dir, "profile", "folder-error.txt");
+      if (existsSync(failure))
+        console.error("Update folder:", readFileSync(failure, "utf8").slice(0, 4096));
       resume.resolve();
       await cleanup.disposeAsync();
     }
