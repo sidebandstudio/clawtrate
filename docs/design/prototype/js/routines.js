@@ -434,7 +434,8 @@
     editstate: P.get("editstate") || "",
     // A read-only connection can't write users.prefs, so it can't keep the answer: no card.
     away: P.get("away") === "1" && P.get("access") !== "read",
-    from: "list",
+    // Opened from search (search.md §9): Back returns to the conversation search was opened over.
+    from: /^search\.html\?[\w=&%.,-]*$/.test(P.get("return") || "") ? "search" : "list",
     starting: false,
     already: false,
     rowError: null,
@@ -775,7 +776,7 @@
         `<button type="button" class="icon-button" data-r="more" data-id="${r.id}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(r.name)}">${icon("more")}</button>`
       : "";
     const head =
-      `<header class="r-head">${backButton(S.from === "calendar" ? "Back to the calendar" : "Back to routines", "back")}<div class="r-titles"><h1 id="view-title">${esc(r.name)}</h1>` +
+      `<header class="r-head">${backButton(S.from === "calendar" ? "Back to the calendar" : S.from === "search" ? "Back to the conversation" : "Back to routines", "back")}<div class="r-titles"><h1 id="view-title">${esc(r.name)}</h1>` +
       `<p><span class="avatar" data-bot="${r.bot}"></span>${botName(r.bot)}</p></div><span class="spacer"></span>${actions}</header>`;
     let state;
     if (S.deleted) state = "";
@@ -1607,6 +1608,7 @@
       case "open":
         return go("routine", { routine: id, from: ["day", "3day", "week"].includes(S.view) ? "calendar" : S.view === "convo" ? "convo" : "list", back: S.view, deleted: false });
       case "back":
+        if (S.from === "search") return void (location.href = P.get("return"));
         return go(S.back && S.back !== "routine" && S.back !== "run" ? S.back : "list", { deleted: false, focus: `[data-r="open"][data-id="${S.routine}"]` });
       case "open-run":
         return go("run", { runKey: t.dataset.run, runstate: "" });

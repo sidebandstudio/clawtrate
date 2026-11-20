@@ -506,10 +506,16 @@
     );
   }
 
+  // Routine pages: the first page's snapshotRevision is kept, and each later page is asked at the
+  // nextOffset of the last accepted reply; a later page with another revision or an unexpected
+  // offset stops paging, keeping the pages already accepted.
   function askRoutines(q, offset) {
     const prev = S.groups.routines;
     if (offset === 0) S.groups.routines = { state: "searching", asked: true };
-    else S.groups.routines = { ...prev, more: "loading" };
+    else {
+      S.groups.routines = { ...prev, more: "loading" };
+      prev.used.add(offset);
+    }
     unsay();
     render();
     lane("routines", (free) =>
@@ -518,19 +524,22 @@
         if (src.has("routinesmorefail") && offset > 0 && !S.retriedMore) return { error: "the gateway didn't answer in time" };
         const ql = q.toLowerCase();
         const all = ROUTINES.filter((r) => [r.id, r.name, r.description, r.bot, botName(r.bot)].join(" ").toLowerCase().includes(ql));
-        const total = all.length + (src.has("routineschanged") && offset > 0 ? 1 : 0);
+        const total = all.length;
         const jobs = all.slice(offset, offset + ROUTINE_PAGE);
-        return { jobs, total, offset, hasMore: offset + jobs.length < total };
+        const nextOffset = offset + jobs.length < total ? offset + jobs.length : null;
+        // routineschanged: a routine is edited between pages, so the revision moves and the total stays.
+        const revision = src.has("routinesnorev") ? {} : { snapshotRevision: src.has("routineschanged") && offset > 0 ? "rev-2" : "rev-1" };
+        return { jobs, total, offset, hasMore: nextOffset !== null, nextOffset, ...revision };
       }, (reply, current) => {
         free();
         if (!current) return;
         if (offset === 0) {
-          S.groups.routines = reply.error ? { state: "failed", asked: true, error: reply.error === "timeout" ? "the gateway didn't answer in 8 seconds" : reply.error } : { state: "done", asked: true, rows: reply.jobs, total: reply.total, hasMore: reply.hasMore };
+          S.groups.routines = reply.error ? { state: "failed", asked: true, error: reply.error === "timeout" ? "the gateway didn't answer in 8 seconds" : reply.error } : { state: "done", asked: true, rows: reply.jobs, total: reply.total, hasMore: reply.hasMore, nextOffset: reply.nextOffset, revision: reply.snapshotRevision, pages: 1, used: new Set([0]) };
         } else {
           const g = S.groups.routines;
           if (reply.error) g.more = { error: reply.error === "timeout" ? "the gateway didn't answer in 8 seconds" : reply.error };
-          else if (reply.total !== g.total) g.more = "changed";
-          else Object.assign(g, { rows: [...g.rows, ...reply.jobs], hasMore: reply.hasMore, more: null });
+          else if (reply.snapshotRevision !== g.revision || reply.offset !== offset) Object.assign(g, { more: "changed", hasMore: false });
+          else Object.assign(g, { rows: [...g.rows, ...reply.jobs], hasMore: reply.hasMore, nextOffset: reply.nextOffset, pages: g.pages + 1, more: null });
         }
         settle();
       }),
@@ -833,7 +842,7 @@
     } else if (gr.more?.error) {
       g.lines.push(`Couldn't load more routines: ${gr.more.error}.`);
       g.tone = "danger";
-      g.actions.push({ key: "act:more-retry", label: "Try again", act: () => { S.retriedMore = true; askRoutines(q, gr.rows.length); } });
+      g.actions.push({ key: "act:more-retry", label: "Try again", act: () => { S.retriedMore = true; gr.used.delete(gr.nextOffset); askRoutines(q, gr.nextOffset); } });
       g.say = "More routines couldn't be loaded.";
     } else if (gr.more === "loading") {
       g.lines.push("Loading more…");
@@ -841,9 +850,10 @@
     }
     else if (gr.hasMore) {
       g.lines.push(`First ${gr.rows.length} of ${gr.total}`);
-      g.actions.push({ key: "act:more-routines", label: `Show ${plural(Math.min(ROUTINE_PAGE, gr.total - gr.rows.length), "more routine", "more routines")}`, act: () => askRoutines(q, gr.rows.length) });
+      // Paging is offered only when the reply supplies a next offset not asked for yet.
+      if (Number.isInteger(gr.nextOffset) && !gr.used.has(gr.nextOffset)) g.actions.push({ key: "act:more-routines", label: `Show ${plural(Math.min(ROUTINE_PAGE, gr.total - gr.rows.length), "more routine", "more routines")}`, act: () => askRoutines(q, gr.nextOffset) });
       g.say = "More routines match.";
-    } else if (gr.rows.length > ROUTINE_PAGE || TEST.requests.filter((r) => r.source === "routines" && r.offset > 0).length) g.lines.push(`All ${plural(gr.total, "routine")}`);
+    } else if (gr.pages > 1) g.lines.push(gr.revision === undefined ? `${plural(gr.rows.length, "routine result")} loaded` : `All ${plural(gr.total, "routine")}`);
     g.complete = !gr.hasMore && !gr.more;
     return g;
   }
@@ -1117,7 +1127,9 @@
       return said(`Opened ${taskOf(r.bot, r.task).title}.`);
     }
     if (r.kind === "routine") {
-      location.href = `routines.html?view=routine&routine=${encodeURIComponent(r.routine)}${carry()}`;
+      // Back returns to the conversation search was opened over (automation.md §6).
+      const back = `search.html?bot=${encodeURIComponent(app.model.selectedBot)}&task=${encodeURIComponent(app.model.selectedTask || "")}${carry()}`;
+      location.href = `routines.html?view=routine&routine=${encodeURIComponent(r.routine)}&return=${encodeURIComponent(back)}${carry()}`;
       return;
     }
     if (r.kind === "setting") {

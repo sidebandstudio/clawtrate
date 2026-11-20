@@ -804,7 +804,7 @@ for (const id of ["gateway", "accounts", "integrations", "permissions", "memory"
 check("R8 every Settings row's section exists in the Settings it opens", exists.every(Boolean), exists.join());
 await p.close();
 
-p = await open("palette=open");
+p = await open("palette=open&bot=juniper&task=j1");
 await type(p, "tidy");
 const routines = await groupText(p, "routines");
 check("R8 routines: names, descriptions and bot details; on or off", routines.includes("Matches routine names, descriptions and bot details") && routines.includes("Inbox tidy-up") && routines.includes("Pip · Off"));
@@ -812,7 +812,11 @@ check("A1 a routine row says Open routine, and its name says so", (await activeT
 await p.keyboard.press("Enter");
 await p.waitForURL(/routines\.html/);
 await p.waitForTimeout(300);
-check("A1 a routine opens its own page by its id, with Back", p.url().includes("view=routine&routine=cleanup") && (await text(p, "#view-title")) === "Inbox tidy-up" && (await p.evaluate(() => Boolean(document.querySelector('[data-r="back"]')))));
+check("A1 a routine opens its own page by its id, with Back", p.url().includes("view=routine&routine=cleanup") && (await text(p, "#view-title")) === "Inbox tidy-up" && (await p.evaluate(() => document.querySelector('[data-r="back"]')?.getAttribute("aria-label") === "Back to the conversation")));
+await p.click('[data-r="back"]');
+await p.waitForURL(/search\.html/);
+await p.waitForTimeout(250);
+check("A1 Back returns to the conversation search was opened over, not the Routines list", (await p.evaluate(() => document.querySelector(".task-line")?.textContent)) === "Heat pump vs. gas furnace" && !(await paletteOpen(p)) && !p.url().includes("tidy"));
 await p.goto(base + "&palette=open");
 await type(p, "cleanup");
 check("R8 a match on the id alone is labelled", (await groupText(p, "routines")).includes("Matched its id, cleanup"));
@@ -842,7 +846,16 @@ await type(p, "e");
 await activate(p, "Show 3 more routines");
 await p.keyboard.press("Enter");
 await p.waitForTimeout(400);
-check("R8 a list that changed between pages says so", (await groupText(p, "routines")).includes("The list of routines changed while more were loading. Search again to see it from the start."));
+check("R8 a later page with another revision and the same total: the list changed, the accepted page kept, and no more paging", (await groupText(p, "routines")).includes("The list of routines changed while more were loading. Search again to see it from the start.") && (await p.locator('.s-group[data-group="routines"] .s-row[data-kind="routine"]').count()) === 3 && !(await groupText(p, "routines")).includes("more routine") && !(await groupText(p, "routines")).includes("All 7") && (await requests(p, "routines")).map((r) => r.offset).join() === "0,3");
+await p.close();
+p = await open("palette=open&routinepage=3&src=routinesnorev");
+await type(p, "e");
+for (const more of ["Show 3 more routines", "Show 1 more routine"]) {
+  await activate(p, more);
+  await p.keyboard.press("Enter");
+  await p.waitForTimeout(400);
+}
+check("R8 without a revision, the last page says how many loaded, never All", (await groupText(p, "routines")).includes("7 routine results loaded") && !(await groupText(p, "routines")).includes("All 7"));
 await p.close();
 p = await open("palette=open&routinepage=3&src=routinesmorefail");
 await type(p, "e");
