@@ -215,10 +215,10 @@
     if (kind !== "email") return "";
     const unchecked = S.d === "unchecked";
     const line = unchecked
-      ? "Couldn't check report.txt: it isn't in Otto's workspace. If it changes before it's sent, Clawtrate can't tell."
+      ? "Couldn't check report.txt: the plugin couldn't read it. If it changes before it's sent, Clawtrate can't tell."
       : phase === "second"
         ? "Checked after the first answer. The file can still change while this draft waits."
-        : "Checked when Otto asked, 5:42 PM. Checked again after your answer.";
+        : "Checked when Otto asked, 5:42 PM. Will be checked again after your first answer.";
     return (
       `<ul class="d-files" aria-label="Attachments">` +
       EMAIL.files
@@ -334,7 +334,8 @@
     if (st === "editfailed") note = `<p class="d-say" data-tone="danger">This draft was already edited on another device.</p>`;
     if (st === "editunconfirmed")
       note = `<p class="d-say" data-tone="warn">Couldn't confirm the edit. Check the draft's current state. ${button("Check the draft", 'data-d="edit-check" data-size="sm"')}</p>`;
-    const sendLabel = st === "editunconfirmed" ? "Try again" : `Send edited ${noun(kind)}`;
+    // While the edit is unconfirmed nothing is offered but Check: a fresh read decides what comes next.
+    const send = st === "editunconfirmed" ? "" : button(`Send edited ${noun(kind)}`, `data-d="edit-send"${busy || st === "editfailed" ? " disabled" : ""}`, "primary");
     return (
       `<section class="card request d-card" data-kind="draft" data-state="editing" role="region" aria-label="${title(kind)}. Editing." data-testid="draft">` +
       `<header class="request-head"><div><h3 class="request-title">${title(kind)}</h3><p class="d-sub">${subline(kind)}</p></div><span class="tag" data-tone="warn">Ready to send</span></header>` +
@@ -342,7 +343,7 @@
       (kind === "email" ? `${filesOf(kind)}<p class="d-hint">From and the attachments stay as Otto set them.</p>` : "") +
       `<p class="d-editnote">Your edit goes to Clawtrate's drafts plugin, for this draft only. Sending it releases Otto's ${noun(kind)} to the plugin, which swaps in your edit. The gateway then asks once more, for the edited ${noun(kind)}, and that answer sends it.</p>` +
       note +
-      `<div class="request-actions">${button(sendLabel, `data-d="edit-send"${busy || st === "editfailed" ? " disabled" : ""}`, "primary")}${button("Cancel edit", `data-d="edit-cancel"${busy ? " disabled" : ""}`)}<span class="spacer"></span>${button("Discard", 'data-d="discard"', "quiet")}</div>` +
+      `<div class="request-actions">${send}${button("Cancel edit", `data-d="edit-cancel"${busy ? " disabled" : ""}`)}<span class="spacer"></span>${button("Discard", 'data-d="discard"', "quiet")}</div>` +
       `<div class="d-foot">${pluginMark()}</div></section>`
     );
   }
@@ -355,7 +356,6 @@
       bodyOf(editedModel(kind), kind, changedFields(kind)) +
       filesOf(kind, "second") +
       `<p class="d-say">${icon("clock")} Waiting for the gateway to ask again for the edited ${noun(kind)}.</p>` +
-      `<div class="request-actions"><span class="spacer"></span>${button("Discard", 'data-d="discard"', "quiet")}</div>` +
       `<div class="d-foot">${pluginMark()}</div></section>`
     );
   }
@@ -796,7 +796,6 @@
 
   function decide(which) {
     S.last = which;
-    const firstOfEdited = S.d === "elsewhere";
     go({ d: "sending" });
     later(() => {
       const a = S.answer;
@@ -804,8 +803,8 @@
       if (a === "already") return go({ d: "already" }, "Already answered on another device");
       if (a === "noanswer") return go({ d: "noanswer" }, "No answer from the gateway");
       if (which === "discard") return go({ d: S.edited || S.editGiven ? "editdiscarded" : "discarded" }, "Discarded");
-      if (firstOfEdited) return secondHold();
-      if (S.file === "changed") return go({ d: "filechanged" }, "Not sent");
+      // The plugin rechecks files after the first answer only; nothing of it runs after the second.
+      if (S.file === "changed" && !S.edited) return go({ d: "filechanged" }, "Not sent");
       if (S.tool === "fails") return go({ d: "toolfailed" }, "Tool failed");
       go({ d: S.edited ? "editsent" : S.tool === "silent" ? "sentnoreport" : "sent" }, "Sent");
     });
@@ -892,7 +891,9 @@
       case "edit-cancel":
         return go({ d: "pending", typed: null });
       case "edit-check":
-        return go({ d: "edit" }, "The draft is still waiting");
+        // Back to the fields only when the fresh read finds the first hold waiting at the old revision.
+        if (S.checkfinds === "waiting") return go({ d: "edit" }, "The draft is still waiting");
+        return go({ d: "editunconfirmed" }, "Couldn't confirm the edit");
       case "edit-send":
         S.typed = readTyped();
         go({ d: "editsaving" });

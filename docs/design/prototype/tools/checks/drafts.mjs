@@ -49,7 +49,7 @@ const PLAIN = "The gateway keeps this value in its state database on its own mac
 
 // Part 1: every state from the address, with its words ------------------------------------------
 const states = [
-  ["view=draft", [PROPOSED, "New email", "Ready to send", "Otto wants to send this from its email tool, mail_send.", "otto@example.com", "dana@example.com", "lee@example.org", "Media box report", "report.txt", "Checked when Otto asked, 5:42 PM. Checked again after your answer.", "Send email", "Edit", "Discard", "Show full request", "Disable drafts for Otto", "Held by Clawtrate's drafts plugin. It waits up to 10 minutes.", "Raw", "Show more"]],
+  ["view=draft", [PROPOSED, "New email", "Ready to send", "Otto wants to send this from its email tool, mail_send.", "otto@example.com", "dana@example.com", "lee@example.org", "Media box report", "report.txt", "Checked when Otto asked, 5:42 PM. Will be checked again after your first answer.", "Send email", "Edit", "Discard", "Show full request", "Disable drafts for Otto", "Held by Clawtrate's drafts plugin. It waits up to 10 minutes.", "Raw", "Show more"]],
   ["view=draft&d=full", ["Hide full request", "mail_send", "5:42 PM, expires 5:52 PM", "Clawtrate's drafts plugin"]],
   ["view=draft&d=raw", ["plugin.approval.requested", "toolCallId", "the bot's call (tool start)", "clawtrate-drafts.get (proposed)", "Hide Raw"]],
   ["view=draft&d=sending", ["Sending your decision…", "Discard"]],
@@ -68,12 +68,12 @@ const states = [
   ["view=draft&d=runended", ["Otto's run ended. Couldn't confirm whether this was sent."]],
   ["view=draft&d=restartunknown", ["The gateway restarted. Couldn't confirm whether this was sent."]],
   ["view=draft&d=filechanged", ["Not sent", "report.txt changed after Otto asked (28 bytes then, 44 now), so nothing was sent. Otto was told why. If it asks again, the new draft appears below."]],
-  ["view=draft&d=unchecked", ["Couldn't check report.txt: it isn't in Otto's workspace. If it changes before it's sent, Clawtrate can't tell.", "Send email"]],
+  ["view=draft&d=unchecked", ["Couldn't check report.txt: the plugin couldn't read it. If it changes before it's sent, Clawtrate can't tell.", "Send email"]],
   ["view=draft&d=norecord", ["Couldn't read this draft. The gateway still lists it as waiting.", "Check again", "Discard"]],
   ["view=draft&d=edit", ["Your edit goes to Clawtrate's drafts plugin, for this draft only. Sending it releases Otto's email to the plugin, which swaps in your edit. The gateway then asks once more, for the edited email, and that answer sends it.", "From and the attachments stay as Otto set them.", "Send edited email", "Cancel edit", "Discard"]],
   ["view=draft&d=editsaving", ["Giving your edit to the drafts plugin…"]],
   ["view=draft&d=editfailed", ["This draft was already edited on another device."]],
-  ["view=draft&d=editunconfirmed", ["Couldn't confirm the edit. Check the draft's current state.", "Check the draft", "Try again"]],
+  ["view=draft&d=editunconfirmed", ["Couldn't confirm the edit. Check the draft's current state.", "Check the draft"]],
   ["view=draft&d=editwaiting", ["Waiting for the gateway to ask again for the edited email.", "Edited email"]],
   ["view=draft&d=edited", ["Edited email", "You edited Otto's email. This is what will be sent.", "Show Otto's version", "dana@example.com, sam@example.net", "Media box report: disk at 91%", "Edited", "Checked after the first answer. The file can still change while this draft waits.", "Send edited email", "The gateway asks again because you edited it. This answer sends it."]],
   ["view=draft&d=elsewhere", ["Edited on another device at 5:44 PM.", "Send edited email"]],
@@ -161,7 +161,10 @@ p = await open("view=draft&d=norecord");
 check("no record: Send is never offered", (await p.locator('[data-d="send"]').count()) === 0);
 await p.close();
 p = await open("view=draft&d=editwaiting");
-check("before the newer approval is seen, no Send", (await p.locator('[data-d="send"]').count()) === 0);
+check("before the newer approval is seen, no Send and no Discard: neither hold is pending", (await p.locator('[data-d="send"], [data-d="discard"]').count()) === 0);
+await p.close();
+p = await open("view=draft&d=editunconfirmed");
+check("an unconfirmed edit offers no Try again, only Check", (await p.locator('[data-d="edit-send"]').count()) === 0 && (await p.locator('[data-d="edit-check"]').count()) === 1);
 await p.close();
 p = await open("view=draft&d=runended");
 check("a run known to be over shows no actions", (await p.locator('[data-d="send"], [data-d="discard"]').count()) === 0);
@@ -247,9 +250,15 @@ await typeEmail(p);
 await click(p, '[data-d="edit-send"]');
 await waitText(p, ["Couldn't confirm the edit. Check the draft's current state."]);
 check("walk: an unconfirmed edit keeps every typed field", (await p.inputValue("#e-to")) === TYPED.to && (await p.inputValue("#e-subject")) === TYPED.subject && (await p.inputValue("#e-body")) === TYPED.body);
+await bar(p, "checkfinds", "unknown");
+await click(p, '[data-d="edit-check"]');
+check("walk: a Check that doesn't find the first hold waiting keeps the edit unconfirmed", (await waitText(p, ["Couldn't confirm the edit."])) && (await p.locator('[data-d="edit-send"]').count()) === 0);
+await bar(p, "checkfinds", "waiting");
+await click(p, '[data-d="edit-check"]');
+check("walk: Check finding the first hold waiting returns to the fields with what was typed", (await p.inputValue("#e-to")) === TYPED.to && (await p.inputValue("#e-subject")) === TYPED.subject && (await p.inputValue("#e-body")) === TYPED.body);
 await bar(p, "answer", "applied");
 await click(p, '[data-d="edit-send"]');
-check("walk: Try again carries the same edit to the second hold", (await waitText(p, ["Edited email", TYPED.subject], 5000)) && (await bodyText(p)) === TYPED.body);
+check("walk: sending again after Check carries the same edit to the second hold", (await waitText(p, ["Edited email", TYPED.subject], 5000)) && (await bodyText(p)) === TYPED.body);
 await p.close();
 p = await open("view=draft", { chrome: "1" });
 await bar(p, "tool", "silent");
@@ -287,7 +296,12 @@ for (const ev of ["close", "stop", "restart"]) {
   await p.close();
 }
 (await walk("Edit, a file changed before the second hold", "view=draft", [tap('[data-proto-event="file"]'), tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1200)], ["report.txt changed after Otto asked", "Your edit wasn't used."])).close();
-(await walk("Edited elsewhere → Send → the second hold → Send", "view=draft&d=elsewhere", [tap('[data-d="send"]'), pause(1300), tap('[data-d="send"]')], ["You edited this before it was sent."])).close();
+p = await walk("Edited elsewhere → Send, once, on its second hold", "view=draft&d=elsewhere", [tap('[data-d="send"]')], ["Answered", "You edited this before it was sent."]);
+check("walk: the edited-elsewhere send asks no third time", (await p.locator('[data-testid="draft"]').count()) === 0);
+await p.close();
+p = await walk("Edit → a file changes during the second hold → Send", "view=draft", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1700), tap('[data-proto-event="file"]'), tap('[data-d="send"]')], ["Answered"]);
+check("walk: a file changed during the second hold is not vetoed by the plugin", !(await text(p)).includes("report.txt changed after Otto asked") && !(await text(p)).includes("Not sent"));
+await p.close();
 (await walk("Disable drafts → off, this draft still waits", "view=draft", [tap('[data-d="disable"]'), tap('[data-d="disable-yes"]')], ["Drafts off for Otto. This draft is still waiting for you."])).close();
 (await walk("Disable drafts, refused → unknown → Read again", "view=draft", [answer("refused"), tap('[data-d="disable"]'), tap('[data-d="disable-yes"]'), pause(500), tap('[data-d="disable-read"]')], ["Drafts off for Otto."])).close();
 (await walk("Read-only: Request approvals access → waiting", "view=draft&access=read", [tap('[data-d="request"]')], ["Waiting for the gateway's owner."])).close();
