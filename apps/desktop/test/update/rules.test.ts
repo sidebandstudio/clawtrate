@@ -12,7 +12,12 @@ import {
 } from "../../src/main/update/index.ts";
 import { buildAddressProblem, checkFeedAddress } from "../../src/main/update/address.ts";
 import { parseReleaseDate } from "../../src/main/update/feed.ts";
-import { formatVersion, isNewer, parseVersion, type Version } from "../../src/main/update/version.ts";
+import {
+  formatVersion,
+  isNewer,
+  parseVersion,
+  type Version,
+} from "../../src/main/update/version.ts";
 import { feedServer, tempDir } from "./harness.ts";
 
 const APP = join(import.meta.dirname, "../..");
