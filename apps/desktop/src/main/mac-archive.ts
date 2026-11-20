@@ -12,7 +12,11 @@ export interface HeldMacArchive {
   readonly sha256: string;
 }
 
-export async function holdMacArchive(proof: VerifiedArtifact): Promise<HeldMacArchive> {
+export async function holdMacArchive(
+  proof: VerifiedArtifact,
+  signal?: AbortSignal,
+): Promise<HeldMacArchive> {
+  signal?.throwIfAborted();
   const source = await open(
     proof.path,
     constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
@@ -43,6 +47,7 @@ export async function holdMacArchive(proof: VerifiedArtifact): Promise<HeldMacAr
         const buffer = Buffer.alloc(64 * 1024);
         let total = 0;
         while (total <= proof.size) {
+          signal?.throwIfAborted();
           const { bytesRead } = await source.read(
             buffer,
             0,

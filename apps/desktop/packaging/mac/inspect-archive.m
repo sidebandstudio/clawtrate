@@ -6,6 +6,7 @@
 #import <sys/resource.h>
 #import <fcntl.h>
 #import <unistd.h>
+#import <signal.h>
 
 // The macOS SDK ships the libarchive.2 stub without its C headers.
 struct archive;
@@ -208,6 +209,8 @@ done:
 }
 
 int main(int argc, char **argv) {
+    signal(SIGALRM, SIG_DFL);
+    alarm(120);
     BOOL classify = argc == 3 && strcmp(argv[1], "--running-signature") == 0;
     if (!classify && argc != 5) return 1;
     struct rlimit memory = { 768 * 1024 * 1024, 768 * 1024 * 1024 };

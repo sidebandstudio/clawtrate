@@ -1,3 +1,6 @@
+import { spawn, type SpawnOptions } from "node:child_process";
+import { PassThrough } from "node:stream";
+import { fstatSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { linkSync, watch } from "node:fs";
@@ -15,6 +18,11 @@ import { UpdateEngine } from "../../src/main/update/engine.ts";
 import { DesktopUpdateService } from "../../src/main/update/service.ts";
 import { bytes, feedFor, feedServer, json, payload, tempDir, type FeedServer } from "./harness.ts";
 
+vi.mock(import("node:child_process"), async (original) => {
+  const cp = { ...(await original()) };
+  vi.spyOn(cp, "spawn");
+  return cp;
+});
 vi.mock(import("node:fs"), async (original) => {
   const fs = { ...(await original()) };
   vi.spyOn(fs, "watch");
@@ -1246,3 +1254,59 @@ it("a watch error during inspection prevents the first eligible event", async ()
   expect(snapshots.some((s) => s.install.kind === "restart-available")).toBe(false);
   expect((await service.restart(id)).outcome).toBe("stale");
 });
+
+it.skipIf(process.platform === "win32")(
+  "quit during Mac Download aborts native inspection and closes its archive and scratch",
+  async () => {
+    const old = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    Object.defineProperty(process, "resourcesPath", {
+      value: "/fixture/Contents/Resources",
+      configurable: true,
+    });
+    const child = () =>
+      Object.assign(new EventEmitter(), { stdout: new PassThrough(), kill: vi.fn() });
+    const inspector = child();
+    const entered = Promise.withResolvers<{ scratch: string; fd: number; signal: AbortSignal }>();
+    vi.mocked(spawn)
+      .mockImplementationOnce(() => {
+        const classification = child();
+        queueMicrotask(() => {
+          classification.stdout.end("ok");
+          classification.emit("close", 0);
+        });
+        return classification as unknown as ReturnType<typeof spawn>;
+      })
+      .mockImplementationOnce((_command, args, options) => {
+        const controls = options as SpawnOptions;
+        entered.resolve({
+          scratch: args[0]!,
+          fd: (controls.stdio as number[])[3]!,
+          signal: controls.signal!,
+        });
+        return inspector as unknown as ReturnType<typeof spawn>;
+      });
+    try {
+      const service = await start({ installer: macInstaller("arm64") });
+      const id = await offer(service);
+      const pending = service.download(id);
+      const { scratch, fd, signal } = await entered.promise;
+      try {
+        service.shutdown();
+        expect(signal.aborted).toBe(true);
+        inspector.emit("error", Error("aborted"));
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(existsSync(scratch)).toBe(true);
+        expect(fstatSync(fd).isFile()).toBe(true);
+      } finally {
+        inspector.emit("close", null, "SIGKILL");
+        await pending;
+      }
+      expect(existsSync(scratch)).toBe(false);
+      expect(() => fstatSync(fd)).toThrow();
+      expect((await pending).outcome).toBe("superseded");
+    } finally {
+      if (old) Object.defineProperty(process, "resourcesPath", old);
+      else Reflect.deleteProperty(process, "resourcesPath");
+    }
+  },
+);

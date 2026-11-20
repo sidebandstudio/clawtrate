@@ -13,26 +13,38 @@ import type { UpdateInstaller } from "./update/install.ts";
 
 async function runInspector(
   args: string[],
+  signal: AbortSignal,
   archive?: HeldMacArchive,
 ): Promise<UpdateInstallRefusal | null> {
-  const reason = await new Promise<string>((resolve, reject) => {
+  signal.throwIfAborted();
+  const reason = await new Promise<string>((resolve) => {
     const child = spawn(
       join(process.resourcesPath, "..", "Helpers", "ClawtrateUpdateInspection"),
       args,
       {
         env: { PATH: "/usr/bin:/bin" },
         stdio: ["ignore", "pipe", "ignore", ...(archive ? [archive.file.fd] : [])],
+        signal,
         timeout: 120000,
         killSignal: "SIGKILL",
       },
     );
     let output = "";
+    let failed = false;
     child.stdout!.on("data", (data: Buffer) => {
-      output += data.toString("utf8");
-      if (output.length > 128) child.kill("SIGKILL");
+      if (failed) return;
+      if (output.length + data.length > 128) {
+        failed = true;
+        child.kill("SIGKILL");
+      } else output += data.toString("utf8");
     });
-    child.once("error", reject);
-    child.once("close", (code) => resolve(code === 0 ? output.trim() : "inspection-failed"));
+    // An abort emits error before the inherited descriptors close.
+    child.on("error", () => {
+      failed = true;
+    });
+    child.once("close", (code) =>
+      resolve(!failed && !signal.aborted && code === 0 ? output.trim() : "inspection-failed"),
+    );
   });
   switch (reason) {
     case "ok":
@@ -53,10 +65,12 @@ async function runInspector(
 async function inspectBundle(
   archive: HeldMacArchive,
   arch: string,
+  signal: AbortSignal,
 ): Promise<UpdateInstallRefusal | null> {
+  signal.throwIfAborted();
   const scratch = await mkdtemp(join(dirname(archive.proof.path), ".inspect-"));
   try {
-    return await runInspector([scratch, APP_ID, archive.proof.version, arch], archive);
+    return await runInspector([scratch, APP_ID, archive.proof.version, arch], signal, archive);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -203,10 +217,11 @@ export function macInstaller(
   deadlineMs = 120000,
 ): UpdateInstaller {
   let kept: HeldMacArchive | undefined;
-  let generation = 0;
+  let inspection: AbortController | undefined;
   let unsigned = false;
   function retire() {
-    generation++;
+    inspection?.abort();
+    inspection = undefined;
     if (kept) void kept.file.close().catch(() => {});
     kept = undefined;
   }
@@ -220,19 +235,20 @@ export function macInstaller(
       if (kept?.proof.offerId === file.offerId && kept.proof.identity === file.identity)
         return null;
       retire();
-      const current = generation;
+      inspection = new AbortController();
+      const { signal } = inspection;
       if (!inspect) {
         // The signature-only invocation receives neither a descriptor nor a scratch path.
-        const refusal = await runInspector(["--running-signature", APP_ID]);
-        if (current !== generation) return "artifact-changed";
+        const refusal = await runInspector(["--running-signature", APP_ID], signal);
+        if (signal.aborted) return "artifact-changed";
         if (refusal === "build-not-signed") unsigned = true;
         if (refusal) return refusal;
       }
-      const held = await holdMacArchive(file).catch(() => null);
+      const held = await holdMacArchive(file, signal).catch(() => null);
       if (!held) return "artifact-changed";
       try {
-        const reason = await (inspect ?? inspectBundle)(held, arch);
-        if (reason || current !== generation) return reason ?? "artifact-changed";
+        const reason = await (inspect ?? inspectBundle)(held, arch, signal);
+        if (reason || signal.aborted) return reason ?? "artifact-changed";
         kept = held;
         return null;
       } finally {
