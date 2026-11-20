@@ -196,19 +196,30 @@ const WORDS = {
 const REMEDY = {
   "manages-gateway": "Deny it the gateway and plugins tools.",
   "commands-on-gateway-host":
-    'Deny it exec and process. Or run its commands on another machine (tools.exec.host "node"). Or use a sandbox for its commands, clear any gateway-host override in its sessions, and disable elevated exec for the bot (agents.entries.<bot>.tools.elevated.enabled false).',
+    // `entry` names the bot's own settings, where `exposures` reads them.
+    (entry) =>
+      `Deny it exec and process. Or run its commands on another machine (tools.exec.host "node"). Or use a sandbox for its commands, clear any gateway-host override in its sessions, and disable elevated exec for the bot (tools.elevated.enabled false in ${entry}).`,
   "files-outside-workspace":
     "Set tools.fs.workspaceOnly to true, or deny it write, edit and apply_patch.",
   "store-in-workspace":
     "Choose a workspace that does not contain the rules store, or deny it write, edit and apply_patch.",
 };
 
+/** The bot's own settings as `configuredAgents` takes them: its `agents.list` entry, if it has one. */
+function entryName(config, agentId) {
+  const listed = rec(rec(config).agents).list;
+  return Array.isArray(listed) && listed.some((entry) => rec(entry).id === agentId)
+    ? `its agents.list entry (id "${agentId}")`
+    : `agents.entries.${agentId}`;
+}
+
 /** One warning per bot and reason, in words. */
 export function exposureWarnings(config, where = {}) {
   return exposures(config, where).flatMap(({ agentId, reasons }) =>
-    reasons.map(
-      (reason) =>
-        `Bot ${agentId} ${WORDS[reason]}, so Clawtrate's rules are advice for it. ${REMEDY[reason]}`,
-    ),
+    reasons.map((reason) => {
+      const remedy = REMEDY[reason];
+      const words = typeof remedy === "function" ? remedy(entryName(config, agentId)) : remedy;
+      return `Bot ${agentId} ${WORDS[reason]}, so Clawtrate's rules are advice for it. ${words}`;
+    }),
   );
 }

@@ -237,6 +237,19 @@ describe("the remedy for commands on the gateway's host", () => {
     expect(line).toContain(
       "Or use a sandbox for its commands, clear any gateway-host override in its sessions, and disable elevated exec for the bot",
     );
-    expect(line).toContain("agents.entries.<bot>.tools.elevated.enabled false");
+    expect(line).toContain("tools.elevated.enabled false in agents.entries.otto");
+  });
+
+  it("names the agents.list entry for a bot listed there, which is what the check reads", () => {
+    const config = {
+      ...SAFE,
+      agents: {
+        entries: { otto: {} },
+        list: [{ id: "otto", tools: { exec: { mode: "ask" } } }],
+      },
+    };
+    const [line] = exposureWarnings(config);
+    expect(line).toContain('tools.elevated.enabled false in its agents.list entry (id "otto")');
+    expect(line).not.toContain("agents.entries");
   });
 });
