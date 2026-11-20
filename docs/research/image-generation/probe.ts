@@ -61,7 +61,28 @@ for (const step of steps) {
     print("tools.effective", effective.toolAccess.tools.find((t) => t.id === "image_generate"));
   }
   if (step === "invoke") {
-    print("invoke, a task with no history", await invoke(`agent:main:probe-invoke-${stamp}`, { prompt: IMAGE_PROMPT }));
+    const never = `agent:main:probe-invoke-${stamp}`;
+    const foreground = (await invoke(never, { prompt: IMAGE_PROMPT })) as JsonRecord;
+    print("invoke, a key never created", foreground);
+    // The foreground file, over the gateway's assistant media route.
+    const path = String(((rec(rec(foreground.output).details).paths as string[]) ?? [])[0]);
+    const route = `${origin}/__openclaw__/assistant-media?source=${encodeURIComponent(path)}`;
+    const bearer = { authorization: `Bearer ${connection.token}` };
+    const served = await fetch(route, { headers: bearer });
+    print("assistant media route", {
+      withoutToken: (await fetch(route)).status,
+      withToken: served.status,
+      type: served.headers.get("content-type"),
+      bytes: (await served.arrayBuffer()).byteLength,
+    });
+    const meta = (await (await fetch(`${route}&meta=1`, { headers: bearer })).json()) as JsonRecord;
+    const ticketed = await fetch(`${route}&mediaTicket=${encodeURIComponent(String(meta.mediaTicket))}`);
+    print("assistant media route, meta=1", { ...meta, mediaTicket: typeof meta.mediaTicket, ticketWithoutToken: ticketed.status });
+    print("the never-created task's history", ((await writer.request("chat.history", { sessionKey: never, limit: 5 })) as JsonRecord).messages);
+    // A task bound to a saved session, with no messages yet.
+    const created = `agent:main:probe-created-${stamp}`;
+    await writer.request("sessions.create", { key: created, agentId: "main" });
+    print("invoke, a task made with sessions.create", await invoke(created, { prompt: IMAGE_PROMPT }));
     print("invoke, action list", await invoke(`agent:main:probe-invoke-${stamp}`, { action: "list" }));
     for (const outcome of ["refuse", "fail", "hang"] as const) {
       const started = Date.now();
@@ -95,10 +116,17 @@ for (const step of steps) {
             "the ticketed address": `${origin}${address}`,
           }
         : { "the ticketed address": `${origin}${address}` };
+    if (step === "avatar") {
+      // Saved, and shown only up to the gateway's encoded-length limit for a data URL.
+      for (const decoded of [2_097_152, 2_098_176]) {
+        sources[`a PNG data URL of ${decoded} decoded bytes`] = `data:image/png;base64,${Buffer.alloc(decoded, 7).toString("base64")}`;
+      }
+    }
     for (const [label, avatar] of Object.entries(sources)) {
       const updated = await attempt(admin.request("agents.update", { agentId: "marlow", avatar }));
       const readBack = await pictureOf(admin);
-      print(`avatar from ${label}`, { sent: avatar.length, updated, readBack: readBack.length, same: readBack === avatar });
+      const saved = await pictureOf(admin, "avatar");
+      print(`avatar from ${label}`, { sent: avatar.length, updated, saved: saved === avatar, shown: readBack.length, same: readBack === avatar });
     }
     print("agents.update with write only", await attempt(writer.request("agents.update", { agentId: "marlow", avatar: "data:image/png;base64,AA==" })));
     if (step === "expiry") {
@@ -106,6 +134,8 @@ for (const step of steps) {
       await new Promise((resolve) => setTimeout(resolve, wait));
       const stored = await pictureOf(admin);
       print("after the ticket expired", { stillStored: stored === `${origin}${address}`, fetched: (await fetch(stored)).status });
+      const again = (await writer.request("artifacts.download", { sessionKey: key, artifactId: artifact.id })) as JsonRecord;
+      print("a new download after the expiry", { fetched: (await fetch(`${origin}${String(again.url)}`)).status });
     }
     await admin.close();
   }
@@ -117,7 +147,11 @@ function rec(value: unknown): JsonRecord {
   return value !== null && typeof value === "object" ? (value as JsonRecord) : {};
 }
 
-async function pictureOf(admin: Awaited<ReturnType<typeof openOperator>>): Promise<string> {
+/** Marlow's picture as `agents.list` shows it (`avatarUrl`), or as it was saved (`avatar`). */
+async function pictureOf(
+  admin: Awaited<ReturnType<typeof openOperator>>,
+  field: "avatarUrl" | "avatar" = "avatarUrl",
+): Promise<string> {
   const agents = ((await admin.request("agents.list", {})) as { agents: JsonRecord[] }).agents;
-  return String(rec(agents.find((agent) => agent.id === "marlow")?.identity).avatarUrl ?? "");
+  return String(rec(agents.find((agent) => agent.id === "marlow")?.identity)[field] ?? "");
 }
