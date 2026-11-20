@@ -777,15 +777,19 @@ const screens = await p.evaluate(() => window.CT.deviceScreens);
 await p.close();
 check("the page lists its states", screens.length >= 45, String(screens.length));
 const banned = /\b(safe|secure|securely|private|protected|Resumed)\b|your own chat|own chats|Otto wants|Otto asked|was told/i;
+// A request's origin is never established (section 2's second rule): no state may claim one, a chat's kind included.
+const provenance = /\b(direct|group|private|cron) (request|chat|task|message)s?\b|\b(from|in) (a|your|the|this) (group|chat|direct)\b|\bcame from\b|\b(sent|asked|requested) by\b|\bon behalf of\b/i;
 for (const [label, width] of [["1440", 1440], ["1100", 1100], ["800", 800], ["390", 390]]) {
   const bad = [];
   const words = [];
   const errors = [];
+  const claims = [];
   for (const screen of screens) {
     for (const theme of ["light", "dark"]) {
       const q = await open(`screen=${screen}${label === "390" ? "&width=phone" : "&width=full"}`, { width, height: 844, theme });
       if (!(await q.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1))) bad.push(`${screen}/${theme}`);
       if (theme === "light" && banned.test(await text(q))) words.push(screen);
+      if (theme === "light" && provenance.test(await text(q))) claims.push(screen);
       if (q.errors.length) errors.push(`${screen}: ${q.errors[0]}`);
       if (theme === "dark" && !(await q.evaluate(() => document.documentElement.dataset.theme === "dark"))) errors.push(`${screen}: not dark`);
       await q.close();
@@ -794,6 +798,7 @@ for (const [label, width] of [["1440", 1440], ["1100", 1100], ["800", 800], ["39
   check(`every state at ${label}: no sideways scroll`, bad.length === 0, bad.join(" "));
   check(`every state at ${label}: no page errors`, errors.length === 0, errors.join(" | "));
   check(`every state at ${label}: none of the words the design rules out`, words.length === 0, words.join(" "));
+  check(`every state at ${label}: no claim of where a request came from`, claims.length === 0, claims.join(" "));
 }
 p = await open("screen=card-pending&width=phone", phone);
 check("phone: the card's buttons are touch-sized", await p.evaluate(() => [...document.querySelectorAll(".d-ask .d-actions .button")].every((el) => el.getBoundingClientRect().height >= 44)));
