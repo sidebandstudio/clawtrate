@@ -1097,6 +1097,8 @@
         S.readNo = 0;
         S.foldOpen = false;
         j1.html = compactHtml();
+        // Kept on Juniper's task; drawn and announced only while that task is open on a confirmed Home gateway.
+        if (!confirmed() || S.inUse !== "home" || app.model.selectedTask !== "j1") return;
         rerenderTask();
         announce(compactWords());
       }, 1200);

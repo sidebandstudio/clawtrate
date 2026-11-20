@@ -898,6 +898,17 @@ await (await compactReply("a run was stopped", "stopped", ["The gateway reported
   await p.close();
 }
 
+{
+  // CodeRabbit 6: Compact ending during a switch is kept on its task and draws nothing of Home.
+  const p = await open("bot=juniper&task=j1&panel=open&tab=details&switchid=pending");
+  await press(p, "button", "Compact", 100);
+  await click(p, ".gateway-pill");
+  await click(p, '#gateway-menu [data-gw="studio"]', 2000);
+  check("walk: Compact ends during a switch: Home isn't drawn again", (await rail(p)).includes("Confirming this is Studio gateway…") && (await p.locator("#composer").isHidden()) && !(await text(p, "#transcript")).includes("The gateway reported a compaction") && !(await announced(p)).startsWith("The gateway reported"), `${await rail(p)} | ${await announced(p)}`);
+  check("walk: Compact ends during a switch: the outcome is kept on Juniper's task", (await p.evaluate(() => window.settingsProto.S.compact)) === "done");
+  await p.close();
+}
+
 // Part 9: low disk (section 14) ---------------------------------------------------------------------------------
 
 {
