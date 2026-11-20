@@ -582,6 +582,21 @@ await p.waitForTimeout(80);
 const conf = await p.evaluate(() => ({ host: document.querySelector(".s-confirm-host")?.textContent, address: document.querySelector(".s-confirm-address")?.textContent, line: document.querySelector(".s-confirm-line")?.textContent, role: document.querySelector(".s-confirm")?.getAttribute("role") }));
 check("A4 a clipped address confirms first, host first, then the full canonical address", conf.role === "alertdialog" && conf.host === "energy.example" && conf.address === "https://energy.example/heat-pumps/sizing-guide/appendix/heat-loss-worksheet?climate-zone=5A&rooms=kitchen,living,bedrooms,basement&units=imperial#step-4" && conf.line === "Opens in your browser.");
 check("R6 nothing is handed over before Open", (await handoffs(p)).length === 0);
+const clipped = await open("palette=open&q=sizing", { width: 1440, height: 420 });
+await settle(clipped);
+const box = await clipped.evaluate(() => {
+  // Scroll the list so the address, untruncated inside its own box, is cut by the list's top edge.
+  const body = document.querySelector("#s-body");
+  const a = document.querySelector('.s-row[data-kind="link"] .s-address');
+  body.scrollTop += a.getBoundingClientRect().top - body.getBoundingClientRect().top + a.getBoundingClientRect().height / 2;
+  const r = a.getBoundingClientRect();
+  const v = body.getBoundingClientRect();
+  return { own: a.scrollHeight <= a.clientHeight + 1 && a.scrollWidth <= a.clientWidth + 1, cut: r.top < v.top && r.bottom > v.top, link: document.getElementById(document.querySelector("#s-field").getAttribute("aria-activedescendant"))?.dataset.kind };
+});
+await clipped.keyboard.press("Shift+Enter");
+await clipped.waitForTimeout(80);
+check("A4 an address whole in its own box but cut by the list's edge confirms first, with nothing handed over", box.own && box.cut && box.link === "link" && (await clipped.evaluate(() => document.querySelector(".s-confirm-address")?.textContent)) === "https://energy.example/heat-pumps/sizing-guide" && (await handoffs(clipped)).length === 0, JSON.stringify(box));
+await clipped.close();
 await p.keyboard.press("Meta+k");
 check("R7 ⌘K over the confirmation keeps focus in it", await p.evaluate(() => document.activeElement.closest(".s-confirm") !== null));
 await p.click('[data-s="confirm-open"]');
@@ -624,9 +639,9 @@ await p.close();
 p = await open("palette=open");
 const where = await p.evaluate(() => {
   const w = (raw) => { const c = CT.searchTest.canonical(raw); return c.url ? CT.searchTest.whereIs(c.hostname) : "refused"; };
-  return ["http://[::1]/", "http://localhost:3000/", "http://dev.localhost/", "http://[::ffff:127.0.0.1]/", "http://167772168/", "http://2886992129/", "http://2851995905/", "http://1681915913/", "http://[fe80::1]/", "http://[fd00::5]/", "http://[64:ff9b::808:808]/", "http://printer/", "http://nas.local./", "https://energy.example/", "https://134744072/", "https://[2606:4700::1111]/", "http://0x7f.1/"].map(w);
+  return ["http://[::1]/", "http://localhost:3000/", "http://dev.localhost/", "http://[::ffff:127.0.0.1]/", "http://167772168/", "http://2886992129/", "http://2851995905/", "http://1681915913/", "http://[fe80::1]/", "http://[fd00::5]/", "http://[64:ff9b::808:808]/", "http://printer/", "http://nas.local./", "https://energy.example/", "https://134744072/", "https://[2606:4700::1111]/", "http://0x7f.1/", "http://[2002:c000:204::1]/", "http://[3fff:10::1]/", "http://192.0.0.8/", "http://[2001:2::1]/", "https://192.0.0.9/", "https://[2001:4:112::1]/", "https://[::ffff:192.0.0.10]/"].map(w);
 });
-check("A2 the written host decides once the URL parser has canonicalized it (integer IPv4 included), with no lookup", where.join() === "self,self,self,self,network,network,network,network,network,network,network,network,network,,,,self", where.join());
+check("A2 6to4 and 3fff::/20 are refused; the globally reachable 192.0.0.9 and 2001:4:112::/48 inside refused blocks stay direct; the written host decides once the URL parser has canonicalized it (integer IPv4 included), with no lookup", where.join() === "self,self,self,self,network,network,network,network,network,network,network,network,network,,,,self,network,network,network,network,,,", where.join());
 await type(p, "installer");
 const refused = await groupText(p, "links");
 check("R6 an address with a user name or password is plain text and can't be handed over", refused.includes("https://sam:hunter2@installer.example.com/portal") && (await p.evaluate(() => !document.querySelector('.s-row[data-kind="link"] .s-hint-more'))));

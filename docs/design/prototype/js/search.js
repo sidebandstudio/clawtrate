@@ -212,7 +212,9 @@
     const mask = bits ? (~0 << (32 - bits)) >>> 0 : 0;
     return ((n(a) & mask) >>> 0) === ((n(b) & mask) >>> 0);
   };
-  // IPv4 entries of the special-purpose registry that are not globally reachable.
+  // IPv4 entries of the special-purpose registry that are not globally reachable, then the globally
+  // reachable entries inside them; the longest matching prefix decides.
+  const V4_GLOBAL = [[[192, 0, 0, 9], 32], [[192, 0, 0, 10], 32]];
   const V4_LOCAL = [[[0, 0, 0, 0], 8], [[10, 0, 0, 0], 8], [[100, 64, 0, 0], 10], [[169, 254, 0, 0], 16], [[172, 16, 0, 0], 12], [[192, 0, 0, 0], 24], [[192, 0, 2, 0], 24], [[192, 168, 0, 0], 16], [[198, 18, 0, 0], 15], [[198, 51, 100, 0], 24], [[203, 0, 113, 0], 24], [[224, 0, 0, 0], 4], [[240, 0, 0, 0], 4]];
   const v6 = (h) => {
     if (!h.includes(":")) return null;
@@ -232,21 +234,38 @@
     if (mapped) all.push((mapped[0] << 8) + mapped[1], (mapped[2] << 8) + mapped[3]);
     return all.length === 8 ? all : null;
   };
+  const inV6 = (g, [prefix, bits]) => {
+    const p6 = v6(prefix);
+    return g.every((x, i) => {
+      const take = Math.max(0, Math.min(16, bits - i * 16));
+      const mask = (0xffff << (16 - take)) & 0xffff;
+      return (x & mask) === (p6[i] & mask);
+    });
+  };
+  // Inside 2000::/3, the registry's entries that are not globally reachable, then the globally
+  // reachable entries inside 2001::/23.
+  const V6_LOCAL = [["2001::", 23], ["2001:db8::", 32], ["2002::", 16], ["3fff::", 20]];
+  const V6_GLOBAL = [["2001:1::1", 128], ["2001:1::2", 128], ["2001:3::", 32], ["2001:4:112::", 48], ["2001:20::", 28], ["2001:30::", 28]];
+  // Local when the longest matching prefix is a local entry.
+  const localByPrefix = (inside, local, global) => {
+    const best = (entries) => Math.max(-1, ...entries.filter((e) => inside(e)).map(([, bits]) => bits));
+    return best(local) > best(global);
+  };
+  const v4Where = (a) => (a[0] === 127 ? "self" : localByPrefix((r) => inV4(a, r), V4_LOCAL, V4_GLOBAL) ? "network" : "");
   // The written host only, never a lookup: "self" for loopback and localhost names, "network" for
   // any other literal the preview check refuses, a .local name or a name without a dot.
   function whereIs(hostname) {
     const h = hostname.toLowerCase();
     if (h === "localhost" || h.endsWith(".localhost")) return "self";
     const a = v4(h);
-    if (a) return a[0] === 127 ? "self" : V4_LOCAL.some((r) => inV4(a, r)) ? "network" : "";
+    if (a) return v4Where(a);
     const g = v6(h);
     if (g) {
       if (g.every((x, i) => (i < 7 ? x === 0 : x === 1))) return "self";
       if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff) {
-        const m = [g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255];
-        return m[0] === 127 ? "self" : V4_LOCAL.some((r) => inV4(m, r)) ? "network" : "";
+        return v4Where([g[6] >> 8, g[6] & 255, g[7] >> 8, g[7] & 255]);
       }
-      const global = (g[0] & 0xe000) === 0x2000 && !(g[0] === 0x2001 && g[1] === 0xdb8) && !(g[0] === 0x2001 && g[1] < 0x200);
+      const global = (g[0] & 0xe000) === 0x2000 && !localByPrefix((r) => inV6(g, r), V6_LOCAL, V6_GLOBAL);
       if (g[0] === 0x64 && g[1] === 0xff9b) return "network";
       return global ? "" : "network";
     }
@@ -1151,9 +1170,15 @@
   function handoff(r) {
     if (!r.url) return;
     const el = $(`.s-row[data-key="${CSS.escape(r.key)}"] .s-address`, layer());
-    const full = el && el.textContent === r.url && el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1;
+    const full = el && el.textContent === r.url && el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1 && inView(el);
     if (full && !r.where) return handOver(r.url);
     confirmLink(r);
+  }
+  // The whole address line lies inside the visible bounds of the results and of the window.
+  function inView(el) {
+    const a = el.getBoundingClientRect();
+    const v = $("#s-body", layer()).getBoundingClientRect();
+    return a.top >= Math.max(v.top, 0) - 0.5 && a.bottom <= Math.min(v.bottom, innerHeight) + 0.5 && a.left >= Math.max(v.left, 0) - 0.5 && a.right <= Math.min(v.right, innerWidth) + 0.5;
   }
   function handOver(url) {
     TEST.handoffs.push({ url, confirmed: Boolean(S.confirm) });
