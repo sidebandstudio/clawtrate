@@ -106,28 +106,40 @@ class Gateway {
       }
       case "tools.catalog":
         return CATALOG;
-      case "tools.effective":
+      case "tools.effective": {
+        // As the gateway lists a task's tools: what the lists for every bot and the bot's own leave.
+        const bot = String(params.sessionKey).split(":")[1]!;
+        const every = this.config.tools as Json;
+        const own = (botTools(this, bot) ?? {}) as Json;
+        const deny = [...((every.deny as string[]) ?? []), ...((own.deny as string[]) ?? [])];
+        const allows = [every.allow, own.allow].filter(Array.isArray) as string[][];
+        const names = (list: string[], id: string) =>
+          list.some((e) => e === id || (e.endsWith("*") && id.startsWith(e.slice(0, -1))));
+        const allowed = (id: string) =>
+          !names(deny, id) &&
+          allows.every((a) => names(a, id) || (id === "apply_patch" && a.includes("write")));
+        const ids = CATALOG.groups.flatMap((g) => g.tools.map((t) => t.id));
         return {
           toolAccess: {
-            tools: [
-              { id: "read", status: "available" },
-              { id: "exec", status: "available" },
-            ],
+            tools: ids.map((id) => ({ id, status: allowed(id) ? "available" : "excluded" })),
           },
-          groups: [
-            {
-              id: "mcp",
-              tools: [
+          groups: allowed("coder__run_checks")
+            ? [
                 {
-                  id: "coder__run_checks",
-                  source: "mcp",
-                  mcpServer: "coder",
-                  mcpToolName: "run_checks",
+                  id: "mcp",
+                  tools: [
+                    {
+                      id: "coder__run_checks",
+                      source: "mcp",
+                      mcpServer: "coder",
+                      mcpToolName: "run_checks",
+                    },
+                  ],
                 },
-              ],
-            },
-          ],
+              ]
+            : [],
         };
+      }
       case "clawtrate-tool-rules.status":
         if (this.plugin === "stopped") throw new Error("unknown method");
         return {
@@ -445,6 +457,57 @@ describe("what a bot may do", () => {
     ]);
   });
 
+  it("a line says only what the reads establish: whose allow list leaves a tool out, an Ask on part of it, the latest task's listing, and settings this page doesn't read", async () => {
+    const gw = new Gateway();
+    // The bot's own allow list is the bot's, never the gateway's for every bot.
+    botTools(gw, "pip").allow = ["read", "ls", "exec", "web_search", "ask_user"];
+    // A provider's list this page doesn't evaluate removes read and ls from the task.
+    (gw.config.tools as Json).byProvider = { scripted: { deny: ["read", "ls"] } };
+    (gw.config.tools as Json).deny = ["web_fetch", "browser", "group:plugins"];
+    gw.scopes.pip = {
+      version: 1,
+      fallback: false,
+      rules: [{ id: "x", version: 1, action: "ask", tools: ["web_search"], target: null }],
+    };
+    gw.scopes["*"] = {
+      version: 1,
+      fallback: false,
+      rules: [{ id: "e", version: 1, action: "ask", tools: ["exec"] }],
+    };
+    const answer = gw.answer.bind(gw);
+    gw.answer = async (method, params) => {
+      const got = (await answer(method, params)) as Json;
+      if (method !== "tools.effective") return got;
+      const access = got.toolAccess as { tools: Json[] };
+      access.tools = access.tools.filter((t) => t.id !== "read" && t.id !== "ls");
+      return got;
+    };
+    const view = await new PermissionsEngine(gw.ctx()).read("pip");
+    expect(line(view, "files")).toMatchObject({
+      value: "not-offered",
+      mark: "gateway",
+      choice: null,
+    });
+    expect(choiceRefusal(view, line(view, "files"), "never", true)).toMatch(/own allow list/);
+    // Settings leave read and ls open; the listing doesn't have them: no claim of Allowed.
+    expect(line(view, "read")).toMatchObject({ value: "not-offered", mark: null, offered: "no" });
+    expect(line(view, "read").exceptions).toEqual([{ kind: "not-listed", tools: ["read", "ls"] }]);
+    expect(view.unread).toEqual(["tools.byProvider"]);
+    // `group:plugins` names every plugin's tools.
+    expect(line(view, "plugin:ollama")).toMatchObject({ value: "never", mark: "set" });
+    // An Ask on one of the line's two tools limits it and is grouped with the asks.
+    gw.answer = answer;
+    const web = await new PermissionsEngine(gw.ctx()).read("pip");
+    expect(line(web, "web")).toMatchObject({ value: "asks", ownAsk: true });
+    botTools(gw, "pip").allow = undefined;
+    (gw.config.tools as Json).deny = ["browser", "node_inference"];
+    (gw.config.tools as Json).allow = undefined;
+    const both = await new PermissionsEngine(gw.ctx()).read("pip");
+    expect(line(both, "web")).toMatchObject({ value: "limited", ownAsk: false, choice: "allow" });
+    expect(permissionGroups(both.lines).asks).toContain("web");
+    expect(permissionGroups(both.lines).without).not.toContain("web");
+  });
+
   it("a tool the gateway's settings deny for every bot reads Never with the padlock, whatever the bot's own allow or Ask, and no choice can be made", async () => {
     const gw = new Gateway();
     (gw.config.tools as Json).deny = ["web_search", "web_fetch", "browser", "node_inference"];
@@ -487,23 +550,29 @@ describe("what a bot may do", () => {
     expect(line(result.view!, "files")).toMatchObject({ value: "never", choice: "never" });
   });
 
-  it("F-222: a tool server's Never writes `<server>__*` to the bot's own deny list, and Allow takes it off", async () => {
+  it("F-222: a tool server's Never writes `<prefix>__*` to the bot's own deny list, and Allow on that entry takes it off", async () => {
     const gw = new Gateway();
     const engine = new PermissionsEngine(gw.ctx());
     const view = await engine.read("pip");
+    expect(line(view, "server:coder")).toMatchObject({ tools: ["coder__*"], value: "allowed" });
     const result = await engine.choose("pip", "server:coder", "never", {
       configHash: view.configHash,
       rulesVersion: null,
     });
     expect(result.outcome).toBe("saved");
     expect(botTools(gw, "pip").deny).toEqual(["coder__*"]);
-    expect(line(result.view!, "server:coder")).toMatchObject({ value: "never", mark: "gateway" });
-    const back = await engine.choose("pip", "server:coder", "allow", {
+    // Denied, the server's tools aren't listed: its entry shows the deny.
+    expect(line(result.view!, "deny:coder__*")).toMatchObject({ value: "never", mark: "gateway" });
+    const back = await engine.choose("pip", "deny:coder__*", "allow", {
       configHash: result.view!.configHash,
       rulesVersion: null,
     });
     expect(back.outcome).toBe("saved");
     expect(botTools(gw, "pip").deny).toBeUndefined();
+    expect(line(back.view!, "server:coder")).toMatchObject({
+      tools: ["coder__*"],
+      value: "allowed",
+    });
   });
 
   it("a tool server's Never writes the prefix the gateway gave its tools, not its configured name, and its deny entry is shown and taken off", async () => {

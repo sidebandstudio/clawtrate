@@ -211,20 +211,10 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
           : {
               status: "listed",
               taskKey: `agent:${botId}:main`,
-              available: [
-                "read",
-                "ls",
-                "write",
-                "edit",
-                "apply_patch",
-                "exec",
-                "web_search",
-                "sessions_send",
-                "sessions_list",
-                "ask_user",
-                "progress_card",
-              ],
-              servers: [{ name: "coder", prefix: "coder" }],
+              available: listed(config, botId),
+              servers: listed(config, botId).includes("coder__run_checks")
+                ? [{ name: "coder", prefix: "coder" }]
+                : [],
             },
       plugin: status,
       rules: readable
@@ -310,6 +300,23 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
     };
     return delay(result, 600);
   };
+}
+
+/** The tools a bot's task is offered, as the gateway lists them: what its lists leave. */
+function listed(config: Json, botId: string): string[] {
+  const every = (config.tools ?? {}) as Json;
+  const own = ((((config.agents as Json).entries as Json)[botId] as Json | undefined)?.tools ??
+    {}) as Json;
+  const names = (list: unknown, id: string) =>
+    Array.isArray(list) &&
+    list.some((e: string) => e === id || (e.endsWith("*") && id.startsWith(e.slice(0, -1))));
+  const allows = [every.allow, own.allow].filter(Array.isArray);
+  return [...CATALOG.groups.flatMap((g) => g.tools.map((t) => t.id)), "coder__run_checks"].filter(
+    (id) =>
+      !names(every.deny, id) &&
+      !names(own.deny, id) &&
+      allows.every((a) => names(a, id) || (id === "apply_patch" && names(a, "write"))),
+  );
 }
 
 const delay = <T>(value: T, ms = 120) =>

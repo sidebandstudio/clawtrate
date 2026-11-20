@@ -139,6 +139,7 @@ function exceptionWords(
   name: string,
   held: boolean,
   lineTools: readonly string[],
+  listedAt: number,
 ): string {
   const owner = (scope: "bot" | "every") =>
     scope === "bot" ? `${name}'s rule` : "a rule for every bot";
@@ -149,7 +150,11 @@ function exceptionWords(
     case "bot-deny":
       return `Never: ${list(e.tools)} (${name}'s settings)`;
     case "not-offered":
-      return `Not offered: ${list(e.tools)}`;
+      return e.by === "every"
+        ? `Not offered: ${list(e.tools)} (set on the gateway)`
+        : `Not in ${name}'s allow list: ${list(e.tools)}`;
+    case "not-listed":
+      return `Not in ${name}'s latest task's tools as the gateway listed them at ${clock(listedAt)}: ${list(e.tools)}`;
     case "unnamed":
       return `The gateway hasn't named this server's tools in ${name}'s latest task's listing`;
     case "fallback":
@@ -189,7 +194,7 @@ function subWords(line: PermissionLine, view: BotPermissions, name: string): str
   const held = pluginHolds(view.plugin) && view.rules.from === "now";
   const out: string[] = [];
   if (line.kind === "exec" && line.value !== "never") out.push(execSub(line, name));
-  for (const e of line.exceptions) out.push(exceptionWords(e, name, held, line.tools));
+  for (const e of line.exceptions) out.push(exceptionWords(e, name, held, line.tools, view.readAt));
   return out;
 }
 
@@ -198,8 +203,15 @@ function glanceExtra(line: PermissionLine, name: string): string | null {
   if (line.kind === "exec" && line.value === "asks" && line.exec?.own)
     return `${name}'s setting: ${EXEC_WORDS[line.exec.own]}`;
   if (line.value !== "limited") return null;
-  // A Limited line names what holds part of it back: the tools denied, the paths a rule refuses.
+  // A Limited line names what holds part of it back: the tools asked about or denied, the paths a
+  // rule asks before or refuses, the tools the latest task wasn't offered.
   const parts: string[] = [];
+  const asked = line.exceptions.flatMap((e) =>
+    e.kind === "rule" && e.action === "ask"
+      ? [e.pattern ? `before ${e.pattern}` : `only ${list(e.tools)}`]
+      : [],
+  );
+  if (asked.length > 0) parts.push(list(asked));
   const denied = line.exceptions.flatMap((e) =>
     e.kind === "bot-deny" || e.kind === "every-deny" ? e.tools : [],
   );
@@ -208,6 +220,8 @@ function glanceExtra(line: PermissionLine, name: string): string | null {
     e.kind === "rule" && e.action === "never" && e.pattern ? [e.pattern] : [],
   );
   if (under.length > 0) parts.push(`not under ${list(under)}`);
+  const unlisted = line.exceptions.flatMap((e) => (e.kind === "not-listed" ? e.tools : []));
+  if (unlisted.length > 0) parts.push(`${list(unlisted)} not listed`);
   return parts.length > 0 ? parts.join("; ") : null;
 }
 
@@ -531,6 +545,15 @@ function Overview({
     <>
       <PluginLine view={view} name={name} />
       <NotEnforced view={view} />
+      {view.unread.length > 0 && (
+        <Note tone="warn" testId="unread">
+          <p>
+            Clawtrate doesn't read these of the gateway's settings, and they can remove tools:{" "}
+            {list(view.unread)}. The lines leave them out; a tool missing from {name}'s latest
+            task's listing is named on its line.
+          </p>
+        </Note>
+      )}
       {view.listsCut.length > 0 && (
         <Note tone="warn" testId="lists-cut">
           <p>
@@ -626,20 +649,22 @@ function Overview({
             {name} can change the gateway or its plugins, and so its rules.
           </li>
         )}
-        {!execLine || execLine.value === "never" ? (
-          <li>
-            <CheckIcon />
-            {name} can't run commands.
-          </li>
-        ) : (
-          <li data-tone="warn">
-            <WarnIcon />
-            {name} can run commands, and this page doesn't show where. On the gateway's machine,
-            outside a sandbox, a command can change the gateway's settings and the rules plugin's
-            store, so {name}'s plugin rules are advice there until Run commands is Never or runs
-            elsewhere.
-          </li>
-        )}
+        {/* Said only of a Run commands line the gateway's catalog gives. */}
+        {execLine &&
+          (execLine.value === "never" ? (
+            <li>
+              <CheckIcon />
+              {name} can't run commands.
+            </li>
+          ) : (
+            <li data-tone="warn">
+              <WarnIcon />
+              {name} can run commands, and this page doesn't show where. On the gateway's machine,
+              outside a sandbox, a command can change the gateway's settings and the rules plugin's
+              store, so {name}'s plugin rules are advice there until Run commands is Never or runs
+              elsewhere.
+            </li>
+          ))}
         <li>
           <FileIcon />A rule about a file tool covers that tool, not the file.
         </li>
@@ -900,9 +925,9 @@ function LinePage({
     [
       "Offered",
       line.offered === "yes"
-        ? `Yes, in ${name}'s latest task`
+        ? `Yes, in ${name}'s latest task's tools as the gateway listed them at ${clock(view.readAt)}`
         : line.offered === "no"
-          ? `No: not in ${name}'s latest task's tools`
+          ? `No: not in ${name}'s latest task's tools as the gateway listed them at ${clock(view.readAt)}`
           : view.offered.status === "no-task"
             ? "Not listed yet"
             : "The listing couldn't be read",
@@ -956,7 +981,10 @@ function LinePage({
         ))}
       </span>,
     ],
-    ["Held by", line.mark ? MARK_WORDS[line.mark] : "Nothing holds it back"],
+    [
+      "Held by",
+      line.mark ? MARK_WORDS[line.mark] : "Nothing in the settings and rules Clawtrate reads",
+    ],
   ];
   return (
     <>

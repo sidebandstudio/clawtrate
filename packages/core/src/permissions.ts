@@ -113,6 +113,8 @@ export type ToolSettings = {
    * never written back, since its replacement would drop what was cut.
    */
   cut: ToolList[];
+  /** Settings present that can remove tools and that this page doesn't evaluate, by path. */
+  unread: string[];
   hash: string | null;
 };
 
@@ -148,6 +150,9 @@ function names(value: unknown): string[] {
   }
   return out;
 }
+
+/** Tool settings that can remove tools and that this page doesn't evaluate. */
+const UNREAD_KEYS = ["profile", "byProvider", "alsoAllow", "sandbox"] as const;
 
 /** Whether `names` read a list whole: every entry a name, once, within the bound. */
 const readWhole = (value: unknown) => !Array.isArray(value) || names(value).length === value.length;
@@ -200,6 +205,14 @@ export function readToolSettings(answer: unknown, botId: string): ToolSettings {
     botExec: bot.policy,
     botExecLegacy: bot.legacy,
     servers,
+    unread: (
+      [
+        ["tools", tools],
+        [`agents.entries.${botId}.tools`, own],
+      ] as const
+    ).flatMap(([at, each]) =>
+      UNREAD_KEYS.filter((key) => each?.[key] !== undefined).map((key) => `${at}.${key}`),
+    ),
     cut: (
       [
         ["every-allow", tools?.allow],
@@ -461,10 +474,14 @@ function globMatches(pattern: string, name: string): boolean {
  * for as `<server>__*`, which only an entry covering every name of it matches.
  */
 export function entryNames(entry: string, tool: string, catalog: readonly CatalogTool[]): boolean {
+  // `group:plugins` is every plugin's tools, a tool server's among them; a plugin's id, its tools.
+  if (entry === "group:plugins")
+    return tool.endsWith("__*") || catalog.some((t) => t.id === tool && t.plugin !== null);
   if (entry.startsWith("group:")) {
     const group = entry.slice(6);
     return catalog.some((t) => t.group === group && t.id === tool);
   }
+  if (catalog.some((t) => t.plugin === entry && t.id === tool)) return true;
   if (tool.endsWith("__*")) return entry === "*" || entry === tool || globMatches(entry, tool);
   return globMatches(entry, tool);
 }
@@ -495,7 +512,10 @@ export type LineMark = "set" | "gateway" | "plugin" | "not-now" | null;
 export type LineException =
   | { kind: "every-deny"; tools: string[] }
   | { kind: "bot-deny"; tools: string[] }
-  | { kind: "not-offered"; tools: string[] }
+  /** Left out by an allow list: the gateway's for every bot, or the bot's own. */
+  | { kind: "not-offered"; tools: string[]; by: "every" | "bot" }
+  /** Left open by the settings read here, and not in the latest task's listing. */
+  | { kind: "not-listed"; tools: string[] }
   | {
       kind: "rule";
       action: RuleAction;
@@ -567,6 +587,8 @@ export type BotPermissions = {
   configHash: string | null;
   /** The gateway's tool lists longer than this page reads, or not read whole. */
   listsCut: ToolList[];
+  /** Settings that can remove tools and that this page doesn't evaluate: paths, or list entries. */
+  unread: string[];
   lines: PermissionLine[];
   /** Lines past `MAX_LINES` not shown. */
   linesOmitted: number;
@@ -701,26 +723,26 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
     };
   const everyDenied: string[] = [];
   const botDenied: string[] = [];
-  const notOffered: string[] = [];
+  const everyLeftOut: string[] = [];
+  const botLeftOut: string[] = [];
   const open: string[] = [];
   for (const tool of def.tools) {
     if (listNames(settings.everyDeny, tool, catalog)) everyDenied.push(tool);
     else if (listNames(settings.botDeny, tool, catalog)) botDenied.push(tool);
-    else if (
-      leftOut(settings.everyAllow, tool, catalog) ||
-      leftOut(settings.botAllow, tool, catalog)
-    )
-      notOffered.push(tool);
+    else if (leftOut(settings.everyAllow, tool, catalog)) everyLeftOut.push(tool);
+    else if (leftOut(settings.botAllow, tool, catalog)) botLeftOut.push(tool);
     else open.push(tool);
   }
-  const offered: PermissionLine["offered"] =
-    facts.offered.status !== "listed"
-      ? "unknown"
-      : def.kind === "server"
-        ? "yes"
-        : def.tools.some((t) => (facts.offered as { available: string[] }).available.includes(t))
-          ? "yes"
-          : "no";
+  const listing = facts.offered.status === "listed" ? facts.offered : null;
+  // Tools the settings read here leave open that the latest task's listing doesn't have:
+  // something this page doesn't read (a provider's or a profile's setting) may remove them.
+  const unlisted =
+    listing && def.kind !== "server" ? open.filter((t) => !listing.available.includes(t)) : [];
+  const offered: PermissionLine["offered"] = !listing
+    ? "unknown"
+    : def.kind === "server" || def.tools.some((t) => listing.available.includes(t))
+      ? "yes"
+      : "no";
   const exec: ExecFacts | null =
     def.kind === "exec"
       ? {
@@ -739,13 +761,29 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
     ownAsk: false,
   };
   const exceptions: LineException[] = [];
-  // 1, 2: the gateway removes the tools: for every bot, or for this bot. A tool no allow list
-  // offers is not offered; a line none of whose tools is offered or allowed is Never or Not offered.
+  const leftOutBy = (): LineException[] => [
+    ...(everyLeftOut.length > 0
+      ? [{ kind: "not-offered" as const, tools: everyLeftOut, by: "every" as const }]
+      : []),
+    ...(botLeftOut.length > 0
+      ? [{ kind: "not-offered" as const, tools: botLeftOut, by: "bot" as const }]
+      : []),
+  ];
+  // 1, 2: the gateway removes the tools: for every bot, or for this bot. A tool an allow list
+  // leaves out is not offered, said with whose list it is.
   if (open.length === 0) {
     const denied = everyDenied.length + botDenied.length > 0;
-    if (notOffered.length > 0 && denied)
-      exceptions.push({ kind: "not-offered", tools: notOffered });
-    if (!denied) return { ...base, value: "not-offered", mark: "set", exceptions, choice: null };
+    if (!denied) {
+      if (everyLeftOut.length > 0 && botLeftOut.length > 0) exceptions.push(...leftOutBy());
+      return {
+        ...base,
+        value: "not-offered",
+        mark: botLeftOut.length > 0 ? "gateway" : "set",
+        exceptions,
+        choice: null,
+      };
+    }
+    exceptions.push(...leftOutBy());
     if (botDenied.length === 0)
       return {
         ...base,
@@ -765,7 +803,8 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
   }
   if (everyDenied.length > 0) exceptions.push({ kind: "every-deny", tools: everyDenied });
   if (botDenied.length > 0) exceptions.push({ kind: "bot-deny", tools: botDenied });
-  if (notOffered.length > 0) exceptions.push({ kind: "not-offered", tools: notOffered });
+  exceptions.push(...leftOutBy());
+  if (unlisted.length > 0) exceptions.push({ kind: "not-listed", tools: unlisted });
   // A tool of the line no allow list offers leaves the rest as they are; a denied one limits the line.
   const partial = everyDenied.length + botDenied.length > 0;
 
@@ -782,15 +821,14 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
         if (open.some((tool) => ruleCovers(rule, tool))) rules.push({ rule, scope });
   }
   const covering = (r: PluginRule) => open.every((tool) => ruleCovers(r, tool));
-  const wholeNever = rules.find(
-    (r) => r.rule.action === "never" && !r.rule.target && covering(r.rule),
-  );
+  const whole = (r: PluginRule) => !r.target && covering(r);
+  const wholeNever = rules.find((r) => r.rule.action === "never" && whole(r.rule));
   const asks = rules.filter((r) => r.rule.action === "ask");
+  // An Ask on every tool of the line, with no pattern, makes it Asks first; any other limits it.
+  const wholeAsk = asks.some((r) => whole(r.rule));
   // A Never that holds back only part of the line: under a pattern, or on some of its tools.
-  const targetNevers = rules.filter(
-    (r) => r.rule.action === "never" && (r.rule.target || !covering(r.rule)),
-  );
-  const ownAsk = asks.some((r) => r.scope === "bot" && !r.rule.target && covering(r.rule));
+  const targetNevers = rules.filter((r) => r.rule.action === "never" && !whole(r.rule));
+  const ownAsk = asks.some((r) => r.scope === "bot" && whole(r.rule));
   for (const { rule, scope } of [...(wholeNever ? [wholeNever] : []), ...targetNevers, ...asks]) {
     if (exceptions.length >= MAX_EXCEPTIONS) break;
     exceptions.push({
@@ -813,72 +851,71 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
     exceptions.push({ kind: "fallback", scope: facts.botScope?.fallback ? "bot" : "every" });
   const pluginPart = rules.length > 0 || fallbackOn;
   const pluginMark: LineMark = holds ? "plugin" : "not-now";
+  // What the latest task's listing shows over the settings: none of the line's open tools listed
+  // is Not offered, held by nothing established here; some missing limits an Allowed line.
+  const listed = (line: PermissionLine): PermissionLine =>
+    unlisted.length === 0
+      ? line
+      : unlisted.length === open.length
+        ? { ...line, value: "not-offered", mark: null }
+        : line.value === "allowed"
+          ? { ...line, value: "limited" }
+          : line;
 
   // Run commands: the gateway's command policy decides after the plugin.
   if (exec) {
     const policy = exec.applies;
+    const choice = policy === "none" ? null : policy;
     if (pluginPart && !holds)
-      return {
-        ...base,
-        value: "unknown",
-        mark: "not-now",
-        exceptions,
-        choice: policy === "none" ? null : policy,
-        ownAsk,
-      };
+      return listed({ ...base, value: "unknown", mark: "not-now", exceptions, choice, ownAsk });
     if (wholeNever)
-      return {
-        ...base,
-        value: "never",
-        mark: "plugin",
-        exceptions,
-        choice: policy === "none" ? null : policy,
-        ownAsk,
-      };
+      return listed({ ...base, value: "never", mark: "plugin", exceptions, choice, ownAsk });
+    const limited = asks.length > 0 || targetNevers.length > 0 || partial;
     const value: LineValue =
       policy === "deny"
         ? "never"
         : policy === "full" || policy === "none"
-          ? asks.length > 0
+          ? wholeAsk
             ? "asks"
-            : targetNevers.length > 0 || partial
+            : limited
               ? "limited"
               : "allowed"
           : policy === "allowlist"
-            ? asks.length > 0
+            ? wholeAsk
               ? "asks"
               : "limited"
             : "asks";
     const mark: LineMark =
       asks.length > 0 || targetNevers.length > 0 ? pluginMark : exec.own ? "gateway" : "set";
-    return { ...base, value, mark, exceptions, choice: policy === "none" ? null : policy, ownAsk };
+    return listed({ ...base, value, mark, exceptions, choice, ownAsk });
   }
   // The bot's own deny on some of the line's tools is no one choice: none is checked, and Never
   // denies the rest. Never is checked only when the gateway removes every tool of the line.
   const choice = botDenied.length > 0 ? null : ownAsk ? "ask" : "allow";
   if (def.kind === "question")
-    return {
+    return listed({
       ...base,
       value: partial ? "limited" : "allowed",
       mark: partial ? "gateway" : null,
       exceptions,
       choice: "allow",
-    };
+    });
   if (pluginPart && !holds)
-    return { ...base, value: "unknown", mark: "not-now", exceptions, choice, ownAsk };
-  if (wholeNever) return { ...base, value: "never", mark: "plugin", exceptions, choice, ownAsk };
-  if (asks.length > 0)
-    return { ...base, value: "asks", mark: "plugin", exceptions, choice, ownAsk };
-  if (targetNevers.length > 0)
-    return { ...base, value: "limited", mark: "plugin", exceptions, choice, ownAsk };
-  return {
+    return listed({ ...base, value: "unknown", mark: "not-now", exceptions, choice, ownAsk });
+  if (wholeNever)
+    return listed({ ...base, value: "never", mark: "plugin", exceptions, choice, ownAsk });
+  if (wholeAsk)
+    return listed({ ...base, value: "asks", mark: "plugin", exceptions, choice, ownAsk });
+  if (asks.length > 0 || targetNevers.length > 0)
+    return listed({ ...base, value: "limited", mark: "plugin", exceptions, choice, ownAsk });
+  return listed({
     ...base,
     value: partial ? "limited" : "allowed",
     mark: partial ? (botDenied.length > 0 ? "gateway" : "set") : fallbackOn ? pluginMark : null,
     exceptions,
     choice,
     ownAsk,
-  };
+  });
 }
 
 /** The page's view of a bot's facts. */
@@ -905,6 +942,20 @@ export function permissionsView(facts: PermissionFacts): BotPermissions {
     },
     configHash: facts.settings.hash,
     listsCut: facts.settings.cut,
+    unread: [
+      ...facts.settings.unread,
+      ...[
+        ...(facts.settings.everyAllow ?? []),
+        ...facts.settings.everyDeny,
+        ...(facts.settings.botAllow ?? []),
+        ...facts.settings.botDeny,
+      ].filter(
+        (entry) =>
+          entry.startsWith("group:") &&
+          entry !== "group:plugins" &&
+          !facts.catalog.some((t) => t.group === entry.slice(6)),
+      ),
+    ].slice(0, MAX_EXCEPTIONS * 2),
     lines,
     linesOmitted: omitted,
   };
@@ -923,7 +974,9 @@ export function permissionGroups(lines: readonly PermissionLine[]): PermissionGr
     const key =
       line.value === "never"
         ? "never"
-        : line.value === "asks"
+        : line.value === "asks" ||
+            (line.value === "limited" &&
+              line.exceptions.some((e) => e.kind === "rule" && e.action === "ask"))
           ? "asks"
           : line.value === "unknown"
             ? "unknown"
@@ -964,6 +1017,8 @@ export function choiceRefusal(
     return "The gateway hasn't listed this server's tools for the bot's latest task, so Clawtrate can't name them to allow, ask or deny.";
   if (line.value === "not-offered" && line.mark === "set")
     return "The gateway's settings for every bot don't offer this tool. Clawtrate can't change them.";
+  if (line.value === "not-offered" && line.mark === "gateway")
+    return "The bot's own allow list in the gateway's settings leaves this out. This page doesn't change allow lists.";
   if (line.mark === "set" && line.value === "never")
     return "The gateway's settings deny this for every bot. Clawtrate can't change them.";
   if (line.kind === "question" && choice === "ask") return "A question already asks you.";
@@ -1104,7 +1159,7 @@ export function choiceShown(
     case "allow":
       return line.choice === "allow" && line.value !== "never";
     case "ask":
-      return line.value === "asks" && line.ownAsk;
+      return line.choice === "ask";
     case "full":
     case "auto":
     case "deny":
