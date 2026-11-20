@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import type { spawnSync } from "node:child_process";
 import { expect, it, vi } from "vitest";
 import { nativeUnsigned } from "../packaging/check-unsigned.ts";
 import { requireUnsignedEnvironment } from "../packaging/unsigned-environment.ts";

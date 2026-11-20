@@ -4,13 +4,7 @@ import { lstatSync, readFileSync, readdirSync, renameSync, writeFileSync } from 
 import { join } from "node:path";
 
 import { MAX_DOWNLOAD_BYTES, MAX_FEED_BYTES } from "../src/main/update/engine.ts";
-import {
-  FEED_FORMAT,
-  FILE_KEYS,
-  parseFeed,
-  parseReleaseDate,
-  type FileKey,
-} from "../src/main/update/feed.ts";
+import { FEED_FORMAT, FILE_KEYS, parseFeed, parseReleaseDate } from "../src/main/update/feed.ts";
 import { isNewer, parseVersion, versionTrack } from "../src/main/update/version.ts";
 import { artifactName, makeFeed, sha512Base64 } from "./feed.ts";
 
