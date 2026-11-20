@@ -1051,10 +1051,9 @@ test("F-476 F-490: an account only another bot keeps is no account for this bot,
     const settings = await accountPage();
     await settings.getByRole("button", { name: "Check now" }).click();
     await expect(
-      settings.getByText(
-        "No account. Second's account, Acme · Studio, is kept by Otto only, so Second can't use it.",
-        { exact: false },
-      ),
+      settings.getByText("No account. The gateway's list does not show Acme · Studio for Second.", {
+        exact: false,
+      }),
     ).toBeVisible({ timeout: 20_000 });
     await expect(settings.getByTestId("locked-note")).toHaveCount(0);
     await page.getByRole("button", { name: "Back to settings" }).click();
