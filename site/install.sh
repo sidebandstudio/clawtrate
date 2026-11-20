@@ -3,15 +3,15 @@
 #
 #   curl -fsSL https://clawtrate.dev/install.sh | sh
 #
-# It downloads the build the beta feed names, checks its SHA-256, checks the
-# app's signature and Apple's notarization, and only then copies Clawtrate.app
-# into /Applications. It asks before it replaces a copy that is already there.
+# It downloads the build the beta feed names for this Mac's processor, checks
+# its SHA-256, the app's signature, the Developer ID team that signed it and
+# Apple's notarization, and only then copies Clawtrate.app into /Applications. It asks before it replaces a copy that is already there.
 # It never uses sudo and changes no system setting. Any failed check stops it
 # before anything is installed.
 #
 # Two variables point it elsewhere, for testing: CLAWTRATE_FEED (the feed's
-# address, which may then also be http:// or file://) and CLAWTRATE_APPLICATIONS (the folder to
-# install into).
+# address, which may then also be http:// or file://) and
+# CLAWTRATE_APPLICATIONS (the folder to install into).
 
 set -eu
 
@@ -45,7 +45,11 @@ done
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/clawtrate-install.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-# 1. The feed: {"version": "...", "url": "https://...", "sha256": "<64 hex>"}
+# 1. The feed: the signing team, and one build per processor, keyed by what
+#    `uname -m` prints:
+#    {"teamIdentifier": "<10 characters>",
+#     "arm64":  {"version": "...", "url": "https://....zip", "sha256": "<64 hex>"},
+#     "x86_64": {"version": "...", "url": "https://....zip", "sha256": "<64 hex>"}}
 say "Reading the beta feed: $FEED"
 status="$(curl --proto "$PROTO" --proto-redir "$PROTO" -sSL -o "$WORK/latest-mac.json" -w '%{http_code}' "$FEED" 2>/dev/null)" || status="failed"
 case "$status" in
@@ -56,15 +60,25 @@ case "$status" in
 esac
 
 field() { plutil -extract "$1" raw -expect string -o - "$WORK/latest-mac.json" 2>/dev/null; }
-VERSION="$(field version)" || stop "the beta feed has no version."
-URL="$(field url)" || stop "the beta feed has no file address."
-SHA256="$(field sha256 | tr 'A-F' 'a-f')" || stop "the beta feed has no SHA-256."
+ARCH="$(uname -m)"
+case "$ARCH" in
+  arm64 | x86_64) ;;
+  *) stop "this Mac's processor ($ARCH) is not one Clawtrate is built for." ;;
+esac
+plutil -extract "$ARCH" raw -o - "$WORK/latest-mac.json" >/dev/null 2>&1 ||
+  stop "the beta feed has no build for this Mac's processor ($ARCH)."
+TEAM="$(field teamIdentifier)" || stop "the beta feed does not name the signing team."
+printf '%s' "$TEAM" | grep -Eq '^[A-Z0-9]{10}$' || stop "the beta feed's signing team is not a Developer ID team identifier."
+VERSION="$(field "$ARCH.version")" || stop "the beta feed's $ARCH build has no version."
+URL="$(field "$ARCH.url")" || stop "the beta feed's $ARCH build has no file address."
+SHA256="$(field "$ARCH.sha256")" || stop "the beta feed's $ARCH build has no SHA-256."
+SHA256="$(printf '%s' "$SHA256" | tr 'A-F' 'a-f')"
 printf '%s' "$SHA256" | grep -Eq '^[0-9a-f]{64}$' || stop "the beta feed's SHA-256 is not 64 hexadecimal characters."
 case "$URL" in
   *.zip) ;;
   *) stop "the beta feed names a file that is not a .zip." ;;
 esac
-say "Latest beta: Clawtrate $VERSION"
+say "Latest beta: Clawtrate $VERSION for $ARCH"
 
 # 2. The download, and its SHA-256.
 say "Downloading $URL"
@@ -83,6 +97,10 @@ NEW="$WORK/unpacked/$APP"
 codesign --verify --deep --strict "$NEW" 2>"$WORK/codesign.txt" ||
   stop "the app's signature is not valid: $(cat "$WORK/codesign.txt")"
 say "Signature is valid."
+SIGNER="$(codesign -dv "$NEW" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+[ "$SIGNER" = "$TEAM" ] ||
+  stop "the app is signed by team ${SIGNER:-unknown}, not by Clawtrate's team $TEAM."
+say "Signed by Clawtrate's Developer ID team ($TEAM)."
 spctl --assess --type execute "$NEW" 2>"$WORK/spctl.txt" ||
   stop "macOS does not accept the app as notarized: $(cat "$WORK/spctl.txt")"
 say "Notarization is accepted by macOS."
@@ -131,4 +149,4 @@ else
 fi
 
 say "Installed Clawtrate $VERSION in $TARGET"
-say "Open it from Applications. It updates itself on the Beta track."
+say "Open it from Applications. It checks for updates on the Beta track."
