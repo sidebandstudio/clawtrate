@@ -332,6 +332,31 @@ test.describe("the card's menu", () => {
         true,
       );
     }
+
+    // A message whose items include one with no content and one at an outside address: the
+    // result names both, beside the one over Clawtrate's limit, and sends only what it can.
+    downloads.length = 0;
+    const report = card(page, "borrowing-report.md");
+    await report.scrollIntoViewIfNeeded();
+    await report.getByRole("button", { name: /^borrowing-report/ }).click({ button: "right" });
+    await page
+      .getByRole("menu", { name: "borrowing-report.md" })
+      .getByRole("menuitem", { name: "Download 2 of 5" })
+      .click();
+    await expect(announcer(page)).toHaveText(
+      "The browser received 2 download requests. Not sent: app-screens.zip, library-card.pkpass, lending-faq.pdf",
+    );
+    await expect.poll(() => downloads.length).toBe(2);
+    for (const download of downloads) {
+      const name = download.suggestedFilename();
+      expect(readFileSync((await download.path())!).equals(Buffer.from(BYTES[name]!)), name).toBe(
+        true,
+      );
+    }
+    expect(downloads.map((download) => download.suggestedFilename()).sort()).toEqual([
+      "borrowing-report.md",
+      "lending-terms.pdf",
+    ]);
   });
 
   test("F-305: a picture's menu copies that picture: the clipboard holds an image with its pixels", async ({
