@@ -29,7 +29,7 @@ export function macReadback(log: string, key: FileKey) {
   const lines = log.split(/\r?\n/).filter((line) => line.startsWith(prefix));
   if (lines.length !== 1) return "unknown";
   if (lines[0] === prefix + "ad hoc.") return "ad hoc";
-  if (lines[0] === prefix + "none.") return "unsigned";
+  if (lines[0] === prefix + "none.") return "none";
   if (lines[0] === prefix + "certificate.") return "certificate";
   return "unknown";
 }

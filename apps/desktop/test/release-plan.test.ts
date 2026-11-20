@@ -216,10 +216,11 @@ it("labels signing as unchecked whatever the build record says", () => {
   for (const [log, kind] of [
     ["ad hoc", "ad hoc"],
     ["certificate", "certificate"],
-    ["none", "unsigned"],
+    ["none", "none"],
   ] as const)
     expect(macReadback("Signature of dist/mac-arm64/Clawtrate.app: " + log + ".", mac)).toBe(kind);
   expect(macReadback("Signing plan: certificate", mac)).toBe("unknown");
+  expect(macReadback("", mac)).toBe("unknown");
 });
 
 it("rechecks the saved candidate from the command line and preserves the feed on refusal", () => {
