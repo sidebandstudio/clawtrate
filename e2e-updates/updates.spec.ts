@@ -175,6 +175,8 @@ const test = base.extend<{ desktopApp: TestApp }>({
 // A failure may be visible only in the host's state, which fixture teardown closes away.
 test.afterEach(async ({ desktopApp }, testInfo) => {
   if (testInfo.status === "passed" || testInfo.status === "skipped") return;
+  // A test that captured before its own cleanup keeps that snapshot.
+  if (testInfo.attachments.some((each) => each.name === "host-state")) return;
   await captureHostState(desktopApp.page, testInfo, desktopApp.server, desktopApp.rendererRequests);
 });
 
@@ -299,13 +301,26 @@ async function captureHostState(
     mkdirSync(info.outputDir, { recursive: true });
     writeFileSync(
       file,
-      JSON.stringify({ reading, requests: server.requests, rendererRequests }, null, 2),
+      JSON.stringify(
+        { reading, requests: server.requests, rendererRequests, notes: info.annotations },
+        null,
+        2,
+      ),
     );
     await info.attach("host-state", { path: file, contentType: "application/json" });
   } catch {
     // The failure under diagnosis still outranks the diagnostics.
   }
 }
+
+/** Which element has focus, in words, for a failure's notes. */
+const focusedElement = (page: Page) =>
+  page.evaluate(() => {
+    const el = document.activeElement;
+    if (!el) return "none";
+    const name = el.getAttribute("aria-label") ?? el.textContent?.trim().slice(0, 60) ?? "";
+    return `${el.tagName.toLowerCase()}${el.getAttribute("role") ? `[role=${el.getAttribute("role")}]` : ""} ${name}`;
+  });
 
 async function checkStable() {
   const api = (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates;
@@ -340,7 +355,10 @@ for (const stage of ["check", "download"] as const) {
       const stable = page.getByRole("radio", { name: "Stable" }),
         nightly = page.getByRole("radio", { name: "Nightly" });
       await check.focus();
+      const notes = test.info().annotations;
+      notes.push({ type: "focus before Enter", description: await focusedElement(page) });
       await page.keyboard.press("Enter");
+      notes.push({ type: "focus after Enter", description: await focusedElement(page) });
       await expect(status).toBeFocused();
       await expect.poll(() => server.requests).toEqual(["/stable"]);
       let id = "";
@@ -418,6 +436,10 @@ for (const stage of ["check", "download"] as const) {
       expect(await page.evaluate(() => (window as unknown as ProbeWindow).seenUpdates)).toContain(
         "verified",
       );
+    } catch (error) {
+      // Cleanup releases the held choice, so the failure's state is read first.
+      await captureHostState(page, test.info(), server, desktopApp.rendererRequests);
+      throw error;
     } finally {
       delayed.resolve();
       resume();
