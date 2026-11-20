@@ -28,6 +28,7 @@ const open = async (query = "", viewport = { width: 1440, height: 900 }) => {
   });
   p.on("request", (r) => /^https?:/i.test(r.url()) && outbound.push(r.url()));
   await p.goto(base + (query ? "&" + query : ""));
+  await p.waitForFunction(() => Boolean(window.skills) && document.readyState === "complete", null, { timeout: 20000 });
   await p.waitForTimeout(250);
   return p;
 };
@@ -36,7 +37,12 @@ const dialog = (p) => text(p, "#settings-dialog");
 const details = (p) => text(p, ".k-task");
 const tab = (p) => text(p, "#panel-settings");
 const has = (t, ...words) => words.every((w) => t.includes(w));
-const wait = (p, ms = SETTLE) => p.waitForTimeout(ms);
+// A settle waits its time, then until no write of the page is still waiting for its answer or
+// its read, so a slow machine doesn't read a pending state as an outcome.
+const wait = async (p, ms = SETTLE) => {
+  await p.waitForTimeout(ms);
+  if (ms === SETTLE) await p.waitForFunction(() => !window.skills.busy(), null, { timeout: 20000 }).catch(() => {});
+};
 const announced = async (p) => {
   await p.waitForTimeout(80);
   return p.evaluate(() => document.querySelector("#b-announce").textContent);
@@ -220,11 +226,11 @@ check("S5 R3 a skill left out of defaults: new tasks don't begin with it", (awai
 await p.close();
 
 for (const [mode, words, ann] of [
-  ["unchanged", ["Nothing to save: the gateway already has this text."], "Nothing to save"],
-  ["refused", ["The gateway answered: Skill library authority changed. Refresh and retry. Reading the skill again: revision", "unchanged. Your text is still here."], "Couldn't save"],
-  ["silent", ["The gateway answered that it couldn't complete the save, without saying why. It refuses a skill that contains something that looks like a key or a password; if this one has one, take it out. Reading the skill again: revision"], "Couldn't save"],
-  ["superseded", ["The gateway answered: saved as revision", "Reading it again found revision", "saved after it; the page shows that one. Yours stays as an earlier revision."], "Saved, then changed elsewhere"],
-  ["readfail", ["The gateway answered: saved as revision", "Reading the skill again failed, so the facts below are as read before.", "Read again"], "Saved, not read back"],
+  ["unchanged", ["The gateway already had this bundle at revision"], "Already saved"],
+  ["refused", ["The gateway answered: Skill library authority changed. Refresh and retry. The next read found revision", "Your text is still here."], "Couldn't save"],
+  ["silent", ["The gateway answered that it couldn't complete the save, without saying why. The next read found revision", "Your text is still here."], "Couldn't save"],
+  ["superseded", ["The gateway returned revision", "for your save. The next read found revision", "The page shows"], "The next read found a different revision"],
+  ["readfail", ["The gateway returned revision", "for your request. Reading the skill again failed. The page still shows the previous read.", "Read again"], "Couldn't read the skill again."],
 ]) {
   p = await open(LIB + "&skill=trail&save=" + mode);
   if (mode === "unchanged") {
@@ -234,9 +240,45 @@ for (const [mode, words, ann] of [
   } else await typeInto(p, "#k-desc", "Use when planning a walk.");
   await p.click('[data-k="save"]');
   await wait(p);
-  check(`S5 R4 ${mode}: its words, from the read`, has(await dialog(p), ...words) && (await announced(p)) === ann, (await dialog(p)).slice(0, 400));
+  t = await dialog(p);
+  check(`S5 R4 ${mode}: its words, from the receipt and the read`, has(t, ...words) && !/key or a password|saved after it|Saved revision|unchanged\./.test(t) && (await announced(p)) === ann, t.slice(0, 400));
   await p.close();
 }
+
+// A rollback after the save: the read shows an earlier revision, and the page doesn't call it later.
+p = await open(LIB + "&skill=trail&save=rollback");
+await typeInto(p, "#k-desc", "Use when planning a walk.");
+await p.click('[data-k="save"]');
+await wait(p);
+const [first, mine2] = await p.evaluate(() => window.skills.G.skills.find((s) => s.id === "trail").history.map((h) => h.rev).filter((r, i, a) => i === 0 || i === a.length - 1));
+check(
+  "S5 R4 rollback: the receipt's revision and the read's, exactly, with no claim of which came later",
+  (await text(p, "#settings-dialog [role=status]")) === `The gateway returned revision ${mine2.slice(0, 12)} for your save. The next read found revision ${first.slice(0, 12)}. The page shows ${first.slice(0, 12)}.` && (await gwRead(p, "trail")).rev === first && (await announced(p)) === "The next read found a different revision",
+);
+await p.close();
+// A refusal, then another device's save before the read: the read's revision, the draft kept, compared.
+p = await open(LIB + "&skill=trail&save=refusedmoved");
+await typeInto(p, "#k-body", "Keep it after refusal.");
+await p.click('[data-k="save"]');
+await wait(p);
+g = await gwRead(p, "trail");
+check(
+  "S5 R4 refused, then a different revision: the read's revision named, nothing called unchanged, the draft kept and compared",
+  (await dialog(p)).includes(`The gateway answered: Skill library authority changed. Refresh and retry. The next read found revision ${g.rev.slice(0, 12)}. Your text is still here.`) &&
+    (await p.evaluate(() => document.querySelector("#k-body").value)) === "Keep it after refusal." &&
+    (await p.evaluate(() => document.querySelector("[data-k-theirs]")?.textContent)) === g.body &&
+    (await announced(p)) === "Couldn't save",
+);
+await p.close();
+p = await open(LIB + "&skill=trail&save=refusedreadfail");
+await typeInto(p, "#k-body", "Keep it after a failed read.");
+await p.click('[data-k="save"]');
+await wait(p);
+check(
+  "S5 R4 refused, and the read fails: the refusal, the failed read, the draft kept",
+  (await dialog(p)).includes("The gateway answered: Skill library authority changed. Refresh and retry. Couldn't read the skill again. The page shows the last readable revision. Your text is still here.") && (await p.evaluate(() => document.querySelector("#k-body").value)) === "Keep it after a failed read." && (await announced(p)) === "Couldn't read the skill again.",
+);
+await p.close();
 
 for (const [mode, matches] of [
   ["lost", "matches"],
@@ -257,21 +299,32 @@ p = await open(LIB + "&skill=trail&save=removed");
 await typeInto(p, "#k-body", "My own steps.");
 await p.click('[data-k="save"]');
 await wait(p);
-check("S5 removed meanwhile: told by its code, the text is still here", (await dialog(p)).includes("This skill was removed on the gateway. Your text is still here."));
+check("S5 removed meanwhile: told by the read's tombstone, the text is still here", (await dialog(p)).includes("This skill was removed on the gateway. Your text is still here.") && (await gwRead(p, "trail")).removed === true && (await announced(p)) === "Couldn't save");
 await p.click('[data-k="save-as-new"]');
 await wait(p, 150);
 t = await dialog(p);
 check("S6 R1 Save text as a new skill: named as such, says what isn't copied", (await text(p, "#b-section-title")) === "Save text as a new skill" && (await p.evaluate(() => document.querySelector("#k-body").value)) === "My own steps." && t.includes("The removed skill's other settings and files aren't copied: the new skill has only this Use when… and these instructions."));
 await p.close();
+// Not found, and the read refuses the entry: not called removed.
+p = await open(LIB + "&skill=trail&save=hidden&access=write");
+await typeInto(p, "#k-body", "My steps for a hidden skill.");
+await p.click('[data-k="save"]');
+await wait(p);
+t = await dialog(p);
+check(
+  "S5 R4 not found and unreadable, not tombstoned: not called removed, the text kept, Save text as a new skill offered",
+  t.includes("Couldn't read this skill again. Your text is still here.") && !t.includes("was removed") && Boolean(await p.$('[data-k="save-as-new"]')) && (await p.evaluate(() => document.querySelector("#k-body").value)) === "My steps for a hidden skill." && (await announced(p)) === "Couldn't read the skill again.",
+);
+await p.close();
 
-// Someone else saved first (section 5.1)
+// The gateway has a different revision (section 5.1)
 p = await open(LIB + "&skill=trail&save=conflict");
 await typeInto(p, "#k-body", "My edit of the checklist.");
 await p.click('[data-k="save"]');
 await wait(p);
 t = await dialog(p);
 g = await gwRead(p, "trail");
-check("S5.1 someone else saved first: the note and both versions", has(t, "Someone else saved this skill at 5:44 PM, after you opened it. Your edit isn't saved. Compare them, then choose.", "On the gateway now", "Your edit", "Theirs stays as an earlier revision on the gateway.") && (await announced(p)) === "Someone else saved this skill");
+check("S5.1 a different revision: the note names the revision and when it was read, and no person", has(t, `The gateway has a different revision: ${g.rev.slice(0, 12)}, as read at`, "Your edit isn't saved. Compare them, then choose.", "On the gateway now", "Your edit", "Theirs stays as an earlier revision on the gateway.") && !t.includes("Someone else") && (await announced(p)) === "The gateway has a different revision");
 check("S5.1 theirs is shown whole, as the gateway has it; yours is kept", (await p.evaluate(() => document.querySelector("[data-k-theirs]").textContent)) === g.body && (await text(p, "[data-k-theirs-desc]")) === g.description && (await p.evaluate(() => document.querySelector("#k-body").value)) === "My edit of the checklist.");
 check("S5.1 nothing was saved silently: no Save in the foot", !(await p.$('[data-k="save"]')));
 await p.click('[data-k="use-theirs"]');
@@ -362,9 +415,37 @@ for (const [mode, words] of [
   await p.click('[data-k="save"]');
   await wait(p);
   t = await dialog(p);
-  check(`S6 R4 new skill, ${mode}: only what the read by name found`, has(t, ...words) && !t.includes("Saved revision") && (await text(p, "#b-section-title")) === "New skill");
+  check(`S6 R4 new skill, ${mode}: only what the read by name found`, has(t, ...words) && !t.includes("Saved revision") && (await text(p, "#b-section-title")) === "New skill" && (await announced(p)) === "Couldn't tell whether it was saved");
   await p.close();
 }
+for (const [mode, words, ann, created] of [
+  ["refused", "The gateway answered: Skill library authority changed. Refresh and retry. Your text is still here.", "Couldn't save", false],
+  ["readfail", "for your request. Reading the skill again failed. Your text is still here.", "Couldn't read the skill again.", true],
+  ["lostother", "Couldn't tell whether your save reached the gateway. Reading your library again found a skill named trail-notes, revision", "Couldn't tell whether it was saved", false],
+]) {
+  p = await open(LIB + "&skill=new&save=" + mode);
+  await typeInto(p, "#k-slug", "trail-notes");
+  await typeInto(p, "#k-desc", "Use when writing up a walk.");
+  await typeInto(p, "#k-body", "Note the distance.");
+  await p.click('[data-k="save"]');
+  await wait(p);
+  t = await dialog(p);
+  check(
+    `S6 R4 new skill, ${mode}: no success, the form kept, ${created ? "the receipt's revision named" : "nothing created by this request"}`,
+    t.includes(words) && !t.includes("Saved revision") && (await text(p, "#b-section-title")) === "New skill" && (await p.evaluate(() => document.querySelector("#k-body").value)) === "Note the distance." && Boolean((await gwRead(p, "new-trail-notes")).rev) === created && (await announced(p)) === ann,
+    t.slice(0, 300),
+  );
+  await p.close();
+}
+p = await open(LIB + "&skill=new&save=superseded");
+await typeInto(p, "#k-slug", "trail-notes");
+await typeInto(p, "#k-desc", "Use when writing up a walk.");
+await typeInto(p, "#k-body", "Note the distance.");
+await p.click('[data-k="save"]');
+await wait(p);
+g = await gwRead(p, "new-trail-notes");
+check("S6 R4 new skill, a different read of the receipt's ID: both revisions, no Saved", (await dialog(p)).includes("for your save. The next read found revision " + g.rev.slice(0, 12)) && !(await dialog(p)).includes("Saved revision") && (await p.evaluate(() => window.skills.sent.at(-1).expectedRevision)) === null);
+await p.close();
 p = await open(LIB);
 await p.click('[data-k="new"]');
 await typeInto(p, "#k-slug", "trail-checklist");
@@ -420,6 +501,27 @@ await p.click('#confirm-dialog [data-b="confirm-ok"]');
 await wait(p);
 g = await gwRead(p, "trail");
 check("S7 R4 a stale Remove with nothing unsaved: nothing removed, the page as read again", (await dialog(p)).includes(`The gateway refused this removal because it read a different revision. Reading it again found revision ${g.rev.slice(0, 12)}.`) && !(await dialog(p)).includes("Your unsaved text") && g.removed !== true && (await p.evaluate(() => document.querySelector("#k-body").value)) === g.body);
+await p.close();
+for (const [mode, words, ann, removed] of [
+  ["lost", "Reading the skill again shows it was removed. The gateway did not answer your request. Tasks that hold it keep their pins.", "Removed", true],
+  ["lostnot", "Couldn't tell whether it was removed. Reading it again: it is still in your library.", "Not removed", false],
+  ["refused", "The gateway answered: Skill library authority changed. Refresh and retry. Reading it again found revision", "Not removed", false],
+  ["readfail", "The gateway answered that it removed the skill. Reading the skill again failed. The page still shows the previous read.", "Couldn't read the skill again.", true],
+]) {
+  p = await open(LIB + "&skill=trail&remove=" + mode);
+  await p.click('[data-k="remove"]');
+  await p.click('#confirm-dialog [data-b="confirm-ok"]');
+  await wait(p);
+  t = await dialog(p);
+  check(`S7 R4 Remove, ${mode}: the receipt and the read apart`, t.includes(words) && !t.includes("Removed. Reading") && Boolean((await gwRead(p, "trail")).removed) === removed && (await announced(p)) === ann, t.slice(0, 300));
+  await p.close();
+}
+p = await open(LIB + "&skill=trail&remove=readfail");
+await typeInto(p, "#k-body", "Kept through a failed read.");
+await p.click('[data-k="remove"]');
+await p.click('#confirm-dialog [data-b="confirm-ok"]');
+await wait(p);
+check("S7 R4 Remove whose read fails: the page and the draft stay", (await text(p, "#b-section-title")) === "trail-checklist" && (await p.evaluate(() => document.querySelector("#k-body").value)) === "Kept through a failed read." && (await dialog(p)).includes("Your unsaved text is still here."));
 await p.close();
 p = await open(LIB + "&skill=trail&remove=conflict");
 await typeInto(p, "#k-body", "My route notes, not saved.");

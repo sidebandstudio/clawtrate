@@ -346,8 +346,10 @@
     return `<h4 class="b-group">Needs</h4><p class="k-needs">Programs: <span class="mono">${s.needs.bins.map(esc).join(", ")}</span>. Values: <span class="mono">${s.needs.env.map(esc).join(", ")}</span>.</p><p class="b-hint">From the skill's own text. The gateway gives a skill to a bot only when what it needs is there.</p>`;
   }
 
-  function skillPage(s) {
+  function skillPage(live) {
     const r = K.read;
+    // The page acts on what it last read, not on the gateway's state since.
+    const s = { ...live, owner: r.owner, shared: r.shared };
     const fits = roundTrips(r);
     const editable = canEdit(s) && fits;
     let body = CONTENT + (K.pending ? pendingLine(K.pending) : "") + (K.status || "");
@@ -396,7 +398,7 @@
     const t = K.compare.theirs;
     const kept = [t.extra.length ? "its other settings" : "", t.files.length ? `its ${t.files.length === 1 ? "file" : `${t.files.length} files`}` : ""].filter(Boolean).join(" and ");
     return (
-      note(`<p><b>Someone else saved this skill</b> at ${esc(t.saved)}, after you opened it. Your edit isn't saved. Compare them, then choose.</p>`, "warn") +
+      note(`<p><b>The gateway has a different revision</b>: ${rev(t.rev)}, as read at ${esc(K.compare.readAt || clock())}. Your edit isn't saved. Compare them, then choose.</p>`, "warn") +
       `<div class="k-compare-wrap"><div class="k-compare">` +
       `<section aria-labelledby="k-theirs"><h4 class="b-group" id="k-theirs">On the gateway now</h4><p class="b-hint">Revision ${rev(t.rev)}, saved ${esc(t.saved)}</p><p class="k-label">Use when…</p><p class="k-ro" data-k-theirs-desc>${esc(t.description)}</p><p class="k-label">Instructions</p><pre class="k-plain" data-k-theirs>${esc(t.body)}</pre></section>` +
       `<section aria-labelledby="k-mine"><h4 class="b-group" id="k-mine">Your edit</h4>${fieldsHtml(true)}</section>` +
@@ -442,13 +444,15 @@
   }
 
   // Saving (section 5). What is sent is captured at the click: the skill, the base revision,
-  // the two fields, and every other part of the skill as the base has it.
+  // the two fields, and every other part of the skill as the base has it. The receipt and the
+  // read that follows are kept apart, and the page concludes only what they establish.
   function save({ over = false } = {}) {
     if (K.pending) return;
     if (K.page === "new") return saveNew();
     const base = over ? K.compare.theirs : K.read;
     const sub = { id: K.page, base: base.rev, description: K.draft.description, body: K.draft.body, extra: [...base.extra], files: base.files.map((f) => ({ ...f })) };
     const mode = takeMode("save");
+    sent.push({ method: "skills.library.save", skillId: sub.id, expectedRevision: sub.base, retainFiles: sub.files.map((f) => f.path) });
     K.pending = "Saving…";
     K.status = null;
     rerender();
@@ -457,92 +461,100 @@
       const s = gw(sub.id);
       let answer;
       if (mode === "removed") s.removed = true;
-      if (mode === "refused") answer = { error: "INVALID_REQUEST", message: "Skill library authority changed. Refresh and retry." };
+      // hidden: the entry is still there, but this connection can no longer read it.
+      if (mode === "hidden") Object.assign(s, { owner: "robin", ownerLabel: "Robin Park", shared: false });
+      if (mode === "refused" || mode === "refusedmoved" || mode === "refusedreadfail") answer = { error: "INVALID_REQUEST", message: "Skill library authority changed. Refresh and retry." };
       else if (mode === "silent") answer = { error: "UNAVAILABLE" };
-      else if (s.removed) answer = { error: "INVALID_REQUEST", code: "SKILL_LIBRARY_NOT_FOUND" };
+      else if (s.removed || mode === "hidden") answer = { error: "INVALID_REQUEST", code: "SKILL_LIBRARY_NOT_FOUND" };
       else if (s.rev !== sub.base) answer = { error: "INVALID_REQUEST", code: "SKILL_LIBRARY_CONFLICT", currentRevision: s.rev };
       else if (mode === "lostnot") answer = null; // the request never reached the gateway
       else {
         const state = commit(s, sub);
         answer = mode === "lost" ? null : { state, rev: s.rev };
         if (mode === "superseded") otherSave(sub.id);
+        // rollback: another device moves the entry back to an earlier revision.
+        if (mode === "rollback") rollback(s);
       }
+      // refusedmoved: another device saves between the refusal and this page's read.
+      if (mode === "refusedmoved") otherSave(sub.id);
       later(READ, () => settleSave(sub, answer, mode));
     });
+  }
+  function rollback(s) {
+    const earlier = s.history[0];
+    const back = CT.skillsParts(earlier.md);
+    s.description = back.description;
+    s.body = back.body;
+    s.rev = earlier.rev;
+    s.saved = clock();
   }
 
   function settleSave(sub, answer, mode) {
     K.pending = null;
     const typedSince = K.draft.description !== sub.description || K.draft.body !== sub.body;
-    const r = mode === "readfail" ? { error: "UNAVAILABLE" } : read(sub.id);
+    const r = mode === "readfail" || mode === "refusedreadfail" ? { error: "UNAVAILABLE" } : read(sub.id);
     const mineNow = typedSince ? `<p>You typed more after you chose Save. That text is still here, unsaved.</p>` : "";
-    const adopt = () => {
-      K.read = r;
-      if (!typedSince) K.draft = { slug: r.slug, description: r.description, body: r.body };
+    const readAgain = `<div class="b-actions">${button("Read again", 'data-k="reread" data-size="sm"')}</div>`;
+    const asNew = `<div class="b-actions">${button("Save text as a new skill", 'data-k="save-as-new" data-size="sm"')}</div>`;
+    const settle = (html, tone, said) => {
+      K.status = statusNote(html + mineNow, tone);
+      announce(said);
+      rerender();
     };
-    if (answer?.error === "INVALID_REQUEST" && answer.code === "SKILL_LIBRARY_CONFLICT") {
-      K.compare = { theirs: r };
-      announce("Someone else saved this skill");
+    // Only a read that shows the tombstone says the skill was removed.
+    if (r.removed === true) return settle(`<p>This skill was removed on the gateway. Your text is still here.</p>${asNew}`, "danger", "Couldn't save");
+    if (answer?.code === "SKILL_LIBRARY_CONFLICT" && r.rev) {
+      K.compare = { theirs: r, readAt: clock() };
+      announce("The gateway has a different revision");
       rerender();
       return $("#k-theirs", settings())?.scrollIntoView({ block: "nearest" });
     }
-    if (answer?.code === "SKILL_LIBRARY_NOT_FOUND" || r.removed) {
-      K.status = statusNote(`<p>This skill was removed on the gateway. Your text is still here.</p><div class="b-actions">${button("Save text as a new skill", 'data-k="save-as-new" data-size="sm"')}</div>`, "danger");
-      announce("Couldn't save");
-      return rerender();
-    }
-    if (r.error && !answer) {
-      K.status = statusNote(`<p>Couldn't tell whether your save reached the gateway, and reading the skill again failed too. Your text is still here, unsaved. The facts below are as read before.</p><div class="b-actions">${button("Read again", 'data-k="reread" data-size="sm"')}</div>`, "warn");
-      announce("Couldn't tell whether it was saved");
-      return rerender();
+    const refusal = !answer?.error
+      ? ""
+      : answer.error === "UNAVAILABLE"
+        ? "The gateway answered that it couldn't complete the save, without saying why."
+        : `The gateway answered: ${esc(answer.message || answer.code)}`;
+    if (r.error) {
+      if (answer?.code === "SKILL_LIBRARY_NOT_FOUND") return settle(`<p>Couldn't read this skill again. Your text is still here.</p>${asNew}`, "danger", "Couldn't read the skill again.");
+      if (answer?.error) return settle(`<p>${refusal} Couldn't read the skill again. The page shows the last readable revision. Your text is still here.</p>${readAgain}`, "danger", "Couldn't read the skill again.");
+      if (!answer) return settle(`<p>Couldn't tell whether your save reached the gateway, and reading the skill again failed too. Your text is still here.</p>${readAgain}`, "warn", "Couldn't read the skill again.");
+      return settle(`<p>The gateway returned revision ${rev(answer.rev)} for your request. Reading the skill again failed. The page still shows the previous read.</p>${readAgain}`, "warn", "Couldn't read the skill again.");
     }
     if (answer?.error) {
-      K.status = statusNote(
-        answer.error === "UNAVAILABLE"
-          ? `<p>The gateway answered that it couldn't complete the save, without saying why. It refuses a skill that contains something that looks like a key or a password; if this one has one, take it out. Reading the skill again: revision ${rev(r.rev)}, unchanged. Your text is still here.</p>`
-          : `<p>The gateway answered: ${esc(answer.message)} Reading the skill again: revision ${rev(r.rev)}, unchanged. Your text is still here.</p>`,
-        "danger",
-      );
-      announce("Couldn't save");
-      return rerender();
+      // The read is reported as found. A different revision is compared before another save.
+      if (r.rev !== sub.base) K.compare = { theirs: r, readAt: clock() };
+      else K.read = r;
+      return settle(`<p>${refusal} The next read found revision ${rev(r.rev)}. Your text is still here.</p>`, "danger", "Couldn't save");
     }
     if (!answer) {
       // No answer: say only what the read shows, and keep the text.
       const matches = r.description === sub.description && r.body === sub.body;
       K.read = r;
-      K.status = statusNote(
-        `<p>Couldn't tell whether your save reached the gateway. Reading the skill again found revision ${rev(r.rev)}, updated ${esc(r.saved)}; its text ${matches ? "matches" : "doesn't match"} what you sent. Which save wrote it isn't known. Your text is still here${matches ? "" : ", unsaved"}.</p>` + mineNow,
+      return settle(
+        `<p>Couldn't tell whether your save reached the gateway. Reading the skill again found revision ${rev(r.rev)}, updated ${esc(r.saved)}; its text ${matches ? "matches" : "doesn't match"} what you sent. Which save wrote it isn't known. Your text is still here${matches ? "" : ", unsaved"}.</p>`,
         "warn",
+        "Couldn't tell whether it was saved",
       );
-      announce("Couldn't tell whether it was saved");
-      return rerender();
     }
-    if (r.error) {
-      K.status = statusNote(`<p>The gateway answered: saved as revision ${rev(answer.rev)}. Reading the skill again failed, so the facts below are as read before.</p><div class="b-actions">${button("Read again", 'data-k="reread" data-size="sm"')}</div>`, "warn");
-      announce("Saved, not read back");
-      return rerender();
-    }
-    adopt();
-    if (answer.state === "unchanged") {
-      K.status = statusNote(`<p>Nothing to save: the gateway already has this text.</p>`);
-      announce("Nothing to save");
-    } else if (r.rev !== answer.rev) {
-      K.status = statusNote(`<p>The gateway answered: saved as revision ${rev(answer.rev)}. Reading it again found revision ${rev(r.rev)}, saved after it; the page shows that one. Yours stays as an earlier revision.</p>` + mineNow, "warn");
-      announce("Saved, then changed elsewhere");
-    } else {
-      K.status = statusNote(
-        `<p>Saved revision ${rev(r.rev)}.${r.enabled ? " New tasks that begin with this skill get this revision." : " It isn't included in defaults, so new tasks don't begin with it."} Tasks that have it keep theirs until they are updated.</p>` + mineNow,
-      );
-      announce("Saved");
-    }
+    K.read = r;
+    if (!typedSince) K.draft = { slug: r.slug, description: r.description, body: r.body };
     K.compare = null;
-    rerender();
+    if (r.rev !== answer.rev) settle(`<p>The gateway returned revision ${rev(answer.rev)} for your save. The next read found revision ${rev(r.rev)}. The page shows ${rev(r.rev)}.</p>`, "warn", "The next read found a different revision");
+    else if (answer.state === "unchanged") settle(`<p>The gateway already had this bundle at revision ${rev(answer.rev)}.</p>`, "", "Already saved");
+    else
+      settle(
+        `<p>Saved revision ${rev(r.rev)}.${r.enabled ? " New tasks that begin with this skill get this revision." : " It isn't included in defaults, so new tasks don't begin with it."} Tasks that have it keep theirs until they are updated.</p>`,
+        "",
+        "Saved",
+      );
     $("#b-section-title", settings())?.focus();
   }
 
+  // A new skill (section 6). The receipt's skill ID is read; the name only when there was no answer.
   function saveNew() {
     const sub = { slug: K.draft.slug, description: K.draft.description, body: K.draft.body };
     const mode = takeMode("save");
+    sent.push({ method: "skills.library.save", slug: sub.slug, expectedRevision: null });
     K.pending = "Saving…";
     K.status = null;
     rerender();
@@ -550,42 +562,59 @@
     later(ANSWER, () => {
       const taken = G.skills.find((s) => !s.removed && mine(s) && s.slug === sub.slug);
       let answer;
-      if (taken || mode === "taken") answer = { code: "SKILL_LIBRARY_NAME_CONFLICT" };
+      if (taken || mode === "taken") answer = { error: "INVALID_REQUEST", code: "SKILL_LIBRARY_NAME_CONFLICT" };
+      else if (mode === "refused") answer = { error: "INVALID_REQUEST", message: "Skill library authority changed. Refresh and retry." };
       else if (mode === "lostnot") answer = null;
-      else {
+      else if (mode === "lostother") {
+        // Another device made a skill with this name first; this request was refused, and its answer lost.
+        G.skills.push(skill(`other-${sub.slug}`, sub.slug, "Use when another device wrote it.", "Another device's instructions.", { saved: clock() }));
+        answer = null;
+      } else {
         const s = skill(`new-${sub.slug}`, sub.slug, sub.description, sub.body, { saved: clock() });
         G.skills.push(s);
-        answer = mode === "lost" ? null : { rev: s.rev, id: s.id };
+        answer = mode === "lost" ? null : { state: "published", entry: { skillId: s.id, slug: s.slug, revision: s.rev } };
+        if (mode === "superseded") otherSave(s.id);
       }
       later(READ, () => {
         K.pending = null;
-        if (answer?.code) {
+        const laterDraft = { ...K.draft };
+        const typedSince = laterDraft.description !== sub.description || laterDraft.body !== sub.body;
+        const mineNow = typedSince ? `<p>You typed more after you chose Save. That text is still here, unsaved.</p>` : "";
+        const settle = (html, tone, said) => {
+          K.status = statusNote(html + mineNow, tone);
+          announce(said);
+          rerender();
+        };
+        if (answer?.code === "SKILL_LIBRARY_NAME_CONFLICT") {
           K.nameTaken = sub.slug;
           announce("Couldn't save");
           rerender();
           return $("#k-slug", settings())?.focus();
         }
-        // Read the library again by name.
-        const found = G.skills.find((s) => !s.removed && mine(s) && s.slug === sub.slug);
+        if (answer?.error) return settle(`<p>The gateway answered: ${esc(answer.message)} Your text is still here.</p>`, "danger", "Couldn't save");
         if (!answer) {
-          K.status = found
-            ? statusNote(`<p>Couldn't tell whether your save reached the gateway. Reading your library again found a skill named ${esc(sub.slug)}, revision ${rev(found.rev)}; whether your save made it isn't known.</p><div class="b-actions">${button("Open it", `data-k-skill="${found.id}" data-size="sm"`)}</div>`, "warn")
-            : statusNote(`<p>Couldn't tell whether your save reached the gateway. Reading your library again found no skill named ${esc(sub.slug)}. Your text is still here.</p>`, "warn");
-          announce("Couldn't tell whether it was saved");
-          return rerender();
+          // Read the library again by name: what it finds may not be this request's.
+          const found = G.skills.find((s) => !s.removed && mine(s) && s.slug === sub.slug);
+          return found
+            ? settle(`<p>Couldn't tell whether your save reached the gateway. Reading your library again found a skill named ${esc(sub.slug)}, revision ${rev(found.rev)}; whether your save made it isn't known.</p><div class="b-actions">${button("Open it", `data-k-skill="${found.id}" data-size="sm"`)}</div>`, "warn", "Couldn't tell whether it was saved")
+            : settle(`<p>Couldn't tell whether your save reached the gateway. Reading your library again found no skill named ${esc(sub.slug)}. Your text is still here.</p>`, "warn", "Couldn't tell whether it was saved");
         }
-        // What was typed after the click stays, unsaved, on the new skill's page.
-        const laterDraft = { ...K.draft };
-        const typedSince = laterDraft.description !== sub.description || laterDraft.body !== sub.body;
+        const id = answer.entry.skillId;
+        const r = mode === "readfail" ? { error: "UNAVAILABLE" } : read(id);
+        if (!r.rev)
+          return settle(
+            `<p>The gateway returned revision ${rev(answer.entry.revision)} for your request. Reading the skill again failed. Your text is still here.</p><div class="b-actions">${button("Read again", `data-k-skill="${esc(id)}" data-size="sm"`)}</div>`,
+            "warn",
+            "Couldn't read the skill again.",
+          );
+        // Confirmed by a read of the receipt's entry: the page becomes that skill's page.
         K.nameTaken = null;
         K.saveAsNew = false;
-        openPage(found.id);
-        if (typedSince) K.draft = { slug: found.slug, description: laterDraft.description, body: laterDraft.body };
-        K.status = statusNote(
-          `<p>Saved revision ${rev(found.rev)}. It is included in defaults, so new tasks a person starts can begin with it.</p>` + (typedSince ? `<p>You typed more after you chose Save. That text is still here, unsaved.</p>` : ""),
-        );
-        announce("Saved");
-        rerender();
+        openPage(id);
+        if (typedSince) K.draft = { slug: r.slug, description: laterDraft.description, body: laterDraft.body };
+        if (r.rev !== answer.entry.revision)
+          settle(`<p>The gateway returned revision ${rev(answer.entry.revision)} for your save. The next read found revision ${rev(r.rev)}. The page shows ${rev(r.rev)}.</p>`, "warn", "The next read found a different revision");
+        else settle(`<p>Saved revision ${rev(r.rev)}. It is included in defaults, so new tasks a person starts can begin with it.</p>`, "", "Saved");
         $("#b-section-title", settings())?.focus();
       });
     });
@@ -596,6 +625,7 @@
     const r = K.read;
     const sub = { id: K.page, base: r.rev, slug: r.slug };
     const mode = takeMode("remove");
+    sent.push({ method: "skills.library.mutate", skillId: sub.id, expectedRevision: sub.base, action: "remove" });
     K.pending = "Removing…";
     K.status = null;
     rerender();
@@ -604,48 +634,57 @@
       const s = gw(sub.id);
       let answer;
       if (mode === "conflict") otherSave(sub.id);
-      if (s.rev !== sub.base) answer = { code: "SKILL_LIBRARY_CONFLICT" };
+      if (s.rev !== sub.base) answer = { error: "INVALID_REQUEST", code: "SKILL_LIBRARY_CONFLICT" };
+      else if (mode === "refused") answer = { error: "INVALID_REQUEST", message: "Skill library authority changed. Refresh and retry." };
+      else if (mode === "lostnot") answer = null;
       else {
         s.removed = true;
         answer = mode === "lost" ? null : { state: "removed" };
       }
       later(READ, () => {
         K.pending = null;
-        const after = read(sub.id);
+        const after = mode === "readfail" ? { error: "UNAVAILABLE" } : read(sub.id);
         const kept = dirty(); // unsaved text on the page, against the page's own read
-        if (after.removed) {
-          const words = `Removed. Reading your library again: ${esc(sub.slug)} isn't in it. Tasks that have it keep their revision.`;
-          announce("Removed");
+        const unsavedLine = kept ? " Your unsaved text is still here." : "";
+        const settle = (html, tone, said) => {
+          K.status = statusNote(html, tone);
+          announce(said);
+          rerender();
+        };
+        if (after.removed === true) {
+          const words = answer
+            ? `Removed. Reading your library again: ${esc(sub.slug)} isn't in it. Tasks that have it keep their revision.`
+            : "Reading the skill again shows it was removed. The gateway did not answer your request. Tasks that hold it keep their pins.";
           if (kept) {
             // The draft stays on the removed skill's page; only "Save text as a new skill" can take it.
             K.gone = true;
-            K.status = statusNote(`<p>${words} Your unsaved text is still here.</p><div class="b-actions">${button("Save text as a new skill", 'data-k="save-as-new" data-size="sm"')}</div>`, "warn");
-            rerender();
+            settle(`<p>${words}${unsavedLine}</p><div class="b-actions">${button("Save text as a new skill", 'data-k="save-as-new" data-size="sm"')}</div>`, "warn", "Removed");
             return paintTask();
           }
           K.page = null;
           K.draft = null;
-          K.listStatus = statusNote(`<p>${words}</p>`);
+          K.listStatus = statusNote(`<p>${words}</p>`, answer ? "" : "warn");
           rerender();
           $("#b-section-title", settings())?.focus();
+          announce("Removed");
           return paintTask();
         }
-        if (answer?.code === "SKILL_LIBRARY_CONFLICT") {
-          const words = `<p>The gateway refused this removal because it read a different revision. Reading it again found revision ${rev(after.rev)}.${kept ? " Your unsaved text is still here." : ""}</p>`;
-          if (kept) K.compare = { theirs: after };
-          else {
-            K.read = after;
-            K.draft = { slug: after.slug, description: after.description, body: after.body };
-          }
-          K.status = statusNote(words, "warn");
-          announce("Not removed");
-          return rerender();
+        if (after.error) {
+          const words = answer?.error
+            ? `The gateway answered: ${esc(answer.message || answer.code)} Couldn't read the skill again. The page shows the last readable revision.`
+            : answer
+              ? "The gateway answered that it removed the skill. Reading the skill again failed. The page still shows the previous read."
+              : "Couldn't tell whether it was removed, and reading the skill again failed too. The page still shows the previous read.";
+          return settle(`<p>${words}${unsavedLine}</p><div class="b-actions">${button("Read again", 'data-k="reread" data-size="sm"')}</div>`, "warn", "Couldn't read the skill again.");
         }
-        K.read = after;
-        if (!kept) K.draft = { slug: after.slug, description: after.description, body: after.body };
-        K.status = statusNote(`<p>Couldn't tell whether it was removed. Reading it again: it is still in your library.</p>`, "warn");
-        announce("Not removed");
-        rerender();
+        if (kept && after.rev !== sub.base) K.compare = { theirs: after, readAt: clock() };
+        else if (!kept) {
+          K.read = after;
+          K.draft = { slug: after.slug, description: after.description, body: after.body };
+        }
+        if (answer?.code === "SKILL_LIBRARY_CONFLICT") return settle(`<p>The gateway refused this removal because it read a different revision. Reading it again found revision ${rev(after.rev)}.${unsavedLine}</p>`, "warn", "Not removed");
+        if (answer?.error) return settle(`<p>The gateway answered: ${esc(answer.message)} Reading it again found revision ${rev(after.rev)}.${unsavedLine}</p>`, "danger", "Not removed");
+        settle(`<p>Couldn't tell whether it was removed. Reading it again: it is still in your library.${unsavedLine}</p>`, "warn", "Not removed");
       });
     });
   }
@@ -663,7 +702,7 @@
   // A refusal for a stale base: the flag is left alone, the draft keeps its old base.
   function refusedFlag(after, what) {
     const kept = dirty();
-    if (kept) K.compare = { theirs: after };
+    if (kept) K.compare = { theirs: after, readAt: clock() };
     else {
       K.read = after;
       K.draft = { slug: after.slug, description: after.description, body: after.body };
@@ -1346,7 +1385,9 @@
     });
   }
 
-  window.skills = { G, K, pins, openPage, read, otherSave, sent };
+  // busy: a write on any of these pages is still waiting for its answer or its read.
+  const busy = () => Boolean(K.pending || K.taskPending || K.listPending || K.learnedPending || document.querySelector("#k-card-attach .k-pending"));
+  window.skills = { G, K, pins, openPage, read, otherSave, sent, busy };
   paintTask();
   paintCards();
   if (p("section") === "skills" && p("open") === "settings") rerender();

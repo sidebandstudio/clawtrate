@@ -69,6 +69,7 @@
     return { verb: "Used the skill tool", object, state: "Done", rows: [], says: c.result };
   }
   CT.skillsCardOf = cardOf;
+  CT.skillsParts = parts;
 
   const raw = (c) =>
     `<details class="k-raw"><summary>Raw</summary><p class="k-label">Arguments</p><pre class="k-plain">${esc(JSON.stringify(c.args, null, 2))}</pre>` +
