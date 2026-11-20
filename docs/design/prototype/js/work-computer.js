@@ -105,7 +105,7 @@
   const tabNow = () => tabs.find((x) => x.id === C.tab);
 
   function screenSection(b, t) {
-    const name = b.name;
+    const name = esc(b.name); // written into HTML below
     if (!C.plugin) {
       return (
         `<div class="work-empty computer-empty"><span class="empty-mark">${icon("plugin")}</span><h4>Watching isn't set up on this gateway</h4>` +
@@ -178,7 +178,7 @@
   // Control this device may still hold, out of sight: after leaving with the release
   // unconfirmed, or after a drop. It is shown until a confirmation or an end is observed.
   function heldLine(b) {
-    const name = b.name;
+    const name = esc(b.name); // written into HTML below
     if (C.full) return "";
     if (C.outOfSight && ["releasing", "unconfirmed"].includes(C.control))
       return (
@@ -196,7 +196,7 @@
   function banner(b) {
     if (!C.plugin || !C.configured || !C.used || !C.open || !C.question || readOnly() || C.stopped) return "";
     if (["maybeheld", "checking", "releasing", "unconfirmed"].includes(C.control)) return "";
-    const waiting = C.released ? `${b.name} is still waiting for you` : `${b.name} is waiting for you`;
+    const waiting = C.released ? `${esc(b.name)} is still waiting for you` : `${esc(b.name)} is waiting for you`;
     return (
       `<div class="computer-banner" role="region" aria-label="${waiting}">${glyph("waiting")}<div><strong>${waiting}</strong>` +
       `<p>Sign in to your library account, then hand the browser back.</p><div class="computer-banner-actions">` +
@@ -207,7 +207,7 @@
 
   // Where the task's work runs: only what the gateway established (work-pane.md, section 16).
   function machine(b) {
-    const name = b.name;
+    const name = esc(b.name); // written into HTML below
     const row = (k, v, sub = "") => `<div><dt>${k}</dt><dd>${v}${sub ? `<span class="machine-sub">${sub}</span>` : ""}</dd></div>`;
     const browser = C.plugin && C.configured && b.id === "juniper" ? `The gateway's machine, in ${name}'s own browser` : "Not reported.";
     if (b.id === "otto") {
@@ -280,10 +280,10 @@
 
   function stuckLine(b) {
     if (C.busyCount < 3) return "";
-    if (C.stopped) return `<p class="files-alert" data-tone="quiet" role="status">Stopped ${b.name}'s runs in this task. Its other tasks and other bots keep going.</p>`;
+    if (C.stopped) return `<p class="files-alert" data-tone="quiet" role="status">Stopped ${esc(b.name)}'s runs in this task. Its other tasks and other bots keep going.</p>`;
     return (
-      `<p class="files-alert" role="alert">${b.name}'s browser has been busy for a while. A call that never finished can keep control from being handed over. If stopping doesn't free it, the gateway's owner can restart the gateway.` +
-      `<button type="button" class="button" data-size="sm" data-cmp="stop-task">Stop ${b.name} in this task</button></p>`
+      `<p class="files-alert" role="alert">${esc(b.name)}'s browser has been busy for a while. A call that never finished can keep control from being handed over. If stopping doesn't free it, the gateway's owner can restart the gateway.` +
+      `<button type="button" class="button" data-size="sm" data-cmp="stop-task">Stop ${esc(b.name)} in this task</button></p>`
     );
   }
 
@@ -291,7 +291,7 @@
     const el = $("#panel-computer");
     if (!el) return;
     if (!t) {
-      el.innerHTML = `<p class="work-note">Pick one of ${b.name}'s tasks to see its computer.</p>`;
+      el.innerHTML = `<p class="work-note">Pick one of ${esc(b.name)}'s tasks to see its computer.</p>`;
       return;
     }
     // A view ends when the task or bot changes.
@@ -301,7 +301,7 @@
     // Only Juniper's research task has used a browser in these fixtures.
     const screen = isJ
       ? screenSection(b, t)
-      : `<div class="work-empty"><span class="empty-mark">${icon("screen")}</span><h4>No screen to show</h4><p>When ${b.name} uses its browser, you can watch it here.</p></div>`;
+      : `<div class="work-empty"><span class="empty-mark">${icon("screen")}</span><h4>No screen to show</h4><p>When ${esc(b.name)} uses its browser, you can watch it here.</p></div>`;
     el.innerHTML =
       `<div class="computer">` +
       (isJ ? heldLine(b) + banner(b) + stuckLine(b) : "") +
@@ -394,7 +394,7 @@
   const simpleQuestion = () => C.question && mode !== "complexquestion";
 
   function controlBar(b) {
-    const name = b.name;
+    const name = esc(b.name); // written into HTML below
     const bar = (state, html, role = "status") => `<div class="control-bar"${state ? ` data-state="${state}"` : ""} role="${role}">${html}</div>`;
     const btn = (label, cmp, variant = "", extra = "") => `<button type="button" class="button" data-size="sm"${variant ? ` data-variant="${variant}"` : ""} data-cmp="${cmp}" ${extra}>${label}</button>`;
     if (C.control === "draining") return bar("", `${glyph("working")}<span>Waiting for ${name} to finish what it's doing in the browser…</span><span class="spacer"></span>${btn("Cancel", "cancel-take")}`);
@@ -452,13 +452,13 @@
     if ($(".app").clientWidth < 688) return renderPhone(view, b, tab, control, focusKey);
     delete view.dataset.layout;
     view.innerHTML =
-      `<div class="viewer-bar screen-bar"><span class="avatar" data-bot="juniper"></span><div class="viewer-title"><strong>${b.name}'s browser</strong>` +
+      `<div class="viewer-bar screen-bar"><span class="avatar" data-bot="juniper"></span><div class="viewer-title"><strong>${esc(b.name)}'s browser</strong>` +
       `<span>${esc(tab.title)} · ${tab.domain}</span>${holding() ? "" : `<span class="screen-mode">Watching</span>`}</div>` +
       (holding() || readOnly() ? "" : `<button type="button" class="button" data-size="sm" data-cmp="take">${icon("hand")}Take control</button>`) +
       `<button type="button" class="icon-button" data-cmp="close-full" aria-label="Close the full view (Esc)" title="Close (Esc)">${icon("collapse")}</button></div>` +
       controlBar(b) +
       `<div class="screen-pills" role="group" aria-label="Tabs">${tabs.map((x) => `<button type="button" class="screen-pill" data-cmp-tab="${x.id}" aria-pressed="${x.id === C.tab}">${esc(x.title)}</button>`).join("")}</div>` +
-      `<div class="screen-stage"><div class="screen-frame" data-control="${control}" tabindex="0" role="application" aria-label="${b.name}'s browser, live${control ? ", you have control" : ""}"${control ? ' aria-describedby="control-note"' : ""}>${page()}` +
+      `<div class="screen-stage"><div class="screen-frame" data-control="${control}" tabindex="0" role="application" aria-label="${esc(b.name)}'s browser, live${control ? ", you have control" : ""}"${control ? ' aria-describedby="control-note"' : ""}>${page()}` +
       `<span class="screen-hint" role="status" hidden></span></div></div>`;
     CT.hydrate(view);
     if (focusKey) $(`[data-cmp="${focusKey}"]`, view)?.focus();
@@ -495,7 +495,7 @@
           ? ""
           : `<div class="control-bar"><button type="button" class="button" data-variant="primary" data-cmp="take">${icon("hand")}Take control</button></div>`;
     view.innerHTML =
-      `<div class="viewer-bar screen-bar"><span class="avatar" data-bot="juniper"></span><div class="viewer-title"><strong aria-label="${b.name}'s browser">${b.name}</strong>` +
+      `<div class="viewer-bar screen-bar"><span class="avatar" data-bot="juniper"></span><div class="viewer-title"><strong aria-label="${esc(b.name)}'s browser">${esc(b.name)}</strong>` +
       `<span class="screen-mode">${control ? "You have control" : holding() ? "Control" : "Watching"}</span></div>` +
       (tabs.length > 1 ? `<button type="button" class="screen-pill" data-cmp="tabs-sheet" aria-expanded="${Boolean(C.tabsOpen)}" aria-label="${tabs.length} tabs, showing ${esc(tab.title)}">${tabs.length} tabs</button>` : "") +
       `<button type="button" class="icon-button" data-cmp="close-full" aria-label="Close the full view" title="Close">${icon("collapse")}</button></div>` +
@@ -503,7 +503,7 @@
         ? `<ul class="menu screen-tabs-sheet" role="menu" aria-label="Tabs">${tabs.map((x) => `<li role="none"><button type="button" class="menu-item" role="menuitemradio" aria-checked="${x.id === C.tab}" data-cmp-tab="${x.id}">${esc(x.title)}<span>${x.domain}</span></button></li>`).join("")}</ul>`
         : "") +
       `<div class="screen-stage"><div class="screen-zoom" data-level="${C.zoom}">` +
-      `<div class="screen-frame" data-control="${control}" tabindex="0" role="application" style="width:${width}px" aria-label="${b.name}'s browser, live${control ? ", you have control" : ""}">${page()}` +
+      `<div class="screen-frame" data-control="${control}" tabindex="0" role="application" style="width:${width}px" aria-label="${esc(b.name)}'s browser, live${control ? ", you have control" : ""}">${page()}` +
       `<span class="screen-hint" role="status" hidden></span></div></div>` +
       `<div class="zoom-controls" role="group" aria-label="Zoom"><button type="button" class="icon-button" data-cmp="zoom-out" aria-label="Zoom out"${C.zoom === 0 ? " disabled" : ""}>${icon("minus")}</button>` +
       `<button type="button" class="zoom-fit" data-cmp="zoom-fit" aria-label="Fit the page to the screen">Fit</button>` +
@@ -511,7 +511,7 @@
       (control ? `<button type="button" class="icon-button keyboard-button" data-cmp="keyboard" aria-label="Type into the page" aria-expanded="${Boolean(C.typing)}">${icon("keyboard")}</button>` : "") +
       `</div>` +
       (control
-        ? `<details class="control-help"><summary>What reaches the page</summary><p>Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${b.name}'s new browser actions are paused, in every one of ${b.name}'s tasks; something it already started can still change this page. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p></details>`
+        ? `<details class="control-help"><summary>What reaches the page</summary><p>Clicks, scrolling and typed text reach the page; Enter, Tab and other keys don't yet. Until you give control back, ${esc(b.name)}'s new browser actions are paused, in every one of ${esc(b.name)}'s tasks; something it already started can still change this page. Other ways in aren't blocked: the gateway's own browser controls, and other tools such as commands, can still reach this browser. Pages you open aren't checked by the gateway's browser rules.</p></details>`
         : "") +
       `<div class="control-dock">${dock}</div>` +
       (control && C.typing

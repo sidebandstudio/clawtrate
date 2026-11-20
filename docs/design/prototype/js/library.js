@@ -38,7 +38,7 @@
   // Today is Thursday, November 19. day: days before today. Monday the 16th starts the week.
 
   const pic = (a, b, label) => () =>
-    `<svg viewBox="0 0 640 400" role="img" aria-label="${label}"><rect width="640" height="400" fill="${a}"/>` +
+    `<svg viewBox="0 0 640 400" role="img" aria-label="${esc(label)}"><rect width="640" height="400" fill="${a}"/>` +
     `<path d="M0 320 L160 180 L280 260 L420 120 L640 300 L640 400 L0 400Z" fill="${b}"/></svg>`;
 
   // Marlow's tasks, newest activity first. at: minutes for the rail's order.
@@ -176,11 +176,39 @@
       return null;
     }
   }
-  // The written host only, no lookup: "device" for loopback, "network" for the person's own network.
+  // The decision's one written-host rule, for every surface that opens an address: the written host only, no lookup.
+  // "device" for loopback, "network" for the person's own network and every other special-purpose literal.
+  // (In the app this classifier lives in the shared core, beside the link preview's numeric checks.)
+  function ipv4Kind(h) {
+    const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(h);
+    if (!m) return undefined;
+    const [a, b, c] = m.slice(1).map(Number);
+    if (a === 127) return "device";
+    const special =
+      a === 0 || a === 10 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 0 && (c === 0 || c === 2)) || (a === 192 && b === 88 && c === 99) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)) ||
+      (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113) || a >= 224;
+    return special ? "network" : null;
+  }
   function nearby(href) {
     const h = new URL(href).hostname.replace(/\.$/, "").toLowerCase();
-    if (/(^|\.)localhost$/.test(h) || /^127\./.test(h) || h === "[::1]") return "device";
-    if (/\.local$/.test(h) || !h.includes(".") || /^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^169\.254\.|^\[f[cde]/.test(h)) return "network";
+    if (/(^|\.)localhost$/.test(h)) return "device";
+    const v4 = ipv4Kind(h);
+    if (v4 !== undefined) return v4;
+    if (h.startsWith("[")) {
+      const v6 = h.slice(1, -1);
+      // A mapped IPv4 address is checked as IPv4 first: URL writes ::ffff:127.0.0.1 as ::ffff:7f00:1.
+      const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(v6);
+      if (mapped) {
+        const hi = parseInt(mapped[1], 16);
+        const lo = parseInt(mapped[2], 16);
+        return ipv4Kind(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`) ?? "network";
+      }
+      if (v6 === "::1") return "device";
+      if (v6 === "::" || /^f[cd]|^fe[89ab]|^ff|^2001:db8:|^64:ff9b:/.test(v6)) return "network";
+      return null;
+    }
+    if (/\.local$/.test(h) || !h.includes(".")) return "network";
     return null;
   }
 
@@ -1595,7 +1623,7 @@
     });
   });
 
-  CT.library = { L, G, P, ITEMS, PAGES, counters, opened, handoffs, framedPage, canonical, rerender, prefsChanged, owner, fileName };
+  CT.library = { L, G, P, ITEMS, PAGES, counters, opened, handoffs, framedPage, canonical, nearby, pic, rerender, prefsChanged, owner, fileName };
 
   // The extension: wraps the one work.js set ----------------------------------------------------------
 

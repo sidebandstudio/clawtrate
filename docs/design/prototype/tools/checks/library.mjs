@@ -318,6 +318,39 @@ await q(p, () => {
 });
 check("R2 a Page's title is text in the bar and the dialog's name", await q(p, () => !document.querySelector("#page-title b, #page-title i") && document.querySelector("#page-title").textContent === "<b>Guide</b> & <i>more</i>"));
 await p.close();
+p = await open("");
+check("E7 a preview's name with quotes and angle brackets is its exact accessible name, with no element made", await q(p, () => {
+  const box = document.createElement("div");
+  box.innerHTML = window.CT.library.pic("#000", "#fff", 'Map "north" <b>side</b>')();
+  return box.querySelector("svg").getAttribute("aria-label") === 'Map "north" <b>side</b>' && !box.querySelector("b");
+}));
+await p.close();
+p = await open("&bot=juniper&task=j2&panel=open&tab=computer");
+await q(p, () => {
+  window.app.bots.find((x) => x.id === "juniper").name = "<em>Jun</em>iper";
+  window.app.openTask("juniper", "j2");
+  window.app.setTab("computer");
+});
+await p.waitForTimeout(200);
+check("E7 the Computer tab writes a bot's name as text too", await q(p, () => !document.querySelector("#panel-computer em") && document.querySelector("#panel-computer").textContent.includes("<em>Jun</em>iper")));
+await p.close();
+p = await open("");
+await q(p, () => {
+  window.CT.library.PAGES["trail-guide"].html = '<p>Two synthetic links: <a href="http://100.64.0.1/">shared</a> and <a href="http://[::ffff:127.0.0.1]/">mapped</a>.</p>';
+  window.CT.library.L.pageCache = {};
+  window.CT.openPage("p2");
+});
+await p.waitForTimeout(500);
+for (const [href, warning] of [
+  ["http://100.64.0.1/", "This address may be on your own network."],
+  ["http://[::ffff:7f00:1]/", "This address points to this device."],
+]) {
+  await p.click('[data-pv="links"]');
+  await p.click(`.page-links [data-href="${href}"]`);
+  check(`E7 a Links address under the written-host rule (${href}): the confirmation with its warning, and nothing handed over before Open`, (await text(p, ".confirm-warning")) === warning && (await text(p, ".confirm-address")) === href && (await q(p, () => window.CT.library.opened.length === 0)));
+  await p.keyboard.press("Escape");
+}
+await p.close();
 
 // The Page, full window -----------------------------------------------------------------------------
 
