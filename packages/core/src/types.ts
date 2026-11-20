@@ -6,6 +6,7 @@ import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
+import type { SetupState } from "./setup.ts";
 import type { SidebarState } from "./sidebar.ts";
 import { initialUsage, type UsageState } from "./usage.ts";
 
@@ -383,6 +384,12 @@ export type ClawtrateState = {
    * does not read it.
    */
   sidebar?: SidebarState;
+  /**
+   * Setting up on the host's own computer (`setup.ts`): the look's result and
+   * where Connect stands. Written by the host alone; absent where a host
+   * offers no setup.
+   */
+  setup?: SetupState;
   /**
    * Warning budgets as the gateway keeps them for this person, each one's count
    * for its current period, and the limits providers report (`usage.ts`).

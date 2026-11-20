@@ -14,6 +14,7 @@
 //   &tab=files             the Work pane's tab
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
 //   &routines=running, &routines=many …            routines (routines.ts)
+//   ?setup=first           the desktop's first screen and a state of setup (setup.ts)
 //   &usage=…, &budget=…, &plimit=…, &uview=usage     usage and budgets (usage.ts)
 
 import { App, BridgeProvider, requestUsagePage, rosterKey, rosterScope } from "@clawtrate/ui";
@@ -84,6 +85,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   files: fileParams(params),
   accounts: accountParams(params),
   routines: routineParams(params),
+  setup: params.get("setup"),
   usage: usageParams(params),
   machines: machineParams(params),
 });

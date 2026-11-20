@@ -24,6 +24,7 @@ import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./t
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
 import type { BotRoutines, CalendarRuns, RoutineRun, RunConversation } from "./routines.ts";
+import type { SetupHost, SetupOffer } from "./setup.ts";
 import type { MenuRow } from "./composer-menus.ts";
 import type { UsageBusy, UsageReport } from "./usage-engine.ts";
 import {
@@ -49,6 +50,11 @@ export type BridgeCommand =
   /** Connect to the local development gateway. The host supplies its token. */
   | { type: "connectDevGateway" }
   | { type: "disconnect" }
+  /** Setting up on the host's computer (`setup.ts`): look there, stop, pair with what was found, start over. */
+  | { type: "setupLook" }
+  | { type: "setupCancel" }
+  | { type: "setupConnect" }
+  | { type: "setupReset" }
   /** Close the connection and keep the gateway and the pairing, until `retry` reconnects. */
   | { type: "suspend" }
   | { type: "retry" }
@@ -377,6 +383,12 @@ export type HostInfo = {
    * more access and refuses every command that writes.
    */
   readOnly?: boolean;
+  /**
+   * Set when the host offers setup on its own computer (docs/design/setup.md):
+   * the first screen asks where OpenClaw runs. Absent on a host that keeps the
+   * address-and-token form as its first screen, as the web preview does by default.
+   */
+  setup?: SetupOffer;
 };
 
 /** Renderer-side view of the bridge, implemented over IPC or a WebSocket. */
@@ -775,6 +787,10 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "disconnect":
     case "suspend":
     case "retry":
+    case "setupLook":
+    case "setupCancel":
+    case "setupConnect":
+    case "setupReset":
       return { type: command.type };
     case "sendMessage": {
       const ids = command.attachmentIds ?? [];
@@ -1132,6 +1148,8 @@ export type BridgePolicy = {
   maxResultChars?: number;
   /** Tasks one viewer may hold open: `MAX_VIEWER_OPEN_TASKS` unless the host sets fewer. */
   maxOpenTasks?: number;
+  /** Setting up on the host's own computer, where the host offers it. */
+  setup?: SetupHost;
 };
 
 /**
@@ -1236,6 +1254,17 @@ class ViewerSession implements BridgeSession {
         return client.connect(policy.devGateway);
       case "disconnect":
         return client.disconnect();
+      case "setupLook":
+      case "setupCancel":
+      case "setupConnect":
+      case "setupReset": {
+        const setup = policy.setup;
+        if (!setup) throw new Error("This host doesn't set up OpenClaw on its computer.");
+        if (command.type === "setupLook") return setup.look();
+        if (command.type === "setupConnect") return setup.connect();
+        if (command.type === "setupCancel") return setup.cancel();
+        return setup.reset();
+      }
       case "suspend":
         return client.suspend();
       case "retry":
