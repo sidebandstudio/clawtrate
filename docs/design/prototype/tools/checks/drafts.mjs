@@ -98,7 +98,8 @@ const states = [
   ["view=secret&s=saving", ["Saving…"]],
   ["view=secret&s=saved", ["Saved to your gateway as PRICE_TRACKER_KEY.", "Hosts reported by the bot's tool after saving: api.example.com."]],
   ["view=secret&s=savedrefresh", ["Saved to the Vault. The gateway couldn't refresh settings that use it."]],
-  ["view=secret&s=refused", ["The gateway didn't save it", "Type it again to try again."]],
+  ["view=secret&s=refused", ["The gateway didn't save it: an allowed host isn't a valid hostname. Correct it and type the value again."]],
+  ["view=secret&s=unattributed", ["The gateway records this question as answered. Clawtrate couldn't confirm which value was saved."]],
   ["view=secret&s=unconfirmed", ["Couldn't confirm whether the gateway saved it.", "Check"]],
   ["view=secret&s=already", ["Already answered on another device."]],
   ["view=secret&s=skipped", ["Skipped. Otto was told no secret arrived."]],
@@ -331,12 +332,42 @@ await secretWalk("stored, refresh failed → saved, no new entry", "refresh", ["
 await secretWalk("not stored → the field again", "notstored", ["The gateway didn't save it"], async (pg) => check("walk: secret: not stored offers an empty field", (await pg.inputValue("#secret-value")) === ""));
 await secretWalk("unclear → Check finds answered", "unclear", ["Couldn't confirm whether the gateway saved it."], async (pg) => {
   await click(pg, '[data-d="s-check"]');
-  check("walk: secret: Check reflects an answered question", await waitText(pg, ["Saved to your gateway as PRICE_TRACKER_KEY."]));
+  check(
+    "walk: secret: Check finding the question answered after a lost reply doesn't credit this submission",
+    (await waitText(pg, ["The gateway records this question as answered. Clawtrate couldn't confirm which value was saved."])) && !(await text(pg)).includes("Saved to"),
+  );
 });
 await secretWalk("unclear → Check finds pending", "unclear-pending", ["Couldn't confirm whether the gateway saved it."], async (pg) => {
   await click(pg, '[data-d="s-check"]');
-  check("walk: secret: Check reflects a pending question", (await pg.locator("#secret-value").count()) === 1 && !(await text(pg)).includes("Saved to"));
+  check(
+    "walk: secret: Check finding the question pending after an unclear reply keeps Check and offers no field",
+    (await waitText(pg, ["Couldn't confirm whether the gateway saved it."])) && (await pg.locator('[data-d="s-check"]').count()) === 1 && (await pg.locator("#secret-value").count()) === 0 && !(await text(pg)).includes("Saved to"),
+  );
 });
+p = await open("view=secret&s=exists&access=interactive");
+check(
+  "secret: at the interactive tier the replaced value's date is hidden",
+  !(await text(p)).includes("on Nov 19") && (await text(p)).includes("Saving replaces any value already stored under this name."),
+);
+await p.close();
+p = await open("view=secret&s=exists", { chrome: "1" });
+check("secret: the replacement names STORE_API_KEY before saving", (await text(p)).includes("STORE_API_KEY") && !(await text(p)).includes("PRICE_TRACKER_KEY"));
+await p.fill("#secret-value", VALUE);
+await click(p, '[data-d="s-save"]');
+check("walk: secret: an acknowledged replacement still names STORE_API_KEY", (await waitText(p, ["Saved to your gateway as STORE_API_KEY."])) && !(await text(p)).includes("PRICE_TRACKER_KEY"));
+await p.close();
+p = await open("view=secret", { chrome: "1" });
+await click(p, '[data-host="api.example.com"]');
+await p.fill("#add-host", "prices.example.net");
+await p.press("#add-host", "Enter");
+await p.waitForTimeout(60);
+await p.fill("#secret-value", VALUE);
+await click(p, '[data-d="s-save"]');
+check(
+  "walk: secret: the reported hosts are the tool result's, not the submitted chips",
+  (await waitText(p, ["Hosts reported by the bot's tool after saving: api.example.com."])) && !(await text(p, '[data-testid="hosts-back"]')).includes("prices.example.net"),
+);
+await p.close();
 for (const [rep, words] of [
   ["omitted", "the list was too long"],
   ["missing", "the entry wasn't listed"],
@@ -460,7 +491,7 @@ p = await b.newPage();
 await p.goto(pageUrl("gallery.html") + "?chrome=1&section=drafts");
 await p.waitForTimeout(100);
 const links = await p.evaluate(() => [...document.querySelectorAll('#drafts a[href^="drafts.html"]')].map((a) => a.getAttribute("href")));
-check("gallery: the Drafts and the Vault section links to every state", links.length === 92, String(links.length));
+check("gallery: the Drafts and the Vault section links to every state", links.length === 93, String(links.length));
 check("gallery: the section says draft examples use a proposed plugin", (await text(p, "#drafts")).includes(PROPOSED));
 check("the prototype bar links to the drafts page", await p.evaluate(() => [...document.querySelectorAll("#proto-bar a")].some((a) => a.getAttribute("href") === "drafts.html")));
 await p.close();

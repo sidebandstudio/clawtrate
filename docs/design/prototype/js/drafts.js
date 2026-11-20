@@ -45,6 +45,10 @@
     typed: null, // what the person typed into the draft's fields, carried through both holds
   };
   if (S.s === "hosts") S.hosts = ["api.example.com", "api.example.net"];
+  // The question record names the entry; the name stays with that record through every state. Only the
+  // STORE_API_KEY fixture comes with a fresh admin listing that names the value it replaces.
+  S.qname = S.s === "exists" ? "STORE_API_KEY" : "PRICE_TRACKER_KEY";
+  S.listed = S.s === "exists";
   const HOSTS_STATES = { omitted: "omitted", missing: "missing", kindchanged: "kind_changed", hostsunavailable: "unavailable" };
   if (HOSTS_STATES[S.s]) {
     S.hostsrep = HOSTS_STATES[S.s];
@@ -446,6 +450,8 @@
   }
 
   // The masked secret card ------------------------------------------------------
+  // The bot's tool result after a save: its currentPolicy, held apart from the hosts the person submitted.
+  const RESULT_POLICY = { allowedHosts: ["api.example.com"] };
   const HOSTS_LINE = {
     available: (hosts) => `Hosts reported by the bot's tool after saving: ${hosts.length ? hosts.join(", ") : "none"}.`,
     omitted: () => "Current hosts unavailable: the list was too long for the bot's tool to report.",
@@ -463,7 +469,7 @@
         `<div style="padding: 0 14px 14px"><p class="d-sentence">missing scope: operator.questions</p>` +
         `<p class="d-sentence">Inferred: the gateway lets a bot ask for a secret only in a run started from a connection with admin access. This device has read, write, approvals and questions.</p></div></section>`
       );
-    const name = st === "exists" ? "STORE_API_KEY" : "PRICE_TRACKER_KEY";
+    const name = S.qname;
     const raw = S.s === "raw" || S.raw;
     const rawBody = raw
       ? `<pre class="d-raw" data-testid="raw">${esc(
@@ -481,12 +487,13 @@
           ),
         )}</pre>`
       : "";
-    const resolved = ["saved", "savedrefresh", "already", "skipped", "expired"].includes(st);
+    const resolved = ["saved", "savedrefresh", "unattributed", "already", "skipped", "expired"].includes(st);
     if (resolved) {
       const words = {
         saved: ["Saved", "accent", `Saved to your gateway as ${name}.`],
         savedrefresh: ["Saved", "accent", "Saved to the Vault. The gateway couldn't refresh settings that use it."],
-        already: ["Answered", "", "Already answered on another device. Nothing was sent from here."],
+        unattributed: ["Answered", "", "The gateway records this question as answered. Clawtrate couldn't confirm which value was saved."],
+        already: ["Answered", "", "Already answered on another device."],
         skipped: ["Skipped", "", "Skipped. Otto was told no secret arrived."],
         expired: ["Expired", "", "Expired without an answer. Otto was told no secret arrived."],
       }[st];
@@ -495,13 +502,13 @@
         `<header class="request-head"><div><h3 class="request-title">Otto asks for a secret</h3></div><span class="tag"${words[1] ? ` data-tone="${words[1]}"` : ""}>${words[0]}</span></header>` +
         `<dl class="d-rows"><dt>Name</dt><dd><code>${name}</code></dd></dl>` +
         `<p class="d-sentence">${words[2]}</p>` +
-        (st === "saved" && S.hostsBack ? `<p class="d-sentence" data-testid="hosts-back">${HOSTS_LINE[S.hostsrep](S.hosts)}</p>` : "") +
+        (st === "saved" && S.hostsBack ? `<p class="d-sentence" data-testid="hosts-back">${HOSTS_LINE[S.hostsrep](RESULT_POLICY.allowedHosts)}</p>` : "") +
         `<div class="d-foot"><button type="button" class="link-button" data-d="raw">${raw ? "Hide Raw" : "Raw"}</button></div>${rawBody}</section>`
       );
     }
     const saving = st === "saving";
     let note = "";
-    if (st === "refused") note = `<p class="d-say" data-tone="danger">The gateway didn't save it: the name must use uppercase letters, digits and _. Type it again to try again.</p>`;
+    if (st === "refused") note = `<p class="d-say" data-tone="danger">The gateway didn't save it: an allowed host isn't a valid hostname. Correct it and type the value again.</p>`;
     if (st === "unconfirmed") note = `<p class="d-say" data-tone="warn">Couldn't confirm whether the gateway saved it.</p>`;
     const hosts =
       `<span class="d-fieldlabel" id="hosts-label">Allowed hosts</span><div class="d-hosts" role="group" aria-labelledby="hosts-label">` +
@@ -528,7 +535,7 @@
       `<section class="card request d-card" data-kind="secret" data-state="pending" role="region" aria-label="Otto asks for a secret: ${name}." data-testid="secret">` +
       `<header class="request-head"><div><h3 class="request-title">Otto asks for a secret</h3></div><span class="tag">Secret</span></header>` +
       `<dl class="d-rows"><dt>Name</dt><dd><code>${name}</code></dd><dt>Why</dt><dd>"To read prices from the store's API for your tracker."</dd></dl>` +
-      `<p class="d-sentence">Saving sends the value to the gateway's store. The answer the bot gets contains a reference and status. ${st === "exists" ? "This replaces the value saved as STORE_API_KEY on Nov 19." : "Saving replaces any value already stored under this name."}</p>` +
+      `<p class="d-sentence">Saving sends the value to the gateway's store. The answer the bot gets contains a reference and status. ${S.listed && S.access === "admin" ? "This replaces the value saved as STORE_API_KEY on Nov 19." : "Saving replaces any value already stored under this name."}</p>` +
       hosts +
       field +
       note +
@@ -931,7 +938,8 @@
         clearSecret();
         return go({ s: "skipped" }, "Skipped");
       case "s-check":
-        return S.secretsave === "unclear-pending" ? go({ s: "pending" }, "The question is still waiting") : go({ s: "saved", hostsBack: true }, "Saved to the gateway");
+        // An answered record after a lost reply isn't this submission's; a pending one after an uncertain error keeps Check.
+        return S.secretsave === "unclear-pending" ? go({ s: "unconfirmed" }, "Couldn't confirm the save") : go({ s: "unattributed" }, "Answered; the value isn't confirmed");
       case "reveal": {
         const f = document.getElementById("secret-value");
         if (f) {
