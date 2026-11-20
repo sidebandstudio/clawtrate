@@ -10,6 +10,12 @@ import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fix
 const open = (page: Page, scene: string, theme: "light" | "dark" = "light", extra = "") =>
   openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed${extra}`, theme);
 
+// Deliver the scene's second read after the test has observed the single card.
+const releaseSecondRead = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
+  );
+
 const transcript = (page: Page) => page.getByTestId("transcript");
 /** The action cards and folds in the transcript, in order. */
 const cards = (page: Page) => page.locator(".transcript details.card.action");
@@ -852,7 +858,7 @@ test.describe("action cards", () => {
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await open(page, "actions-becoming-fold");
+    await open(page, "actions-becoming-fold", "light", "&hold");
     // An earlier card, opened: the read of AGENTS.md.
     const opened = cards(page).filter({
       has: page.locator(':scope > summary[aria-label^="Read AGENTS.md"]'),
@@ -861,6 +867,7 @@ test.describe("action cards", () => {
     await expect(opened).toHaveAttribute("open", "");
     const top = (await line(opened).boundingBox())!.y;
     // A card below updates: the run's read becomes a fold of two as the second read arrives.
+    await releaseSecondRead(page);
     const fold = page.locator(".transcript details.card.action[data-fold]");
     await expect(fold).toHaveCount(1, { timeout: 5000 });
     await expect(line(fold)).toHaveAccessibleName(/^Read 2 files/);
@@ -909,7 +916,7 @@ test.describe("action cards", () => {
   test("an open card becomes a fold with its first row open in its view; focus stays on the same control; nothing above moves", async ({
     page,
   }) => {
-    await open(page, "actions-becoming-fold");
+    await open(page, "actions-becoming-fold", "light", "&hold");
     const first = cards(page).last();
     await expect(line(first)).toHaveAccessibleName(/^Read backup-2026-11-15\.log/);
     await line(first).click();
@@ -920,6 +927,7 @@ test.describe("action cards", () => {
     await expect(line(first)).toHaveAccessibleName(/^Read backup-2026-11-15\.log/);
     const top = (await line(first).boundingBox())!.y;
     // The second read arrives: one fold, open, its first row open on Raw, focus on that Raw tab.
+    await releaseSecondRead(page);
     const fold = page.locator(".transcript details.card.action[data-fold]");
     await expect(fold).toHaveCount(1, { timeout: 5000 });
     await expect(line(fold)).toHaveAccessibleName(/^Read 2 files/);
@@ -1020,10 +1028,11 @@ test.describe("action cards", () => {
   }) => {
     for (const reduce of [false, true]) {
       await page.emulateMedia({ reducedMotion: reduce ? "reduce" : "no-preference" });
-      await open(page, "actions-becoming-fold");
+      await open(page, "actions-becoming-fold", "light", "&hold");
       // Drawn with the page: no arrival.
       await expect(cards(page).last()).not.toHaveAttribute("data-fresh", "true");
       // The second read arrives: the card becomes a fold, and its new row arrives.
+      await releaseSecondRead(page);
       const fold = page.locator(".transcript details.card.action[data-fold]").last();
       await expect(fold).toBeAttached();
       const row = fold.locator(".fold-rows > li").last();

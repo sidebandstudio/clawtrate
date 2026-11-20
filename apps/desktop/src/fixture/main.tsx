@@ -84,6 +84,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   usage: usageParams(params),
   machines: machineParams(params),
 });
+if (params.has("hold")) bridge.hold();
 // Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.
 if (params.get("uview") === "usage")
   requestUsagePage(params.get("bot") ?? OPEN_BOT, params.get("budget") === "invalid");
