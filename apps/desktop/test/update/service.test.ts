@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { linkSync } from "node:fs";
+import { linkSync, watch } from "node:fs";
 import { macInstaller } from "../../src/main/mac-install.ts";
 import type { UpdateInstaller } from "../../src/main/update/install.ts";
 import type { DesktopUpdateReply, DesktopUpdateSnapshot } from "@clawtrate/core";
@@ -14,6 +14,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { UpdateEngine } from "../../src/main/update/engine.ts";
 import { DesktopUpdateService } from "../../src/main/update/service.ts";
 import { bytes, feedFor, feedServer, json, payload, tempDir, type FeedServer } from "./harness.ts";
+
+vi.mock(import("node:fs"), async (original) => {
+  const fs = { ...(await original()) };
+  vi.spyOn(fs, "watch");
+  return fs;
+});
 
 import { rename } from "node:fs/promises";
 vi.mock(import("node:fs/promises"), async (original) => {
@@ -847,9 +853,12 @@ it.each(["changed", "replaced", "truncated", "symlink", "hardlink"])(
       if (change === "symlink") symlinkSync(path + ".old", path);
       else writeFileSync(path, fixture.body);
     }
-    expect((await service.restart(id)).snapshot).toMatchObject({
-      state: { kind: "handoff-failed", reason: "artifact-changed" },
-      install: { kind: "unavailable-in-this-build", reason: "artifact-changed" },
+    expect(await service.restart(id)).toMatchObject({
+      outcome: "stale",
+      snapshot: {
+        state: { kind: "failed", stage: "download", reason: "artifact-changed" },
+        install: { kind: "unavailable-in-this-build", reason: "artifact-changed" },
+      },
     });
     expect(installer.launch).not.toHaveBeenCalled();
     expect(await store().get("attempt")).toBeNull();
@@ -1220,3 +1229,20 @@ it.skipIf(process.platform === "win32")(
     }
   },
 );
+
+it("a watch error during inspection prevents the first eligible event", async () => {
+  const installer = installStandIn();
+  installer.inspect = async () => {
+    const watcher = vi.mocked(watch).mock.results.at(-1)!.value;
+    watcher.emit("error", Error("watch stopped"));
+    return null;
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.state).toMatchObject({
+    kind: "failed",
+    reason: "artifact-changed",
+  });
+  expect(snapshots.some((s) => s.install.kind === "restart-available")).toBe(false);
+  expect((await service.restart(id)).outcome).toBe("stale");
+});
