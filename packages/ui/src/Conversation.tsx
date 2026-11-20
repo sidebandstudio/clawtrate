@@ -33,6 +33,7 @@ import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
 import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
 
 /**
@@ -44,22 +45,39 @@ function Turn({ item, incomplete = false }: { item: TranscriptItem; incomplete?:
   const time = item.timestamp === null ? undefined : fullDate(item.timestamp);
   return (
     <div className="turn" data-role={role} data-testid="transcript-turn">
+      <ReplyQuote item={item} />
       {role === "assistant" ? (
         <ItemFeed itemId={item.id} />
       ) : (
-        item.blocks.map((block, i) =>
-          block.kind === "text" && block.text.trim() ? (
-            <div className="msg" data-role={role} key={i}>
-              <div className="bubble" title={time}>
-                <Markdown text={block.text} />
+        <MessageUnit
+          message={
+            item.messageId
+              ? { messageId: item.messageId, role: "user", text: itemText(item) }
+              : null
+          }
+        >
+          {item.blocks.map((block, i) =>
+            block.kind === "text" && block.text.trim() ? (
+              <div className="msg" data-role={role} key={i}>
+                <div className="bubble" title={time}>
+                  <Markdown text={block.text} />
+                </div>
               </div>
-            </div>
-          ) : null,
-        )
+            ) : null,
+          )}
+        </MessageUnit>
       )}
       {incomplete && <IncompleteCaption />}
     </div>
   );
+}
+
+/** A history item whose visible text is exactly a failed run's error: the gateway's own row of it. */
+export function echoesError(item: TranscriptItem, run: Run): boolean {
+  // The row's text may escape punctuation for markdown ("fail\\."); the event's does not.
+  const plain = (text: string) => text.replace(/\\([\\`*_{}[\]()#+\-.!|>~])/g, "$1").trim();
+  const error = plain(run.error?.message ?? "");
+  return error !== "" && plain(itemText(item)) === error;
 }
 
 /** Under the task's name: how much of the model's context the task uses. */
@@ -195,14 +213,32 @@ function TranscriptView({
   transcript,
   note,
   liveOptions,
+  onAnnounce,
 }: {
   task: Task;
   bot: Bot;
   transcript: Transcript;
   note: ReactNode;
   liveOptions: LiveOptions;
+  onAnnounce: (text: string) => void;
 }) {
   const reading = useReading();
+  // The thread open over the transcript, and what opened it, for focus to go back to.
+  const [thread, setThread] = useState<{ messageId: string; from: HTMLElement | null } | null>(
+    null,
+  );
+  const messageEnv = useMemo(
+    () => ({
+      taskKey: task.key,
+      transcript,
+      botName: bot.name,
+      canWrite: liveOptions.interactive,
+      connected: liveOptions.connected,
+      openThread: (messageId: string, from: HTMLElement | null) => setThread({ messageId, from }),
+      announce: onAnnounce,
+    }),
+    [task.key, transcript, bot.name, liveOptions.interactive, liveOptions.connected, onAnnounce],
+  );
   const live = buildLive(bot, task, transcript, { ...liveOptions, reading });
   const scroller = useRef<HTMLDivElement>(null);
   const itemCount = transcript.items.length;
@@ -317,7 +353,7 @@ function TranscriptView({
           <p className="event-line" data-side="center">
             {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
           </p>
-        ) : (
+        ) : live.echoes.has(item.id) ? null : (
           <Turn item={item} incomplete={live.incomplete.has(item.id)} />
         )}
       </CardSlot>,
@@ -348,19 +384,33 @@ function TranscriptView({
               effort={task.effort ?? null}
               ctx={reading}
             >
-              <h1 className="task-line" tabIndex={-1}>
-                {task.title}
-              </h1>
-              <TaskContext task={task} />
-              {note}
-              {rows}
-              <BudgetLine bot={bot} />
-              <TrailingCards except={live.drawsCards} />
-              {live.foot}
+              <MessageProvider env={messageEnv}>
+                <h1 className="task-line" tabIndex={-1}>
+                  {task.title}
+                </h1>
+                <TaskContext task={task} />
+                {note}
+                {rows}
+                <BudgetLine bot={bot} />
+                <TrailingCards except={live.drawsCards} />
+                {live.foot}
+              </MessageProvider>
             </ActionScope>
           </CardScope>
         </div>
       </div>
+      {thread && (
+        <MessageProvider env={messageEnv}>
+          <ThreadView
+            messageId={thread.messageId}
+            onClose={() => {
+              const from = thread.from;
+              setThread(null);
+              requestAnimationFrame(() => from?.focus());
+            }}
+          />
+        </MessageProvider>
+      )}
       {live.needsYou && !atEnd ? (
         <button
           type="button"
@@ -442,6 +492,8 @@ type LiveParts = {
   endingsBefore: Map<string | null, ReactNode[]>;
   /** History items that end a reply cut off by a stop or a failure. */
   incomplete: Set<string>;
+  /** History items that only repeat a failed run's error, which its card already says. */
+  echoes: Set<string>;
   /** Runs whose cards the foot draws under their message, so the trailing cards leave them out. */
   drawsCards: Set<string>;
   /** Runs drawn from the engine's state rather than from history. */
@@ -479,6 +531,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
   const placed = new Set<string>();
   const endingsBefore = new Map<string | null, ReactNode[]>();
   const incomplete = new Set<string>();
+  const echoes = new Set<string>();
   const drawsCards = new Set<string>();
   const shown = new Set(transcript.items.map((item) => item.id));
   const signature: string[] = [];
@@ -521,8 +574,11 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
             item.role === "assistant" &&
             item.blocks.some((block) => block.kind === "text" && block.text.trim()),
         );
-      // Only a reply the gateway had not reported complete was cut off.
-      if (last && !run.textComplete) incomplete.add(last.id);
+      // The gateway writes a failure as the run's last row, its text the error itself: the
+      // card says it, once. Otherwise only a reply the gateway had not reported complete was cut.
+      if (last && run.state === "failed" && echoesError(last, run)) {
+        if (last.blocks.every((block) => block.kind === "text")) echoes.add(last.id);
+      } else if (last && !run.textComplete) incomplete.add(last.id);
     }
   }
 
@@ -631,6 +687,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
     foot,
     endingsBefore,
     incomplete,
+    echoes,
     drawsCards,
     engineRuns,
     signature: signature.join("|"),
@@ -979,6 +1036,7 @@ export function Conversation({
           onReview: review,
           leaving,
         }}
+        onAnnounce={onAnnounce}
         note={
           refreshNote && (
             <p className="load-note" role="alert">
@@ -1059,6 +1117,7 @@ export function Conversation({
           connected={caughtUp}
           conversationOpen={conversationOpen}
           covered={inert}
+          limits={connection.sendLimits}
           notices={[
             ...stopNotices.map((notice) => ({
               ...notice,

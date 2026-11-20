@@ -22,6 +22,7 @@ const ALLOWED: Record<string, string> = {
   "apps/desktop/src/main/github-star.ts:args":
     "static, the eight fixed arguments of the star command",
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
+  "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
   "packages/core/src/file-paths.ts:FILE_TOOLS": "static, four tool names",
   "packages/core/src/file-paths.ts:CHANGE_TOOLS": "static, three tool names",
   "packages/core/src/file-paths.ts:COMMAND_TOOLS": "static, one tool name",

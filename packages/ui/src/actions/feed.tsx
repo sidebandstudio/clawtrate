@@ -48,6 +48,7 @@ import {
 } from "../cards/index.ts";
 import { fullDate } from "../format.ts";
 import { Markdown } from "../Markdown.tsx";
+import { MessageUnit } from "../Messages.tsx";
 import {
   ActionEnvContext,
   ActionGroup,
@@ -59,7 +60,13 @@ import {
 
 /** What a non-action entry of a record is. */
 export type FeedRef =
-  | { t: "text"; text: string; title?: string | undefined; replyRun?: string | undefined }
+  | {
+      t: "text";
+      text: string;
+      title?: string | undefined;
+      replyRun?: string | undefined;
+      messageId?: string | undefined;
+    }
   | { t: "preamble"; preamble: Preamble }
   | { t: "reply"; run: Run }
   | { t: "card"; ref: CardRef }
@@ -256,6 +263,7 @@ function itemEntries(
             replyRun: run?.text.trim() === block.text.trim() ? run.id : undefined,
             text: block.text,
             title: item.timestamp === null ? undefined : fullDate(item.timestamp),
+            messageId: block.messageId,
           },
         });
     } else if (block.kind === "reasoning") {
@@ -684,9 +692,17 @@ function GroupView({
           );
         case "text":
           return (
-            <Bubble title={ref.title} replyRun={ref.replyRun}>
-              <Markdown text={ref.text} />
-            </Bubble>
+            <MessageUnit
+              message={
+                ref.messageId
+                  ? { messageId: ref.messageId, role: "assistant", text: ref.text }
+                  : null
+              }
+            >
+              <Bubble title={ref.title} replyRun={ref.replyRun}>
+                <Markdown text={ref.text} />
+              </Bubble>
+            </MessageUnit>
           );
         case "preamble":
           return (
