@@ -1104,7 +1104,7 @@ export function accountCommand(
           return { ...next, evidence: { ...b.evidence, status, checkedAt: Date.now() } };
         }),
       }));
-      return Promise.resolve();
+      return Promise.resolve("saved");
     }
     case "removeBotFallbacks":
       put((a) => ({

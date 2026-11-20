@@ -231,9 +231,11 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                       ? ArchiveResult
                                       : C extends { type: "listArchived" }
                                         ? ArchivedList
-                                        : C extends { type: "setTaskModel" }
-                                          ? "saved" | "held" | "unchanged" | "unconfirmed"
-                                          : void;
+                                        : C extends { type: "setBotModel" | "changeBotAccount" }
+                                          ? "saved" | "unverified"
+                                          : C extends { type: "setTaskModel" }
+                                            ? "saved" | "held" | "unchanged" | "unconfirmed"
+                                            : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";

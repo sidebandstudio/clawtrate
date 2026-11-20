@@ -707,27 +707,44 @@ describe("the client around a task's model", () => {
 });
 
 describe("a bot's model and effort", () => {
-  it("F-042 F-043: an effort saved right after a model keeps that model, also when the read after the model's save fails", async () => {
+  it("F-042 F-043: a bot's change is saved only once the bot read back shows it", async () => {
     const { AccountsGateway, accountsClient } = await import("./accounts-fake.ts");
     const fake = new AccountsGateway();
     const { client, accounts } = await accountsClient({ gateway: fake });
-    await client.setBotModel("otto", "dev-2", null);
-    expect(accounts().bindings.find((b) => b.botId === "otto")?.model).toBe("dev-2");
-    // The gateway reloads after a write to a bot's entry: the read after the next save fails.
-    const authStatus = fake.gateway.handlers["models.authStatus"]!;
+    await expect(client.setBotModel("otto", "dev-2", "high")).resolves.toBe("saved");
+    const otto = accounts().bindings.find((b) => b.botId === "otto")!;
+    expect(otto).toMatchObject({ model: "dev-2", effort: "high" });
+    expect(accounts().write).toMatchObject({ what: "model", status: "saved" });
+    client.stop();
+  });
+
+  it("F-042 F-043: a write the gateway takes and its read-back does not show is not called saved, and nothing sent is shown as read", async () => {
+    const { AccountsGateway, accountsClient } = await import("./accounts-fake.ts");
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const prior = accounts().bindings.find((b) => b.botId === "otto")!;
+    // Accepted, and the gateway's settings stay as they were.
+    fake.gateway.handlers["config.patch"] = () => ({ ok: true });
+    await expect(client.setBotModel("otto", "dev-2", "high")).resolves.toBe("unverified");
+    const now = accounts().bindings.find((b) => b.botId === "otto")!;
+    expect(now.model).toBe(prior.model);
+    expect(now.effort).toBe(prior.effort);
+    expect(accounts().write).toMatchObject({ status: "unverified" });
+    client.stop();
+  });
+
+  it("F-042 F-043: while the read after a bot's write is unavailable the last values read stay, and the change is not confirmed", async () => {
+    const { AccountsGateway, accountsClient } = await import("./accounts-fake.ts");
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const prior = accounts().bindings.find((b) => b.botId === "otto")!;
+    // The gateway reloads after a write to a bot's entry: the read after it fails.
     fake.gateway.handlers["models.authStatus"] = () => {
       throw new GatewayError({ code: "UNAVAILABLE", message: "reloading" });
     };
-    await client.setBotModel("otto", "dev-1", null);
-    fake.gateway.handlers["models.authStatus"] = authStatus;
-    // The person chooses an effort next, from what the settings show.
-    const shown = accounts().bindings.find((b) => b.botId === "otto")!;
-    expect(shown.model).toBe("dev-1");
-    await client.setBotModel("otto", shown.model!, "high");
-    const otto = (fake.config.agents as { entries: Record<string, Record<string, unknown>> })
-      .entries.otto!;
-    expect(otto.model).toEqual({ primary: "acme/dev-1@acme:work", fallbacks: [] });
-    expect(otto.thinkingDefault).toBe("high");
+    await expect(client.setBotModel("otto", "dev-2", null)).resolves.toBe("unverified");
+    expect(accounts().bindings.find((b) => b.botId === "otto")!.model).toBe(prior.model);
+    expect(accounts().write?.error).toContain("could not be read back");
     client.stop();
   });
 });

@@ -325,9 +325,17 @@ export class AccountsEngine {
    * read that fails keeps the last confirmation and says when it was.
    */
   async checkLock(botId: string): Promise<void> {
+    await this.readBinding(botId);
+  }
+
+  /** One read of a bot's binding; true when the gateway answered it. */
+  private async readBinding(botId: string): Promise<boolean> {
     const { ctx } = this;
     const before = ctx.get().bindings.find((each) => each.botId === botId);
-    if (!before) return this.load();
+    if (!before) {
+      await this.load();
+      return ctx.get().status === "ready";
+    }
     ctx.update((a) =>
       this.patchBinding(a, botId, (b) => ({
         ...b,
@@ -351,7 +359,7 @@ export class AccountsEngine {
             evidence: { ...b.evidence, status: "unavailable", error: reason },
           })),
         );
-        return;
+        return false;
       }
       const entry = asRecord(
         asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId],
@@ -362,6 +370,7 @@ export class AccountsEngine {
         const next = this.binding(botId, entry, view, current, at);
         return { ...a, bindings: a.bindings.map((each) => (each.botId === botId ? next : each)) };
       });
+      return true;
     } catch (error) {
       ctx.update((a) =>
         this.patchBinding(a, botId, (b) => ({
@@ -369,7 +378,42 @@ export class AccountsEngine {
           evidence: { ...b.evidence, status: "failed", error: this.scrub(errorText(error)) },
         })),
       );
+      return false;
     }
+  }
+
+  /**
+   * After a write to a bot: read it back, and call it saved only when the read
+   * shows what was written. A read that fails, or one that shows something
+   * else, leaves the last values read and says the change is not confirmed.
+   */
+  private async confirmWrite(
+    what: "account" | "model",
+    botId: string,
+    wrote: { primary: string; effort: string | null },
+  ): Promise<"saved" | "unverified"> {
+    const read = await this.readBinding(botId);
+    const now = this.ctx.get().bindings.find((each) => each.botId === botId);
+    const shows =
+      read &&
+      now !== undefined &&
+      now.primary === wrote.primary &&
+      Array.isArray(now.fallbacks) &&
+      now.fallbacks.length === 0 &&
+      (wrote.effort === null || now.effort === wrote.effort);
+    const status = shows ? "saved" : "unverified";
+    this.setWrite({
+      what,
+      target: botId,
+      status,
+      error: shows
+        ? null
+        : read
+          ? "The gateway took the change, and its settings read back show something else."
+          : "The gateway took the change, and it could not be read back yet.",
+      at: this.ctx.now(),
+    });
+    return status;
   }
 
   private patchBinding(
@@ -1401,7 +1445,7 @@ export class AccountsEngine {
     provider: string,
     model: string,
     effort: string | null,
-  ): Promise<void> {
+  ): Promise<"saved" | "unverified"> {
     this.requireAdmin("Changing a bot's settings");
     if (account && accountProvider(account) !== provider)
       throw new Error("That account belongs to another provider.");
@@ -1415,13 +1459,6 @@ export class AccountsEngine {
     try {
       await this.writeModel(botId, { provider, model, account }, effort, false);
       await this.recordIntent(botId, account ? { mode: "account", account } : { mode: "gateway" });
-      this.setWrite({
-        what: "account",
-        target: botId,
-        status: "saved",
-        error: null,
-        at: this.ctx.now(),
-      });
     } catch (error) {
       this.setWrite({
         what: "account",
@@ -1432,7 +1469,10 @@ export class AccountsEngine {
       });
       throw error;
     }
-    await this.checkLock(botId);
+    return this.confirmWrite("account", botId, {
+      primary: formatModelRef({ provider, model, account }),
+      effort,
+    });
   }
 
   /**
@@ -1466,7 +1506,11 @@ export class AccountsEngine {
   }
 
   /** The bot's model and effort, keeping its account. */
-  async setModel(botId: string, model: string, effort: string | null): Promise<void> {
+  async setModel(
+    botId: string,
+    model: string,
+    effort: string | null,
+  ): Promise<"saved" | "unverified"> {
     this.requireAdmin("Changing a bot's settings");
     const binding = this.ctx.get().bindings.find((b) => b.botId === botId);
     if (!binding?.provider) throw new Error("Choose an account first.");
@@ -1477,27 +1521,9 @@ export class AccountsEngine {
       error: null,
       at: this.ctx.now(),
     });
+    const ref = { provider: binding.provider, model, account: binding.account };
     try {
-      const ref = { provider: binding.provider, model, account: binding.account };
       await this.writeModel(botId, ref, effort, false);
-      // What the gateway took, at once: a write to a bot's entry can make the gateway reload, and
-      // the read after it then fails, so the next save must not start from the model before it.
-      this.ctx.update((a) =>
-        this.patchBinding(a, botId, (b) => ({
-          ...b,
-          primary: formatModelRef(ref),
-          model,
-          effort: effort ?? b.effort,
-          fallbacks: [],
-        })),
-      );
-      this.setWrite({
-        what: "model",
-        target: botId,
-        status: "saved",
-        error: null,
-        at: this.ctx.now(),
-      });
     } catch (error) {
       this.setWrite({
         what: "model",
@@ -1508,7 +1534,8 @@ export class AccountsEngine {
       });
       throw error;
     }
-    await this.checkLock(botId);
+    // Nothing of what was sent is copied into what was read: the read decides.
+    return this.confirmWrite("model", botId, { primary: formatModelRef(ref), effort });
   }
 
   /** "Remove fallbacks": the bot's model keeps its account; its fallback list becomes empty. */

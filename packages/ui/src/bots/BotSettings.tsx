@@ -275,13 +275,20 @@ export function BotSettings({
     const saveModel = async (nextModel: string, nextEffort: string | null) => {
       setError(null);
       try {
-        await bridge.invoke({
+        const outcome = await bridge.invoke({
           type: "setBotModel",
           botId: bot.id,
           model: nextModel,
           effort: nextEffort,
         });
-        announce(nextModel !== model ? "Model saved" : "Effort saved");
+        // Saved only once the bot, read back, shows it; otherwise the page keeps what it last read.
+        if (outcome === "saved") announce(nextModel !== model ? "Model saved" : "Effort saved");
+        else {
+          setError(
+            "The gateway took the change, and its settings read back don't show it yet. Shown is what was last read.",
+          );
+          announce("Couldn't confirm the change");
+        }
       } catch (failure) {
         setError(
           `Couldn't save the model: ${failure instanceof Error ? failure.message : String(failure)}`,
@@ -447,7 +454,7 @@ export function BotSettings({
       setSaving(true);
       setError(null);
       try {
-        await bridge.invoke({
+        const outcome = await bridge.invoke({
           type: "changeBotAccount",
           botId: bot.id,
           account: toGateway ? null : chosen,
@@ -455,6 +462,14 @@ export function BotSettings({
           model,
           effort,
         });
+        if (outcome !== "saved") {
+          // The gateway took it and the read after it doesn't show it: nothing is claimed.
+          setError(
+            "The gateway took the change, and its settings read back don't show it yet. Shown is what was last read.",
+          );
+          announce("Couldn't confirm the change");
+          return;
+        }
         announce(
           toGateway
             ? `${name} now has no fixed account`

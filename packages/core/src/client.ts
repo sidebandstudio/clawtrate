@@ -3558,11 +3558,16 @@ export class ClawtrateClient {
     provider: string,
     model: string,
     effort: string | null,
-  ): Promise<void> {
+  ): Promise<"saved" | "unverified"> {
     return this.accounts.changeAccount(botId, account, provider, model, effort);
   }
 
-  setBotModel(botId: string, model: string, effort: string | null): Promise<void> {
+  /** `saved` once the bot read back shows it; `unverified` when it does not, or could not be read. */
+  setBotModel(
+    botId: string,
+    model: string,
+    effort: string | null,
+  ): Promise<"saved" | "unverified"> {
     return this.accounts.setModel(botId, model, effort);
   }
 
