@@ -826,7 +826,8 @@ const SAVED_WORDS: Record<PermissionChoice, string> = {
   deny: "never",
 };
 
-function sentence(line: PermissionLine, view: BotPermissions, name: string): string {
+/** The sentence under a line's choices: what the reads establish about it, and nothing more. */
+export function sentence(line: PermissionLine, view: BotPermissions, name: string): string {
   // Stored settings the gateway doesn't use yet are said as stored, never as in force.
   if (notInUse(view) && fromSettings(line.mark) && line.kind !== "exec")
     return `${name}'s stored settings say ${VALUE_WORDS[line.value]}. The gateway reports it isn't using its stored settings yet, so this may not be in force.`;
