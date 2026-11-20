@@ -394,7 +394,8 @@
   const silent = () => S.d === "sentnoreport" || S.tool === "silent";
   function sentSentence(m, kind) {
     if (silent()) return `The ${noun(kind)} tool reported success at 5:43 PM. It doesn't say what it sent; this is what you approved.`;
-    const r = S.result || toolResult(kind, m);
+    // The receipt is read once; a later change to the file doesn't rewrite it.
+    const r = S.result || (S.result = toolResult(kind, m));
     return kind === "email"
       ? `Sent from ${esc(r.from)} to ${esc(r.to.join(", "))}, cc ${esc(r.cc.join(", "))}, with ${r.files.map((f) => `${esc(f.name)} (${esc(f.size)})`).join(", ")}, at 5:43 PM. Read back from the email tool's result.`
       : `Posted to ${esc(r.to)} in ${esc(r.workspace)}, in the thread ${esc(r.thread)}, at 5:43 PM. Read back from the message tool's result.`;
@@ -1163,9 +1164,9 @@
       const ev = b.dataset.protoEvent;
       if (ev === "file") return go({ file: "changed" }, "report.txt changed on the gateway's machine");
       if (S.view === "secret") return go({ s: ev === "expire" ? "expired" : "skipped" });
-      if (ev === "expire") return go({ d: S.edited ? "editexpired" : "expired" });
-      // A settled card keeps its result whatever happens to the run afterwards.
+      // A settled card keeps its result whatever happens afterwards; only a live hold can expire.
       if (finished(S.kind)) return;
+      if (ev === "expire") return go({ d: S.edited ? "editexpired" : "expired" });
       // The fixture's restart while an edit waits carries the recorded refusal; a bare restart doesn't.
       if (ev === "restart") return S.edited || S.editGiven || S.d === "edit" ? go({ d: "editrestart", edited: true }) : go({ d: "restartunknown" });
       // A bare run-end event says nothing of the tool; a stop of an unanswered first hold is a recorded cancellation.

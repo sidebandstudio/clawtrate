@@ -695,6 +695,23 @@ for (const [when, wait] of [
   await p.close();
 }
 
+// No later event overwrites a confirmed send, nor changes its receipt.
+for (const q of ["view=draft", "view=draft&d=edited"]) {
+  for (const ev of ["expire", "close", "stop", "restart", "file"]) {
+    p = await open(q, { chrome: "1" });
+    await click(p, '[data-d="send"]');
+    await waitText(p, ["Answered"]);
+    const before = await text(p, '[data-testid="draft-resolved"]');
+    await click(p, `[data-proto-event="${ev}"]`);
+    check(`${q}: a confirmed send is unchanged by the bar's ${ev} event`, (await text(p, '[data-testid="draft-resolved"]')) === before && before.includes("report.txt (28 bytes)"));
+    await p.close();
+  }
+}
+p = await open("view=draft&d=sent", { chrome: "1" });
+await click(p, '[data-proto-event="file"]');
+check("a sent card opened from the address keeps its receipt when the file changes later", (await text(p)).includes("report.txt (28 bytes)"));
+await p.close();
+
 await b.close();
 console.log(out.join("\n"));
 console.log(`${out.filter((l) => l.startsWith("ok")).length} ok, ${failed} failed`);
