@@ -5,6 +5,13 @@
 import { describe, expect, it } from "vitest";
 import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
 import { sleep, until } from "./fake-gateway.ts";
+import {
+  applyAgentEvent,
+  emptyActivity,
+  mergeHistoryRuns,
+  RawTable,
+  runsFromHistory,
+} from "../src/runs.ts";
 
 const RUN = "run-w";
 const QUEUED = "run-queued";
@@ -188,5 +195,68 @@ describe("a steered run that waits on you (F-468, F-096)", () => {
     });
     await until(() => gateway.calls("chat.send").length === 1);
     task.client.stop();
+  });
+});
+
+describe("a call of a run history only infers to have ended (F-468)", () => {
+  it("F-468: while the gateway runs another turn, history's inferred end leaves the live run's open call open, and its own result closes it", () => {
+    const ctx = { sessionKey: KEY, now: 5_000, raw: new RawTable() };
+    const event = (seq: number, stream: string, data: object) => ({
+      runId: "r-old",
+      seq,
+      stream,
+      ts: 1_000 + seq,
+      sessionKey: KEY,
+      data,
+    });
+    let activity = applyAgentEvent(
+      emptyActivity,
+      event(1, "lifecycle", { phase: "start" }),
+      ctx,
+    ).activity;
+    activity = applyAgentEvent(
+      activity,
+      event(2, "tool", { phase: "start", name: "exec", toolCallId: "c1", args: { command: "ls" } }),
+      ctx,
+    ).activity;
+    // History's rows of the run stop at its call, a later turn's rows follow, and the gateway has
+    // a turn of the task in flight: it infers the run's end, which the gateway has not said.
+    const rows = [
+      { role: "user", content: "First", __openclaw: { id: "u1", idempotencyKey: "r-old:user" } },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c1", name: "exec", arguments: { command: "ls" } }],
+        stopReason: "toolUse",
+        __openclaw: { id: "a1", runId: "r-old" },
+      },
+      { role: "user", content: "Then", __openclaw: { id: "u2", idempotencyKey: "r-mid:user" } },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+        stopReason: "stop",
+        __openclaw: { id: "a2", runId: "r-mid" },
+      },
+    ];
+    const history = runsFromHistory(rows, "r-queued", ctx, { busy: true });
+    expect(history.find((run) => run.id === "r-old")?.steps[0]?.status).toBe("unknown");
+    const runs = mergeHistoryRuns(activity.runs, history, ctx, true).runs;
+    const old = runs.find((run) => run.id === "r-old")!;
+    expect(old.state).toBe("running");
+    expect(old.steps.find((step) => step.id === "tool:c1")?.status).toBe("running");
+    activity = applyAgentEvent(
+      { ...activity, runs },
+      event(3, "tool", {
+        phase: "result",
+        name: "exec",
+        toolCallId: "c1",
+        isError: false,
+        result: { content: [{ type: "text", text: "notes" }] },
+      }),
+      ctx,
+    ).activity;
+    const step = activity.runs
+      .find((run) => run.id === "r-old")!
+      .steps.find((each) => each.id === "tool:c1");
+    expect(step).toMatchObject({ status: "done", result: { text: "notes" } });
   });
 });

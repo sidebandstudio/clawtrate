@@ -3123,9 +3123,10 @@ export function mergeHistoryRuns(
       for (const step of fromRun.steps) fromHistory.add(step.id);
       return fromRun;
     }
+    const inferredOnly = !fromRun.outcomeKnown && busy;
     const { steps, omittedSteps, omittedTools, omittedToolsAtEnd } = mergeSteps(
       current,
-      fromRun,
+      inferredOnly && !isTerminal(current.state) ? keepOpenSteps(current, fromRun) : fromRun,
       fromHistory,
     );
     let run: Run = {
@@ -3143,7 +3144,6 @@ export function mergeHistoryRuns(
     };
     // An end this client only inferred gives way to the end history establishes.
     if (isTerminal(fromRun.state) && fromRun.outcomeKnown) run = reopenInferred(run);
-    const inferredOnly = !fromRun.outcomeKnown && busy;
     if (!isTerminal(run.state) && isTerminal(fromRun.state) && !inferredOnly) {
       run = {
         ...finishRun(
@@ -3164,6 +3164,19 @@ export function mergeHistoryRuns(
     (a, b) => Number(a.state === "queued") - Number(b.state === "queued"),
   );
   return { runs, fromHistory };
+}
+
+/**
+ * History's copy of a run whose end it only infers, while the gateway still runs the task: a
+ * call it closed only because of that inferred end is the live one, still open, so its own
+ * result closes it when it arrives. A call history holds a result for is history's.
+ */
+function keepOpenSteps(live: Run, history: Run): Run {
+  const open = new Map(live.steps.filter(isOpenStep).map((step) => [step.id, step]));
+  return {
+    ...history,
+    steps: history.steps.map((step) => (closedByRunEnd(step) ? (open.get(step.id) ?? step) : step)),
+  };
 }
 
 /**
