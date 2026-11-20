@@ -265,6 +265,40 @@ describe("Connect on this computer", () => {
     // The temporary folder is scanned, which takes a while on a busy machine.
   }, 60_000);
 
+  it("F-492: Connect redeems a voice-node code itself, asking for read, and the code stays out of renderer state, diagnostics and published errors", async () => {
+    const h = harness();
+    // The gateway refuses the code once, echoing it, then takes it.
+    let refused = false;
+    h.gateway.connectReply = (params) => {
+      const auth = (params as { auth?: { bootstrapToken?: string } }).auth;
+      if (!refused) {
+        refused = true;
+        return {
+          ok: false,
+          error: { code: "INVALID_REQUEST", message: `bad ${CODE}`, details: { code: CODE } },
+        };
+      }
+      return auth?.bootstrapToken === CODE
+        ? { ok: true, payload: helloOk(["operator.read"], "device-token") }
+        : { ok: false, error: { code: "INVALID_REQUEST", message: "unauthorized" } };
+    };
+    await h.client.start();
+    await h.setup.look();
+    await h.setup.connect();
+    await until(() => h.setup.current.phase === "failed");
+    expect(h.dialogs).toHaveLength(1);
+    expect(minted(h.requests).map((request) => request.args)).toEqual([
+      ["qr", "--json", "--voice-node", "--url", URL],
+    ]);
+    const sent = h.gateway.connects[0] as { scopes: string[]; auth: Record<string, string> };
+    expect(sent.scopes).toEqual(["operator.read"]);
+    expect(sent.auth).toEqual({ bootstrapToken: CODE });
+    // Renderer state (every snapshot), diagnostics (every log line) and the published error.
+    expect(h.client.state.connection.error?.code).toBe("SETUP_CONNECT_REFUSED");
+    expect(h.everywhere()).not.toContain(CODE);
+    h.client.stop();
+  });
+
   it("F-492: declining the host's dialog mints nothing and pairs nothing", async () => {
     const h = harness({ confirm: async () => false });
     await h.client.start();
@@ -418,7 +452,7 @@ describe("Connect on this computer", () => {
     h.client.stop();
   });
 
-  it("F-515: an untested or a below-floor reported version can't mint or open a socket, and asks nothing", async () => {
+  it("F-515: another reported version cannot pair, start an update, or open a socket", async () => {
     for (const [version, outcome] of [
       ["2026.9.37", "untested"],
       ["2026.6.2", "too-old"],
@@ -438,6 +472,12 @@ describe("Connect on this computer", () => {
       expect([...h.storage.data.keys()].filter((key) => key.startsWith("deviceToken:"))).toEqual(
         [],
       );
+      // Only the look's own commands ran: nothing that pairs, updates or changes OpenClaw.
+      expect(h.requests.map(({ args }) => args.join(" ")).sort()).toEqual([
+        "--version",
+        "config get gateway.auth.mode --json",
+        "gateway status --json",
+      ]);
       h.client.stop();
     }
   });

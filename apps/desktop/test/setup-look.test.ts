@@ -193,6 +193,12 @@ describe("the look on this computer", () => {
     }
   });
 
+  it("F-515: the tested version is offered for Connect, with what the look established", async () => {
+    const report = await look(homeWorld(), fakeRunner(defaultTable()).run);
+    expect(report?.look).toMatchObject({ outcome: "running", version: "2026.10.6", access: "new" });
+    expect(report?.found).not.toBeNull();
+  });
+
   it("F-515: another version is named and not offered for Connect", async () => {
     const report = await look(
       homeWorld(),

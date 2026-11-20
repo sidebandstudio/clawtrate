@@ -343,3 +343,27 @@ test("F-516: each card says only what the look established", async ({ page }) =>
   await expect(page.getByText("OpenClaw didn't return a usable setup code.")).toBeVisible();
   await expect(page.getByText(/exited with code 0|OpenClaw stopped/)).toHaveCount(0);
 });
+
+test("F-494: the setup screens take no token; only Advanced's form has a token field", async ({
+  page,
+}) => {
+  for (const state of ["first", "found", "confirming", "connecting", "code-refused"]) {
+    await openFixture(page, `setup=${state}`, "light");
+    await expect(page.locator("input"), state).toHaveCount(0);
+  }
+  await openFixture(page, "setup=first", "light");
+  await page.getByRole("button", { name: "Advanced" }).click();
+  await expect(page.getByPlaceholder("Token, for the first pairing only")).toHaveAttribute(
+    "type",
+    "password",
+  );
+});
+
+test("F-515: with the tested version everything is offered: its facts and Connect read-only", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=found", "light");
+  await expect(page.getByTestId("setup-found").locator("dl > div")).toHaveCount(4);
+  await page.getByRole("button", { name: "Connect read-only" }).click();
+  expect(await sent(page)).toEqual(["setupConnect"]);
+});
