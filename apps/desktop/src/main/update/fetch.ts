@@ -97,7 +97,11 @@ export function open(
     // off, and neither NODE_EXTRA_CA_CERTS nor the system's store adds to them.
     const request =
       url.protocol === "https:"
-        ? httpsGet(url, { ...options, rejectUnauthorized: true, ca: rootCertificates }, onResponse)
+        ? httpsGet(
+            url,
+            { ...options, rejectUnauthorized: true, ca: [...rootCertificates] },
+            onResponse,
+          )
         : httpGet(url, options, onResponse);
     request.on("error", () => reject(new FetchRefused(transfer.cause())));
   });
