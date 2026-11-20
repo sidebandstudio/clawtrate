@@ -44,6 +44,7 @@ export * from "./sidebar.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
 export * from "./file-paths.ts";
+export * from "./check-ins.ts";
 export { isStopNow } from "./stop-words.ts";
 export * from "./send-size.ts";
 export * from "./composer-menus.ts";
