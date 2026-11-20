@@ -311,7 +311,7 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
       if (command === process.execPath) {
         const env = options!.env!;
         seen.certificateMode = statSync(env.CSC_LINK!).mode & 0o777;
-        seen.tempDir = env.TMPDIR;
+        seen.tempDir = env.TMPDIR!;
         return build(args[1]!, args[2]!, env);
       }
       if (command === "ditto") {
