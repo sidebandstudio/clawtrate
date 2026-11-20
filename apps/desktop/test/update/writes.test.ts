@@ -10,8 +10,8 @@ import type { FeedServer } from "./harness.ts";
 
 const sink = vi.hoisted(() => ({ opened: [] as string[], failWrites: false }));
 
-vi.mock("node:fs", async (importOriginal) => {
-  const fs = await importOriginal<typeof import("node:fs")>();
+vi.mock(import("node:fs"), async (importOriginal) => {
+  const fs = await importOriginal();
   const noSpace = () =>
     Object.assign(new Error("ENOSPC: no space left on device, write"), {
       code: "ENOSPC",
@@ -19,7 +19,7 @@ vi.mock("node:fs", async (importOriginal) => {
     });
   return {
     ...fs,
-    createWriteStream: (path: string, options: Parameters<typeof fs.createWriteStream>[1]) => {
+    createWriteStream: (...[path, options]: Parameters<typeof fs.createWriteStream>) => {
       sink.opened.push(String(path));
       if (!sink.failWrites) return fs.createWriteStream(path, options);
       return fs.createWriteStream(path, {
