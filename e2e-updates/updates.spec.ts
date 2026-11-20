@@ -1,12 +1,14 @@
 // The same main entry, sandboxed preload and renderer as the launch check.
 // Only this temporary build links the service to the test's own feed.
-import { expect, test as base, type Browser, type Page } from "@playwright/test";
+import { expect, test as base, type Page } from "@playwright/test";
 import { once } from "node:events";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
   chmodSync,
   statSync,
   mkdtempSync,
+  readdirSync,
+  readFileSync,
   realpathSync,
   symlinkSync,
   rmSync,
@@ -33,16 +35,43 @@ type TestApp = {
   manifest: Record<string, unknown>;
   rendererRequests: string[];
 };
+async function stopElectron(app: ChildProcess) {
+  const { pid } = app;
+  if (!pid || app.exitCode !== null || app.signalCode !== null) return;
+  const deadline = AbortSignal.timeout(25_000);
+  const exited = once(app, "exit", { signal: deadline });
+  const windows = process.platform === "win32";
+  const force = () => {
+    if (windows) forceEnd(pid);
+    else app.kill("SIGKILL");
+  };
+  const timer = setTimeout(force, 15_000);
+  try {
+    if (windows) {
+      if (askToClose(pid)) force();
+    } else app.kill("SIGTERM");
+    await exited;
+  } catch (error) {
+    if (deadline.aborted)
+      throw new Error(`Electron PID ${pid} did not exit after forced shutdown`, { cause: error });
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 const test = base.extend<{ desktopApp: TestApp }>({
   desktopApp: async ({ playwright }, use) => {
     const desktop = join(import.meta.dirname, "../apps/desktop");
     const require = createRequire(join(desktop, "package.json"));
     const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "clawtrate-update-app-")));
-    const server = await feedServer();
+    const cleanup = new AsyncDisposableStack();
+    cleanup.defer(() =>
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
+    );
     const resume = Promise.withResolvers<void>();
-    let app: ChildProcess | undefined;
-    let browser: Browser | undefined;
     try {
+      const server = await feedServer();
+      cleanup.defer(() => server.close());
       const key = fileKeyFor(process.platform, process.arch);
       if (!key) throw new Error("The desktop check needs a supported package target");
       const { body, sha512 } = payload(4000000);
@@ -71,7 +100,12 @@ const test = base.extend<{ desktopApp: TestApp }>({
           "--outDir",
           join(dir, "out"),
         ],
-        { cwd: desktop, env: { ...env, UPDATE_SCREEN_TEST_PORT: String(server.port) } },
+        {
+          cwd: desktop,
+          env: { ...env, UPDATE_SCREEN_TEST_PORT: String(server.port) },
+          timeout: 60_000,
+          killSignal: "SIGKILL",
+        },
       );
       cpSync(join(desktop, "resources"), join(dir, "resources"), { recursive: true });
       writeFileSync(
@@ -89,7 +123,7 @@ const test = base.extend<{ desktopApp: TestApp }>({
         process.platform === "win32" ? "junction" : "dir",
       );
       const profile = join(dir, "profile");
-      app = spawn(
+      const app = spawn(
         require("electron"),
         [dir, "--user-data-dir=" + profile, "--remote-debugging-port=0"],
         {
@@ -101,9 +135,11 @@ const test = base.extend<{ desktopApp: TestApp }>({
           stdio: "ignore",
         },
       );
+      cleanup.defer(() => stopElectron(app));
       await once(app, "spawn");
       const port = await debuggingPort(profile, app);
-      browser = await playwright.chromium.connectOverCDP("http://127.0.0.1:" + port);
+      const browser = await playwright.chromium.connectOverCDP("http://127.0.0.1:" + port);
+      cleanup.defer(() => browser.close());
       const context = browser.contexts()[0]!;
       const page = context.pages()[0] ?? (await context.waitForEvent("page"));
       await page.locator(".app").waitFor();
@@ -123,29 +159,7 @@ const test = base.extend<{ desktopApp: TestApp }>({
       });
     } finally {
       resume.resolve();
-      try {
-        await browser?.close();
-      } finally {
-        if (app?.pid && app.exitCode === null && app.signalCode === null) {
-          const exited = once(app, "exit");
-          const pid = app.pid;
-          const windows = process.platform === "win32";
-          const force = setTimeout(() => {
-            if (windows) forceEnd(pid);
-            else app?.kill("SIGKILL");
-          }, 15000);
-          if (windows) {
-            if (askToClose(pid)) forceEnd(pid);
-          } else app.kill("SIGTERM");
-          try {
-            await exited;
-          } finally {
-            clearTimeout(force);
-          }
-        }
-        await server.close();
-        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-      }
+      await cleanup.disposeAsync();
     }
   },
 });
@@ -182,7 +196,8 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   const bar = page.getByRole("progressbar");
   expect(Number(await bar.getAttribute("value"))).toBeLessThan(body.length);
   await expect(bar).toHaveAttribute("max", String(body.length));
-  await expect(line).toContainText("of 4,000,000 bytes");
+  const total = await page.evaluate((size) => size.toLocaleString(), body.length);
+  await expect(line).toContainText(`of ${total} bytes`);
   expect(server.requests).toEqual(["/stable", filePath]);
   await expect(line).not.toContainText("checksum");
   resume();
@@ -302,6 +317,7 @@ for (const stage of ["check", "download"] as const) {
         });
         expect(id).not.toBe("");
         await download.click();
+        await expect.poll(() => server.requests, { timeout: 35_000 }).toContain(filePath);
         await expect
           .poll(async () => Number(await page.getByRole("progressbar").getAttribute("value")))
           .toBeGreaterThan(0);
@@ -415,7 +431,7 @@ test("F-231: a stale check or download reconciles the screen without contacting 
 test("F-231: an older Check on the same track preserves the verified download", async ({
   desktopApp,
 }) => {
-  const { page, profile, server, filePath, resume } = desktopApp;
+  const { page, profile, server, filePath, body, resume } = desktopApp;
   await page.keyboard.press("ControlOrMeta+,");
   await page.getByRole("button", { name: "Updates", exact: true }).click();
   const line = page.locator(".update-result dd");
@@ -430,6 +446,11 @@ test("F-231: an older Check on the same track preserves the verified download", 
     offer.offerId,
   );
   expect(verified.snapshot.state).toMatchObject({ kind: "verified", offerId: offer.offerId });
+  const offerDir = join(profile, "updates", offer.offerId);
+  const files = readdirSync(offerDir);
+  expect(files).toHaveLength(1);
+  const artifact = join(offerDir, files[0]!);
+  expect(readFileSync(artifact).equals(body)).toBe(true);
   await expect(line).toHaveText("Not checked yet.");
   expect(server.requests).toEqual(["/stable", filePath]);
   await page.getByRole("button", { name: "Check for Updates" }).click();
@@ -442,6 +463,7 @@ test("F-231: an older Check on the same track preserves the verified download", 
       (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get(),
     ),
   ).toEqual(verified.snapshot);
+  expect(readFileSync(artifact).equals(body)).toBe(true);
   expect(server.requests).toEqual(["/stable", filePath]);
 });
 

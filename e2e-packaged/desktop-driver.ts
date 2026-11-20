@@ -6,7 +6,10 @@ import { FORBIDDEN_PORTS } from "../e2e/ports.ts";
 export function appEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(process.env).filter(
-      ([key]) => !/^(CLAWTRATE_|ELECTRON_|NODE_OPTIONS$|OPENCLAW_)/.test(key),
+      ([key]) =>
+        !/^(CLAWTRATE_|ELECTRON_|NODE_OPTIONS$|OPENCLAW_)/.test(
+          process.platform === "win32" ? key.toUpperCase() : key,
+        ),
     ),
   );
 }
