@@ -1056,6 +1056,28 @@ test("F-473: the line is drawn in the task that was open for the bot, with no ru
   );
 });
 
+test("F-473: the binding event is visible in a loaded task with no messages", async ({ page }) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`,
+    "light",
+  );
+  // A new, empty task of Otto's: its history is read, and it has no messages.
+  await page.keyboard.press("Alt+t");
+  await expect(page.locator(".title-pill-task")).toHaveText("New task");
+  await expect(page.getByText("Nothing here yet")).toBeVisible();
+  await page.getByRole("tab", { name: "Settings" }).click();
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await page.getByRole("button", { name: "Save" }).click();
+  // Before any first message, the line is in the task.
+  await expect(page.getByTestId("transcript").getByTestId("client-event-line")).toHaveText(
+    "Otto is now bound to OpenAI · Home.",
+  );
+  await expect(page.getByText("Nothing here yet")).toHaveCount(0);
+});
+
 /** New bot, on the sign-in methods, and one of them started. */
 async function startMethod(page: Page, method: RegExp) {
   await page.keyboard.press("ControlOrMeta+n");

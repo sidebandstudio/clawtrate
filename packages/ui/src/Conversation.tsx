@@ -1026,7 +1026,7 @@ export function Conversation({
         </button>
       </EmptyState>
     );
-  } else if (itemCount === 0 && !hasLive) {
+  } else if (itemCount === 0 && !hasLive && (eventLines?.length ?? 0) === 0) {
     body = (
       <EmptyState
         bot={bot}
