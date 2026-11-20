@@ -110,11 +110,20 @@ def windows_exe(path, require_amd64=False):
         signature, machine, sections, _, _, _, length, flags = struct.unpack("<4sHHIIIHH", binary.read(24))
         if signature != b"PE\0\0" or machine == 0 or not flags & 2 or flags & 0x2000:
             return False
-        if not 1 <= sections <= 96 or length < 96 or offset + 24 + length + 40 * sections > size:
+        headers_end = offset + 24 + length + 40 * sections
+        if not 1 <= sections <= 96 or length < 96 or headers_end > size:
             return False
         optional = binary.read(length)
         magic, = struct.unpack_from("<H", optional)
         if magic not in (0x10b, 0x20b) or (magic == 0x20b and length < 112):
+            return False
+        section_align, file_align = struct.unpack_from("<II", optional, 32)
+        image_size, headers_size = struct.unpack_from("<II", optional, 56)
+        if not file_align or file_align & (file_align - 1) or section_align < file_align or section_align & (section_align - 1):
+            return False
+        if not headers_end <= headers_size <= size or headers_size % file_align:
+            return False
+        if image_size <= headers_size or image_size % section_align:
             return False
         if (machine == 0x014c and magic != 0x10b) or (machine in (0x8664, 0xaa64) and magic != 0x20b):
             return False
@@ -124,9 +133,12 @@ def windows_exe(path, require_amd64=False):
         has_entry = False
         for _ in range(sections):
             section = binary.read(40)
-            address, count, raw = struct.unpack_from("<III", section, 12)
+            virtual_size, address, count, raw = struct.unpack_from("<4I", section, 8)
             attributes, = struct.unpack_from("<I", section, 36)
-            if count and (raw < offset + 24 + length + 40 * sections or raw + count > size):
+            mapped_size = max(virtual_size, count)
+            if mapped_size and address + mapped_size > image_size:
+                return False
+            if count and (raw < headers_size or raw + count > size):
                 return False
             if attributes & 0x20000000 and address <= start < address + count:
                 has_entry = True

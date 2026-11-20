@@ -157,7 +157,7 @@ export function plan(candidate: Candidate) {
       signing: "not checked by this plan",
       ...(key === "win-x64"
         ? {
-            installedArchitecture: "not read from the installer",
+            installedArchitecture: "not read from the candidate executable",
             buildJobObservation:
               receipt.unpackedAppMachine === "AMD64" ? "win-unpacked/Clawtrate.exe is AMD64" : null,
           }
@@ -263,12 +263,16 @@ export function runPlan(args: string[], print = console.log) {
         [
           record.ownerChecks,
           record.comparison,
-          ...(windows?.format ? ["Windows installer: " + windows.format + "."] : []),
+          ...(windows?.format ? ["Windows candidate: " + windows.format + "."] : []),
           ...(windows
             ? ["Installed app architecture: " + windows.installedArchitecture + "."]
             : []),
           ...(windows?.buildJobObservation
-            ? ["Windows build job reported: " + windows.buildJobObservation + "."]
+            ? [
+                "Windows build record attributes this observation to the build job: " +
+                  windows.buildJobObservation +
+                  ".",
+              ]
             : []),
           ...record.issues,
         ].join("\n"),

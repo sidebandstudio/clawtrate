@@ -56,7 +56,7 @@ sys.stdout.buffer.write(buf.getvalue())`,
     variant,
   ]);
 }
-function pe(machine: number) {
+function pe(machine: number, mapped = true) {
   const b = Buffer.alloc(1024);
   b.write("MZ");
   b.writeUInt32LE(64, 60);
@@ -69,6 +69,13 @@ function pe(machine: number) {
   b.writeUInt16LE(2, 86);
   b.writeUInt16LE(machine === 0x014c ? 0x10b : 0x20b, 88);
   b.writeUInt32LE(4096, 104);
+  if (mapped) {
+    b.writeUInt32LE(4096, 88 + 32);
+    b.writeUInt32LE(512, 88 + 36);
+    b.writeUInt32LE(8192, 88 + 56);
+    b.writeUInt32LE(512, 88 + 60);
+    b.writeUInt32LE(512, section + 8);
+  }
   b.writeUInt32LE(4096, section + 12);
   b.writeUInt32LE(512, section + 16);
   b.writeUInt32LE(512, section + 20);
@@ -98,14 +105,13 @@ beforeEach(() => {
       buildDate: c.buildDate,
       feedAddresses: feedAddresses(c.track, c.feedUrl),
       sha512: sha512Base64(path(name)),
-      signing: key === "win-x64" ? "authenticode-valid" : "developer-id-notarized",
     });
   }
   assemble(c);
 });
 afterEach(() => rmSync(c.dir, { recursive: true, force: true }));
 
-it("checks the complete set of signed build receipts and all final bytes", () => {
+it("checks that the build records agree with all final artifact bytes", () => {
   const result = plan(c);
   expect(result).toMatchObject({ verdict: "complete and consistent", issues: [] });
   expect(result.files).toHaveLength(3);
@@ -352,30 +358,41 @@ it("compares the supplied track feeds offline, including stale, reused and super
   );
 });
 
-it("accepts a 32-bit PE installer and refuses a non-executable with matching hashes", () => {
+it("accepts a mapped 32-bit PE without an installer payload and refuses unmapped files with matching hashes", () => {
   expect(plan(c)).toMatchObject({
     verdict: "complete and consistent",
     files: expect.arrayContaining([
       expect.objectContaining({
         format: "Windows PE executable",
-        installedArchitecture: "not read from the installer",
+        installedArchitecture: "not read from the candidate executable",
         buildJobObservation: null,
       }),
     ]),
   });
+  const lines: string[] = [];
+  const check = () =>
+    runPlan(["check", c.dir, c.track, c.version, c.commit, c.buildDate, c.feedUrl], (line) =>
+      lines.push(line),
+    );
+  expect(check()).toBe(0);
+  expect(lines.at(-1)).toContain("Windows candidate: Windows PE executable.");
+  write("win-x64.json", { ...read("win-x64.json"), unpackedAppMachine: "AMD64" });
+  expect(check()).toBe(0);
+  expect(lines.at(-1)).toContain(
+    "Windows build record attributes this observation to the build job: win-unpacked/Clawtrate.exe is AMD64.",
+  );
+  expect(read("release-plan.json").verdict).toBe("complete and consistent");
   const name = artifactName(c.version, "win-x64");
-  writeFileSync(path(name), "MZ but no executable header");
-  write("win-x64.json", {
-    ...read("win-x64.json"),
-    sha512: sha512Base64(path(name)),
-    unpackedAppMachine: "AMD64",
-  });
-  rmSync(path("update-feed.json"));
-  assemble(c);
-  expect(plan(c)).toMatchObject({
-    verdict: "refused",
-    issues: ["win-x64: invalid Windows executable."],
-  });
+  for (const bytes of [pe(0x014c, false), Buffer.from("MZ but no executable header")]) {
+    writeFileSync(path(name), bytes);
+    write("win-x64.json", { ...read("win-x64.json"), sha512: sha512Base64(path(name)) });
+    rmSync(path("update-feed.json"));
+    assemble(c);
+    expect(plan(c)).toMatchObject({
+      verdict: "refused",
+      issues: ["win-x64: invalid Windows executable."],
+    });
+  }
 });
 
 it("the Windows job records AMD64 only after reading the unpacked app header", () => {
@@ -395,6 +412,8 @@ it("the Windows job records AMD64 only after reading the unpacked app header", (
   expect(inspect()).toBe(1);
   writeFileSync(exe, pe(0xaa64));
   expect(inspect()).toBe(1);
+  writeFileSync(exe, pe(0x8664, false));
+  expect(inspect()).toBe(1);
   expect(read("win-x64.json").unpackedAppMachine).toBeUndefined();
   writeFileSync(exe, pe(0x8664));
   expect(inspect()).toBe(0);
@@ -406,7 +425,7 @@ it("the Windows job records AMD64 only after reading the unpacked app header", (
     ),
   ).toBe(0);
   expect(lines.join("\n")).toContain(
-    "Installed app architecture: not read from the installer.\nWindows build job reported: win-unpacked/Clawtrate.exe is AMD64.",
+    "Installed app architecture: not read from the candidate executable.\nWindows build record attributes this observation to the build job: win-unpacked/Clawtrate.exe is AMD64.",
   );
   expect(read("release-plan.json").files[2].buildJobObservation).toBe(
     "win-unpacked/Clawtrate.exe is AMD64",
