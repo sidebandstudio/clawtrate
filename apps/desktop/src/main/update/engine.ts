@@ -4,7 +4,13 @@
 // docs/decisions.md, "Updates and release signing", has its rules.
 
 import { createHash } from "node:crypto";
-import { createWriteStream } from "node:fs";
+import {
+  close as closeFile,
+  createWriteStream,
+  open as openFile,
+  write as writeFileChunk,
+  writev as writeFileChunks,
+} from "node:fs";
 import { mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Transform } from "node:stream";
@@ -288,37 +294,55 @@ export class UpdateEngine {
           done(null, chunk);
         },
       });
-      // Which side failed first: the response, or the file's own write. The
-      // other side is then destroyed with the same error, so the error alone
-      // does not say; these listeners run before the pipeline's own.
-      let sourceStopped = false;
-      const stopSource = () => {
-        sourceStopped = true;
-      };
-      response.once("error", stopSource);
-      response.once("close", () => {
-        if (!response.complete) stopSource();
-      });
-      let opened = false;
-      let writeError: unknown;
-      const out = createWriteStream(partial, { flags: "wx", mode: 0o600 });
-      out.on("open", () => {
-        opened = true;
-      });
-      out.once("error", (error) => {
-        if (!sourceStopped) writeError = error;
+      // Pipeline forwards one error between streams. Watch the filesystem
+      // callbacks so a forwarded socket error cannot stand in for a disk error.
+      let diskFailed = false;
+      type DiskCallback<Args extends unknown[]> = (
+        error: NodeJS.ErrnoException | null,
+        ...args: Args
+      ) => void;
+      const record =
+        <Args extends unknown[]>(callback: DiskCallback<Args>): DiskCallback<Args> =>
+        (error, ...args) => {
+          if (error) diskFailed = true;
+          callback(error, ...args);
+        };
+      const out = createWriteStream(partial, {
+        flags: "wx",
+        mode: 0o600,
+        fs: {
+          open(path: string, flags: string, mode: number, callback: DiskCallback<[number]>) {
+            openFile(path, flags, mode, record(callback));
+          },
+          write(
+            fd: number,
+            buffer: Buffer,
+            offset: number,
+            length: number,
+            position: number | undefined,
+            callback: DiskCallback<[number, Buffer]>,
+          ) {
+            writeFileChunk(fd, buffer, offset, length, position, record(callback));
+          },
+          writev(
+            fd: number,
+            buffers: Buffer[],
+            position: number | undefined,
+            callback: DiskCallback<[number, Buffer[]]>,
+          ) {
+            writeFileChunks(fd, buffers, position ?? null, record(callback));
+          },
+          close(fd: number, callback: DiskCallback<[]>) {
+            closeFile(fd, record(callback));
+          },
+        },
       });
       try {
         await pipeline(response, counter, out, { signal: transfer.signal });
       } catch (error) {
+        if (diskFailed) throw new DownloadFailed("write-failed");
         if (error instanceof DownloadFailed) throw error;
-        if (transfer.signal.aborted) throw new FetchRefused(transfer.cause());
-        // A write that failed is a write failure, whatever the network was doing.
-        if (!opened || (writeError !== undefined && error === writeError)) {
-          throw new DownloadFailed("write-failed");
-        }
-        if (!response.complete) throw new FetchRefused("unreachable");
-        throw new DownloadFailed("write-failed");
+        throw new FetchRefused(transfer.cause());
       }
       if (received !== file.size) throw new DownloadFailed("size-mismatch");
       if (hash.digest("base64") !== file.sha512) throw new DownloadFailed("hash-mismatch");

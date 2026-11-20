@@ -1,14 +1,20 @@
 // What the engine does with its download file: when it opens one, and how a
 // write that fails is reported. `createWriteStream` is the real one, watched,
-// and on request given file operations whose writes fail with ENOSPC, so no
+// and the write callback can report ENOSPC, so no
 // disk is filled.
 
 import { existsSync, readdirSync } from "node:fs";
+import type { Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bytes, engineFor, feedFor, feedServer, json, payload, tempDir } from "./harness.ts";
 import type { FeedServer } from "./harness.ts";
 
-const sink = vi.hoisted(() => ({ opened: [] as string[], failWrites: false }));
+const sink = vi.hoisted(() => ({
+  opened: [] as string[],
+  failWrites: false,
+  holdWrite: undefined as ((fail: () => void) => void) | undefined,
+  responseClosed: undefined as (() => void) | undefined,
+}));
 
 vi.mock(import("node:fs"), async (importOriginal) => {
   const fs = await importOriginal();
@@ -21,19 +27,27 @@ vi.mock(import("node:fs"), async (importOriginal) => {
     ...fs,
     createWriteStream: (...[path, options]: Parameters<typeof fs.createWriteStream>) => {
       sink.opened.push(String(path));
-      if (!sink.failWrites) return fs.createWriteStream(path, options);
-      return fs.createWriteStream(path, {
-        ...(typeof options === "object" ? options : {}),
-        fs: {
-          open: fs.open,
-          close: fs.close,
-          write: (...args: unknown[]) => {
-            const callback = args.at(-1) as (error: Error) => void;
-            process.nextTick(callback, noSpace());
-          },
-        },
-      } as Parameters<typeof fs.createWriteStream>[1]);
+      return fs.createWriteStream(path, options);
     },
+    write: ((...args: Parameters<typeof fs.write>) => {
+      if (!sink.failWrites && !sink.holdWrite) return fs.write(...args);
+      const callback = args.at(-1) as (error: Error) => void;
+      const fail = () => callback(noSpace());
+      if (sink.holdWrite) sink.holdWrite(fail);
+      else process.nextTick(fail);
+    }) as typeof fs.write,
+  };
+});
+
+vi.mock(import("node:http"), async (importOriginal) => {
+  const http = await importOriginal();
+  return {
+    ...http,
+    get: ((url, options, callback) =>
+      http.get(url, options, (response) => {
+        if (sink.responseClosed) response.once("close", sink.responseClosed);
+        callback?.(response);
+      })) as typeof http.get,
   };
 });
 
@@ -45,6 +59,8 @@ beforeEach(async () => {
   dir = tempDir();
   sink.opened.length = 0;
   sink.failWrites = false;
+  sink.holdWrite = undefined;
+  sink.responseClosed = undefined;
 });
 afterEach(async () => {
   await server.close();
@@ -81,7 +97,7 @@ describe("the download file", () => {
     // The first part, then nothing more: the response is still open when the write fails.
     server.route("/files/app.zip", (_request, response) => {
       response.writeHead(200, { "content-length": String(file.body.length) });
-      response.write(file.body.subarray(0, 64 * 1024));
+      response.write(file.body.subarray(0, 4096));
     });
     const { engine } = engineFor(server, dir.path);
     await engine.check();
@@ -92,6 +108,42 @@ describe("the download file", () => {
       cause: "write-failed",
     });
     expect(sink.opened).toHaveLength(1);
+    expect(downloads()).toEqual([]);
+  });
+
+  it("reports a pending write that fails after a socket reset as write-failed", async () => {
+    const file = payload();
+    const installer = {
+      url: `${server.origin}/app.exe`,
+      size: file.body.length,
+      sha512: file.sha512,
+    };
+    server.route(
+      "/feed.json",
+      json(feedFor(server.origin, "0.2.0", installer, { files: { "win-x64": installer } })),
+    );
+    let socket: Socket;
+    server.route("/app.exe", (request, response) => {
+      socket = request.socket;
+      response.writeHead(200, { "content-length": String(file.body.length) });
+      response.write(file.body.subarray(0, 4096));
+    });
+    const { engine, states } = engineFor(server, dir.path, { platform: "win32", arch: "x64" });
+    await engine.check();
+    const closed = new Promise<void>((resolve) => {
+      sink.responseClosed = resolve;
+    });
+    const pendingWrite = new Promise<() => void>((resolve) => {
+      sink.holdWrite = resolve;
+    });
+    const download = engine.download();
+    const failWrite = await pendingWrite;
+    socket!.destroy();
+    await closed;
+    failWrite();
+    expect(await download).toEqual({ kind: "failed", stage: "download", cause: "write-failed" });
+    expect(sink.opened).toHaveLength(1);
+    expect(states.some((state) => state.kind === "ready")).toBe(false);
     expect(downloads()).toEqual([]);
   });
 
