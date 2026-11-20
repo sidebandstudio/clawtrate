@@ -64,7 +64,29 @@ const SCENES: Scene[] = [
     },
   },
   { name: "line-files", ids: "F-176 F-177", query: q(""), ready: line("files") },
-  { name: "line-exec", ids: "F-176 F-414", query: q(""), ready: line("exec") },
+  {
+    name: "line-exec",
+    ids: "F-176 F-414",
+    query: q(""),
+    ready: async (page) => {
+      await line("exec")(page);
+      await expect(page.getByTestId("choice-sentence")).toHaveText(
+        "Otto's command setting: Ask. Clawtrate's rules plugin checks its rules before it. A task's own settings and the machine's approvals file can also ask or refuse; this page doesn't read them.",
+      );
+    },
+  },
+  {
+    name: "line-exec-no-plugin",
+    ids: "F-176",
+    query: q("rules=noplugin"),
+    ready: async (page) => {
+      await line("exec")(page);
+      await expect(page.getByTestId("choice-sentence")).toContainText(
+        "Clawtrate's rules plugin isn't on this gateway.",
+      );
+      await expect(page.getByText(/Two checks/)).toHaveCount(0);
+    },
+  },
   { name: "line-connector", ids: "F-222", query: q(""), ready: line("server:coder") },
   { name: "line-locked", ids: "F-176", query: q("override=1"), ready: line("web") },
   { name: "line-read-only", ids: "F-176", query: q("", "read"), ready: line("files") },

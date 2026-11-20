@@ -1313,5 +1313,5 @@ export const EXEC_WORDS: Record<ExecPolicy | "none", string> = {
   deny: "Never",
   allowlist: "Only listed commands",
   legacy: "Legacy setting: security and ask",
-  none: "No policy: the gateway runs commands without asking",
+  none: "None set",
 };

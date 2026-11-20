@@ -808,7 +808,7 @@ const SAVED_WORDS: Record<PermissionChoice, string> = {
   deny: "never",
 };
 
-function sentence(line: PermissionLine, name: string): string {
+function sentence(line: PermissionLine, view: BotPermissions, name: string): string {
   const verb = line.words.charAt(0).toLowerCase() + line.words.slice(1);
   if (line.kind === "question")
     return `${name} asks its questions in the conversation, which already waits for you.`;
@@ -817,20 +817,29 @@ function sentence(line: PermissionLine, name: string): string {
   if (line.value === "never" && line.mark === "set")
     return `The gateway's settings deny this for every bot. Set on the gateway; Clawtrate can't change it, and no choice here can loosen it.`;
   if (line.kind === "exec") {
-    const policy = line.exec?.applies ?? "none";
-    const words: Record<ExecPolicy | "none", string> = {
-      full: `${name} runs any command without asking, as the user of the machine it runs on.`,
-      auto: "Commands on the machine's allowlist run; the gateway's reviewer decides the rest and asks you when unsure.",
-      ask: `${name} asks you before each command that isn't on the machine's allowlist; listed commands run.`,
-      deny: `${name} can't run commands.`,
-      allowlist: `Only listed commands: set outside Clawtrate. It can be left by choosing another value, not chosen again here.`,
-      legacy: `A legacy setting (security and ask), set outside Clawtrate. It can be left by choosing another value, not chosen again here.`,
-      none: `${name} has no command policy and none is set for every bot, so the gateway runs its commands without asking.`,
-    };
-    const whose = line.exec?.own
-      ? `${name}'s own setting.`
-      : "The default for every bot; a choice here sets one for " + name + ".";
-    return `${words[policy]} ${whose} The gateway enforces this.`;
+    // What the page reads: the configured setting, and whether the rules plugin applies. A
+    // task's own settings and the machine's approvals file aren't read, so nothing is promised.
+    const exec = line.exec!;
+    const setting = exec.own
+      ? `${name}'s command setting: ${EXEC_WORDS[exec.own]}.`
+      : exec.every
+        ? `${name} has no command setting of its own; the default for every bot is ${EXEC_WORDS[exec.every]}. A choice here sets one for ${name}.`
+        : `Neither ${name} nor every bot has a command setting.`;
+    const plugin =
+      view.enforcement === "read"
+        ? "Clawtrate's rules plugin checks its rules before it."
+        : view.enforcement === "ask-every-call"
+          ? "Clawtrate's rules plugin asks before every command."
+          : view.enforcement === "unread"
+            ? "Whether Clawtrate's rules plugin has rules for commands is unknown."
+            : view.plugin.kind === "unavailable"
+              ? "Clawtrate's rules plugin isn't on this gateway."
+              : "Clawtrate's rules plugin isn't enforcing rules now.";
+    const other =
+      exec.applies === "allowlist" || exec.applies === "legacy"
+        ? " It was set outside Clawtrate: choosing another value leaves it, and it can't be chosen again here."
+        : "";
+    return `${setting}${other} ${plugin} A task's own settings and the machine's approvals file can also ask or refuse; this page doesn't read them.`;
   }
   if (line.kind === "server" && line.tools.length === 0)
     return `The gateway hasn't named this server's tools in ${name}'s latest task's listing, so Clawtrate says nothing about them and can't allow, ask or deny them here. Once denied, a server's tools aren't listed: the deny is shown as its own line.`;
@@ -1097,7 +1106,7 @@ function LinePage({
         })}
       </div>
       <p className="c-sentence" role="status" data-testid="choice-sentence">
-        {saving ? "Saving…" : sentence(line, name)}
+        {saving ? "Saving…" : sentence(line, view, name)}
       </p>
       {reasons.length > 0 && !saving && (
         <p className="b-hint" data-testid="choice-reason">
@@ -1108,12 +1117,6 @@ function LinePage({
         <Note tone={note.tone} testId="save-note">
           <p>{note.text}</p>
         </Note>
-      )}
-      {exec && line.value !== "never" && (
-        <p className="b-hint">
-          Two checks: Clawtrate's rules plugin first, then the gateway's own ({name}'s policy and
-          the machine's approvals file). An allow in one never passes the other.
-        </p>
       )}
       <dl className="facts" style={{ marginTop: 14 }}>
         {facts.map(([label, value]) => (
@@ -1137,7 +1140,7 @@ function LinePage({
       {confirm && (
         <Confirm
           title={`Allow ${name} every command?`}
-          text={`${name} runs any command without asking, as the user of the machine it runs on.`}
+          text={`Allow all sets ${name}'s command setting to run commands without asking. A task's own settings, the machine's approvals file and Clawtrate's rules plugin can still ask or refuse.`}
           action="Allow all"
           onCancel={() => setConfirm(false)}
           onAction={() => {
