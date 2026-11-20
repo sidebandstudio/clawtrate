@@ -117,7 +117,8 @@ const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuf
 
 /**
  * The processes listening on the protected ports, each by PID, start time and
- * address. `lsof` exits 1 when nothing listens, which is an answer too.
+ * address. `lsof` exits 1 when any one of the ports has no listener, with the
+ * others' rows on its output, or none when nothing listens: both are answers.
  */
 export function protectedListeners(): string[] {
   let out: string;
@@ -129,8 +130,8 @@ export function protectedListeners(): string[] {
     );
   } catch (error) {
     const failed = error as { status?: number; stdout?: string };
-    if (failed.status !== 1 || failed.stdout) throw error;
-    out = "";
+    if (failed.status !== 1) throw error;
+    out = failed.stdout ?? "";
   }
   const rows: string[] = [];
   let pid = 0;
