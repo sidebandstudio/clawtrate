@@ -1,6 +1,7 @@
-// One bounded GET: no redirect followed, an overall deadline and an idle
-// deadline, and a refusal typed by its cause. The caller has already checked
-// the address (address.ts).
+// One bounded GET: an overall deadline and an idle deadline, and a refusal
+// typed by its cause. No redirect is followed unless the caller passes a
+// `follow` rule, and then at most one. The caller has already checked the
+// address (address.ts).
 
 import { get as httpGet, type IncomingMessage } from "node:http";
 import { get as httpsGet } from "node:https";
@@ -67,15 +68,21 @@ export class Transfer {
   }
 }
 
+/** Statuses that carry a `Location` to follow. 304 and 300 are not redirects to a file. */
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+
 /**
  * Opens `url` and resolves with a 200 response whose declared length, if any,
- * is at most `maxBytes`. Every other answer is refused, a redirect included.
+ * is at most `maxBytes`. Every other answer is refused, a redirect included,
+ * except one redirect that `follow` turns into an address. That address gets
+ * the same request and no further redirect.
  */
 export function open(
   url: URL,
   transfer: Transfer,
   maxBytes: number,
   userAgent: string,
+  follow?: (location: string | undefined) => URL | null,
 ): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
     const options = {
@@ -83,31 +90,46 @@ export function open(
       agent: false,
       headers: { accept: "*/*", "accept-encoding": "identity", "user-agent": userAgent },
     };
-    const onResponse = (response: IncomingMessage) => {
-      transfer.touch();
-      const status = response.statusCode ?? 0;
-      const refuse = (cause: FetchCause, code?: number) => {
-        response.destroy();
-        reject(new FetchRefused(cause, code));
+    // Only the request now in flight can fail the open: the redirect's own
+    // connection is closed when its replacement starts.
+    let current = 0;
+    const get = (target: URL, redirect: typeof follow) => {
+      const attempt = ++current;
+      const onResponse = (response: IncomingMessage) => {
+        transfer.touch();
+        const status = response.statusCode ?? 0;
+        const refuse = (cause: FetchCause, code?: number) => {
+          response.destroy();
+          reject(new FetchRefused(cause, code));
+        };
+        if (status >= 300 && status < 400) {
+          const next =
+            redirect && REDIRECTS.has(status) ? redirect(response.headers.location) : null;
+          if (!next) return refuse("redirect-refused", status);
+          response.destroy();
+          return get(next, undefined);
+        }
+        if (status !== 200) return refuse("http-status", status);
+        const declared = Number(response.headers["content-length"] ?? NaN);
+        if (Number.isFinite(declared) && declared > maxBytes) return refuse("too-large");
+        resolve(response);
       };
-      if (status >= 300 && status < 400) return refuse("redirect-refused", status);
-      if (status !== 200) return refuse("http-status", status);
-      const declared = Number(response.headers["content-length"] ?? NaN);
-      if (Number.isFinite(declared) && declared > maxBytes) return refuse("too-large");
-      resolve(response);
+      // The certificate is always verified, against Node's bundled certificate
+      // authorities only: NODE_TLS_REJECT_UNAUTHORIZED=0 cannot turn the check
+      // off, and neither NODE_EXTRA_CA_CERTS nor the system's store adds to them.
+      const request =
+        target.protocol === "https:"
+          ? httpsGet(
+              target,
+              { ...options, rejectUnauthorized: true, ca: [...rootCertificates] },
+              onResponse,
+            )
+          : httpGet(target, options, onResponse);
+      request.on("error", () => {
+        if (attempt === current) reject(new FetchRefused(transfer.cause()));
+      });
     };
-    // The certificate is always verified, against Node's bundled certificate
-    // authorities only: NODE_TLS_REJECT_UNAUTHORIZED=0 cannot turn the check
-    // off, and neither NODE_EXTRA_CA_CERTS nor the system's store adds to them.
-    const request =
-      url.protocol === "https:"
-        ? httpsGet(
-            url,
-            { ...options, rejectUnauthorized: true, ca: [...rootCertificates] },
-            onResponse,
-          )
-        : httpGet(url, options, onResponse);
-    request.on("error", () => reject(new FetchRefused(transfer.cause())));
+    get(url, follow);
   });
 }
 

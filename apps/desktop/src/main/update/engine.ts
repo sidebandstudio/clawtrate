@@ -17,7 +17,13 @@ import { join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { inspectUpdateFile } from "../inspect-update-file.ts";
-import { checkFeedAddress, type LoopbackHttpForTests } from "./address.ts";
+import {
+  checkFeedAddress,
+  GITHUB_RELEASE_ASSETS,
+  releaseAssetRedirect,
+  type LoopbackHttpForTests,
+  type ReleaseAssets,
+} from "./address.ts";
 import { FILE_EXTENSION, fileKeyFor, parseFeed, type FeedFile, type FileKey } from "./feed.ts";
 import { FetchRefused, open, readAll, Transfer, type FetchCause } from "./fetch.ts";
 import { formatVersion, isNewer, parseVersion, type Version } from "./version.ts";
@@ -123,6 +129,8 @@ export interface UpdateEngineOptions {
   readonly onState?: (state: UpdateState) => void;
   /** Tests only: allow `http://127.0.0.1:<port>`. */
   readonly loopbackHttpForTests?: LoopbackHttpForTests;
+  /** Tests only: a stand-in for the project's GitHub release downloads. */
+  readonly releaseAssetsForTests?: ReleaseAssets;
   /** Tests only: smaller bounds. Each is capped at its default. */
   readonly limits?: Partial<Limits>;
 }
@@ -250,6 +258,10 @@ export class UpdateEngine {
     }
   }
 
+  private get releases(): ReleaseAssets {
+    return this.options.releaseAssetsForTests ?? GITHUB_RELEASE_ASSETS;
+  }
+
   private get userAgent(): string {
     return `Clawtrate/${formatVersion(this.running)}`;
   }
@@ -284,7 +296,14 @@ export class UpdateEngine {
       transfer.done();
     }
     this.options.onFeedRead?.();
-    const read = parseFeed(text, address.url, this.key, loopback, this.options.track);
+    const read = parseFeed(
+      text,
+      address.url,
+      this.key,
+      loopback,
+      this.options.track,
+      this.releases,
+    );
     if (!read.ok) return this.report({ kind: "failed", stage: "check", cause: read.cause });
     const { version, releaseDate, file } = read.feed;
     if (!isNewer(version, this.running)) {
@@ -330,7 +349,21 @@ export class UpdateEngine {
         throw new DownloadFailed("write-failed");
       }
       // A declared length other than the feed's is refused before a byte is written.
-      const response = await open(file.url, transfer, this.limits.maxDownloadBytes, this.userAgent);
+      // A release download follows its one redirect to the asset host; the
+      // bytes are still counted and hashed against the feed's.
+      const response = await open(
+        file.url,
+        transfer,
+        this.limits.maxDownloadBytes,
+        this.userAgent,
+        (location) =>
+          releaseAssetRedirect(
+            file.url,
+            location,
+            this.releases,
+            this.options.loopbackHttpForTests,
+          ),
+      );
       response.once("close", () => {
         if (!response.complete) transfer.recordCause("unreachable");
       });

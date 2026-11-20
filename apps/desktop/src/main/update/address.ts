@@ -75,3 +75,53 @@ export function buildAddressProblem(text: string): string | null {
   }
   return null;
 }
+
+/**
+ * The project's own release downloads. A feed may name a file there, on
+ * another origin than its own, and GitHub answers each such address with one
+ * redirect to its release-asset host. Only that one redirect is followed.
+ * docs/decisions.md, "Updates and release signing", has the reasons.
+ */
+export interface ReleaseAssets {
+  /** `https://github.com/<owner>/<repository>/releases/download/`, ending in a slash. */
+  readonly downloadPrefix: string;
+  /** The origins a release download may redirect to. */
+  readonly assetOrigins: readonly string[];
+}
+
+export const GITHUB_RELEASE_ASSETS: ReleaseAssets = {
+  downloadPrefix: "https://github.com/sidebandstudio/clawtrate/releases/download/",
+  assetOrigins: ["https://release-assets.githubusercontent.com"],
+};
+
+/** One path segment of a tag or file name, as GitHub writes them, with no dot segment. */
+const RELEASE_SEGMENT = /^(?!\.\.?$)[A-Za-z0-9._~+-]+$/;
+
+/** `<prefix><tag>/<file>` exactly: no query, fragment or credentials. */
+export function isReleaseDownload(url: URL, rule: ReleaseAssets): boolean {
+  if (url.username || url.password || url.search || url.hash) return false;
+  if (!url.href.startsWith(rule.downloadPrefix)) return false;
+  const rest = url.href.slice(rule.downloadPrefix.length).split("/");
+  return rest.length === 2 && rest.every((segment) => RELEASE_SEGMENT.test(segment));
+}
+
+/**
+ * The one redirect a file download may follow: from a release download to an
+ * asset origin, readable by the same rule as the feed. Null refuses it.
+ */
+export function releaseAssetRedirect(
+  from: URL,
+  location: string | undefined,
+  rule: ReleaseAssets,
+  loopback?: LoopbackHttpForTests,
+): URL | null {
+  if (!location || !isReleaseDownload(from, rule)) return null;
+  let next: URL;
+  try {
+    next = new URL(location, from);
+  } catch {
+    return null;
+  }
+  if (next.hash || !rule.assetOrigins.includes(next.origin)) return null;
+  return readable(next, loopback) ? next : null;
+}
