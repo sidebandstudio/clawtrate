@@ -231,10 +231,12 @@ describe("the remedy for a workspace that holds the store", () => {
 });
 
 describe("the remedy for commands on the gateway's host", () => {
-  it("keeps denying the tools apart, and says a sandbox needs elevated exec off and the host off the gateway", () => {
+  it("keeps denying the tools apart, and says a sandbox needs the bot's elevated exec off and no gateway-host override", () => {
     const [line] = exposureWarnings(withAgent(SAFE, { tools: { exec: { mode: "ask" } } }));
     expect(line).toMatch(/Deny it exec and process\./);
-    expect(line).toMatch(/tools\.elevated\.enabled/);
-    expect(line).toMatch(/tools\.exec\.host.*not "gateway"/);
+    expect(line).toContain(
+      "Or use a sandbox for its commands, clear any gateway-host override in its sessions, and disable elevated exec for the bot",
+    );
+    expect(line).toContain("agents.entries.<bot>.tools.elevated.enabled false");
   });
 });

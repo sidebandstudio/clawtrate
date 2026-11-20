@@ -196,7 +196,7 @@ const WORDS = {
 const REMEDY = {
   "manages-gateway": "Deny it the gateway and plugins tools.",
   "commands-on-gateway-host":
-    'Deny it exec and process. Or run its commands on another machine (tools.exec.host "node"), or in a sandbox with tools.exec.host not "gateway" and elevated commands turned off for it (tools.elevated.enabled false).',
+    'Deny it exec and process. Or run its commands on another machine (tools.exec.host "node"). Or use a sandbox for its commands, clear any gateway-host override in its sessions, and disable elevated exec for the bot (agents.entries.<bot>.tools.elevated.enabled false).',
   "files-outside-workspace":
     "Set tools.fs.workspaceOnly to true, or deny it write, edit and apply_patch.",
   "store-in-workspace":
