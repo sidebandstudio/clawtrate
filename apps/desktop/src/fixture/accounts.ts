@@ -768,10 +768,7 @@ export function accountCommand(
           const ids = [`${method.provider}:other`, `${method.provider}:second`];
           put((a) => ({
             ...a,
-            accounts: [
-              ...a.accounts,
-              ...ids.map((id) => account(id, null, "oauth", "subscription")),
-            ],
+            accounts: [...a.accounts, ...ids.map((id) => account(id, null, "oauth", "gateway"))],
           }));
           return signIn({ stage: "several", step: null, result: result(ids) });
         }
@@ -953,8 +950,8 @@ export function accountCommand(
     }
     case "chooseSignInAccount": {
       const chosen = accounts().accounts.find((x) => x.id === command.profileId);
+      // The account to label; the sign-in's outcome stays what it was.
       signIn({
-        stage: "connected",
         result: {
           ...result([command.profileId]),
           landed: chosen?.keptBy ? "kept" : "shared",
@@ -1211,12 +1208,13 @@ export function accountCommand(
               id,
               null,
               current.flow === "key" ? "api_key" : "oauth",
-              "subscription",
+              "gateway",
               params.kept ? { keptBy: current.forBot } : {},
             ),
           ],
       signIn: a.signIn
-        ? { ...a.signIn, stage: "connected", step: null, result: result([id]) }
+        ? // The gateway's answer names no account: the new one is a candidate to label.
+          { ...a.signIn, stage: "several", step: null, result: result([id]) }
         : null,
     }));
   }

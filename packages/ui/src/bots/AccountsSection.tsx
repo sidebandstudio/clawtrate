@@ -111,8 +111,6 @@ export function useAccountsSection({
       view: null,
       connect: (
         <Connect
-          from="settings"
-          draftName={null}
           forBot={null}
           accounts={accounts}
           bots={bots}

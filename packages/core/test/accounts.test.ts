@@ -811,7 +811,7 @@ describe("how an account was made", () => {
 });
 
 describe("sign-ins, through the gateway's own methods", () => {
-  it("a link and a code: starting, waiting with the code and the link, connected, and where it landed", async () => {
+  it("a link and a code: starting, waiting with the code and the link, signed in, and the account the read after it lists", async () => {
     const fake = new AccountsGateway();
     fake.orders.otto = { acme: ["acme:work"] };
     const { client, accounts } = await accountsClient({ gateway: fake });
@@ -837,7 +837,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     };
     expect(login).toMatchObject({ agentId: "main", authChoice: CHOICES.device });
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     // The read after it: the target's view and another bot's, refreshed.
     expect(accounts().signIn?.result).toMatchObject({
       added: ["acme:travel"],
@@ -849,10 +849,10 @@ describe("sign-ins, through the gateway's own methods", () => {
     expect(accounts().signIn?.result?.locks).toEqual([
       { botId: "otto", account: "acme:work", outcome: "kept" },
     ]);
-    expect(fake.prefs["clawtrate.account-kind.acme:travel"]).toBe("subscription");
+    // The gateway's answer names no account: nothing records that this sign-in made it.
+    expect(fake.prefs["clawtrate.account-kind.acme:travel"]).toBeUndefined();
     expect(accounts().accounts.find((a) => a.id === "acme:travel")).toMatchObject({
-      kind: "subscription",
-      made: "sign-in",
+      made: null,
       keptBy: null,
     });
     client.stop();
@@ -874,7 +874,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     expect(accountWord(binding(accounts(), "main"))).toBe("locked");
     await client.startSignIn(CHOICES.device, null);
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     expect(accounts().signIn?.result?.locks).toEqual([
       { botId: "main", account: "acme:work", outcome: "widened" },
     ]);
@@ -890,7 +890,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     // The read after the sign-in reads main and one other bot; only Pip's own check fails.
     fake.failStatusFor = "pip";
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     expect(accounts().signIn?.result?.locks).toEqual([
       { botId: "pip", account: "acme:home", outcome: "unchecked" },
     ]);
@@ -941,7 +941,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     fake.failStatusFor = null;
     await client.recheckSignIn();
     expect(accounts().signIn).toMatchObject({
-      stage: "connected",
+      stage: "several",
       result: { readFailed: false, added: ["acme:travel"], landed: "shared" },
     });
     client.stop();
@@ -992,7 +992,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     client.stop();
   });
 
-  it("two new accounts after a sign-in that names neither: both are named, and the person's choice is its account", async () => {
+  it("two new accounts after a sign-in that names neither: both are offered, and the person's choice is only the account to label", async () => {
     const { client, fake, accounts } = await accountsClient();
     const next = fake.gateway.handlers["wizard.next"]!;
     fake.gateway.handlers["wizard.next"] = (params) => {
@@ -1013,10 +1013,10 @@ describe("sign-ins, through the gateway's own methods", () => {
     expect(Object.keys(fake.prefs).filter((key) => key.includes("acme:elsewhere"))).toEqual([]);
     await client.chooseSignInAccount("acme:mine");
     expect(accounts().signIn).toMatchObject({
-      stage: "connected",
+      stage: "several",
       result: { added: ["acme:mine"], landed: "shared" },
     });
-    expect(fake.prefs["clawtrate.account-kind.acme:mine"]).toBeDefined();
+    expect(fake.prefs["clawtrate.account-kind.acme:mine"]).toBeUndefined();
     expect(fake.prefs["clawtrate.account-kind.acme:elsewhere"]).toBeUndefined();
     await expect(client.chooseSignInAccount("acme:work")).rejects.toThrow();
     client.stop();
@@ -1156,7 +1156,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     await client.cancelSignIn();
     expect(accounts().signIn).toMatchObject({ stage: "waiting", saving: true });
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     client.stop();
   });
 
@@ -1218,7 +1218,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     await client.startSignIn(CHOICES.device, "pip");
     expect(accounts().signIn).toMatchObject({ forBot: "pip", keptOnly: true });
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     expect(accounts().signIn?.result).toMatchObject({
       added: ["acme:travel"],
       landed: "kept",
@@ -1241,7 +1241,7 @@ describe("sign-ins, through the gateway's own methods", () => {
     });
     const code = "one-time-code-7Q2Z";
     await client.answerSignIn(code);
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     expect(fake.typed).toContain(code);
     expect(JSON.stringify(client.state)).not.toContain(code);
     client.stop();
@@ -1381,10 +1381,15 @@ describe("a typed API key leaves no trace", () => {
   it("through the provider's key sign-in: saved, sent once, and absent afterwards", async () => {
     const { client, storage, logs, fake } = await keyClient();
     const { profileId } = await client.saveApiKey("acme", KEY, null);
-    expect(profileId).toBe("acme:travel");
+    // The gateway's answer names no account; the new one the read lists is only a candidate.
+    expect(profileId).toBeNull();
     expect(fake.typed.filter((value) => value === KEY)).toHaveLength(1);
-    expect(client.state.accounts.signIn).toMatchObject({ stage: "connected", byKey: true });
-    expect(fake.prefs["clawtrate.account-kind.acme:travel"]).toBe("typed-key");
+    expect(client.state.accounts.signIn).toMatchObject({
+      stage: "several",
+      byKey: true,
+      result: { added: ["acme:travel"] },
+    });
+    expect(fake.prefs["clawtrate.account-kind.acme:travel"]).toBeUndefined();
     await traceless(client, storage, logs, KEY);
     client.stop();
   });
@@ -1755,9 +1760,8 @@ describe("a typed API key leaves no trace", () => {
     await traceless(client, storage, logs, code);
   });
 
-  it("a log line that echoes the typed key while the sign-in lasts carries none of it", async () => {
+  it("a key sign-in writes no record of how an account was made, so no such write can echo the key", async () => {
     const { client, storage, logs, fake } = await keyClient();
-    // The record of how the account was made is written before the sign-in ends; its error echoes the key.
     fake.gateway.handlers["users.prefs.set"] = () => {
       throw new GatewayError({
         code: "UNAVAILABLE",
@@ -1765,7 +1769,7 @@ describe("a typed API key leaves no trace", () => {
       });
     };
     await client.saveApiKey("acme", KEY, null);
-    expect(logs.some((line) => line.startsWith("could not record an account's kind"))).toBe(true);
+    expect(logs.some((line) => line.startsWith("could not record an account's kind"))).toBe(false);
     await traceless(client, storage, logs, KEY);
   });
 
@@ -1795,7 +1799,7 @@ describe("labels", () => {
     const { client, fake } = await accountsClient();
     await client.startSignIn(CHOICES.device, null);
     fake.answerDevice();
-    await until(() => client.state.accounts.signIn?.stage === "connected");
+    await until(() => client.state.accounts.signIn?.stage === "several");
     await client.setAccountLabel("acme:travel", "Travel");
     const patch = fake.gateway.calls("config.patch").at(-1) as { raw: string };
     expect(JSON.parse(patch.raw)).toEqual({
@@ -2010,7 +2014,7 @@ describe("which account a sign-in made, and who can use it (F-474)", () => {
     await client.answerSignIn("code-pasted-back-41");
     await until(() => accounts().signIn?.result != null);
     expect(accounts().signIn).toMatchObject({
-      stage: "connected",
+      stage: "several",
       result: { added: ["acme:travel"] },
     });
     client.stop();
@@ -2061,6 +2065,49 @@ describe("which account a sign-in made, and who can use it (F-474)", () => {
     });
     client.stop();
   });
+
+  it("F-474: an outside addition after a reauth never becomes the sign-in's account", async () => {
+    const fake = new AccountsGateway();
+    // The sign-in refreshes an account the gateway already has; another client adds one meanwhile.
+    fake.nextEnding = { outcome: "approve", account: "work" };
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await client.startSignIn(CHOICES.device, null);
+    fake.shared.push({ id: "acme:elsewhere", provider: "acme", type: "oauth" });
+    fake.answerDevice();
+    await until(() => accounts().signIn?.result != null);
+    // A candidate to label, not the sign-in's account: nothing records that it made it.
+    expect(accounts().signIn).toMatchObject({
+      stage: "several",
+      result: { added: ["acme:elsewhere"] },
+    });
+    await client.chooseSignInAccount("acme:elsewhere");
+    expect(accounts().signIn?.stage).toBe("several");
+    expect(fake.prefs["clawtrate.account-kind.acme:elsewhere"]).toBeUndefined();
+    expect(accounts().accounts.find((a) => a.id === "acme:elsewhere")?.made).toBeNull();
+    client.stop();
+  });
+
+  it("F-474: a shadowing bot prevents the every-bot claim", async () => {
+    const { client, accounts, fake } = await accountsClient();
+    await client.startSignIn(CHOICES.device, null);
+    // The two views read after the sign-in list it inherited; a third bot keeps its own copy.
+    fake.own.pip = [
+      ...(fake.own.pip ?? []),
+      { id: "acme:travel", provider: "acme", type: "oauth" },
+    ];
+    fake.answerDevice();
+    await until(() => accounts().signIn?.result != null && accounts().status === "ready");
+    await until(() => accounts().accounts.some((a) => a.id === "acme:travel"));
+    expect(accounts().accounts.find((a) => a.id === "acme:travel")).toMatchObject({
+      unclear: true,
+    });
+    expect(accounts().signIn?.result).toMatchObject({
+      added: ["acme:travel"],
+      landed: "unclear",
+      keptBy: null,
+    });
+    client.stop();
+  });
 });
 
 describe("every kind of sign-in, and every stage (F-474)", () => {
@@ -2081,7 +2128,7 @@ describe("every kind of sign-in, and every stage (F-474)", () => {
     await until(() => fake.sessions.values().next().value?.phase === "waiting");
     expect(isSignInActive(accounts().signIn!)).toBe(true);
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     expect(accounts().signIn?.result?.added).toEqual(["acme:travel"]);
     client.stop();
   });
@@ -2096,7 +2143,7 @@ describe("every kind of sign-in, and every stage (F-474)", () => {
     });
     expect(accounts().signIn?.step?.url?.href).toMatch(/state=c1$/);
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     client.stop();
   });
 
@@ -2108,7 +2155,7 @@ describe("every kind of sign-in, and every stage (F-474)", () => {
       (state) => void shown.push(state.accounts.signIn?.step?.type ?? ""),
     );
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     stop();
     // The code's progress step stays the wait; the note that ends the sign-in is never shown.
     expect(shown).not.toContain("note");
@@ -2126,7 +2173,7 @@ describe("every kind of sign-in, and every stage (F-474)", () => {
       cancelUnknown: false,
     });
     fake.answerDevice();
-    await until(() => accounts().signIn?.stage === "connected");
+    await until(() => accounts().signIn?.stage === "several");
     expect(accounts().signIn?.saving).toBe(false);
     client.stop();
   });
@@ -2368,7 +2415,7 @@ describe("what a sign-in is compared against (F-474)", () => {
     fake.answerDevice();
     await until(() => accounts().signIn?.result != null);
     expect(accounts().signIn).toMatchObject({
-      stage: "connected",
+      stage: "several",
       result: { added: ["acme:travel"] },
     });
     client.stop();

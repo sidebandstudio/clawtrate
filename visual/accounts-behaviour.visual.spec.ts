@@ -2,7 +2,7 @@
 // 19): the "+" menu and ⌘N, focus in and out of the dialogs, the radio groups'
 // one tab stop and arrows, the selects, Escape that belongs to the innermost
 // thing, the access bar for admin, and what a read-only connection shows.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
@@ -251,17 +251,19 @@ test("F-474: a pasted code is a password field, cleared as it is sent", async ({
   await expect(paste).toHaveAttribute("autocomplete", "off");
   await paste.fill("made-up-code-0001");
   await page.getByRole("button", { name: "Continue" }).click();
-  await expect(page.getByRole("heading", { name: "Connected to OpenAI" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Signed in to OpenAI" })).toBeVisible();
   expect(await page.content()).not.toContain("made-up-code-0001");
+  // The gateway's answer names no account: the new one the read lists is offered to label.
+  await labelNew(page, "openai:second");
   // The label step: another OpenAI account exists, so a label is required.
-  await expect(page.getByRole("textbox", { name: "Label" })).toBeFocused();
+  await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Done" })).toBeDisabled();
   await page.getByRole("textbox", { name: "Label" }).fill("Studio");
   await page.getByRole("button", { name: "Done" }).click();
-  // Back on the Account step, the new account chosen.
+  // Back on the Account step: a list difference alone chooses nothing.
   await expect(page.getByRole("radio", { name: /^OpenAI · Studio/ })).toHaveAttribute(
     "aria-checked",
-    "true",
+    "false",
   );
 });
 
@@ -675,6 +677,11 @@ test("F-472: Create and Save take only a choice the list shows now: a failed rea
   await expect(page.getByRole("button", { name: "Save" })).toBeDisabled();
 });
 
+/** The read after a sign-in lists a new account: it is chosen to be labelled. */
+async function labelNew(scope: Page | Locator, id: string) {
+  await scope.getByTestId("several").locator(`[data-choose="${id}"]`).click();
+}
+
 /** New bot, connecting an account, on the sign-in methods. */
 async function connectFromNewBot(page: Page) {
   await page.keyboard.press("ControlOrMeta+n");
@@ -693,7 +700,7 @@ test("F-474: a sign-in whose read afterwards failed says so, and Check again rea
   await expect(page.getByRole("heading", { name: "Signed in, not confirmed" })).toBeVisible();
   await expect(page.getByRole("heading", { name: /^Connected to/ })).toHaveCount(0);
   await page.getByRole("button", { name: "Check again" }).click();
-  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Signed in to xAI" })).toBeVisible();
   expect((await sent(page)).some((each) => each.type === "recheckSignIn")).toBe(true);
 });
 
@@ -720,25 +727,25 @@ test("F-474: where the gateway keeps sign-ins per bot, a bot connects an account
   await page.getByRole("button", { name: /^Account: / }).click();
   await page.getByRole("button", { name: "Change account" }).click();
   const connect = page.getByRole("button", { name: /^Connect an account/ });
-  await expect(connect).toContainText("A sign-in here is kept for Otto.");
+  await expect(connect).toContainText("Clawtrate starts sign-in for Otto.");
   await connect.click();
-  await expect(page.getByTestId("kept-note")).toContainText(
-    "This gateway keeps this sign-in for Otto only.",
-  );
+  await expect(page.getByTestId("kept-note")).toHaveText("Clawtrate starts sign-in for Otto.");
   await page.getByRole("button", { name: /^xAI · / }).click();
-  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Signed in to xAI" })).toBeVisible();
+  await labelNew(page, "xai:second");
   await expect(page.getByTestId("landed")).toHaveText(
-    "Saved for Otto only. Other bots can't use it.",
+    "The gateway lists this account in Otto's own store.",
   );
   const start = (await sent(page)).find((each) => each.type === "startSignIn");
   expect(start).toMatchObject({ botId: "otto" });
   await page.getByRole("textbox", { name: "Label" }).fill("Side");
   await page.getByRole("button", { name: "Done" }).click();
-  // Back on the choice, with the new account chosen, kept by Otto.
+  // Back on the choice: the new account is listed, kept by Otto, and a list difference alone
+  // chooses nothing.
   await expect(page.getByRole("heading", { name: "Change account", level: 3 })).toBeVisible();
   await expect(
-    page.getByRole("radio", { name: /^xAI · Side, Subscription, Only Otto can use it/ }),
-  ).toHaveAttribute("aria-checked", "true");
+    page.getByRole("radio", { name: /^xAI · Side, .*Only Otto can use it/ }),
+  ).toHaveAttribute("aria-checked", "false");
 });
 
 test("F-034: a bot written whose first task did not land is said to exist, unfinished; Finish completes it by its id and opens it", async ({
@@ -847,19 +854,20 @@ test("F-476: a label step closed before Done comes back, in New bot and in Setti
   await newBot(page)
     .getByRole("button", { name: /^xAI · / })
     .click();
-  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await labelNew(page, "xai:second");
+  await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
   // Closed before Done: New bot opens on the label step again.
   await page.keyboard.press("Escape");
   await expect(newBot(page)).toHaveCount(0);
   await page.keyboard.press("ControlOrMeta+n");
-  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Signed in to xAI" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
   await page.keyboard.press("Escape");
   // Settings → Accounts opens on it too.
   await page.keyboard.press("ControlOrMeta+,");
   const settings = page.getByRole("dialog", { name: "Settings" });
   await settings.getByRole("button", { name: "Accounts", exact: true }).click();
-  await expect(settings.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await expect(settings.getByRole("heading", { name: "Signed in to xAI" })).toBeVisible();
   await settings.getByRole("textbox", { name: "Label" }).fill("Travel");
   await settings.getByRole("button", { name: "Done" }).click();
   await expect(settings.getByRole("heading", { name: "Accounts", level: 3 })).toBeVisible();
@@ -900,7 +908,8 @@ test("F-474 F-490: a sign-in's result says a lock widened only from a read that 
   await newBot(page)
     .getByRole("button", { name: /^xAI · / })
     .click();
-  await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await labelNew(page, "xai:second");
+  await expect(page.getByRole("heading", { name: "Signed in to xAI" })).toBeVisible();
   await change(
     page,
     `return { ...state, accounts: { ...state.accounts, signIn: { ...state.accounts.signIn, result: { ...state.accounts.signIn.result, locks: [{ botId: "otto", account: "openai:work", outcome: "unchecked" }] } } } };`,
@@ -931,7 +940,7 @@ test("F-474: a key saved directly is called saved only when the read after it sh
   await expect(newBot(page).getByRole("textbox", { name: "Label" })).toBeVisible();
 });
 
-test("F-474: when two new accounts appear during a sign-in, the person chooses which is theirs before it is labelled", async ({
+test("F-474: when two new accounts appear during a sign-in whose answer names neither, the person may choose one to label", async ({
   page,
 }) => {
   await openFixture(page, `${ADMIN}&signin=several`, "light");
@@ -943,12 +952,12 @@ test("F-474: when two new accounts appear during a sign-in, the person chooses w
   await expect(several.getByRole("button")).toHaveCount(2);
   await expect(newBot(page).getByRole("textbox", { name: "Label" })).toHaveCount(0);
   await expect(
-    newBot(page).getByText(/2 new xAI accounts appeared while this sign-in ran/),
+    newBot(page).getByText(
+      "The gateway's answer doesn't name an account. The refreshed list has 2 new xAI accounts. Choose an account to label, or return to Accounts.",
+    ),
   ).toBeVisible();
-  await several
-    .getByRole("button", { name: /^xAI xai:second: this is the account I signed in to$/ })
-    .click();
-  await expect(newBot(page).getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
+  await several.getByRole("button", { name: /^xAI xai:second: label this account$/ }).click();
+  await expect(newBot(page).getByRole("heading", { name: "Signed in to xAI" })).toBeVisible();
   await expect(
     newBot(page).getByText("You have another xAI account", { exact: false }),
   ).toBeVisible();

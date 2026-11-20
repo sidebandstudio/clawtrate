@@ -417,8 +417,6 @@ export function BotSettings({
     return (
       <div ref={rootRef} className="b-tab" data-testid="bot-settings">
         <Connect
-          from="settings"
-          draftName={null}
           forBot={bot.id}
           accounts={accounts}
           bots={bots}
@@ -558,9 +556,11 @@ export function BotSettings({
                 <span className="b-choice-text">
                   <span className="b-choice-title">Connect an account</span>
                   <span className="b-choice-sub">
+                    Clawtrate starts sign-in for{" "}
                     {accounts.mainShared
-                      ? "A sign-in here is shared with every bot."
-                      : `A sign-in here is kept for ${name}.`}
+                      ? (bots.find((each) => each.id === "main")?.name ?? "main")
+                      : name}
+                    .
                   </span>
                 </span>
               </button>

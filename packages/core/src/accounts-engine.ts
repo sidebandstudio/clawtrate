@@ -883,24 +883,29 @@ export class AccountsEngine {
    */
   async chooseSignInAccount(profileId: string): Promise<void> {
     const signIn = this.ctx.get().signIn;
-    if (
-      !signIn ||
-      (signIn.stage !== "several" && signIn.stage !== "unconfirmed") ||
-      !signIn.result?.added.includes(profileId)
-    )
-      throw new Error("That account isn't one this sign-in may have made.");
+    if (!signIn || signIn.result === null || !signIn.result.added.includes(profileId))
+      throw new Error("That account isn't one the read after this sign-in found.");
     const account = this.ctx.get().accounts.find((each) => each.id === profileId);
-    this.setSignIn(signIn.id, {
-      // "Saved, not confirmed" stays what it is; it now names its account.
-      stage: signIn.stage === "several" ? "connected" : "unconfirmed",
-      result: {
-        ...signIn.result,
-        added: [profileId],
-        landed: account ? (account.unclear ? "unclear" : account.keptBy ? "kept" : "shared") : null,
-        keptBy: account?.keptBy ?? null,
+    // The person's choice of an account to label. The sign-in's outcome stays what it was, and
+    // nothing records that this sign-in made it.
+    this.setSignIn(
+      signIn.id,
+      {
+        result: {
+          ...signIn.result,
+          added: [profileId],
+          landed: account
+            ? account.unclear
+              ? "unclear"
+              : account.keptBy
+                ? "kept"
+                : "shared"
+            : null,
+          keptBy: account?.keptBy ?? null,
+        },
       },
-    });
-    await this.recordKind(profileId, kindOf(signIn));
+      true,
+    );
   }
 
   /** Read again where a finished sign-in's account landed, after that read failed. */
@@ -941,6 +946,7 @@ export class AccountsEngine {
       readFailed: false,
       locks: [],
     };
+    let first: string | undefined;
     try {
       const other = ctx.bots().find((bot) => bot.id !== signIn.forBot)?.id ?? null;
       const [target, second] = await Promise.all([
@@ -957,7 +963,7 @@ export class AccountsEngine {
       result.added = target.profiles
         .filter((p) => p.provider === signIn.provider && !known.has(p.id))
         .map((p) => p.id);
-      const first = result.added.length === 1 ? result.added[0] : undefined;
+      first = result.added.length === 1 ? result.added[0] : undefined;
       if (first) {
         // Shared only when another bot's view lists it as inherited; kept when only the
         // target's own store has it; otherwise the views don't establish which bots can use it.
@@ -970,8 +976,8 @@ export class AccountsEngine {
               ? "kept"
               : "unclear";
         result.keptBy = result.landed === "kept" ? signIn.forBot : null;
-        if (signIn.stage === "checking" || signIn.stage === "unconfirmed")
-          await this.recordKind(first, kindOf(signIn));
+        // No kind is recorded: the gateway's answer names no account, and a list difference
+        // alone does not say which account this sign-in made.
       }
       result.locks = await this.checkLocksOf(signIn.provider);
     } catch {
@@ -979,24 +985,31 @@ export class AccountsEngine {
     }
     if (ctx.get().signIn?.id !== id) return;
     const ended = ctx.get().signIn!;
-    // "Connected" only when the read after it shows the account; otherwise what is known.
+    // The gateway's answer names no account: any new id in the read after it is a candidate the
+    // person may label, never the sign-in's account (`several`, even for one). The outcome of a
+    // sign-in that did not finish stays what it was.
     const stage =
       ended.stage !== "checking"
         ? ended.stage
         : result.readFailed
           ? "unverified"
-          : result.added.length > 1
+          : result.added.length > 0
             ? "several"
-            : result.added.length === 1
-              ? "connected"
-              : "refreshed";
-    this.setSignIn(id, { result, stage, saving: false, cancelling: false });
-    // The accounts read again while what it was given is still held: its errors are scrubbed too.
+            : "refreshed";
+    this.setSignIn(id, { result, stage, saving: false, cancelling: false }, true);
     try {
       await this.load();
     } finally {
       if (ctx.get().signIn?.id === id) this.forgetSecrets();
     }
+    // Shared only while the merged views still show it inherited with no other copy beside it.
+    const merged = first ? ctx.get().accounts.find((each) => each.id === first) : undefined;
+    if (
+      ctx.get().signIn?.id === id &&
+      result.landed === "shared" &&
+      (ctx.get().status !== "ready" || !merged || merged.unclear || merged.keptBy !== null)
+    )
+      this.setSignIn(id, { result: { ...result, landed: "unclear", keptBy: null } }, true);
   }
 
   /** Every bot bound to an account of `provider`: was it locked, and is it still? */
@@ -1103,11 +1116,9 @@ export class AccountsEngine {
       } finally {
         this.forgetSecrets();
       }
-      const after = this.ctx.get().signIn;
-      return {
-        profileId: after?.id === id ? (after.result?.added[0] ?? null) : null,
-        warning: null,
-      };
+      // The gateway's answer names no account: a new one in the read after it is a candidate the
+      // person may label, never the key's account.
+      return { profileId: null, warning: null };
     }
     const forBot = this.signInTarget(botId);
     const who = providerName(provider);
@@ -1822,16 +1833,6 @@ export function isActive(signIn: SignInState): boolean {
   return (
     ["starting", "waiting", "entering", "checking"].includes(signIn.stage) && signIn.result === null
   );
-}
-
-/** What Clawtrate records for an account a sign-in made, from how the sign-in went. */
-function kindOf(signIn: SignInState): KindRecord {
-  // A key typed here; a browser sign-in that saves a key (OpenRouter's); a subscription.
-  return signIn.byKey || signIn.flow === "key"
-    ? "typed-key"
-    : signIn.provider === "openrouter"
-      ? "sign-in-key"
-      : "subscription";
 }
 
 /** The gateway answered and refused: the request was not applied. */

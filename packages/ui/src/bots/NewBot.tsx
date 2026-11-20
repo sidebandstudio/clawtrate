@@ -578,8 +578,6 @@ export function NewBot({
     return (
       <Dialog kind="create" labelledBy="create-title" onClose={onClose} testId="new-bot">
         <Connect
-          from="create"
-          draftName={draft.name.trim() || null}
           forBot={null}
           accounts={accounts}
           bots={bots}

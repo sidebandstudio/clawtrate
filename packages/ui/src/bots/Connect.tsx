@@ -41,7 +41,12 @@ const LABEL_KEPT = "connect-label";
  * when the read confirmed it, otherwise the outcome it came from.
  */
 type Unconfirmed = { title: string; text: string } | null;
-type KeptLabel = { account: string; byKey: boolean; unconfirmed?: Unconfirmed };
+type KeptLabel = {
+  account: string;
+  byKey: boolean;
+  unconfirmed?: Unconfirmed;
+  candidate?: boolean;
+};
 
 /** The label step left open, when its account is still on the gateway. */
 export function keptLabel(accounts: AccountsState): KeptLabel | null {
@@ -65,7 +70,14 @@ export type ConnectView = {
 type Where =
   | { view: "methods" }
   | { view: "flow"; method: string }
-  | { view: "label"; account: string; byKey: boolean; unconfirmed?: Unconfirmed }
+  | {
+      view: "label";
+      account: string;
+      byKey: boolean;
+      unconfirmed?: Unconfirmed;
+      /** Chosen by the person from the read after a sign-in whose answer named no account. */
+      candidate?: boolean;
+    }
   | { view: "same"; provider: string }
   /** A key the gateway took whose account the read after it didn't show. */
   | { view: "key-check"; provider: string; known: string[] };
@@ -75,8 +87,6 @@ type Where =
  * foot in its own frame (the New bot dialog, a Settings section).
  */
 export function useConnect({
-  from,
-  draftName,
   forBot,
   accounts,
   bots,
@@ -87,8 +97,6 @@ export function useConnect({
   onLeave,
   startWith,
 }: {
-  from: "create" | "settings";
-  draftName: string | null;
   /** The bot the person is working on, when there is one. */
   forBot: string | null;
   accounts: AccountsState;
@@ -123,7 +131,12 @@ export function useConnect({
     remember(
       LABEL_KEPT,
       next.view === "label"
-        ? { account: next.account, byKey: next.byKey, unconfirmed: next.unconfirmed ?? null }
+        ? {
+            account: next.account,
+            byKey: next.byKey,
+            unconfirmed: next.unconfirmed ?? null,
+            candidate: next.candidate ?? false,
+          }
         : null,
     );
     setWhereState(next);
@@ -138,7 +151,6 @@ export function useConnect({
   const [saving, setSaving] = useState(false);
   const keyRef = useRef<HTMLInputElement>(null);
   const pasteRef = useRef<HTMLInputElement>(null);
-  const [confirmDrop, setConfirmDrop] = useState<string | null>(null);
 
   // A sign-in that finished moves on to its label; one that found no new account says so.
   const stage = signIn?.stage ?? null;
@@ -146,18 +158,14 @@ export function useConnect({
   const [seen, setSeen] = useState<{ stage: string | null; result: unknown }>({ stage, result });
   if (seen.stage !== stage || seen.result !== result) {
     setSeen({ stage, result });
-    // Connected: the read after it showed the account. Refreshed: it finished with no new one.
+    // Refreshed: it finished with no new account.
     if (where.view === "flow" && signIn && signIn.method === where.method && result) {
-      const added = result.added[0];
-      if (stage === "connected" && added)
-        setWhere({ view: "label", account: added, byKey: signIn.byKey });
-      else if (stage === "refreshed") setWhere({ view: "same", provider: signIn.provider });
+      if (stage === "refreshed") setWhere({ view: "same", provider: signIn.provider });
     }
   }
   useEffect(() => {
     if (!signIn) return;
-    if (stage === "connected" && result)
-      announce(signIn.byKey ? "Key saved" : `Connected to ${providerName(signIn.provider)}`);
+    if (stage === "several" && result) announce(`Signed in to ${providerName(signIn.provider)}`);
     else if (stage === "cancelled") announce("Sign-in cancelled");
     // Once per stage reached.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -295,20 +303,9 @@ export function useConnect({
     };
     const body = (
       <>
-        {!accounts.mainShared && (
-          <Note testId="kept-note">
-            <p>
-              This gateway keeps this sign-in for {targetName} only. Other bots
-              {from === "create" ? ", and a bot you are creating," : ""} won't be able to use it.
-            </p>
-            {from === "create" && (
-              <p>
-                To give {draftName || "the new bot"} an account of its own, create it with "Let the
-                gateway choose", then connect from its settings.
-              </p>
-            )}
-          </Note>
-        )}
+        <Note testId="kept-note">
+          <p>Clawtrate starts sign-in for {targetName}.</p>
+        </Note>
         <p className="b-lead">
           Sign in with a subscription you already pay for. Your gateway does the sign-in and keeps
           it; Clawtrate never sees your password and never keeps the sign-in.
@@ -515,14 +512,18 @@ export function useConnect({
       signIn?.result && signIn.result.added.includes(where.account) ? signIn.result : null;
     const keeper = landing ? landing.keptBy : (account?.keptBy ?? null);
     const keptBy = keeper ? (bots.find((bot) => bot.id === keeper)?.name ?? keeper) : null;
-    const unclear = landing ? landing.landed === "unclear" : (account?.unclear ?? false);
+    // Inherited by another bot only when the current merged views say so, with no other copy;
+    // anything less is said as not shown.
+    const inherited =
+      account !== null &&
+      !account.unclear &&
+      account.keptBy === null &&
+      (landing === null || landing.landed === "shared");
     const landedText = keptBy
-      ? `Saved for ${keptBy} only. Other bots can't use it.`
-      : unclear
-        ? "The gateway's lists don't show which bots can use it."
-        : landing?.landed === "shared" || (!landing && account)
-          ? "Every bot can use it: the gateway shows it to other bots as shared."
-          : "Clawtrate hasn't seen it in the gateway's lists yet, so it can't say which bots can use it.";
+      ? `The gateway lists this account in ${keptBy}'s own store.`
+      : inherited
+        ? "The gateway lists this account as inherited by another bot."
+        : "The gateway's lists don't show which bots can use it.";
     const locks = signIn?.result?.locks ?? [];
     const done = async () => {
       // Nothing to write: no label, or the one the account already has.
@@ -534,7 +535,7 @@ export function useConnect({
       try {
         await bridge.invoke({ type: "setAccountLabel", profileId: where.account, label: typed });
         announce("Label saved");
-        finish(where.account);
+        finish(where.candidate ? null : where.account);
       } catch (error) {
         setLabelError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -556,10 +557,20 @@ export function useConnect({
             <Result
               tone="ok"
               mark="check"
-              title={where.byKey ? "Key saved" : `Connected to ${who}`}
+              title={
+                where.candidate
+                  ? `Signed in to ${who}`
+                  : where.byKey
+                    ? "Key saved"
+                    : `Connected to ${who}`
+              }
               focus={false}
             >
-              {where.byKey ? "Your gateway keeps the key." : "Your gateway keeps the sign-in."}
+              {where.candidate
+                ? "The label goes to the account you chose."
+                : where.byKey
+                  ? "Your gateway keeps the key."
+                  : "Your gateway keeps the sign-in."}
             </Result>
           )}
           <p className="b-hint" role="status" style={{ textAlign: "center" }} data-testid="landed">
@@ -685,7 +696,7 @@ export function useConnect({
       {word}
     </button>
   );
-  // More than one new account and the gateway didn't name one: the person says which is theirs.
+  // The gateway's answer names no account: the new ones the read found are candidates to label.
   const chooser = (sign: SignInState) => (
     <ul className="b-choices" data-testid="several" aria-label="New accounts">
       {sign.result!.added.map((id) => {
@@ -697,20 +708,36 @@ export function useConnect({
               type="button"
               className="b-choice"
               data-choose={id}
-              aria-label={`${name}: this is the account I signed in to`}
+              aria-label={`${name}: label this account`}
               onClick={() =>
-                void bridge
-                  .invoke({ type: "chooseSignInAccount", profileId: id })
-                  .catch((error: unknown) =>
+                void bridge.invoke({ type: "chooseSignInAccount", profileId: id }).then(
+                  () =>
+                    setWhere({
+                      view: "label",
+                      account: id,
+                      byKey: sign.byKey,
+                      candidate: true,
+                      ...(sign.stage === "unconfirmed"
+                        ? {
+                            unconfirmed: {
+                              title: "Saved, not confirmed",
+                              text:
+                                sign.error ??
+                                "The gateway saved the sign-in, but couldn't confirm it.",
+                            },
+                          }
+                        : {}),
+                    }),
+                  (error: unknown) =>
                     announce(error instanceof Error ? error.message : String(error)),
-                  )
+                )
               }
             >
               <span className="b-choice-text">
                 <span className="b-choice-title">
                   {listed ? <AccountTitle account={listed} accounts={accounts} /> : id}
                 </span>
-                <span className="b-choice-sub">This is the account I signed in to</span>
+                <span className="b-choice-sub">Label this account</span>
               </span>
               <ChevronIcon />
             </button>
@@ -764,8 +791,8 @@ export function useConnect({
       return (
         <Note tone="warn" testId="reread">
           <p>
-            The gateway now has a {who} account it didn't have before,{" "}
-            <span className="mono">{added}</span>. It may not be ready to use.
+            The refreshed account list includes <span className="mono">{added}</span>. The gateway
+            did not identify which sign-in added it.
           </p>
           <div className="b-actions">
             <button
@@ -777,6 +804,7 @@ export function useConnect({
                   view: "label",
                   account: added,
                   byKey: sign.byKey,
+                  candidate: true,
                   unconfirmed: {
                     title: "Listed, not finished",
                     text: `The gateway lists this ${who} account, but the sign-in did not finish. It may not be ready to use.`,
@@ -785,16 +813,6 @@ export function useConnect({
               }
             >
               Name it
-            </button>
-            <button
-              type="button"
-              className="button"
-              data-size="sm"
-              data-variant="quiet"
-              data-tone="danger"
-              onClick={() => setConfirmDrop(added)}
-            >
-              Disconnect it…
             </button>
           </div>
         </Note>
@@ -1074,47 +1092,49 @@ export function useConnect({
     body = (
       <>
         <Result tone="ok" mark="check" title={`Signed in to ${who}`} focus={false}>
-          {current.result!.added.length} new {who} accounts appeared while this sign-in ran, and the
-          gateway didn't say which is this one. Choose the account you signed in to: the label and
-          the choice in New bot go to it.
+          The gateway's answer doesn't name an account. The refreshed list has{" "}
+          {current.result!.added.length === 1
+            ? `a new ${who} account`
+            : `${current.result!.added.length} new ${who} accounts`}
+          . Choose an account to label, or return to Accounts.
         </Result>
         {chooser(current)}
-      </>
-    );
-    foot = another;
-  } else if (current.stage === "unconfirmed") {
-    const several = (current.result?.added.length ?? 0) > 1;
-    const added = several ? undefined : current.result?.added[0];
-    body = (
-      <>
-        <Result tone="warn" mark="clock" title="Saved, not confirmed">
-          {current.error ?? "The gateway saved the sign-in, but couldn't confirm it."}
-        </Result>
-        {several && chooser(current)}
       </>
     );
     foot = (
       <button
         type="button"
         className="button"
-        data-variant="primary"
+        data-variant="quiet"
         data-size="lg"
-        disabled={!current.result || several}
-        onClick={() =>
-          added
-            ? setWhere({
-                view: "label",
-                account: added,
-                byKey: current.byKey,
-                unconfirmed: {
-                  title: "Saved, not confirmed",
-                  text: current.error ?? "The gateway saved the sign-in, but couldn't confirm it.",
-                },
-              })
-            : finish(null)
-        }
+        onClick={() => finish(null)}
       >
-        Continue
+        Done
+      </button>
+    );
+  } else if (current.stage === "unconfirmed") {
+    const candidates = current.result?.added.length ?? 0;
+    body = (
+      <>
+        <Result tone="warn" mark="clock" title="Saved, not confirmed">
+          {current.error ?? "The gateway saved the sign-in, but couldn't confirm it."}
+        </Result>
+        {candidates > 0 && (
+          <p className="b-hint">Choose an account to label, or return to Accounts.</p>
+        )}
+        {candidates > 0 && chooser(current)}
+      </>
+    );
+    foot = (
+      <button
+        type="button"
+        className="button"
+        data-variant={candidates > 0 ? "quiet" : "primary"}
+        data-size="lg"
+        disabled={!current.result}
+        onClick={() => finish(null)}
+      >
+        {candidates > 0 ? "Done" : "Continue"}
       </button>
     );
   } else {
@@ -1145,44 +1165,6 @@ export function useConnect({
           </p>
         </Note>
         {body}
-      </>
-    );
-  }
-
-  if (confirmDrop) {
-    body = (
-      <>
-        {body}
-        <Note tone="danger">
-          <p>
-            Disconnect <span className="mono">{confirmDrop}</span>? Your gateway removes the
-            sign-in.
-          </p>
-          <div className="b-actions">
-            <button
-              type="button"
-              className="button"
-              data-size="sm"
-              data-variant="quiet"
-              onClick={() => setConfirmDrop(null)}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="button"
-              data-size="sm"
-              data-tone="danger"
-              onClick={() => {
-                const id = confirmDrop;
-                setConfirmDrop(null);
-                void bridge.send({ type: "disconnectAccount", profileId: id }).catch(() => {});
-              }}
-            >
-              Disconnect
-            </button>
-          </div>
-        </Note>
       </>
     );
   }

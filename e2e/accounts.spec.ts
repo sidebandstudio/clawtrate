@@ -8,7 +8,7 @@
 //
 // With CLAWTRATE_ACCOUNT_SHOTS=<folder outside the repository>, it also saves
 // screenshots of what it checked there, at 1440 and 390 px in both themes.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -283,6 +283,11 @@ async function connectFromSettings() {
   return settings;
 }
 
+/** The read after a sign-in lists a new account: it is chosen to be labelled. */
+async function labelNew(scope: Locator, id: string) {
+  await scope.getByTestId("several").locator(`[data-choose="${id}"]`).click();
+}
+
 test("F-474 F-476: a sign-in with a link and a code lands where the screen says it landed, and takes a label", async () => {
   const settings = await connectFromSettings();
   await shots("settings-accounts");
@@ -311,12 +316,14 @@ test("F-474 F-476: a sign-in with a link and a code lands where the screen says 
     outcome: "approve",
     account: "travel",
   });
-  await expect(settings.getByRole("heading", { name: "Connected to Acme" })).toBeVisible({
+  await expect(settings.getByRole("heading", { name: "Signed in to Acme" })).toBeVisible({
     timeout: 30_000,
   });
-  // The screen says every bot can use it: another bot's refreshed view lists it as inherited.
+  // The gateway's answer names no account: the new one the read lists is offered to label.
+  await labelNew(settings, "acme:travel");
+  // Another bot's refreshed view lists it as inherited, and no bot keeps a copy of its own.
   await expect(settings.getByTestId("landed")).toHaveText(
-    "Every bot can use it: the gateway shows it to other bots as shared.",
+    "The gateway lists this account as inherited by another bot.",
   );
   expect(
     (await view("pip", "acme"))?.profiles.find((p) => p.profileId === "acme:travel"),
@@ -333,7 +340,7 @@ test("F-474 F-476: a sign-in with a link and a code lands where the screen says 
   await label.fill("Travel");
   await done.click();
   await expect(
-    settings.getByRole("button", { name: /^Acme · Travel, Subscription, / }),
+    settings.getByRole("button", { name: /^Acme · Travel, Added on the gateway, / }),
   ).toBeVisible({ timeout: 20_000 });
   expect(((await config()).auth as Json).profiles).toMatchObject({
     "acme:travel": { displayName: "Travel" },
@@ -357,10 +364,11 @@ test("F-474: a browser sign-in with the code pasted back lands where the screen 
   });
   await paste.fill(answered.code);
   await settings.getByRole("button", { name: "Continue" }).click();
-  await expect(settings.getByRole("heading", { name: "Connected to Acme" })).toBeVisible({
+  await expect(settings.getByRole("heading", { name: "Signed in to Acme" })).toBeVisible({
     timeout: 30_000,
   });
-  await expect(settings.getByTestId("landed")).toContainText("Every bot can use it");
+  await labelNew(settings, "acme:browse");
+  await expect(settings.getByTestId("landed")).toContainText("inherited by another bot");
   expect(
     (await view("otto", "acme"))?.profiles.find((p) => p.profileId === "acme:browse")?.source,
   ).toBe("inherited");
@@ -388,9 +396,12 @@ test("F-474 F-475: an API key typed into the key path reaches the gateway once a
   await field.fill(TYPED_KEY);
   await settings.getByRole("button", { name: "Save key" }).click();
   await expect(field).toHaveCount(0, { timeout: 30_000 });
-  await expect(settings.getByRole("heading", { name: "Key saved" })).toBeVisible({
+  // The key's sign-in names no account: the new one the read lists is offered to label.
+  await expect(settings.getByRole("heading", { name: "Signed in to Acme" })).toBeVisible({
     timeout: 30_000,
   });
+  await expect(settings.getByRole("heading", { name: "Key saved" })).toHaveCount(0);
+  await labelNew(settings, "acme:typed");
   expect(
     (await view("main", "acme"))?.profiles.find((p) => p.profileId === "acme:typed")?.type,
   ).toBe("api_key");
@@ -400,7 +411,9 @@ test("F-474 F-475: an API key typed into the key path reaches the gateway once a
   expect(await page.content()).not.toContain(TYPED_KEY);
   await settings.getByRole("textbox", { name: "Label" }).fill("Typed");
   await settings.getByRole("button", { name: "Done" }).click();
-  await expect(settings.getByRole("button", { name: /^Acme · Typed, API key/ })).toBeVisible({
+  await expect(
+    settings.getByRole("button", { name: /^Acme · Typed, Added on the gateway/ }),
+  ).toBeVisible({
     timeout: 20_000,
   });
   await page.keyboard.press("Escape");
@@ -771,10 +784,11 @@ test("F-474: a sign-in that finishes on the gateway's machine shows the gateway'
   const port = /-L (\d+):/.exec((await command.textContent()) ?? "")![1];
   expect(new URL(answered.redirectUrl).port).toBe(port);
   expect((await fetch(answered.redirectUrl)).status).toBe(200);
-  await expect(settings.getByRole("heading", { name: "Connected to Acme" })).toBeVisible({
+  await expect(settings.getByRole("heading", { name: "Signed in to Acme" })).toBeVisible({
     timeout: 30_000,
   });
-  await expect(settings.getByTestId("landed")).toContainText("Every bot can use it");
+  await labelNew(settings, "acme:machine");
+  await expect(settings.getByTestId("landed")).toContainText("inherited by another bot");
   await settings.getByRole("textbox", { name: "Label" }).fill("Machine");
   await settings.getByRole("button", { name: "Done" }).click();
   await expect(settings.getByRole("button", { name: /^Acme · Machine/ })).toBeVisible({
@@ -804,9 +818,10 @@ test("F-474: OpenRouter's order of steps, on Clawtrate's connection: the page, t
   });
   await field.fill(answered.redirectUrl);
   await settings.getByRole("button", { name: "Continue" }).click();
-  await expect(settings.getByRole("heading", { name: "Connected to Acme" })).toBeVisible({
+  await expect(settings.getByRole("heading", { name: "Signed in to Acme" })).toBeVisible({
     timeout: 30_000,
   });
+  await labelNew(settings, "acme:returned");
   await settings.getByRole("textbox", { name: "Label" }).fill("Returned");
   await settings.getByRole("button", { name: "Done" }).click();
   await expect(settings.getByRole("button", { name: /^Acme · Returned/ })).toBeVisible({

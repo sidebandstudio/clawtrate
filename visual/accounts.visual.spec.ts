@@ -228,14 +228,16 @@ const SCENES: Scene[] = [
   {
     name: "signin-label",
     query: `${ADMIN}&signin=connected`,
-    ready: signIn(/^ChatGPT · /, (page) =>
-      expect(page.getByRole("heading", { name: "Connected to OpenAI" })).toBeVisible(),
-    ),
+    ready: signIn(/^ChatGPT · /, async (page) => {
+      await page.getByTestId("several").locator('[data-choose="openai:second"]').click();
+      await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
+    }),
   },
   {
     name: "signin-label-clash",
     query: `${ADMIN}&signin=connected`,
     ready: signIn(/^ChatGPT · /, async (page) => {
+      await page.getByTestId("several").locator('[data-choose="openai:second"]').click();
       await page.getByRole("textbox", { name: "Label" }).fill("work");
       await expect(
         page.getByText("Another OpenAI account is called Work. Choose a different label."),
@@ -251,7 +253,9 @@ const SCENES: Scene[] = [
     name: "signin-failed-saved",
     query: `${ADMIN}&signin=failed&saved=1`,
     ready: signIn(/^xAI · /, (page) =>
-      expect(page.getByTestId("reread")).toContainText("It may not be ready to use."),
+      expect(page.getByTestId("reread")).toContainText(
+        "The gateway did not identify which sign-in added it.",
+      ),
     ),
   },
   {
