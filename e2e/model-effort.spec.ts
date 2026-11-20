@@ -78,6 +78,46 @@ async function row(): Promise<Json> {
   return list.sessions.find((each) => each.key === TASK) ?? {};
 }
 
+/**
+ * The effort each run of a task's session started with, in order: the gateway reports none for a
+ * run (conversation.md 25.5), so a check reads its debug log (`embedded run start: … thinking=`),
+ * as a read-only client reads the log.
+ */
+async function runStarts(sessionId: string): Promise<string[]> {
+  const found: string[] = [];
+  const pattern =
+    /embedded run start: runId=\S+ sessionId=(\S+) provider=\S+ model=\S+ thinking=(\w+)/;
+  let cursor: number | undefined;
+  for (let page = 0; page < 50; page += 1) {
+    const tail = await reader.request<{ lines?: string[]; cursor?: number; size?: number }>(
+      "logs.tail",
+      { ...(cursor === undefined ? {} : { cursor }), limit: 5000, maxBytes: 1_000_000 },
+    );
+    for (const line of tail.lines ?? []) {
+      const match = pattern.exec(line);
+      if (match && match[1] === sessionId) found.push(match[2]!);
+    }
+    if (tail.cursor === undefined || tail.cursor === cursor || tail.cursor >= (tail.size ?? 0))
+      break;
+    cursor = tail.cursor;
+  }
+  return found;
+}
+
+/** The gateway runs with its latest config. */
+async function configApplied(): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        admin.request<Json>("config.get", {}).then(
+          (now) => now.appliedConfigHash === now.configRevisionHash,
+          () => false,
+        ),
+      { timeout: 120_000, intervals: [1000] },
+    )
+    .toBe(true);
+}
+
 async function approve(): Promise<void> {
   await expect
     .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
@@ -157,22 +197,15 @@ test.beforeAll(async ({ browser }) => {
   await admin.request("config.patch", {
     raw: JSON.stringify({
       agents: { entries: { [BOT]: { model: { primary: "acme/dev-1@acme:work", fallbacks: [] } } } },
+      // The effort a run starts with is in the debug log only; set back in afterAll.
+      logging: { level: "debug" },
     }),
     baseHash: hash,
     replacePaths: [`agents.entries.${BOT}.model.fallbacks`],
   });
   await admin.request("sessions.create", { key: TASK, agentId: BOT, label: "Main" });
   // The gateway applies the new entry, reloading if it must, before the interface pairs.
-  await expect
-    .poll(
-      () =>
-        admin.request<Json>("config.get", {}).then(
-          (now) => now.appliedConfigHash === now.configRevisionHash,
-          () => false,
-        ),
-      { timeout: 120_000, intervals: [1000] },
-    )
-    .toBe(true);
+  await configApplied();
 
   const data = mkdtempSync(join(tmpdir(), "clawtrate-models-"));
   const started = startHost(INSTANCE, STATIC, data);
@@ -198,8 +231,17 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
-  // Quill goes, with its task: the gateway's bots are as the checks found them.
+  // Quill goes, with its task, and the log's level with it: the gateway is as the checks found it.
   await admin?.request("agents.delete", { agentId: BOT, deleteFiles: true }).catch(() => {});
+  await admin
+    ?.request<{ hash: string }>("config.get", {})
+    .then(({ hash }) =>
+      admin.request("config.patch", {
+        raw: JSON.stringify({ logging: { level: null } }),
+        baseHash: hash,
+      }),
+    )
+    .catch(() => {});
   await admin?.close();
   await reader?.close();
   for (const host of hosts) {
@@ -208,7 +250,7 @@ test.afterAll(async () => {
   }
 });
 
-test("F-042 F-044 F-045: a task's model changed during a turn is held, saved when the turn ends, and the next turn runs on it; the line is there live and after a reload", async () => {
+test("F-042 F-045: a task's model changed during a turn is held, saved when the turn ends, and the next turn runs on it; the line is there live and after a reload", async () => {
   test.setTimeout(240_000);
   await expect(chip(page)).toHaveAccessibleName(/^Model for this task: acme\/dev-1, /, {
     timeout: 30_000,
@@ -339,6 +381,50 @@ test("F-042: a model chosen in the app keeps the account another client chose fo
   await expect.poll(async () => (await row()).status, { timeout: 60_000 }).not.toBe("running");
   // Put back for any later check.
   await patchTask({ model: "acme/dev-1@acme:work" });
+});
+
+test("F-043 F-045: an effort chosen for the task during a turn is held, saved when it ends, read by a second connection, and the next turn starts with it, by the gateway's log", async () => {
+  test.setTimeout(240_000);
+  await expect(chip(page)).toHaveAccessibleName(
+    "Model for this task: acme/dev-1, Low effort. Change.",
+    { timeout: 30_000 },
+  );
+  const session = String((await row()).sessionId);
+  const before = (await runStarts(session)).length;
+  await startTurn("#slow 10");
+  await chip(page).click();
+  await page.getByRole("menuitemradio", { name: "High" }).click();
+  await expect(chip(page)).toHaveAccessibleName(/High effort\. Held until this turn ends/);
+  // Not written while the turn runs.
+  expect((await row()).thinkingLevel).toBeUndefined();
+  await expect.poll(async () => (await row()).status, { timeout: 90_000 }).not.toBe("running");
+  await expect.poll(async () => (await row()).thinkingLevel, { timeout: 90_000 }).toBe("high");
+  await expect(modelLines(page).last()).toHaveText("Effort changed to High · from the next turn", {
+    timeout: 30_000,
+  });
+  await expect(chip(page)).toHaveAccessibleName(
+    "Model for this task: acme/dev-1, High effort. Change.",
+  );
+  // The turn that ran while it was held started with the effort it had.
+  const during = (await runStarts(session)).slice(before);
+  expect(during.length).toBeGreaterThan(0);
+  expect(during).not.toContain("high");
+  // The next turn starts with High.
+  const field = page.getByTestId("composer-input");
+  await field.fill("#text");
+  await field.press("Enter");
+  await expect
+    .poll(async () => (await runStarts(session)).length, { timeout: 60_000 })
+    .toBeGreaterThan(before + during.length);
+  const next = (await runStarts(session)).slice(before + during.length);
+  expect(next).toEqual(next.map(() => "high"));
+  await expect.poll(async () => (await row()).status, { timeout: 60_000 }).not.toBe("running");
+  // Put back for any later check: the task's own effort removed.
+  await patchTask({ thinkingLevel: null });
+  await expect(chip(page)).toHaveAccessibleName(
+    "Model for this task: acme/dev-1, Low effort. Change.",
+    { timeout: 30_000 },
+  );
 });
 
 test("F-042 F-043: a bot's model and effort chosen in its settings are saved on its account and seen by a second connection", async () => {
