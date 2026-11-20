@@ -55,8 +55,8 @@ function harness() {
 it("F-231: a newer offer survives an old check reply and an older initial read", async () => {
   const h = harness();
   h.event({ ...base, revision: 2 });
-  const check = h.reader.check("stable");
-  void h.reader.check("stable");
+  const check = h.reader.check("stable", 2);
+  void h.reader.check("stable", 2);
   const newest: DesktopUpdateSnapshot = {
     ...base,
     revision: 5,
@@ -68,7 +68,7 @@ it("F-231: a newer offer survives an old check reply and an older initial read",
   h.first.resolve(base);
   await h.first.promise;
   expect(h.reader.get()).toMatchObject({ snapshot: newest, message: null, working: false });
-  expect(h.host.check.mock.calls).toEqual([["stable"]]);
+  expect(h.host.check.mock.calls).toEqual([["stable", 2]]);
   expect(h.host.subscribe).toHaveBeenCalledTimes(1);
   h.disconnect();
   expect(h.stop).toHaveBeenCalledOnce();
@@ -95,7 +95,7 @@ it.each(["busy", "superseded", "stale", "invalid"] as const)(
   async (outcome) => {
     const h = harness();
     h.event(base);
-    const done = h.reader.check("stable");
+    const done = h.reader.check("stable", base.revision);
     h.reply.resolve({ snapshot: base, outcome });
     await done;
     expect(h.reader.get().message).toBe(
@@ -114,10 +114,10 @@ it("F-231: rejected reads and commands release the action without replay", async
   await vi.waitFor(() => expect(h.reader.get().message).toBe("Couldn't read update settings."));
   h.event(base);
   h.host.check.mockRejectedValueOnce(Error());
-  await h.reader.check("stable");
+  await h.reader.check("stable", base.revision);
   expect(h.reader.get().message).toBe("Couldn't start the update check.");
   h.reply.resolve({ outcome: "busy", snapshot: base });
-  await h.reader.check("stable");
+  await h.reader.check("stable", base.revision);
   expect(h.host.check).toHaveBeenCalledTimes(2);
 });
 
@@ -126,7 +126,7 @@ it("F-231: a track choice masks the old offer immediately and rejects overlappin
   h.event(base);
   const saving = h.reader.chooseTrack("nightly");
   expect(h.reader.get().localChoice).toBe("nightly");
-  await h.reader.check("stable");
+  await h.reader.check("stable", base.revision);
   await h.reader.download("retired");
   await h.reader.chooseTrack("nightly");
   expect(h.host.check).not.toHaveBeenCalled();

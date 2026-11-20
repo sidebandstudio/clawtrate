@@ -236,7 +236,7 @@ export function Updates({
                 onClick={() => {
                   if (working) return;
                   if (state.kind === "offered") void download(state.offerId);
-                  else if (s.selectedTrack) void check(s.selectedTrack);
+                  else if (s.selectedTrack) void check(s.selectedTrack, s.revision);
                 }}
               >
                 {action}

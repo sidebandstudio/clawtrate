@@ -214,6 +214,10 @@ type ProbeWindow = Window & {
   clawtrateHost: { desktopUpdates: DesktopUpdates };
   seenUpdates: string[];
 };
+async function checkStable() {
+  const api = (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates;
+  return api.check("stable", (await api.get()).revision);
+}
 for (const stage of ["check", "download"] as const) {
   test(`F-231: retires a held ${stage} while saving a track`, async ({ desktopApp }) => {
     const { page, server, filePath, body, profile, manifest, resume } = desktopApp;
@@ -278,9 +282,7 @@ for (const stage of ["check", "download"] as const) {
       await nightly.press("ArrowLeft");
       await nightly.press("Space");
       await expect(stable).toBeChecked();
-      const busy = await page.evaluate(() =>
-        (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.check("stable"),
-      );
+      const busy = await page.evaluate(checkStable);
       expect(busy.outcome).toBe("busy");
       delayed.resolve();
       resume();
@@ -302,9 +304,7 @@ for (const stage of ["check", "download"] as const) {
         expect(stale.outcome).toBe("stale");
         await expect(notice).toBeVisible();
       } else {
-        const stale = await page.evaluate(() =>
-          (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.check("stable"),
-        );
+        const stale = await page.evaluate(checkStable);
         expect(stale.outcome).toBe("stale");
       }
       expect(server.requests).toEqual(before);
@@ -361,12 +361,43 @@ test("F-231: a stale check or download reconciles the screen without contacting 
   await expect(line).toContainText("1.1.0 is offered");
   writeFileSync(hold, "");
   server.route("/stable", json({ ...manifest, version: "1.2.0" }));
-  const second = await page.evaluate(() =>
-    (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.check("stable"),
-  );
+  const second = await page.evaluate(checkStable);
   expect(second.snapshot.state.kind).toBe("offered");
   await expect(line).toContainText("1.1.0 is offered");
   await download.click();
   await expect(line).toContainText("1.2.0 is offered");
   expect(server.requests).toEqual(["/stable", "/stable"]);
+});
+
+test("F-231: an older Check on the same track preserves the verified download", async ({
+  desktopApp,
+}) => {
+  const { page, profile, server, filePath, resume } = desktopApp;
+  await page.keyboard.press("ControlOrMeta+,");
+  await page.getByRole("button", { name: "Updates", exact: true }).click();
+  const line = page.locator(".update-result dd");
+  writeFileSync(join(profile, "hold-events"), "");
+  const {
+    snapshot: { state: offer },
+  } = await page.evaluate(checkStable);
+  if (offer.kind !== "offered") throw new Error("Expected an offer");
+  resume();
+  const verified = await page.evaluate(
+    (id) => (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.download(id),
+    offer.offerId,
+  );
+  expect(verified.snapshot.state).toMatchObject({ kind: "verified", offerId: offer.offerId });
+  await expect(line).toHaveText("Not checked yet.");
+  expect(server.requests).toEqual(["/stable", filePath]);
+  await page.getByRole("button", { name: "Check for Updates" }).click();
+  await expect(line).toContainText("its size and checksum match the update source.");
+  await expect(
+    page.getByRole("button", { name: /^(Check for Updates|Download|Restart to Update)$/ }),
+  ).toHaveCount(0);
+  expect(
+    await page.evaluate(() =>
+      (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get(),
+    ),
+  ).toEqual(verified.snapshot);
+  expect(server.requests).toEqual(["/stable", filePath]);
 });

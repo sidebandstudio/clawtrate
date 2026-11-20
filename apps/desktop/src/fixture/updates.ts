@@ -94,9 +94,11 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    check: async (track) => {
+    check: async (track, revision) => {
       if (snapshot.pendingTrack) return reply("busy");
-      if (snapshot.selectedTrack !== track) return reply("stale");
+      if (!snapshot.selectedTrack || !Number.isSafeInteger(revision) || revision < 0)
+        return reply("invalid");
+      if (snapshot.selectedTrack !== track || revision !== snapshot.revision) return reply("stale");
       publish({
         state: {
           ...states.offered,

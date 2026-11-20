@@ -14,7 +14,9 @@ type Reading = {
 };
 
 type Command =
-  { kind: "check" | "choose"; track: UpdateTrack } | { kind: "download"; offerId: string };
+  | { kind: "check"; track: UpdateTrack; revision: number }
+  | { kind: "choose"; track: UpdateTrack }
+  | { kind: "download"; offerId: string };
 
 const failure = {
   check: "Couldn't start the update check.",
@@ -80,7 +82,7 @@ export class UpdateReading {
       let reply: DesktopUpdateReply;
       switch (command.kind) {
         case "check":
-          reply = await this.host.check(command.track);
+          reply = await this.host.check(command.track, command.revision);
           break;
         case "download":
           reply = await this.host.download(command.offerId);
@@ -121,7 +123,7 @@ export class UpdateReading {
       }
     }
   }
-  check = (track: UpdateTrack) => this.send({ kind: "check", track });
+  check = (track: UpdateTrack, revision: number) => this.send({ kind: "check", track, revision });
   chooseTrack = (track: UpdateTrack) => this.send({ kind: "choose", track });
   download = (offerId: string) => this.send({ kind: "download", offerId });
 }

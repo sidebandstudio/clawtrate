@@ -127,10 +127,12 @@ test("opens its window from the packaged app on the connect screen", async () =>
     selectedTrack: null,
   });
   expect(
-    await page.evaluate(() =>
-      (
-        window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
-      ).clawtrateHost.desktopUpdates.check("stable"),
+    await page.evaluate(
+      (revision) =>
+        (
+          window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+        ).clawtrateHost.desktopUpdates.check("stable", revision),
+      updates.revision,
     ),
   ).toMatchObject({
     outcome: "invalid",
