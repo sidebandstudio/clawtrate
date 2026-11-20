@@ -1,8 +1,8 @@
-import { win32 } from "node:path";
-import { expect, it } from "vitest";
+import { join, win32 } from "node:path";
+import { expect, it, vi } from "vitest";
 import {
   checkWindowsDirectorySpelling,
-  updatePowerShellEnvironment,
+  runUpdatePowerShell,
 } from "../../src/main/private-update-directory.ts";
 
 it("accepts a Windows short directory name only when every differing entry identifies the same directory", async () => {
@@ -61,22 +61,25 @@ it("checks case-only aliases, parent identity and UNC roots", async () => {
   await expect(compare("\\\\server\\other\\folder", unc)).rejects.toThrow(/roots/);
 });
 
-it("builds the update helper's search paths from the OS directory and drops runtime overrides", () => {
-  const system = "C:\\Windows";
-  const env = updatePowerShellEnvironment(system, {
-    SystemRoot: "other",
-    PSModulePath: "other",
-    PATH: "other",
-    ComSpec: "other",
-    COR_ENABLE_PROFILING: "1",
-    TEMP: "profile-temp",
-  });
-  expect(env).toMatchObject({
-    SystemRoot: system,
-    ComSpec: win32.join(system, "System32", "cmd.exe"),
-    PATH: win32.join(system, "System32"),
-    PSModulePath: win32.join(system, "System32", "WindowsPowerShell", "v1.0", "Modules"),
-    TEMP: "profile-temp",
-  });
-  expect(env).not.toHaveProperty("COR_ENABLE_PROFILING");
+const execFile = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", () => ({ execFile }));
+
+it("starts the Windows folder helper from SystemRoot with the host environment and forwards cancellation", async () => {
+  const root = "C:\\WindowsFixture";
+  const signal = new AbortController().signal;
+  vi.stubEnv("SystemRoot", root);
+  vi.stubEnv("CLAWTRATE_TEST_ENV", "inherited");
+  const values = { CLAWTRATE_PRIVATE_DIRECTORY: "fixture-directory" };
+  execFile.mockImplementation((_file, _args, _options, done) => done(null, ""));
+  try {
+    await runUpdatePowerShell("fixture command", values, 15000, signal);
+    expect(execFile).toHaveBeenCalledExactlyOnceWith(
+      join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "fixture command"],
+      { env: { ...process.env, ...values }, timeout: 15000, windowsHide: true, signal },
+      expect.any(Function),
+    );
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
