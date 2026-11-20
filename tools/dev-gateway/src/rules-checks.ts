@@ -258,7 +258,8 @@ function cardsSeen(ctx: RulesContext, since: Record<RulesClient, number>, runId?
 /** The ids of the plugin cards a connection can list as waiting. */
 async function waitingCards(op: OperatorSession): Promise<string[]> {
   const listed = await op.request<unknown>("plugin.approval.list", {}, 30_000);
-  return (Array.isArray(listed) ? (listed as unknown[]) : []).map((card) => String(rec(card).id));
+  expect(Array.isArray(listed), "the gateway did not return a list of pending approvals");
+  return (listed as unknown[]).map((card) => String(rec(card).id));
 }
 
 async function resolve(ctx: RulesContext, id: string, decision: string): Promise<void> {
@@ -1221,14 +1222,16 @@ export const RULES_CHECKS: RulesCheck[] = [
 /** Stop every run in the checks' tasks, deny every card still waiting, and empty the rules. */
 async function settle(ctx: RulesContext, world: World): Promise<boolean> {
   const { admin } = ctx.clients;
-  for (const id of await waitingCards(admin).catch(() => [])) {
-    await call(admin, "plugin.approval.resolve", { id, decision: "deny" });
-  }
-  if (!(await drainSessions(admin, world.keys))) return false;
   try {
     // A check's rollback that failed is retried first; until it succeeds, nothing more starts.
     await ctx.restoreSettings?.();
     delete ctx.restoreSettings;
+    for (const id of await waitingCards(admin)) {
+      await call(admin, "plugin.approval.resolve", { id, decision: "deny" });
+    }
+    if (!(await drainSessions(admin, world.keys))) return false;
+    // Verified gone, also a card cancelled between the listing and its answer.
+    if ((await waitingCards(admin)).length !== 0) return false;
     await pluginRunning(ctx);
     await clearRules(ctx);
     return true;

@@ -439,3 +439,60 @@ describe("the rules checks' recipient run", () => {
     );
   });
 });
+
+describe("the rules checks' approval clean-up", () => {
+  /** One check that passes, on a fake gateway; `list` answers each pending-approvals request. */
+  const drive = async (list: (final: boolean) => unknown) => {
+    let final = false;
+    const op = {
+      events: [],
+      lastSeq: 0,
+      request: async (method: string) => {
+        if (method === "plugin.approval.list") return list(final);
+        if (method === "clawtrate-tool-rules.status") return { hook: { registered: true } };
+        if (method === "clawtrate-tool-rules.get") return { scopes: {} };
+        return {};
+      },
+    } as unknown as OperatorSession;
+    const held = RULES_CHECKS.splice(0);
+    RULES_CHECKS.push({ name: "a check", covers: [], run: async () => void (final = true) });
+    const lines: string[] = [];
+    vi.useFakeTimers();
+    try {
+      const outcome = runRulesChecks(
+        {
+          clients: { admin: op, interactive: op, approver: op, writer: op, reader: op },
+          gatewayLog: "",
+          stateDir: "",
+        },
+        (line) => lines.push(line),
+      );
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      return { result: await outcome, lines };
+    } finally {
+      vi.useRealTimers();
+      RULES_CHECKS.splice(0, RULES_CHECKS.length, ...held);
+    }
+  };
+
+  it("fails the final clean-up when the pending approvals cannot be listed", async () => {
+    const run = await drive((final) => {
+      if (final) throw new Error("plugin.approval.list refused");
+      return [];
+    });
+    expect(run.result).toEqual({ passed: 1, failed: 1 });
+    expect(run.lines.at(-1)).toMatch(/^FAIL {2}the final clean-up/);
+  });
+
+  it("fails the final clean-up when a card is still pending after the runs were stopped", async () => {
+    let finalLists = 0;
+    const run = await drive((final) => {
+      if (!final) return [];
+      finalLists += 1;
+      // None at the sweep; one listed again after the drain.
+      return finalLists === 1 ? [] : [{ id: "late" }];
+    });
+    expect(run.result).toEqual({ passed: 1, failed: 1 });
+    expect(run.lines.at(-1)).toMatch(/^FAIL {2}the final clean-up/);
+  });
+});
