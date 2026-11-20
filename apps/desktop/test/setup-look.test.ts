@@ -755,6 +755,18 @@ describe("the sandbox: a run's description, its folder and its proven instance",
     expect(() => parseDescription("{")).toThrow(SetupRefusedError);
   });
 
+  it("S1: explicit null is refused as an invalid scenario", () => {
+    expect(() =>
+      parseDescription(
+        JSON.stringify({ instance: "su1-test", run: fake.runId("a"), scenario: null }),
+      ),
+    ).toThrow(SetupRefusedError);
+    // Left out, it is the recorded scenario.
+    expect(
+      parseDescription(JSON.stringify({ instance: "su1-test", run: fake.runId("a") })).scenario,
+    ).toBe("recorded");
+  });
+
   it("refuses a description outside a private run folder below the system's temporary root, before reading it", async () => {
     const s = setting();
     // Not named sandbox.json, relative, not normal.

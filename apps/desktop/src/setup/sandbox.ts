@@ -264,7 +264,8 @@ export function parseDescription(text: string): SandboxDescription {
   if (FORBIDDEN_INSTANCES.has(instance)) throw new SetupRefusedError("file");
   if (typeof record.run !== "string" || !RUN_ID.test(record.run))
     throw new SetupRefusedError("file");
-  const scenario = record.scenario ?? "recorded";
+  // Left out means recorded; anything given, an explicit null too, must be one of the five.
+  const scenario = Object.hasOwn(record, "scenario") ? record.scenario : "recorded";
   if (!SCENARIOS.includes(scenario as Scenario)) throw new SetupRefusedError("file");
   return { instance, run: record.run, scenario: scenario as Scenario };
 }
