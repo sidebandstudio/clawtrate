@@ -175,9 +175,11 @@ export function accountLine(
     state: tone ? { tone, word } : null,
     users: account.keptBy
       ? `Only ${keeper?.name ?? account.keptBy} can use it`
-      : users.length > 0
-        ? users.join(", ")
-        : "Not used yet",
+      : account.unclear
+        ? "Which bots can use it isn't clear"
+        : users.length > 0
+          ? users.join(", ")
+          : "Not used yet",
   };
 }
 

@@ -741,6 +741,7 @@ describe("labels", () => {
         kind: "subscription" as const,
         made: "sign-in" as const,
         keptBy: null,
+        unclear: false,
         logoutSupported: true,
       },
     ];
@@ -1594,6 +1595,7 @@ describe("the bounds", () => {
           kind: "subscription",
           made: "sign-in",
           keptBy: null,
+          unclear: false,
           logoutSupported: true,
         })),
       },
@@ -1681,6 +1683,83 @@ describe("the bounds", () => {
     const { client } = await accountsClient({ gateway: fake });
     const engine = (client as unknown as { accounts: { kinds: Map<string, unknown> } }).accounts;
     expect(engine.kinds.size).toBeLessThanOrEqual(MAX_ACCOUNTS);
+    client.stop();
+  });
+});
+
+describe("which account a sign-in made, and who can use it (F-474)", () => {
+  type Profiles = { providers: Array<{ profiles: Array<Record<string, unknown>> }> };
+  /** Rewrite each bot's view as the gateway would answer it. */
+  const views = (
+    fake: AccountsGateway,
+    change: (agentId: string, profile: Record<string, unknown>) => void,
+  ) => {
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    fake.gateway.handlers["models.authStatus"] = (params) => {
+      const answer = status(params) as Profiles;
+      const { agentId } = params as { agentId: string };
+      for (const profile of answer.providers.flatMap((p) => p.profiles)) change(agentId, profile);
+      return answer;
+    };
+  };
+
+  it("F-474: an account the read just before the start found is not the pasted code's, though the last list lacked it", async () => {
+    const { client, accounts, fake } = await accountsClient();
+    fake.shared.push({ id: "acme:elsewhere", provider: "acme", type: "api_key" });
+    await client.startSignIn(CHOICES.browser, null);
+    expect(accounts().signIn?.known).toContain("acme:elsewhere");
+    await client.answerSignIn("code-pasted-back-41");
+    await until(() => accounts().signIn?.result != null);
+    expect(accounts().signIn).toMatchObject({
+      stage: "connected",
+      result: { added: ["acme:travel"] },
+    });
+    client.stop();
+  });
+
+  it("F-474: an account another client adds while the person pastes the code makes it ambiguous, never the sign-in's", async () => {
+    const { client, accounts, fake } = await accountsClient();
+    await client.startSignIn(CHOICES.browser, null);
+    fake.shared.push({ id: "acme:elsewhere", provider: "acme", type: "api_key" });
+    await client.answerSignIn("code-pasted-back-42");
+    await until(() => accounts().signIn?.result != null);
+    expect(accounts().signIn?.stage).toBe("several");
+    expect(accounts().signIn?.result?.added.sort()).toEqual(["acme:elsewhere", "acme:travel"]);
+    client.stop();
+  });
+
+  it("F-474: a new account another bot lists from configuration or outside the stores is not called shared", async () => {
+    for (const source of ["config", "external"]) {
+      const { client, accounts, fake } = await accountsClient();
+      views(fake, (agentId, profile) => {
+        // `main`'s own store is the shared one: the gateway lists it there as saved.
+        if (profile.profileId === "acme:travel")
+          profile.source = agentId === "main" ? "saved" : source;
+      });
+      await client.startSignIn(CHOICES.device, null);
+      fake.answerDevice();
+      await until(() => accounts().signIn?.result != null);
+      expect(accounts().signIn?.result).toMatchObject({ landed: "unclear", keptBy: null });
+      expect(accounts().accounts.find((a) => a.id === "acme:travel")).toMatchObject({
+        keptBy: null,
+        unclear: true,
+      });
+      client.stop();
+    }
+  });
+
+  it("F-474: one id saved in two bots' own stores is one row that says the views don't settle who can use it", async () => {
+    const fake = new AccountsGateway();
+    fake.own.pip = [{ id: "acme:studio", provider: "acme", type: "api_key" }];
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    expect(accounts().accounts.filter((a) => a.id === "acme:studio")).toEqual([
+      expect.objectContaining({ keptBy: null, unclear: true }),
+    ]);
+    // An account one bot keeps alone, and one every bot inherits, stay as they were.
+    expect(accounts().accounts.find((a) => a.id === "acme:work")).toMatchObject({
+      keptBy: null,
+      unclear: false,
+    });
     client.stop();
   });
 });

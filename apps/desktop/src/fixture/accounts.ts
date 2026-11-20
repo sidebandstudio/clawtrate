@@ -117,6 +117,7 @@ const account = (
   kind,
   made: kind === "subscription" ? "sign-in" : kind === "key" ? "typed" : null,
   keptBy: null,
+  unclear: false,
   logoutSupported: true,
   ...extra,
 });

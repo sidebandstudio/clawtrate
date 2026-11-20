@@ -708,7 +708,8 @@ export class AccountsEngine {
     const secret = signIn.step.sensitive || signIn.step.url !== null;
     this.holdSecret(value);
     this.setSignIn(signIn.id, { stage: "checking" });
-    const before = this.accountsOf(signIn.provider);
+    // Compared with the read made just before it started, kept through every step.
+    const before = signIn.known;
     try {
       await this.paused((pause) => this.follow(signIn.id, { stepId, value }, null, before, pause));
     } finally {
@@ -783,7 +784,7 @@ export class AccountsEngine {
       result: {
         ...signIn.result,
         added: [profileId],
-        landed: account ? (account.keptBy ? "kept" : "shared") : null,
+        landed: account ? (account.unclear ? "unclear" : account.keptBy ? "kept" : "shared") : null,
         keptBy: account?.keptBy ?? null,
       },
     });
@@ -846,10 +847,17 @@ export class AccountsEngine {
         .map((p) => p.id);
       const first = result.added.length === 1 ? result.added[0] : undefined;
       if (first) {
-        const shared =
-          second?.profiles.some((p) => p.id === first && p.source !== "saved") ?? false;
-        result.landed = shared ? "shared" : "kept";
-        result.keptBy = shared ? null : signIn.forBot;
+        // Shared only when another bot's view lists it as inherited; kept when only the
+        // target's own store has it; otherwise the views don't establish which bots can use it.
+        const mine = target.profiles.find((p) => p.id === first);
+        const theirs = second?.profiles.find((p) => p.id === first);
+        result.landed =
+          theirs?.source === "inherited"
+            ? "shared"
+            : mine?.source === "saved" && !theirs
+              ? "kept"
+              : "unclear";
+        result.keptBy = result.landed === "kept" ? signIn.forBot : null;
         if (signIn.stage === "checking" || signIn.stage === "unconfirmed")
           await this.recordKind(first, kindOf(signIn));
       }

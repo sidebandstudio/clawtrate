@@ -492,11 +492,14 @@ export function useConnect({
       signIn?.result && signIn.result.added.includes(where.account) ? signIn.result : null;
     const keeper = landing ? landing.keptBy : (account?.keptBy ?? null);
     const keptBy = keeper ? (bots.find((bot) => bot.id === keeper)?.name ?? keeper) : null;
+    const unclear = landing ? landing.landed === "unclear" : (account?.unclear ?? false);
     const landedText = keptBy
       ? `Saved for ${keptBy} only. Other bots can't use it.`
-      : landing?.landed === "shared" || (!landing && account)
-        ? "Every bot can use it: the gateway shows it to other bots as shared."
-        : "Clawtrate hasn't seen it in the gateway's lists yet, so it can't say which bots can use it.";
+      : unclear
+        ? "The gateway's lists don't show which bots can use it."
+        : landing?.landed === "shared" || (!landing && account)
+          ? "Every bot can use it: the gateway shows it to other bots as shared."
+          : "Clawtrate hasn't seen it in the gateway's lists yet, so it can't say which bots can use it.";
     const locks = signIn?.result?.locks ?? [];
     const done = async () => {
       // Nothing to write: no label, or the one the account already has.

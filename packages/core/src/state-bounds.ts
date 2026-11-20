@@ -743,6 +743,7 @@ const account = object<GatewayAccount>()({
   kind: ENUM,
   made: ENUM,
   keptBy: ID,
+  unclear: FLAG,
   logoutSupported: FLAG,
 });
 const signInMethod = object<SignInMethod>()({

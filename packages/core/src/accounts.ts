@@ -127,6 +127,14 @@ export type GatewayAccount = {
    * as inherited; null when it is in the shared store, which every bot sees.
    */
   keptBy: string | null;
+  /**
+   * The views don't establish which bots can use it: the same id is saved in
+   * more than one bot's own store, a bot's own copy stands beside the shared
+   * one, or the gateway lists it from its settings or an outside source
+   * (`config`, `external`) and no bot as inherited. One row may then stand for
+   * different credentials, and it is shared with no bot.
+   */
+  unclear: boolean;
   logoutSupported: boolean;
 };
 
@@ -278,8 +286,13 @@ export type LockCheck = {
 export type SignInResult = {
   /** Accounts of the provider that were not there before the sign-in. */
   added: string[];
-  /** Where the first of them is visible: to every bot, or to one. */
-  landed: "shared" | "kept" | null;
+  /**
+   * Where the first of them is visible: to every bot (another bot's view lists
+   * it as inherited), to one (only the target's own store has it), or
+   * `unclear` (the views list it otherwise, so which bots can use it is not
+   * established).
+   */
+  landed: "shared" | "kept" | "unclear" | null;
   keptBy: string | null;
   /** The read after the sign-in failed. */
   readFailed: boolean;
@@ -566,11 +579,13 @@ export function readBotView(answer: unknown): BotView {
 }
 
 /**
- * Every account across the bots' refreshed views. An account is shared when
- * any bot's view lists it as inherited (or from configuration); otherwise it
- * is kept by the one bot whose view lists it as its own. With a single bot
- * there is no second view, so its own accounts are kept by it until a read
- * with another bot present shows otherwise (bots.md section 5).
+ * Every account across the bots' refreshed views. An account is shared only
+ * when some bot's view lists it as inherited; it is kept by a bot when that
+ * bot's view alone lists it as its own (`saved`). Anything else, the same id
+ * in several bots' own stores, a bot's own copy beside the shared one, or a
+ * `config` or `external` source with no inherited one, is `unclear`. With a
+ * single bot there is no second view, so its own accounts are kept by it
+ * until a read with another bot present shows otherwise (bots.md section 5).
  */
 const kindOf = (record: KindRecord | undefined): AccountKind =>
   record === "subscription" ? "subscription" : record ? "key" : "gateway";
@@ -585,23 +600,34 @@ export function mergeAccounts(
   views: Map<string, BotView>,
   kinds: ReadonlyMap<string, KindRecord>,
 ): GatewayAccount[] {
-  const seen = new Map<string, { profile: ViewProfile; shared: boolean; owners: Set<string> }>();
+  const seen = new Map<
+    string,
+    { profile: ViewProfile; shared: boolean; owners: Set<string>; other: boolean }
+  >();
   for (const [botId, view] of views) {
     for (const profile of view.profiles) {
-      const entry = seen.get(profile.id) ?? { profile, shared: false, owners: new Set<string>() };
+      const entry = seen.get(profile.id) ?? {
+        profile,
+        shared: false,
+        owners: new Set<string>(),
+        other: false,
+      };
       // A label comes only with admin: take any view's.
       if (!entry.profile.label && profile.label)
         entry.profile = { ...entry.profile, label: profile.label };
       if (profile.source === "saved") entry.owners.add(botId);
-      else entry.shared = true;
+      else if (profile.source === "inherited") entry.shared = true;
+      else entry.other = true;
       seen.set(profile.id, entry);
     }
   }
   const accounts: GatewayAccount[] = [];
-  for (const { profile, shared, owners } of seen.values()) {
+  for (const { profile, shared, owners, other } of seen.values()) {
     if (accounts.length >= MAX_ACCOUNTS) break;
-    // Saved in several bots' own stores, and inherited by none: each keeps its own copy.
-    const keptBy = shared ? null : ([...owners].sort()[0] ?? null);
+    // The shared store is `main`'s own: another bot's own copy beside it is not the shared one.
+    const copies = [...owners].filter((owner) => !shared || owner !== "main");
+    const unclear = shared ? copies.length > 0 : other || owners.size !== 1;
+    const keptBy = !shared && !unclear ? [...owners][0]! : null;
     accounts.push({
       id: profile.id,
       provider: profile.provider,
@@ -612,6 +638,7 @@ export function mergeAccounts(
       kind: kindOf(kinds.get(profile.id)),
       made: madeOf(kinds.get(profile.id)),
       keptBy,
+      unclear,
       logoutSupported: profile.logoutSupported,
     });
   }

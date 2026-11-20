@@ -270,15 +270,17 @@ export function useAccountsSection({
             <dd>
               {account.keptBy
                 ? `Only ${keeper} can use it`
-                : users.length > 0
-                  ? users
-                      .map((each) =>
-                        each.lock
-                          ? `${each.bot.name} (${lockText(each.lock, true)})`
-                          : each.bot.name,
-                      )
-                      .join(", ")
-                  : "No bots"}
+                : account.unclear
+                  ? "The gateway's lists don't show which bots can use it"
+                  : users.length > 0
+                    ? users
+                        .map((each) =>
+                          each.lock
+                            ? `${each.bot.name} (${lockText(each.lock, true)})`
+                            : each.bot.name,
+                        )
+                        .join(", ")
+                    : "No bots"}
             </dd>
           </div>
           <div>
