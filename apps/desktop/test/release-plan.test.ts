@@ -26,18 +26,34 @@ const file = () => path(artifactName(c.version, mac));
 const read = (name: string) => JSON.parse(readFileSync(path(name), "utf8"));
 const write = (name: string, value: unknown) => writeFileSync(path(name), JSON.stringify(value));
 // Small structural fixtures. No fixture is executed or signed.
-function macZip(cpu: number): Buffer {
+function macZip(cpu: number, variant = ""): Buffer {
   return execFileSync(process.platform === "win32" ? "python" : "python3", [
     "-I",
     "-c",
     `
-import io, plistlib, struct, sys, zipfile
+import io, plistlib, stat, struct, sys, zipfile
+variant = sys.argv[2]
+header = struct.pack("<8I", 0xfeedfacf, int(sys.argv[1]), 0, 2, 2, 96, 0, 0)
+segment = struct.pack("<II16s4Q4I", 0x19, 0 if variant == "zero command size" else 72,
+                      b"__TEXT", 0, 129, 0, 129, 5, 5, 0, 0)
+main = struct.pack("<IIQQ", 0x80000028, 24, 128, 0)
+executable = header + segment + main + (b"" if variant == "truncated entry" else b"X")
 buf = io.BytesIO()
 with zipfile.ZipFile(buf, "w") as z:
-    z.writestr("Clawtrate.app/Contents/Info.plist", plistlib.dumps({"CFBundleExecutable":"Clawtrate"}))
-    z.writestr("Clawtrate.app/Contents/MacOS/Clawtrate", struct.pack("<10I", 0xfeedfacf, int(sys.argv[1]), 0, 2, 1, 8, 0, 0, 0x1b, 8))
+    contents = "Clawtrate.app/Contents/"
+    marker = zipfile.ZipInfo(contents)
+    marker.external_attr = (stat.S_IFLNK if variant == "slash-marked symlink" else stat.S_IFDIR) << 16
+    z.writestr(marker, b"")
+    z.writestr(contents + "Info.plist", plistlib.dumps({"CFBundleExecutable":"Clawtrate"}))
+    z.writestr(contents + "MacOS/Clawtrate", executable)
+    if variant == "case-folded twin":
+        z.writestr(contents + "MacOS/clawtrate", executable)
+    link = zipfile.ZipInfo(contents + "Frameworks/Example.framework/Versions/Current")
+    link.external_attr = stat.S_IFLNK << 16
+    z.writestr(link, b"A")
 sys.stdout.buffer.write(buf.getvalue())`,
     String(cpu),
+    variant,
   ]);
 }
 function pe(machine: number) {
@@ -208,6 +224,16 @@ it("refuses text, truncated archives, swapped Mac architectures even with matchi
     expect(plan(c).issues).toContain(key + ": invalid artifact format or architecture.");
   }
 });
+it.each(["zero command size", "truncated entry", "slash-marked symlink", "case-folded twin"])(
+  "refuses a Mac ZIP with %s even when both hashes match",
+  (variant) => {
+    writeFileSync(file(), macZip(0x0100000c, variant));
+    write(mac + ".json", { ...read(mac + ".json"), sha512: sha512Base64(file()) });
+    rmSync(path("update-feed.json"));
+    assemble(c);
+    expect(plan(c).issues).toEqual(["mac-arm64: invalid artifact format or architecture."]);
+  },
+);
 it("labels signing as unchecked whatever the build record says", () => {
   for (const key of FILE_KEYS)
     write(key + ".json", { ...read(key + ".json"), signing: "arbitrary personal data" });

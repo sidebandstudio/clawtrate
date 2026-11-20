@@ -5,21 +5,80 @@ import plistlib
 import stat
 import struct
 import sys
+import unicodedata
 from pathlib import Path
 from zipfile import ZipFile
+
+
+def valid_bundle_paths(entries):
+    tree = {}
+    for entry in entries:
+        name = entry.filename
+        directory = entry.is_dir()
+        parts = (name[:-1] if directory else name).split("/")
+        if parts[0] != "Clawtrate.app" or any(part in ("", ".", "..") for part in parts) or "\\" in name:
+            return False
+        kind = stat.S_IFMT(entry.external_attr >> 16)
+        if (directory and kind not in (0, stat.S_IFDIR)) or (not directory and kind == stat.S_IFDIR):
+            return False
+        for depth in range(1, len(parts) + 1):
+            spelling = "/".join(parts[:depth])
+            key = unicodedata.normalize("NFD", spelling).casefold()
+            explicit = depth == len(parts)
+            is_directory = not explicit or directory
+            if key in tree:
+                previous, was_explicit, was_directory = tree[key]
+                if previous != spelling or (was_explicit and explicit) or was_directory != is_directory:
+                    return False
+                explicit = explicit or was_explicit
+            tree[key] = spelling, explicit, is_directory
+    return True
+
+
+def mac_executable(binary, size, cpu):
+    magic, machine, _, kind, commands, length, _, _ = struct.unpack("<8I", binary.read(32))
+    if magic != 0xFEEDFACF or machine != cpu or kind != 2:
+        return False
+    if not commands or not 8 * commands <= length <= min(size - 32, 1024**2):
+        return False
+    table = binary.read(length)
+    if len(table) != length:
+        return False
+    text_range = None
+    entry = None
+    offset = 0
+    for _ in range(commands):
+        if offset + 8 > length:
+            return False
+        cmd, cmdsize = struct.unpack_from("<II", table, offset)
+        if cmdsize < 8 or cmdsize % 8 or offset + cmdsize > length:
+            return False
+        if cmd == 0x19:  # LC_SEGMENT_64
+            if cmdsize < 72:
+                return False
+            nsects, = struct.unpack_from("<I", table, offset + 64)
+            fileoff, filesize = struct.unpack_from("<QQ", table, offset + 40)
+            initprot, = struct.unpack_from("<I", table, offset + 60)
+            if cmdsize != 72 + 80 * nsects or fileoff + filesize > size:
+                return False
+            if table[offset + 8:offset + 24].rstrip(b"\0") == b"__TEXT" and initprot & 4 and filesize:
+                if text_range is not None:
+                    return False
+                text_range = (fileoff, fileoff + filesize)
+        elif cmd == 0x80000028:  # LC_MAIN
+            if cmdsize != 24 or entry is not None:
+                return False
+            entry, = struct.unpack_from("<Q", table, offset + 8)
+        offset += cmdsize
+    return (offset == length and entry is not None and text_range is not None and
+            max(text_range[0], 32 + length) <= entry < text_range[1])
 
 
 def mac_app(path, cpu):
     with ZipFile(path) as archive:
         entries = archive.infolist()
-        names = {entry.filename for entry in entries}
-        if len(names) != len(entries) or sum(e.file_size for e in entries) > 2 * 1024**3:
+        if sum(e.file_size for e in entries) > 2 * 1024**3 or not valid_bundle_paths(entries):
             return False
-        # Electron has nested helper apps, all inside the single outer bundle.
-        for name in names:
-            parts = name.rstrip("/").split("/")
-            if parts[0] != "Clawtrate.app" or any(part in ("", ".", "..") for part in parts) or "\\" in name:
-                return False
         def regular(name):
             entry = archive.getinfo(name)
             return stat.S_IFMT(entry.external_attr >> 16) in (0, stat.S_IFREG)
@@ -33,14 +92,9 @@ def mac_app(path, cpu):
         main = contents + "MacOS/" + executable
         if not regular(main):
             return False
-        for prefix in ("Clawtrate.app", "Clawtrate.app/Contents", contents + "MacOS"):
-            if prefix in names:
-                return False
         with archive.open(main) as binary:
-            magic, machine, _, kind, commands, command_bytes = struct.unpack("<6I", binary.read(24))
-        return (magic == 0xFEEDFACF and machine == cpu and kind == 2 and
-                commands > 0 and 8 * commands <= command_bytes <= archive.getinfo(main).file_size - 32 and
-                archive.testzip() is None)
+            return mac_executable(binary, archive.getinfo(main).file_size, cpu) and archive.testzip() is None
+
 
 
 def windows_exe(path, require_amd64=False):
