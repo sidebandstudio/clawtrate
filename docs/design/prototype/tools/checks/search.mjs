@@ -74,7 +74,7 @@ check(
     idle.includes("Every bot this connection can see, by name.") &&
     idle.includes("Titles in this device's task list, which keeps up to 500 tasks.") &&
     idle.includes("User messages and bot replies in tasks this gateway lets you see. Excludes routine runs, subagent tasks and archived tasks.") &&
-    idle.includes("File names the gateway returns from each bot's workspace.") &&
+    idle.includes("File names returned from workspaces the palette can verify. Some folders may be skipped.") &&
     idle.includes("Links in the conversations loaded on this device: 2 now.") &&
     idle.includes("Routine names, descriptions and bot details.") &&
     idle.includes("The sections of Clawtrate's Settings."),
@@ -113,10 +113,19 @@ await p.close();
 p = await open("palette=open&marlow=workspace");
 await type(p, "ephyr");
 const none = await body(p);
-check("R1 every source finished over its coverage: the 'No results' title, each source's coverage", none.includes("No results for “ephyr”") && none.includes("Messages match the words you type; the end of your query can match the start of a word.") && none.includes("File names the gateway returned from each bot's workspace."));
+check("R1 all four workspaces answered: no 'No results' title; the sources that finished are named, and Files keeps its qualification", !none.includes("No results for") && (await text(p, ".s-nomatch")).includes("No matches in Bots, Tasks, Messages, Links, Routines and Settings") && (await groupText(p, "files")).includes("Names the gateway returned from the workspaces of Juniper, Marlow, Otto and Pip. Some folders may be skipped.") && (await groupText(p, "files")).includes("No file names returned from Juniper, Marlow, Otto and Pip."));
 await p.waitForTimeout(300);
-check("R1 and the live region says No results", (await live(p)) === "No results for ephyr.");
+check("R1 and the live region names the finished sources and the Files qualification, never No results", (await live(p)) === "No matches in Bots, Tasks, Messages, Links, Routines and Settings. Some folders may be skipped.", await live(p));
 await p.close();
+
+for (const scope of ["bots", "messages"]) {
+  p = await open(`palette=open&width=phone&scope=${scope}`, { width: 390, height: 844 });
+  await type(p, "ephyr");
+  await p.waitForTimeout(300);
+  const solo = await body(p);
+  check(`R1 a complete ${scope} scope with no hits still says No results, with what it covered`, solo.includes("No results for “ephyr”") && (scope === "bots" || solo.includes("Messages match the words you type; the end of your query can match the start of a word.")) && (await live(p)) === "No results for ephyr.", await live(p));
+  await p.close();
+}
 
 p = await open("palette=open&marlow=workspace&src=msgfail&links=none");
 await type(p, "ephyr");
@@ -140,7 +149,28 @@ await p.clock.runFor(8000);
 check("R1 a timeout is said in its group, and never as 'No results'", (await groupText(p, "messages")).includes("Couldn't search messages: the gateway didn't answer in 8 seconds.") && !(await body(p)).includes("No results for"));
 await p.clock.runFor(1000);
 check("R1 the timeout's announcement names it", (await said(p)).some((t) => t.includes("Messages couldn't be searched.")) && !(await said(p)).some((t) => t.includes("No results")));
+await activate(p, "Try again");
+await p.keyboard.press("Enter");
+await p.clock.runFor(8500); // past the second deadline: slow never answers
+check("R1 with slow, Try again times out again", (await groupText(p, "messages")).includes("Couldn't search messages: the gateway didn't answer in 8 seconds.") && (await requests(p, "messages")).length === 2);
 await p.close();
+
+// Skipped, capped, failed and offline, alone and together, with and without hits: never a title,
+// never a combined count, and each limit said.
+for (const [query, extra, says] of [
+  ["md", "marlow=workspace&src=filescap", ["The file search stopped at its limit for Otto."]],
+  ["ephyr", "src=msgfail", ["Messages couldn't be searched.", "1 bot's workspace was not searched."]],
+  ["md", "src=filescap,msgfail", ["Messages couldn't be searched.", "The file search stopped at its limit for Otto.", "1 bot's workspace was not searched."]],
+  ["ephyr", "banner=offline", ["No matches in Bots, Tasks, Links and Settings.", "Messages weren't searched: the gateway isn't connected.", "Files weren't searched: the gateway isn't connected."]],
+  ["disk", "banner=offline", ["Messages weren't searched: the gateway isn't connected."]],
+]) {
+  p = await open(`palette=open&${extra}`);
+  await type(p, query);
+  await p.waitForTimeout(300);
+  const l = await live(p);
+  check(`R1 ${extra} for ${query}: no title, no combined count, and the limits said`, !(await body(p)).includes("No results for") && !/\d+ results?:/.test(l) && says.every((x) => l.includes(x)), l);
+  await p.close();
+}
 
 p = await open("palette=open&marlow=workspace&roster=failed&state=partial");
 await type(p, "ephyr");
@@ -153,6 +183,8 @@ await p.close();
 p = await open("palette=open&state=discovering&marlow=workspace");
 await type(p, "ephyr");
 check("R1 an empty cached bot list is not an all-clear", (await groupText(p, "bots")).includes("The gateway's bots haven't loaded yet.") && !(await body(p)).includes("No results for"));
+await p.waitForTimeout(300);
+check("R1 with no eligible workspace Files settles at once, with nothing pending, and says why", (await groupText(p, "files")).includes("Not searched: the gateway's bots haven't loaded yet.") && !(await groupText(p, "files")).includes("Searching…") && (await requests(p, "files")).length === 0 && (await live(p)).includes("Files weren't searched: the gateway's bots haven't loaded yet."), await live(p));
 await p.close();
 
 p = await open("palette=open");
@@ -169,6 +201,21 @@ await recordLive(p);
 await type(p, "backup");
 check("R1 the phone announces only its visible scope", (await said(p)).length > 0 && !(await said(p)).some((t) => /message|file|routine/i.test(t)), (await said(p)).join(" / "));
 check("S11 a scope asks only its own sources", (await requests(p)).length === 0);
+await p.close();
+
+p = await open("palette=open&width=phone&scope=groups", { width: 390, height: 844 });
+await recordLive(p);
+await type(p, "backup");
+check("R1 Group Chats always says its one line, with no request and never No results", (await said(p)).length > 0 && (await said(p)).every((t) => t === "Group chats aren't part of Clawtrate yet.") && (await requests(p)).length === 0, (await said(p)).join(" / "));
+await p.close();
+
+// Changing scope while a hidden source is still widening: what is said belongs to the chosen scope.
+p = await open("palette=open&width=phone&scope=messages&q=backup&bots=30&each=1&src=eachfail", { width: 390, height: 844 });
+await p.waitForTimeout(450);
+await recordLive(p);
+await p.click('[data-scope="groups"]');
+await p.waitForTimeout(1500);
+check("R1 a scope change drops the hidden widening's announcement", (await said(p)).length > 0 && (await said(p)).every((t) => t === "Group chats aren't part of Clawtrate yet."), (await said(p)).join(" / "));
 await p.close();
 
 // R2: older work is dropped (a fake clock) ------------------------------------------------------------------------
@@ -323,7 +370,7 @@ await p.waitForTimeout(700);
 m = await groupText(p, "messages");
 check("R3 after widening: how many bots answered and how many messages came back", m.includes("4 of 4 bots answered. 30 messages returned.") && m.includes("Juniper · no matches") && m.includes("Marlow · all 2 matches") && m.includes("Otto · 25 returned. More match; add words to narrow them.") && m.includes("Pip · all 3 matches"));
 check("F-268 searching each bot found what the first search left out", m.includes("Saved a backup copy as the March draft"));
-check("S12 the live region says how many bots answered", (await live(p)) === "4 of 4 bots answered. 30 messages returned.");
+check("S12 the live region says how many bots answered, as Messages' limit, with no combined count", (await live(p)).includes("4 of 4 bots answered. 30 messages returned.") && !/\d+ results?:/.test(await live(p)), await live(p));
 await p.close();
 
 p = await open("palette=open&q=backup&each=1&src=eachfail");
@@ -331,9 +378,15 @@ await settle(p);
 m = await groupText(p, "messages");
 check("R3 a failed bot is named, and not counted as answered", m.includes("3 of 4 bots answered.") && m.includes("Pip · couldn't search: the gateway didn't answer in time") && (await live(p)).includes("Pip couldn't be searched."));
 await activate(p, "Try again for Pip");
+await p.evaluate(() => {
+  window.__raw = [];
+  new MutationObserver(() => window.__raw.push(document.querySelector("#s-live").textContent)).observe(document.querySelector("#s-live"), { childList: true, characterData: true, subtree: true });
+});
 await p.keyboard.press("Enter");
-await p.waitForTimeout(300);
+await p.waitForTimeout(900);
 check("S8 Try again searches that bot again", (await groupText(p, "messages")).includes("Pip · all 3 matches"));
+const raw = await p.evaluate(() => window.__raw);
+check("R1 while the retry is in progress the earlier status is cleared and nothing is said until it answers", raw[0] === "" && raw.filter(Boolean).length > 0 && raw.filter(Boolean).every((t) => t.includes("4 of 4 bots answered.")), raw.join(" / "));
 await p.close();
 
 p = await open("palette=open&q=backup&each=1&src=indexing");
@@ -700,15 +753,23 @@ await type(p, "cleanup");
 check("R8 a match on the id alone is labelled", (await groupText(p, "routines")).includes("Matched its id, cleanup"));
 await p.close();
 
-p = await open("palette=open&routinepage=3");
-await type(p, "e");
+p = await open("palette=open&routinepage=3", undefined, { clock: true });
+await p.clock.pauseAt(new Date("2026-11-18T22:00:05Z"));
+await p.fill("#s-field", "e");
+await p.clock.runFor(1500);
 check("R8 a paged list says how far it is and offers the next page", (await groupText(p, "routines")).includes("First 3 of 7") && (await groupText(p, "routines")).includes("Show 3 more routines"));
+const pagedSaid = await live(p);
 await activate(p, "Show 3 more routines");
 await p.keyboard.press("Enter");
-await p.waitForTimeout(400);
+const inFlight = { loading: (await groupText(p, "routines")).includes("Loading more…"), said: await live(p) };
+await p.clock.runFor(150);
+inFlight.later = await live(p);
+check("R1 while a routine page is in flight its earlier status is cleared and nothing is announced", pagedSaid !== "" && inFlight.loading && inFlight.said === "" && inFlight.later === "", JSON.stringify([pagedSaid, inFlight]));
+await p.clock.runFor(1000);
+check("R1 once the page answers, the region speaks again", (await live(p)) !== "");
 await activate(p, "Show 1 more routine");
 await p.keyboard.press("Enter");
-await p.waitForTimeout(400);
+await p.clock.runFor(400);
 check("R8 the last page: all of them, and no more to show", (await groupText(p, "routines")).includes("All 7 routines") && !(await groupText(p, "routines")).includes("more routine") && (await requests(p, "routines")).map((r) => r.offset).join() === "0,3,6");
 await p.close();
 p = await open("palette=open&routinepage=3&src=routineschanged");

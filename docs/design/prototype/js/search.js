@@ -450,7 +450,7 @@
     if (!q) return render();
     if (offline()) {
       for (const id of ["messages", "files", "routines"]) S.groups[id] = { state: "offline" };
-      return render();
+      return settle(); // nothing is asked, and the live region says what wasn't searched
     }
     if (asks("messages") && !S.groups.messages?.asked) askMessages(q);
     if (asks("routines") && !S.groups.routines?.asked) askRoutines(q, 0);
@@ -463,6 +463,7 @@
   }
 
   function askMessages(q) {
+    unsay();
     S.groups.messages = { state: "searching", asked: true };
     lane("messages", (free) =>
       send("messages", { query: q, scope: { excludeCron: true, excludeSubagents: true }, limit: 25 }, MESSAGE_DELAY, () => (src.has("msgfail") && TEST.requests.filter((r) => r.source === "messages").length === 1 ? { error: "the gateway didn't answer in time" } : gatewayMessages(q)), (reply, current) => {
@@ -486,6 +487,7 @@
     const prev = S.groups.routines;
     if (offset === 0) S.groups.routines = { state: "searching", asked: true };
     else S.groups.routines = { ...prev, more: "loading" };
+    unsay();
     render();
     lane("routines", (free) =>
       send("routines", { query: q, enabled: "all", limit: ROUTINE_PAGE, offset }, 180, () => {
@@ -527,7 +529,13 @@
     const g = from === 0 ? (S.groups.files = { state: "searching", asked: true, per: {}, order: filesEligible() }) : S.groups.files;
     const asked = g.order.filter((e) => e.via && !g.per[e.bot]).slice(0, FILES_CAP);
     for (const e of asked) g.per[e.bot] = { state: "searching" };
+    // With no eligible bot nothing is sent, and the batch settles at once.
+    if (!asked.length) {
+      g.state = "done";
+      return settle();
+    }
     g.state = "searching";
+    unsay();
     render();
     pool("files", asked, (e, free) => askFilesFor(q, e, free));
   }
@@ -589,23 +597,16 @@
   function askEachFor(q, botId, free) {
     const g = S.groups.messages;
     g.each.per[botId] = { state: "searching" };
+    unsay();
     render();
     send("messages", { query: q, scope: { agentId: botId, excludeCron: true, excludeSubagents: true }, limit: 25 }, 60, () => (src.has("eachfail") && botId === "pip" && !S.eachRetried ? { error: "the gateway didn't answer in time" } : gatewayMessages(q, botId)), (reply, current) => {
       free();
       if (!current) return;
       g.each.per[botId] = reply.error ? { state: "failed", error: reply.error === "timeout" ? "the gateway didn't answer in 8 seconds" : reply.error } : { state: "done", reply };
       const states = Object.values(g.each.per).map((v) => v.state);
-      if (!states.some((s) => s === "searching" || s === "queued")) {
-        const first = !g.each.finished;
-        g.each.finished = true;
-        if (first) {
-          const answered = g.each.asked.filter((id) => g.each.per[id].state === "done");
-          const n = answered.reduce((sum, id) => sum + g.each.per[id].reply.results.length, 0);
-          const failed = g.each.asked.filter((id) => g.each.per[id].state === "failed").map(botName);
-          announce(`${answered.length} of ${g.each.asked.length} bots answered. ${plural(n, "message")} returned.${failed.length ? ` ${list(failed)} couldn't be searched.` : ""}`, S.gen);
-        }
-      }
-      render();
+      if (!states.some((s) => s === "searching" || s === "queued")) g.each.finished = true;
+      // What it found is said with the rest, from the group's own coverage, once nothing is pending.
+      settle();
     });
   }
 
@@ -664,7 +665,8 @@
     const R = roster();
     const answered = each.asked.filter((id) => each.per[id].state === "done");
     const n = answered.reduce((sum, id) => sum + each.per[id].reply.results.length, 0);
-    g.lines.push(`${answered.length} of ${each.asked.length} bots answered. ${plural(n, "message")} returned.`);
+    const head = `${answered.length} of ${each.asked.length} bots answered. ${plural(n, "message")} returned.`;
+    g.lines.push(head);
     const notAsked = R.filter((b) => !each.asked.includes(b.id));
     if (notAsked.length) g.lines.push(`Not asked: ${list(notAsked.map((b) => b.name))}.`);
     g.sub = each.asked.map((id) => {
@@ -687,14 +689,16 @@
     g.rows = g.sub.flatMap((s) => s.rows);
     const failed = g.sub.filter((s) => s.tone).map((s) => s.name);
     g.complete = !notAsked.length && !failed.length && g.sub.every((s) => !s.partial);
-    g.say = [failed.length ? `${list(failed)} couldn't be searched.` : "", notAsked.length ? `${plural(notAsked.length, "bot was", "bots were")} not asked.` : ""].filter(Boolean).join(" ");
+    // A bot being searched again keeps the group pending.
+    g.pending = g.sub.some((s) => s.line.endsWith("searching…"));
+    g.say = [head, failed.length ? `${list(failed)} couldn't be searched.` : "", notAsked.length ? `${plural(notAsked.length, "bot was", "bots were")} not asked.` : ""].filter(Boolean).join(" ");
     if (notAsked.length) g.actions.push({ key: "act:each-next", label: `Search the next ${plural(Math.min(EACH_CAP, notAsked.length), "bot")}`, act: () => searchEach(q, 0) });
     return g;
   }
 
   function filesGroup(q) {
     const gf = S.groups.files || { state: "searching" };
-    const g = { id: "files", name: "Files", rows: [], lines: [], actions: [], state: gf.state, complete: false, none: "File names the gateway returned from each bot's workspace", say: "" };
+    const g = { id: "files", name: "Files", rows: [], lines: [], actions: [], state: gf.state, complete: false, none: "File names returned from workspaces the palette can verify. Some folders may be skipped", say: "" };
     if (gf.state === "short") {
       g.lines.push("Type 2 or more characters to search file names.");
       g.state = "note";
@@ -705,10 +709,12 @@
     const by = (s) => gf.order.filter((e) => gf.per[e.bot]?.state === s).map((e) => e.bot);
     const done = by("done");
     const R = gf.order;
+    if (!R.length) g.lines.push("Not searched: the gateway's bots haven't loaded yet.");
     if (done.length) g.lines.push(`Names the gateway returned from the workspaces of ${list(done.map(botName))}. Some folders may be skipped.`);
     const empty = done.filter((id) => !gf.per[id].rows.length);
     if (empty.length) g.lines.push(`No file names returned from ${list(empty.map(botName))}.`);
-    for (const id of done) if (gf.per[id].truncated) g.lines.push(`${botName(id)}: the gateway stopped at its limit of 500 names or 5,000 entries walked.`);
+    const capped = done.filter((id) => gf.per[id].truncated);
+    for (const id of capped) g.lines.push(`${botName(id)}: the gateway stopped at its limit of 500 names or 5,000 entries walked.`);
     const unverified = R.filter((e) => !e.via).map((e) => e.bot);
     if (unverified.length) g.lines.push(`Not searched: ${list(unverified.map((id) => `${botName(id)}'s workspace`))} could not be verified.`);
     for (const id of by("noroot")) g.lines.push(`${botName(id)}: the gateway returned no workspace for its task, so nothing was searched.`);
@@ -719,19 +725,30 @@
       g.actions.push({ key: `act:retry-files:${id}`, label: `Try again for ${botName(id)}`, act: () => { S.filesRetried = true; gf.state = "searching"; askFilesFor(q, gf.order.find((e) => e.bot === id), () => {}); render(); } });
     }
     const notAsked = R.filter((e) => e.via && !gf.per[e.bot]);
+    if (by("searching").length) g.state = "searching";
     if (notAsked.length) {
       g.lines.push(`Not asked yet: ${list(notAsked.map((e) => botName(e.bot)))}.`);
       g.actions.push({ key: "act:files-next", label: `Search the next ${plural(Math.min(FILES_CAP, notAsked.length), "bot")}' files`.replace("bot' files", "bot's files"), act: () => askFiles(q, 1) });
     }
-    if (done.length !== R.length) g.lines.push(`${done.length} of ${R.length} bots' workspaces searched.`);
+    if (R.length && done.length !== R.length) g.lines.push(`${done.length} of ${R.length} bots' workspaces searched.`);
     for (const id of done)
       for (const path of gf.per[id].rows) {
         const name = path.split("/").pop();
         const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : `${botName(id)}'s workspace`;
         g.rows.push({ kind: "file", key: `file:${id}:${path}`, bot: id, path, first: esc(name), second: `${esc(folder)} · ${esc(botName(id))}`, name: `File ${path}, ${botName(id)}` });
       }
-    g.complete = done.length === R.length && done.every((id) => !gf.per[id].truncated);
-    g.say = [unverified.length || notAsked.length || by("noroot").length ? `${plural(R.length - done.length, "bot's workspace was", "bots' workspaces were")} not searched.` : "", g.tone ? "Some workspaces couldn't be searched." : ""].filter(Boolean).join(" ");
+    // An uncapped reply describes the names returned; some folders may be skipped, so Files is
+    // never complete and always keeps its coverage line.
+    g.complete = false;
+    g.say = [
+      !R.length ? "Files weren't searched: the gateway's bots haven't loaded yet." : "",
+      R.length && done.length === R.length ? "Some folders may be skipped." : "",
+      capped.length ? `The file search stopped at its limit for ${list(capped.map(botName))}.` : "",
+      unverified.length || notAsked.length || by("noroot").length ? `${plural(R.length - done.length, "bot's workspace was", "bots' workspaces were")} not searched.` : "",
+      g.tone ? "Some workspaces couldn't be searched." : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     return g;
   }
 
@@ -768,7 +785,10 @@
       g.tone = "danger";
       g.actions.push({ key: "act:more-retry", label: "Try again", act: () => { S.retriedMore = true; askRoutines(q, gr.rows.length); } });
       g.say = "More routines couldn't be loaded.";
-    } else if (gr.more === "loading") g.lines.push("Loading more…");
+    } else if (gr.more === "loading") {
+      g.lines.push("Loading more…");
+      g.pending = true;
+    }
     else if (gr.hasMore) {
       g.lines.push(`First ${gr.rows.length} of ${gr.total}`);
       g.actions.push({ key: "act:more-routines", label: `Show ${plural(Math.min(ROUTINE_PAGE, gr.total - gr.rows.length), "more routine", "more routines")}`, act: () => askRoutines(q, gr.rows.length) });
@@ -807,19 +827,23 @@
   const inScope = (id) => !phone() || S.scope === "all" || (S.scope === "messages" && ["tasks", "messages", "links"].includes(id)) || S.scope === id;
 
   // One summary drives the list's end and the live region, so the two can't disagree.
+  // No global title and no combined count while any group in view has limited coverage or a pending
+  // request: an incomplete view names the sources that finished empty, then the limits of the rest.
   function summary(all, q) {
+    // Group Chats always says its one line.
+    if (phone() && S.scope === "groups") return { visible: [], pending: false, none: [], allClear: false, say: "Group chats aren't part of Clawtrate yet." };
     const visible = all.filter((g) => inScope(g.id));
-    const pending = visible.some((g) => g.state === "searching");
+    const pending = visible.some((g) => g.state === "searching" || g.pending);
     const total = visible.reduce((n, g) => n + g.rows.length, 0);
     const none = visible.filter((g) => g.complete && !g.rows.length);
     const incomplete = visible.filter((g) => !g.complete);
-    const allClear = !pending && !total && !incomplete.length;
+    const allClear = !pending && visible.length > 0 && !total && !incomplete.length;
     let say = "";
     if (!pending) {
       if (allClear) say = `No results for ${q}.`;
       else {
         const counts = visible.filter((g) => g.rows.length).map((g) => plural(g.rows.length, g.name.toLowerCase().replace(/s$/, ""), g.name.toLowerCase()));
-        const parts = [total ? `${plural(total, "result")}: ${counts.join(", ")}.` : "", none.length ? `No matches in ${list(none.map((g) => g.name))}.` : ""];
+        const parts = [total && !incomplete.length ? `${plural(total, "result")}: ${counts.join(", ")}.` : "", none.length ? `No matches in ${list(none.map((g) => g.name))}.` : ""];
         for (const g of incomplete) parts.push(g.say || `${g.name} were searched only in part.`);
         say = parts.filter(Boolean).join(" ");
       }
@@ -892,7 +916,7 @@
       ["Bots", "Every bot this connection can see, by name."],
       ["Tasks", `Titles in this device's task list, which keeps up to 500 tasks${tasksCut ? ". It was cut short and holds the most recent tasks only" : ""}.`],
       ["Messages", "User messages and bot replies in tasks this gateway lets you see. Excludes routine runs, subagent tasks and archived tasks."],
-      ["Files", "File names the gateway returns from each bot's workspace."],
+      ["Files", "File names returned from workspaces the palette can verify. Some folders may be skipped."],
       ["Links", n ? `Links in the conversations loaded on this device: ${n} now.` : "Links in conversations you open. None is loaded now."],
       ["Routines", "Routine names, descriptions and bot details."],
       ["Settings", "The sections of Clawtrate's Settings."],
@@ -1238,6 +1262,8 @@
   function setScope(id) {
     S.scope = id;
     S.active = null;
+    clearTimeout(S.announceTimer);
+    unsay();
     render();
     ask();
     $(`#s-scope-${id}`)?.focus();
@@ -1292,13 +1318,13 @@
     if (restoreFocus && S.opener && document.contains(S.opener)) S.opener.focus();
   }
 
-  // The live region speaks only for the generation it was asked in.
-  function announce(text, gen) {
+  // The live region speaks only for the generation and the scope it was asked in.
+  function announce(text, gen, scope = S.scope) {
     const live = $("#s-live");
     if (!live) return;
     live.textContent = "";
     setTimeout(() => {
-      if (gen === S.gen && S.open) live.textContent = text;
+      if (gen === S.gen && scope === S.scope && S.open) live.textContent = text;
     }, 30);
   }
   // The app's own announcer, after search closed: it speaks only while search stays closed, in the
@@ -1317,10 +1343,11 @@
     render();
     clearTimeout(S.announceTimer);
     const gen = S.gen;
+    const scope = S.scope;
     S.announceTimer = setTimeout(() => {
-      if (!S.open || gen !== S.gen || S.groups.messages?.each) return;
+      if (!S.open || gen !== S.gen || scope !== S.scope) return;
       const sum = summary(groups(), S.query.trim());
-      if (!sum.pending) announce(sum.say, gen);
+      if (!sum.pending) announce(sum.say, gen, scope);
     }, 400);
   }
 
@@ -1372,7 +1399,7 @@
       S.lanes = {};
       if (offline()) {
         if (S.query.trim()) for (const id of ["messages", "files", "routines"]) S.groups[id] = { state: "offline" };
-        render();
+        settle();
       } else if (name === "connected") ask();
       else render();
     },
