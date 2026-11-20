@@ -9,12 +9,15 @@ import {
   INTERACTIVE_SCOPES,
   scopeSatisfied,
   type AccountsState,
+  type DesktopUpdateSnapshot,
+  type UpdateTrack,
   type Bot,
   type ConnectionState,
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useCommand } from "./bridge.tsx";
+import { Updates } from "./Updates.tsx";
+import { useBridge, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
 import { useMachinesSection } from "./machines/Machines.tsx";
@@ -67,12 +70,13 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = "gateway" | "accounts" | "usage" | "machines";
+type Section = "gateway" | "accounts" | "usage" | "machines" | "updates";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
   ["usage", "Usage"],
   ["machines", "Machines"],
+  ["updates", "Updates"],
 ];
 /** ⌘, opens on the section last shown, Gateway the first time. */
 const SHOWN_LAST = "settings-section";
@@ -82,21 +86,30 @@ export function Settings({
   info,
   accounts,
   bots,
+  initialUpdates,
+  updateSnapshot,
+  refused,
+  onChoice,
   onClose,
 }: {
   connection: ConnectionState;
   info: HostInfo;
   accounts: AccountsState;
   bots: readonly Bot[];
+  initialUpdates: boolean;
+  updateSnapshot: DesktopUpdateSnapshot | null;
+  refused: UpdateTrack | null;
+  onChoice: (track: UpdateTrack) => void;
   onClose: () => void;
 }) {
+  const { desktopUpdates } = useBridge();
   const send = useCommand();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const [section, setSectionState] = useState<Section>(
-    () => recall<Section>(SHOWN_LAST) ?? "gateway",
+  const [section, setSectionState] = useState<Section>(() =>
+    initialUpdates ? "updates" : (recall<Section>(SHOWN_LAST) ?? "gateway"),
   );
   // On a phone the list comes first; a section replaces it.
-  const [pane, setPane] = useState<"nav" | "section">("nav");
+  const [pane, setPane] = useState<"nav" | "section">(initialUpdates ? "section" : "nav");
   const [announcer, announce] = useAnnouncer();
   const setSection = (next: Section) => {
     remember(SHOWN_LAST, next);
@@ -338,7 +351,21 @@ export function Settings({
           ? usageSection
           : section === "machines"
             ? machinesSection
-            : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+            : section === "updates"
+              ? {
+                  title: "Updates",
+                  back: toNav,
+                  foot: null,
+                  body: (
+                    <Updates
+                      snapshot={updateSnapshot}
+                      updates={desktopUpdates}
+                      refused={refused}
+                      onChoice={onChoice}
+                    />
+                  ),
+                }
+              : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">

@@ -1,0 +1,31 @@
+.updates-section fieldset {
+  margin: 1rem 0;
+  padding: 0;
+  border: 0;
+}
+.updates-section legend {
+  font-weight: 600;
+}
+.updates-section label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  margin-inline-end: 18px;
+}
+.updates-section input,
+.updates-section progress {
+  accent-color: var(--accent);
+}
+.updates-section progress {
+  width: 100%;
+}
+@container app (max-width: 687px) {
+  .rail-footer:has(.update-entry) {
+    display: flex;
+    justify-content: flex-end;
+  }
+  .rail-footer:has(.update-entry) .gateway-pill {
+    display: none;
+  }
+}

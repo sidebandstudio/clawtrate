@@ -461,6 +461,7 @@ function answerStrings(
 export function createFixtureBridge(
   name: SceneName,
   options: {
+    desktopUpdates?: ClawtrateBridge["desktopUpdates"];
     files?: FileParams;
     accounts?: AccountParams;
     usage?: UsageParams;
@@ -806,7 +807,7 @@ export function createFixtureBridge(
   }
 
   return {
-    desktopUpdates: noDesktopUpdates,
+    desktopUpdates: options.desktopUpdates ?? noDesktopUpdates,
     info: name === "access-pinned" ? { ...FIXTURE_INFO, readOnly: true } : FIXTURE_INFO,
     getState: () => state,
     subscribe(listener) {

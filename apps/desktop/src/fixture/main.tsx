@@ -24,6 +24,7 @@ import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
 import { accountParams } from "./accounts.ts";
 import { usageParams } from "./usage.ts";
+import { fixtureUpdates } from "./updates.ts";
 import { machineParams } from "./machines.ts";
 
 const params = new URLSearchParams(location.search);
@@ -77,6 +78,7 @@ seedPreferences();
 document.documentElement.dataset.host = "web";
 const sceneName = params.get("scene");
 const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
+  desktopUpdates: fixtureUpdates(params),
   files: fileParams(params),
   accounts: accountParams(params),
   usage: usageParams(params),
