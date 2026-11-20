@@ -22,6 +22,7 @@ import {
   type BridgeCommand,
   type BridgeResultFor,
   type ClawtrateBridge,
+  noDesktopUpdates,
   type ClawtrateState,
   type ConnectionState,
   type HostInfo,
@@ -832,6 +833,7 @@ export function createFixtureBridge(
   }
 
   return {
+    desktopUpdates: noDesktopUpdates,
     info: name === "access-pinned" ? { ...FIXTURE_INFO, readOnly: true } : FIXTURE_INFO,
     getState: () => state,
     subscribe(listener) {
