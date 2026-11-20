@@ -1,3 +1,4 @@
+import type { DesktopUpdates } from "@clawtrate/core";
 import { expect, test } from "@playwright/test";
 import { contextFor, openFixture, settle, showList, SIZES, OTTO_DISK } from "./fixture.ts";
 
@@ -81,7 +82,7 @@ test("F-231: a retired offer closes its confirmation without restarting", async 
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await page.evaluate(() => {
     const host = window as unknown as {
-      clawtrateFixture: { desktopUpdates: import("@clawtrate/core").DesktopUpdates };
+      clawtrateFixture: { desktopUpdates: DesktopUpdates };
     };
     return host.clawtrateFixture.desktopUpdates.chooseTrack("nightly");
   });

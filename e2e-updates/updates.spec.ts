@@ -61,7 +61,10 @@ async function stopElectron(app: ChildProcess) {
     clearTimeout(timer);
   }
 }
-const test = base.extend<{ desktopApp: TestApp; installer: "unsigned" | "mac" | "manual" }>({
+const test = base.extend<{
+  desktopApp: TestApp;
+  installer: "unsigned" | "mac" | "mac-unconfirmed" | "manual";
+}>({
   installer: ["unsigned", { option: true }],
   desktopApp: async ({ playwright, installer }, use) => {
     const desktop = join(import.meta.dirname, "../apps/desktop");
@@ -531,7 +534,7 @@ async function requestFile(page: Page) {
   await page.getByRole("button", { name: "Check for Updates", exact: true }).click();
   await page.getByRole("button", { name: "Download", exact: true }).click();
 }
-for (const mode of ["mac", "manual"] as const) {
+for (const mode of ["mac", "mac-unconfirmed", "manual"] as const) {
   test.describe(mode, () => {
     test.use({ installer: mode });
     test("F-231: confirms one shown offer, follows handoff and reads the version on a later launch", async ({
@@ -553,7 +556,7 @@ for (const mode of ["mac", "manual"] as const) {
       );
       const mac =
         "macOS installs the update when Clawtrate next quits, also if the restart does not complete.";
-      if (mode === "mac") await expect(dialog).toContainText(mac);
+      if (mode !== "manual") await expect(dialog).toContainText(mac);
       else await expect(dialog).not.toContainText(mac);
       await expect(cancel).toBeFocused();
       await page.keyboard.press("Shift+Tab");
@@ -574,7 +577,6 @@ for (const mode of ["mac", "manual"] as const) {
       expect(typeof id).toBe("string");
       writeFileSync(join(profile, "hold-inspect"), "");
       writeFileSync(join(profile, "hold-launch"), "");
-      if (mode === "manual") writeFileSync(join(profile, "lose-acknowledgement"), "");
       await restart.click();
       await confirm.click();
       async function locked(text: string) {
@@ -608,6 +610,11 @@ for (const mode of ["mac", "manual"] as const) {
           await openUpdates(next);
           await expect(next.locator(".update-result")).toContainText(line);
         }
+        expect(server.requests).toEqual(["/stable", filePath]);
+      } else if (mode === "manual") {
+        await expect(result).toContainText("Couldn't hand the update to the installer.");
+        await expect(result.getByRole("button", { name: "Check for Updates" })).toBeVisible();
+        await expect(restart).toHaveCount(0);
         expect(server.requests).toEqual(["/stable", filePath]);
       } else {
         await locked(

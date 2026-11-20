@@ -16,15 +16,16 @@ export async function startDesktopUpdates(
   const refusal = join(profile, "inspect-refusal");
   const installer: UpdateInstaller = {
     unavailable: mode === "unsigned" ? "build-not-signed" : null,
-    ...(mode === "mac" ? { completesOnQuit: true } : {}),
-    requestsQuit: true,
+    ...(mode === "mac" || mode === "mac-unconfirmed" ? { completesOnQuit: true } : {}),
     async inspect() {
       while (existsSync(join(profile, "hold-inspect"))) await pause(20);
       return existsSync(refusal) ? (readFileSync(refusal, "utf8") as UpdateInstallRefusal) : null;
     },
-    async launch(_file, _signal, handed) {
+    async launch(_file, _signal, handed, submitted) {
       while (existsSync(join(profile, "hold-launch"))) await pause(20);
-      if (existsSync(join(profile, "lose-acknowledgement"))) return "handoff-unconfirmed";
+      if (mode === "manual") return "installer-failed";
+      submitted?.();
+      if (mode === "mac-unconfirmed") return "installer-failed";
       handed();
       return null;
     },
