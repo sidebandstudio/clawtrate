@@ -883,6 +883,17 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
     },
   });
 
+  it("F-324: an empty activity list is confirmed only when the gateway returns the list", async () => {
+    const read = (answer: unknown) =>
+      readActivity(
+        fake({ "audit.activity.list": () => answer, "config.get": () => ({ config: {} }) }).ctx,
+        { cursor: null, agentId: null, status: null },
+        { rulesListed: false, loaded: new Map() },
+      );
+    await expect(read({})).rejects.toThrow("no list of activity events");
+    await expect(read({ events: [] })).resolves.toMatchObject({ rows: [] });
+  });
+
   it("a cause is Recorded only from a decision record of the same run and call, naming the version it had", async () => {
     const gateway = fake({
       "audit.activity.list": () => ({

@@ -1059,8 +1059,9 @@ export async function readActivity(
     ctx.request("config.get", {}).then(asRecord, () => null),
   ]);
   const page = asRecord(answer);
-  const events = Array.isArray(page?.events) ? page.events.slice(0, ACTIVITY_PAGE_RECORDS) : [];
-  const rows = activityRows(events);
+  if (!Array.isArray(page?.events))
+    throw new Error("The gateway's answer has no list of activity events.");
+  const rows = activityRows(page.events.slice(0, ACTIVITY_PAGE_RECORDS));
   const audit = asRecord(asRecord(asRecord(config?.config)?.logging)?.audit);
   const recording = config === null ? "unknown" : audit?.enabled === false ? "off" : "on";
   let decisions: Awaited<ReturnType<typeof decisionsOf>> | null = null;
