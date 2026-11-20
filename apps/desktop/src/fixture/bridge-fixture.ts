@@ -54,6 +54,7 @@ import {
   fixtureAccounts,
   NO_ACCOUNT_PARAMS,
   withAccess,
+  withBotEffort,
   type AccountParams,
 } from "./accounts.ts";
 import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machines.ts";
@@ -516,12 +517,15 @@ export function createFixtureBridge(
       : { ...initial, transcripts: withFileRuns(initial.transcripts, now, fileParams) };
   // Every scene with bots has the gateway's accounts; the address can give it more access.
   if (state.bots.length > 0)
-    state = withAccess(
-      {
-        ...state,
-        accounts: fixtureAccounts(now, accountParams),
-        routines: fixtureRoutines(now, routineParams),
-      },
+    state = withBotEffort(
+      withAccess(
+        {
+          ...state,
+          accounts: fixtureAccounts(now, accountParams),
+          routines: fixtureRoutines(now, routineParams),
+        },
+        accountParams,
+      ),
       accountParams,
     );
   // And the usage the gateway reports, with this person's budgets.

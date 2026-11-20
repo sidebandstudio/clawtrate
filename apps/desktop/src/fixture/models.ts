@@ -15,6 +15,9 @@
 //                  is read, and after its read failed
 //   model-unlisted the task is on acme/dev-gone at Ultra, which the list does not contain
 //   model-no-levels the task is on acme/dev-old, which the list gives with no levels
+//   model-no-levels-kept
+//                  model-no-levels, with High the effort last read for the task
+//   model-unreported the task is on acme/dev-quiet, whose entry leaves its levels out
 //
 // `access=read` (accounts.ts) gives any of them the read-only form. Invented content only.
 
@@ -41,6 +44,8 @@ export const MODEL_SCENES = [
   "model-list-failed",
   "model-unlisted",
   "model-no-levels",
+  "model-no-levels-kept",
+  "model-unreported",
 ] as const;
 export type ModelScene = (typeof MODEL_SCENES)[number];
 
@@ -58,6 +63,7 @@ export const FIXTURE_MODELS: CatalogModel[] = [
     name: null,
     available: true,
     levels: LEVELS,
+    levelsReported: true,
     defaultLevel: "low",
   },
   {
@@ -66,6 +72,7 @@ export const FIXTURE_MODELS: CatalogModel[] = [
     name: null,
     available: true,
     levels: LEVELS,
+    levelsReported: true,
     defaultLevel: "low",
   },
   {
@@ -74,10 +81,29 @@ export const FIXTURE_MODELS: CatalogModel[] = [
     name: null,
     available: true,
     levels: ["off", "ultra"],
+    levelsReported: true,
     defaultLevel: "off",
   },
-  { provider: "acme", id: "dev-old", name: null, available: false, levels: [], defaultLevel: null },
+  {
+    provider: "acme",
+    id: "dev-old",
+    name: null,
+    available: false,
+    levels: [],
+    levelsReported: true,
+    defaultLevel: null,
+  },
 ];
+/** A model whose entry leaves its levels out (`thinkingLevels` is optional). */
+const QUIET: CatalogModel = {
+  provider: "acme",
+  id: "dev-quiet",
+  name: null,
+  available: true,
+  levels: [],
+  levelsReported: false,
+  defaultLevel: null,
+};
 
 const interactive = (state: ClawtrateState): ClawtrateState => ({
   ...state,
@@ -202,6 +228,8 @@ export function modelScene(name: ModelScene, base: ClawtrateState, now: number):
     ],
     "model-unlisted": ["acme/dev-gone", {}],
     "model-no-levels": ["acme/dev-old", {}],
+    "model-no-levels-kept": ["acme/dev-old", {}],
+    "model-unreported": ["acme/dev-quiet", { models: [...FIXTURE_MODELS, QUIET] }],
   };
   const known = unknown[name];
   if (known) {
@@ -209,7 +237,13 @@ export function modelScene(name: ModelScene, base: ClawtrateState, now: number):
     state = withRow(state, ({ effort: _effort, effortDefault: _default, ...task }) => ({
       ...task,
       model,
-      ...(model === "acme/dev-old" ? {} : { effort: "ultra" }),
+      ...(name === "model-no-levels"
+        ? {}
+        : name === "model-no-levels-kept"
+          ? { effort: "high" }
+          : name === "model-unreported"
+            ? {}
+            : { effort: "ultra" }),
     }));
     return { ...state, taskModels: { [OPEN_TASK]: view(state, change) } };
   }

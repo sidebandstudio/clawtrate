@@ -15,7 +15,8 @@ import {
   type TaskModelsContext,
   type TaskModelView,
 } from "../src/task-models.ts";
-import type { CatalogModel } from "../src/accounts.ts";
+import { readCatalog, type CatalogModel } from "../src/accounts.ts";
+import { mapAgents } from "../src/mapping.ts";
 import type { Task } from "../src/types.ts";
 import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { GatewayError, memoryStorage, until } from "./fake-gateway.ts";
@@ -28,6 +29,7 @@ const MODELS: CatalogModel[] = [
     name: null,
     available: true,
     levels: LEVELS,
+    levelsReported: true,
     defaultLevel: "low",
   },
   {
@@ -36,6 +38,7 @@ const MODELS: CatalogModel[] = [
     name: null,
     available: true,
     levels: LEVELS,
+    levelsReported: true,
     defaultLevel: "low",
   },
   {
@@ -44,6 +47,7 @@ const MODELS: CatalogModel[] = [
     name: null,
     available: true,
     levels: ["off", "ultra"],
+    levelsReported: true,
     defaultLevel: "off",
   },
   {
@@ -52,6 +56,7 @@ const MODELS: CatalogModel[] = [
     name: null,
     available: true,
     levels: LEVELS,
+    levelsReported: true,
     defaultLevel: "low",
   },
 ];
@@ -736,6 +741,26 @@ describe("a task's model and effort", () => {
     // An empty list is not a model with no levels.
     expect(effortLevels(listed([]), "acme/dev-1")).toEqual({ kind: "unlisted" });
   });
+
+  it("F-043: a catalogue entry without thinkingLevels does not establish an empty level list", () => {
+    const models = readCatalog({
+      models: [
+        { id: "dev-quiet", provider: "acme" },
+        { id: "dev-old", provider: "acme", thinkingLevels: [] },
+      ],
+    });
+    expect(models.map((m) => [m.id, m.levels, m.levelsReported])).toEqual([
+      ["dev-quiet", [], false],
+      ["dev-old", [], true],
+    ]);
+    const view: TaskModelView = { ...emptyTaskModel, catalog: "ready", models };
+    expect(effortLevels(view, "acme/dev-quiet")).toEqual({ kind: "unreported" });
+    expect(effortLevels(view, "acme/dev-old")).toEqual({ kind: "none" });
+    // A refresh that failed says so, though an earlier read listed the model.
+    expect(
+      effortLevels({ ...view, catalog: "error", catalogError: "timed out" }, "acme/dev-old"),
+    ).toEqual({ kind: "failed", error: "timed out" });
+  });
 });
 
 describe("the client around a task's model", () => {
@@ -876,6 +901,20 @@ function ottoEntry(fake: { config: unknown }): { model: { primary: string } } {
 }
 
 describe("a bot's model and effort", () => {
+  it("F-043: the effort agents.list reports for a bot is kept with it, and none is made up", () => {
+    const bots = mapAgents({
+      defaultId: "otto",
+      agents: [
+        { id: "otto", model: { primary: "acme/dev-1" }, thinkingDefault: "high" },
+        { id: "pip", model: { primary: "acme/dev-1" } },
+      ],
+    });
+    expect(bots.map((bot) => [bot.id, bot.effort])).toEqual([
+      ["otto", "high"],
+      ["pip", undefined],
+    ]);
+  });
+
   it("F-042 F-043: a bot's change is saved only once the bot read back shows it", async () => {
     const { AccountsGateway, accountsClient } = await import("./accounts-fake.ts");
     const fake = new AccountsGateway();

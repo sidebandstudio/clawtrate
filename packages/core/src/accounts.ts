@@ -158,6 +158,11 @@ export type CatalogModel = {
   name: string | null;
   available: boolean;
   levels: string[];
+  /**
+   * The gateway's entry gave its levels as a list (`thinkingLevels`, which the
+   * protocol makes optional): only then does an empty `levels` mean none.
+   */
+  levelsReported: boolean;
   defaultLevel: string | null;
 };
 
@@ -682,6 +687,7 @@ export function readCatalog(answer: unknown): CatalogModel[] {
       name: str(model.name),
       available: model.available !== false,
       levels,
+      levelsReported: Array.isArray(model.thinkingLevels),
       defaultLevel: str(model.thinkingDefault),
     });
   }

@@ -59,6 +59,8 @@ export type AccountParams = {
    * takes a change of model and fails the read after it, so it is unconfirmed.
    */
   botsave: "slow" | "unread" | null;
+  /** The effort `agents.list` reports for the open bot, when it reports one. */
+  boteffort: string | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -78,6 +80,7 @@ export function accountParams(params: URLSearchParams): AccountParams {
     defacct: params.get("defacct") === "1",
     keyfails: params.get("keyfails") === "1",
     keyread: params.get("keyread") === "fail",
+    boteffort: params.get("boteffort"),
     botsave:
       params.get("botsave") === "slow" || params.get("botsave") === "unread"
         ? (params.get("botsave") as "slow" | "unread")
@@ -104,6 +107,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   keyfails: false,
   keyread: false,
   botsave: null,
+  boteffort: null,
 };
 
 const MINUTE = 60_000;
@@ -338,6 +342,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         name: null,
         available: true,
         levels: ["off", "low", "medium", "high"],
+        levelsReported: true,
         defaultLevel: "medium",
       },
       {
@@ -346,6 +351,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         name: null,
         available: true,
         levels: ["low", "medium"],
+        levelsReported: true,
         defaultLevel: "low",
       },
       {
@@ -354,6 +360,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         name: null,
         available: false,
         levels: ["low", "medium", "high"],
+        levelsReported: true,
         defaultLevel: "medium",
       },
       {
@@ -362,6 +369,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         name: null,
         available: true,
         levels: ["low", "high"],
+        levelsReported: true,
         defaultLevel: "low",
       },
       {
@@ -370,6 +378,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         name: null,
         available: true,
         levels: [],
+        levelsReported: true,
         defaultLevel: null,
       },
       {
@@ -378,6 +387,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         name: null,
         available: true,
         levels: ["off", "low", "medium", "high"],
+        levelsReported: true,
         defaultLevel: "medium",
       },
       {
@@ -386,6 +396,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         name: null,
         available: true,
         levels: ["low", "medium", "high"],
+        levelsReported: true,
         defaultLevel: "medium",
       },
     ],
@@ -415,6 +426,31 @@ function withLock(state: AccountsState, params: AccountParams, now: number): Acc
         mode: "account",
         order: { ids: ["openai:work"], stored: true, configured: null },
         evidence: evidence({ status: "matched", checkedAt: at, lastMatchAt: at }),
+      });
+    case "noeffort":
+      // Bound, and its config sets no effort of its own.
+      return patch({
+        primary: work,
+        account: "openai:work",
+        provider: "openai",
+        model: "gpt-5.5",
+        mode: "account",
+        effort: null,
+        order: null,
+        evidence: evidence({ status: "none", checkedAt: at }),
+      });
+    case "default":
+      // On the gateway's default model: no model of its own.
+      return patch({
+        primary: null,
+        account: null,
+        provider: null,
+        model: null,
+        mode: "default-model",
+        fallbacks: null,
+        effort: null,
+        order: null,
+        evidence: evidence({ status: "none", checkedAt: at }),
       });
     case "bound":
     case "watching":
@@ -598,6 +634,14 @@ function withLock(state: AccountsState, params: AccountParams, now: number): Acc
     default:
       return state;
   }
+}
+
+/** The open bot with the effort `agents.list` reports for it (`boteffort=<level>`). */
+export function withBotEffort(state: ClawtrateState, params: AccountParams): ClawtrateState {
+  const effort = params.boteffort;
+  if (!effort) return state;
+  const id = params.bot ?? "otto";
+  return { ...state, bots: state.bots.map((b) => (b.id === id ? { ...b, effort } : b)) };
 }
 
 /** The connection with the access the address names. */

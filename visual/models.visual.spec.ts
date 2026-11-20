@@ -70,6 +70,12 @@ const SCENES: Scene[] = [
     scene: "model-unlisted",
     prepare: openDetails,
   },
+  {
+    name: "model-no-levels-kept",
+    rows: "F-043",
+    scene: "model-no-levels-kept",
+    prepare: openDetails,
+  },
 ];
 
 for (const size of SIZES) {
@@ -214,7 +220,7 @@ test.describe("a task's model and effort, behaviour", () => {
       ["model-list-failed", "Couldn't load the models: The gateway did not answer in time."],
       [
         "model-unlisted",
-        "acme/dev-gone isn't in the gateway's list of models, so its effort levels aren't known.",
+        "acme/dev-gone isn't in the list shown here, so its effort levels aren't known.",
       ],
     ];
     for (const [scene, words] of cases) {
@@ -232,7 +238,7 @@ test.describe("a task's model and effort, behaviour", () => {
     }
     await expect(menu).toBeHidden();
     await chip(page).click();
-    await expect(menu).toContainText("Effort: acme/dev-gone isn't in the gateway's list of models");
+    await expect(menu).toContainText("Effort: acme/dev-gone isn't in the list shown here");
     await expect(menu.getByRole("group", { name: "Effort" })).toHaveCount(0);
     await page.keyboard.press("Escape");
     // A failed read is offered again.
@@ -254,6 +260,31 @@ test.describe("a task's model and effort, behaviour", () => {
     await openDetails(page);
     await expect(effort).toHaveAccessibleName("Effort: Not offered");
     await expect(line).toHaveText("For this task. Otto's own model is in Settings.");
+    // Listed with none, and an effort read for the task before: that effort stays.
+    await openFixture(page, `scene=model-no-levels-kept&${OTTO_DISK}`, "light");
+    await expect(chip(page)).toHaveAccessibleName(
+      "Model for this task: acme/dev-old, High effort. Change.",
+    );
+    await openDetails(page);
+    await expect(effort).toHaveAccessibleName("Effort: High");
+    await expect(effort).toBeDisabled();
+  });
+
+  test("F-043: a catalogue entry without thinkingLevels does not establish an empty level list", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=model-unreported&${OTTO_DISK}`, "light");
+    await expect(chip(page)).toHaveAccessibleName(
+      "Model for this task: acme/dev-quiet, effort not reported. Change.",
+    );
+    await openDetails(page);
+    const effort = page.getByTestId("task-effort-select");
+    await expect(effort).toHaveAccessibleName("Effort: Not reported");
+    await expect(effort).toBeDisabled();
+    await expect(page.getByTestId("task-model-line")).toHaveText(
+      "The gateway didn't report this model's effort levels.",
+    );
+    await expect(details(page)).not.toContainText("Not offered");
   });
 
   test("F-042 F-043: a read-only connection sees the values and no control", async ({ page }) => {
@@ -321,5 +352,22 @@ test.describe("a bot's model and effort in its settings", () => {
       "Couldn't confirm the change. Showing the last settings read.",
     );
     await expect(page.getByTestId("model-select")).toHaveAccessibleName("Model: gpt-5.5");
+  });
+
+  test("F-043: Bot Settings shows a gateway-reported effort or Not reported", async ({ page }) => {
+    // Neither configured nor reported: no level is proposed in its place.
+    await openFixture(page, settings().replace("lock=bound", "lock=noeffort"), "light");
+    await expect(page.getByTestId("model-select")).toHaveAccessibleName("Model: gpt-5.5");
+    await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Not reported");
+    // The effort agents.list reports for the bot.
+    await openFixture(
+      page,
+      settings("&boteffort=high").replace("lock=bound", "lock=noeffort"),
+      "light",
+    );
+    await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: High");
+    // A configured effort is the bot's own.
+    await openFixture(page, settings(), "light");
+    await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Medium");
   });
 });

@@ -1,7 +1,7 @@
 // Model and effort, side by side (bots.md section 9): the models the gateway
 // lists for the provider, unavailable ones shown and disabled, and the levels
-// the gateway reports for the chosen model, or "Not offered" when it lists the
-// model with none. A model its list does not contain keeps the effort last read.
+// the gateway reports for the chosen model, or "Not offered" when its entry
+// gives none. An effort neither reported nor configured is "Not reported".
 
 import type { AccountsState } from "@clawtrate/core";
 import { Select } from "./parts.tsx";
@@ -46,7 +46,9 @@ export function ModelPair({
       />
       <Select
         label="Effort"
-        value={levels.length === 0 ? noLevelsWord(models, model, effort) : (effort ?? levels[0]!)}
+        value={
+          levels.length === 0 ? noLevelsWord(models, model, effort) : (effort ?? "Not reported")
+        }
         choices={levels.map((level) => ({ value: level, label: levelWord(level) }))}
         onChoose={onEffort}
         disabled={disabled || levels.length === 0}

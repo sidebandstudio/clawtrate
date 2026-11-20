@@ -185,23 +185,30 @@ export function catalogEntry(models: readonly CatalogModel[], ref: string | null
 
 /**
  * What is known of a model's effort levels (25.2): the levels the gateway
- * lists for it; none, which is "Not offered" and said only then; or why they
- * are not known: the list is not read yet, its read failed, or it does not
- * contain the model.
+ * lists for it; none, which is "Not offered" and said only when its entry
+ * gives an empty list; or why they are not known: the list is not read yet,
+ * its last read failed, it does not contain the model, or its entry leaves the
+ * levels out.
  */
 export type EffortLevels =
   | { kind: "levels"; levels: string[] }
   | { kind: "none" }
   | { kind: "loading" }
   | { kind: "failed"; error: string | null }
-  | { kind: "unlisted" };
+  | { kind: "unlisted" }
+  | { kind: "unreported" };
 
 export function effortLevels(view: TaskModelView | undefined, ref: string | null): EffortLevels {
+  // A failed read has its own words, whatever an earlier read listed.
+  if (view?.catalog === "error") return { kind: "failed", error: view.catalogError };
   const entry = catalogEntry(view?.models ?? [], ref);
   if (entry)
-    return entry.levels.length ? { kind: "levels", levels: entry.levels } : { kind: "none" };
+    return entry.levels.length
+      ? { kind: "levels", levels: entry.levels }
+      : entry.levelsReported
+        ? { kind: "none" }
+        : { kind: "unreported" };
   if (!view || view.catalog === "idle" || view.catalog === "loading") return { kind: "loading" };
-  if (view.catalog === "error") return { kind: "failed", error: view.catalogError };
   return { kind: "unlisted" };
 }
 

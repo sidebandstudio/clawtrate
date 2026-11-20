@@ -674,6 +674,7 @@ const bot = flagged<Bot>()({
   avatarUrl: json(MAX_AVATAR_CHARS),
   theme: NAME,
   model: NAME,
+  effort: ENUM,
   isDefault: FLAG,
 });
 const task = flagged<Task>()({
@@ -904,6 +905,7 @@ const catalogModel = object<CatalogModel>()({
   name: NAME,
   available: FLAG,
   levels: list(MAX_EFFORT_LEVELS, ENUM),
+  levelsReported: FLAG,
   defaultLevel: ENUM,
 });
 const storedOrder = object<StoredOrder>()({

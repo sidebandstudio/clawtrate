@@ -60,6 +60,7 @@ export function mapAgents(result: unknown): Bot[] {
       avatarUrl: safeAvatarUrl(identity.avatarUrl),
       theme: str(identity.theme),
       model: str(model?.primary) ?? (typeof agent.model === "string" ? agent.model : null),
+      ...(str(agent.thinkingDefault) ? { effort: str(agent.thinkingDefault)! } : {}),
       isDefault: id === defaultId,
     });
   }

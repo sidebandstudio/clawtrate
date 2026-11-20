@@ -39,8 +39,10 @@ function unknownLevels(known: EffortLevels, model: string | null): string | null
   if (known.kind === "loading") return "Loading the models…";
   if (known.kind === "failed")
     return `Couldn't load the models${known.error ? `: ${known.error}` : ""}.`;
+  // The list shown is the task's provider's first models, not every model the gateway has.
   if (known.kind === "unlisted")
-    return `${model ?? "This model"} isn't in the gateway's list of models, so its effort levels aren't known.`;
+    return `${model ?? "This model"} isn't in the list shown here, so its effort levels aren't known.`;
+  if (known.kind === "unreported") return "The gateway didn't report this model's effort levels.";
   return null;
 }
 
@@ -369,13 +371,7 @@ export function TaskModelDetails({
         />
         <Select
           label="Effort"
-          value={
-            known.kind === "none"
-              ? "Not offered"
-              : levels.length === 0
-                ? effortWord(shown.effort, known)
-                : (shown.effort ?? "")
-          }
+          value={levels.length === 0 ? effortWord(shown.effort, known) : (shown.effort ?? "")}
           choices={levels.map((level) => ({ value: level, label: levelWord(level) }))}
           onChoose={(effort) => void choose({ model: null, effort })}
           disabled={!connected || levels.length === 0}

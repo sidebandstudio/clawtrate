@@ -435,7 +435,7 @@ export function BotSettings({
                 accounts={listed}
                 provider={provider}
                 model={model}
-                effort={binding.effort ?? firstEffort(listed, provider, model)}
+                effort={binding.effort ?? bot.effort ?? null}
                 disabled={!admin || connection.status !== "connected"}
                 onModel={(next) => {
                   const levels =

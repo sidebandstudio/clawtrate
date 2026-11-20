@@ -130,6 +130,11 @@ export type Bot = {
   avatarUrl: string | null;
   theme: string | null;
   model: string | null;
+  /**
+   * The effort the gateway reports the bot uses (`thinkingDefault` in
+   * `agents.list`), when it reports one.
+   */
+  effort?: string;
   isDefault: boolean;
   /** Paths of fields cut to their bound (an avatar too large to keep is dropped). */
   cut?: string[];
