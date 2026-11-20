@@ -533,7 +533,7 @@ export class DesktopUpdateService {
     this.retireFile();
     if (handed) return this.reply("accepted");
     if (reason) return fail(reason);
-    this.options.quitAfterLaunch?.();
+    if (!installer.requestsQuit) this.options.quitAfterLaunch?.();
     return this.reply("accepted");
   }
 }

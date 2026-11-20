@@ -1,6 +1,7 @@
 // Feed addresses and the release date are compiled into the main bundle.
 import { DesktopUpdateService, type UpdateServiceOptions } from "./service.ts";
 
+import { windowsInstaller } from "../windows-install.ts";
 import { macInstaller } from "../mac-install.ts";
 import type { UpdateInstaller } from "./install.ts";
 import type { UpdateInstallRefusal } from "@clawtrate/core";
@@ -8,12 +9,19 @@ import type { UpdateInstallRefusal } from "@clawtrate/core";
 declare const __CLAWTRATE_SIGNED_MAC__: boolean | undefined;
 declare const __CLAWTRATE_WINDOWS_PUBLISHER__: string | null | undefined;
 
-function buildInstaller(platform: string, arch: string, packaged: boolean): UpdateInstaller {
+function buildInstaller(
+  platform: string,
+  arch: string,
+  packaged: boolean,
+  requestQuit?: () => void,
+): UpdateInstaller {
   const publisher =
     typeof __CLAWTRATE_WINDOWS_PUBLISHER__ === "string" ? __CLAWTRATE_WINDOWS_PUBLISHER__ : null;
   // A signed Windows build still needs an installed trial of NSIS's later opens.
   const signedWindows =
     packaged && platform === "win32" && !!publisher && /^[A-F0-9]{64}$/.test(publisher);
+  if (signedWindows && arch === "x64" && requestQuit)
+    return windowsInstaller(publisher!, requestQuit);
   const signedMac =
     platform === "darwin" &&
     typeof __CLAWTRATE_SIGNED_MAC__ !== "undefined" &&
@@ -62,7 +70,7 @@ export function startDesktopUpdates(
     downloadDir,
     store,
     changed,
-    installer: buildInstaller(platform, arch, packaged && !!quitAfterLaunch),
+    installer: buildInstaller(platform, arch, packaged && !!quitAfterLaunch, quitAfterLaunch),
     ...(quitAfterLaunch && { quitAfterLaunch }),
     feeds: { stable: BUILD_FEED_ADDRESS, nightly: BUILD_NIGHTLY_FEED_ADDRESS },
     releaseDate: BUILD_RELEASE_DATE,

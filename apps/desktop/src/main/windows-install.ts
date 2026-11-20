@@ -1,6 +1,6 @@
 import type { UpdateInstallRefusal } from "@clawtrate/core";
 import { runUpdatePowerShell } from "./private-update-directory.ts";
-import type { VerifiedArtifact } from "./update/install.ts";
+import type { UpdateInstaller, VerifiedArtifact } from "./update/install.ts";
 
 // One native call holds the directory entries and the read-only image open
 // through the per-user setup process. Elevated handoff stays unavailable.
@@ -363,4 +363,19 @@ export async function windowsInstall(
   } catch {
     return authorized ? ("handoff-unconfirmed" as const) : failure;
   }
+}
+
+/** The owner’s signed trial must establish NSIS sharing on the target system
+ * before the service can offer this adapter. Its owner requests quit only
+ * after acquiring the initiating process handle. */
+export function windowsInstaller(publisher: string, requestQuit: () => void): UpdateInstaller {
+  return {
+    unavailable: "no-installer-path",
+    requestsQuit: true,
+    async inspect(file) {
+      const reason = await windowsInstall(file, publisher, false);
+      return reason === "installer-failed" ? "inspection-failed" : reason;
+    },
+    launch: (file, signal) => windowsInstall(file, publisher, true, signal, requestQuit),
+  };
 }

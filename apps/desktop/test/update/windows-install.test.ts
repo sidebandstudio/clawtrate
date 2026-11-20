@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { expect, it, vi } from "vitest";
 import { runUpdatePowerShell } from "../../src/main/private-update-directory.ts";
-import { windowsInstall } from "../../src/main/windows-install.ts";
+import { windowsInstaller, windowsInstall } from "../../src/main/windows-install.ts";
 import type { VerifiedArtifact } from "../../src/main/update/install.ts";
 
 vi.mock("../../src/main/private-update-directory.ts", () => ({ runUpdatePowerShell: vi.fn() }));
@@ -163,3 +163,15 @@ it.each([
     expect(await pending).toBe(reason);
   },
 );
+
+it("keeps the production adapter gated and delegates quit to its waiting owner", async () => {
+  const quit = vi.fn();
+  const adapter = windowsInstaller(pin, quit);
+  expect(adapter).toMatchObject({ unavailable: "no-installer-path", requestsQuit: true });
+  const native = nativeStandIn();
+  const pending = adapter.launch(file, new AbortController().signal, () => {});
+  native.stdout.emit("data", proof.join(" ") + "\nwaiting\n");
+  expect(quit).toHaveBeenCalledTimes(1);
+  native.finish("quit-blocked");
+  expect(await pending).toBe("quit-blocked");
+});
