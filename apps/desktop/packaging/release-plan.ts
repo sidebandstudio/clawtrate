@@ -1,7 +1,8 @@
+import { artifactFormat } from "./candidate-format.ts";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildAddressProblem, checkFeedAddress } from "../src/main/update/address.ts";
+import { buildAddressProblem } from "../src/main/update/address.ts";
 import { MAX_DOWNLOAD_BYTES, MAX_FEED_BYTES } from "../src/main/update/engine.ts";
 import { FEED_FORMAT, FILE_KEYS, parseReleaseDate, type FileKey } from "../src/main/update/feed.ts";
 import { parseVersion, versionTrack } from "../src/main/update/version.ts";
@@ -40,25 +41,12 @@ function json(path: string) {
   }
 }
 
-const signingStates = [
-  "ad hoc",
-  "unsigned",
-  "certificate",
-  "developer-id-notarized",
-  "authenticode-valid",
-  "invalid",
-  "unknown",
-] as const;
-
-function expectedSigning(key: FileKey) {
-  return key === "win-x64" ? "authenticode-valid" : "developer-id-notarized";
-}
-
+const ownerChecks =
+  "This plan does not establish that the files may be published. Signing, notarization and updating in place are verified by the owner on each system, as the runbook says.";
 export function plan(candidate: Candidate) {
   const { dir, track, version, commit, buildDate, feedUrl } = candidate;
   const parsed = parseVersion(version);
   const issues: string[] = [];
-  const holds: string[] = [];
   const files = [];
   const validTrack = track === "stable" || track === "nightly";
   const validCommit = fullCommit(commit);
@@ -70,7 +58,6 @@ export function plan(candidate: Candidate) {
   const address = buildAddressProblem(feedUrl) ? null : new URL(feedUrl);
   if (!address || address.search || address.hash || address.pathname.endsWith("/"))
     issues.push("Expected a direct HTTPS feed address.");
-  else if (!checkFeedAddress(feedUrl).ok) holds.push("The build uses a placeholder feed.");
 
   const allowed = new Set(["update-feed.json", "release-plan.json"]);
   const feed = json(join(dir, "update-feed.json"));
@@ -87,7 +74,6 @@ export function plan(candidate: Candidate) {
     const receiptName = key + ".json";
     allowed.add(receiptName);
     const receipt = json(join(dir, receiptName));
-    const signing = signingStates.find((state) => state === receipt.signing) ?? "unknown";
     const hasReceipt = Object.keys(receipt).length > 0;
     if (hasReceipt && receipt.feedHash !== feedFingerprint(feedUrl))
       issues.push(key + ": build used a different feed address.");
@@ -95,8 +81,6 @@ export function plan(candidate: Candidate) {
       issues.push(key + ": missing or different source commit.");
     if (hasReceipt && receipt.buildDate !== buildDate)
       issues.push(key + ": missing or different build date.");
-    if (signing !== expectedSigning(key))
-      holds.push(key + ": signing is " + signing + "; requires " + expectedSigning(key) + ".");
     if (!parsed) continue;
     const name = artifactName(version, key);
     allowed.add(name);
@@ -119,8 +103,10 @@ export function plan(candidate: Candidate) {
     if (hasEntry && entry.size !== size) issues.push(key + ": feed size differs.");
     if (hasEntry && entry.sha512 !== sha512) issues.push(key + ": feed digest differs.");
     if (hasReceipt && receipt.sha512 !== sha512)
-      issues.push(key + ": bytes differ from signing readback.");
-    files.push({ name, size, sha512, signing });
+      issues.push(key + ": bytes differ from the build record.");
+    const format = size > 0 && size <= MAX_DOWNLOAD_BYTES ? artifactFormat(key, path) : null;
+    if (!format) issues.push(key + ": invalid artifact format or architecture.");
+    files.push({ name, size, sha512, format, signing: "not checked by this plan" });
   }
   if (
     readdirSync(dir, { withFileTypes: true }).some(
@@ -134,9 +120,9 @@ export function plan(candidate: Candidate) {
     commit: validCommit ? commit : null,
     buildDate: validDate ? buildDate : null,
     files,
-    verdict: issues.length || holds.length ? "not publishable" : "publishable",
+    verdict: issues.length ? "refused" : "complete and consistent",
     issues,
-    holds,
+    ownerChecks,
   };
 }
 
@@ -193,9 +179,9 @@ export function runPlan(args: string[], print = console.log) {
     print(
       [record.track, record.version, record.verdict].join(" ") +
         "\n" +
-        [...record.issues, ...record.holds].join("\n"),
+        [record.ownerChecks, ...record.issues].join("\n"),
     );
-    return record.issues.length ? 1 : record.holds.length ? 2 : 0;
+    return record.issues.length ? 1 : 0;
   } catch {
     console.error("Could not read the candidate or write a fresh record.");
     return 1;

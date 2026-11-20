@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   mkdtempSync,
   readFileSync,
@@ -28,6 +29,43 @@ const mac = "mac-arm64";
 const file = () => path(artifactName(c.version, mac));
 const read = (name: string) => JSON.parse(readFileSync(path(name), "utf8"));
 const write = (name: string, value: unknown) => writeFileSync(path(name), JSON.stringify(value));
+// Small structural fixtures. No fixture is executed or signed.
+function macZip(cpu: number): Buffer {
+  return execFileSync(process.platform === "win32" ? "python" : "python3", [
+    "-I",
+    "-c",
+    `
+import io, plistlib, struct, sys, zipfile
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w") as z:
+    z.writestr("Clawtrate.app/Contents/Info.plist", plistlib.dumps({"CFBundleExecutable":"Clawtrate"}))
+    z.writestr("Clawtrate.app/Contents/MacOS/Clawtrate", struct.pack("<10I", 0xfeedfacf, int(sys.argv[1]), 0, 2, 1, 8, 0, 0, 0x1b, 8))
+sys.stdout.buffer.write(buf.getvalue())`,
+    String(cpu),
+  ]);
+}
+function pe(machine: number) {
+  const b = Buffer.alloc(1024);
+  b.write("MZ");
+  b.writeUInt32LE(64, 60);
+  b.write("PE", 64);
+  b.writeUInt16LE(machine, 68);
+  b.writeUInt16LE(1, 70);
+  b.writeUInt16LE(240, 84);
+  b.writeUInt16LE(2, 86);
+  b.writeUInt16LE(0x20b, 88);
+  b.writeUInt32LE(4096, 104);
+  b.writeUInt32LE(4096, 340);
+  b.writeUInt32LE(512, 344);
+  b.writeUInt32LE(512, 348);
+  b.writeUInt32LE(0x60000020, 364);
+  return b;
+}
+const samples = {
+  "mac-arm64": macZip(0x0100000c),
+  "mac-x64": macZip(0x01000007),
+  "win-x64": pe(0x8664),
+};
 beforeEach(() => {
   c = {
     dir: mkdtempSync(join(tmpdir(), "release-test-")),
@@ -39,7 +77,7 @@ beforeEach(() => {
   };
   for (const key of FILE_KEYS) {
     const name = artifactName(c.version, key);
-    writeFileSync(path(name), key);
+    writeFileSync(path(name), samples[key]);
     write(key + ".json", {
       name,
       commit: c.commit,
@@ -55,13 +93,14 @@ afterEach(() => rmSync(c.dir, { recursive: true, force: true }));
 
 it("checks the complete set of signed build receipts and all final bytes", () => {
   const result = plan(c);
-  expect(result).toMatchObject({ verdict: "publishable", issues: [], holds: [] });
+  expect(result).toMatchObject({ verdict: "complete and consistent", issues: [] });
   expect(result.files).toHaveLength(3);
   expect(result.files[0]).toEqual({
     name: artifactName(c.version, mac),
-    size: mac.length,
+    size: samples[mac].length,
     sha512: sha512Base64(file()),
-    signing: "developer-id-notarized",
+    format: "ZIP with arm64 Mach-O app executable",
+    signing: "not checked by this plan",
   });
   expect(() => assemble(c)).toThrow();
 });
@@ -78,7 +117,7 @@ it("reports missing, misnamed, empty and leftover artifacts together without pri
     ]),
   );
   expect(JSON.stringify(result)).not.toContain("private-name");
-  expect(result.verdict).toBe("not publishable");
+  expect(result.verdict).toBe("refused");
 });
 it("rejects a symbolic link, oversized file or malformed receipt", () => {
   rmSync(file());
@@ -156,28 +195,29 @@ it("checks version syntax, both track mismatches, commit, date and the HTTPS fee
     ]),
   );
   expect(JSON.stringify(result)).not.toContain("private");
-  expect(plan({ ...c, feedUrl: "https://updates.example/feed.json" }).holds).toContain(
-    "The build uses a placeholder feed.",
-  );
 });
-it.each([
-  "ad hoc",
-  "unsigned",
-  "certificate",
-  "unknown",
-  "invalid",
-  "authenticode-valid",
-  "arbitrary personal data",
-])("refuses Mac signing readback %s", (signing) => {
-  write(mac + ".json", { ...read(mac + ".json"), signing });
+it("refuses text, truncated archives, swapped Mac architectures and a different PE machine even with matching receipts and feed digests", () => {
+  for (const [key, bytes] of [
+    [mac, Buffer.from("text")],
+    [mac, samples[mac].subarray(0, -12)],
+    [mac, samples["mac-x64"]],
+    ["win-x64", pe(0xaa64)],
+  ] as const) {
+    const name = artifactName(c.version, key);
+    writeFileSync(path(name), bytes);
+    write(key + ".json", { ...read(key + ".json"), sha512: sha512Base64(path(name)) });
+    rmSync(path("update-feed.json"));
+    assemble(c);
+    expect(plan(c).issues).toContain(key + ": invalid artifact format or architecture.");
+  }
+});
+it("labels signing as unchecked whatever the build record says", () => {
+  for (const key of FILE_KEYS)
+    write(key + ".json", { ...read(key + ".json"), signing: "arbitrary personal data" });
   const result = plan(c);
-  expect(result.verdict).toBe("not publishable");
-  expect(result.holds[0]).toContain("requires developer-id-notarized");
-  expect(JSON.stringify(result)).not.toContain("arbitrary personal data");
-});
-it("refuses unsigned Windows and distinguishes the packager's readback from its signing plan", () => {
-  write("win-x64.json", { ...read("win-x64.json"), signing: "unsigned" });
-  expect(plan(c).holds).toContain("win-x64: signing is unsigned; requires authenticode-valid.");
+  expect(result.verdict).toBe("complete and consistent");
+  expect(result.files.every((f) => f.signing === "not checked by this plan")).toBe(true);
+  expect(JSON.stringify(result)).not.toContain("personal data");
   for (const [log, kind] of [
     ["ad hoc", "ad hoc"],
     ["certificate", "certificate"],
@@ -199,9 +239,12 @@ it("rechecks the saved candidate from the command line and preserves the feed on
       ...read(key + ".json"),
       signing: key === "win-x64" ? "unsigned" : "ad hoc",
     });
-  expect(check()).toBe(2);
-  expect(lines.at(-1)).toContain("stable 0.2.0 not publishable");
-  expect(read("release-plan.json")).toMatchObject({ issues: [], verdict: "not publishable" });
+  expect(check()).toBe(0);
+  expect(lines.at(-1)).toContain("stable 0.2.0 complete and consistent");
+  expect(read("release-plan.json")).toMatchObject({
+    issues: [],
+    verdict: "complete and consistent",
+  });
   const feed = read("update-feed.json");
   writeFileSync(file(), "changed");
   expect(check()).toBe(1);
