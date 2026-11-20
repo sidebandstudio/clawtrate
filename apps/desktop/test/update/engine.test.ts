@@ -186,6 +186,39 @@ describe("the update engine against a local feed", () => {
     expect(await chunked.check()).toEqual(failed("check", "too-large"));
   });
 
+  it("refuses a feed that declares more than its bound at once, without waiting for a body that never comes", async () => {
+    server.route("/feed.json", (_request, response) => {
+      response.writeHead(200, { "content-length": String(64 * 1024 + 1) });
+      response.flushHeaders();
+    });
+    const { engine } = engineFor(server, dir.path, { limits: { feedTimeoutMs: 2000 } });
+    expect(await engine.check()).toEqual(failed("check", "too-large"));
+  });
+
+  it("counts F-010 from the build's own date it was given, and only while a newer version is on offer", async () => {
+    const file = payload();
+    let body: unknown = feedFor(server.origin, "0.2.0", {
+      size: file.body.length,
+      sha512: file.sha512,
+    });
+    server.route("/feed.json", (request, response) => json(body)(request, response));
+    const now = new Date("2026-11-19T00:00:00.000Z");
+    const old = engineFor(server, dir.path, {
+      buildReleaseDate: "2026-11-04T23:59:59.000Z",
+    }).engine;
+    const recent = engineFor(server, dir.path, {
+      buildReleaseDate: "2026-11-05T00:00:00.000Z",
+    }).engine;
+    expect(old.updateRequired(now)).toBe(false);
+    await old.check();
+    await recent.check();
+    expect(old.updateRequired(now)).toBe(true);
+    expect(recent.updateRequired(now)).toBe(false);
+    body = "{ not json";
+    await old.check();
+    expect(old.updateRequired(now)).toBe(false);
+  });
+
   it("reports an unreachable feed as unreachable", async () => {
     const port = server.port;
     await server.close();

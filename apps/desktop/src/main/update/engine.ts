@@ -58,6 +58,22 @@ export type UpdateState =
       readonly status?: number;
     };
 
+export const UPDATE_REQUIRED_AFTER_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * F-010: "Update required" when a newer version exists and this build is more
+ * than 14 days old by its own release date. The feed's dates play no part.
+ */
+export function isUpdateRequired(
+  newer: NewerVersion | null,
+  buildReleaseDate: string | null,
+  now: Date,
+): boolean {
+  if (!newer || !buildReleaseDate) return false;
+  const built = Date.parse(buildReleaseDate);
+  return Number.isFinite(built) && now.getTime() - built > UPDATE_REQUIRED_AFTER_MS;
+}
+
 /** A newer version the last check found, for F-010 and the screens. */
 export interface NewerVersion {
   readonly version: string;
@@ -83,6 +99,8 @@ export const DEFAULT_LIMITS: Limits = {
 export interface UpdateEngineOptions {
   /** The feed's address. The production constructor passes the one fixed at build time. */
   readonly feedAddress: string | null;
+  /** The build's own release date, for F-010. The production constructor passes the build's. */
+  readonly buildReleaseDate?: string | null;
   /** The running app's version, `app.getVersion()`. */
   readonly currentVersion: string;
   /** A folder of the app's own for downloads; created 0700 if missing. */
@@ -143,6 +161,11 @@ export class UpdateEngine {
     return this.found
       ? { version: formatVersion(this.found.version), releaseDate: this.found.releaseDate }
       : null;
+  }
+
+  /** F-010 now: the last check found a newer version and this build is more than 14 days old. */
+  updateRequired(now: Date): boolean {
+    return isUpdateRequired(this.newer, this.options.buildReleaseDate ?? null, now);
   }
 
   /** Reads the feed once. While a check or a download runs, returns that one's result. */

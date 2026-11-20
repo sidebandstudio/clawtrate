@@ -8,7 +8,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   BUILD_FEED_ADDRESS,
   BUILD_RELEASE_DATE,
+  DEFAULT_LIMITS,
   isUpdateRequired,
+  MAX_FEED_BYTES,
   productionUpdateEngine,
 } from "../../src/main/update/index.ts";
 import { buildAddressProblem, checkFeedAddress } from "../../src/main/update/address.ts";
@@ -173,6 +175,19 @@ describe("F-010's age is the build's own", () => {
     expect(isUpdateRequired(null, "2026-01-01T00:00:00.000Z", now)).toBe(false);
     expect(isUpdateRequired(newer, null, now)).toBe(false);
     expect(BUILD_RELEASE_DATE).toBeNull();
+  });
+});
+
+describe("the production engine's bounds", () => {
+  it("are the documented ones, written out", () => {
+    expect(MAX_FEED_BYTES).toBe(65_536);
+    expect(DEFAULT_LIMITS).toEqual({
+      maxFeedBytes: 65_536,
+      feedTimeoutMs: 15_000,
+      maxDownloadBytes: 536_870_912,
+      downloadTimeoutMs: 1_800_000,
+      idleTimeoutMs: 60_000,
+    });
   });
 });
 
