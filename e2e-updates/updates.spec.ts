@@ -66,7 +66,7 @@ const test = base.extend<{
   installer: "unsigned" | "mac" | "mac-unconfirmed" | "manual";
 }>({
   installer: ["manual", { option: true }],
-  desktopApp: async ({ playwright, installer }, use) => {
+  desktopApp: async ({ playwright, installer }, use, testInfo) => {
     const desktop = join(import.meta.dirname, "../apps/desktop");
     const require = createRequire(join(desktop, "package.json"));
     const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "clawtrate-update-app-")));
@@ -163,8 +163,9 @@ const test = base.extend<{
         });
         return page;
       }
+      const page = await launch("0.1.0");
       await use({
-        page: await launch("0.1.0"),
+        page,
         relaunch: launch,
         server,
         filePath,
@@ -174,6 +175,18 @@ const test = base.extend<{
         manifest,
         rendererRequests,
       });
+      if (testInfo.status !== testInfo.expectedStatus && !page.isClosed()) {
+        const reading = await page.evaluate(async () => {
+          const { state, preferenceIssue } = await (
+            window as unknown as ProbeWindow
+          ).clawtrateHost.desktopUpdates.get();
+          return { state, preferenceIssue };
+        });
+        console.log(
+          "Update status at failure",
+          JSON.stringify({ requests: server.requests, ...reading }),
+        );
+      }
     } finally {
       resume.resolve();
       await cleanup.disposeAsync();
