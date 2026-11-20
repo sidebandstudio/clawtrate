@@ -799,6 +799,13 @@ The host side of "Another computer" (`docs/design/setup.md` sections 5, 8 and 19
 - **A routine's refused call** is counted `failed` (`tool_failed`) in the audit log, not `blocked`, and the routine run's transcript was empty, so the gateway's sentence for it ("Plugin approval unavailable: cron runs have no approval-capable initiating surface.") was not seen again. The plugin's record shows the ask answered `cancelled`.
 - **Removing an entry from a bot's deny list** with `config.patch` needs `replacePaths`; with it, `null` removes the key.
 
+## The website
+
+The website lives in `site/` as plain HTML, CSS and one script, with no build step and no dependencies, so any static host can serve the folder as it is. It loads nothing from another host: no analytics, no trackers, no third-party scripts. Figtree's Latin file is committed under `site/fonts/` with its OFL licence beside it, because a static folder has no bundler to take it from the npm package the app uses. The screens on the site are crops of the macOS visual baselines in `visual/baselines/`, never of a real gateway.
+
+- `site/download/mac/` sends visitors to the GitHub releases page until the first signed beta is published.
+- `site/install.sh` reads `updates/beta/latest-mac.json` (`{"version", "url", "sha256"}`) from the site, downloads the zip it names over HTTPS, and refuses to install unless the SHA-256 matches, `codesign --verify --deep --strict` passes and `spctl --assess --type execute` accepts the app. It copies `Clawtrate.app` into `/Applications`, asks before replacing a copy that is there, and never uses `sudo`. `CLAWTRATE_FEED` and `CLAWTRATE_APPLICATIONS` point it at a stand-in feed and folder for testing.
+
 ## Not done yet
 
 - The Work pane shows the task's details; its Files and Computer tabs are empty states until those flows exist.
