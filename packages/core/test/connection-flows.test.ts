@@ -563,4 +563,56 @@ describe("connecting", () => {
     expect(JSON.parse(storage.data.get("connection")!)).toEqual({ url: URL, token: null });
     client.stop();
   });
+
+  it("a refused device token that could not be removed leaves the refusal on screen, and is not taken for a pairing", async () => {
+    // A removal that fails unhandled fails this file: Vitest reports every unhandled rejection.
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "bootstrap" });
+    await until(() => client.state.connection.status === "connected");
+    expect(client.state.connection.paired).toBe(true);
+    const remove = storage.delete.bind(storage);
+    storage.delete = (key) =>
+      key === tokenKey(URL) ? Promise.reject(new Error("The disk is full.")) : remove(key);
+    // The gateway no longer accepts this device's token.
+    const refuse = () => ({
+      ok: false as const,
+      error: {
+        code: "UNAUTHORIZED",
+        message: "device token mismatch",
+        details: { code: "AUTH_DEVICE_TOKEN_MISMATCH", recommendedNextStep: "re_pair" },
+      },
+    });
+    gateway.connectReply = refuse;
+    gateway.dropAll();
+    await until(() => client.state.connection.error?.code === "AUTH_DEVICE_TOKEN_MISMATCH");
+    await sleep(50);
+    expect(storage.data.has(tokenKey(URL)), "the refused token is still on disk").toBe(true);
+    expect(client.state.connection).toMatchObject({
+      paired: false,
+      error: { code: "AUTH_DEVICE_TOKEN_MISMATCH", message: "device token mismatch" },
+    });
+    // Another attempt does not take the token still on disk for a pairing.
+    const attempts = gateway.connects.length;
+    await client.retryNow();
+    expect(client.state.connection.paired, "trying again is not paired").toBe(false);
+    await until(() => gateway.connects.length > attempts);
+    await until(() => client.state.connection.error?.code === "AUTH_DEVICE_TOKEN_MISMATCH");
+    expect(client.state.connection.paired).toBe(false);
+    // Only a hello says this device is paired.
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    await client.retryNow();
+    await until(() => client.state.connection.status === "connected");
+    expect(client.state.connection.paired).toBe(true);
+    client.stop();
+  });
 });

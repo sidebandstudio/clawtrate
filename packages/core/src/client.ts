@@ -4776,7 +4776,6 @@ export class ClawtrateClient {
 
     const stored = await this.loadToken(settings.url, identity.deviceId, "operator");
     if (generation !== this.generation) return;
-    const paired = stored !== null;
     // Reopening the same gateway keeps what is on screen until fresh data arrives.
     const sameGateway = this.state.connection.gatewayUrl === settings.url;
     const hasData = sameGateway && this.state.bots.length > 0;
@@ -4795,7 +4794,7 @@ export class ClawtrateClient {
         status: hasData ? "reconnecting" : "connecting",
         gatewayUrl: settings.url,
         deviceId: identity.deviceId,
-        paired,
+        // Not paired yet: only a hello says so, since a saved token may be one the gateway refuses.
         requestedScopes:
           stored && !this.options.readOnly ? [...stored.heldScopes] : [...READ_SCOPES],
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
@@ -5138,10 +5137,14 @@ export class ClawtrateClient {
       };
     }
 
-    if (code === "AUTH_TOKEN_MISMATCH" || code === "AUTH_DEVICE_TOKEN_MISMATCH") {
+    const refused = code === "AUTH_TOKEN_MISMATCH" || code === "AUTH_DEVICE_TOKEN_MISMATCH";
+    if (refused) {
       // A stored device token was revoked or rotated elsewhere. Forget it so the
-      // next attempt can pair again with a bootstrap token.
-      void tokenStore.clear(this.tokenParams(deviceId));
+      // next attempt can pair again with a bootstrap token. The gateway's refusal
+      // stays on screen whether or not the host could remove it.
+      void (async () => tokenStore.clear(this.tokenParams(deviceId)))().catch(() =>
+        this.log("warn", "Could not remove the rejected device token from this device."),
+      );
     }
 
     const pause = shouldPauseGatewayReconnect({ details: error.details });
@@ -5149,6 +5152,7 @@ export class ClawtrateClient {
       status: pause ? "error" : this.everConnected ? "reconnecting" : "connecting",
       pairing: null,
       error: { code, message: error.message, hint },
+      ...(refused ? { paired: false } : {}),
     });
     // The gateway stopped accepting this device: work waiting for access will not get it on this connection.
     if (pause)
