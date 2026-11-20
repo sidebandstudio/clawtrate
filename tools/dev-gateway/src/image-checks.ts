@@ -47,6 +47,8 @@ export type ImageContext = {
   gatewayToken: string;
   /** The scripted model's log, where its egress proxy records what it refused. */
   providerLog: string;
+  /** The gateway's log, where it records what its fetches got back. */
+  gatewayLog: string;
   stamp: string;
 };
 
@@ -316,6 +318,7 @@ export const IMAGE_CHECKS: ImageCheck[] = [
       const reference = `http://${host}/hill.png`;
       const since = (await standInRequests(ctx)).length;
       const logged = readFileSync(ctx.providerLog, "utf8").length;
+      const beforeGateway = readFileSync(ctx.gatewayLog, "utf8").length;
       const answer = rec(
         await ctx.writer.request(
           "tools.invoke",
@@ -332,6 +335,15 @@ export const IMAGE_CHECKS: ImageCheck[] = [
       const refusal = `refused a request beyond loopback: CONNECT ${host}:80`;
       const lines = readFileSync(ctx.providerLog, "utf8").slice(logged);
       expect(lines.includes(refusal), `the egress proxy did not record "${refusal}"`);
+      const diagnostics = readFileSync(ctx.gatewayLog, "utf8").slice(beforeGateway).split("\n");
+      expect(
+        diagnostics.some(
+          (line) =>
+            line.includes(reference) &&
+            line.includes("Proxy response (403) !== 200 when HTTP Tunneling"),
+        ),
+        "the gateway did not observe HTTP 403 for this reference",
+      );
       same(
         (await standInRequests(ctx)).slice(since),
         [],

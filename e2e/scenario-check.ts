@@ -242,6 +242,7 @@ async function computerChecks(
       stateDir: inst.stateDir,
       gatewayToken: readDevConnection(inst.connectionFile)!.token,
       providerLog: join(inst.runDir, "provider.log"),
+      gatewayLog: join(inst.runDir, "gateway.log"),
       stamp: Date.now().toString(36),
     });
     console.log(`${images.passed} of ${images.passed + images.failed} image checks passed`);
