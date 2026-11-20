@@ -4,11 +4,13 @@ import { execFileSync } from "node:child_process";
 
 export type WindowsProcess = { pid: number; ppid: number; command: string };
 
-function powershell(script: string, env: NodeJS.ProcessEnv = {}): string {
+function powershell(script: string, env: NodeJS.ProcessEnv = {}, timeout?: number): string {
   return execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
     encoding: "utf8",
     env: { ...process.env, ...env },
     stdio: ["ignore", "pipe", "inherit"],
+    timeout,
+    killSignal: "SIGKILL",
   });
 }
 
@@ -40,9 +42,37 @@ export function mainWindowTitle(pid: number): string {
  * ("3 unread"), and is empty while there is no overlay. The button is found by
  * its application id, which the packaged app sets to its bundle id, compared
  * without regard to case.
- * Returns null if no taskbar has a button with that id.
+ * Returns null if no taskbar has a button with that id, and undefined if the
+ * read failed or took longer than 5 seconds: a synchronous read blocks the
+ * event loop, so one that hangs would outlast any poll around it. Each read
+ * is appended to `reads`, for the failure's report.
  */
-export function taskbarOverlayDescription(appId: string): string | null {
+export function taskbarOverlayDescription(
+  appId: string,
+  reads: OverlayRead[],
+): string | null | undefined {
+  const at = new Date().toISOString();
+  const started = Date.now();
+  try {
+    const value = readOverlay(appId);
+    reads.push({ at, ms: Date.now() - started, value });
+    return value;
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    reads.push({
+      at,
+      ms: Date.now() - started,
+      error: code === "ETIMEDOUT" ? "timed out" : String(error),
+    });
+    return undefined;
+  }
+}
+
+export type OverlayRead = { at: string; ms: number } & (
+  { value: string | null } | { error: string }
+);
+
+function readOverlay(appId: string): string | null {
   const out = powershell(
     `
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
@@ -54,6 +84,7 @@ foreach ($bar in $ae::RootElement.FindAll([Windows.Automation.TreeScope]::Childr
   if ($button) { 'found:' + $button.Current.HelpText; break }
 }`,
     { CLAWTRATE_CHECK_APP_ID: appId },
+    5_000,
   ).trim();
   return out.startsWith("found:") ? out.slice("found:".length) : null;
 }
