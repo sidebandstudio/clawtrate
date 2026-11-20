@@ -133,6 +133,14 @@ it("F-521: success requires exit zero and a 204 within the first 4 KiB", async (
     [success + "\nprintf '%9000s' ' '", true],
   ] as const)
     expect(await starRepository(script(body))).toBe(ok);
+  for (const [body, expected] of [
+    ["printf 'HTTP/1.1 302 Found\\r\\n'\n" + success, false],
+    ["printf 'HTTP/2.0 2'\n/bin/sleep 0.05\nprintf '04\\r\\n'", true],
+    ["printf 'HTTP/2.0 204 %4082s\\n' ''", true],
+    ["printf 'HTTP/2.0 204 %4083s\\n' ''", false],
+  ] as const)
+    expect(await starRepository(script(body))).toBe(expected);
+  expect(await starRepository(script(success + "\nexec /bin/sleep 30"), 100)).toBe(false);
 });
 
 it("F-521: the CLI uses its stored config with prompts, update checks and telemetry disabled", async () => {
@@ -311,5 +319,53 @@ it("F-521: Windows config paths must name a drive or a complete UNC share", asyn
     }
     expect(launches.map((env) => env.GH_CONFIG_DIR)).toEqual(valid);
     expect(trace.every((entry) => entry.endsWith(" " + executable))).toBe(true);
+  });
+});
+
+it("F-521: startup walks the listed paths and activation rechecks only the chosen link", async () => {
+  writeFileSync(gh, "");
+  vi.stubEnv("PATH", "/on-path");
+  const entries = {
+    "/on-path/gh": "file",
+    "/opt": "directory",
+    "/usr": "directory",
+    "/usr/local": "directory",
+    "/usr/local/bin": "directory",
+    "/usr/local/bin/gh": { link: "/Volumes/shared/gh" },
+    "/opt/local": "directory",
+    "/opt/local/bin": "directory",
+    "/opt/local/bin/gh": { link: "/installed/program" },
+    "/installed": "directory",
+    "/installed/program": "file",
+  } as const;
+  const recheck = [
+    "lstat /opt",
+    "lstat /opt/local",
+    "lstat /opt/local/bin",
+    "lstat /opt/local/bin/gh",
+    "readlink /opt/local/bin/gh",
+    "lstat /installed",
+    "lstat /installed/program",
+    "stat /installed/program",
+    "access /installed/program",
+  ];
+  await withInstallation("darwin", entries, async (host, trace, launches) => {
+    const cli = host.findGitHubCli();
+    expect(cli?.path).toBe("/installed/program");
+    expect(trace).toEqual([
+      "lstat /opt",
+      "lstat /opt/homebrew",
+      "lstat /usr",
+      "lstat /usr/local",
+      "lstat /usr/local/bin",
+      "lstat /usr/local/bin/gh",
+      "readlink /usr/local/bin/gh",
+      ...recheck,
+    ]);
+    expect(launches).toHaveLength(0);
+    trace.length = 0;
+    expect(await host.starRepository(cli)).toBe(true);
+    expect(trace).toEqual(recheck);
+    expect(launches).toHaveLength(1);
   });
 });
