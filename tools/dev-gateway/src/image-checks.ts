@@ -112,7 +112,7 @@ async function imageRun(
     op.events.some((event) => event.seq > from && rec(event.payload).runId === completion.runId),
     "the completion run's events",
   );
-  return { key, taskId, completion, since };
+  return { key, taskId, completion, since, from };
 }
 
 /** The task's history, read again until `found` finds what it waits for (at most 30 s). */
@@ -142,9 +142,17 @@ const imageBlocks = (messages: JsonRecord[]) =>
 const replyText = (message: JsonRecord) =>
   (message.content as JsonRecord[] | undefined)?.find((part) => part.type === "text")?.text;
 
-/** Whether any of a run's live events carries an `image` content part. */
-const liveImageParts = (op: OperatorSession, runId: string) =>
-  op.runEvents(runId).filter((event) => JSON.stringify(event.payload).includes('"type":"image"'));
+/** The live events of a run, or of its task's messages, that carry an `image` content part. */
+const liveImageParts = (op: OperatorSession, runId: string, key: string, from: number) =>
+  op.events.filter((event) => {
+    const payload = rec(event.payload);
+    return (
+      event.seq > from &&
+      (payload.runId === runId ||
+        (event.event === "session.message" && payload.sessionKey === key)) &&
+      JSON.stringify(payload).includes('"type":"image"')
+    );
+  });
 
 /** A finished image task the provider failed: the bot's words, and no picture. */
 function failureCheck(
@@ -190,16 +198,11 @@ export const IMAGE_CHECKS: ImageCheck[] = [
     name: "a bot's picture arrives in a later turn of the task, as an artifact",
     covers: ["#image"],
     async run(ctx) {
-      const { key, completion, since } = await imageRun(ctx, "picture", "#image", "ok");
+      const { key, completion, since, from } = await imageRun(ctx, "picture", "#image", "ok");
       same(
         replyText(rec(completion.message)),
         IMAGE_READY_REPLY,
         "the completion turn's text, its MEDIA line taken out",
-      );
-      same(
-        liveImageParts(ctx.writer, String(completion.runId)).length,
-        0,
-        "live events of the completion run carrying an image part",
       );
       const picture = scriptedPicture();
       const { value: blocks } = await historyUntil(ctx, key, "the image block", (m) => {
@@ -239,6 +242,11 @@ export const IMAGE_CHECKS: ImageCheck[] = [
         await (await fetch(`${ctx.gatewayOrigin}${address}`)).arrayBuffer(),
       );
       expect(fetched.equals(picture), "the downloaded bytes are not the stand-in's picture");
+      same(
+        liveImageParts(ctx.writer, String(completion.runId), key, from).length,
+        0,
+        "live events of the completion run or task carrying an image part",
+      );
       const request = await onlyRequestSince(ctx, since, IMAGE_PROMPT);
       same(
         [request.authorized, request.model, request.n, request.size, request.outcome],
