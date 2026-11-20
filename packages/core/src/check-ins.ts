@@ -193,7 +193,11 @@ export function readJobs(answer: unknown): CheckInJob[] {
   return out;
 }
 
-const agentsOf = (config: unknown) => asRecord(asRecord(asRecord(config)?.config)?.agents);
+const configData = (answer: unknown) => {
+  const result = asRecord(answer);
+  return result?.valid === false ? null : asRecord(result?.config);
+};
+const agentsOf = (config: unknown) => asRecord(configData(config)?.agents);
 const entriesOf = (config: unknown) => asRecord(agentsOf(config)?.entries);
 const prompt = (value: unknown) => {
   const text = typeof value === "string" ? value : null;
@@ -325,14 +329,12 @@ const emptyState = (): CheckInsState => ({
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-type Ask = () => { timeoutMs: number } | undefined;
-
 /**
  * Every page of heartbeat jobs: the list is read whole or not at all. Pages
  * of one read carry the same `snapshotRevision` and `total`; when either
  * changes between pages the jobs moved, and the read begins again.
  */
-async function readAllJobs(link: CheckInsLink, ask: Ask): Promise<CheckInJob[]> {
+async function readAllJobs(request: CheckInsLink["request"]): Promise<CheckInJob[]> {
   for (let restart = 0; restart <= MAX_JOB_RESTARTS; restart += 1) {
     const out: CheckInJob[] = [];
     let offset = 0;
@@ -340,11 +342,12 @@ async function readAllJobs(link: CheckInsLink, ask: Ask): Promise<CheckInJob[]> 
     let moved = false;
     for (let page = 0; page < MAX_JOB_PAGES && !moved; page += 1) {
       const answer = asRecord(
-        await link.request(
-          "cron.list",
-          { includeDisabled: true, scheduleKind: "every", limit: JOB_PAGE, offset },
-          ask(),
-        ),
+        await request("cron.list", {
+          includeDisabled: true,
+          scheduleKind: "every",
+          limit: JOB_PAGE,
+          offset,
+        }),
       );
       first ??= answer;
       if (answer?.snapshotRevision !== first?.snapshotRevision || answer?.total !== first?.total) {
@@ -385,13 +388,17 @@ async function read(
   { required = false, deadline }: { required?: boolean; deadline?: number } = {},
 ): Promise<Snapshot> {
   const bots = ctx.botIds();
-  const ask: Ask = () =>
-    deadline === undefined ? undefined : { timeoutMs: Math.max(1, deadline - ctx.now()) };
-  const configRead = link.request("config.get", {}, ask());
+  const request = (method: string, params: unknown) => {
+    if (deadline === undefined) return link.request(method, params);
+    const left = deadline - ctx.now();
+    if (left <= 0) return Promise.reject(new Error("The check-in confirmation timed out."));
+    return link.request(method, params, { timeoutMs: left });
+  };
+  const configRead = request("config.get", {});
   const [config, allJobs, status] = await Promise.all([
     required ? configRead : configRead.catch(() => null),
-    readAllJobs(link, ask),
-    link.request("cron.status", {}, ask()).catch(() => null),
+    readAllJobs(request),
+    request("cron.status", {}).catch(() => null),
   ]);
   const hash = asRecord(config)?.hash;
   const enabled = asRecord(status)?.enabled;
@@ -402,8 +409,8 @@ async function read(
     allJobs,
     jobs: allJobs.filter((job) => bots.includes(job.botId)),
     scheduler: typeof enabled === "boolean" ? enabled : null,
-    settings: config ? readSettings(config, bots) : null,
-    defaults: config ? readDefaults(config) : null,
+    settings: configData(config) ? readSettings(config, bots) : null,
+    defaults: configData(config) ? readDefaults(config) : null,
   };
 }
 
@@ -480,7 +487,7 @@ export function planCheckIn(
   const agents = agentsOf(config);
   const entries = asRecord(agents?.entries);
   if (!entries) {
-    return asRecord(asRecord(config)?.config) && agents?.entries === undefined
+    return configData(config) && agents?.entries === undefined
       ? { conflict: CHECKIN_BOT_DELETED }
       : { refused: "Clawtrate couldn't read this gateway's bots from its config." };
   }
@@ -630,7 +637,7 @@ export async function saveCheckIn(
     const latest = ctx.begin();
     try {
       const next = await read(ctx, link, { required: true, deadline });
-      if (!link.alive()) break;
+      if (!link.alive() || ctx.now() >= deadline) break;
       if (took(next, botId, plan.own, plan.expect)) {
         show(latest, next);
         return settle("saved", null);

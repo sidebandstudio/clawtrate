@@ -84,10 +84,9 @@ function jobsFor(config: Config, now: number): CheckInJob[] {
   const enrolled = own.length > 0 ? own : [defaults.heartbeat.agentId ?? "main"];
   return enrolled.map((botId) => {
     const ms = durationMs(entries[botId]?.heartbeat?.every ?? defaults.heartbeat.every ?? "30m")!;
-    const next = now - (now % (30 * 60_000)) + Math.min(ms, 30 * 60_000);
-    return ms === 0
-      ? { botId, enabled: false, everyMs: 30 * 60_000, nextRunAtMs: null }
-      : { botId, enabled: true, everyMs: ms, nextRunAtMs: next };
+    if (ms === 0) return { botId, enabled: false, everyMs: 30 * 60_000, nextRunAtMs: null };
+    const interval = Math.min(ms, 30 * 60_000);
+    return { botId, enabled: true, everyMs: ms, nextRunAtMs: now - (now % interval) + interval };
   });
 }
 

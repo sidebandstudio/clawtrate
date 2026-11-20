@@ -62,6 +62,7 @@ function fakeGateway(
     hash: 0,
     /** What `config.get` gives as its hash instead of the real one. */
     hashText: null as string | null,
+    invalidConfig: false,
     /** The gateway's identity (`gateway.identity.get`). */
     identity: "gw-1",
     /** Requests then wait for their own timeout, unanswered. */
@@ -120,6 +121,7 @@ function fakeGateway(
       case "cron.status":
         return { enabled: false };
       case "config.get":
+        if (gateway.invalidConfig) return { valid: false, config: {}, hash: "invalid" };
         return { hash: gateway.hashText ?? `h${gateway.hash}`, config: view().config };
       case "config.patch": {
         gateway.attempts.push({ baseHash: p.baseHash });
@@ -758,18 +760,68 @@ describe("F-201 F-366 saving", () => {
     expect(state().save?.status).toBe("unknown");
   });
 
+  it("F-201: an invalid config does not establish that the bot is gone, and the draft can be retried after repair", async () => {
+    const { gateway, ctx, state } = fakeGateway();
+    await loadCheckIns(ctx);
+    const change = draft(state(), "marlow", { every: "24h" });
+    gateway.invalidConfig = true;
+    await loadCheckIns(ctx);
+    expect(state().settings).toBeNull();
+    expect(state().defaults).toBeNull();
+    await saveCheckIn(ctx, "s1", "marlow", change);
+    expect(state().save?.status).toBe("failed");
+    expect(gateway.attempts).toEqual([]);
+    gateway.invalidConfig = false;
+    await saveCheckIn(ctx, "s2", "marlow", change);
+    expect(state().save?.status).toBe("saved");
+  });
+
+  it.each([false, true])(
+    "F-201: a job page arriving past the deadline cannot confirm the save or start another page (more jobs: %s)",
+    async (more) => {
+      const fake = fakeGateway({
+        entries: {
+          marlow: { heartbeat: { every: "12h" } },
+          otto: more ? { heartbeat: { every: "1h" } } : {},
+        },
+      });
+      // Drop the fixture's unrelated agent-turn job so the late page can also be the last one.
+      fake.gateway.arrange = (jobs) => jobs.slice(1);
+      await loadCheckIns(fake.ctx);
+      let pages = 0;
+      fake.gateway.gate = async (method) => {
+        if (
+          method === "cron.list" &&
+          fake.gateway.patches.length &&
+          fake.state().save?.status === "saving"
+        ) {
+          pages += 1;
+          if (pages === 1) await fake.ctx.sleep(20_001);
+        }
+      };
+      await saveCheckIn(fake.ctx, "s1", "marlow", draft(fake.state(), "marlow", { every: "24h" }));
+      expect(pages).toBe(1);
+      expect(fake.state().save?.status).toBe("unknown");
+    },
+  );
+
   it("F-201: confirming a save ends at 20 seconds even while the gateway answers nothing", async () => {
     const fake = fakeGateway();
     await loadCheckIns(fake.ctx);
     let patchedAt = 0;
     let settledAt: number | null = null;
+    const set = fake.ctx.set;
+    fake.ctx.set = (next) => {
+      if (settledAt === null && next.save?.status === "unknown") settledAt = fake.now();
+      set(next);
+    };
     fake.gateway.before = (method) => {
       if (method === "config.patch") patchedAt = fake.now();
       else if (fake.gateway.patches.length === 1) fake.gateway.stall = true;
-      if (settledAt === null && fake.state().save?.status === "unknown") settledAt = fake.now();
     };
     await saveCheckIn(fake.ctx, "s1", "marlow", draft(fake.state(), "marlow", { every: "24h" }));
     expect(fake.state().save?.status).toBe("unknown");
+    expect(settledAt).not.toBeNull();
     expect(settledAt! - patchedAt).toBeLessThanOrEqual(20_000);
   });
 
