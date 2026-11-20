@@ -163,6 +163,8 @@
 .k-ro {
   margin: 0 0 var(--space-3);
   font-size: var(--text-md);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .k-needs {
   margin: 0;
@@ -205,12 +207,11 @@
 .k-compare .b-group {
   margin-top: 0;
 }
-@container (max-width: 760px) {
-  .k-compare {
-    grid-template-columns: 1fr;
-  }
+/* The comparison stacks below 760 px of its own width (section 13). */
+.k-compare-wrap {
+  container-type: inline-size;
 }
-@media (max-width: 1000px) {
+@container (max-width: 760px) {
   .k-compare {
     grid-template-columns: 1fr;
   }
@@ -352,4 +353,53 @@
 }
 :root[data-width="phone"] .k-editor {
   min-height: calc(10 * 20px + 24px);
+}
+
+/* Long values wrap: a 63-character name, a long "Use when…", a file's facts (section 13). */
+.k-title,
+.k-row-name,
+.k-name,
+.k-cmd-wrap {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.b-section-head h3,
+.b-subhead h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.k-card-facts dd,
+.k-files dd {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+  min-width: 0;
+}
+.k-card-facts dt,
+.k-files dt {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* A write waiting for its answer or its read (section 2, Writes). */
+.k-pending {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* A card's Raw (conversation.md section 9). */
+.k-raw {
+  margin-top: 10px;
+}
+.k-raw > summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.k-raw .k-plain {
+  margin-bottom: 8px;
 }
