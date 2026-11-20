@@ -164,6 +164,18 @@ export function planReply(
 
   const raw = messageText(messages[lastUserIndex]!);
   const prompt = normalizePrompt(raw);
+  if (prompt === "What do you remember about me?") {
+    const memory = messages
+      .filter((message) => message.role === "system")
+      .map(messageText)
+      .map((prompt) => prompt.split("\n<!-- /openclaw:attempt:STABLE -->", 1)[0]!)
+      .find((prompt) => /^## .*\/MEMORY\.md\s*$/m.test(prompt))
+      // A heading stops the extract only when it names another workspace file, as the
+      // gateway's injected-file headings do; a `##` inside the memory itself does not.
+      ?.match(/^## .*\/MEMORY\.md\s*\n([\s\S]*?)(?=^## [^\n]*\/[^\n]*\.md\s*$|(?![\s\S]))/m)?.[1]
+      ?.trim();
+    return [{ kind: "text", text: memory || "I have no root memory for this task." }];
+  }
   const after = messages.slice(lastUserIndex + 1);
   // Each assistant message after the user's turn is one completed round.
   const roundIndex = after.filter((m) => m.role === "assistant").length;
