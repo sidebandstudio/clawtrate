@@ -4,6 +4,7 @@ import { expect, test as base, type Page } from "@playwright/test";
 import { once } from "node:events";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
+  existsSync,
   chmodSync,
   statSync,
   mkdtempSync,
@@ -27,6 +28,7 @@ import { askToClose, forceEnd } from "../e2e-packaged/windows.ts";
 
 type TestApp = {
   page: Page;
+  relaunch: (version: string) => Promise<Page>;
   server: Awaited<ReturnType<typeof feedServer>>;
   filePath: string;
   body: Buffer;
@@ -59,8 +61,9 @@ async function stopElectron(app: ChildProcess) {
     clearTimeout(timer);
   }
 }
-const test = base.extend<{ desktopApp: TestApp }>({
-  desktopApp: async ({ playwright }, use) => {
+const test = base.extend<{ desktopApp: TestApp; installer: "unsigned" | "mac" | "manual" }>({
+  installer: ["unsigned", { option: true }],
+  desktopApp: async ({ playwright, installer }, use) => {
     const desktop = join(import.meta.dirname, "../apps/desktop");
     const require = createRequire(join(desktop, "package.json"));
     const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "clawtrate-update-app-")));
@@ -108,47 +111,58 @@ const test = base.extend<{ desktopApp: TestApp }>({
         },
       );
       cpSync(join(desktop, "resources"), join(dir, "resources"), { recursive: true });
-      writeFileSync(
-        join(dir, "package.json"),
-        JSON.stringify({
-          name: "update-screen-test",
-          version: "0.1.0",
-          type: "module",
-          main: "out/main/index.js",
-        }),
-      );
       symlinkSync(
         join(desktop, "node_modules"),
         join(dir, "node_modules"),
         process.platform === "win32" ? "junction" : "dir",
       );
       const profile = join(dir, "profile");
-      const app = spawn(
-        require("electron"),
-        [dir, "--user-data-dir=" + profile, "--remote-debugging-port=0"],
-        {
-          cwd: dir,
-          env: {
-            ...env,
-            CLAWTRATE_DEV_INSTANCE: "update-ui-test",
-          },
-          stdio: "ignore",
-        },
-      );
-      cleanup.defer(() => stopElectron(app));
-      await once(app, "spawn");
-      const port = await debuggingPort(profile, app);
-      const browser = await playwright.chromium.connectOverCDP("http://127.0.0.1:" + port);
-      cleanup.defer(() => browser.close());
-      const context = browser.contexts()[0]!;
-      const page = context.pages()[0] ?? (await context.waitForEvent("page"));
-      await page.locator(".app").waitFor();
       const rendererRequests: string[] = [];
-      page.on("request", (r) => {
-        if (/^https?:/.test(r.url())) rendererRequests.push(r.url());
-      });
+      let previous: ChildProcess | undefined;
+      async function launch(version: string) {
+        if (previous) {
+          await stopElectron(previous);
+          rmSync(join(profile, "DevToolsActivePort"), { force: true });
+        }
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({
+            name: "update-screen-test",
+            version,
+            type: "module",
+            main: "out/main/index.js",
+          }),
+        );
+        const app = spawn(
+          require("electron"),
+          [dir, "--user-data-dir=" + profile, "--remote-debugging-port=0"],
+          {
+            cwd: dir,
+            env: {
+              ...env,
+              UPDATE_SCREEN_TEST_INSTALLER: installer,
+              CLAWTRATE_DEV_INSTANCE: "update-ui-test",
+            },
+            stdio: "ignore",
+          },
+        );
+        previous = app;
+        cleanup.defer(() => stopElectron(app));
+        await once(app, "spawn");
+        const port = await debuggingPort(profile, app);
+        const browser = await playwright.chromium.connectOverCDP("http://127.0.0.1:" + port);
+        cleanup.defer(() => browser.close());
+        const context = browser.contexts()[0]!;
+        const page = context.pages()[0] ?? (await context.waitForEvent("page"));
+        await page.locator(".app").waitFor();
+        page.on("request", (r) => {
+          if (/^https?:/.test(r.url())) rendererRequests.push(r.url());
+        });
+        return page;
+      }
       await use({
-        page,
+        page: await launch("0.1.0"),
+        relaunch: launch,
         server,
         filePath,
         body,
@@ -507,3 +521,168 @@ if (process.platform !== "win32")
       await gateway.close();
     }
   });
+
+async function openUpdates(page: Page) {
+  await page.keyboard.press("ControlOrMeta+,");
+  if (!(await page.locator(".updates-section").isVisible()))
+    await page.getByRole("button", { name: "Updates", exact: true }).click();
+}
+async function requestFile(page: Page) {
+  await page.getByRole("button", { name: "Check for Updates", exact: true }).click();
+  await page.getByRole("button", { name: "Download", exact: true }).click();
+}
+for (const mode of ["mac", "manual"] as const) {
+  test.describe(mode, () => {
+    test.use({ installer: mode });
+    test("F-231: confirms one shown offer, follows handoff and reads the version on a later launch", async ({
+      desktopApp,
+    }) => {
+      const { page, profile, server, filePath, rendererRequests, relaunch } = desktopApp;
+      desktopApp.resume();
+      await openUpdates(page);
+      expect(server.requests).toEqual([]);
+      await requestFile(page);
+      const restart = page.getByRole("button", { name: "Restart to Update", exact: true });
+      const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+      const confirm = page.getByRole("button", { name: "Restart", exact: true });
+      const result = page.getByRole("group", { name: "Update status" });
+      await restart.click();
+      const dialog = page.getByRole("alertdialog", { name: "Restart to update?" });
+      await expect(dialog).toContainText(
+        "Clawtrate will close and start again to update to version 1.1.0.",
+      );
+      const mac =
+        "macOS installs the update when Clawtrate next quits, also if the restart does not complete.";
+      if (mode === "mac") await expect(dialog).toContainText(mac);
+      else await expect(dialog).not.toContainText(mac);
+      await expect(cancel).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(confirm).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(cancel).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(restart).toBeFocused();
+      await restart.click();
+      await cancel.click();
+      expect(existsSync(join(profile, "restart-calls"))).toBe(false);
+      const id = await page.evaluate(async () => {
+        const { install } = await (
+          window as unknown as ProbeWindow
+        ).clawtrateHost.desktopUpdates.get();
+        return install.kind === "restart-available" && install.offerId;
+      });
+      expect(typeof id).toBe("string");
+      writeFileSync(join(profile, "hold-inspect"), "");
+      writeFileSync(join(profile, "hold-launch"), "");
+      if (mode === "manual") writeFileSync(join(profile, "block-quit"), "");
+      await restart.click();
+      await confirm.click();
+      async function locked(text: string) {
+        await expect(result).toContainText(text);
+        await expect(result.getByRole("button")).toHaveCount(0);
+        await expect(page.getByRole("radio", { name: "Nightly" })).toBeDisabled();
+        await expect(result).toBeFocused();
+      }
+      await locked("Preparing Clawtrate");
+      rmSync(join(profile, "hold-inspect"));
+      await locked("Handing Clawtrate");
+      rmSync(join(profile, "hold-launch"));
+      expect(
+        readFileSync(join(profile, "restart-calls"), "utf8")
+          .trim()
+          .split("\n")
+          .map((s) => JSON.parse(s)),
+      ).toEqual([id]);
+      if (mode === "mac") {
+        await locked("Clawtrate handed the update to the macOS updater.");
+        for (const [version, line] of [
+          ["1.1.0", "Clawtrate 1.1.0 is running."],
+          ["0.1.0", "Clawtrate is still running 0.1.0."],
+          ["1.2.0", "Clawtrate 1.2.0 is running. Couldn't confirm the update attempt."],
+        ] as const) {
+          const next = await relaunch(version);
+          await openUpdates(next);
+          await expect(next.locator(".update-result")).toContainText(line);
+        }
+        expect(server.requests).toEqual(["/stable", filePath]);
+      } else {
+        await expect(result).toContainText("Clawtrate stayed open.");
+        await expect(restart).toHaveCount(0);
+        rmSync(join(profile, "block-quit"));
+        await requestFile(page);
+        await restart.click();
+        await confirm.click();
+        await locked("Handing Clawtrate");
+        const ids = readFileSync(join(profile, "restart-calls"), "utf8")
+          .trim()
+          .split("\n")
+          .map((s) => JSON.parse(s));
+        expect(ids).toHaveLength(2);
+        expect(ids[1]).not.toBe(id);
+        expect(server.requests).toEqual(["/stable", filePath, "/stable", filePath]);
+      }
+      expect(rendererRequests).toEqual([]);
+    });
+  });
+}
+
+test.describe("installer refusals", () => {
+  test.use({ installer: "manual" });
+  test("F-231: each unavailable installer reason withholds Restart after verification", async ({
+    desktopApp,
+  }) => {
+    const { page, resume, profile, server, filePath, rendererRequests } = desktopApp;
+    test.setTimeout(300_000);
+    resume();
+    await openUpdates(page);
+    const reasons = [
+      "no-verified-download",
+      "build-not-signed",
+      "no-installer-path",
+      "artifact-changed",
+      "mac-designated-requirement",
+      "authenticode-trust",
+      "publisher-mismatch",
+      "installation-context",
+      "inspection-failed",
+      "running-signature-untrusted",
+      "running-publisher-mismatch",
+      "installer-product",
+      "installer-version",
+      "mac-archive",
+      "mac-bundle-identifier",
+      "mac-architecture",
+      "quit-blocked",
+      "handoff-unconfirmed",
+    ] as const;
+    const requests: string[] = [];
+    for (const reason of reasons) {
+      writeFileSync(join(profile, "inspect-refusal"), reason);
+      await page.evaluate(checkStable);
+      await page.getByRole("button", { name: "Download", exact: true }).click();
+      await expect
+        .poll(() =>
+          page.evaluate(async () => {
+            const s = await (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get();
+            return (
+              (s.state.kind === "verified" ||
+                (s.state.kind === "failed" && s.state.reason === "artifact-changed")) &&
+              s.install.kind === "unavailable-in-this-build" &&
+              s.install.reason
+            );
+          }),
+        )
+        .toBe(reason);
+      await expect(page.locator(".update-result dd")).toContainText(
+        reason === "artifact-changed"
+          ? "Couldn't verify the saved update again."
+          : "its size and checksum match",
+      );
+      await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
+      requests.push("/stable", filePath);
+      expect(server.requests).toEqual(requests);
+    }
+    expect(existsSync(join(profile, "restart-calls"))).toBe(false);
+    expect(rendererRequests).toEqual([]);
+  });
+});
