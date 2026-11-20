@@ -1,0 +1,525 @@
+/* Voice: the components docs/design/voice.md adds. Every value is a token
+   from tokens.css. New components are marked "new"; the rest places existing
+   ones (the dialog, choice rows, the menu surface, the event line). */
+
+/* new: the composer's two buttons. They sit in its row as built, after "How to send"
+   and before "Stopping…", Stop and Send. */
+.composer-box .mic-button[data-state="listening"] {
+  background: var(--danger);
+  color: var(--bg-pane);
+}
+
+.composer-box .icon-button[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.composer-box .call-button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* new: the dictation line under the composer's row: the microphone mark, where the
+   words go, and the words not yet final (the field is a plain textarea). */
+.dictation-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 16px 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.v-reason {
+  padding: 6px 16px 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* new: the microphone mark. A filled --danger dot while open, the hollow ring
+   while not; the words beside it always say which. */
+.mic-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.mic-mark::before {
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--text-faint);
+  border-radius: 50%;
+  content: "";
+}
+
+.mic-mark[data-on="true"]::before {
+  border-color: var(--danger);
+  background: var(--danger);
+  animation: v-pulse 1.6s ease-in-out infinite;
+}
+
+[data-motion="reduce"] .mic-mark[data-on="true"]::before {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mic-mark[data-on="true"]::before {
+    animation: none;
+  }
+}
+
+@keyframes v-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Dictated words not yet final: only in the dictation line, never in the field. */
+.v-partial {
+  color: var(--text-faint);
+}
+
+.v-partial i {
+  font-style: normal;
+  text-decoration: underline dotted;
+}
+
+/* A memo's address, shown in full as text before it can be opened. */
+.v-address {
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+/* new: the call band, between the transcript and the composer. */
+#call-slot {
+  padding: 0 var(--space-4);
+}
+
+.call-band {
+  max-width: 760px;
+  margin: 0 auto var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  box-shadow: inset 0 0 0 1px var(--border);
+  font-size: var(--text-md);
+}
+
+.call-band[data-tone="danger"] {
+  background: var(--danger-soft);
+  box-shadow: inset 0 0 0 1px var(--danger-line);
+}
+
+.call-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.call-top .avatar {
+  flex: none;
+  width: 28px;
+  height: 28px;
+}
+
+.call-title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.call-title b {
+  font-weight: var(--weight-medium);
+}
+
+.call-time {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.call-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.call-actions .spacer {
+  flex: 1;
+}
+
+.call-actions .button[aria-pressed="true"] {
+  background: var(--bg-selected);
+}
+
+.call-note {
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.call-note b {
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+
+.call-band[data-tone="danger"] .call-reason {
+  margin: var(--space-1) 0 0;
+  font-weight: var(--weight-medium);
+}
+
+/* new: the live transcript, a log under the band. */
+.call-transcript {
+  max-height: 160px;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
+  overflow: auto;
+  border-radius: var(--radius-md);
+  background: var(--bg-pane);
+  font-size: var(--text-md);
+}
+
+.call-transcript p {
+  margin: 4px 0;
+}
+
+.call-transcript b {
+  font-weight: var(--weight-medium);
+}
+
+.call-transcript [data-final="false"] {
+  color: var(--text-faint);
+}
+
+/* new: the call's settings, on the menu's surface. */
+.call-settings {
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+}
+
+.call-settings h4 {
+  margin: var(--space-2) 0 var(--space-1);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.call-settings h4:first-child {
+  margin-top: 0;
+}
+
+.v-radios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.v-radio {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.v-radio[aria-checked="true"] {
+  background: var(--bg-inverse);
+  color: var(--text-inverse, var(--bg-pane));
+}
+
+[data-input="touch"] .v-radio {
+  min-height: 44px;
+}
+
+.v-row-note {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.v-select {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+/* new: the "Voice chat" line, an event line that opens its turns. */
+.call-line {
+  display: flex;
+  justify-content: center;
+  margin: var(--space-3) 0;
+}
+
+.call-line > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-bubble);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.call-line > button[aria-expanded="true"] .icon {
+  transform: rotate(90deg);
+}
+
+.call-turns {
+  margin: 0 0 var(--space-3);
+}
+
+.call-line-note {
+  margin: -4px 0 var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+/* new: a voice memo's player additions. */
+.memo {
+  max-width: 420px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+}
+
+.memo-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.memo-head .icon-button {
+  flex: none;
+}
+
+.memo-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.memo-name small {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.speed {
+  flex: none;
+  min-width: 44px;
+  min-height: 28px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-pane);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.memo-text {
+  margin-top: var(--space-2);
+  font-size: var(--text-md);
+}
+
+.memo-text p {
+  margin: 4px 0;
+}
+
+.memo-text .v-faint,
+.v-faint {
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
+
+/* The consent sheet: where the audio goes, before the first use. */
+.voice-consent p {
+  color: var(--text-muted);
+}
+
+.voice-consent .b-choices {
+  margin: var(--space-3) 0;
+}
+
+/* Settings, Voice. */
+.v-group {
+  margin: 0 0 var(--space-5);
+}
+
+.v-group h4 {
+  margin: 0 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.v-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-md);
+}
+
+.v-table th,
+.v-table td {
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.v-table th {
+  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+}
+
+/* Prototype chrome: a picture of the system's microphone prompt. */
+.v-os-layer {
+  top: 64px;
+  margin: 0 auto;
+  width: min(300px, calc(100% - 32px));
+  padding: var(--space-4);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--text-md);
+}
+
+.v-os-layer .v-pic-label {
+  margin: 0 0 var(--space-2);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.v-os-layer .b-actions {
+  justify-content: flex-end;
+}
+
+.app {
+  position: relative;
+}
+
+/* Touch: the band's controls are 44 px; the composer's two buttons keep the row's
+   40 px and reach 44 px with their hit area, as the row's neighbours look. */
+[data-input="touch"] .call-band .button {
+  min-height: var(--tap-min);
+}
+
+[data-input="touch"] .composer-row .mic-button,
+[data-input="touch"] .composer-row .call-button {
+  position: relative;
+}
+
+[data-input="touch"] .composer-row .mic-button::after,
+[data-input="touch"] .composer-row .call-button::after {
+  position: absolute;
+  inset: calc((40px - var(--tap-min)) / 2);
+  border-radius: 50%;
+  content: "";
+}
+
+/* The band's second row: the microphone mark, then the actions. At phone width
+   the mark takes its own row and the four actions share the next one. */
+.call-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.call-row .call-actions {
+  flex: 1;
+  margin-top: 0;
+}
+
+[data-width="phone"] .call-row .call-mic,
+[data-input="touch"] .call-row .call-mic {
+  flex-basis: 100%;
+}
+
+[data-width="phone"] .call-row .call-actions .button,
+[data-input="touch"] .call-row .call-actions .button {
+  padding-inline: 10px;
+}
+
+/* The call, wherever its bot and task are listed. */
+.v-task-call {
+  flex: none;
+  color: var(--danger);
+  font-size: var(--text-xs, 12px);
+}
+
+.v-elsewhere {
+  text-align: center;
+}
+
+/* Where the voice goes, named in full. */
+.v-dest {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 var(--space-2);
+}
+
+.v-dest div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+}
+
+.v-dest dt {
+  color: var(--text-muted);
+}
+
+.v-dest dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The call's settings dialog. */
+.v-call-settings .v-group h4 {
+  margin-bottom: 6px;
+}
+
+.v-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--space-2);
+}
+
+[data-input="touch"] .v-select {
+  min-height: var(--tap-min);
+}
+
+.task:has(.v-task-call) {
+  flex-wrap: wrap;
+}
+
+.task .v-task-call {
+  flex-basis: 100%;
+}

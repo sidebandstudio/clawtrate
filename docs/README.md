@@ -34,6 +34,7 @@ Every document in the repository, by what you want to do.
 - [Bots](design/bots.md): creating a bot on an account, connecting accounts, a bot's settings and the optional T3 Code integration.
 - [Controls](design/controls.md): what each bot may do and who enforces it, saved approvals, activity, memory, where a bot runs, usage and warning budgets.
 - [Setting up](design/setup.md): the first run, where OpenClaw runs and what Clawtrate found there, connecting on this computer or over SSH, installing OpenClaw, setup codes and approvals.
+- [Voice](design/voice.md): dictation, a voice chat with a bot, its voice, speed and language, the line a call leaves, voice memos and the microphone setting.
 - [Prototype](design/prototype/README.md): static pages that show the design working.
 
 ## Research
@@ -44,6 +45,8 @@ Every document in the repository, by what you want to do.
 - [The setup flow](research/setup-flow.md): first pairing, setup codes, the gateway's identity, installing and removing OpenClaw, SSH from a shipped app, and Tailscale, from OpenClaw's source and live runs.
 - `research/setup-flow/`: the probe behind the setup flow note.
 - [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
+- [Voice](research/voice.md): where a call's and a dictation's audio go, what the gateway's Talk methods allow at each tier, a dropped connection, voice changes, language, memos and keys.
+- `research/voice/`: the probe behind the voice note.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
 ## Writing docs
