@@ -805,6 +805,12 @@ describe("the client around a task's model", () => {
   });
 });
 
+/** Otto's entry in the fake gateway's config, to change as a second client would. */
+function ottoEntry(fake: { config: unknown }): { model: { primary: string } } {
+  return (fake.config as { agents: { entries: { otto: { model: { primary: string } } } } }).agents
+    .entries.otto;
+}
+
 describe("a bot's model and effort", () => {
   it("F-042 F-043: a bot's change is saved only once the bot read back shows it", async () => {
     const { AccountsGateway, accountsClient } = await import("./accounts-fake.ts");
@@ -814,6 +820,45 @@ describe("a bot's model and effort", () => {
     const otto = accounts().bindings.find((b) => b.botId === "otto")!;
     expect(otto).toMatchObject({ model: "dev-2", effort: "high" });
     expect(accounts().write).toMatchObject({ what: "model", status: "saved" });
+    client.stop();
+  });
+
+  it("F-042: choosing a bot model preserves an account already changed by a second client", async () => {
+    const { AccountsGateway, accountsClient } = await import("./accounts-fake.ts");
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    expect(accounts().bindings.find((b) => b.botId === "otto")!.account).toBe("acme:work");
+    // A second client moves Otto to Home after this one read it.
+    ottoEntry(fake).model.primary = "acme/dev-1@acme:home";
+    fake.revision += 1;
+    let raw: unknown;
+    const patch = fake.gateway.handlers["config.patch"]!;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      raw = JSON.parse(String((params as { raw: string }).raw));
+      return patch(params);
+    };
+    await expect(client.setBotModel("otto", "dev-2", null)).resolves.toBe("saved");
+    expect(raw).toEqual({
+      agents: { entries: { otto: { model: { primary: "acme/dev-2@acme:home", fallbacks: [] } } } },
+    });
+    expect(accounts().bindings.find((b) => b.botId === "otto")).toMatchObject({
+      model: "dev-2",
+      account: "acme:home",
+    });
+    client.stop();
+  });
+
+  it("F-042: a bot whose model another client moved to another provider is not written; the person chooses again", async () => {
+    const { AccountsGateway, accountsClient } = await import("./accounts-fake.ts");
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    ottoEntry(fake).model.primary = "globex/dev-1";
+    fake.revision += 1;
+    const before = fake.revision;
+    await expect(client.setBotModel("otto", "dev-2", null)).rejects.toThrow(
+      "This bot's settings changed on the gateway. Choose its model again.",
+    );
+    expect(fake.revision).toBe(before);
     client.stop();
   });
 

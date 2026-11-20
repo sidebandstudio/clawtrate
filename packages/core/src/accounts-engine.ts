@@ -84,6 +84,17 @@ export type AccountsContext = {
 };
 
 /** A write needs admin; the access bar asks for it (bots.md section 2). */
+/**
+ * The bot's entry changed on the gateway since its settings were read: it is
+ * gone, or its model is now another provider's. The person chooses again.
+ */
+export class BotChangedError extends Error {
+  constructor() {
+    super("This bot's settings changed on the gateway. Choose its model again.");
+    this.name = "BotChangedError";
+  }
+}
+
 export class AdminNeededError extends Error {
   constructor(what: string) {
     super(`${what} needs admin access.`);
@@ -1035,13 +1046,19 @@ export class AccountsEngine {
 
   /**
    * One merge patch of the gateway's config (`config.patch`, admin), then the
-   * gateway applying it: `config.get` reports the new revision as applied.
+   * gateway applying it: `config.get` reports the new revision as applied. A
+   * patch can be made from the config it is written over (`patch` as a
+   * function): that read's `baseHash` guards it against any change after it.
    */
-  private async patch(patch: RawRecord, replacePaths: string[] = []): Promise<void> {
+  private async patch(
+    patch: RawRecord | ((config: RawRecord | null) => RawRecord),
+    replacePaths: string[] = [],
+  ): Promise<void> {
     const before = asRecord(await this.ctx.request("config.get", {}));
     const baseHash = typeof before?.hash === "string" ? before.hash : undefined;
+    const body = typeof patch === "function" ? patch(asRecord(before?.config)) : patch;
     await this.ctx.request("config.patch", {
-      raw: JSON.stringify(patch),
+      raw: JSON.stringify(body),
       ...(baseHash ? { baseHash } : {}),
       ...(replacePaths.length > 0 ? { replacePaths } : {}),
     });
@@ -1514,6 +1531,7 @@ export class AccountsEngine {
     this.requireAdmin("Changing a bot's settings");
     const binding = this.ctx.get().bindings.find((b) => b.botId === botId);
     if (!binding?.provider) throw new Error("Choose an account first.");
+    const provider = binding.provider;
     this.setWrite({
       what: "model",
       target: botId,
@@ -1521,9 +1539,23 @@ export class AccountsEngine {
       error: null,
       at: this.ctx.now(),
     });
-    const ref = { provider: binding.provider, model, account: binding.account };
+    // The account is the one the config being patched names now, not the one read before: another
+    // client may have changed it since, and the next prompt goes where this write points it.
+    let primary: string | null = null;
     try {
-      await this.writeModel(botId, ref, effort, false);
+      await this.patch(
+        (config) => {
+          const entry = asRecord(asRecord(asRecord(config?.agents)?.entries)?.[botId]);
+          const fresh = parseModelRef(readModelConfig(entry?.model).primary);
+          if (!entry || !fresh || fresh.provider !== provider) throw new BotChangedError();
+          primary = formatModelRef({ provider, model, account: fresh.account });
+          const write: RawRecord = { model: { primary, fallbacks: [] } };
+          if (effort) write.thinkingDefault = effort;
+          return { agents: { entries: { [botId]: write } } };
+        },
+        [`agents.entries.${botId}.model.fallbacks`],
+      );
+      this.unwritten.delete(botId);
     } catch (error) {
       this.setWrite({
         what: "model",
@@ -1532,10 +1564,12 @@ export class AccountsEngine {
         error: errorText(error),
         at: this.ctx.now(),
       });
+      // What the gateway has now, to choose from again.
+      if (error instanceof BotChangedError) void this.load().catch(() => {});
       throw error;
     }
     // Nothing of what was sent is copied into what was read: the read decides.
-    return this.confirmWrite("model", botId, { primary: formatModelRef(ref), effort });
+    return this.confirmWrite("model", botId, { primary: primary!, effort });
   }
 
   /** "Remove fallbacks": the bot's model keeps its account; its fallback list becomes empty. */
