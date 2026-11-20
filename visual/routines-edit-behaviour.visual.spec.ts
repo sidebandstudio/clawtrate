@@ -305,8 +305,10 @@ test.describe("1440", () => {
     await setConnection(page, { connectedAt: Date.now() + 5_000 });
     await setConnection(page, { gatewayId: null });
     // Bound to the first gateway, the draft waits while the newcomer's identity is unknown
-    // (an unbound one would have closed at the new hello).
-    await expect(editor(page)).toBeVisible();
+    // (an unbound one would have closed at the new hello, before this click is handled),
+    // and its save is refused rather than sent.
+    await save(page).click();
+    await expect(editor(page)).toContainText("The gateway hasn't confirmed its identity yet");
     await setConnection(page, { gatewayId: "another gateway" });
     await expect(editor(page)).toHaveCount(0);
   });
