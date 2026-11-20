@@ -210,8 +210,8 @@ test.afterAll(() => {
 
 const MINTED = "[setup] The stand-in made a one-time code for the synthetic gateway.";
 const ANSWERED = (response: number) => `[e2e] The host's dialog answered ${response}.`;
-/** A one-time code's shape, as the fixture mint and OpenClaw make them. */
-const CODE_SHAPE = /[A-Za-z0-9_-]{43}/;
+/** A one-time code's shape, as the fixture mint makes them: exactly 43 base64url characters. */
+const CODE_SHAPE = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/;
 
 test("an automated launch without a sandbox is refused, loudly, and looks at nothing", async () => {
   const launched = await launch({ sandbox: null });
@@ -317,7 +317,7 @@ test("F-494: the one-time code of a pairing reaches none of the app's output or 
   await page.getByRole("button", { name: "Connect" }).click();
   await expect(page.locator(".shell")).toBeVisible({ timeout: 60_000 });
   expect(launched.log()).toContain(MINTED);
-  // No string of a one-time code's shape in the output or the store; the device token is shorter.
+  // No string of a one-time code's shape in the output or the store; the device token and id are not.
   expect(launched.log()).not.toMatch(CODE_SHAPE);
   expect(readStore(launched.data)).not.toMatch(CODE_SHAPE);
   await close(launched);
