@@ -440,12 +440,12 @@ export class DecisionLog {
     let aside = null;
     let fingerprint = "none";
     try {
-      let oversized = false;
+      let oversized = null;
       const fd = openSync(this.path, "r");
       try {
         // Looked at before it is read: a line added after this is not taken as read.
         const stat = fstatSync(fd);
-        oversized = stat.size > MAX_DECISIONS_BYTES;
+        if (stat.size > MAX_DECISIONS_BYTES) oversized = statKey(stat);
         if (!oversized) {
           text = readFileSync(fd, "utf8");
           fingerprint = statKey(stat);
@@ -454,8 +454,10 @@ export class DecisionLog {
         closeSync(fd);
       }
       // A file past the cap is not read into memory: it is set aside.
-      if (oversized) {
-        aside = this.#setAside();
+      if (oversized !== null) {
+        aside = this.#setAside(oversized);
+        // Replaced since it was looked at: left in place, and what is there now is read.
+        if (aside === CHANGED) return this.#load();
         // Not moved: what memory holds stays as it is, nothing is written.
         if (aside === null) return;
       }
@@ -537,11 +539,15 @@ export class DecisionLog {
   }
 
   /**
-   * Set the record past the byte cap aside, unread: the problem to say, or
-   * null when it could not be moved (then nothing is written).
+   * Set the record past the byte cap aside, unread: the problem to say, null
+   * when it could not be moved (then nothing is written), or `CHANGED` when
+   * the file there is no longer the one looked at (`expected`, by `statKey`),
+   * which is then left in place. The check comes before the rename, which
+   * cannot compare and swap.
    */
-  #setAside() {
+  #setAside(expected) {
     try {
+      if (statKey(statOrNull(this.path)) !== expected) return CHANGED;
       renameSync(this.path, this.oversizePath);
     } catch (error) {
       this.loaded = false;

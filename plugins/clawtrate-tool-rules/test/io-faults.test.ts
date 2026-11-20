@@ -24,6 +24,8 @@ const io = vi.hoisted(() => ({
   afterRename: null as null | (() => void),
   /** Closing a temporary file fails this many more times, after it is closed. */
   tempCloseFails: 0,
+  /** Run once right after a descriptor opened on `io.path` is next closed. */
+  afterClose: null as null | (() => void),
   /** Run once just before `io.path` is next opened to be appended to or cut. */
   beforeWriteOpen: null as null | (() => void),
   /** The path each open descriptor was opened on. */
@@ -47,6 +49,11 @@ vi.mock("node:fs", async (importOriginal) => {
       const path = io.fds.get(fd) ?? "";
       io.fds.delete(fd);
       real.closeSync(fd);
+      if (path === io.path) {
+        const after = io.afterClose;
+        io.afterClose = null;
+        after?.();
+      }
       if (io.tempCloseFails > 0 && path.endsWith(".tmp")) {
         io.tempCloseFails -= 1;
         throw Object.assign(new Error("injected"), { code: "ENOSPC" });
@@ -101,6 +108,7 @@ afterEach(() => {
   io.utimesFails = false;
   io.afterRename = null;
   io.beforeWriteOpen = null;
+  io.afterClose = null;
   io.tempCloseFails = 0;
   cleanups.splice(0).forEach((done) => done());
 });
@@ -522,6 +530,21 @@ describe("recovery of a decision record", () => {
     io.utimesFails = false;
     log.prune();
     expect(actual.statSync(`${file}.oversize`).mtimeMs).toBe(110);
+  });
+
+  it("leaves in place a record put there after the oversized one was looked at, and reads it", () => {
+    const { dir, file } = seed();
+    actual.truncateSync(file, 64 * 1024 * 1024 + 1);
+    const outside = { ...fields, id: "outside0000000000", at: 105 };
+    io.afterClose = () => {
+      actual.writeFileSync(`${file}.new`, `${JSON.stringify(outside)}\n`);
+      actual.renameSync(`${file}.new`, file);
+    };
+    const log = new DecisionLog(dir, { now: () => 110 });
+    expect(actual.existsSync(`${file}.oversize`)).toBe(false);
+    expect(ids(file)).toEqual([outside.id]);
+    expect(log.problem).toBeNull();
+    expect(log.list({ limit: 50 }).records.map((r) => r.id)).toEqual([outside.id]);
   });
 
   it("says a failed time on the set-aside record apart from a read error", () => {
