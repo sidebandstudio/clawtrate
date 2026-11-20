@@ -80,11 +80,11 @@ The title says what changes for the person using Clawtrate, in plain words and u
 | `fix: a stopped run no longer restarts after a reconnect` | `Merge the engine follow-up: Stop on every path, checks that wait on the gateway's own state, and…` |
 | `docs: explain how to add a scenario`                     | `Update files`                                                                                      |
 
-The body says what changes in one to three sentences, why, and how it was checked. Use short, plain sentences, and delete the template's comments. Interface changes need before and after screenshots at desktop and phone width.
+Describe the problem in a sentence or two, then explain the change and how you checked it. Use short, plain sentences, and delete the template's comments. Interface changes need before and after screenshots at desktop and phone width.
 
 CodeRabbit reviews every pull request into `main` that is not a draft. Its comments are advice: check each one against the code, fix the real ones, and reply with the reason when one is wrong. Nothing waits on it.
 
-Every Clawtrate pull request must say which AI model and harness helped prepare the changes. Use the model identifier your tool shows and the name of the program that ran it. Add one line per pair to the body, including any subagents whose work you used. For example, `- AI model: gpt-6.2-astra | Harness: Codex via T3 Code`. If you used no AI, write `- AI model: None | Harness: None`. Update the list when another agent contributes. Reviewers must hold approval and merge until the author supplies a complete disclosure.
+End your pull request with the model and harness that did the work. For example, `AI: gpt-6.2-astra via Codex (T3 Code)` identifies the model and the coding agent that ran it. If several pairs contributed changes, put each on its own line in the final paragraph. If you used no AI, end with `No AI used.` Keep the footer current when someone adds changes. Reviewers must verify it before they approve or merge.
 
 You are responsible for every line you submit. Read the diff before opening the pull request. Keep co-author trailers, "generated with" lines and tool credits out of commit messages and pull request titles.
 

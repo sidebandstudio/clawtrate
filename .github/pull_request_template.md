@@ -14,20 +14,16 @@ Delete these comments before you open the pull request.
 
 Closes #
 
-## AI assistance
+## Problem
 
-<!-- Use one line per contributing model and harness, including subagents. If no AI contributed, enter None for both fields. -->
+<!-- Describe the problem or the parity row this addresses in a sentence or two. -->
 
-- AI model: | Harness:
-
-## What changes
+## Change
 
 <!-- One to three plain sentences: what someone can do now, or what stops going wrong. -->
-
-## Why
-
-<!-- The problem, or the checklist rows (F-0xx) this covers. -->
 
 ## How it was checked
 
 <!-- The checks you ran and what they showed, and anything you could not check. Interface changes need before and after screenshots at desktop and phone width. -->
+
+<!-- End with AI: MODEL via HARNESS. Use one line per contributing pair in the final paragraph. If no AI contributed, end with No AI used. -->
