@@ -8,7 +8,6 @@ import {
   browserUse,
   commandRows,
   commandsRanOn,
-  execSettings,
   readMachine,
   recentActions,
 } from "../src/machine.ts";
@@ -95,23 +94,35 @@ describe("the machine (F-147, section 16)", () => {
     expect(commandsRanOn(ran)).toEqual({ nodeId: "media-box", at: 1300 });
   });
 
-  it("F-147: the bot's setting is a setting: its own, else the gateway's default, read from config.get", () => {
-    const config = {
-      config: {
-        tools: { exec: { host: "node", node: "rack-1" } },
-        agents: {
-          entries: {
-            otto: { tools: { exec: { host: "node", node: "media-box" } } },
-            pip: { tools: { exec: { node: "media-box" } } },
-            main: { tools: {} },
-          },
-        },
-      },
-    };
-    const settings = execSettings(config);
-    expect(settings.defaults).toEqual({ host: "node", node: "rack-1" });
-    expect(settings.bots.otto).toEqual({ host: "node", node: "media-box" });
-    expect(settings.bots.main).toBeNull();
+  it("F-147: the bot's setting as the gateway reads it: its own over every bot's; unset and auto are kept as not resolved, never as the gateway's machine", async () => {
+    const read = (config: unknown) =>
+      readMachine(
+        async (method) => (method === "config.get" ? { config } : { nodes: [] }),
+        "pip",
+        [],
+        1,
+      ).then((facts) => facts.setting);
+    // Nothing stored anywhere: not set, the gateway chooses for each command.
+    expect(await read({})).toMatchObject({ host: null, nodeSelector: null });
+    expect(await read({ tools: { exec: { host: "auto" } } })).toMatchObject({
+      host: "auto",
+      inherited: true,
+    });
+    // A node host with no node named stays that: no machine.
+    expect(
+      await read({ agents: { entries: { pip: { tools: { exec: { host: "node" } } } } } }),
+    ).toMatchObject({ host: "node", nodeSelector: null, inherited: false });
+    // Host and node are read apart, as the gateway reads them: the bot's node over every bot's.
+    expect(
+      await read({
+        tools: { exec: { host: "gateway", node: "rack-1" } },
+        agents: { entries: { pip: { tools: { exec: { node: "media-box" } } } } },
+      }),
+    ).toMatchObject({ host: "gateway", inherited: true, nodeSelector: "media-box" });
+    // `agents.defaults` is not where the gateway reads it from.
+    expect(
+      await read({ agents: { defaults: { tools: { exec: { host: "gateway" } } } } }),
+    ).toMatchObject({ host: null });
   });
 
   it("F-148 F-150: a node's record says Connected or Not connected with when it was last seen; a list that couldn't be read is unknown, never Not connected", async () => {
@@ -121,7 +132,9 @@ describe("the machine (F-147, section 16)", () => {
           agents: {
             entries: {
               otto: { tools: { exec: { host: "node", node: "media-box" } } },
+              // A node with no host: not set to run there (the gateway chooses).
               pip: { tools: { exec: { node: "media-box" } } },
+              juniper: { tools: { exec: { host: "node", node: "media-box" } } },
             },
           },
         },
@@ -148,14 +161,18 @@ describe("the machine (F-147, section 16)", () => {
     };
     const request = async (method: string) => answers[method];
     const facts = await readMachine(request, "otto", [], 10_000);
-    expect(facts.setting).toEqual({ host: "node", node: "media-box", inherited: false });
+    expect(facts.setting).toMatchObject({
+      host: "node",
+      nodeSelector: "media-box",
+      inherited: false,
+    });
     expect(facts.nodes["media-box"]).toMatchObject({
       connected: false,
       lastSeenAtMs: 5_000,
       lastSeenReason: "while going to sleep",
       stats: { cpuCount: 4, loadAverage: 0.6, diskTotalBytes: null },
     });
-    expect(facts.sharedWith).toEqual({ "media-box": ["pip"] });
+    expect(facts.sharedWith).toEqual({ "media-box": ["juniper"] });
     expect(facts.desktop).toBeNull();
 
     const failing = async (method: string) => {

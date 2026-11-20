@@ -16,6 +16,7 @@
 import {
   ComputerViews,
   newRun,
+  readCommandPlace,
   type ClawtrateState,
   type ComputerState,
   type QuestionCard,
@@ -50,6 +51,7 @@ export const COMPUTER_STATES = [
   "complexquestion",
   "offline",
   "nodeunknown",
+  "machinefail",
   "desktop",
 ] as const;
 export type ComputerMode = (typeof COMPUTER_STATES)[number];
@@ -359,6 +361,7 @@ export function computerFixture(
   let releases = 0;
   let shownTab = 0;
   let prepared = false;
+  let machineReads = 0;
   const sockets = new Set<FakeStream>();
   const generation = { current: "" };
 
@@ -592,12 +595,24 @@ export function computerFixture(
     engine,
     /** Machine facts the scripted gateway gives for `readMachine`; `probe` prepares its desktop. */
     machine: (key: string, probe: boolean) => {
+      // `machinefail`: the first read answers, every later one fails as a whole.
+      machineReads += 1;
+      if (mode === "machinefail" && machineReads > 1) throw new Error("The gateway didn't answer.");
       if (probe) prepared = true;
       const otto = key.startsWith("agent:otto:");
       return {
-        setting: otto
-          ? { host: "node", node: "media-box", inherited: false }
-          : { host: null, node: null, inherited: true },
+        // As the gateway reads it: Otto's own node; Juniper sets nothing, so the gateway chooses.
+        setting: readCommandPlace(
+          otto
+            ? {
+                agents: {
+                  entries: { otto: { tools: { exec: { host: "node", node: "media-box" } } } },
+                },
+              }
+            : {},
+          otto ? "otto" : "main",
+          [],
+        ),
         nodes: otto
           ? {
               "media-box":

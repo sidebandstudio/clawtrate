@@ -149,6 +149,7 @@ export function Settings({
   accounts,
   bots,
   initialUpdates,
+  initialSection = null,
   updateReading,
   onClose,
 }: {
@@ -157,16 +158,20 @@ export function Settings({
   accounts: AccountsState;
   bots: readonly Bot[];
   initialUpdates: boolean;
+  /** Open on this section, as a link elsewhere asks (the Computer tab's Node settings). */
+  initialSection?: "machines" | null;
   updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
   onClose: () => void;
 }) {
   const send = useCommand();
   const dialogRef = useRef<HTMLDivElement>(null);
   const [section, setSectionState] = useState<Section>(() =>
-    initialUpdates ? "updates" : (recall<Section>(SHOWN_LAST) ?? "gateway"),
+    initialUpdates ? "updates" : (initialSection ?? recall<Section>(SHOWN_LAST) ?? "gateway"),
   );
   // On a phone the list comes first; a section replaces it.
-  const [pane, setPane] = useState<"nav" | "section">(initialUpdates ? "section" : "nav");
+  const [pane, setPane] = useState<"nav" | "section">(
+    initialUpdates || initialSection ? "section" : "nav",
+  );
   const [announcer, announce] = useAnnouncer();
   const setSection = (next: Section) => {
     remember(SHOWN_LAST, next);

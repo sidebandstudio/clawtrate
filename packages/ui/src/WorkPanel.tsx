@@ -59,6 +59,7 @@ export function WorkPanel({
   onShowStep,
   onShowQuestion,
   onRequestAccess,
+  onOpenMachines,
   accounts,
   bots,
   tasks,
@@ -87,6 +88,8 @@ export function WorkPanel({
   onShowStep: (stepId: string) => void;
   onShowQuestion: () => void;
   onRequestAccess: (() => void) | null;
+  /** Settings, on Machines: where a node's settings are. */
+  onOpenMachines?: (() => void) | undefined;
   accounts: AccountsState;
   bots: readonly Bot[];
   /** The bot's tasks, for a run in progress when its account changes. */
@@ -223,6 +226,7 @@ export function WorkPanel({
               onShowInChat={onShowStep}
               onShowQuestion={onShowQuestion}
               onRequestAccess={onRequestAccess}
+              onOpenMachines={onOpenMachines}
             />
           ) : (
             <p className="work-note">Pick one of {name}'s tasks to see its computer.</p>

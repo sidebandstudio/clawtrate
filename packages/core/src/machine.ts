@@ -6,7 +6,8 @@
 // `readMachine` reads the gateway and returns; the rest are views over a
 // transcript.
 
-import { asRecord, type RawRecord } from "./mapping.ts";
+import { readCommandPlace, readNodes, type CommandPlace } from "./machines.ts";
+import { asRecord } from "./mapping.ts";
 import type { Run, Step } from "./runs.ts";
 import type { Transcript } from "./types.ts";
 
@@ -197,8 +198,12 @@ export type NodeRecord = {
 };
 
 export type MachineFacts = {
-  /** The bot's own setting, or the gateway's default when the bot sets none; null when unreadable. */
-  setting: { host: string | null; node: string | null; inherited: boolean } | null;
+  /**
+   * Where the bot's commands are set to run, as the gateway reads its settings
+   * (`readCommandPlace`): the bot's own over every bot's; null when unreadable.
+   * Unset and `auto` are not resolved: the gateway chooses for each command.
+   */
+  setting: CommandPlace | null;
   /**
    * Each node named by the setting or the evidence: its record; `unknown`
    * when the list couldn't be read (never "not connected"); `not-listed` when
@@ -216,28 +221,6 @@ const num = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
 const text = (value: unknown, max = 256): string | null =>
   typeof value === "string" && value.length > 0 ? value.slice(0, max) : null;
-
-function execOf(entry: RawRecord | null): { host: string | null; node: string | null } | null {
-  const exec = asRecord(asRecord(entry?.tools)?.exec);
-  if (!exec) return null;
-  const host = text(exec.host);
-  const node = text(exec.node);
-  return host || node ? { host, node } : null;
-}
-
-/** The bots' exec settings from `config.get`, each with the gateway's default when it sets none. */
-export function execSettings(config: unknown): {
-  defaults: { host: string | null; node: string | null } | null;
-  bots: Record<string, { host: string | null; node: string | null } | null>;
-} {
-  const root = asRecord(asRecord(config)?.config) ?? asRecord(config);
-  const agents = asRecord(root?.agents);
-  const entries = asRecord(agents?.entries) ?? {};
-  const bots: Record<string, { host: string | null; node: string | null } | null> = {};
-  for (const [id, entry] of Object.entries(entries).slice(0, 64))
-    bots[id] = execOf(asRecord(entry));
-  return { defaults: execOf(root) ?? execOf(asRecord(agents?.defaults)), bots };
-}
 
 export function nodeRecord(raw: unknown): NodeRecord | null {
   const r = asRecord(raw);
@@ -283,23 +266,20 @@ export async function readMachine(
   let setting: MachineFacts["setting"] = null;
   const sharedWith: Record<string, string[]> = {};
   if (config.status === "fulfilled") {
-    const settings = execSettings(config.value);
-    const own = settings.bots[botId] ?? null;
-    setting = own
-      ? { ...own, inherited: false }
-      : {
-          host: settings.defaults?.host ?? null,
-          node: settings.defaults?.node ?? null,
-          inherited: true,
-        };
-    for (const [id, each] of Object.entries(settings.bots)) {
-      const node = each?.node ?? settings.defaults?.node ?? null;
-      if (id === botId || !node) continue;
-      (sharedWith[node] ??= []).push(id);
+    const root = asRecord(asRecord(config.value)?.config) ?? {};
+    const machines = nodes.status === "fulfilled" ? readNodes(nodes.value).nodes : [];
+    setting = readCommandPlace(root, botId, machines);
+    // Other bots whose stored setting names the same node: a setting, not where they ran.
+    const entries = asRecord(asRecord(root.agents)?.entries) ?? {};
+    for (const id of Object.keys(entries).slice(0, 64)) {
+      if (id === botId) continue;
+      const place = readCommandPlace(root, id, machines);
+      if (place.host === "node" && place.nodeSelector)
+        (sharedWith[place.nodeSelector] ??= []).push(id);
     }
   }
   const wanted = new Set(named.filter(Boolean));
-  if (setting?.node) wanted.add(setting.node);
+  if (setting?.nodeSelector) wanted.add(setting.nodeSelector);
   const records: MachineFacts["nodes"] = {};
   const listed =
     nodes.status === "fulfilled"

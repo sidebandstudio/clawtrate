@@ -58,7 +58,7 @@ export function Shell({
   onBubbles: (choice: BubbleChoice) => void;
   onUnreadCount?: ((count: number) => void) | undefined;
   updateEntry: boolean;
-  onOpenSettings: (section?: "updates") => void;
+  onOpenSettings: (section?: "updates" | "machines") => void;
   /** Set while Settings covers the shell. */
   inert?: boolean;
   /** Whether the open task has caught up since the latest connect: until then work is last seen. */
@@ -630,6 +630,7 @@ export function Shell({
             onShowStep={showStep}
             onShowQuestion={showQuestion}
             onRequestAccess={info.readOnly ? null : () => void send({ type: "requestAccess" })}
+            onOpenMachines={() => onOpenSettings("machines")}
             drawer={drawerOpen}
             onClose={() => setPanel(false)}
             closeRef={closeRef}

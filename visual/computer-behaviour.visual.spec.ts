@@ -464,6 +464,60 @@ test.describe("the computer button, recovery and the machine", () => {
     );
   });
 
+  test("F-147: a setting the gateway hasn't resolved says so as it is stored, never the gateway's machine", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=watching`, "light");
+    const machine = computerPanel(page).getByTestId("computer-machine");
+    await expect(machine).toContainText(
+      "Set for Juniper" +
+        "Commands: not set" +
+        "Not resolved: the gateway chooses where each of Juniper's commands runs. Where one ran is only in its own result.",
+    );
+    await expect(machine.locator(".machine-setting")).not.toContainText("the gateway's machine");
+  });
+
+  test("F-147: Node settings opens Settings on Machines, where the node's settings are", async ({
+    page,
+  }) => {
+    await openFixture(page, `${OTTO_COMPUTER}&computer=offline`, "light");
+    const machine = computerPanel(page).getByTestId("computer-machine");
+    await machine.getByRole("button", { name: "Node settings for media-box" }).click();
+    await expect(page.locator("#b-section-title")).toHaveText("Machines");
+  });
+
+  test("F-148: after a read that fails, or with the connection dropped, the facts are the last read at their time, never current", async ({
+    page,
+  }) => {
+    await openFixture(page, `${OTTO_COMPUTER}&computer=machinefail`, "light");
+    const machine = computerPanel(page).getByTestId("computer-machine");
+    const node = machine.getByTestId("computer-node");
+    await expect(node).toContainText("Connected");
+    await expect(machine.getByTestId("computer-machine-stale")).toHaveCount(0);
+    // Shown again, the tab reads again, and that read fails.
+    await page.getByRole("tab", { name: "Files" }).click();
+    await page.getByRole("tab", { name: "Computer" }).click();
+    await expect(machine.getByTestId("computer-machine-stale")).toHaveText(
+      /^Couldn't read this again\. As read at \d+:\d\d (AM|PM)\.$/,
+    );
+    await expect(node).toContainText(/Connected when last read, \d+:\d\d (AM|PM)/);
+    await page.evaluate(() =>
+      (
+        window as unknown as {
+          clawtrateFixture: {
+            setState(change: (s: { connection: object }) => object): void;
+          };
+        }
+      ).clawtrateFixture.setState((s) => ({
+        ...s,
+        connection: { ...s.connection, status: "reconnecting" },
+      })),
+    );
+    await expect(machine.getByTestId("computer-machine-stale")).toHaveText(
+      /^Not connected to the gateway\. As read at \d+:\d\d (AM|PM)\.$/,
+    );
+  });
+
   test("F-148: a node record that couldn't be read is Unknown, never Not connected", async ({
     page,
   }) => {

@@ -38,6 +38,7 @@ import {
   PluginIcon,
   ScreenIcon,
 } from "../icons.tsx";
+import { hostWords } from "../machines/words.ts";
 import { readPreference, writePreference } from "../preferences.ts";
 import { pictureWords, useFrames, useNow, type FrameCanvases, type Picture } from "./frames.ts";
 import { ScreenView } from "./ScreenView.tsx";
@@ -79,6 +80,8 @@ export type ComputerTabProps = {
   onShowQuestion: () => void;
   /** Absent on a host pinned to the read tier: it never asks for more access. */
   onRequestAccess: (() => void) | null;
+  /** Settings, on Machines, where a node's settings are; absent where there is no Settings. */
+  onOpenMachines?: (() => void) | undefined;
 };
 
 export function ComputerTab(props: ComputerTabProps) {
@@ -290,6 +293,8 @@ export function ComputerTab(props: ComputerTabProps) {
           // Read only while the tab is in front of the person: nothing is asked of the gateway
           // for a tab no one is looking at.
           online={online && shown}
+          connected={online}
+          onOpenMachines={props.onOpenMachines}
           browser={
             pane?.availability === "ready"
               ? `The gateway's machine, in ${name}'s own browser`
@@ -862,13 +867,19 @@ function MachineSection({
   taskKey,
   transcript,
   online,
+  connected,
+  onOpenMachines,
   browser,
 }: {
   bridge: ClawtrateBridge;
   name: string;
   taskKey: string;
   transcript: Transcript | undefined;
+  /** Read only while shown and connected. */
   online: boolean;
+  /** The gateway connection is up: after a drop the facts are the last read, at their time. */
+  connected: boolean;
+  onOpenMachines?: (() => void) | undefined;
   browser: string | null;
 }) {
   const target = transcript ? approvalTarget(transcript) : null;
@@ -879,6 +890,8 @@ function MachineSection({
   const [lastGood, setLastGood] = useState<Record<string, { record: NodeRecord; at: number }>>({});
   const [checking, setChecking] = useState(false);
   const [checked, setChecked] = useState<number | null>(null);
+  /** The latest read failed as a whole: what is shown is the read before, at its time. */
+  const [failed, setFailed] = useState(false);
   const ask = useCallback(
     (probe: boolean) =>
       bridge.invoke({
@@ -891,10 +904,14 @@ function MachineSection({
   );
   const keep = useCallback((answer: MachineFacts) => {
     setFacts(answer);
+    setFailed(false);
+    // Only the nodes named now: a node no longer named leaves with its last record.
     setLastGood((before) => {
-      const next = { ...before };
-      for (const [id, record] of Object.entries(answer.nodes))
+      const next: typeof before = {};
+      for (const [id, record] of Object.entries(answer.nodes)) {
         if (typeof record === "object") next[id] = { record, at: answer.readAt };
+        else if (before[id]) next[id] = before[id];
+      }
       return next;
     });
   }, []);
@@ -908,8 +925,11 @@ function MachineSection({
         if (manual) setChecked(answer.readAt);
         setChecking(false);
       },
-      // Kept as it was: a failed read is never shown as "not connected".
-      () => setChecking(false),
+      // Kept as it was, as the last read: a failed read is never shown as "not connected".
+      () => {
+        setFailed(true);
+        setChecking(false);
+      },
     );
   };
   useEffect(() => {
@@ -919,7 +939,9 @@ function MachineSection({
       (answer) => {
         if (!gone) keep(answer);
       },
-      () => {},
+      () => {
+        if (!gone) setFailed(true);
+      },
     );
     return () => {
       gone = true;
@@ -927,16 +949,32 @@ function MachineSection({
   }, [ask, keep, online]);
   // Times are read against when the facts were read.
   const now = facts?.readAt ?? 0;
+  // After a failed read or a dropped connection, what is shown is the last read, at its time.
+  const stale = facts !== null && (failed || !connected);
   const setting = facts?.setting;
-  const settingWords = setting
-    ? `Commands: ${setting.node ?? (setting.host === "sandbox" ? "a sandbox" : "the gateway's machine")}`
-    : null;
-  const nodeIds = [...new Set([...named, ...(setting?.node ? [setting.node] : [])])];
+  // As "Where it runs" says it: unset and auto are not resolved, and never the gateway's machine.
+  const settingWords = setting ? `Commands: ${hostWords(setting)}` : null;
+  const unresolved = setting ? setting.host === null || setting.host === "auto" : false;
+  const nodeIds = [
+    ...new Set([...named, ...(setting?.nodeSelector ? [setting.nodeSelector] : [])]),
+  ];
   return (
     <div data-testid="computer-machine">
+      {stale && (
+        <p
+          className="files-alert"
+          data-tone="quiet"
+          role="status"
+          data-testid="computer-machine-stale"
+        >
+          {connected
+            ? `Couldn't read this again. As read at ${clockTime(facts.readAt)}.`
+            : `Not connected to the gateway. As read at ${clockTime(facts.readAt)}.`}
+        </p>
+      )}
       {nodeIds.map((id) => {
         const got = facts?.nodes[id];
-        if (typeof got !== "object" || got.connected) return null;
+        if (stale || typeof got !== "object" || got.connected) return null;
         // Above the machine: the node is not connected, and the one thing to do about it.
         return (
           <p key={id} className="files-alert" role="alert" data-testid="computer-node-offline">
@@ -988,7 +1026,9 @@ function MachineSection({
             <dd className="machine-setting">
               {settingWords}
               <span className="machine-sub">
-                A setting for {name}. A task can run somewhere else.
+                {unresolved
+                  ? `Not resolved: the gateway chooses where each of ${name}'s commands runs. Where one ran is only in its own result.`
+                  : `A setting for ${name}. A task can run somewhere else.`}
               </span>
             </dd>
           </div>
@@ -1023,7 +1063,13 @@ function MachineSection({
               <div>
                 <dt>State</dt>
                 <dd className="machine-state">
-                  {unknown || !got ? (
+                  {stale && record ? (
+                    <>
+                      {glyph("queued")}
+                      {record.connected ? "Connected" : "Not connected"} when last read,{" "}
+                      {clockTime(now)}
+                    </>
+                  ) : unknown || !got ? (
                     <>
                       {glyph("queued")}Unknown
                       {last && (
@@ -1082,6 +1128,17 @@ function MachineSection({
                 As of {clockTime(statsAt)}
                 {now - statsAt > 180_000 ? ". The node hasn't sent newer figures." : ""}
               </p>
+            )}
+            {onOpenMachines && (
+              <button
+                type="button"
+                className="link-button"
+                data-tone="muted"
+                aria-label={`Node settings for ${record?.name ?? id}`}
+                onClick={onOpenMachines}
+              >
+                Node settings
+              </button>
             )}
             <p className="machine-foot">
               {(facts?.sharedWith[id] ?? []).length > 0 && (
