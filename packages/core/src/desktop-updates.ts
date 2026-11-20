@@ -44,8 +44,9 @@ export interface DesktopUpdateSnapshot {
   tracks: ReadonlyArray<{ track: UpdateTrack; source: string }>;
   selectedTrack: UpdateTrack | null;
   pendingTrack: UpdateTrack | null;
-  /** UTC ISO timestamp of the last completed feed read. */
-  lastCheckedAt: string | null;
+  /** Most recent complete feed read accepted by this host. */
+  lastCheck: {track:UpdateTrack; readAt:string} | null;
+  preferenceIssue: "last-check-not-saved" | null;
   state: DesktopUpdateState;
   install: { kind: "unavailable-in-this-build" };
 }

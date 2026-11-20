@@ -29,6 +29,13 @@ export interface UpdateServiceOptions {
   loopbackHttpForTests?: LoopbackHttpForTests;
 }
 
+export function readCheck(value: unknown): DesktopUpdateSnapshot["lastCheck"] {
+  if (!value || typeof value !== "object" || !("track" in value) || !("readAt" in value)) return null;
+  const {track,readAt} = value;
+  const date = parseReleaseDate(readAt);
+  return (track === "stable" || track === "nightly") && date ? {track,readAt:date} : null;
+}
+
 function failed(
   reason: DesktopUpdateFailure,
   stage: "check" | "preferences" = "check",
@@ -56,13 +63,16 @@ export class DesktopUpdateService {
     });
     let selectedTrack =
       tracks.find((t) => t.track === runningTrack)?.track ?? tracks[0]?.track ?? runningTrack;
-    let lastCheckedAt: string | null = null;
+    let lastCheck: DesktopUpdateSnapshot["lastCheck"] = null;
     let state: DesktopUpdateState = { kind: "not-checked" };
     try {
       await clearUpdateDirectory(options.downloadDir);
+    } catch {state = failed("write-failed","preferences");}
+    try {
       const saved = await options.store.get("selectedTrack");
       selectedTrack = tracks.find((t) => t.track === saved)?.track ?? selectedTrack;
-      lastCheckedAt = parseReleaseDate(await options.store.get("lastCheckedAt"));
+      const raw = await options.store.get("lastCheck");
+      if(raw !== null) lastCheck = readCheck(JSON.parse(raw));
     } catch {
       state = failed("write-failed", "preferences");
     }
@@ -72,7 +82,7 @@ export class DesktopUpdateService {
       tracks,
       selectedTrack,
     pendingTrack:null,
-      lastCheckedAt,
+      lastCheck, preferenceIssue:null,
       state: options.packaged ? state : failed("development-build"),
       install: { kind: "unavailable-in-this-build" },
     });
@@ -169,11 +179,8 @@ export class DesktopUpdateService {
         if (this.engine !== engine) return;
         const result = await engine.check();
         if (this.engine !== engine) return;
-        if (checkedAt) {
-          await this.options.store.set("lastCheckedAt", checkedAt);
-          if (this.engine !== engine) return;
-          this.snapshot = { ...this.snapshot, lastCheckedAt: checkedAt };
-        }
+        const lastCheck = checkedAt ? {track:selectedTrack,readAt:checkedAt} : null;
+        if (lastCheck) this.snapshot = {...this.snapshot,lastCheck,preferenceIssue:null};
         switch (result.kind) {
           case "available":
             this.publish({
@@ -192,6 +199,14 @@ export class DesktopUpdateService {
           case "failed":
             this.publish(failed(result.cause));
             break;
+        }
+        if (lastCheck) {
+          try {
+            await this.options.store.set("lastCheck",JSON.stringify(lastCheck));
+          } catch {
+            this.snapshot={...this.snapshot,preferenceIssue:"last-check-not-saved"};
+            this.publish(this.snapshot.state);
+          }
         }
       })()
         .catch(() => {

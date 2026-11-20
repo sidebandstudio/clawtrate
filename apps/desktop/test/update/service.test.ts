@@ -63,7 +63,7 @@ it("removes old files and makes zero requests at launch, on get, and on choosing
   expect(service.get()).toMatchObject({
     runningTrack: "stable",
     selectedTrack: "stable",
-    lastCheckedAt: null,
+    lastCheck: null,
     state: { kind: "not-checked" },
   });
   await service.chooseTrack("nightly");
@@ -74,8 +74,8 @@ it("removes old files and makes zero requests at launch, on get, and on choosing
   });
   expect(readdirSync(updates)).toHaveLength(1);
   expect(server.requests).toEqual(["/nightly", "/files/app.zip"]);
-  const checked = service.get().lastCheckedAt;
-  expect(checked).toMatch(/Z$/);
+  const checked = service.get().lastCheck;
+  expect(checked).toMatchObject({track:"nightly",readAt:expect.stringMatching(/Z$/)});
   expect(JSON.stringify(snapshots)).not.toMatch(/https?:|app\.zip|\.partial|sha512|"path"/);
   expect(service.get().tracks).toEqual(
     ["stable", "nightly"].map((track) => ({ track, source: "127.0.0.1" })),
@@ -83,7 +83,7 @@ it("removes old files and makes zero requests at launch, on get, and on choosing
   expect((await start()).get()).toMatchObject({
     runningTrack: "stable",
     selectedTrack: "nightly",
-    lastCheckedAt: checked,
+    lastCheck: checked,
     state: { kind: "not-checked" },
   });
   expect(existsSync(updates)).toBe(false);
@@ -133,14 +133,14 @@ it.each(["check", "download"] as const)(
 it("refuses a feed for another track and records only completed reads", async () => {
   const service = await start();
   server.route("/stable", (_req, res) => res.destroy());
-  expect((await service.check(service.get().selectedTrack)).snapshot.lastCheckedAt).toBeNull();
+  expect((await service.check(service.get().selectedTrack)).snapshot.lastCheck).toBeNull();
   for (const [version, track] of [
     [nightly, "nightly"],
     [nightly, "stable"],
   ] as const) {
     server.route("/stable", json(document(version, track)));
     expect((await service.check(service.get().selectedTrack)).snapshot).toMatchObject({
-      lastCheckedAt: expect.stringMatching(/Z$/),
+      lastCheck: {track:"stable",readAt:expect.stringMatching(/Z$/)},
       state: { kind: "failed", reason: "wrong-track" },
     });
   }

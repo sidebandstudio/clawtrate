@@ -118,7 +118,7 @@ test("opens its window from the packaged app on the connect screen", async () =>
   );
   expect(updates).toMatchObject({
     tracks: [],
-    lastCheckedAt: null,
+    lastCheck: null,
     state: { kind: "not-checked" },
   });
   expect(
@@ -128,7 +128,7 @@ test("opens its window from the packaged app on the connect screen", async () =>
       ).clawtrateHost.desktopUpdates.check("stable"),
     ),
   ).toMatchObject({snapshot:{
-    lastCheckedAt: null,
+    lastCheck: null,
     state: { kind: "failed", reason: "not-configured" },
   }});
   // A packaged app does not look for the development gateway.
