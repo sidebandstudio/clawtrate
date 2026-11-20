@@ -24,6 +24,15 @@ export function refusalLine(reason: Reason) {
     : "This update can't be installed from here.";
 }
 
+export function downloadBlocked(install: DesktopUpdateSnapshot["install"]) {
+  return (
+    install.kind === "unavailable-in-this-build" &&
+    (install.reason === "build-not-signed" ||
+      install.reason === "windows-install-pending-trial" ||
+      install.reason === "no-installer-path")
+  );
+}
+
 export function restartCapability(s: DesktopUpdateSnapshot) {
   return s.state.kind === "verified" &&
     s.install.kind === "restart-available" &&

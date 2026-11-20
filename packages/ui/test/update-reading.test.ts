@@ -20,7 +20,7 @@ const base: DesktopUpdateSnapshot = {
   preferenceIssue: null,
   lastCheck: null,
   lastAttempt: null,
-  install: { kind: "unavailable-in-this-build", reason: "build-not-signed" },
+  install: { kind: "unavailable-in-this-build", reason: "no-verified-download" },
   state: { kind: "not-checked" },
 };
 function harness() {

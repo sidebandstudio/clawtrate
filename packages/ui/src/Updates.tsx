@@ -2,7 +2,13 @@ import type { DesktopUpdateSnapshot, UpdateTrack } from "@clawtrate/core";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { useRef, useState } from "react";
 import { Confirm } from "./bots/Dialog.tsx";
-import { handoffLocked, restartCapability, refusalLine, attemptLine } from "./update-restart.ts";
+import {
+  downloadBlocked,
+  handoffLocked,
+  restartCapability,
+  refusalLine,
+  attemptLine,
+} from "./update-restart.ts";
 import { WarnIcon } from "./icons.tsx";
 import "./styles/updates.css";
 
@@ -83,13 +89,7 @@ function updateRow(
     case "offered":
       return {
         line: `Clawtrate ${state.version} is offered by the update source.`,
-        action:
-          s.install.kind === "unavailable-in-this-build" &&
-          ["build-not-signed", "windows-install-pending-trial", "no-installer-path"].includes(
-            s.install.reason,
-          )
-            ? "Check for Updates"
-            : "Download",
+        action: downloadBlocked(s.install) ? "Check for Updates" : "Download",
       };
     case "downloading":
       if (state.received >= state.expected)

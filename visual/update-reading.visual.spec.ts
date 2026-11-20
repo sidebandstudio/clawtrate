@@ -242,3 +242,66 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
   await entry.click();
   await expect(page.locator(".update-result dd")).toHaveText("Couldn't check for updates.");
 });
+
+type OfferProbe = Window & {
+  publishOffer: (snapshot: DesktopUpdateSnapshot) => void;
+  updateCalls: string[];
+  clawtrateFixture: { desktopUpdates: DesktopUpdates };
+};
+
+for (const reason of [
+  "build-not-signed",
+  "windows-install-pending-trial",
+  "no-installer-path",
+] as const) {
+  test.describe(reason, () => {
+    test("F-231: a stale Download control sends nothing after a permanent refusal", async ({
+      page,
+    }) => {
+      await page.addInitScript(() => {
+        const w = window as unknown as OfferProbe;
+        w.updateCalls = [];
+        Object.defineProperty(w, "clawtrateFixture", {
+          configurable: true,
+          set(bridge: { desktopUpdates: DesktopUpdates }) {
+            Object.defineProperty(w, "clawtrateFixture", { value: bridge });
+            const host = bridge.desktopUpdates;
+            const subscribe = host.subscribe;
+            host.subscribe = (listener) => {
+              w.publishOffer = listener;
+              return subscribe(listener);
+            };
+            const { check, download } = host;
+            host.check = (track, revision) => {
+              w.updateCalls.push(`check ${track} ${revision}`);
+              return check(track, revision);
+            };
+            host.download = (id) => {
+              w.updateCalls.push(`download ${id}`);
+              return download(id);
+            };
+          },
+        });
+      });
+      await openFixture(page, "scene=main&updates=offered", "light");
+      await page.getByRole("button", { name: "Open Updates" }).click();
+      const download = page.getByRole("button", { name: "Download", exact: true });
+      await download.evaluate(async (button, reason) => {
+        const w = window as unknown as OfferProbe;
+        const offer = await w.clawtrateFixture.desktopUpdates.get();
+        w.publishOffer({
+          ...offer,
+          revision: offer.revision + 1,
+          install: { kind: "unavailable-in-this-build", reason },
+        });
+        (button as HTMLButtonElement).click();
+      }, reason);
+      await expect(download).toHaveCount(0);
+      expect(await page.evaluate(() => (window as unknown as OfferProbe).updateCalls)).toEqual([]);
+      await page.getByRole("button", { name: "Check for Updates" }).click();
+      expect(await page.evaluate(() => (window as unknown as OfferProbe).updateCalls)).toEqual([
+        "check stable 1",
+      ]);
+    });
+  });
+}

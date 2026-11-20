@@ -6,7 +6,7 @@ import type {
 } from "@clawtrate/core";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 
-import { handoffLocked, restartCapability } from "./update-restart.ts";
+import { downloadBlocked, handoffLocked, restartCapability } from "./update-restart.ts";
 
 type Reading = {
   snapshot: DesktopUpdateSnapshot | null;
@@ -110,6 +110,7 @@ export class UpdateReading {
       this.work?.kind === "restart"
     )
       return;
+    if (command.kind === "download" && downloadBlocked(snapshot.install)) return;
     if (command.kind === "restart" && restartCapability(snapshot)?.offerId !== command.offerId)
       return;
     const choosing = command.kind === "choose";
