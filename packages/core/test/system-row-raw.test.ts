@@ -28,8 +28,8 @@ describe("F-094: a system line's history row", () => {
   });
 });
 
-describe("F-094: a system line's row, read through a queue alias", () => {
-  it("keeps the run id the gateway sent in its Raw, though the client groups the row under the send's run", async () => {
+describe("F-094: history rows read through a queue alias", () => {
+  it("keeps the gateway run id in both the system line and the run line Raw", async () => {
     const gateway = grantingGateway();
     const person = {
       role: "user",
@@ -54,6 +54,10 @@ describe("F-094: a system line's row, read through a queue alias", () => {
       expect(transcript().queueAliases).toEqual({ "gw-1": "send-1" });
       const line = transcript().items.find((item) => item.role === "system");
       expect(line?.raw).toEqual(compaction);
+      const run = transcript().runs.find((each) => each.id === "send-1");
+      expect(run?.lifecycle).toEqual([
+        { via: "chat.history (the run's last correlated row)", record: compaction },
+      ]);
     } finally {
       client.stop();
     }

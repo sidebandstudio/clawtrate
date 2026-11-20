@@ -705,14 +705,14 @@ const END_FRAME = /^(agent \(lifecycle end\)|chat \((aborted|final)\))$/;
  * correlated with it, labelled as such (F-094). A run that has events of its
  * own keeps those.
  */
-function withHistoryRows(runs: Run[], messages: unknown): Run[] {
-  if (!Array.isArray(messages) || messages.length === 0) return runs;
+function withHistoryRows(runs: Run[], messages: unknown, received: unknown): Run[] {
+  if (!Array.isArray(messages) || !Array.isArray(received) || messages.length === 0) return runs;
   return runs.map((run) => {
     if (!isTerminal(run.state) || !run.endFromRows || (run.lifecycle?.length ?? 0) > 0) return run;
     let last: unknown = undefined;
-    for (const message of messages) {
+    for (const [index, message] of messages.entries()) {
       const meta = asRecord(asRecord(message)?.__openclaw);
-      if (meta?.runId === run.id) last = message;
+      if (meta?.runId === run.id) last = received[index];
     }
     return last === undefined
       ? run
@@ -5522,6 +5522,7 @@ export class ClawtrateClient {
           ctx,
         ),
         messages,
+        history?.messages,
       );
       // A Stop asked before the gateway named its run: the run in flight under the send's id
       // is that run, named now, and is stopped; so is one settled earlier with no known outcome.
