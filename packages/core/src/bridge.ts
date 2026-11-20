@@ -2,6 +2,7 @@
 // the renderer. The host owns the gateway connection; the renderer receives state
 // snapshots and sends commands. Transport is IPC in Electron and a WebSocket on the web.
 
+import type { DesktopUpdates } from "./desktop-updates.ts";
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   type AttachmentInfo,
@@ -9,7 +10,7 @@ import {
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
-import type { QuestionAnswer, StepRead } from "./runs.ts";
+import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
 import {
   MAX_SIDEBAR_BOTS,
   parseSidebar,
@@ -21,6 +22,25 @@ import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./t
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
 import type { BotRoutines, CalendarRuns, RoutineRun, RunConversation } from "./routines.ts";
+import type { MenuRow } from "./composer-menus.ts";
+import type { UsageBusy, UsageReport } from "./usage-engine.ts";
+import {
+  MAX_ROUTINE_NAME_CHARS,
+  validTimeZone,
+  type BudgetChange,
+  type BudgetRoutine,
+  type UsagePeriod,
+} from "./usage.ts";
+import {
+  DEFAULTS_CHOICES,
+  MAX_MACHINE_NAME_CHARS,
+  MAX_PATH_CHARS,
+  type ApprovalsFile,
+  type BotPlacement,
+  type ConfigSave,
+  type DefaultsChoice,
+  type MachinesView,
+} from "./machines.ts";
 
 export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
@@ -34,7 +54,7 @@ export type BridgeCommand =
   | { type: "closeSession"; key: string }
   /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
   /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
-  | { type: "requestAccess"; tier?: "admin" }
+  | { type: "requestAccess"; tier?: "admin" | "pairing" }
   /**
    * Send to a task this viewer has open. Files are not carried in the command:
    * they are added first (web upload path or Electron IPC) and named by id.
@@ -45,7 +65,15 @@ export type BridgeCommand =
       text: string;
       mode: "auto" | "queue";
       attachmentIds: string[];
+      /** The gateway's id of the message this one replies to (F-067). */
+      replyToId?: string;
     }
+  /** Add, or with `remove` take back, this person's reaction on a message the task shows (F-283). */
+  | { type: "setReaction"; key: string; messageId: string; emoji: string; remove: boolean }
+  /** The "Turn time limit", in minutes, for every run this client starts (F-100). */
+  | { type: "setTurnLimit"; minutes: number }
+  /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
+  | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
   | { type: "retryMessage"; key: string; messageId: string }
   | { type: "deleteMessage"; key: string; messageId: string }
   | { type: "cancelQueued"; key: string; messageId: string }
@@ -90,6 +118,9 @@ export type BridgeCommand =
    * hold it yet.
    */
   | { type: "readStepRaw"; key: string; stepId: string }
+  | { type: "readRunRaw"; key: string; runId: string }
+  /** Files the viewer attached and then removed from its draft: the host lets them go. */
+  | { type: "releaseAttachments"; attachmentIds: string[] }
   /** Ask again, with its own key, for a task creation the gateway refused, or whose outcome is unknown (it may create a second task). */
   | { type: "retryCreation"; creationId: string }
   /** Forget a task creation that failed, settled or cannot be established. */
@@ -194,7 +225,44 @@ export type BridgeCommand =
   /** A bot's archived tasks, read now. */
   | { type: "listArchived"; botId: string }
   /** Change the rail's arrangement on the gateway; `base` is this device's, used when the gateway holds none. */
-  | { type: "changeSidebar"; change: SidebarChange; base: SidebarPrefs | null };
+  | { type: "changeSidebar"; change: SidebarChange; base: SidebarPrefs | null }
+  /** A bot's usage, or every bot's (`botId` null), for a period in this person's time zone; read now. */
+  | {
+      type: "readUsage";
+      botId: string | null;
+      period: UsagePeriod;
+      timeZone: string;
+      detail: boolean;
+    }
+  /** Set or remove a warning budget, kept with the gateway. */
+  | { type: "changeBudget"; change: BudgetChange }
+  /** Count the budgets and read the providers' limits again now. */
+  | { type: "refreshUsage" }
+  /** The routines a budget can be set for, read now. */
+  | { type: "listRoutines" }
+  // Where a bot runs and Machines (controls.md sections 14 and 15). Read now, never kept;
+  // writes are read back before they answer, and need admin (or pairing for names and removals).
+  | { type: "readPlacement"; botId: string }
+  | { type: "readMachines" }
+  | {
+      type: "setCommandMachine";
+      botId: string;
+      host: "gateway" | "node";
+      nodeId: string | null;
+      /** The configuration revision the page showed (`BotPlacement.configHash`). */
+      baseHash: string | null;
+    }
+  | { type: "setBotWorkspace"; botId: string; path: string }
+  | {
+      type: "setMachineDefaults";
+      machineId: string;
+      choice: DefaultsChoice;
+      expectedHash: string | null;
+    }
+  | { type: "renameMachine"; nodeId: string; name: string }
+  | { type: "removeMachine"; nodeId: string }
+  | { type: "renameDevice"; deviceId: string; name: string }
+  | { type: "removeDevice"; deviceId: string };
 
 /** What each command answers with. */
 export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMessage" }
@@ -207,45 +275,72 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
         ? { key: string }
         : C extends { type: "readStepRaw" }
           ? StepRead | null
-          : C extends { type: "readApprovalText" }
-            ? { text: Record<string, string | string[] | null>; digest: string }
-            : C extends { type: "readHistoryItem" }
-              ? TranscriptItem | null
-              : C extends { type: "retryCreation" }
-                ? { key: string }
-                : C extends { type: "readBotRoutines" }
-                  ? BotRoutines
-                  : C extends { type: "readRoutineRuns" }
-                    ? RoutineRun[]
-                    : C extends { type: "readCalendarRuns" }
-                      ? CalendarRuns
-                      : C extends { type: "readRunConversation" }
-                        ? RunConversation
-                        : C extends { type: "listTaskFiles" }
-                          ? TaskFileList
-                          : C extends { type: "readTaskFile" | "readWorkspaceFile" }
-                            ? FileRead
-                            : C extends { type: "listWorkspace" }
-                              ? WorkspacePage
-                              : C extends { type: "readCheckoutDiff" }
-                                ? CheckoutDiff
-                                : C extends { type: "readFileChunk" }
-                                  ? { data: string }
-                                  : C extends { type: "cancelSignIn" }
-                                    ? { cancelled: boolean }
-                                    : C extends { type: "dismissSignIn" }
-                                      ? { dismissed: boolean }
-                                      : C extends { type: "saveApiKey" }
-                                        ? { profileId: string | null }
-                                        : C extends { type: "createBot" | "finishBot" }
-                                          ? { botId: string; missing: MissingStep[] }
-                                          : C extends { type: "newTask" | "newMainTask" }
-                                            ? { key: string }
-                                            : C extends { type: "archiveTask" }
-                                              ? ArchiveResult
-                                              : C extends { type: "listArchived" }
-                                                ? ArchivedList
-                                                : void;
+          : C extends { type: "readRunRaw" }
+            ? RunRawRead | null
+            : C extends { type: "readApprovalText" }
+              ? { text: Record<string, string | string[] | null>; digest: string }
+              : C extends { type: "readHistoryItem" }
+                ? TranscriptItem | null
+                : C extends { type: "retryCreation" }
+                  ? { key: string }
+                  : C extends { type: "readBotRoutines" }
+                    ? BotRoutines
+                    : C extends { type: "readRoutineRuns" }
+                      ? RoutineRun[]
+                      : C extends { type: "readCalendarRuns" }
+                        ? CalendarRuns
+                        : C extends { type: "readRunConversation" }
+                          ? RunConversation
+                          : C extends { type: "listTaskFiles" }
+                            ? TaskFileList
+                            : C extends { type: "readTaskFile" | "readWorkspaceFile" }
+                              ? FileRead
+                              : C extends { type: "listWorkspace" }
+                                ? WorkspacePage
+                                : C extends { type: "readCheckoutDiff" }
+                                  ? CheckoutDiff
+                                  : C extends { type: "readFileChunk" }
+                                    ? { data: string }
+                                    : C extends { type: "cancelSignIn" }
+                                      ? { cancelled: boolean }
+                                      : C extends { type: "dismissSignIn" }
+                                        ? { dismissed: boolean }
+                                        : C extends { type: "saveApiKey" }
+                                          ? { profileId: string | null }
+                                          : C extends { type: "createBot" | "finishBot" }
+                                            ? { botId: string; missing: MissingStep[] }
+                                            : C extends { type: "newTask" | "newMainTask" }
+                                              ? { key: string }
+                                              : C extends { type: "archiveTask" }
+                                                ? ArchiveResult
+                                                : C extends { type: "listArchived" }
+                                                  ? ArchivedList
+                                                  : C extends { type: "readComposerMenu" }
+                                                    ? MenuRow[]
+                                                    : C extends { type: "readUsage" }
+                                                      ? UsageReport | UsageBusy
+                                                      : C extends { type: "listRoutines" }
+                                                        ? BudgetRoutine[]
+                                                        : C extends { type: "readPlacement" }
+                                                          ? BotPlacement
+                                                          : C extends { type: "readMachines" }
+                                                            ? MachinesView
+                                                            : C extends {
+                                                                  type: "setCommandMachine";
+                                                                }
+                                                              ? ConfigSave
+                                                              : C extends {
+                                                                    type: "setBotWorkspace";
+                                                                  }
+                                                                ? {
+                                                                    workspace: string | null;
+                                                                    asTyped: boolean;
+                                                                  }
+                                                                : C extends {
+                                                                      type: "setMachineDefaults";
+                                                                    }
+                                                                  ? ApprovalsFile
+                                                                  : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -267,6 +362,7 @@ export type HostInfo = {
 
 /** Renderer-side view of the bridge, implemented over IPC or a WebSocket. */
 export type ClawtrateBridge = {
+  readonly desktopUpdates: DesktopUpdates;
   info: HostInfo;
   getState(): ClawtrateState;
   subscribe(listener: (state: ClawtrateState) => void): () => void;
@@ -378,6 +474,46 @@ function botId(value: unknown): string {
 function flag(value: unknown): boolean {
   if (typeof value !== "boolean") throw new Error("invalid flag");
   return value;
+}
+
+/** One change to the budgets, checked field by field. */
+function budgetChange(value: unknown): BudgetChange {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error("invalid budget change");
+  const change = value as Record<string, unknown>;
+  if (change.op === "remove") {
+    if (typeof change.id !== "string" || !/^(bot|routine):[\w.-]{1,128}$/.test(change.id))
+      throw new Error("invalid budget id");
+    return { op: "remove", id: change.id };
+  }
+  if (change.op !== "set") throw new Error("invalid budget change");
+  const budget = change.budget as Record<string, unknown> | null;
+  if (budget === null || typeof budget !== "object") throw new Error("invalid budget");
+  const routineId =
+    budget.routineId === null || budget.routineId === undefined ? null : botId(budget.routineId);
+  const routineName = budget.routineName;
+  if (
+    routineName !== null &&
+    routineName !== undefined &&
+    (typeof routineName !== "string" || routineName.length > MAX_ROUTINE_NAME_CHARS)
+  )
+    throw new Error("invalid routine name");
+  if (budget.period !== "daily" && budget.period !== "weekly") throw new Error("invalid period");
+  if (typeof budget.tokens !== "number" || !Number.isSafeInteger(budget.tokens))
+    throw new Error("invalid tokens");
+  const timeZone = validTimeZone(budget.timeZone);
+  if (!timeZone) throw new Error("invalid time zone");
+  return {
+    op: "set",
+    budget: {
+      botId: botId(budget.botId),
+      routineId,
+      routineName: routineId ? ((routineName as string | null | undefined) ?? null) : null,
+      period: budget.period,
+      tokens: budget.tokens,
+      timeZone,
+    },
+  };
 }
 
 /** One change to the rail's arrangement, checked field by field. */
@@ -511,8 +647,8 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return { type: "connect", url: command.url, token: token ?? null };
     }
     case "requestAccess":
-      return command.tier === "admin"
-        ? { type: "requestAccess", tier: "admin" }
+      return command.tier === "admin" || command.tier === "pairing"
+        ? { type: "requestAccess", tier: command.tier }
         : { type: "requestAccess" };
     case "refreshRoutines":
       return { type: command.type };
@@ -643,6 +779,28 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         text: messageText(command.text),
         mode: command.mode === "queue" ? "queue" : "auto",
         attachmentIds: ids as string[],
+        ...(command.replyToId !== undefined
+          ? { replyToId: id(command.replyToId, "message id") }
+          : {}),
+      };
+    }
+    case "setTurnLimit":
+      if (typeof command.minutes !== "number" || !Number.isInteger(command.minutes))
+        throw new Error("invalid turn limit");
+      return { type: "setTurnLimit", minutes: command.minutes };
+    case "readComposerMenu":
+      if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
+      return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
+    case "setReaction": {
+      const emoji = command.emoji;
+      if (typeof emoji !== "string" || emoji.length === 0 || emoji.length > 64)
+        throw new Error("invalid emoji");
+      return {
+        type: "setReaction",
+        key: sessionKey(command.key),
+        messageId: id(command.messageId, "message id"),
+        emoji,
+        remove: command.remove === undefined ? false : flag(command.remove),
       };
     }
     case "retryMessage":
@@ -747,6 +905,21 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         key: sessionKey(command.key),
         stepId: id(command.stepId, "step id"),
       };
+    case "releaseAttachments": {
+      const ids = command.attachmentIds;
+      if (!Array.isArray(ids) || ids.length > MAX_ATTACHMENTS_PER_MESSAGE)
+        throw new Error("invalid attachments");
+      return {
+        type: "releaseAttachments",
+        attachmentIds: ids.map((each) => id(each, "attachment id")),
+      };
+    }
+    case "readRunRaw":
+      return {
+        type: "readRunRaw",
+        key: sessionKey(command.key),
+        runId: id(command.runId, "run id"),
+      };
     case "openSession":
     case "closeSession":
       return { type: command.type, key: sessionKey(command.key) };
@@ -819,6 +992,77 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         base:
           command.base === null || command.base === undefined ? null : parseSidebar(command.base),
       };
+    case "readUsage": {
+      const period = command.period;
+      if (period !== "today" && period !== "week" && period !== "month")
+        throw new Error("invalid period");
+      const timeZone = validTimeZone(command.timeZone);
+      if (!timeZone) throw new Error("invalid time zone");
+      return {
+        type: "readUsage",
+        botId: command.botId === null ? null : botId(command.botId),
+        period,
+        timeZone,
+        detail: flag(command.detail),
+      };
+    }
+    case "changeBudget":
+      return { type: "changeBudget", change: budgetChange(command.change) };
+    case "refreshUsage":
+    case "listRoutines":
+      return { type: command.type };
+    case "readPlacement":
+      return { type: "readPlacement", botId: botId(command.botId) };
+    case "readMachines":
+      return { type: "readMachines" };
+    case "setCommandMachine": {
+      if (command.host !== "gateway" && command.host !== "node") throw new Error("invalid host");
+      return {
+        type: "setCommandMachine",
+        botId: botId(command.botId),
+        host: command.host,
+        nodeId: command.host === "node" ? id(command.nodeId, "machine") : null,
+        baseHash:
+          command.baseHash === null || command.baseHash === undefined
+            ? null
+            : id(command.baseHash, "hash"),
+      };
+    }
+    case "setBotWorkspace":
+      return {
+        type: "setBotWorkspace",
+        botId: botId(command.botId),
+        path: shortText(command.path, MAX_PATH_CHARS, "path"),
+      };
+    case "setMachineDefaults": {
+      if (!DEFAULTS_CHOICES.includes(command.choice as DefaultsChoice))
+        throw new Error("invalid choice");
+      return {
+        type: "setMachineDefaults",
+        machineId: id(command.machineId, "machine"),
+        choice: command.choice as DefaultsChoice,
+        expectedHash:
+          command.expectedHash === null || command.expectedHash === undefined
+            ? null
+            : id(command.expectedHash, "hash"),
+      };
+    }
+    case "renameMachine":
+      return {
+        type: "renameMachine",
+        nodeId: id(command.nodeId, "machine"),
+        name: shortText(command.name, MAX_MACHINE_NAME_CHARS, "name"),
+      };
+    case "removeMachine":
+      return { type: "removeMachine", nodeId: id(command.nodeId, "machine") };
+    case "renameDevice":
+      return {
+        type: "renameDevice",
+        deviceId: id(command.deviceId, "device"),
+        name: shortText(command.name, MAX_MACHINE_NAME_CHARS, "name"),
+      };
+    case "removeDevice":
+      return { type: "removeDevice", deviceId: id(command.deviceId, "device") };
     default:
       throw new Error("unknown command");
   }
@@ -949,7 +1193,7 @@ class ViewerSession implements BridgeSession {
         if (this.open.delete(command.key)) client.closeSession(command.key);
         return;
       case "requestAccess":
-        return client.requestAccess(command.tier === "admin" ? "admin" : "interactive");
+        return client.requestAccess(command.tier ?? "interactive");
       case "refreshRoutines":
         return client.refreshRoutines();
       case "readBotRoutines":
@@ -1026,6 +1270,7 @@ class ViewerSession implements BridgeSession {
           const messageId = client.sendMessage(key, command.text, {
             mode: command.mode,
             attachments: taken.attachments,
+            ...(command.replyToId ? { replyToId: command.replyToId } : {}),
           });
           return { messageId };
         } catch (error) {
@@ -1067,6 +1312,18 @@ class ViewerSession implements BridgeSession {
         );
       case "stopRun":
         return client.stopRun(this.mine(command.key), command.runId, { owner });
+      case "setTurnLimit":
+        return client.setTurnLimit(command.minutes);
+      case "readComposerMenu":
+        return client.readComposerMenu(this.mine(command.key), command.trigger);
+      case "setReaction":
+        return client.setReaction(
+          this.mine(command.key),
+          command.messageId,
+          command.emoji,
+          command.remove,
+          { owner },
+        );
       case "answerQuestion":
         return client.answerQuestion(this.mine(command.key), command.questionId, command.answers, {
           owner,
@@ -1099,6 +1356,12 @@ class ViewerSession implements BridgeSession {
         return client.dismissCreation(command.creationId);
       case "readStepRaw":
         return client.readStepRaw(this.mine(command.key), command.stepId);
+      case "readRunRaw":
+        return client.readRunRaw(this.mine(command.key), command.runId);
+      case "releaseAttachments":
+        // What a removed chip reserved is free again at once, not when it would expire.
+        this.policy.attachments?.release(command.attachmentIds);
+        return;
       case "listTaskFiles":
         return client.listTaskFiles(this.mine(command.key), this.fileOptions());
       case "readTaskFile":
@@ -1144,6 +1407,47 @@ class ViewerSession implements BridgeSession {
         return client.listArchived(command.botId);
       case "changeSidebar":
         return client.changeSidebar(command.change, command.base, { owner });
+      case "readUsage":
+        return client.readUsage({
+          botId: command.botId,
+          period: command.period,
+          timeZone: command.timeZone,
+          detail: command.detail,
+        });
+      case "changeBudget":
+        return client.changeBudget(command.change, { owner });
+      case "refreshUsage":
+        return client.refreshUsage();
+      case "listRoutines":
+        return client.listRoutines();
+      case "readPlacement":
+        return client.readPlacement(command.botId);
+      case "readMachines":
+        return client.readMachines();
+      case "setCommandMachine":
+        // A machine without its id is refused, never read as the gateway's machine.
+        if (command.host === "node" && !command.nodeId) throw new Error("invalid machine");
+        return client.setCommandMachine(
+          command.botId,
+          command.host === "node" && command.nodeId
+            ? { host: "node", nodeId: command.nodeId }
+            : { host: "gateway" },
+          command.baseHash,
+        );
+      case "setBotWorkspace":
+        return client.setBotWorkspace(command.botId, command.path);
+      case "setMachineDefaults":
+        return client.setMachineDefaults(command.machineId, command.choice, command.expectedHash, {
+          owner,
+        });
+      case "renameMachine":
+        return client.renameMachine(command.nodeId, command.name);
+      case "removeMachine":
+        return client.removeMachine(command.nodeId);
+      case "renameDevice":
+        return client.renameDevice(command.deviceId, command.name, { owner });
+      case "removeDevice":
+        return client.removeDevice(command.deviceId);
     }
   }
 

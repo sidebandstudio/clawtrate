@@ -6,6 +6,8 @@ export const WRITE_SCOPE = "operator.write";
 export const APPROVALS_SCOPE = "operator.approvals";
 export const QUESTIONS_SCOPE = "operator.questions";
 export const ADMIN_SCOPE = "operator.admin";
+/** Paired devices and machines: listing, renaming, removing (`device.pair.*`, `node.rename`, `node.pair.remove`). */
+export const PAIRING_SCOPE = "operator.pairing";
 
 /** Tier one: a read-only connection. Every connect asks for this until the user acts. */
 export const READ_SCOPES: readonly string[] = [READ_SCOPE];

@@ -10,21 +10,10 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import type { AfterPackContext, Configuration } from "electron-builder";
 import { APP_ID } from "../src/main/identity.ts";
+import { macSigningRequested, notarizeWith, type Env } from "./signing.ts";
 
-export { APP_ID };
+export { APP_ID, macSigningRequested, type Env };
 export const PRODUCT_NAME = "Clawtrate";
-
-export type Env = Record<string, string | undefined>;
-
-/**
- * macOS signing is on when a Developer ID certificate is named: CSC_LINK (a
- * .p12 file or its base64) or CSC_NAME (an identity already in the keychain).
- * Without either, electron-builder is told there is no identity, so it never
- * looks in the keychain.
- */
-export function macSigningRequested(env: Env): boolean {
-  return Boolean(env.CSC_LINK?.trim() || env.CSC_NAME?.trim());
-}
 
 /**
  * Electron fuses, flipped in the binary at package time. The packaged app has
@@ -98,10 +87,11 @@ export function builderConfig(env: Env, electronVersion: string): Configuration 
       ],
       // null skips electron-builder's signing and its keychain lookup; the
       // afterPack hook signs ad hoc instead. Unset, it signs with CSC_LINK or
-      // CSC_NAME and notarizes when the APPLE_* variables are set.
+      // CSC_NAME, and notarizes only when a complete set of APPLE_* variables
+      // is present (packaging/signing.ts).
       ...(signMac ? {} : { identity: null }),
       hardenedRuntime: true,
-      notarize: signMac,
+      notarize: signMac && notarizeWith(env) !== null,
     },
     dmg: { writeUpdateInfo: false },
     win: {

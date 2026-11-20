@@ -330,6 +330,11 @@
     { id: "pip", name: "Pip", preview: "Here is the week, with Thursday kept clear.", time: "3:10 PM" },
   ];
   const botName = (id) => bots.find((b) => b.id === id)?.name ?? id;
+  function targetWords(target, bot) {
+    if (target === "isolated") return "A new conversation each time";
+    if (target === "main") return `${botName(bot)}'s main conversation`;
+    return "The conversation it was made in";
+  }
 
   // `runId` is the run's identity on the gateway (section 7); a fixture's is only unique.
   let runSeq = 0;
@@ -800,7 +805,7 @@
       (r.schedule.kind === "every" || r.schedule.kind === "at" ? "" : fact("Time zone", tz ? `${esc(city(tz))} <small>${esc(tz)}</small>` : "The gateway's own time zone", "zone")) +
       fact("Next run", nextCell, "next") +
       (r.trigger ? fact("Starts", `Only when its check passes<small><code class="r-mono">${esc(r.trigger)}</code></small>`, "starts") : "") +
-      fact("Runs in", r.sessionTarget === "isolated" ? "A new conversation each time" : `${botName(r.bot)}'s main conversation`, "runs-in") +
+      fact("Runs in", targetWords(r.sessionTarget, r.bot), "runs-in") +
       fact("Results", r.delivery?.mode === "none" ? "Kept with the run" : r.delivery?.channel && r.delivery.channel !== "last" ? `Sent to ${esc(r.delivery.channel)}` : "Announced to the gateway's channels", "results") +
       fact("Triggers", "Its schedule only.<small>This gateway's webhooks start a bot directly, not a routine.</small>", "triggers") +
       `</dl>`;
@@ -1252,7 +1257,7 @@
     const more =
       `<details class="b-disclosure"${d.cron || d.errors.cron ? " open" : ""}><summary>More</summary><div class="b-disclosure-body r-dialog-more">` +
       (d.locked ? "" : field("e-cron", "Cron expression", `<input class="input r-mono" id="e-cron" data-e="cron" value="${esc(d.cron)}" placeholder="0 8 * * 1-5" autocomplete="off"${err("cron")}${dis} />`, d.errors.cron)) +
-      `<div class="r-field"><span class="r-label">Runs in</span><p class="r-locked" id="e-runs">${d.runsIn === "isolated" ? "A new conversation each time" : d.runsIn === "main" ? `${botName(d.bot)}'s main conversation` : "The conversation it was made in"}</p></div>` +
+      `<div class="r-field"><span class="r-label">Runs in</span><p class="r-locked" id="e-runs">${targetWords(d.runsIn, d.bot)}</p></div>` +
       `<div class="r-field"><label for="e-results">Results</label><select class="input" id="e-results" data-e="results"${dis}><option value="none"${d.results === "none" ? " selected" : ""}>Keep them with the run</option><option value="announce"${d.results === "announce" ? " selected" : ""}>Also announce to the gateway's channels</option></select></div>` +
       `</div></details>`;
     editDialog.innerHTML =
