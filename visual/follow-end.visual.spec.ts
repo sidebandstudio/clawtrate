@@ -1,91 +1,123 @@
-// The transcript follows its end during the conversation's first layout
-// (conversation.md section 18, F-468's traces): a first layout that settles
-// while cards and notes are still arriving must end at the end, at every
-// width, with or without the composer's menus. The phone, where the same
-// content meets the narrowest view, is the case.
+// The transcript follows its end through the ordering that left it short in
+// F-068, F-456 and F-471's failing frames (#219), driven step by step rather
+// than left to the machine's timing. The end is followed: the resize observer
+// puts the scroll at the end, which queues a scroll event for the next frame.
+// Before that frame, the end moves up (the content shrinks, or the view grows),
+// a layout runs, and the content grows. Had the browser clamped the scroll to
+// the smaller end, the queued event would report the clamped place against the
+// grown content, ahead of the resize observer, and read as the reader moving up.
 import { test, expect, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const PHONE = SIZES.find((size) => size.phone)!;
 
-/** How far the transcript sits above its end. */
-const shortOf = (page: Page) =>
-  page.getByTestId("transcript").evaluate((element) => {
-    const short = element.scrollHeight - element.scrollTop - element.clientHeight;
-    return `${short} (scrollTop ${element.scrollTop} of ${element.scrollHeight - element.clientHeight})`;
-  });
-
-const SCENES: Array<{
-  name: string;
-  query: string;
-  ready: (page: Page) => Promise<void>;
-}> = [
-  {
-    name: "the held message and the question pending (F-468)",
-    query: `scene=run-question&${OTTO_DISK}&panel=closed`,
-    ready: (page) => expect(page.getByTestId("shelf-row")).toContainText("Held until you answer"),
-  },
-  {
-    name: "the budget reached and a provider limit near",
-    query: `scene=main&${OTTO_DISK}&access=write&budget=reached&plimit=near`,
-    ready: async (page) => {
-      await expect(page.getByTestId("budget-reached-note")).toBeVisible();
-      await expect(page.getByTestId("limit-note")).toBeVisible();
-    },
-  },
+const SCENES = [
+  { rows: "F-068", scene: "composer" },
+  { rows: "F-456", scene: "access-denied" },
+  { rows: "F-471", scene: "queued-refused" },
 ];
 
+/**
+ * The recorded steps: the content 24 px shorter, then 167 px taller (F-068's
+ * 2058, 2034, 2201), or the view 30 px taller and the content 177 px taller,
+ * as when a composer note leaves while a card arrives.
+ */
+const ORDERINGS = {
+  "the content shrinks, then grows": { shrink: 24, view: 0, grow: 167 },
+  "the view grows, then the content grows": { shrink: 0, view: 30, grow: 177 },
+};
+type Ordering = (typeof ORDERINGS)[keyof typeof ORDERINGS];
+
+/** The growth that the resize observer follows, queueing the scroll event. */
+const PIN = 24;
+
+/**
+ * Runs the ordering and returns each following frame's scroll position and how
+ * far it sits above the end. The view starts shorter by the ordering's growth,
+ * and a spacer at the end of the content grows by PIN. The resize observer
+ * follows that; a second observer, created after the transcript's so it runs
+ * after it in the same frame, then takes the steps. Its changes reach the
+ * transcript's observer only in the next frame, after the queued scroll event.
+ */
+async function drive(page: Page, ordering: Ordering) {
+  const transcript = page.getByTestId("transcript");
+  await transcript.evaluate((element, view) => {
+    const spacer = document.createElement("div");
+    spacer.dataset.followSpacer = "";
+    element.firstElementChild!.append(spacer);
+    element.style.marginBottom = `${view}px`;
+  }, ordering.view);
+  await settle(page);
+  return transcript.evaluate(
+    (element, { shrink, grow, pin }) =>
+      new Promise<Array<{ top: number; short: number }>>((resolve) => {
+        const spacer = element.querySelector<HTMLElement>("[data-follow-spacer]")!;
+        const steps = new ResizeObserver(() => {
+          steps.disconnect();
+          spacer.style.height = `${pin - shrink}px`;
+          element.style.marginBottom = "";
+          void element.scrollHeight;
+          spacer.style.height = `${pin - shrink + grow}px`;
+        });
+        steps.observe(element.firstElementChild!);
+        spacer.style.height = `${pin}px`;
+        const seen: Array<{ top: number; short: number }> = [];
+        const frame = () => {
+          const top = element.scrollTop;
+          seen.push({ top, short: element.scrollHeight - top - element.clientHeight });
+          if (seen.length < 10) requestAnimationFrame(frame);
+          else resolve(seen);
+        };
+        requestAnimationFrame(frame);
+      }),
+    { ...ordering, pin: PIN },
+  );
+}
+
+const atEnd = (page: Page) =>
+  expect
+    .poll(() =>
+      page
+        .getByTestId("transcript")
+        .evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight),
+    )
+    .toBeLessThanOrEqual(1);
+
 for (const theme of THEMES) {
-  test.describe(`first layout follows the end, phone ${theme}`, () => {
+  test.describe(`following the end, phone ${theme}`, () => {
     test.use(contextFor(PHONE, theme));
 
-    for (const scene of SCENES) {
-      for (const throttle of [1, 12]) {
-        test(`${scene.name}, ${throttle}× throttled`, async ({ page }) => {
-          // Slowing the renderer spreads the layout over more frames, where a
-          // shrink and a growth of the content can interleave with the scroll
-          // events the browser reports for them.
-          if (throttle > 1) {
-            const session = await page.context().newCDPSession(page);
-            await session.send("Emulation.setCPUThrottlingRate", { rate: throttle });
-          }
-          await openFixture(page, scene.query, theme);
-          await scene.ready(page);
-          await expect
-            .poll(
-              async () => (await shortOf(page)).startsWith("0"),
-              `the transcript at its end: ${scene.name}, phone ${theme}, ${throttle}×`,
-            )
-            .toBe(true);
+    for (const { rows, scene } of SCENES) {
+      for (const [name, ordering] of Object.entries(ORDERINGS)) {
+        test(`${rows}: ${scene}, ${name}`, async ({ page }) => {
+          await openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed`, theme);
+          await atEnd(page);
+          const frames = await drive(page, ordering);
+          // Each sample is taken before its frame's resize observer runs, so the
+          // first frames show the spacer and the steps before they are followed.
+          // From then on the transcript stays at the end, frame after frame.
+          const shorts = frames.map(({ short }) => short);
+          expect(
+            shorts.slice(4).every((short) => short <= 1),
+            `px short of the end, frame by frame: ${shorts}`,
+          ).toBe(true);
         });
       }
     }
 
-    test("a reader who leaves after following is not dragged back", async ({ page }) => {
-      await openFixture(page, `scene=run-question&${OTTO_DISK}&panel=closed`, theme);
-      await expect(page.getByTestId("shelf-row")).toContainText("Held until you answer");
-      await expect.poll(async () => (await shortOf(page)).startsWith("0")).toBe(true);
-      // The reader follows the end again after the first layout has settled.
-      await page.getByTestId("composer-input").click();
-      await page.keyboard.type("Answering, one moment.");
-      await page.keyboard.press("Backspace");
-      await page.waitForTimeout(400);
-      await expect.poll(async () => (await shortOf(page)).startsWith("0")).toBe(true);
-      // The reader scrolls up a little and stays: a scroll the reader made is
-      // never taken for a clamp under a followed end.
-      const transcript = page.getByTestId("transcript");
-      const top = await transcript.evaluate((element) => {
-        element.scrollTop -= 30;
-        return element.scrollTop;
+    for (const [name, ordering] of Object.entries(ORDERINGS)) {
+      test(`a reader who scrolls up keeps their place when ${name}`, async ({ page }) => {
+        await openFixture(page, `scene=composer&${OTTO_DISK}&panel=closed`, theme);
+        await atEnd(page);
+        const transcript = page.getByTestId("transcript");
+        const top = await transcript.evaluate((element) => {
+          element.scrollTop -= 200;
+          return element.scrollTop;
+        });
+        await settle(page);
+        const tops = (await drive(page, ordering)).map((frame) => frame.top);
+        expect(tops, "the reader's scroll position, frame by frame").toEqual(tops.map(() => top));
       });
-      await settle(page);
-      expect(
-        await transcript.evaluate((element) => element.scrollTop),
-        "the reader's scroll-up holds",
-      ).toBe(top);
-      expect(await transcript.evaluate((element) => element.scrollTop)).toBeLessThan(
-        await transcript.evaluate((element) => element.scrollHeight - element.clientHeight),
-      );
-    });
+    }
   });
 }
