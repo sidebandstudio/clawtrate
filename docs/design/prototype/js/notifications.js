@@ -95,7 +95,14 @@
     bots: { juniper: true, marlow: true, otto: p("bot") !== "otto=off", pip: true },
     botsFull: p("botsfull") === "1",
     tasks: Object.assign({ o4: "off" }, p("task") ? { o3: p("task") } : {}, p("tasks") === "full" ? filler() : {}),
-    quiet: { enabled: p("quiet") === "1" || p("quietset") === "1", from: "22:00", to: "07:00" },
+    quiet: {
+      enabled: p("quiet") === "1" || p("quietset") === "1",
+      from: p("qfrom") || "22:00",
+      to: p("qto") || "07:00",
+      // The saved zone, and the date tonight's interval starts on (quietzone=ny&quietdate=…).
+      zone: p("quietzone") === "ny" ? "America/New_York" : "Europe/Lisbon",
+      date: p("quietdate") || "2026-11-19",
+    },
     quietNow: p("quiet") === "1",
     focus: p("focus") || null, // the bot on screen in a focused window
     click: p("click") || "", // what the host finds at a click
@@ -193,9 +200,9 @@
       if (S.focus === ev.bot) return { none: `${b.name} is on screen in the focused window.` };
     }
     if (S.quietNow) {
-      if (ev.kind === "budget") return { hold: `Held until ${S.quiet.to}: ${b.name}'s budget warning. It needs a fresh figure for this period then.` };
+      if (ev.kind === "budget") return { hold: `Held until ${quietEnd()}: ${b.name}'s budget warning. It needs a fresh figure for this period then.` };
       if (ev.kind === "approval" && !hasRecord(ev)) return { none: "Quiet hours: a wait this device has no request for isn't held. It can't be confirmed later." };
-      if (ev.kind === "approval" || ev.kind === "question") return { hold: `Held until ${S.quiet.to}: ${b.name} is waiting for you.` };
+      if (ev.kind === "approval" || ev.kind === "question") return { hold: `Held until ${quietEnd()}: ${b.name} is waiting for you.` };
       return { none: "Quiet hours: this is never shown later. The rail and the task hold it." };
     }
     return { show: picture(ev) };
@@ -403,6 +410,30 @@
       end: e.length ? e[e.length - 1] : firstAfter(endDate, to, zone),
     };
   }
+
+  /**
+   * The continuous quiet interval that starts on a date: the start is included and the end excluded;
+   * an interval whose endpoints coincide is empty; intervals that touch or overlap are one, and
+   * "Quiet until" and release use its final end.
+   */
+  function continuousInterval(startDate, from, to, zone) {
+    const first = quietInterval(startDate, from, to, zone);
+    if (first.start >= first.end) return { ...first, empty: true };
+    let { start, end } = first;
+    for (let d = addDays(startDate, 1), n = 0; n < 7; d = addDays(d, 1), n += 1) {
+      const next = quietInterval(d, from, to, zone);
+      if (next.start >= next.end || next.start > end) break;
+      end = Math.max(end, next.end);
+    }
+    return { start, end, empty: false };
+  }
+  const ZONE_NAMES = { "Europe/Lisbon": "Lisbon", "America/New_York": "New York" };
+  /** The resolved end of tonight's continuous interval, as the saved zone's clock reads it. */
+  const quietEnd = () => {
+    const q = S.quiet;
+    const { end } = continuousInterval(q.date, q.from, q.to, q.zone);
+    return `${localOf(end, q.zone).slice(11)}, ${ZONE_NAMES[q.zone]} time`;
+  };
 
   // Opening (section 5) -------------------------------------------------------------------------------
 
@@ -912,7 +943,7 @@
   const AFTER = "Clawtrate can notify you after quiet hours if the item is still waiting and your settings allow it.";
   const heldCount = () => S.held.length + Object.keys(S.budgetHolds).length;
   // "Quiet until" comes from tonight's interval in the saved zone (section 6).
-  const quietUntil = () => `Quiet until ${S.quiet.to}, Lisbon time.${heldCount() ? ` ${heldCount() === 1 ? "1 item is" : `${heldCount()} items are`} held. ${AFTER}` : ""}`;
+  const quietUntil = () => `Quiet until ${quietEnd()}.${heldCount() ? ` ${heldCount() === 1 ? "1 item is" : `${heldCount()} items are`} held. ${AFTER}` : ""}`;
   const RECEIVED = "Clawtrate shows desktop notifications for events it receives while running and connected. Missed events can appear in your tasks when it reconnects.";
   const SYSTEM_NOTE = {
     mac: `${RECEIVED} It shows them also with its window closed. It can't see whether macOS allows them or whether a Focus is on.`,
@@ -1037,7 +1068,7 @@
   }
   // Tonight's interval, converted from the saved zone (Lisbon) to this device's (Berlin).
   function tonightHere() {
-    const { start, end } = quietInterval("2026-11-19", S.quiet.from, S.quiet.to, "Europe/Lisbon");
+    const { start, end } = continuousInterval(S.quiet.date, S.quiet.from, S.quiet.to, S.quiet.zone);
     const here = (ms) => localOf(ms, "Europe/Berlin").slice(11);
     return `${here(start)} to ${here(end)}`;
   }
@@ -1274,5 +1305,5 @@
     S.tab = "details";
     render();
   }
-  window.notif = { S, fire, decide, open, quietEnds, wakeAfterEnd, answeredElsewhere, dropConnection, reconnect, quietInterval, nativeTitle, resolveReq, bytes, LIMIT };
+  window.notif = { S, fire, decide, open, quietEnds, wakeAfterEnd, answeredElsewhere, dropConnection, reconnect, quietInterval, continuousInterval, nativeTitle, resolveReq, bytes, LIMIT };
 })();

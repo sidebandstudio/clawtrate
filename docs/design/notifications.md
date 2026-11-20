@@ -243,6 +243,8 @@ The host keeps, for each notification it shows, what it was for: the gateway's i
 - A time that occurs twice (the clocks go back) starts the interval on its first occurrence and ends it on its last.
 - A time that does not occur (the clocks go forward) is taken as the first valid time after the jump.
 
+The start is included and the end is excluded. An interval whose endpoints coincide is empty. When intervals touch or overlap, treat them as one continuous quiet interval. "Quiet until" and release use that continuous interval's final end.
+
 So for 22:00 to 01:30 in New York on the night the clocks go back, quiet hours end at the second 01:30; for 22:00 to 02:30 on the night they go forward, they end at 03:00. "Quiet until" and any time converted to another zone come from that interval, never from the clock face. The prototype's `quietInterval` works these out, and its check asserts midnight, both changes and both ends.
 
 **During quiet hours** Clawtrate posts no new notifications. (A banner the system already shows, or keeps in its list, is the system's.) The rail's marks, the task rows and the dock or taskbar badge go on updating as they do now: they never depended on notifications.
@@ -251,7 +253,7 @@ So for 22:00 to 01:30 in New York on the night the clocks go back, quiet hours e
 
 **Clawtrate must be running and connected for that.** It shows its notifications itself, so if it is not running when quiet hours end, nothing is shown then or later. If the connection is down when they end, every hold is dropped: nothing held is released without a fresh pending record. Missed events can appear in your tasks when it reconnects. On macOS it keeps running with its window closed; on Windows closing its window quits it (research §7). Settings says this in its words for each system.
 
-**On a second device**, the same quiet hours apply, by the same zone. Each running device holds and shows its own waits: an approval on the device that sent the message, the waiting phase elsewhere.
+Every device uses the saved zone. Each device holds only the waits for which it received a pending record it can see. A waiting phase without the request is never held.
 
 **While they are on**, Settings shows one line under the times: "Quiet until 07:00, Lisbon time." and, when something is held, "1 item is held. Clawtrate can notify you after quiet hours if the item is still waiting and your settings allow it."
 

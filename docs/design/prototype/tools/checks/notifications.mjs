@@ -98,7 +98,7 @@ await notShown("a build that can't show notifications", "event=approval&platform
 await notShown("before your settings are read", "event=finished&prefs=reading", ["Your settings aren't confirmed from the gateway"]);
 await notShown("an event while the connection is down", "event=finished&conn=down", ["The connection is down: this device receives nothing until it reconnects."]);
 await notShown("a reply during quiet hours: never shown later", "event=finished&quiet=1", ["Quiet hours: this is never shown later."]);
-await notShown("a wait with a card during quiet hours is held", "event=approval&quiet=1", ["Held until 07:00: Otto is waiting for you."]);
+await notShown("a wait with a card during quiet hours is held", "event=approval&quiet=1", ["Held until 07:00, Lisbon time: Otto is waiting for you."]);
 await notShown("a wait this device has no request for is not held", "event=approval&quiet=1&device=other", ["a wait this device has no request for isn't held. It can't be confirmed later."]);
 
 let p = await open("event=finished");
@@ -158,7 +158,7 @@ check("ruling 2: a card this device has stays shown through a disconnect", (awai
 await p.close();
 
 // Ruling 5: a held budget warning, released only with a fresh figure for the same budget and period.
-await notShown("a budget warning during quiet hours is held", "event=budget&quiet=1", ["Held until 07:00: Otto's budget warning. It needs a fresh figure for this period then."]);
+await notShown("a budget warning during quiet hours is held", "event=budget&quiet=1", ["Held until 07:00, Lisbon time: Otto's budget warning. It needs a fresh figure for this period then."]);
 for (const [end, show, words] of [
   ["still", true, ""],
   ["raised", true, ""],
@@ -241,6 +241,29 @@ r = await iv("2026-03-07", "22:00", "02:30", "America/New_York");
 check("ruling 6: a skipped end uses the first valid time after it", r[1] === "2026-03-08T07:00:00.000Z", r.join(" "));
 r = await iv("2026-03-08", "02:30", "07:00", "America/New_York");
 check("ruling 6: a skipped start uses the first valid time after it", r[0] === "2026-03-08T07:00:00.000Z", r.join(" "));
+await p.close();
+
+// Fix 3: the on-screen end is the resolved one; touching or overlapping intervals are one.
+p = await open("open=settings&quiet=1&quietzone=ny&quietdate=2026-03-08&qfrom=01:00&qto=02:30");
+check("fix 3: on March 8 in New York, 01:00 to 02:30 reads Quiet until 03:00", (await text(p, '[data-testid="quiet-now"]')).includes("Quiet until 03:00, New York time."), await text(p, '[data-testid="quiet-now"]'));
+await p.close();
+p = await open("");
+const cont = (d, f, t, z) => p.evaluate(([d, f, t, z]) => { const r = window.notif.continuousInterval(d, f, t, z); return { start: new Date(r.start).toISOString(), end: new Date(r.end).toISOString(), empty: r.empty }; }, [d, f, t, z]);
+let c = await cont("2026-10-31", "01:15", "01:10", "America/New_York");
+const firstEnd = await p.evaluate(() => new Date(window.notif.quietInterval("2026-10-31", "01:15", "01:10", "America/New_York").end).toISOString());
+check("fix 3: the October 31 interval ends at 06:10 UTC, while the November 1 interval began at 05:15 UTC", firstEnd === "2026-11-01T06:10:00.000Z" && (await p.evaluate(() => new Date(window.notif.quietInterval("2026-11-01", "01:15", "01:10", "America/New_York").start).toISOString())) === "2026-11-01T05:15:00.000Z");
+check("fix 3: so the first ending releases nothing: the continuous interval runs to November 2, 06:10 UTC", c.end === "2026-11-02T06:10:00.000Z" && c.end !== firstEnd && !c.empty, JSON.stringify(c));
+c = await cont("2026-03-08", "02:10", "02:40", "America/New_York");
+check("fix 3: March 8, 02:10 to 02:40 is empty (both resolve to 07:00 UTC)", c.empty && c.start === "2026-03-08T07:00:00.000Z" && c.end === "2026-03-08T07:00:00.000Z", JSON.stringify(c));
+await p.close();
+p = await open("event=approval&quiet=1&chrome=1");
+await click(p, '[data-bar="drop"]');
+await click(p, '[data-bar="quietend"]');
+const offlineEnd = (await pics(p)).length;
+await p.close();
+p = await open("event=approval&quiet=1&chrome=1");
+await click(p, '[data-bar="wake"]');
+check("fix 3: ending offline and waking late still drop holds", offlineEnd === 0 && (await pics(p)).length === 0 && (await p.evaluate(() => window.notif.S.held.length === 0)));
 await p.close();
 
 // The bar fires events by clicking.
