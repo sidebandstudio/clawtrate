@@ -809,7 +809,7 @@
     $(".shell").inert = true;
     $('[data-pv="close"]', view).focus();
     if (L.access) renderAccess();
-    setTimeout(() => loadPage(x), 300);
+    setTimeout(loadPage, 300, view);
     if (!view.classList.contains("chat-hidden")) setTimeout(() => view?._x === x && offerPrefix(x, null, false), 320);
   }
 
@@ -825,8 +825,9 @@
     else ex.title = "Nothing to export: the page didn't load";
   }
 
-  function loadPage(x) {
-    if (!view || view._x !== x) return;
+  function loadPage(requestedView) {
+    if (view !== requestedView) return;
+    const x = requestedView._x;
     const name = esc(botOf(x.task).name);
     // The occurrence first, for drawing and export alike: a view id on a canvas block in this task's transcript, not an app view.
     const why = unconfirmed(x);
@@ -1427,7 +1428,7 @@
       }
       if (what === "retry") {
         $("#page-stage").innerHTML = `<p class="page-state" aria-busy="true">Loading ${esc(view._x.title)}…</p>`;
-        return setTimeout(() => loadPage(view._x), 300);
+        return setTimeout(loadPage, 300, view);
       }
       if (what === "chat" || what === "chat-close") {
         const hidden = what === "chat-close" ? true : !view.classList.contains("chat-hidden");
