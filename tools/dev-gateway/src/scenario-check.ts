@@ -3282,10 +3282,12 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       const text = view.finalText();
       for (const scenario of SCENARIOS.filter((s) => s.name !== "help")) {
         expect(text.includes(`\`#${scenario.name}`), `#help does not list #${scenario.name}`);
-        expect(
-          text.includes(`"${scenario.phrase}"`),
-          `#help does not give the phrase for #${scenario.name}`,
-        );
+        if (scenario.phrase !== undefined) {
+          expect(
+            text.includes(`"${scenario.phrase}"`),
+            `#help does not give the phrase for #${scenario.name}`,
+          );
+        }
       }
       view.expectCalls([]);
       view.expectEnd("final", scriptedFinalText("#help"));

@@ -50,8 +50,11 @@ const isToolStep = (step: Step) =>
 export type Scenario = {
   /** The directive, without `#`. */
   name: string;
-  /** A plain-language phrase that selects it, matched case-insensitively anywhere in the message. */
-  phrase: string;
+  /**
+   * A plain-language phrase that selects it, matched case-insensitively anywhere in the message.
+   * None for a scenario chosen only by its directive.
+   */
+  phrase?: string;
   /** Takes a number after the directive, such as `#slow 5`, with this default. */
   defaultArg?: number;
   maxArg?: number;
@@ -297,7 +300,8 @@ const afterImage: Step = (ctx) => {
 /**
  * One scenario per outcome of the stand-in image provider (scripted-images.ts),
  * which reads the outcome from a marker in the prompt. Only an instance
- * started with `--with-images` offers the tool.
+ * started with `--with-images` offers the tool. Each is chosen by its
+ * directive alone: no ordinary sentence asks for a picture.
  */
 function imageScenarios(): Scenario[] {
   const call = (suffix: string, extra: Record<string, unknown> = {}): Step[] => [
@@ -309,7 +313,6 @@ function imageScenarios(): Scenario[] {
   return [
     {
       name: "image",
-      phrase: "draw a picture",
       summary:
         "Asks the image tool for a picture. The tool starts a background task; the picture arrives in a later turn of the same task.",
       bots,
@@ -317,21 +320,18 @@ function imageScenarios(): Scenario[] {
     },
     {
       name: "image-refuse",
-      phrase: "draw a picture the provider refuses",
       summary: "Asks for a picture the stand-in image provider refuses (400, content policy).",
       bots,
       steps: () => call(` ${outcomeMarker("refuse")}`),
     },
     {
       name: "image-fail",
-      phrase: "draw a picture that fails",
       summary: "Asks for a picture the stand-in image provider fails to make (500).",
       bots,
       steps: () => call(` ${outcomeMarker("fail")}`),
     },
     {
       name: "image-hang",
-      phrase: "draw a picture that never comes",
       summary:
         "Asks for a picture the stand-in image provider never answers; the call gives up after 5 seconds.",
       bots,
@@ -353,7 +353,7 @@ export const SCENARIOS: Scenario[] = [
           )
             .map(
               (s) =>
-                `- \`#${s.name}${s.defaultArg === undefined ? "" : " [seconds]"}\` or "${s.phrase}": ${s.summary}`,
+                `- \`#${s.name}${s.defaultArg === undefined ? "" : " [seconds]"}\`${s.phrase === undefined ? "" : ` or "${s.phrase}"`}: ${s.summary}`,
             )
             .join("\n")}`,
         ),
@@ -879,13 +879,16 @@ export const SCENARIOS: Scenario[] = [
 ];
 
 const BY_NAME = new Map(SCENARIOS.map((scenario) => [scenario.name, scenario]));
-const BY_PHRASE = [...SCENARIOS].sort((a, b) => b.phrase.length - a.phrase.length);
+const BY_PHRASE = SCENARIOS.filter(
+  (scenario): scenario is Scenario & { phrase: string } => scenario.phrase !== undefined,
+).sort((a, b) => b.phrase.length - a.phrase.length);
 
 export type Selection = { scenario: Scenario; arg: number };
 
 /**
  * The scenarios a message selects: every known `#directive` in order, or else
- * the longest phrase it contains. Unknown directives are ignored.
+ * the longest phrase it contains (a scenario without a phrase is chosen by its
+ * directive only). Unknown directives are ignored.
  */
 export function selectScenarios(prompt: string): Selection[] {
   const selected: Selection[] = [];
