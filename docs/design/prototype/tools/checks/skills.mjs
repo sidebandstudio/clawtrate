@@ -78,7 +78,7 @@ check("S3 R6 the lead claims nothing about a person's other devices", t.includes
 check("S3 R6 an admin sees others' skills, unshared ones marked", (await p.evaluate(() => [...document.querySelectorAll("#settings-dialog .b-group")].map((g) => g.textContent).join(","))) === "Your skills,Others' skills on this gateway" && (await text(p, '[data-k-skill="elsewhere"]')).includes("From Robin Park, not shared"));
 check("S3 R3 a skill left out of defaults says so", (await text(p, '[data-k-skill="pack"]')).includes("Not in defaults"));
 check("S3 a team skill carries the word Team", (await text(p, '[data-k-skill="ridge"]')).includes("Team"));
-check("S3 R3 who a task begins with, exactly", t.includes("A task a person starts begins with up to 64 of the skills included in defaults, their own first. A task a bot starts begins with none. A task keeps the revisions it began with until it is updated; see a task's Details."));
+check("S3 R3 which new tasks get defaults, exactly, and that a save leaves existing pins", t.includes("When an attributed person with a gateway profile creates a task, the gateway can pin up to 64 enabled library skills, their own first. Spawned tasks and tasks the gateway marks synthetic do not get these defaults. A save does not change an existing task's pins.") && !t.includes("A task a person starts begins"));
 check("S3 the list says when it was read", t.includes("As read at 5:41 PM."));
 await p.click('[data-k="lib-read"]');
 await wait(p, 150);
@@ -108,6 +108,14 @@ await p.close();
 p = await open(LIB + "&lib=noprofile");
 t = await dialog(p);
 check("S3 R6 no personal library: said from the list's profile, shared skills still listed, no New skill", t.includes("This connection has no personal library: the gateway's list says it has no profile. Skills shared on this gateway are still listed.") && Boolean(await p.$('[data-k-skill="ridge"]')) && !(await p.$('[data-k="new"]')));
+check(
+  "S3 R6 no profile (admin): a team skill (owner null) is not Your skills, though both are null",
+  (await p.evaluate(() => [...document.querySelectorAll("#settings-dialog .b-group")].map((g) => g.textContent).join(","))) === "Others' skills on this gateway" && (await p.evaluate(() => window.skills.G.profile === null && window.skills.G.skills.find((s) => s.id === "ridge").owner === null)),
+);
+await p.click('[data-k-skill="ridge"]');
+await wait(p, 150);
+t = await dialog(p);
+check("S4 R6 no profile, admin: the team skill's owner is Team, no edit field, its defaults flag as read with no switch", has(t, "OwnerTeam", "Include in defaults for new tasksIncluded") && !t.includes("OwnerYou") && !(await p.$("#k-body")) && !(await p.$('[data-k="enable"]')) && !(await p.$('[data-k="save"]')));
 await p.close();
 p = await open(LIB + "&banner=offline");
 check("S2 R4 offline: the list as read, New skill disabled", (await dialog(p)).includes("Not connected to the gateway. This is the list as read at 5:41 PM") && (await p.evaluate(() => document.querySelector('[data-k="new"]').disabled)));
@@ -130,7 +138,7 @@ await p.click('[data-k-skill="trail"]');
 await wait(p, 150);
 t = await dialog(p);
 check("S4 the page opens on its title, the skill's name", (await text(p, "#b-section-title")) === "trail-checklist" && (await p.evaluate(() => document.activeElement?.id)) === "b-section-title");
-check("S2 the page says what a skill is, and calls nothing safe", t.includes("A skill is instructions a bot follows. A bot given this skill can act on what it says, with the tools it is allowed. Read it before your bots are given it.") && !/\b(safe|verified|trusted)\b/i.test(t));
+check("S2 the page says what a skill is, and calls nothing safe", t.includes("A skill supplies instructions to a bot. A bot given this skill can act on what it says, with the tools it is allowed. Read it before your bots are given it.") && !/\b(safe|verified|trusted)\b/i.test(t));
 check("S4 the name is fixed in Clawtrate, and says so", t.includes("A skill's name is set when it is made in Clawtrate.") && !(await p.$("#k-slug")));
 check("S4 R6 the facts: owner You, a revision, Not shared", has(t, "OwnerYou", "SharedNot shared") && !t.includes("Only you") && (await p.evaluate(() => /^[0-9a-f]{12}$/.test(document.querySelector(".k-rev").textContent))));
 check("S2 angle brackets in instructions stay text", (await p.evaluate(() => document.querySelector("#k-body").value)).includes("<important>"));
@@ -139,7 +147,7 @@ await p.click('[data-k="enable"]');
 await wait(p, 150);
 check("S4.1 R4 the switch waits for the read: pending, not moved, nothing announced", (await dialog(p)).includes("Saving…") && (await p.evaluate(() => document.querySelector('[data-k="enable"]').getAttribute("aria-checked"))) === "true");
 await wait(p);
-check("S4.1 R3 then moves to the read's value, with its line", (await p.evaluate(() => document.querySelector('[data-k="enable"]').getAttribute("aria-checked"))) === "false" && (await dialog(p)).includes("Tasks don't begin with it. It can still be attached to a task.") && (await gwRead(p, "trail")).enabled === false);
+check("S4.1 R3 then moves to the read's value, with its line", (await p.evaluate(() => document.querySelector('[data-k="enable"]').getAttribute("aria-checked"))) === "false" && (await dialog(p)).includes("Excluded from defaults. It can still be attached where the gateway offers it.") && (await gwRead(p, "trail")).enabled === false);
 check("S4.1 R4 the switch sent the saved revision it showed", (await p.evaluate(() => window.skills.sent.at(-1))).expectedRevision === (await gwRead(p, "trail")).rev);
 await p.click('[data-k="to-list"]');
 await wait(p, 150);
@@ -198,6 +206,13 @@ check("S4 R1 a skill that can't be round-tripped is read-only, shown as kept", t
 await p.close();
 p = await open(LIB + "&skill=ridge&access=write");
 check("S4 a team skill below admin is read-only, in the gateway's words", (await dialog(p)).includes("Only the skill's owner or a Gateway administrator can change it.") && !(await p.$("#k-body")));
+check("S4.1 R6 a team skill below admin: the defaults flag as read, no switch, since the read's canEdit is false", (await dialog(p)).includes("Include in defaults for new tasksIncluded") && !(await p.$('[data-k="enable"]')) && (await p.evaluate(() => window.skills.read("ridge").canEdit)) === false);
+await p.close();
+p = await open(LIB + "&skill=trail&access=read");
+check("S4.1 R6 read-only on the person's own skill: the read's canEdit is false, the defaults flag as read, no switch", (await dialog(p)).includes("Include in defaults for new tasksIncluded") && !(await p.$('[data-k="enable"]')) && (await p.evaluate(() => window.skills.read("trail").canEdit)) === false);
+await p.close();
+p = await open(LIB + "&skill=elsewhere");
+check("S4.1 R6 an admin on another person's entry: the read's canEdit and write scope give the switch; no Share there", Boolean(await p.$('[data-k="enable"]')) && (await p.evaluate(() => window.skills.read("elsewhere").canEdit)) === true && !(await p.$('[data-k="share"]')));
 await p.close();
 
 // Saving (section 5) ---------------------------------------------------------------------------------
@@ -217,14 +232,15 @@ await wait(p);
 t = await dialog(p);
 g = await gwRead(p, "trail");
 check("S5 R4 what was sent is what was there at the click; later typing is kept", g.body === "1. Check the forecast.\n2. Pack water and a map." && (await p.evaluate(() => document.querySelector("#k-body").value)).endsWith("Typed while it saved.") && t.includes("You typed more after you chose Save. That text is still here, unsaved."));
-check("F-361 S5 R3 Saved names the revision the read shows, and what new tasks get", t.includes(`Saved revision ${g.rev.slice(0, 12)}. New tasks that begin with this skill get this revision. Tasks that have it keep theirs until they are updated.`) && !t.includes("New tasks start with revision") && (await announced(p)) === "Saved");
+check("F-361 S5 R3 Saved names the revision the read shows, and says only that tasks keep their pins", t.includes(`Saved revision ${g.rev.slice(0, 12)}. Tasks that hold it keep their pins.`) && !t.includes("New tasks that begin") && !t.includes("New tasks start with revision") && (await announced(p)) === "Saved");
 await p.close();
 
 p = await open(LIB + "&skill=pack");
 await typeInto(p, "#k-body", "Pack lighter.");
 await p.click('[data-k="save"]');
 await wait(p);
-check("S5 R3 a skill left out of defaults: new tasks don't begin with it", (await dialog(p)).includes("It isn't included in defaults, so new tasks don't begin with it."));
+t = await dialog(p);
+check("S5 R3 a skill left out of defaults: the save says the same, and the switch carries the condition", t.includes("Tasks that hold it keep their pins.") && !t.includes("new tasks don't begin with it") && t.includes("Excluded from defaults. It can still be attached where the gateway offers it."));
 await p.close();
 
 for (const [mode, words, ann] of [
@@ -404,7 +420,7 @@ check(
   "S6 R1 what was sent is stored; what was typed during the save stays in the field, unsaved",
   (await gwRead(p, "new-trail-notes")).body === "Note the distance and the time." && (await p.evaluate(() => document.querySelector("#k-body").value)) === "Note the distance, the time and the weather." && t.includes("You typed more after you chose Save. That text is still here, unsaved."),
 );
-check("S6 saved: the page becomes the skill's page, from a read by name", (await text(p, "#b-section-title")) === "trail-notes" && (await dialog(p)).includes("Saved revision") && (await dialog(p)).includes("It is included in defaults, so new tasks a person starts can begin with it."));
+check("S6 saved: the page becomes the skill's page, from a read by name", (await text(p, "#b-section-title")) === "trail-notes" && (await dialog(p)).includes("Saved revision") && (await dialog(p)).includes("Tasks that hold it keep their pins.") && !(await dialog(p)).includes("new tasks a person starts can begin with it") && (await dialog(p)).includes("Eligible new tasks can start with this skill, subject to the 64-skill limit."));
 await p.close();
 for (const [mode, words] of [
   ["lost", ["Couldn't tell whether your save reached the gateway. Reading your library again found a skill named trail-notes, revision", "whether your save made it isn't known.", "Open it"]],
@@ -611,7 +627,7 @@ check("S9 R2 the bot's filter is shown apart from the pins", t.includes("Juniper
 check("S9 nothing different: no Update", !(await p.$('[data-k="refresh"]')));
 await p.click('[data-k-pin="kitchen"]');
 await wait(p, 120);
-check("S9 a held revision opens read-only, named as the task's", has(await details(p), "the one this task has", "A skill is instructions a bot follows.") && !(await p.$(".k-held textarea")));
+check("S9 a held revision opens read-only, named as the task's", has(await details(p), "the one this task has", "A skill supplies instructions to a bot.") && !(await p.$(".k-held textarea")));
 await p.click('[data-k="held-back"]');
 await wait(p, 120);
 check("S9 R8 Back returns focus to the row that opened it", (await p.evaluate(() => document.activeElement?.dataset.kPin)) === "kitchen");
@@ -693,6 +709,12 @@ check("S9 detaching a removed skill says it can't come back", (await confirmText
 await p.click('#confirm-dialog [data-b="confirm-ok"]');
 await wait(p);
 check("S9 Update stays blocked while another removed skill is held", await p.evaluate(() => document.querySelector('[data-k="refresh"]').disabled));
+await p.close();
+p = await open(TASK + "&pins=removed&access=write");
+check(
+  "S9 R6 a removed entry this connection could never read stays unavailable to it, not removed",
+  (await text(p, '.k-pin:has([data-k-pin="hiddengone"])')).includes("Library entry unavailable") && !(await text(p, '.k-pin:has([data-k-pin="hiddengone"])')).includes("Removed") && (await gwRead(p, "hiddengone")).code === "SKILL_LIBRARY_NOT_FOUND",
+);
 await p.close();
 p = await open(TASK + "&pins=entryfail&access=write");
 t = await text(p, '.k-pin:has([data-k-pin="elsewhere"])');

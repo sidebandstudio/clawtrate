@@ -107,16 +107,22 @@
   const gw = (id) => G.skills.find((s) => s.id === id);
   // What skills.library.list returns to this connection: removed entries never; another
   // person's unshared one only to an admin (research section 1).
-  const visible = (s) => !s.removed && (s.owner === G.profile || s.shared || s.owner === null || isAdmin());
-  const mine = (s) => s.owner !== null && s.owner === G.profile;
-  const canEdit = (s) => canWrite() && Boolean(G.profile) && (mine(s) || isAdmin());
+  // Whether this connection may read the entry at all: its own, shared, team-owned, or any to an admin.
+  const readable = (s) => (G.profile !== null && s.owner === G.profile) || s.shared || s.owner === null || isAdmin();
+  const visible = (s) => !s.removed && readable(s);
+  // "Your skills": only with a profile, and only the entries that profile owns.
+  const mine = (s) => G.profile !== null && s.owner === G.profile;
+  // The gateway's canEdit for an entry: a writing connection that owns it, or an admin (research section 10).
+  const gwCanEdit = (s) => canWrite() && (isAdmin() || (s.owner !== null && G.profile !== null && s.owner === G.profile));
+  // An edit is offered only with write scope now, a durable profile, and the read's canEdit.
+  const canEdit = (s) => canWrite() && G.profile !== null && Boolean(s.canEdit ?? gwCanEdit(s));
   // A read of one skill, as skills.library.read returns it, or what the gateway refuses.
   const read = (id) => {
     const s = gw(id);
-    if (!s) return { error: "INVALID_REQUEST", code: "SKILL_LIBRARY_NOT_FOUND" };
+    // Visibility first: an entry this connection can't read is not found, removed or not.
+    if (!s || !readable(s)) return { error: "INVALID_REQUEST", code: "SKILL_LIBRARY_NOT_FOUND" };
     if (s.removed) return { removed: true, slug: s.slug };
-    if (!visible(s)) return { error: "INVALID_REQUEST", code: "SKILL_LIBRARY_NOT_FOUND" };
-    return { rev: s.rev, slug: s.slug, description: s.description, body: s.body, extra: [...s.extra], raw: s.raw, files: s.files.map((f) => ({ ...f })), shared: s.shared, enabled: s.enabled, saved: s.saved, owner: s.owner, ownerLabel: s.ownerLabel };
+    return { canEdit: gwCanEdit(s), rev: s.rev, slug: s.slug, description: s.description, body: s.body, extra: [...s.extra], raw: s.raw, files: s.files.map((f) => ({ ...f })), shared: s.shared, enabled: s.enabled, saved: s.saved, owner: s.owner, ownerLabel: s.ownerLabel };
   };
   // Another device's save, on the gateway's side.
   function otherSave(id) {
@@ -276,7 +282,7 @@
   const backTo = (label, action) => `<button type="button" class="icon-button b-back" data-k="${action}" aria-label="${label}">${icon("back")}</button>`;
   const writeBar = (need) =>
     `<section class="access-bar" role="region" aria-label="Access"><div class="access-row">${icon("eye")}<span class="shelf-text"><b>Read-only.</b> ${need}</span>${button("Request access", 'data-b="request-write" data-size="sm"', "primary")}</div></section>`;
-  const CONTENT = `<div class="k-content">${icon("list")}<p><b>A skill is instructions a bot follows.</b> A bot given this skill can act on what it says, with the tools it is allowed. Read it before your bots are given it.</p></div>`;
+  const CONTENT = `<div class="k-content">${icon("list")}<p><b>A skill supplies instructions to a bot.</b> A bot given this skill can act on what it says, with the tools it is allowed. Read it before your bots are given it.</p></div>`;
   const statusNote = (html, tone = "") => (tone ? `<div role="status">${note(html, tone)}</div>` : `<div class="k-status" role="status">${icon("check")}<div>${html}</div></div>`);
   const pendingLine = (word) => `<p class="k-pending" role="status"><span class="status-dot" data-status="connecting"></span>${word}</p>`;
 
@@ -317,7 +323,7 @@
     body +=
       included > 64
         ? note(`<p>New sessions select up to 64 enabled skills, personal skills first and then stable ID order. In a session, detach a selected skill to make room and attach another from the library.</p>`, "warn")
-        : `<p class="b-hint">A task a person starts begins with up to 64 of the skills included in defaults, their own first. A task a bot starts begins with none. A task keeps the revisions it began with until it is updated; see a task's Details.</p>`;
+        : `<p class="b-hint" id="k-defaults-hint">When an attributed person with a gateway profile creates a task, the gateway can pin up to 64 enabled library skills, their own first. Spawned tasks and tasks the gateway marks synthetic do not get these defaults. A save does not change an existing task's pins.</p>`;
     body += `<p class="b-hint k-readat">As read at ${K.readAt}. <button type="button" class="link-button" data-k="lib-read">Read again</button></p>`;
     return { title: "Skills", back, body, foot };
   }
@@ -365,7 +371,7 @@
   function skillPage(live) {
     const r = K.read;
     // The page acts on what it last read, not on the gateway's state since.
-    const s = { ...live, owner: r.owner, shared: r.shared };
+    const s = { ...live, owner: r.owner, shared: r.shared, canEdit: r.canEdit };
     const fits = roundTrips(r);
     const editable = canEdit(s) && fits;
     let body = CONTENT + (K.pending ? pendingLine(K.pending) : "") + (K.status || "");
@@ -378,19 +384,19 @@
         `<pre class="k-plain" id="k-raw-md">${esc(r.raw)}</pre>`;
     else if (!K.compare) body += fieldsHtml(editable);
     body += otherSettingsHtml(r) + filesHtml(r) + needsHtml(s);
-    const owner = r.owner === G.profile && r.owner ? "You" : r.owner === null ? "Team" : esc(r.ownerLabel);
+    const owner = G.profile !== null && r.owner === G.profile ? "You" : r.owner === null ? "Team" : esc(r.ownerLabel);
     body +=
       `<h4 class="b-group">On the gateway</h4><dl class="facts">` +
       fact("Owner", owner) +
       fact("Revision", rev(r.rev)) +
       fact("Updated", esc(r.saved)) +
       fact("Shared", r.shared ? "Shared on this gateway" : "Not shared") +
-      (mine(s) || s.owner === null
+      (editable
         ? `<div class="b-row"><span class="b-row-main"><span>Include in defaults for new tasks</span><small id="k-enabled-line">${
-            r.enabled ? "A task a person starts can begin with it, if it is among the first 64 included." : "Tasks don't begin with it. It can still be attached to a task."
+            r.enabled ? "Eligible new tasks can start with this skill, subject to the 64-skill limit." : "Excluded from defaults. It can still be attached where the gateway offers it."
           }</small></span>` +
-          `<button type="button" class="b-switch" role="switch" aria-checked="${r.enabled}" aria-label="Include in defaults for new tasks" aria-describedby="k-enabled-line" data-k="enable"${editable && !K.pending && !K.gone && online() ? "" : " disabled"}></button></div>`
-        : "") +
+          `<button type="button" class="b-switch" role="switch" aria-checked="${r.enabled}" aria-label="Include in defaults for new tasks" aria-describedby="k-enabled-line" data-k="enable"${!K.pending && !K.gone && online() ? "" : " disabled"}></button></div>`
+        : fact("Include in defaults for new tasks", r.enabled ? "Included" : "Not included")) +
       `</dl>`;
     if (mine(s) && editable) {
       body += r.shared
@@ -559,7 +565,7 @@
     else if (answer.state === "unchanged") settle(`<p>The gateway already had this bundle at revision ${rev(answer.rev)}.</p>`, "", "Already saved");
     else
       settle(
-        `<p>Saved revision ${rev(r.rev)}.${r.enabled ? " New tasks that begin with this skill get this revision." : " It isn't included in defaults, so new tasks don't begin with it."} Tasks that have it keep theirs until they are updated.</p>`,
+        `<p>Saved revision ${rev(r.rev)}. Tasks that hold it keep their pins.</p>`,
         "",
         "Saved",
       );
@@ -630,7 +636,7 @@
         if (typedSince) K.draft = { slug: r.slug, description: laterDraft.description, body: laterDraft.body };
         if (r.rev !== answer.entry.revision)
           settle(`<p>The gateway returned revision ${rev(answer.entry.revision)} for your save. The next read found revision ${rev(r.rev)}. The page shows ${rev(r.rev)}.</p>`, "warn", "The next read found a different revision");
-        else settle(`<p>Saved revision ${rev(r.rev)}. It is included in defaults, so new tasks a person starts can begin with it.</p>`, "", "Saved");
+        else settle(`<p>Saved revision ${rev(r.rev)}. Tasks that hold it keep their pins.</p>`, "", "Saved");
         $("#b-section-title", settings())?.focus();
       });
     });
@@ -1454,6 +1460,11 @@
   document.addEventListener("click", (event) => {
     if (event.target.closest('[data-b="request-write"], [data-b="request-check"]'))
       setTimeout(() => {
+        // A new tier: the page reads the entry's canEdit again rather than keep the old tier's.
+        if (K.read && K.page && K.page !== "new" && !K.pending) {
+          const again = read(K.page);
+          if (again.rev === K.read.rev) (K.read.canEdit = again.canEdit), rerender();
+        }
         paintTask();
         paintCards();
       }, 0);
