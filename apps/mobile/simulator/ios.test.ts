@@ -180,6 +180,8 @@ const MAIL_LINE = "Write [to the team](mailto:someone@example.com) for a copy.";
 let browserUrl = "";
 let browserGet = false;
 let browserRequests = 0;
+/** A label for a link to the listener that differs from its address only in the path's case. */
+const lookalikeLabel = () => browserUrl.replace("/clawtrate-link-check", "/Clawtrate-link-check");
 const browser = createServer((req, res) => {
   browserRequests += 1;
   if (req.method === "GET" && req.url === "/clawtrate-link-check") {
@@ -634,8 +636,9 @@ describe("the iOS app", () => {
       HIDDEN_LINK,
       MAIL_LINE,
       `The setup token was ${env.token}.`,
-      // Its text is the listener's address; its link adds a slash, so it asks first.
-      `[${browserUrl}](${browserUrl}/)`,
+      // Its text names the listener's path in another case and its link adds a slash, so it
+      // asks first. The text is not the bare address below, which iOS also names its link by.
+      `[${lookalikeLabel()}](${browserUrl}/)`,
       browserUrl,
     ])
       await inject(reading.key, message);
@@ -707,7 +710,7 @@ describe("the iOS app", () => {
       scrollTo({ text: lit(browserUrl) }, "DOWN"),
     ]);
     // A link whose text is another address asks too; Cancel sends the listener nothing.
-    const lookalikeText = `${lit(browserUrl)} \\(${lit(new URL(browserUrl).host)}\\)`;
+    const lookalikeText = `${lit(lookalikeLabel())} \\(${lit(new URL(browserUrl).host)}\\)`;
     await steps("lookalike-in-view", [scrollTo({ text: lookalikeText }, "UP")]);
     const lookalike = (await boundsOf(new RegExp(`^${lookalikeText}`)))!;
     await steps("lookalike-link", [
