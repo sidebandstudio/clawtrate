@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, openSync, closeSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, openSync, closeSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { arch } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -26,6 +26,10 @@ int main(int argc, char **argv) {
       return 0;
     }
     int root=open(argv[1],O_DIRECTORY|O_RDONLY);
+    if (argc == 4 && strcmp(argv[2], "budget") == 0) {
+      puts(unpackWithBudget(3,root,atoi(argv[3])) ? "ok" : "mac-archive");
+      return 0;
+    }
     if (!unpack(3,root)) {puts("mac-archive"); return 0;}
     NSURL *url=[NSURL fileURLWithPath:[@(argv[1]) stringByAppendingPathComponent:@"Clawtrate.app"]];
     puts(bundleFacts(url,@"dev.clawtrate.desktop",@(argv[2]),@(argv[3])) ?: "ok");
@@ -56,6 +60,29 @@ int main(int argc, char **argv) {
       expect(execFileSync(reader, [kind], { encoding: "utf8" }).trim()).toBe("build-not-signed");
     },
   );
+  it("rejects an archive whose implicit directories exceed the scratch entry limit", () => {
+    const input = join(dir.path, "budget"),
+      leaf = "Clawtrate.app/a/b/leaf";
+    mkdirSync(join(input, "Clawtrate.app/a/b"), { recursive: true });
+    writeFileSync(join(input, leaf), "");
+    execFileSync("/usr/bin/zip", ["-Dq", "fixture.zip", leaf], { cwd: input });
+    for (const limit of [2, 3, 4]) {
+      const scratch = join(input, String(limit));
+      mkdirSync(scratch);
+      const fd = openSync(join(input, "fixture.zip"), "r");
+      try {
+        expect(
+          execFileSync(reader, [scratch, "budget", String(limit)], {
+            stdio: ["ignore", "pipe", "pipe", fd],
+            encoding: "utf8",
+          }).trim(),
+        ).toBe(limit === 4 ? "ok" : "mac-archive");
+        expect(readdirSync(scratch, { recursive: true })).toHaveLength(limit);
+      } finally {
+        closeSync(fd);
+      }
+    }
+  });
   const version = "1.2.0-nightly.20261104.10";
   it.each([
     "ok",

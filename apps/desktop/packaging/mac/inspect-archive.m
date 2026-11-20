@@ -34,13 +34,20 @@ static NSArray<NSString *> *parts(NSString *name) {
 }
 
 // Descend by directory descriptor. Never write through an archive link or overwrite an entry.
-static int parentFor(int root, NSArray<NSString *> *names) {
+static int directoryAt(int parent, const char *name, unsigned *entries) {
+    const int flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW;
+    int fd = openat(parent, name, flags);
+    if (fd >= 0 || errno != ENOENT || !*entries) return fd;
+    if (mkdirat(parent, name, 0700) != 0) return -1;
+    --*entries;
+    return openat(parent, name, flags);
+}
+
+static int parentFor(int root, NSArray<NSString *> *names, unsigned *entries) {
     int dir = dup(root);
     for (NSUInteger i = 0; dir >= 0 && i + 1 < names.count; ++i) {
         const char *name = names[i].fileSystemRepresentation;
-        int next = -1;
-        if (mkdirat(dir, name, 0700) == 0 || errno == EEXIST)
-            next = openat(dir, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+        int next = directoryAt(dir, name, entries);
         close(dir);
         dir = next;
     }
@@ -48,7 +55,7 @@ static int parentFor(int root, NSArray<NSString *> *names) {
 }
 
 static BOOL extractEntry(struct archive *zip, struct archive_entry *entry, int root,
-                         NSMutableSet *seen, int64_t *remaining) {
+                         NSMutableSet *seen, int64_t *remaining, unsigned *entries) {
     const char *raw = archive_entry_pathname_utf8(entry);
     NSString *path = raw ? [NSString stringWithUTF8String:raw] : nil;
     if ([path hasSuffix:@"/"]) path = [path substringToIndex:path.length - 1];
@@ -69,24 +76,25 @@ static BOOL extractEntry(struct archive *zip, struct archive_entry *entry, int r
     int64_t size = archive_entry_size(entry);
     if (size < 0 || size > *remaining || (names.count == 1 && !S_ISDIR(mode))) return NO;
     if ([names.lastObject isEqual:@"Info.plist"] && (!S_ISREG(mode) || size > 1024 * 1024)) return NO;
-    int dir = parentFor(root, names);
+    int dir = parentFor(root, names, entries);
     if (dir < 0) return NO;
     const char *leaf = names.lastObject.fileSystemRepresentation;
     BOOL ok = NO;
     if (S_ISDIR(mode)) {
-        struct stat st;
-        ok = size == 0 && (mkdirat(dir, leaf, 0700) == 0 || errno == EEXIST) &&
-            fstatat(dir, leaf, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISDIR(st.st_mode);
+        int child = size == 0 ? directoryAt(dir, leaf, entries) : -1;
+        ok = child >= 0 && close(child) == 0;
     } else if (S_ISLNK(mode)) {
         const char *target = archive_entry_symlink_utf8(entry);
         // Framework symlinks point down or across within the bundle. Disallow upward hops,
         // including through another link, so the signature reader also stays inside the app.
-        ok = target && parts([NSString stringWithUTF8String:target]) &&
+        ok = *entries && target && parts([NSString stringWithUTF8String:target]) &&
             symlinkat(target, dir, leaf) == 0;
-    } else if (S_ISREG(mode)) {
+        if (ok) --*entries;
+    } else if (S_ISREG(mode) && *entries) {
         int file = openat(dir, leaf, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
                           (mode & 0111) ? 0700 : 0600);
         if (file >= 0) {
+            --*entries;
             char buf[65536];
             ssize_t count;
             int64_t total = 0;
@@ -102,7 +110,7 @@ static BOOL extractEntry(struct archive *zip, struct archive_entry *entry, int r
     return ok;
 }
 
-static BOOL unpack(int archiveFD, int scratchFD) {
+static BOOL unpackWithBudget(int archiveFD, int scratchFD, unsigned entries) {
     struct archive *zip = archive_read_new();
     if (!zip) return NO;
     BOOL ok = NO;
@@ -114,7 +122,7 @@ static BOOL unpack(int archiveFD, int scratchFD) {
         int status;
         while ((status = archive_read_next_header(zip, &entry)) == 0) {
             @autoreleasepool {
-                if (seen.count >= 32768 || !extractEntry(zip, entry, scratchFD, seen, &remaining))
+                if (seen.count >= 32768 || !extractEntry(zip, entry, scratchFD, seen, &remaining, &entries))
                     break;
             }
         }
@@ -122,6 +130,10 @@ static BOOL unpack(int archiveFD, int scratchFD) {
     }
     archive_read_free(zip);
     return ok;
+}
+
+static BOOL unpack(int archiveFD, int scratchFD) {
+    return unpackWithBudget(archiveFD, scratchFD, 32768);
 }
 
 static const char *bundleFacts(NSURL *url, NSString *identifier, NSString *version, NSString *arch) {
