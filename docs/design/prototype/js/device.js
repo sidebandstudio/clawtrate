@@ -31,7 +31,7 @@
   const TITLE = P ? "This iPhone" : "This Mac";
 
   // Kept from one state to the next; everything else is per state.
-  const KEEP = ["theme", "width", "motion", "chrome", "access", "link", "app", "own", "local", "prior", "allowed", "off", "devname", "taskname", "to", "note", "task", "from", "dev", "msg", "omit", "history", "half"];
+  const KEEP = ["theme", "width", "motion", "chrome", "access", "link", "app", "own", "local", "prior", "allowed", "off", "devname", "taskname", "to", "note", "task", "from", "dev", "msg", "omit", "history", "half", "gw", "gone", "big", "nodefault", "nobots"];
   const go = (to, extra = {}) => {
     const next = new URLSearchParams();
     for (const key of KEEP) if (params.get(key) !== null) next.set(key, params.get(key));
@@ -920,11 +920,16 @@
 
   // The share sheet -------------------------------------------------------------
 
-  const toBot = () => (BOTS[params.get("to")] ? params.get("to") : "juniper");
+  // nodefault=1: agents.list's defaultId isn't among the returned bots, so To starts empty. nobots=1: no bot is
+  // selectable. big=1: a shared item over the composer's limit, left out with its reason.
+  const toBot = () => (BOTS[params.get("to")] ? params.get("to") : params.get("nodefault") === "1" ? null : "juniper");
+  const noBots = params.get("nobots") === "1";
   const noteText = () => (params.get("note") !== null ? params.get("note") : "For Saturday's route.");
   const chips = () =>
     `<li>${icon("link")}<span>https://trail-guide.example/saturday</span></li>` +
-    `<li>${icon("image")}<span>trail-map.png</span><small>240 KB</small></li>`;
+    `<li>${icon("image")}<span>trail-map.png</span><small>240 KB</small></li>` +
+    (params.get("big") === "1" ? `<li data-excluded>${icon("warning")}<span>trail-video.mov</span><small>1.4 GB · Can't be sent: larger than the composer's limit</small></li>` : "");
+  const items = () => (params.get("big") === "1" ? "the note and 2 items; trail-video.mov is left out" : "the note and 2 items");
   const other = () =>
     `<div class="d-other" aria-hidden="true"><p class="d-other-caption">Another app on the iPhone (a stand-in)</p><div class="d-other-tile"></div><div class="d-other-tile"></div></div>`;
   // Before submission the sheet offers Cancel; once submitted (pending, unknown or acknowledged), Close.
@@ -936,49 +941,103 @@
         : link("Cancel", go("share-closed", { closed: null }), { variant: "quiet", attrs: "data-cancel" })
     }<h2 id="d-share-title" tabindex="-1" data-d-title>${title}</h2><span></span></div>${inner}</div>`;
 
+  // The bot picker: a radio group of the listed bots; choosing sends nothing.
+  const picker = (to, current) =>
+    `<div role="radiogroup" aria-label="Send to" class="d-radios" data-radios data-pick-to="${to}">` +
+    (noBots
+      ? ""
+      : Object.entries(BOTS)
+          .map(
+            ([id, name]) =>
+              `<button type="button" class="d-to" role="radio" aria-checked="${id === current}" tabindex="${id === current || (!current && id === "juniper") ? 0 : -1}" data-to="${id}"><span class="avatar" data-bot="${id}"></span><span>${name}${id === "juniper" && params.get("nodefault") !== "1" ? ' <span class="d-to-label">The primary bot</span>' : ""}</span></button>`,
+          )
+          .join("")) +
+    `</div>`;
+
+  // The task the gateway returned: 4f2a…. It is the target for every retry of this handoff; no second task is made.
+  const TASK_ID = "4f2a…";
+
   function shareSheet() {
     const bot = toBot();
-    const sendTo = down ? go("share-cant") : params.get("lost") === "1" ? go("share-unsure") : go("share-sent", { said: `Sent to ${BOTS[bot]}` });
+    const why = params.get("gw") === "none" ? "nogateway" : params.get("gone") === "1" ? "unlisted" : down ? "unreachable" : null;
+    const sendTo = why ? go("share-cant", { why }) : params.get("lost") === "1" ? go("share-unsure") : go("share-sent", { said: `Sent to ${BOTS[bot]}` });
     return (
       other() +
       sheet(
-        `<a class="d-to" href="${go("share-to")}" data-to-row data-keep-note><span class="d-to-label">To:</span><span class="avatar" data-bot="${bot}"></span><span>${BOTS[bot]}</span>${icon("chevron")}</a>` +
+        `<a class="d-to" href="${go("share-to")}" data-to-row data-keep-note><span class="d-to-label">To:</span>${bot ? `<span class="avatar" data-bot="${bot}"></span><span>${BOTS[bot]}</span>` : `<span data-to-empty>Choose a listed bot</span>`}${icon("chevron")}</a>` +
           `<ul class="d-chips" aria-label="What is shared">${chips()}</ul>` +
           `<textarea aria-label="Add a note" placeholder="Add a note" data-note>${esc(noteText())}</textarea>` +
-          `<p class="d-lead">Send starts a new task with ${BOTS[bot]}. Nothing is sent before.</p>` +
-          `<div class="d-actions">${act("Send", sendTo, { variant: "primary", size: "md", attrs: "data-share-send data-keep-note" })}</div>` +
-          proto(link("The reply will be lost", go("share", { lost: "1" }), { attrs: "data-keep-note" })),
+          (bot ? `<p class="d-lead" data-preview>Send starts a new task with ${BOTS[bot]}, with ${items()}. Nothing is sent before.</p>` : `<p class="d-lead" data-preview>Choose a bot to send this to. Nothing is sent before.</p>`) +
+          `<div class="d-actions">${bot ? act("Send", sendTo, { variant: "primary", size: "md", attrs: "data-share-send data-keep-note" }) : `<button type="button" class="button" data-variant="primary" data-size="md" disabled data-share-send>Send</button>`}</div>` +
+          proto(
+            link("The reply will be lost", go("share", { lost: "1" }), { attrs: "data-keep-note" }),
+            link("The task is made, the message refused", go("share-msgfail"), { attrs: "data-keep-note" }),
+            link("Only the task is confirmed", go("share-taskonly"), { attrs: "data-keep-note" }),
+            link("No gateway saved", go("share", { gw: "none" }), { attrs: "data-keep-note" }),
+            link("The bot is no longer listed", go("share", { gone: "1" }), { attrs: "data-keep-note" }),
+          ),
       )
+    );
+  }
+
+  // The returned task, with the exact first message and the supported items held there for retry, by the composer's rules.
+  function heldTask(held) {
+    const bot = toBot() || "juniper";
+    return (
+      `<div class="d-chat" data-task="${TASK_ID}">` +
+      `<header class="d-chat-head"><span class="avatar" data-bot="${bot}"></span><b>${BOTS[bot]}</b><span>Task ${TASK_ID}</span></header>` +
+      `<div class="d-chat-body" data-d-chat><p class="d-event">Shared from another app.</p>` +
+      `<div class="d-composer" aria-label="First message" data-held>` +
+      `<ul class="d-chips">${chips()}</ul><p data-held-text>${esc(noteText())}</p>` +
+      (held === "refused"
+        ? note("danger", "The gateway refused the message.", "It's kept here. Retry sends it to this task.") + `<div class="d-actions">${act("Retry", go("share-task", { held: "retried", said: `Sent to ${BOTS[bot]}` }), { variant: "primary", size: "sm", attrs: "data-retry-held" })}</div>`
+        : held === "retried"
+          ? `<p class="d-event">Sent to this task.</p>`
+          : note("warn", "Clawtrate couldn't confirm the message.", "Clawtrate is checking it against this task before anything is sent again.")) +
+      `</div></div></div>`
     );
   }
 
   Object.assign(SCREENS, {
     share: () => shareSheet(),
-    "share-to": () => {
-      const bot = toBot();
-      return (
-        other() +
-        sheet(
-          `<div role="radiogroup" aria-label="Send to" class="d-radios" data-radios>` +
-            Object.entries(BOTS)
-              .map(
-                ([id, name]) =>
-                  `<button type="button" class="d-to" role="radio" aria-checked="${id === bot}" tabindex="${id === bot ? 0 : -1}" data-to="${id}"><span class="avatar" data-bot="${id}"></span><span>${name}${id === "juniper" ? ' <span class="d-to-label">The primary bot</span>' : ""}</span></button>`,
-              )
-              .join("") +
-            `</div>` +
-            `<div class="d-actions">${act("Done", go("share"), { variant: "primary", size: "md", attrs: "data-to-done" })}</div>`,
-          "Send to",
-        )
-      );
-    },
-    "share-sent": () => other() + sheet(`<p class="d-lead">The gateway made the task.</p>`, `Sent to ${BOTS[toBot()]}`, "done"),
-    "share-cant": () =>
+    "share-to": () =>
       other() +
       sheet(
-        note("warn", "Clawtrate couldn't reach the gateway before sending.", "Nothing was sent.") +
-          `<div class="d-actions">${link("Open in Clawtrate", go("share-draft"), { variant: "primary", size: "md", attrs: "data-open-draft" })}</div>`,
+        (noBots ? `<p class="d-lead">No bot is listed to send this to.</p>` : "") +
+          picker("share", toBot()) +
+          `<div class="d-actions">${act("Done", go("share"), { variant: "primary", size: "md", attrs: "data-to-done" })}</div>`,
+        "Send to",
       ),
+    "share-sent": () => other() + sheet(`<p class="d-lead">The gateway accepted the first message in a new task.</p>`, `Sent to ${BOTS[toBot()]}`, "done"),
+    // A created task whose first message was refused, or not confirmed: never "Sent", and never a second task.
+    "share-msgfail": () =>
+      other() +
+      sheet(
+        note("warn", `${BOTS[toBot()]}'s task was created. The gateway refused the message.`, "") +
+          `<div class="d-actions">${link(`Open ${BOTS[toBot()]}'s task`, go("share-task", { held: "refused" }), { variant: "primary", size: "md", attrs: "data-open-task" })}</div>`,
+        "Clawtrate",
+        "done",
+      ),
+    "share-taskonly": () =>
+      other() +
+      sheet(
+        note("warn", `${BOTS[toBot()]}'s task was created. Clawtrate couldn't confirm the message.`, "") +
+          `<div class="d-actions">${link(`Open ${BOTS[toBot()]}'s task`, go("share-task", { held: "unconfirmed" }), { variant: "primary", size: "md", attrs: "data-open-task" })}</div>`,
+        "Clawtrate",
+        "unknown",
+      ),
+    "share-task": () => heldTask(params.get("held")),
+    "share-cant": () => {
+      const why = params.get("why");
+      const words =
+        why === "nogateway" ? "No gateway is saved in Clawtrate." : why === "unlisted" ? `${BOTS[toBot()] || "That bot"} is no longer listed.` : "Clawtrate couldn't reach the gateway before sending.";
+      // No gateway, or the chosen bot no longer listed: the draft has no bot.
+      const extra = why === "nogateway" || why === "unlisted" ? { nobot: "1" } : {};
+      return (
+        other() +
+        sheet(note("warn", words, "Nothing was sent.") + `<div class="d-actions">${link("Open in Clawtrate", go("share-draft", extra), { variant: "primary", size: "md", attrs: "data-open-draft data-keep-note" })}</div>`)
+      );
+    },
     "share-unsure": () => {
       // Check again may submit the same operation only within four minutes, and only when the current
       // hello matches the saved address, credential context and nonempty boot ID.
@@ -1006,17 +1065,23 @@
     "share-draft": () => {
       const fromSiri = params.get("from") === "siri";
       const nobot = params.get("nobot") === "1";
-      const bot = toBot();
+      const bot = nobot ? null : toBot();
       return (
         `<div class="d-chat">` +
-        `<header class="d-chat-head">${nobot ? "" : `<span class="avatar" data-bot="${bot}"></span><b>${BOTS[bot]}</b>`}<span>New task</span></header>` +
+        `<header class="d-chat-head">${bot ? `<span class="avatar" data-bot="${bot}"></span><b>${BOTS[bot]}</b>` : ""}<span>New task</span></header>` +
         `<div class="d-chat-body" data-d-chat>` +
         `<p class="d-event">${fromSiri ? "From Send Message" : "Shared from another app"}. Nothing has been sent.</p>` +
-        (nobot ? note("", "This draft has no bot yet.", "Choose one before sending.") : "") +
+        // No destination: a bot picker before Send. Choosing selects; it sends nothing and keeps the note and items.
+        (bot
+          ? ""
+          : noBots
+            ? note("", "No bot is listed to send this to.", "The draft is kept here until a bot is listed.")
+            : note("", "This draft has no bot yet.", "Choose one before sending.") + picker("share-draft", null)) +
         `<div class="d-composer" aria-label="Composer">` +
         (fromSiri ? "" : `<ul class="d-chips">${chips()}</ul>`) +
         `<textarea aria-label="Message" data-draft>${esc(fromSiri ? params.get("msg") || "Remind me to water the plants tonight." : noteText())}</textarea>` +
-        `<div class="d-actions"><button type="button" class="button" data-variant="primary" data-size="sm"${nobot ? " disabled" : ""}>Send</button></div></div></div></div>`
+        (bot && !fromSiri ? `<p class="d-lead" data-preview>Send starts a new task with ${BOTS[bot]}, with ${items()}.</p>` : "") +
+        `<div class="d-actions"><button type="button" class="button" data-variant="primary" data-size="sm" data-draft-send${bot ? "" : " disabled"}>Send</button></div></div></div></div>`
       );
     },
     "share-closed": () => {
@@ -1091,10 +1156,10 @@
 
   // The note and the chosen bot go with the person from one state of the share sheet to the next.
   const withNote = (url) => {
-    const field = root.querySelector("[data-note]");
+    const field = root.querySelector("[data-note], [data-draft]");
     if (!field) return url;
     const next = new URL(url, location.href);
-    next.searchParams.set("note", field.value);
+    next.searchParams.set(params.get("from") === "siri" ? "msg" : "note", field.value);
     return `${next.pathname.split("/").pop()}${next.search}`;
   };
 
@@ -1112,7 +1177,8 @@
     }
     const radio = event.target.closest("[role=radio]");
     if (radio) {
-      location.href = go("share", { to: radio.dataset.to });
+      // Choosing a bot selects it and sends nothing; the note or draft goes along as edited.
+      location.href = withNote(go(radio.closest("[data-pick-to]")?.dataset.pickTo || "share", { to: radio.dataset.to, nobot: null }));
       return;
     }
     const where = event.target.closest("[data-where]");
@@ -1129,7 +1195,8 @@
         o.tabIndex = o === r ? 0 : -1;
       }
       r.focus();
-      root.querySelector("[data-to-done]").dataset.go = go("share", { to: r.dataset.to });
+      const done = root.querySelector("[data-to-done]");
+      if (done) done.dataset.go = go("share", { to: r.dataset.to });
     };
     group.addEventListener("keydown", (event) => {
       const at = radios.indexOf(document.activeElement);

@@ -585,7 +585,7 @@ await walk("own node's request changed since it was read: nothing approved", "sc
   check("share-to: Down moves to and chooses the next bot", await q.evaluate(() => document.activeElement?.dataset.to === "marlow" && document.activeElement.getAttribute("aria-checked") === "true"));
   await q.keyboard.press("ArrowDown");
   await q.locator("[data-to-done]").click();
-  check("share: back with Otto chosen and the note as edited", (await at(q, "share")) && (await q.inputValue("[data-note]")) === "Edited: take the north trail." && (await text(q)).includes("Send starts a new task with Otto."));
+  check("share: back with Otto chosen and the note as edited", (await at(q, "share")) && (await q.inputValue("[data-note]")) === "Edited: take the north trail." && (await text(q)).includes("Send starts a new task with Otto, with the note and 2 items."));
   await q.close();
 }
 {
@@ -625,6 +625,51 @@ await walk("Cancel before submission closes the sheet and says nothing was sent"
   [click("[data-cancel]"), "share-closed", ["Nothing was sent."]],
   [async (p) => check("closed: no sheet left", (await p.locator(".d-share").count()) === 0), null],
 ], phone);
+// A created task is told apart from sending its first message; the handoff never makes a second task.
+for (const [label, link_, screen, words, held, heldWords] of [
+  ["the message refused", "The task is made, the message refused", "share-msgfail", "Juniper's task was created. The gateway refused the message.", "refused", "The gateway refused the message."],
+  ["the message not confirmed", "Only the task is confirmed", "share-taskonly", "Juniper's task was created. Clawtrate couldn't confirm the message.", "unconfirmed", "Clawtrate couldn't confirm the message."],
+]) {
+  const q = await open("screen=share", phone);
+  await q.fill("[data-note]", "Edited: meet at the north gate.");
+  await q.getByRole("link", { name: link_, exact: true }).click();
+  check(`a created task with ${label}: never "Sent", and says the task was created`, (await at(q, screen)) && (await text(q)).includes(words) && !/Sent to/.test(await text(q)));
+  await q.locator("[data-open-task]").click();
+  check(`${label}: opens the returned task, with the exact first message and items held there`, (await at(q, "share-task")) && (await param(q, "held")) === held && (await q.locator('[data-task="4f2a…"]').count()) === 1 && (await text(q, "[data-held-text]")) === "Edited: meet at the north gate." && (await q.locator("[data-held] .d-chips li").count()) === 2 && (await text(q)).includes(heldWords) && !/Sent to|New task/.test(await text(q)));
+  if (held === "refused") {
+    await q.locator("[data-retry-held]").click();
+    check("its retry goes to the same task, not a new one", (await at(q, "share-task")) && (await q.locator('[data-task="4f2a…"]').count()) === 1 && (await text(q, "[data-held-text]")) === "Edited: meet at the north gate.");
+  }
+  await q.close();
+}
+// The unaddressed draft: reached from no gateway or a bot no longer listed; the picker selects without sending.
+for (const [label, query, words] of [
+  ["no gateway", "gw=none", "No gateway is saved in Clawtrate."],
+  ["no destination", "gone=1", "Juniper is no longer listed."],
+]) {
+  const q = await open(`screen=share&${query}`, phone);
+  await q.fill("[data-note]", "Edited before choosing a bot.");
+  await q.locator("[data-share-send]").click();
+  check(`${label}: says which, and nothing was sent`, (await at(q, "share-cant")) && !missing(await text(q), [words, "Nothing was sent."]));
+  await q.locator("[data-open-draft]").click();
+  check(`${label}: the draft has no bot, a picker before Send, and Send unavailable`, (await at(q, "share-draft")) && (await param(q, "nobot")) === "1" && (await q.locator("[data-radios] [role=radio]").count()) === 4 && (await q.locator("[data-draft-send][disabled]").count()) === 1);
+  await q.fill("[data-draft]", "Edited again in the draft.");
+  await q.locator('[data-radios] [data-to="marlow"]').click();
+  check(`${label}: choosing Marlow selects it, keeps the edited note and the items, and sends nothing`, (await at(q, "share-draft")) && (await param(q, "to")) === "marlow" && (await param(q, "nobot")) === null && (await q.inputValue("[data-draft]")) === "Edited again in the draft." && (await q.locator(".d-composer .d-chips li").count()) === 2 && (await text(q)).includes("Nothing has been sent.") && !/Sent to/.test(await text(q)) && (await q.locator("[data-draft-send]:not([disabled])").count()) === 1);
+  await q.close();
+}
+p = await open("screen=share-draft&nobot=1&nobots=1", phone);
+check("no selectable bot: the draft is kept and Send stays unavailable", (await text(p)).includes("No bot is listed to send this to.") && (await p.inputValue("[data-draft]")) === "For Saturday's route." && (await p.locator("[data-draft-send][disabled]").count()) === 1 && (await p.locator("[role=radio]").count()) === 0);
+await p.close();
+p = await open("screen=share&nodefault=1", phone);
+check("defaultId not among the listed bots: To starts empty, asks for a listed bot, and Send is unavailable", (await text(p, "[data-to-row]")).includes("Choose a listed bot") && (await p.locator("[data-share-send][disabled]").count()) === 1 && !(await text(p)).includes("The primary bot"));
+await p.close();
+p = await open("screen=share&big=1", phone);
+check("an over-limit item shows its reason and is left out of the send preview", (await text(p, "[data-excluded]")).includes("Can't be sent: larger than the composer's limit") && (await text(p, "[data-preview]")).includes("the note and 2 items; trail-video.mov is left out"));
+await p.close();
+p = await open("screen=share-unsure", phone);
+check("a lost reply never uses the created-task or draft path", (await p.locator("[data-open-task], [data-open-draft]").count()) === 0 && !/task was created/.test(await text(p)));
+await p.close();
 p = await open("screen=share-draft&nobot=1", phone);
 check("a draft with no bot asks which, and can't be sent until chosen", (await text(p)).includes("This draft has no bot yet.") && (await p.locator(".d-composer button[disabled]").count()) === 1);
 await p.close();
