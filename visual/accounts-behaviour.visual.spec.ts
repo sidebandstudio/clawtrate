@@ -195,12 +195,20 @@ test("F-472: below admin the rows show but cannot be chosen, and the access bar 
   await expect(bar).toContainText(
     "Admin access needed. Creating a bot changes the gateway's settings, which needs admin access. What you chose stays here while you ask.",
   );
+  // The owner's approval is held until the check has seen the pending state: that state lasts
+  // only until the approval, so a fixed delay is never long enough on a loaded machine.
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { hold(): void } }).clawtrateFixture.hold(),
+  );
   await bar.getByRole("button", { name: "Request admin access" }).click();
   await expect(bar).toContainText("Waiting for the gateway's owner.");
   await expect(bar.getByTestId("command")).toContainText("openclaw devices approve");
   expect(
     (await sent(page)).some((each) => each.type === "requestAccess" && each.tier === "admin"),
   ).toBe(true);
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: { release(): void } }).clawtrateFixture.release(),
+  );
   await expect(page.getByTestId("admin-bar")).toContainText("Admin access granted.");
   // Granted: labels arrive, the name is kept, and the rows can be chosen.
   await expect(page.getByText("Choose the account Viral runs on.")).toBeVisible();

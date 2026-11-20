@@ -19,7 +19,8 @@
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
 //   create=failed|slow|checking|partial   how New bot's Create goes
-//   admin=grant               a request for admin access is approved after a moment
+//   admin=grant               a request for admin access is approved after a moment, or on
+//                             release if a test holds answers
 //   defacct=1                 the gateway's default model names an account (openai:work)
 
 import {
@@ -626,6 +627,7 @@ export function accountCommand(
   get: () => ClawtrateState,
   set: (state: ClawtrateState) => void,
   params: AccountParams,
+  deferred: (run: () => void, ms: number) => void,
 ): Promise<unknown> | undefined {
   const accounts = () => get().accounts;
   const put = (change: (a: AccountsState) => AccountsState) =>
@@ -664,8 +666,9 @@ export function accountCommand(
           approveCommand: `openclaw devices approve ${REQUEST}`,
         }),
       );
+      // The owner's approval is an answer a test can hold, to look at the pending state first.
       if (params.admin === "grant")
-        later(1000, () => {
+        deferred(() => {
           upgrade({ status: "approved" });
           set(
             withAccess(
@@ -673,7 +676,7 @@ export function accountCommand(
               { ...params, access: "admin" },
             ),
           );
-        });
+        }, 1000);
       return Promise.resolve();
     }
     case "refreshAccounts":
