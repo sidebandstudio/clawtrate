@@ -31,6 +31,14 @@ import {
   type CheckInRead,
 } from "./check-ins.ts";
 import {
+  RoutinesEngine,
+  type BotRoutines,
+  type CalendarRuns,
+  type RoutineRun,
+  type RunConversation,
+  type RunSelector,
+} from "./routines.ts";
+import {
   MachinesEngine,
   type ApprovalsFile,
   type BotPlacement,
@@ -250,7 +258,7 @@ import {
   type UsageReport,
   type UsageReportRequest,
 } from "./usage-engine.ts";
-import { initialUsage, type BudgetChange, type Routine } from "./usage.ts";
+import { initialUsage, type BudgetChange, type BudgetRoutine } from "./usage.ts";
 import {
   archiveTask,
   deleteTask,
@@ -901,6 +909,16 @@ export class ClawtrateClient {
     now: () => this.now(),
     randomId: () => this.randomId(),
     log: (message) => this.log("warn", message),
+  });
+  /** The gateway's scheduled jobs (`routines.ts`); its state is `routines`. */
+  private readonly routines = new RoutinesEngine({
+    request: (method, params) => {
+      if (!this.protocol) return Promise.reject(new NotSentError());
+      return this.protocol.request(method, params);
+    },
+    get: () => this.state.routines,
+    update: (change) =>
+      this.store.update((state) => ({ ...state, routines: change(state.routines) })),
   });
   /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
   private readonly usage = new UsageEngine({
@@ -3891,6 +3909,34 @@ export class ClawtrateClient {
     }
   }
 
+  // Routines (`routines.ts`; automation.md sections 3 to 8), all at the read tier ----------
+
+  /** Read the routine list and the scheduler's state again. */
+  refreshRoutines(): Promise<void> {
+    if (this.state.connection.status !== "connected") return Promise.resolve();
+    return this.routines.load();
+  }
+
+  /** One bot's routines, for a list that keeps fewer than the gateway has; returned, not kept. */
+  readBotRoutines(botId: string): Promise<BotRoutines> {
+    return this.routines.botRoutines(botId);
+  }
+
+  /** A routine's runs, newest finished first, at most `MAX_ROUTINE_RUNS`; returned, not kept. */
+  readRoutineRuns(id: string): Promise<RoutineRun[]> {
+    return this.routines.runs(id);
+  }
+
+  /** Every routine's runs that started from `from` to `to`, for the calendar; returned, not kept. */
+  readCalendarRuns(from: number, to: number): Promise<CalendarRuns> {
+    return this.routines.calendarRuns(from, to);
+  }
+
+  /** One run's conversation, when the gateway keeps it; returned, not kept. */
+  readRunConversation(id: string, run: RunSelector): Promise<RunConversation> {
+    return this.routines.conversation(id, run);
+  }
+
   // Provider accounts (`accounts.ts`, `accounts-engine.ts`; bots.md sections 3 to 11) ----------
 
   /** Read the accounts, sign-ins, bindings and catalogue the account screens show. */
@@ -4785,6 +4831,7 @@ export class ClawtrateClient {
         this.streams.clear();
         this.accounts.onClose();
         this.invalidateCheckIns();
+        this.routines.onClose();
         this.usage.onClose();
         const status = this.state.connection.status;
         if (status !== "pairing" && status !== "error") {
@@ -4851,6 +4898,7 @@ export class ClawtrateClient {
   private forgetGatewayState(): void {
     this.accounts.reset();
     if (this.state.checkIns) this.store.update(({ checkIns: _, ...state }) => state);
+    this.routines.reset();
     this.store.update((state) => ({ ...state, usage: initialUsage }));
     // A creation belongs to the gateway it was asked of; it is never asked of another.
     for (const timer of this.creationTimers.values()) clearTimeout(timer);
@@ -4885,6 +4933,7 @@ export class ClawtrateClient {
     this.generation += 1;
     this.invalidateCheckIns();
     this.accounts.onClose();
+    this.routines.onClose();
     this.usage.onClose();
     this.protocol?.stop();
     this.protocol = null;
@@ -5053,10 +5102,11 @@ export class ClawtrateClient {
     this.pendingResync = null;
     this.quietReconnect = false;
     void this.bootstrap(generation, reason).then(() => {
-      if (generation === this.generation) {
-        this.accounts.onHello();
-        this.usage.onHello();
-      }
+      if (generation !== this.generation) return;
+      this.accounts.onHello();
+      // Every connect reads the list again: runs that started or ended while away are in it.
+      if (this.state.connection.status === "connected") void this.routines.load();
+      this.usage.onHello();
     });
   }
 
@@ -5665,6 +5715,9 @@ export class ClawtrateClient {
         this.handleAgent(event);
         return;
       }
+      case "cron":
+        this.routines.onEvent(event.payload);
+        return;
       case "session.reaction": {
         // Someone, here or elsewhere, added or removed a reaction: the message's reactions now.
         const payload = asRecord(event.payload);
@@ -5933,7 +5986,7 @@ export class ClawtrateClient {
   }
 
   /** The routines a budget can be set for, read now and not kept. */
-  listRoutines(): Promise<Routine[]> {
+  listRoutines(): Promise<BudgetRoutine[]> {
     if (this.state.connection.status !== "connected")
       return Promise.reject(new Error("Not connected to the gateway."));
     return this.usage.listRoutines();

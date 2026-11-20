@@ -2,6 +2,7 @@
 // implements the same ClawtrateBridge the desktop and web hosts do, holds
 // everything in memory, and never opens a socket or makes a request.
 
+import { fixtureRoutines, routineCommand, type RoutineParams } from "./routines.ts";
 import {
   applyApprovalResolved,
   applyQuestionResolved,
@@ -145,6 +146,7 @@ function loaded(now: number): ClawtrateState {
     unroutedApprovalsOmitted: 0,
     creations: [],
     accounts: initialState.accounts,
+    routines: initialState.routines,
     retention: initialState.retention,
   };
 }
@@ -475,6 +477,7 @@ export function createFixtureBridge(
     desktopUpdates?: ClawtrateBridge["desktopUpdates"];
     files?: FileParams;
     accounts?: AccountParams;
+    routines?: RoutineParams;
     usage?: UsageParams;
     machines?: MachineParams;
     checkIns?: CheckInParams;
@@ -503,13 +506,21 @@ export function createFixtureBridge(
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);
   const accountParams = options.accounts ?? NO_ACCOUNT_PARAMS;
+  const routineParams = options.routines ?? { state: "none" };
   let state =
     fileParams.state === null
       ? initial
       : { ...initial, transcripts: withFileRuns(initial.transcripts, now, fileParams) };
   // Every scene with bots has the gateway's accounts; the address can give it more access.
   if (state.bots.length > 0)
-    state = withAccess({ ...state, accounts: fixtureAccounts(now, accountParams) }, accountParams);
+    state = withAccess(
+      {
+        ...state,
+        accounts: fixtureAccounts(now, accountParams),
+        routines: fixtureRoutines(now, routineParams),
+      },
+      accountParams,
+    );
   const checkInParams = options.checkIns ?? {
     checkins: null,
     defaultPrompt: false,
@@ -567,6 +578,11 @@ export function createFixtureBridge(
     if (checkIn) {
       sent.push(command);
       return checkIn;
+    }
+    const routine = routineCommand(command, () => state, now, routineParams);
+    if (routine) {
+      sent.push(command);
+      return routine;
     }
     const usage = usageCommand(command, () => state, set, usageParams);
     if (usage) {

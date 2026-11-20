@@ -3,6 +3,7 @@ import type {
   Bot,
   ConnectionState,
   DiscoveryState,
+  Routine,
   SidebarState,
   Task,
 } from "@clawtrate/core";
@@ -26,6 +27,7 @@ import {
   ArrowDownIcon,
   ArrowUpIcon,
   ChevronIcon,
+  ClockIcon,
   CloseIcon,
   CopyIcon,
   EditIcon,
@@ -136,6 +138,66 @@ function Presence({ bot, state, primary }: { bot: Bot; state: RunState | null; p
 
 type Tip = { text: string; top: number; left: number };
 
+/** A routine run counts as working; anything more urgent the bot's tasks show wins (automation.md section 8). */
+function withRoutine(summary: BotSummary, running: Routine | null): BotSummary {
+  return running && (!summary.state || summary.state === "stopped")
+    ? { ...summary, state: "working" }
+    : summary;
+}
+
+/** A routine run's row stays under its bot this long after it finished (Clawtrate's choice, the gateway's default retention). */
+const ROUTINE_ROW_MS = 24 * 60 * 60 * 1000;
+
+function recentRoutineRuns(bot: Bot, routines: Routine[], now: number): Routine[] {
+  return routines.filter(
+    (each) =>
+      each.botId === bot.id &&
+      each.target === "isolated" &&
+      each.payload === "agentTurn" &&
+      (each.runningAt !== null ||
+        (each.lastRunAt !== null && now - (each.lastEndedAt ?? each.lastRunAt) < ROUTINE_ROW_MS)),
+  );
+}
+
+function RoutineRow({
+  routine,
+  now,
+  onOpen,
+}: {
+  routine: Routine;
+  now: number;
+  onOpen: (id: string, runAt: number | null) => void;
+}) {
+  const failed = routine.runningAt === null && routine.lastStatus === "error";
+  const at = routine.runningAt ?? routine.lastRunAt!;
+  return (
+    <li>
+      <button
+        type="button"
+        className="task routine-task"
+        data-testid="routine-task"
+        data-routine={routine.id}
+        data-state={routine.runningAt !== null ? "working" : failed ? "failed" : undefined}
+        aria-label={`${routine.name}, routine run${routine.runningAt !== null ? ", running" : failed ? ", failed" : ""}`}
+        onClick={() => onOpen(routine.id, at)}
+      >
+        <ClockIcon className="task-pin" />
+        <span className="task-title">{routine.name}</span>
+        <time className="task-time" aria-hidden="true">
+          {routine.runningAt !== null ? "now" : rowTime(at, now)}
+        </time>
+        <span className="task-mark" aria-hidden="true">
+          {routine.runningAt !== null ? (
+            <StateMark state="working" />
+          ) : failed ? (
+            <StateMark state="failed" />
+          ) : null}
+        </span>
+      </button>
+    </li>
+  );
+}
+
 /**
  * A row's menu as a control of its own, for touch, where there is no right-click
  * or Menu key: shown only with a coarse pointer (styles: `.row-more`), at least
@@ -180,6 +242,8 @@ type TaskActions = {
 function TaskRows({
   bot,
   tasks,
+  routineRuns,
+  onOpenRoutineRun,
   selection,
   onOpenTask,
   onTip,
@@ -188,9 +252,12 @@ function TaskRows({
   archived,
   cap,
   now,
+  onScreenKey,
 }: {
   bot: Bot;
   tasks: Task[];
+  routineRuns: Routine[];
+  onOpenRoutineRun?: ((id: string, runAt: number | null) => void) | undefined;
   selection: SelectionModel;
   onOpenTask: (botId: string, key: string) => void;
   onTip: (tip: Tip | null) => void;
@@ -205,9 +272,22 @@ function TaskRows({
   /** Rows shown before "Show all": fewer in one pane, so the rest of the list stays in view. */
   cap: number;
   now: number;
+  /** The task whose conversation is on screen: none while Routines covers it. */
+  onScreenKey: string | null;
 }) {
   const currentKey = selection.bot?.id === bot.id ? (selection.task?.key ?? null) : null;
   const all = selection.showAll.has(bot.id);
+  const rows = [
+    ...tasks.map((task) => ({ key: task.key, at: task.updatedAt, pinned: task.pinned, task })),
+    ...routineRuns.map((routine) => ({
+      key: `routine:${routine.id}`,
+      at: routine.runningAt ?? routine.lastRunAt,
+      pinned: false,
+      routine,
+    })),
+  ].sort(
+    (a, b) => Number(b.pinned === true) - Number(a.pinned === true) || (b.at ?? 0) - (a.at ?? 0),
+  );
   const showTip = (element: HTMLElement, text: string) => {
     const title = element.querySelector(".task-title");
     if (!title || title.scrollWidth <= title.clientWidth) return onTip(null);
@@ -221,10 +301,21 @@ function TaskRows({
   };
   return (
     <ul className="task-list" aria-label={`${bot.name}'s tasks`} data-testid="task-list">
-      {visibleTasks(tasks, currentKey, all, cap).map((task) => {
+      {visibleTasks(rows, currentKey, all, cap).map((row) => {
+        if ("routine" in row)
+          return (
+            <RoutineRow
+              key={row.key}
+              routine={row.routine}
+              now={now}
+              onOpen={(id, at) => onOpenRoutineRun?.(id, at)}
+            />
+          );
+        const { task } = row;
         const current = task.key === currentKey;
         const unread =
-          (!current || selection.keptUnread.has(task.key)) && isUnread(task, selection.unreadSeen);
+          (task.key !== onScreenKey || selection.keptUnread.has(task.key)) &&
+          isUnread(task, selection.unreadSeen);
         const state = taskState(task, selection.seen, selection.task?.key ?? null);
         const spoken =
           task.title +
@@ -298,14 +389,14 @@ function TaskRows({
           </li>
         );
       })}
-      {tasks.length > cap && (
+      {rows.length > cap && (
         <li>
           <button
             type="button"
             className="task task-more"
             onClick={() => selection.toggleShowAll(bot.id)}
           >
-            <span className="task-title">{all ? "Show fewer" : `Show all ${tasks.length}`}</span>
+            <span className="task-title">{all ? "Show fewer" : `Show all ${rows.length}`}</span>
           </button>
         </li>
       )}
@@ -403,6 +494,10 @@ export function Rail({
   interactive = false,
   sidebar,
   newTaskHint = "⌘T",
+  routines = [],
+  routinesOpen = false,
+  onOpenRoutines,
+  onOpenRoutineRun,
 }: {
   bots: Bot[];
   tasksByBot: Record<string, Task[]>;
@@ -435,6 +530,12 @@ export function Rail({
   sidebar?: SidebarState | undefined;
   /** The New task shortcut as this host takes it: ⌘T in the desktop app, ⌥T in a browser. */
   newTaskHint?: string;
+  /** The gateway's routines: a bot works while one of its routines runs (F-024), and each run shows under it (F-193). */
+  routines?: Routine[];
+  routinesOpen?: boolean;
+  onOpenRoutines?: () => void;
+  /** Open a routine's run that started at `runAt`, or the routine itself (`null`) while it runs. */
+  onOpenRoutineRun?: (id: string, runAt: number | null) => void;
 }) {
   const send = useCommand();
   const bridge = useBridge();
@@ -463,7 +564,7 @@ export function Rail({
   const gateway = gatewayLabel(connection.gatewayUrl);
   const words = presenceWords(connection, catchingUp);
   const dot = presenceDot(connection, catchingUp);
-  const onScreenKey = selection.task?.key ?? null;
+  const onScreenKey = routinesOpen ? null : (selection.task?.key ?? null);
   const manual = roster.prefs.sort === "manual";
   const sortLabel = SORT_ORDERS.find((order) => order.id === roster.prefs.sort)!.label;
 
@@ -504,11 +605,13 @@ export function Rail({
       ],
     [matches, arranged],
   );
+  const pinHasRoutines = (botId: string) =>
+    arranged.pinned.some(
+      (bot) => bot.id === botId && recentRoutineRuns(bot, routines, now).length > 0,
+    );
   const owner = matches
     ? undefined
-    : arranged.pinned.find(
-        (bot) => selection.isOpen(bot.id) && (tasksByBot[bot.id]?.length ?? 0) > 1,
-      );
+    : arranged.pinned.find((bot) => selection.isOpen(bot.id, pinHasRoutines(bot.id)));
 
   useEffect(() => {
     if (!announcement) return;
@@ -748,13 +851,14 @@ export function Rail({
 
   // A pinned tile. The grid has one task block, with one owner at a time.
   const clickPin = (bot: Bot, count: number) => {
-    if (count < 2) {
+    const hasRoutines = pinHasRoutines(bot.id);
+    if (count < 2 && !hasRoutines) {
       selection.selectBot(bot.id);
       onOpen();
     } else if (bot.id === owner?.id) {
-      selection.toggleFold(bot.id);
+      selection.toggleFold(bot.id, hasRoutines);
     } else if (onePane || bot.id === selection.bot?.id) {
-      selection.unfoldOnly(bot.id, pinnedIds);
+      selection.unfoldOnly(bot.id, pinnedIds, hasRoutines);
     } else {
       selection.selectBot(bot.id);
       selection.release(pinnedIds.filter((id) => id !== bot.id));
@@ -831,7 +935,8 @@ export function Rail({
   // move to the previous or next bot. The drawer, while open, keeps them out.
   useEffect(() => {
     const open = (bot: Bot) => {
-      if (bot.id === selection.bot?.id) return;
+      // Routines covers the conversation: the selected bot's is not on screen yet.
+      if (bot.id === selection.bot?.id && !routinesOpen) return;
       const inList = listRef.current?.contains(document.activeElement) ?? false;
       selection.selectBot(bot.id);
       onOpen();
@@ -885,7 +990,7 @@ export function Rail({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- newTask reads the latest render's state
-  }, [inert, openSearch, onOpen, selection, ordered, interactive]);
+  }, [inert, openSearch, onOpen, selection, ordered, interactive, routinesOpen]);
 
   const onSearchKey = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape") {
@@ -961,6 +1066,7 @@ export function Rail({
     const botId = row.dataset.bot ?? null;
     const isPin = row.classList.contains("pin");
     const isBot = isPin || row.classList.contains("bot");
+    const hasPinRoutines = isPin && botId !== null && pinHasRoutines(botId);
     if (
       event.altKey &&
       event.shiftKey &&
@@ -986,9 +1092,14 @@ export function Rail({
     } else if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
       rows[event.key === "Home" ? 0 : rows.length - 1]?.focus();
-    } else if (event.key === "ArrowRight" && isBot && botId && !selection.isOpen(botId)) {
+    } else if (
+      event.key === "ArrowRight" &&
+      isBot &&
+      botId &&
+      !selection.isOpen(botId, hasPinRoutines)
+    ) {
       event.preventDefault();
-      if (isPin) selection.unfoldOnly(botId, pinnedIds);
+      if (isPin) selection.unfoldOnly(botId, pinnedIds, hasPinRoutines);
       else selection.toggleFold(botId);
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
@@ -1001,7 +1112,8 @@ export function Rail({
         } else {
           row.closest(".bot-group")?.querySelector<HTMLElement>(":scope > .bot")?.focus();
         }
-      } else if (botId && selection.isOpen(botId)) selection.toggleFold(botId);
+      } else if (botId && selection.isOpen(botId, hasPinRoutines))
+        selection.toggleFold(botId, hasPinRoutines);
     } else if (
       isBot &&
       botId &&
@@ -1406,7 +1518,7 @@ export function Rail({
   const taskEntries = (bot: Bot, task: Task): MenuEntry[] => {
     const unread =
       isUnread(task, selection.unreadSeen) &&
-      (task.key !== selection.task?.key || selection.keptUnread.has(task.key));
+      (task.key !== onScreenKey || selection.keptUnread.has(task.key));
     const trigger = menu?.trigger ?? null;
     const close = () => setMenu(null);
     return tidy([
@@ -1575,12 +1687,22 @@ export function Rail({
         }
       : {};
 
+  const runningRoutine = (botId: string) =>
+    routines.find((each) => each.botId === botId && each.runningAt !== null) ?? null;
+
   const renderRow = (bot: Bot, place: "list" | "section" | "hidden" | "search") => {
     const tasks = tasksByBot[bot.id] ?? [];
-    const summary = summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen);
+    const running = runningRoutine(bot.id);
+    const summary = withRoutine(
+      summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
+      running,
+    );
     const waiting = waitingWords(tasks);
     const open = place !== "search" && selection.isOpen(bot.id);
     const several = tasks.length > 1;
+    const routineRuns =
+      place !== "search" && (open || !several) ? recentRoutineRuns(bot, routines, now) : [];
+    const showTasks = open || (place !== "search" && interactive && archivedOpen.has(bot.id));
     const selected = bot.id === selection.bot?.id;
     const latest = summary.latest;
     return (
@@ -1632,11 +1754,13 @@ export function Rail({
             <span className="bot-line">
               <span className="bot-preview" data-tone={waiting ? "warn" : undefined}>
                 {waiting ??
-                  (latest
-                    ? (latest.preview ?? latest.title)
-                    : discovery.status === "loading"
-                      ? "Loading tasks"
-                      : "No tasks yet")}
+                  (running
+                    ? `Running ${running.name}`
+                    : latest
+                      ? (latest.preview ?? latest.title)
+                      : discovery.status === "loading"
+                        ? "Loading tasks"
+                        : "No tasks yet")}
               </span>
               {summary.unread && <span className="unread-dot" />}
             </span>
@@ -1660,18 +1784,21 @@ export function Rail({
             openBotMenu(bot.id, trigger, rect.right - 232, rect.bottom, true);
           }}
         />
-        {(open || (place !== "search" && interactive && archivedOpen.has(bot.id))) && (
+        {(showTasks || routineRuns.length > 0) && (
           <TaskRows
             bot={bot}
-            tasks={tasks}
+            tasks={showTasks ? tasks : []}
+            routineRuns={routineRuns}
+            onOpenRoutineRun={onOpenRoutineRun}
             selection={selection}
             onOpenTask={openTask}
             onTip={setTip}
             onTaskMenu={openTaskMenu}
-            actions={taskActions}
+            actions={showTasks ? taskActions : null}
             archived={archivedProps(bot)}
             cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
             now={now}
+            onScreenKey={onScreenKey}
           />
         )}
       </li>
@@ -1680,8 +1807,11 @@ export function Rail({
 
   const renderPin = (bot: Bot) => {
     const tasks = tasksByBot[bot.id] ?? [];
-    const summary = summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen);
-    const several = tasks.length > 1;
+    const summary = withRoutine(
+      summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
+      runningRoutine(bot.id),
+    );
+    const several = tasks.length > 1 || pinHasRoutines(bot.id);
     return (
       <li key={bot.id}>
         <button
@@ -1746,6 +1876,18 @@ export function Rail({
         {updateButton}
         {query === null ? (
           <>
+            {onOpenRoutines && (
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Routines"
+                title="Routines"
+                aria-current={routinesOpen ? "page" : undefined}
+                onClick={onOpenRoutines}
+              >
+                <ClockIcon />
+              </button>
+            )}
             <button
               type="button"
               className="icon-button"
@@ -1865,6 +2007,8 @@ export function Rail({
                 <TaskRows
                   bot={owner}
                   tasks={tasksByBot[owner.id] ?? []}
+                  routineRuns={recentRoutineRuns(owner, routines, now)}
+                  onOpenRoutineRun={onOpenRoutineRun}
                   selection={selection}
                   onOpenTask={openTask}
                   onTip={setTip}
@@ -1873,6 +2017,7 @@ export function Rail({
                   archived={archivedProps(owner)}
                   cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
                   now={now}
+                  onScreenKey={onScreenKey}
                 />
               </li>
             )}

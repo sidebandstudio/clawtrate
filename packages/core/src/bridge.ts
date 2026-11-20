@@ -29,13 +29,14 @@ import {
   type CheckInDraft,
   type CheckInRead,
 } from "./check-ins.ts";
+import type { BotRoutines, CalendarRuns, RoutineRun, RunConversation } from "./routines.ts";
 import type { MenuRow } from "./composer-menus.ts";
 import type { UsageBusy, UsageReport } from "./usage-engine.ts";
 import {
   MAX_ROUTINE_NAME_CHARS,
   validTimeZone,
   type BudgetChange,
-  type Routine,
+  type BudgetRoutine,
   type UsagePeriod,
 } from "./usage.ts";
 import {
@@ -155,6 +156,22 @@ export type BridgeCommand =
   | { type: "readFileChunk"; id: string; index: number }
   /** Drop a file's transfer. */
   | { type: "releaseFile"; id: string }
+  // Routines (automation.md sections 3 to 8), at the read tier. Reads answer and keep nothing.
+  | { type: "refreshRoutines" }
+  /** One bot's routines, when the kept list is missing some of the gateway's. */
+  | { type: "readBotRoutines"; botId: string }
+  /** A routine's runs in the gateway's order, newest finished first, at most `MAX_ROUTINE_RUNS`. */
+  | { type: "readRoutineRuns"; id: string }
+  /** Every routine's runs that started from `from` to `to` (epoch ms), for the calendar. */
+  | { type: "readCalendarRuns"; from: number; to: number }
+  /** One run's conversation, when the gateway keeps it; the run by its id, else its start. */
+  | {
+      type: "readRunConversation";
+      id: string;
+      runId: string | null;
+      runAt: number;
+      sessionKey: string | null;
+    }
   // Provider accounts (bots.md sections 3 to 11). Writes need admin.
   /** Read the accounts, sign-ins, bindings and catalogue again. */
   | { type: "refreshAccounts" }
@@ -279,55 +296,69 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                 ? TranscriptItem | null
                 : C extends { type: "retryCreation" }
                   ? { key: string }
-                  : C extends { type: "listTaskFiles" }
-                    ? TaskFileList
-                    : C extends { type: "readTaskFile" | "readWorkspaceFile" }
-                      ? FileRead
-                      : C extends { type: "listWorkspace" }
-                        ? WorkspacePage
-                        : C extends { type: "readCheckoutDiff" }
-                          ? CheckoutDiff
-                          : C extends { type: "readFileChunk" }
-                            ? { data: string }
-                            : C extends { type: "cancelSignIn" }
-                              ? { cancelled: boolean }
-                              : C extends { type: "dismissSignIn" }
-                                ? { dismissed: boolean }
-                                : C extends { type: "saveApiKey" }
-                                  ? { profileId: string | null }
-                                  : C extends { type: "createBot" | "finishBot" }
-                                    ? { botId: string; missing: MissingStep[] }
-                                    : C extends { type: "newTask" | "newMainTask" }
-                                      ? { key: string }
-                                      : C extends { type: "archiveTask" }
-                                        ? ArchiveResult
-                                        : C extends { type: "listArchived" }
-                                          ? ArchivedList
-                                          : C extends { type: "readComposerMenu" }
-                                            ? MenuRow[]
-                                            : C extends { type: "readUsage" }
-                                              ? UsageReport | UsageBusy
-                                              : C extends { type: "listRoutines" }
-                                                ? Routine[]
-                                                : C extends { type: "readPlacement" }
-                                                  ? BotPlacement
-                                                  : C extends { type: "readMachines" }
-                                                    ? MachinesView
-                                                    : C extends { type: "setCommandMachine" }
-                                                      ? ConfigSave
-                                                      : C extends { type: "setBotWorkspace" }
-                                                        ? {
-                                                            workspace: string | null;
-                                                            asTyped: boolean;
-                                                          }
-                                                        : C extends { type: "setMachineDefaults" }
-                                                          ? ApprovalsFile
-                                                          : C extends {
-                                                                type: "refreshCheckIns";
-                                                                botId: string;
-                                                              }
-                                                            ? CheckInRead | null
-                                                            : void;
+                  : C extends { type: "readBotRoutines" }
+                    ? BotRoutines
+                    : C extends { type: "readRoutineRuns" }
+                      ? RoutineRun[]
+                      : C extends { type: "readCalendarRuns" }
+                        ? CalendarRuns
+                        : C extends { type: "readRunConversation" }
+                          ? RunConversation
+                          : C extends { type: "listTaskFiles" }
+                            ? TaskFileList
+                            : C extends { type: "readTaskFile" | "readWorkspaceFile" }
+                              ? FileRead
+                              : C extends { type: "listWorkspace" }
+                                ? WorkspacePage
+                                : C extends { type: "readCheckoutDiff" }
+                                  ? CheckoutDiff
+                                  : C extends { type: "readFileChunk" }
+                                    ? { data: string }
+                                    : C extends { type: "cancelSignIn" }
+                                      ? { cancelled: boolean }
+                                      : C extends { type: "dismissSignIn" }
+                                        ? { dismissed: boolean }
+                                        : C extends { type: "saveApiKey" }
+                                          ? { profileId: string | null }
+                                          : C extends { type: "createBot" | "finishBot" }
+                                            ? { botId: string; missing: MissingStep[] }
+                                            : C extends { type: "newTask" | "newMainTask" }
+                                              ? { key: string }
+                                              : C extends { type: "archiveTask" }
+                                                ? ArchiveResult
+                                                : C extends { type: "listArchived" }
+                                                  ? ArchivedList
+                                                  : C extends { type: "readComposerMenu" }
+                                                    ? MenuRow[]
+                                                    : C extends { type: "readUsage" }
+                                                      ? UsageReport | UsageBusy
+                                                      : C extends { type: "listRoutines" }
+                                                        ? BudgetRoutine[]
+                                                        : C extends { type: "readPlacement" }
+                                                          ? BotPlacement
+                                                          : C extends { type: "readMachines" }
+                                                            ? MachinesView
+                                                            : C extends {
+                                                                  type: "setCommandMachine";
+                                                                }
+                                                              ? ConfigSave
+                                                              : C extends {
+                                                                    type: "setBotWorkspace";
+                                                                  }
+                                                                ? {
+                                                                    workspace: string | null;
+                                                                    asTyped: boolean;
+                                                                  }
+                                                                : C extends {
+                                                                      type: "setMachineDefaults";
+                                                                    }
+                                                                  ? ApprovalsFile
+                                                                  : C extends {
+                                                                        type: "refreshCheckIns";
+                                                                        botId: string;
+                                                                      }
+                                                                    ? CheckInRead | null
+                                                                    : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -668,6 +699,29 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     }
     case "dismissCheckInSave":
       return { type: "dismissCheckInSave", saveId: id(command.saveId, "save") };
+    case "refreshRoutines":
+      return { type: command.type };
+    case "readCalendarRuns":
+      return {
+        type: "readCalendarRuns",
+        from: count(command.from, Number.MAX_SAFE_INTEGER, "time"),
+        to: count(command.to, Number.MAX_SAFE_INTEGER, "time"),
+      };
+    case "readBotRoutines":
+      return { type: "readBotRoutines", botId: botId(command.botId) };
+    case "readRoutineRuns":
+      return { type: "readRoutineRuns", id: id(command.id, "routine id") };
+    case "readRunConversation":
+      return {
+        type: "readRunConversation",
+        id: id(command.id, "routine id"),
+        runId: command.runId === null ? null : id(command.runId, "run id"),
+        runAt: count(command.runAt, Number.MAX_SAFE_INTEGER, "run time"),
+        sessionKey:
+          command.sessionKey === null || command.sessionKey === undefined
+            ? null
+            : id(command.sessionKey, "session key"),
+      };
     case "refreshAccounts":
     case "cancelSignIn":
     case "dismissSignIn":
@@ -1160,6 +1214,13 @@ class ViewerSession implements BridgeSession {
     return { key };
   }
 
+  private routineResult(result: BotRoutines | RoutineRun[] | CalendarRuns | RunConversation) {
+    const max = this.policy.maxResultChars;
+    if (max !== undefined && JSON.stringify(result).length > max)
+      throw new RangeError("The gateway returned more routine data than this view can receive.");
+    return result;
+  }
+
   private async run(command: BridgeCommand): Promise<unknown> {
     const { client, policy, owner } = this;
     if (this.disposed) throw new Error("this viewer has disconnected");
@@ -1189,6 +1250,22 @@ class ViewerSession implements BridgeSession {
         return;
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
+      case "refreshRoutines":
+        return client.refreshRoutines();
+      case "readBotRoutines":
+        return this.routineResult(await client.readBotRoutines(command.botId));
+      case "readRoutineRuns":
+        return this.routineResult(await client.readRoutineRuns(command.id));
+      case "readCalendarRuns":
+        return this.routineResult(await client.readCalendarRuns(command.from, command.to));
+      case "readRunConversation":
+        return this.routineResult(
+          await client.readRunConversation(command.id, {
+            runId: command.runId,
+            runAt: command.runAt,
+            sessionKey: command.sessionKey,
+          }),
+        );
       case "refreshAccounts":
         return client.refreshAccounts();
       case "checkLock":
