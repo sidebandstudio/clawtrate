@@ -445,13 +445,13 @@ Every target stands as written; the available behavior toward it is recorded in 
 
 ### A masked value: what replaces today's path
 
-Three places in today's code would hold a typed value, and each is replaced:
+Today's question path keeps one copy in shared transcript state and exposes it through the web host's snapshots and Raw.
 
 - `packages/core/src/client.ts`, `resolveQuestion`: it writes `sent: { method: "question.resolve", params }` into the question card before it sends, so the outgoing answers sit in transcript state. A masked answer uses its own command instead, whose value is passed straight to the request and never stored; the card's sent record holds the method, the question id and the hosts only.
 - `apps/desktop/src/web-host/server.ts`: each viewer's snapshot carries the open transcripts as they are, so a second viewer of the task would receive whatever the card holds. With the masked command nothing is there to carry; the snapshot code needs no exception.
 - `packages/ui/src/cards/QuestionCard.tsx`: Raw shows `card.sent`. It shows the method, the question id, the hosts and the returned record, with "(not kept by Clawtrate)" where a value would be.
 
-The same applies to `secrets.store.set` for New item and Replace. A check, with an invented marker value, submits a masked answer and a Vault value while a second viewer has the task open, and asserts the marker is absent from that viewer's snapshot while the answer is being submitted and after it settles, from Raw, from a refusal, a timeout and a reload, and from the host's log.
+The same applies to `secrets.store.set` for New item and Replace. For both a masked answer and a Vault set, hold the fake gateway's reply open. While the request is in flight, assert the fake gateway received the marker exactly once. Inspect the core store, the originating and second viewers' next snapshots for the open task, and opened Raw. Repeat the absence assertions after success, refusal, timeout and reload, including the visible fault and host log. Feed a different marker in an environment entry from the fake gateway's list and assert its absence from the core store, both snapshots, Raw and diagnostics.
 
 ### What the engine supplies
 
