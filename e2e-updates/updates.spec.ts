@@ -21,6 +21,7 @@ import { sidebarGateway } from "../apps/desktop/test/update/sidebar-gateway.ts";
 import { feedFor, feedServer, json, payload } from "../apps/desktop/test/update/harness.ts";
 import { fileKeyFor, FILE_EXTENSION } from "../apps/desktop/src/main/update/feed.ts";
 import { appEnv, debuggingPort } from "../e2e-packaged/desktop-driver.ts";
+import { askToClose, forceEnd } from "../e2e-packaged/windows.ts";
 
 type TestApp = {
   page: Page;
@@ -127,8 +128,15 @@ const test = base.extend<{ desktopApp: TestApp }>({
       } finally {
         if (app?.pid && app.exitCode === null && app.signalCode === null) {
           const exited = once(app, "exit");
-          const force = setTimeout(() => app?.kill("SIGKILL"), 10000);
-          app.kill("SIGTERM");
+          const pid = app.pid;
+          const windows = process.platform === "win32";
+          const force = setTimeout(() => {
+            if (windows) forceEnd(pid);
+            else app?.kill("SIGKILL");
+          }, 15000);
+          if (windows) {
+            if (askToClose(pid)) forceEnd(pid);
+          } else app.kill("SIGTERM");
           try {
             await exited;
           } finally {
@@ -136,7 +144,7 @@ const test = base.extend<{ desktopApp: TestApp }>({
           }
         }
         await server.close();
-        rmSync(dir, { recursive: true, force: true });
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
       }
     }
   },
@@ -166,6 +174,8 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   await download.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("group", { name: "Update status" })).toBeFocused();
+  // Windows prepares two protected directories before it requests the first byte.
+  await expect.poll(() => server.requests, { timeout: 35_000 }).toContain(filePath);
   await expect
     .poll(async () => Number(await page.getByRole("progressbar").getAttribute("value")))
     .toBeGreaterThan(0);
