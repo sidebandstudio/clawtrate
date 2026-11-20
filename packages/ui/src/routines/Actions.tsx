@@ -307,8 +307,9 @@ export function DeleteRoutine({
       kind="confirm"
       labelledBy="r-delete-title"
       describedBy="r-delete-text"
+      // An uncertain delete can be left: closing claims nothing, and the list says what the gateway has.
       onClose={() => {
-        if (!needsCheck && status !== "deleting") onCancel();
+        if (status !== "checking" && status !== "deleting") onCancel();
       }}
       role="alertdialog"
       testId="routine-delete"
@@ -338,15 +339,26 @@ export function DeleteRoutine({
         )}
         <div className="b-actions">
           {needsCheck ? (
-            <button
-              type="button"
-              className="button"
-              ref={checkButton}
-              disabled={status === "checking"}
-              onClick={() => void check()}
-            >
-              {status === "checking" ? "Checking…" : error ? "Check again" : "Check now"}
-            </button>
+            <>
+              <button
+                type="button"
+                className="button"
+                data-variant="quiet"
+                onClick={onCancel}
+                disabled={status === "checking"}
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                className="button"
+                ref={checkButton}
+                disabled={status === "checking"}
+                onClick={() => void check()}
+              >
+                {status === "checking" ? "Checking…" : error ? "Check again" : "Check now"}
+              </button>
+            </>
           ) : (
             <>
               <button

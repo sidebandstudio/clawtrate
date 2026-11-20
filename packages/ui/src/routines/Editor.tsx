@@ -935,6 +935,8 @@ export function Editor({
                   type="button"
                   className="button"
                   data-size="sm"
+                  // Outside the fieldset: while a save is out, the draft it sent stays as it is.
+                  disabled={busy}
                   onClick={() => setDraft(mineOver(draft, mine, textLocked))}
                 >
                   Use my version

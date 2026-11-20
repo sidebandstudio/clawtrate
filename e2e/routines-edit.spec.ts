@@ -619,6 +619,23 @@ test("F-352: an unanswered delete checks both a routine still present and a rout
   made.delete(job.id);
 });
 
+test("F-352: an unanswered delete can be closed without saying it was deleted", async () => {
+  const job = await add(scriptedRoutine(`Delete and leave ${STAMP}`));
+  await openPage(job.name);
+  await view().getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: "Delete…" }).click();
+  const dialog = page.getByTestId("routine-delete");
+  const missed = holdCommand("removeRoutine", false);
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+  (await missed)(unanswered);
+  await expect(dialog.getByRole("button", { name: "Check now" })).toBeFocused();
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await expect(dialog).toHaveCount(0);
+  // Nothing claimed it gone: the routine is still the gateway's, and still shown.
+  await expect(view().getByRole("heading", { name: job.name })).toBeVisible();
+  expect((await get(job.id)).id).toBe(job.id);
+});
+
 test("F-192: a routine's menu pauses, runs, edits and deletes it", async () => {
   const job = await add(scriptedRoutine(`Menu ${STAMP}`));
   await openRoutines();
