@@ -255,6 +255,33 @@ describe("F-024: the list stays true when events and reads cross", () => {
     routines.onClose();
   });
 
+  it("F-350: a pause the gateway confirms while the list is read is not undone by that older read", async () => {
+    let answer: (value: unknown) => void = () => {};
+    let reads = 0;
+    const { routines, state } = engine(
+      {
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => {
+          reads += 1;
+          // The first read is the gateway's answer from before the pause landed.
+          if (reads === 1) return new Promise((resolve) => (answer = resolve));
+          return { jobs: [job({ enabled: false })], hasMore: false };
+        },
+        "cron.update": () => job({ enabled: false }),
+      },
+      { ...initialRoutinesState, status: "loaded", routines: [parseRoutine(job())!] },
+      ADMIN,
+    );
+    const loading = routines.load();
+    await until(() => reads === 1);
+    expect(await routines.setEnabled(JOB, false)).toMatchObject({ status: "saved" });
+    answer({ jobs: [job()], hasMore: false });
+    await loading;
+    expect(reads).toBe(2);
+    expect(state().routines[0]).toMatchObject({ enabled: false });
+    routines.onClose();
+  });
+
   it("retries an initial list when events invalidate every immediate read", async () => {
     vi.useFakeTimers();
     let reads = 0;
@@ -1170,6 +1197,31 @@ describe("F-189: changing a routine", () => {
       current: { updatedAt: 30 },
     });
     expect(requests.map((request) => request.method)).toEqual(["cron.get"]);
+  });
+
+  it("F-189: holds the write to the definition it checked, so another editor's save in between is a conflict, not overwritten", async () => {
+    const theirs = { ...once, updatedAtMs: 31, name: "Theirs", configRevision: "r2" };
+    let reads = 0;
+    const { routines, requests } = engine(
+      {
+        "cron.get": () => (reads++ === 0 ? { ...once, configRevision: "r1" } : theirs),
+        "cron.update": () => {
+          throw new GatewayProtocolRequestError({
+            code: "INVALID_REQUEST",
+            message: "cron job definition no longer matches the loaded version",
+            details: { code: "CRON_JOB_CHANGED" },
+          });
+        },
+      },
+      initialRoutinesState,
+      ADMIN,
+    );
+    expect(
+      await routines.update(JOB, original, { ...original, name: "Mine" }, expected),
+    ).toMatchObject({ status: "conflict", current: { name: "Theirs", updatedAt: 31 } });
+    expect(requests.find((request) => request.method === "cron.update")?.params).toMatchObject({
+      expectedConfigRevision: "r1",
+    });
   });
 
   it("does not restore a removed routine when its in-flight save answers", async () => {

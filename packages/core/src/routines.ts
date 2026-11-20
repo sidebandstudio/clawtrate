@@ -568,6 +568,11 @@ function refusal(error: unknown): string | null {
 
 const notFound = (error: string) => /\bnot found\b/iu.test(error);
 
+/** The gateway refused an update held to a definition that has changed since. */
+const changedSince = (error: unknown) =>
+  error instanceof GatewayProtocolRequestError &&
+  asRecord(error.details)?.code === "CRON_JOB_CHANGED";
+
 /** A request that never left this client. */
 function unsent(error: unknown): boolean {
   return (
@@ -845,6 +850,8 @@ export class RoutinesEngine {
   /** The gateway's own view of a routine, put in the list while the connection that read it holds. */
   private keep(routine: Routine, epoch: number): void {
     if (epoch !== this.epoch) return;
+    // A list read in flight may predate this answer, as it may an event's.
+    if (this.loading) this.invalidated = true;
     this.ctx.update((state) => {
       const at = state.routines.findIndex((each) => each.id === routine.id);
       if (at < 0 && state.routines.length >= MAX_ROUTINES) return state;
@@ -917,8 +924,20 @@ export class RoutinesEngine {
 
   /** One routine as the gateway has it now, or null when it has none by that id. Reads only. */
   async readOne(id: string): Promise<Routine | null> {
+    return (await this.readRevised(id))?.routine ?? null;
+  }
+
+  /** A routine with the gateway's token for its definition, which `cron.update` can be held to. */
+  private async readRevised(
+    id: string,
+  ): Promise<{ routine: Routine | null; revision: string | null } | null> {
     try {
-      return parseRoutine(await this.ctx.request("cron.get", { id }));
+      const job = await this.ctx.request("cron.get", { id });
+      const revision = asRecord(job)?.configRevision;
+      return {
+        routine: parseRoutine(job),
+        revision: typeof revision === "string" && revision !== "" ? revision : null,
+      };
     } catch (error) {
       const refused = refusal(error);
       if (refused !== null && notFound(refused)) return null;
@@ -961,8 +980,11 @@ export class RoutinesEngine {
     this.updates.add(pending);
     try {
       let current: Routine | null;
+      let revision: string | null;
       try {
-        current = await this.readOne(id);
+        const read = await this.readRevised(id);
+        current = read?.routine ?? null;
+        revision = read?.revision ?? null;
       } catch (error) {
         if (pending.removed) return { status: "deleted" };
         const failed = this.failed(error);
@@ -986,7 +1008,15 @@ export class RoutinesEngine {
       if (blocked) return { status: "not-sent", reason: blocked };
       if (epoch !== this.epoch) return { status: "not-sent", reason: "offline" };
       try {
-        const routine = answeredJob(await this.ctx.request("cron.update", { id, patch }));
+        // Held to the definition just checked: another editor's save that lands
+        // between the read and this write is refused, not overwritten.
+        const routine = answeredJob(
+          await this.ctx.request("cron.update", {
+            id,
+            patch,
+            ...(revision === null ? {} : { expectedConfigRevision: revision }),
+          }),
+        );
         if (pending.removed) return { status: "deleted" };
         const wanted = changedFields(original, fields);
         if (
@@ -997,7 +1027,13 @@ export class RoutinesEngine {
         this.keep(routine, epoch);
         return { status: "saved", routine };
       } catch (error) {
-        return pending.removed ? { status: "deleted" } : this.failed(error);
+        if (pending.removed) return { status: "deleted" };
+        if (changedSince(error)) {
+          const now = await this.readOne(id).catch(() => undefined);
+          if (now === null) return { status: "deleted" };
+          if (now) return { status: "conflict", current: now };
+        }
+        return this.failed(error);
       }
     } finally {
       this.updates.delete(pending);
@@ -1057,6 +1093,7 @@ export class RoutinesEngine {
     if (blocked) return { status: "not-sent", reason: blocked };
     const epoch = this.epoch;
     const drop = () => {
+      if (epoch === this.epoch && this.loading) this.invalidated = true;
       if (epoch === this.epoch)
         this.ctx.update((state) => ({
           ...state,
