@@ -473,6 +473,9 @@ test.describe("a Page", () => {
     await expect(page.locator("iframe")).toHaveCount(0);
     await expect(viewer(page)).toHaveCount(0);
     expect(await reads(page)).toEqual([]);
+    // Escape closes it with focus on nothing at all, after a click on the view's text.
+    await page.getByTestId("page-unavailable").click();
+    expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
     await page.keyboard.press("Escape");
     await expect(view).toHaveCount(0);
     await expect(opener).toBeFocused();

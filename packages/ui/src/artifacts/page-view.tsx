@@ -267,6 +267,17 @@ export function PageView({
   useEffect(() => {
     closeRef.current?.focus();
   }, []);
+  // Escape closes the view wherever focus is: on the view's text, or nowhere while Export closes.
+  useEffect(() => {
+    if (exporting) return;
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [exporting, onClose]);
   const line = [
     "Page",
     occurrence.bot,
@@ -285,10 +296,7 @@ export function PageView({
       data-testid="page-view"
       onKeyDown={(event) => {
         if (exporting) return;
-        if (event.key === "Escape") {
-          event.preventDefault();
-          onClose();
-        } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "e") {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "e") {
           event.preventDefault();
           setExporting(true);
         } else trapTab(event, root.current);
