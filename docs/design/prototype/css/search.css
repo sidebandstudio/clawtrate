@@ -102,29 +102,34 @@
 
 /* Before anything is typed, and when nothing matched: what each source covers. */
 .s-idle,
-.s-none {
+.s-none,
+.s-nomatch {
   padding: 8px 8px 4px;
 }
 .s-idle dl,
-.s-none dl {
+.s-none dl,
+.s-nomatch dl {
   margin: 8px 0 0;
   display: grid;
   gap: 8px;
 }
 .s-idle dl > div,
-.s-none dl > div {
+.s-none dl > div,
+.s-nomatch dl > div {
   display: grid;
   grid-template-columns: 84px 1fr;
   gap: 12px;
 }
 .s-idle dt,
-.s-none dt {
+.s-none dt,
+.s-nomatch dt {
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   color: var(--text);
 }
 .s-idle dd,
-.s-none dd {
+.s-none dd,
+.s-nomatch dd {
   margin: 0;
   font-size: var(--text-sm);
   color: var(--text-muted);
@@ -135,7 +140,9 @@
   font-weight: var(--weight-medium);
   color: var(--text);
 }
-.s-nomatch,
+.s-nomatch h2 {
+  margin: 0;
+}
 .s-solo {
   margin: 8px;
   font-size: var(--text-sm);
@@ -306,6 +313,24 @@
 .s-row[data-kind="link"]:hover .s-hint {
   display: flex;
 }
+.s-hint-more {
+  cursor: pointer;
+}
+/* A link's full canonical address, on a line that breaks anywhere; at most two lines, and when
+   it needs more the handoff confirms first. */
+.s-address {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  max-height: 36px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  overflow: hidden;
+}
+.s-address[data-refused="true"] {
+  font-family: inherit;
+  font-size: var(--text-sm);
+}
 .s-action {
   min-height: 36px;
   font-size: var(--text-md);
@@ -334,6 +359,12 @@
   font-size: var(--text-md);
   font-weight: var(--weight-medium);
 }
+.s-confirm-host {
+  margin: 0 0 6px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
 .s-confirm-address {
   margin: 0;
   padding: 10px 12px;
@@ -343,10 +374,6 @@
   font-size: 13px;
   overflow-wrap: anywhere;
   color: var(--text-muted);
-}
-.s-confirm-address b {
-  color: var(--text);
-  font-weight: var(--weight-medium);
 }
 .s-confirm-line {
   margin: 10px 0 16px;
