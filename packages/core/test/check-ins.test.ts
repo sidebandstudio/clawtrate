@@ -9,12 +9,14 @@
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
+import { enforce } from "../src/bounds.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, URL_A } from "./client-harness.ts";
 import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 import {
   cannotKeep,
+  CHECK_INS,
   durationMs,
   everyText,
   keptByDefault,
@@ -581,6 +583,34 @@ describe("F-201 F-366 saving", () => {
     expect(jobsOf(state())).toEqual([["main", true, 1_800_000]]);
   });
 
+  it("F-201: a prompt-only save waits for the job to match the cadence in read-back config", async () => {
+    const fake = fakeGateway({
+      entries: { main: { heartbeat: { every: "30m" } }, marlow: {}, otto: {}, quill: {} },
+    });
+    await loadCheckIns(fake.ctx);
+    fake.gateway.jobs = fakeJobs(fake.gateway.config);
+    fake.gateway.before = (method) => {
+      if (method === "config.get" && fake.gateway.patches.length === 1) {
+        fake.gateway.before = () => {};
+        fake.elsewhere((config) => {
+          config.agents.entries.main!.heartbeat!.every = "1h";
+        });
+      }
+    };
+    fake.onSleep(() => {
+      expect(fake.state().save?.status).toBe("saving");
+      fake.gateway.jobs = null;
+    });
+    await saveCheckIn(
+      fake.ctx,
+      "s1",
+      "main",
+      draft(fake.state(), "main", { prompt: "New prompt" }),
+    );
+    expect(fake.state().save?.status).toBe("saved");
+    expect(jobsOf(fake.state())).toEqual([["main", true, 3_600_000]]);
+  });
+
   it("F-366: Off writes every 0m and is saved only once the bot's job is disabled", async () => {
     const fake = fakeGateway();
     await loadCheckIns(fake.ctx);
@@ -755,6 +785,12 @@ describe("F-201 F-366 saving", () => {
   });
 });
 
+it("F-201: state retains a full edit-length prompt even when each code unit needs a JSON escape", () => {
+  const prompt = "\u0001".repeat(4_000);
+  const settings = [{ botId: "main", every: "30m", prompt, promptCut: false }];
+  expect(enforce(CHECK_INS, { settings }).settings).toEqual(settings);
+});
+
 describe("F-201 a save across a connection change", () => {
   it("F-201: admin that ends between the read and the patch sends nothing", async () => {
     const { gateway, ctx, state, setAdmin } = fakeGateway();
@@ -847,7 +883,7 @@ function fakeJobs(cfg: Config) {
 
 describe("F-201 a save across a real connection change", () => {
   /** A client with admin on a gateway whose check-ins are Juniper's default, and whose identity can change. */
-  async function adminClient() {
+  async function adminClient(failIdentity = false) {
     const gateway = grantingGateway();
     const world = { identity: "gw-1", patches: 0 };
     gateway.handlers["agents.list"] = () => ({
@@ -857,7 +893,13 @@ describe("F-201 a save across a real connection change", () => {
         { id: "marlow", identity: { name: "Marlow" } },
       ],
     });
-    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: world.identity });
+    gateway.handlers["gateway.identity.get"] = () => {
+      if (failIdentity) {
+        failIdentity = false;
+        return {};
+      }
+      return { deviceId: world.identity };
+    };
     const entries = (): Config["agents"]["entries"] =>
       world.patches === 0
         ? { main: {}, marlow: {} }
@@ -905,6 +947,16 @@ describe("F-201 a save across a real connection change", () => {
     was: { every: null, prompt: null },
     kept: [{ botId: "main", every: "30m" }],
   };
+
+  it("F-201: a failed bootstrap identity read is retried on Refresh", async () => {
+    const { client } = await adminClient(true);
+    try {
+      expect(client.state.connection.gatewayId).toBeNull();
+      expect(client.state.checkIns?.gatewayId).toBe("gw-1");
+    } finally {
+      client.stop();
+    }
+  });
 
   it("F-201: a reconnect between the read and the patch sends nothing on the new connection", async () => {
     const { client, gateway, world } = await adminClient();

@@ -74,13 +74,15 @@ export function openDraft(checkIns: CheckInsState, botId: string): Draft | null 
  */
 export function rebase(draft: Draft, checkIns: CheckInsState): Draft {
   const base = baseOf(checkIns, draft.botId);
-  const prompt = draft.touched.prompt && !base.promptCut;
+  const edits = draftToSave(draft);
+  const every = edits.every !== null;
+  const prompt = edits.prompt !== null && !base.promptCut;
   return {
     ...draft,
     base,
-    ...(draft.touched.every ? {} : { choice: base.choice, every: base.every }),
+    ...(every ? {} : { choice: base.choice, every: base.every }),
     ...(prompt ? {} : { prompt: base.was.prompt ?? "" }),
-    touched: { every: draft.touched.every, prompt },
+    touched: { every, prompt },
   };
 }
 

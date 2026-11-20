@@ -996,10 +996,12 @@ const checkInJob = object<CheckInJob>()({
   everyMs: NUMBER,
   nextRunAtMs: NUMBER,
 });
+// A prompt code unit can take six characters when escaped in JSON.
+const checkInPrompt = text(6 * MAX_CHECKIN_PROMPT_CHARS + 2);
 const checkInSetting = object<CheckInSetting>()({
   botId: ID,
   every: NAME,
-  prompt: text(MAX_CHECKIN_PROMPT_CHARS),
+  prompt: checkInPrompt,
   promptCut: FLAG,
 });
 const checkInDefaults = object<CheckInDefaults>()({
@@ -1007,7 +1009,7 @@ const checkInDefaults = object<CheckInDefaults>()({
   inheritedCut: FLAG,
   every: NAME,
   everyCut: FLAG,
-  prompt: text(MAX_CHECKIN_PROMPT_CHARS),
+  prompt: checkInPrompt,
   promptCut: FLAG,
 });
 const checkInSave = object<CheckInSave>()({

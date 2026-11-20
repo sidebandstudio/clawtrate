@@ -532,7 +532,11 @@ function took(
   if ("prompt" in own && (heartbeat.prompt ?? null) !== own.prompt) return false;
   for (const each of expect) {
     if (each.botId === botId) {
-      if (!shows(snapshot.allJobs, botId, each.every)) return false;
+      const every =
+        typeof heartbeat.every === "string"
+          ? heartbeat.every
+          : inheritedEvery(agentsOf(snapshot.config));
+      if (!shows(snapshot.allJobs, botId, every)) return false;
       continue;
     }
     const kept = asRecord(asRecord(entriesOf(snapshot.config)?.[each.botId])?.heartbeat);
@@ -597,8 +601,15 @@ export async function saveCheckIn(
   }
   if (!link.alive()) return settle("failed", gone);
   const plan = planCheckIn(botId, draft, fresh.config);
-  if ("conflict" in plan || "refused" in plan || !plan.patch) show(latest, fresh);
-  if ("conflict" in plan) return settle("conflict", plan.conflict);
+  if ("conflict" in plan) {
+    if (!latest()) {
+      settle("conflict", plan.conflict, true);
+      return loadCheckIns(ctx);
+    }
+    show(latest, fresh);
+    return settle("conflict", plan.conflict);
+  }
+  if ("refused" in plan || !plan.patch) show(latest, fresh);
   if ("refused" in plan) return settle("failed", plan.refused);
   if (!plan.patch) return settle("saved", null);
   if (fresh.hash === null)

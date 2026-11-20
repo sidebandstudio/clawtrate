@@ -4001,10 +4001,7 @@ export class ClawtrateClient {
               : Promise.reject(new NotSentError()),
         };
       },
-      gateway: () => {
-        const known = this.gatewayIdentity;
-        return known?.epoch === this.epoch ? known.id : Promise.resolve(null);
-      },
+      gateway: () => this.readGatewayIdentity(),
       begin: () => {
         const mine = (this.checkInReads += 1);
         return () => mine === this.checkInReads;
@@ -5072,6 +5069,23 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, discovery: { ...state.discovery, ...patch } }));
   }
 
+  private readGatewayIdentity(): Promise<string | null> {
+    const known = this.gatewayIdentity;
+    if (known?.epoch === this.epoch) return known.id;
+    const gatewayId = this.request("gateway.identity.get", {}).then(
+      (result) => {
+        const id = asRecord(result)?.deviceId;
+        return typeof id === "string" && id ? id : null;
+      },
+      () => null,
+    );
+    void gatewayId.then((id) => {
+      if (id === null && this.gatewayIdentity?.id === gatewayId) this.gatewayIdentity = null;
+    });
+    this.gatewayIdentity = { epoch: this.epoch, id: gatewayId };
+    return gatewayId;
+  }
+
   /**
    * Every successful connect is a fresh projection: re-list, re-subscribe, reload
    * open transcripts. Bots and tasks load independently, so one failing read
@@ -5083,14 +5097,7 @@ export class ClawtrateClient {
     this.setDiscovery({ status: "loading", error: null });
     // The gateway's identity comes with its bots, so what this device keeps
     // per gateway (pins, hidden bots, order) is known when the bots appear.
-    const gatewayId = this.request("gateway.identity.get", {}).then(
-      (result) => {
-        const id = asRecord(result)?.deviceId;
-        return typeof id === "string" && id ? id : null;
-      },
-      () => null,
-    );
-    this.gatewayIdentity = { epoch: this.epoch, id: gatewayId };
+    const gatewayId = this.readGatewayIdentity();
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const botsIssued = ++this.botsIssued;

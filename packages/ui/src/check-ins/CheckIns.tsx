@@ -224,9 +224,11 @@ function CheckInsDialog({
   const bridge = useBridge();
   const setting = checkIns.settings?.find((each) => each.botId === bot.id);
   const { choice, every, prompt, saveId, refused, base, touched } = draft;
+  const submitting = useRef(false);
   const groupRef = useRef<HTMLUListElement>(null);
   const save = checkIns.save?.id === saveId ? checkIns.save : null;
   const saving = save?.status === "saving";
+  const waitingForBase = save?.status === "conflict" && draft.rebased !== save.id;
   const deleted = save?.status === "conflict" && save.error === CHECKIN_BOT_DELETED;
   const [checking, setChecking] = useState(false);
   const setChoice = (next: Choice) =>
@@ -264,18 +266,23 @@ function CheckInsDialog({
 
   // While a save is under way the dialog waits for its answer, Escape included.
   const close = () => {
-    if (saving) return;
+    if (saving || submitting.current) return;
     if (saveId) void bridge.send({ type: "dismissCheckInSave", saveId }).catch(() => {});
     onClose();
   };
   const submit = () => {
+    if (saving || submitting.current || waitingForBase) return;
+    submitting.current = true;
     const id = crypto.randomUUID();
     change({ saveId: id, refused: null });
     bridge
       .send({ type: "saveCheckIn", saveId: id, botId: bot.id, ...draftToSave(draft) })
       .catch((error: unknown) =>
         change({ refused: error instanceof Error ? error.message : String(error) }),
-      );
+      )
+      .finally(() => {
+        submitting.current = false;
+      });
   };
   // Reads only: whether the change landed is the gateway's to say, and saving again is the person's.
   const check = () => {
@@ -491,7 +498,7 @@ function CheckInsDialog({
               type="button"
               className="button"
               data-variant="primary"
-              disabled={saving || deleted || blocked !== null}
+              disabled={saving || waitingForBase || deleted || blocked !== null}
               onClick={submit}
             >
               {saving ? "Saving…" : "Save"}

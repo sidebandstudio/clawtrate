@@ -85,6 +85,20 @@ describe("F-201 a check-ins draft", () => {
     ).toMatchObject({ every: null, prompt: null });
   });
 
+  it("F-201: reverted cadence and prompt edits follow the gateway after a conflict", () => {
+    const draft = openDraft(state({ every: "30m", prompt: "A" }), "main")!;
+    const after = rebase(
+      { ...draft, touched: { every: true, prompt: true } },
+      state({ every: "2h", prompt: "B" }),
+    );
+    expect(after).toMatchObject({ prompt: "B", touched: { every: false, prompt: false } });
+    expect(draftToSave(after)).toMatchObject({
+      every: null,
+      prompt: null,
+      was: { every: "2h", prompt: "B" },
+    });
+  });
+
   it("is not opened while nothing says which gateway the check-ins are from", () => {
     expect(
       openDraft({ ...state({ every: "30m", prompt: null }), gatewayId: null }, "main"),
