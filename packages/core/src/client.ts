@@ -694,6 +694,11 @@ function withLive(transcript: Transcript): Transcript {
   return same ? transcript : { ...transcript, live };
 }
 
+/** A kept frame that reports an error: a chat error, or a lifecycle error, retried or not. */
+const ERROR_FRAME = /^(chat \(error\)|agent \(lifecycle error(, attempt retried)?\))$/;
+/** A kept frame that ended its run. */
+const END_FRAME = /^(agent \(lifecycle end\)|chat \((aborted|final)\))$/;
+
 /**
  * A run whose end was read from history rows (`endFromRows`), with no event of
  * its own received here, keeps for its run line's Raw the last history row
@@ -5677,8 +5682,10 @@ export class ClawtrateClient {
   /**
    * Keep an event that started or ended a run with the run, as received, for
    * the run line's, the turn error's and the turn notes' Raw (F-094): its
-   * start, its wait for an approval, its end, and a chat error, the latest of each kind. A run the event names that this task
-   * does not hold keeps nothing.
+   * start, its wait for an approval, and its end, the latest of each kind. No
+   * error frame is kept, and a failed run keeps no frame that ended it: that
+   * event is in no snapshot, only in the host's Raw table (F-301). A run the
+   * event names that this task does not hold keeps nothing.
    */
   /** What an event can change of a run, to tell whether the engine took it; null with no run. */
   private runShape(key: string, runId: string): string | null {
@@ -5699,8 +5706,16 @@ export class ClawtrateClient {
     this.updateActivity(key, (activity) => {
       const run = findRun(activity, runId);
       if (!run) return activity;
-      const kept = (run.lifecycle ?? []).filter((each) => each.via !== via);
-      const lifecycle = [...kept, { via, record }].slice(-MAX_LIFECYCLE_RECORDS);
+      // An error event is in no snapshot (F-301): what failed a run is kept only in the host's
+      // Raw table and read when Raw is opened. So no error frame is kept here, and a failed run
+      // keeps no frame that ended it; its start and its wait stay.
+      const failed = run.state === "failed";
+      const excluded = (each: string) => ERROR_FRAME.test(each) || (failed && END_FRAME.test(each));
+      const kept = (run.lifecycle ?? []).filter((each) => each.via !== via && !excluded(each.via));
+      if (excluded(via) && kept.length === (run.lifecycle ?? []).length) return activity;
+      const lifecycle = (excluded(via) ? kept : [...kept, { via, record }]).slice(
+        -MAX_LIFECYCLE_RECORDS,
+      );
       return {
         ...activity,
         runs: activity.runs.map((each) => (each === run ? { ...run, lifecycle } : each)),

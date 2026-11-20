@@ -771,7 +771,13 @@ export function RunLine({ run }: { run: Run }) {
   const line = isTerminal(run.state) ? runLineOf(run, calls, ctx, drawn?.account) : null;
   if (!line) return null;
   return (
-    <RunLineView runId={run.id} line={line} model={run.model} lifecycle={run.lifecycle ?? null} />
+    <RunLineView
+      runId={run.id}
+      line={line}
+      model={run.model}
+      lifecycle={run.lifecycle ?? null}
+      failure={run.error?.raw ?? null}
+    />
   );
 }
 

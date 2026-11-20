@@ -321,7 +321,7 @@ const preamble = object<Preamble>()({
   ended: FLAG,
   beforeCall: ID,
 });
-/** The events that started, paused and ended a run: its start, its wait, its end, and a chat error. */
+/** The events that started, paused and ended a run: its start, its wait, its lifecycle end, and the chat frame that ended it; never an error frame (F-301). */
 export const MAX_LIFECYCLE_RECORDS = 4;
 const lifecycleRecord = object<{ via: string; record: unknown }>()({
   via: NAME,

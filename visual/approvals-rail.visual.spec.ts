@@ -223,11 +223,31 @@ for (const size of SIZES) {
           "scene=run-failed&bot=otto&task=agent:otto:disk-space&panel=closed",
           theme,
         );
+        // A failed run: the event that failed it is in no snapshot, so Raw shows it once opened,
+        // read from the host, with the run's start beside it; on the card and on the run line.
+        const state = () =>
+          page.evaluate(() =>
+            JSON.stringify(
+              (
+                window as unknown as { clawtrateFixture: { getState: () => unknown } }
+              ).clawtrateFixture.getState(),
+            ),
+          );
+        expect(await state()).not.toContain("(agent (lifecycle error))");
         const error = page.getByTestId("turn-error");
         await error.getByRole("button", { name: "Raw" }).click();
-        await expect(raw(error)).toContainText("(agent (lifecycle error))");
+        await expect(raw(error)).toContainText("The chat event that ended the turn, as received");
         await expect(raw(error)).toContainText("The model provider is overloaded.");
+        await expect(raw(error)).toContainText("(agent (lifecycle start))");
         await fitsWidth(page, error);
+        const failedLine = page.getByTestId("run-line").last();
+        await failedLine.locator("summary").click();
+        await failedLine.getByRole("button", { name: "Raw" }).click();
+        await expect(raw(failedLine)).toContainText(
+          "The chat event that ended the turn, as received",
+        );
+        await expect(raw(failedLine)).toContainText("The model provider is overloaded.");
+        await expect(raw(failedLine)).toContainText("(agent (lifecycle start))");
       });
 
       test("F-057: a task done with failures shows the failed mark, and a blocked task says blocked", async ({

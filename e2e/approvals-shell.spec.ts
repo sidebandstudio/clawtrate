@@ -668,14 +668,18 @@ test("F-094: a failed turn's card, its run line and a line the gateway wrote its
     target.getByRole("region", { name: "What the gateway sent" });
   const error = page.getByTestId("turn-error").last();
   await expect(error).toBeVisible({ timeout: 60_000 });
+  // The event that failed the run is in no snapshot: Raw shows it once opened, read from the
+  // host (F-301), beside the run's start; on the card and on the run line.
+  const ended =
+    /The (chat event|data of the agent lifecycle event) that ended the turn, as received/;
   await error.getByRole("button", { name: "Raw" }).click();
-  await expect(raw(error)).toContainText(
-    /The event, as the gateway sent it \((agent \(lifecycle error\)|chat \(error\))\)/,
-  );
+  await expect(raw(error)).toContainText(ended);
+  await expect(raw(error)).toContainText("(agent (lifecycle start))");
   const line = page.getByTestId("run-line").last();
   await line.locator("summary").click();
   await line.getByRole("button", { name: "Raw" }).click();
   await expect(raw(line)).toContainText("(agent (lifecycle start))");
+  await expect(raw(line)).toContainText(ended);
   await expect(raw(line)).toContainText(key);
   await shot(page.getByTestId("transcript"), "raw-run-line");
   // Read anew from history once the page reloads: the run line shows a received history row for

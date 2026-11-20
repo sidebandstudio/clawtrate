@@ -471,9 +471,11 @@ export type Run = {
   attemptErrors: string[];
   /**
    * The events that started and ended the run, as received on the live stream
-   * (`agent` lifecycle `start`, `waiting-approval`, `end` or `error`, and a `chat` `error`), for
-   * the run line's and the turn error's Raw. Absent for a run known only from
-   * history, which keeps no such event. Each is cut to its bound.
+   * (`agent` lifecycle `start`, `waiting-approval` and `end`, and a `chat` `aborted` or
+   * `final`), for the run line's and the turn error's Raw. Never an error frame: what failed a
+   * run is read from the host's Raw table (`readRunRaw`, F-301), so a failed run keeps only its
+   * start and wait here. Absent for a run known only from history, which keeps no such event.
+   * Each is cut to its bound.
    */
   lifecycle?: Array<{ via: string; record: unknown }>;
   /**

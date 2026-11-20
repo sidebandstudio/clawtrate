@@ -9,13 +9,12 @@ import {
   type Bot,
   type OutgoingMessage,
   type Run,
-  type RunErrorRaw,
   type RunRawRead,
   type Transcript,
   type TranscriptItem,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { runRaw } from "./actions/ActionCards.tsx";
+import { RAW_HOLDS, runRaw } from "./actions/ActionCards.tsx";
 import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { CardFoot, RawView, useAnnounce, useRawDisclosure } from "./cards/parts.tsx";
 import { copyText, selectContents } from "./clipboard.ts";
@@ -558,13 +557,6 @@ export function RunNoteRaw({ run }: { run: Run }) {
 export function RawHost({ children }: { children: ReactNode }) {
   return <div className="card raw-host">{children}</div>;
 }
-
-/** What a failed run's Raw holds, in words: exactly that, and as received. */
-const RAW_HOLDS: Record<RunErrorRaw["holds"], string> = {
-  "chat-event": "The chat event that ended the turn, as received",
-  "lifecycle-data": "The data of the agent lifecycle event that ended the turn, as received",
-  "send-answer": "The gateway's answer to the send that started the turn, as received",
-};
 
 /** A failed run's Raw, once read (F-301): what it holds, or why it is not here. */
 function RunRawView({ read }: { read: RunRawRead | null }) {

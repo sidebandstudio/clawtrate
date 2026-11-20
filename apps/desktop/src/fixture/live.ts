@@ -649,11 +649,9 @@ export function liveScene(
             kind: "provider",
             raw: { holds: "chat-event", chars: JSON.stringify(FAILED_EVENT).length },
           },
-          lifecycle: lifecycleOf(now, {
-            phase: "error",
-            error: "The model provider is overloaded.",
-            executionSettled: true,
-          }),
+          // As the engine keeps it: the start, never the error frame, which is read from the
+          // host when Raw opens (F-301).
+          lifecycle: lifecycleOf(now, { phase: "error" }).slice(0, 1),
         }),
         steps: [],
       };

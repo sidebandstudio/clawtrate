@@ -1,7 +1,7 @@
 // The events that started and ended a run, kept with the run as received, for
 // the run line's and the turn error's Raw (F-094): only frames the engine took,
-// a retried attempt under its own label, and for a run known only from history
-// the row its end was read from.
+// never an error frame (that event is read from the host's Raw when Raw opens,
+// F-301), and for a run known only from history the row its end was read from.
 
 import { describe, expect, it } from "vitest";
 import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
@@ -24,18 +24,56 @@ describe("F-094: a run's own events, for its Raw", () => {
     client.stop();
   });
 
-  it("a failed run keeps the error that ended it", async () => {
+  it("a failed run keeps its start but no error frame: the event that failed it is read from the host's Raw when Raw opens (F-301)", async () => {
     const { client, gateway, transcript } = await openTask();
-    gateway.emit("agent", agentEvent("run-2", 1, "lifecycle", { phase: "start" }));
-    const error = agentEvent("run-2", 2, "lifecycle", {
-      phase: "error",
-      error: "The model provider is overloaded.",
-      executionSettled: true,
-    });
-    gateway.emit("agent", error);
+    const start = agentEvent("run-2", 1, "lifecycle", { phase: "start" });
+    gateway.emit("agent", start);
+    gateway.emit(
+      "agent",
+      agentEvent("run-2", 2, "lifecycle", {
+        phase: "error",
+        error: "The model provider is overloaded.",
+        executionSettled: true,
+      }),
+    );
     await until(() => transcript().runs.find((run) => run.id === "run-2")?.state === "failed");
     const run = transcript().runs.find((each) => each.id === "run-2")!;
-    expect(run.lifecycle?.at(-1)).toEqual({ via: "agent (lifecycle error)", record: error });
+    expect(run.lifecycle).toEqual([{ via: "agent (lifecycle start)", record: start }]);
+    expect(client.readRunRaw(KEY, "run-2")).toMatchObject({
+      status: "available",
+      holds: "lifecycle-data",
+    });
+    client.stop();
+  });
+
+  it("a failed run's snapshot carries no error frame through its lifecycle: not a chat error, not a later end", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.emit("agent", agentEvent("run-5", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.some((run) => run.id === "run-5"));
+    gateway.emit("chat", {
+      runId: "run-5",
+      sessionKey: KEY,
+      seq: 2,
+      state: "error",
+      errorMessage: "The model provider is overloaded.",
+      errorKind: "provider",
+      errorDetail: { marker: "diagnostic-run-raw" },
+    });
+    await until(() => transcript().runs.find((run) => run.id === "run-5")?.state === "failed");
+    gateway.emit(
+      "agent",
+      agentEvent("run-5", 3, "lifecycle", {
+        phase: "end",
+        stopReason: "error",
+        error: { message: "The model provider is overloaded.", marker: "diagnostic-run-raw" },
+      }),
+    );
+    await sleep(50);
+    const run = transcript().runs.find((each) => each.id === "run-5")!;
+    expect(run.lifecycle?.map((each) => each.via)).toEqual(["agent (lifecycle start)"]);
+    expect(JSON.stringify(client.state)).not.toContain("diagnostic-run-raw");
+    // The event is still there to read when Raw is opened.
+    expect(client.readRunRaw(KEY, "run-5")).toMatchObject({ status: "available" });
     client.stop();
   });
 });
@@ -53,7 +91,7 @@ describe("F-094: Raw holds only what the engine took, and says where it came fro
     client.stop();
   });
 
-  it("an attempt the gateway retries is kept under its own label, not as the run's end", async () => {
+  it("an attempt the gateway retries keeps no error frame, and is not taken as the run's end", async () => {
     const { client, gateway, transcript } = await openTask();
     gateway.emit("agent", agentEvent("run-4", 1, "lifecycle", { phase: "start" }));
     gateway.emit("agent", agentEvent("run-4", 2, "lifecycle", { phase: "error", error: "retry" }));
@@ -63,10 +101,7 @@ describe("F-094: Raw holds only what the engine took, and says where it came fro
     await sleep(30);
     const run = transcript().runs.find((each) => each.id === "run-4")!;
     expect(run.state).toBe("running");
-    expect(run.lifecycle?.map((each) => each.via)).toEqual([
-      "agent (lifecycle start)",
-      "agent (lifecycle error, attempt retried)",
-    ]);
+    expect(run.lifecycle?.map((each) => each.via)).toEqual(["agent (lifecycle start)"]);
     client.stop();
   });
 
