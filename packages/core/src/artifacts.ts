@@ -186,27 +186,54 @@ const MEDIA_TICKET = /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 /** A download the gateway issued itself, as the host fetches it. */
 export type IssuedDownload = { kind: "ticket" | "grant"; url: string };
 
+/** An expiry as the gateway writes it (`Date.prototype.toISOString`, OpenClaw 2026.10.6). */
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+
+/** The time an ISO expiry names, in epoch milliseconds, or null when it names none. */
+export function expiryTime(raw: unknown): number | null {
+  if (typeof raw !== "string" || !ISO_TIME.test(raw)) return null;
+  const time = Date.parse(raw);
+  return Number.isFinite(time) ? time : null;
+}
+
 /**
  * A download address the gateway issued, from an `artifacts.download`
- * answer, or null. Only two forms are: a managed media ticket for this task's
+ * answer. Only two forms are: a managed media ticket for this task's
  * own session (`/api/chat/media/outgoing/<session>/<attachment>/full?mediaTicket=v1.…`)
  * and a connection-bound grant (`/api/artifacts/download/<connection>/<ticket>`),
  * each a path on the gateway's own origin, exactly as written, with no user
- * information, and answered with its `expiresAt`. An item with no managed
- * replacement is answered with the address its transcript block names and no
- * `expiresAt` (OpenClaw 2026.10.6, `artifacts.download`), whatever that
- * address looks like: it is never one of these.
+ * information, and answered with an ISO `expiresAt` still after `now`. An item
+ * with no managed replacement is answered with the address its transcript
+ * block names and no `expiresAt` (OpenClaw 2026.10.6, `artifacts.download`),
+ * whatever that address looks like: it is never one of these, and the answer is
+ * null; so is one whose `expiresAt` is null. An answer that carries any other
+ * `expiresAt` and is not a current issued download
+ * (an expiry that is not an ISO time, one already past, or another address) is
+ * `unavailable`: nothing is fetched from it and its address is not kept.
  */
 export function issuedDownload(
   answer: unknown,
   gatewayUrl: string,
   sessionKey: string,
-): IssuedDownload | null {
+  now: number,
+): IssuedDownload | "unavailable" | null {
   const record = asRecord(answer);
-  const address = str(record?.url);
+  // No expiry, or a null one, is the transcript's address: never fetched by itself.
+  if (!record || record.expiresAt === undefined || record.expiresAt === null) return null;
+  const issued = issuedRoute(record, gatewayUrl, sessionKey);
+  const expires = expiryTime(record.expiresAt);
+  return issued && expires !== null && expires > now ? issued : "unavailable";
+}
+
+/** The exact issued route an answer names, whatever its expiry says. */
+function issuedRoute(
+  record: Record<string, unknown>,
+  gatewayUrl: string,
+  sessionKey: string,
+): IssuedDownload | null {
+  const address = str(record.url);
   const origin = gatewayOrigin(gatewayUrl);
-  if (!address || !origin || !str(record?.expiresAt) || address.length > MAX_ADDRESS_CHARS)
-    return null;
+  if (!address || !origin || address.length > MAX_ADDRESS_CHARS) return null;
   if (!address.startsWith("/") || address.startsWith("//")) return null;
   let url: URL;
   try {
@@ -336,7 +363,13 @@ export async function listArtifacts(ctx: ArtifactContext, key: string): Promise<
       const download = asRecord(
         await ctx.request("artifacts.download", { sessionKey: key, artifactId: artifact.id }),
       );
-      if (issuedDownload(download, ctx.gatewayUrl, key)) continue;
+      const issued = issuedDownload(download, ctx.gatewayUrl, key, ctx.now());
+      if (issued === "unavailable") {
+        // An expired or unreadable download: nothing by itself; opening it asks again.
+        artifact.place = { kind: "unknown" };
+        continue;
+      }
+      if (issued) continue;
       const address = str(download?.url);
       artifact.place = (address && transcriptAddress(address, ctx.gatewayUrl)) || { kind: "none" };
     } catch {
@@ -459,6 +492,9 @@ export function thumbnailAddress(url: string): string | null {
   return null;
 }
 
+/** A download the gateway issued that has expired, or that is no longer usable. */
+const EXPIRED_DOWNLOAD = "The gateway's download for this item expired or isn't available now.";
+
 /**
  * What an HTTP refusal of an issued download says, and no more: only the
  * download call's `artifact_not_found` says the gateway no longer has an item.
@@ -468,8 +504,7 @@ export function thumbnailAddress(url: string): string | null {
  * (OpenClaw 2026.10.6, `artifact-downloads`, `managed-image-attachments`).
  */
 export function refusedDownload(kind: IssuedDownload["kind"], status: number): string {
-  if (kind === "grant" && status === 404)
-    return "The gateway's download for this item expired or isn't available now.";
+  if (kind === "grant" && status === 404) return EXPIRED_DOWNLOAD;
   if (kind === "ticket" && status === 404)
     return "The gateway didn't find this item's content where its download points.";
   if (kind === "ticket" && (status === 401 || status === 403))
@@ -573,7 +608,11 @@ export async function readArtifact(
   }
   // Only what the gateway issued as a download is fetched; any other address
   // is the transcript's, and the person may open it, never this host.
-  const issued = issuedDownload(answer, ctx.gatewayUrl, key);
+  const issued = issuedDownload(answer, ctx.gatewayUrl, key, ctx.now());
+  if (issued === "unavailable")
+    return preview
+      ? { status: "no-preview", reason: EXPIRED_DOWNLOAD }
+      : { status: "failed", message: EXPIRED_DOWNLOAD };
   if (!issued) {
     const address = str(answer?.url);
     const named = address ? transcriptAddress(address, ctx.gatewayUrl) : null;

@@ -325,7 +325,7 @@ describe("reading an item", () => {
           'artifact is too large for inline transfer; request transport: "http"',
           { type: "artifact_download_unsupported", artifactId: "artifact_b" },
         ),
-        "artifact_b:http": { artifact: {}, url: path, expiresAt: "later" },
+        "artifact_b:http": { artifact: {}, url: path, expiresAt: SOON },
       },
       bodies: { [path]: { type: "image/png", body: big } },
     });
@@ -557,22 +557,34 @@ describe("reading an item", () => {
   it("F-307: only a download the gateway issued is fetched: a ticket for this task, or a grant, as written, with its expiry", () => {
     const grant = `/api/artifacts/download/conn-1/${"g".repeat(43)}`;
     const issued = (url: string, expiresAt: string | null = SOON, key = SESSION) =>
-      issuedDownload({ artifact: {}, url, ...(expiresAt ? { expiresAt } : {}) }, GATEWAY, key);
+      issuedDownload(
+        { artifact: {}, url, ...(expiresAt ? { expiresAt } : {}) },
+        GATEWAY,
+        key,
+        1_000,
+      );
     expect(issued(ticketPath(1))).toEqual({ kind: "ticket", url: `${ORIGIN}${ticketPath(1)}` });
     expect(issued(grant)).toEqual({ kind: "grant", url: `${ORIGIN}${grant}` });
     // The same addresses as a transcript names them: no expiry, so not issued.
     expect(issued(ticketPath(1), null)).toBeNull();
     expect(issued(grant, null)).toBeNull();
-    // Another task's ticket, another shape, another origin, user information, a normalized path.
-    expect(issued(ticketPath(1), SOON, "agent:main:dashboard:two")).toBeNull();
-    expect(issued("/api/files/secret.txt")).toBeNull();
-    expect(issued(`${ORIGIN}${ticketPath(1)}`)).toBeNull();
-    expect(issued(`//gateway.example${grant}`)).toBeNull();
-    expect(issued(`${grant}?variant=thumbnail`)).toBeNull();
+    // With an expiry, another task's ticket, another shape, another origin, user information or
+    // a normalized path is not a download that can be used: nothing is fetched from it.
+    expect(issued(ticketPath(1), SOON, "agent:main:dashboard:two")).toBe("unavailable");
+    expect(issued("/api/files/secret.txt")).toBe("unavailable");
+    expect(issued(`${ORIGIN}${ticketPath(1)}`)).toBe("unavailable");
+    expect(issued(`//gateway.example${grant}`)).toBe("unavailable");
+    expect(issued(`${grant}?variant=thumbnail`)).toBe("unavailable");
+    expect(issued(`/api/chat/media/outgoing/x/../../files/a${ticketPath(1).slice(-60)}`)).toBe(
+      "unavailable",
+    );
+    expect(issued(`${ticketPath(1)}&extra=1`)).toBe("unavailable");
+    // Without one, it is the transcript's address.
+    expect(issued("/api/files/secret.txt", null)).toBeNull();
+    // A null expiry is no expiry: the transcript's address, never fetched by itself.
     expect(
-      issued(`/api/chat/media/outgoing/x/../../files/a${ticketPath(1).slice(-60)}`),
+      issuedDownload({ artifact: {}, url: grant, expiresAt: null }, GATEWAY, SESSION, 1_000),
     ).toBeNull();
-    expect(issued(`${ticketPath(1)}&extra=1`)).toBeNull();
     // A transcript address is kept whole, for the person to open.
     expect(transcriptAddress("/api/files/secret.txt", GATEWAY)).toEqual({
       kind: "elsewhere",
@@ -631,6 +643,71 @@ describe("reading an item", () => {
       status: "elsewhere",
     });
     expect(fetched).toEqual([]);
+  });
+
+  it("F-307: malformed and expired download grants make no HTTP call and do not disclose their address", async () => {
+    const grant = `/api/artifacts/download/conn-1/${"g".repeat(43)}`;
+    const expiries = [
+      "soon",
+      "",
+      42,
+      "2026-11-19 00:05:00",
+      "2026-11-19T00:05:00+01:00",
+      "2026-13-40T99:99:99.000Z",
+      new Date(1_000).toISOString(),
+      new Date(999).toISOString(),
+    ];
+    for (const expiresAt of expiries)
+      for (const url of [ticketPath(1), grant]) {
+        expect(
+          issuedDownload({ artifact: {}, url, expiresAt }, GATEWAY, SESSION, 1_000),
+          `${url} ${String(expiresAt)}`,
+        ).toBe("unavailable");
+        const { ctx, fetched } = world({
+          records: [
+            {
+              id: "artifact_x",
+              type: "image",
+              title: "x.png",
+              sizeBytes: 10,
+              download: { mode: "url" },
+            },
+          ],
+          downloads: {
+            "artifact_x:inline": { artifact: {}, url, expiresAt },
+            "artifact_x:http": { artifact: {}, url, expiresAt },
+          },
+          bodies: { [url]: { type: "image/png", body: picture(10) } },
+        });
+        const list = await listArtifacts(ctx, SESSION);
+        expect(list.artifacts[0]!.place).toEqual({ kind: "unknown" });
+        const answers = [
+          await readArtifact(ctx, SESSION, "artifact_x", "preview"),
+          await readArtifact(ctx, SESSION, "artifact_x", "full"),
+        ];
+        expect(answers).toEqual([
+          {
+            status: "no-preview",
+            reason: "The gateway's download for this item expired or isn't available now.",
+          },
+          {
+            status: "failed",
+            message: "The gateway's download for this item expired or isn't available now.",
+          },
+        ]);
+        expect(JSON.stringify([list, answers])).not.toContain("download/conn-1");
+        expect(JSON.stringify([list, answers])).not.toContain("mediaTicket");
+        expect(fetched).toEqual([]);
+      }
+    // A minute after the clock, the same answer is a download that is fetched.
+    expect(
+      issuedDownload(
+        { artifact: {}, url: grant, expiresAt: new Date(61_000).toISOString() },
+        GATEWAY,
+        SESSION,
+        1_000,
+      ),
+    ).toEqual({ kind: "grant", url: `${ORIGIN}${grant}` });
   });
 
   it("F-307: a listing whose download answer failed fetches nothing by itself", async () => {
