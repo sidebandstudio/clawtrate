@@ -983,7 +983,7 @@
       `</div>`;
     // On the phone a link's handoff is an option of its own, under the same address rule.
     if (r.kind === "link" && r.url && (phone() || IOS)) html += action({ key: `act:open-link:${r.key}`, label: "Open link", name: IOS ? `Open ${r.url} outside Clawtrate` : `Open ${r.url} in your browser`, act: () => handoff(r) });
-    if (opening && opening.state === "older") html += action({ key: "act:latest", label: "Open the task at its latest", act: () => close(false) });
+    if (opening && opening.state === "older") html += action({ key: "act:latest", label: "Open the task at its latest", act: () => openLatest(r) });
     if (opening && opening.state === "failed") html += action({ key: "act:retry-open", label: "Try again", act: () => openRow(r) });
     return html;
   }
@@ -1064,13 +1064,11 @@
       location.href = `work.html?bot=${r.bot}&task=${r.from.via}&panel=open&tab=files&file=${encodeURIComponent(r.path)}${refusal}${carry()}`;
       return;
     }
-    // A message, or the message that holds a link: the task opens behind the palette, then its
-    // loaded rows are searched for the returned message id.
+    // A message, or the message that holds a link: the task's loaded rows are read for the returned
+    // message id while the current conversation stays selected.
     const hit = r.kind === "message" ? r.hit : { ...r, timestamp: MESSAGES.find((m) => m.id === r.messageId)?.ts };
     const gen = S.gen;
     const token = ++S.openToken;
-    app.openTask(hit.bot, hit.task);
-    S.loaded.add(`${hit.bot}:${hit.task}`);
     S.opening = { key: r.key, state: "opening", token };
     render();
     setTimeout(() => {
@@ -1081,18 +1079,37 @@
         render();
         return announce(S.opening.note, gen);
       }
-      const turn = $(`#transcript .turn[data-message-id="${CSS.escape(hit.messageId)}"]`);
-      if (!turn) {
+      const held = new DOMParser().parseFromString(taskOf(hit.bot, hit.task)?.html ?? "", "text/html");
+      if (!held.querySelector(`.turn[data-message-id="${CSS.escape(hit.messageId)}"]`)) {
         const w = windowOf(hit.task);
         const earlier = w.hasMore && w.rows >= 200 && hit.timestamp < w.oldest;
         S.opening = { key: r.key, state: "older", token, note: earlier ? "This message is earlier than the 200 messages this conversation shows, so it can't be shown in place." : "This message isn't in the conversation's loaded messages." };
         render();
         return announce(S.opening.note, gen);
       }
-      close(false);
-      goToMessage(turn, hit);
+      if (!commit(r, hit, gen)) return;
+      goToMessage($(`#transcript .turn[data-message-id="${CSS.escape(hit.messageId)}"]`), hit);
     }, 260);
   }
+
+  // Selecting a result's task: only in the generation it was opened in, and only once the task list
+  // still holds the result's task and session; then search closes and the task opens.
+  function commit(r, hit, gen) {
+    if (gen !== S.gen) return false;
+    const blocked = blockedLine(r);
+    if (blocked) {
+      S.opening = null;
+      render();
+      announce(blocked, gen);
+      return false;
+    }
+    close(false);
+    app.openTask(hit.bot, hit.task);
+    S.loaded.add(`${hit.bot}:${hit.task}`);
+    return true;
+  }
+  // "Open the task at its latest" makes the same checks, then selects the task.
+  const openLatest = (r) => commit(r, r.kind === "message" ? r.hit : r, S.gen);
 
   const carry = () => ["theme", "width", "motion", "chrome", "platform"].map((k) => (p(k) ? `&${k}=${p(k)}` : "")).join("");
 
@@ -1134,8 +1151,10 @@
     said(`In the app, ${url} ${IOS ? "opens outside Clawtrate" : "opens in your browser"}. This prototype opens nothing.`);
   }
 
+  // The confirmation belongs to the generation it was shown in: a change to the text or the
+  // connection cancels it, and Open hands over only while that generation is current.
   function confirmLink(r) {
-    S.confirm = r.url;
+    S.confirm = { url: r.url, gen: S.gen };
     const host = canonical(r.url).host;
     const L = $(".s-confirm-layer", layer());
     L.hidden = false;
@@ -1146,24 +1165,34 @@
       `<p class="s-confirm-line">${OPENS}${r.where ? ` ${LOCAL_LINE[r.where]}` : ""}</p></div>` +
       `<div class="s-confirm-actions"><button type="button" class="button" data-s="confirm-cancel">Cancel</button><button type="button" class="button" data-variant="primary" data-s="confirm-open">Open</button></div></div>`;
     $(".s-palette", layer()).setAttribute("data-confirm", "open");
+    // The rest of the palette is inert while the confirmation is open.
+    for (const el of $$(".s-palette > :not(.s-confirm-layer)", layer())) el.inert = true;
     $('[data-s="confirm-cancel"]', L).focus();
   }
   function closeConfirm(opened) {
-    const url = S.confirm;
-    if (opened) return handOver(url);
+    const c = S.confirm;
+    if (opened && c?.gen === S.gen) return handOver(c.url);
     const L = $(".s-confirm-layer", layer());
     L.hidden = true;
     L.innerHTML = "";
     S.confirm = null;
     $(".s-palette", layer()).removeAttribute("data-confirm");
+    for (const el of $$(".s-palette > *", layer())) el.inert = false;
     $("#s-field").focus();
   }
+  // What the palette's live region published belongs to the query and connection it was said for.
+  const unsay = () => {
+    const live = $("#s-live");
+    if (live) live.textContent = "";
+  };
 
   // Input and keys ------------------------------------------------------------------------------------------
 
   // Any change to the text starts a new generation at once: nothing asked or opened before it can
   // reach the screen, and the device's groups refilter now; the gateway is asked after 250 ms.
   function onInput(value) {
+    if (S.confirm) closeConfirm(false);
+    unsay();
     S.query = value;
     S.gen++;
     S.opening = null;
@@ -1286,10 +1315,15 @@
       if (gen === S.gen && S.open) live.textContent = text;
     }, 30);
   }
+  // The app's own announcer, after search closed: it speaks only while search stays closed, in the
+  // generation it closed in.
   function said(text) {
     const el = $("#search-announce");
     el.textContent = "";
-    setTimeout(() => (el.textContent = text), 30);
+    const gen = S.gen;
+    setTimeout(() => {
+      if (gen === S.gen && !S.open) el.textContent = text;
+    }, 30);
   }
 
   // Once every visible source has settled, say what the screen says (section 12).
@@ -1342,6 +1376,8 @@
     connectionChanged(name) {
       if (!S.open) return;
       // A change of connection starts a new generation; the latest query is asked once on return.
+      if (S.confirm) closeConfirm(false);
+      unsay();
       S.gen++;
       S.opening = null;
       clearTimeout(S.timer);

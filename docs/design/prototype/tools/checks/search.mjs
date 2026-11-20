@@ -237,13 +237,17 @@ await settle(p);
 check("R2 a retry started before the text changed does not draw under the new text", !(await body(p)).includes("transcode cache") && !(await body(p)).includes("All 3 matching messages"));
 await p.close();
 
-p = await open("palette=open&q=transcode");
+p = await open("palette=open&q=transcode&bot=juniper&task=j1");
 await settle(p);
+const behind = await p.evaluate(() => document.querySelector(".task-line")?.textContent);
 await p.keyboard.press("Enter");
 await p.waitForTimeout(60);
 await p.fill("#s-field", "ephyr");
 await p.waitForTimeout(500);
 check("R2 an open started before the text changed does not complete", (await paletteOpen(p)) && !(await p.evaluate(() => document.querySelector(".bubble.search-hit"))));
+check("R2 and the conversation behind search stays on its own task", behind === "Heat pump vs. gas furnace" && (await p.evaluate(() => document.querySelector(".task-line")?.textContent)) === behind);
+await p.keyboard.press("Escape");
+check("R2 after Escape too", (await p.evaluate(() => document.querySelector(".task-line")?.textContent)) === behind);
 await p.close();
 
 p = await open("palette=open&q=transcode");
@@ -255,6 +259,19 @@ check("R2 a disconnect clears the gateway's results and says they weren't search
 await p.evaluate(() => window.app.setConnection("connected"));
 await settle(p);
 check("R2 on reconnect the latest query is asked once", (await requests(p, "messages")).length === before + 1 && (await groupText(p, "messages")).includes("All 3 matching messages"));
+await p.close();
+
+p = await open("palette=open&q=worksheet");
+await settle(p);
+await p.keyboard.press("Shift+Enter");
+await p.waitForTimeout(80);
+const confirmShown = await p.evaluate(() => Boolean(document.querySelector(".s-confirm")) && document.querySelector("#s-body").inert && document.querySelector(".s-top").inert);
+await p.evaluate(() => window.app.setConnection("reconnecting"));
+await p.waitForTimeout(80);
+const confirmGone = await p.evaluate(() => !document.querySelector(".s-confirm"));
+await p.evaluate(() => document.querySelector('[data-s="confirm-open"]')?.click());
+await p.waitForTimeout(80);
+check("R2 a confirmation keeps the rest of the palette inert, a connection change cancels it, and it can't hand off after", confirmShown && confirmGone && (await handoffs(p)).length === 0);
 await p.close();
 
 p = await open("palette=open");
@@ -526,6 +543,22 @@ check("R7 ⌘K over the confirmation keeps focus in it", await p.evaluate(() => 
 await p.click('[data-s="confirm-open"]');
 await p.waitForTimeout(80);
 check("R6 Open hands over the same canonical address it showed", JSON.stringify(await handoffs(p)) === JSON.stringify([{ url: conf.address, confirmed: true }]) && !(await paletteOpen(p)));
+await p.close();
+
+p = await open("palette=open&q=worksheet");
+await settle(p);
+await p.keyboard.press("Shift+Enter");
+await p.waitForTimeout(80);
+await p.evaluate(() => {
+  // Open, then search reopened and typed in before the app's own announcement is spoken.
+  document.querySelector('[data-s="confirm-open"]').click();
+  document.querySelector('[data-action="search"]').click();
+  const f = document.querySelector("#s-field");
+  f.value = "rebates";
+  f.dispatchEvent(new Event("input", { bubbles: true }));
+});
+await p.waitForTimeout(200);
+check("R2 reopening search and typing before the app's announcement leaves that region empty", (await handoffs(p)).length === 1 && (await paletteOpen(p)) && (await text(p, "#search-announce")) === "");
 await p.close();
 
 p = await open("palette=open&platform=mac");
