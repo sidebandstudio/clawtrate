@@ -548,3 +548,16 @@ it("bounds the packaged and displayed hostname to 253 characters", async () => {
   }
   expect(server.requests).toEqual([]);
 });
+
+it("a nightly-only build stays idle and checks only its one configured source", async () => {
+  const service = await start({ feeds: { stable: null, nightly: server.origin + "/nightly" } });
+  expect(service.get()).toMatchObject({
+    runningTrack: "stable",
+    selectedTrack: "nightly",
+    tracks: [{ track: "nightly", source: "127.0.0.1" }],
+  });
+  expect((await service.chooseTrack("stable")).outcome).toBe("invalid");
+  expect(server.requests).toEqual([]);
+  expect((await service.check("nightly")).snapshot.state.kind).toBe("offered");
+  expect(server.requests).toEqual(["/nightly"]);
+});
