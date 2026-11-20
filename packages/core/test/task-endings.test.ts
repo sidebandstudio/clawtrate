@@ -164,6 +164,37 @@ describe("F-057: the task's status in the rail", () => {
     }
   });
 
+  it("a request settled while this client was away no longer waits once the lists at the next connect omit it", async () => {
+    const gateway = grantingGateway();
+    const rows = [{ key: KEY, agentId: "otto", sessionId: "s-1", status: "done", updatedAt: 900 }];
+    gateway.handlers["sessions.list"] = () => ({ sessions: rows, hasMore: false });
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: rows, hasMore: false },
+    });
+    const request = {
+      id: "settled-away",
+      request: { command: "sleep 2", host: "gateway", sessionKey: KEY, runId: "run-1" },
+      createdAtMs: 1_000,
+      expiresAtMs: 9_000_000_000_000,
+    };
+    gateway.handlers["exec.approval.list"] = () => [request];
+    // The task is not open here: only the rail's waiting state knows of the request.
+    const { client } = await openTask({ gateway, key: "agent:otto:other" });
+    const task = () => client.state.tasksByBot.otto?.find((each) => each.key === KEY);
+    try {
+      await until(() => task()?.status === "waiting");
+      // Settled on the gateway while this client is away: no event reaches it.
+      gateway.handlers["exec.approval.list"] = () => [];
+      gateway.dropAll();
+      await until(() => gateway.calls("exec.approval.list").length >= 4);
+      await until(() => task()?.status === "done");
+      expect(task()?.waitingFor ?? null).toBeNull();
+    } finally {
+      client.stop();
+    }
+  });
+
   it("an older run's failed result or blocked end leaves the newer gateway row Done, with no failed count", async () => {
     const gateway = grantingGateway();
     const rows = [

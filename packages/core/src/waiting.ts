@@ -247,6 +247,34 @@ export class WaitingIndex {
     return changed;
   }
 
+  /** The marker ids of the approval waits kept from requests' own records. */
+  recordedApprovals(): Set<string> {
+    const ids = new Set<string>();
+    for (const markers of this.sessions.values()) {
+      for (const [markerId, marker] of markers)
+        if (marker.recorded && marker.kind === "approval") ids.add(markerId);
+    }
+    return ids;
+  }
+
+  /**
+   * Every approval list read at a connect: a recorded wait held before the
+   * reads began (`before`) that none of them lists is over. One added since
+   * stays.
+   */
+  dropUnlisted(before: ReadonlySet<string>, listed: ReadonlySet<string>): boolean {
+    let changed = false;
+    for (const key of [...this.sessions.keys()]) {
+      changed =
+        this.remove(
+          key,
+          (markerId, marker) =>
+            marker.recorded === true && before.has(markerId) && !listed.has(markerId),
+        ) || changed;
+    }
+    return changed;
+  }
+
   /** `question.list` at a connect: the pending questions replace those kept. */
   replaceQuestions(questions: unknown[], at: number): void {
     for (const key of [...this.sessions.keys()])

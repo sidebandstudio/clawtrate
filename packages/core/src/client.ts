@@ -5599,6 +5599,11 @@ export class ClawtrateClient {
   private async loadWaitingApprovals(generation: number): Promise<void> {
     if (!this.holds(APPROVALS_SCOPE)) return;
     let changed = false;
+    // The recorded waits before these reads, and what they list: when every list answered, a
+    // wait held before that none lists was settled while this client was away.
+    const before = this.waiting.recordedApprovals();
+    const listed = new Set<string>();
+    let complete = true;
     for (const source of APPROVAL_SOURCES) {
       try {
         const value = await this.request(source.method, {});
@@ -5611,12 +5616,16 @@ export class ClawtrateClient {
             : [];
         for (const item of items) {
           const card = source.parse(item);
-          if (card?.status === "pending") changed = this.restoreWait(card) || changed;
+          if (card?.status !== "pending") continue;
+          listed.add(`approval:${card.id}`);
+          changed = this.restoreWait(card) || changed;
         }
       } catch (error) {
+        complete = false;
         this.log("warn", `${source.method} failed: ${errorMessage(error)}`);
       }
     }
+    if (complete) changed = this.waiting.dropUnlisted(before, listed) || changed;
     if (changed) this.publishTasks();
   }
 
