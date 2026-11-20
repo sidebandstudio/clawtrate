@@ -9,14 +9,12 @@ import {
   INTERACTIVE_SCOPES,
   scopeSatisfied,
   type AccountsState,
-  type DesktopUpdateSnapshot,
-  type UpdateTrack,
   type Bot,
   type ConnectionState,
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Updates } from "./Updates.tsx";
+import { Updates, type useDesktopUpdateSnapshot } from "./Updates.tsx";
 import { useBridge, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
@@ -87,9 +85,7 @@ export function Settings({
   accounts,
   bots,
   initialUpdates,
-  updateSnapshot,
-  refused,
-  onChoice,
+  updateReading,
   onClose,
 }: {
   connection: ConnectionState;
@@ -97,9 +93,7 @@ export function Settings({
   accounts: AccountsState;
   bots: readonly Bot[];
   initialUpdates: boolean;
-  updateSnapshot: DesktopUpdateSnapshot | null;
-  refused: UpdateTrack | null;
-  onChoice: (track: UpdateTrack) => void;
+  updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
   onClose: () => void;
 }) {
   const { desktopUpdates } = useBridge();
@@ -358,10 +352,11 @@ export function Settings({
                   foot: null,
                   body: (
                     <Updates
-                      snapshot={updateSnapshot}
+                      snapshot={updateReading.snapshot}
+                      savingTrack={updateReading.savingTrack}
                       updates={desktopUpdates}
-                      refused={refused}
-                      onChoice={onChoice}
+                      refused={updateReading.refused}
+                      onChoice={updateReading.chooseTrack}
                     />
                   ),
                 }

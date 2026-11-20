@@ -26,10 +26,17 @@ function render(
   state: DesktopUpdateState,
   extra: Partial<DesktopUpdateSnapshot> = {},
   refused: UpdateTrack | null = null,
+  savingTrack = false,
 ) {
   const s = { ...snapshot, ...extra, state };
   const html = renderToStaticMarkup(
-    createElement(Updates, { updates: noDesktopUpdates, snapshot: s, refused, onChoice: () => {} }),
+    createElement(Updates, {
+      savingTrack,
+      updates: noDesktopUpdates,
+      snapshot: s,
+      refused,
+      onChoice: () => {},
+    }),
   ).replaceAll("&#x27;", "'");
   return {
     html,
@@ -132,4 +139,18 @@ it("F-231 names the running and selected tracks and shows choices only with two 
   expect(startup.html).toContain("Update settings are unavailable.");
   expect(startup.html).not.toContain("save the track");
   expect(startup.footer).toBe(false);
+});
+
+it("F-231 announces download milestones while showing every reported byte count", () => {
+  const download = (received: number) =>
+    render({ kind: "downloading", version: "2.0.0", received, expected: 1000 }).html;
+  expect(download(110)).toContain('role="status">Downloading Clawtrate 2.0.0… 10%');
+  expect(download(119)).toContain('role="status">Downloading Clawtrate 2.0.0… 10%');
+  expect(download(119)).toContain("119 of 1,000 bytes");
+  expect(download(200)).toContain('role="status">Downloading Clawtrate 2.0.0… 20%');
+});
+
+it("F-231 waits for the host to finish changing tracks before enabling Check", () => {
+  const result = render({ kind: "not-checked" }, { selectedTrack: "nightly" }, null, true);
+  expect(result.html).toMatch(/<button[^>]+disabled=""/);
 });

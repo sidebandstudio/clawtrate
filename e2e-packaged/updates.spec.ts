@@ -102,7 +102,9 @@ test("F-231 checks only the chosen feed and downloads matching bytes on request"
       "Clawtrate 1.1.0 is downloaded, and its size and checksum match the update source. Installation isn't available from this screen.",
     );
     await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
-    await page.getByRole("radio", { name: "Nightly" }).check();
+    const nightly = page.getByRole("radio", { name: "Nightly" });
+    await nightly.click();
+    await expect(nightly).toBeChecked();
     await expect(line).toHaveText("Not checked yet.");
     expect(server.requests).toEqual(["/stable", filePath]);
     await page.getByRole("button", { name: "Check for Updates" }).click();
@@ -115,7 +117,9 @@ test("F-231 checks only the chosen feed and downloads matching bytes on request"
     const damaged = Buffer.from(body);
     damaged[0] = damaged[0]! ^ 1;
     server.route(filePath, (_req, res) => res.end(damaged));
-    await page.getByRole("radio", { name: "Stable" }).check();
+    const stable = page.getByRole("radio", { name: "Stable" });
+    await stable.click();
+    await expect(stable).toBeChecked();
     await page.getByRole("button", { name: "Check for Updates" }).click();
     await page.getByRole("button", { name: "Download", exact: true }).click();
     await expect(line).toHaveText("Couldn't download the update. Try again.");

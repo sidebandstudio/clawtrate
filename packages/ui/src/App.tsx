@@ -113,10 +113,8 @@ export function App({
           info={info}
           accounts={state.accounts}
           bots={state.bots}
-          updateSnapshot={updated.snapshot}
+          updateReading={updated}
           initialUpdates={openUpdates}
-          refused={updated.refused}
-          onChoice={updated.chooseTrack}
           onClose={closeSettings}
         />
       )}

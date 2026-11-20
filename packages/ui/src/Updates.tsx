@@ -7,6 +7,7 @@ const names = { stable: "Stable", nightly: "Nightly" };
 export function useDesktopUpdateSnapshot(updates: DesktopUpdates) {
   const [snapshot, setSnapshot] = useState<DesktopUpdateSnapshot | null>(null);
   const choosing = useRef<UpdateTrack | null>(null);
+  const [savingTrack, setSavingTrack] = useState(false);
   const [refused, setRefused] = useState<UpdateTrack | null>(null);
   const [checkPreferenceFailure, setCheckPreferenceFailure] = useState(false);
   useEffect(() => {
@@ -38,13 +39,15 @@ export function useDesktopUpdateSnapshot(updates: DesktopUpdates) {
   async function chooseTrack(track: UpdateTrack) {
     if (choosing.current) return;
     choosing.current = track;
+    setSavingTrack(true);
     try {
       await updates.chooseTrack(track);
     } finally {
       choosing.current = null;
+      setSavingTrack(false);
     }
   }
-  return { snapshot, chooseTrack, refused, checkPreferenceFailure };
+  return { snapshot, chooseTrack, refused, checkPreferenceFailure, savingTrack };
 }
 
 function sourceFor(s: DesktopUpdateSnapshot) {
@@ -139,11 +142,13 @@ function updateRow(
 export function Updates({
   snapshot: s,
   updates,
+  savingTrack,
   refused,
   onChoice,
 }: {
   snapshot: DesktopUpdateSnapshot | null;
   updates: DesktopUpdates;
+  savingTrack: boolean;
   refused: UpdateTrack | null;
   onChoice: (track: UpdateTrack) => void;
 }) {
@@ -191,6 +196,7 @@ export function Updates({
               <input
                 type="radio"
                 name="update-track"
+                aria-disabled={savingTrack || undefined}
                 checked={track === s.selectedTrack}
                 onChange={() => onChoice(track)}
               />
@@ -206,6 +212,7 @@ export function Updates({
         <>
           <button
             className="button"
+            disabled={savingTrack}
             type="button"
             onClick={() => {
               void (state.kind === "offered" ? updates.download(state.offerId) : updates.check());
