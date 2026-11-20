@@ -323,39 +323,45 @@ The call's Settings open a `menu`-surface panel (`.call-settings`) under the ban
 
 ### Hang up
 
-| Step                                     | The band                                                                                                                                                                | Rests on    |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| Hang up                                  | The microphone is released and the reply audio stops at once; "Ending…"                                                                                                 | This device |
-| The gateway answers `talk.session.close` | The band goes; the line is left (section 10); "Voice chat ended"                                                                                                        | research §2 |
-| The close fails or isn't answered        | The band goes; the line is left, with under it: "Ended on this device. Home gateway didn't confirm; it ends the call when this connection closes, or after 30 minutes." | research §5 |
+Hang up (and "End and Chat", section 9) stops capture and playback at once and drops any start still pending. Then the band waits for the gateway:
+
+| Step | The band | Rests on |
+|---|---|---|
+| Hang up | The microphone is released and the reply audio stops; "Ending…" | This device |
+| The gateway answers `talk.session.close`, or sends that relay's own terminal `close` event | The band goes; the line is left (section 10); "Voice chat ended" | research §2 |
+| The close fails, or no answer comes | The band goes; the line is left with "Ended on this device. Home gateway did not confirm the call ended.", announced in the same words. The next start waits (below) | research §5 |
+
+A relay whose end wasn't confirmed may still be open. Until the gateway confirms it (its `close` event, matched by id), or until its scheduled end (`expiresAt` from its create) has passed, the voice chat button is disabled, described "The previous voice session may still be open on Home gateway. A new voice chat can start after 6:06 PM, when that session is scheduled to end." While a close is still waiting for its answer: "Ending the previous voice session…". Starts, handovers and ends are serialized by the host, across its windows and tabs, by connection, task and attempt.
 
 ### When the connection drops (F-463)
 
-The app reconnects to the gateway by itself (the status strip, as always). The gateway closed the call's session with the connection (research §5), and resuming a session by `voiceSessionId` exists only for client-owned calls, which Clawtrate does not create (section 2). So the client resumes the call itself, with a new relayed session:
+The app reconnects to the gateway by itself (the status strip, as always). The call does not. The gateway starts closing a connection's sessions when it sees the socket close, without waiting for that to finish; a new connection can neither use the old session ("Talk session is not owned by this connection" while the gateway still holds it, "Unknown Talk session" once it has forgotten it) nor learn when its cleanup ended (research §5). So:
 
-| Step                                                              | The band                                                                                                                                                                                                            | What happens                                                                                                                                                                        |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The connection drops                                              | "Voice chat with Otto · Reconnecting…", the time still counting, "Microphone off", and "The connection to Home gateway dropped. Nothing is being sent. The call starts again here when it reconnects." with Hang up | The microphone is released; reply audio stops; the region says "Reconnecting the voice chat"                                                                                        |
-| The app is connected again within 30 seconds (Clawtrate's choice) | Back to "Listening", with the note "Reconnected. Home gateway closed the call's session when the connection dropped, so the call goes on in a new one. Nothing said while it was down was heard."                   | `talk.session.create` with the same `sessionKey`, voice and language; the microphone opens again only if the call was not muted; the region says "Voice chat with Otto reconnected" |
-| Not connected within 30 seconds, or the new session is refused    | "Voice chat failed", below                                                                                                                                                                                          | Nothing more is tried                                                                                                                                                               |
-| Hang up while reconnecting                                        | The band goes; the line is left                                                                                                                                                                                     | Nothing is sent to the gateway                                                                                                                                                      |
+| Step | The band |
+|---|---|
+| The connection drops | "Voice chat failed", "Connection lost", "Microphone off. Reconnecting to Home gateway…"; capture and playback stop at once; the line is left with the time this device counted; the region says "Voice chat failed: Connection lost" |
+| The app is connected again (hello) | "Reconnected to Home gateway. The voice session could not be resumed. This device stopped sending audio when it detected the drop.", then "The previous voice session may still be open on Home gateway. A new voice chat can start after 6:06 PM, when that session is scheduled to end." A hello starts no media and announces no reconnected call. |
+| The old session's scheduled end has passed | "Start a new voice chat", which goes through the whole gate (section 5) and keeps the bot's voice and language choices, under their usual checks; the new call has its own time |
 
-The microphone is opened again by itself only for a call the person started and did not end, and never after 30 seconds. At most one call is active throughout: the old session is gone before the new one is created. The time and the line count it as one call (section 10).
+Nothing starts a call by itself. Captions already saved stay in the task, and the measured time of the call that dropped stays on its line. The 30 minutes are the gateway's schedule for a relay, not evidence of when its cleanup ended; Clawtrate uses the scheduled end only because nothing earlier establishes that the old session is gone.
 
 ### A call that fails (F-411)
 
-The band turns `--danger-soft`, says "Voice chat failed" and one reason, with "Dismiss". When the connection is back, the voice chat button offers "Start voice chat", which starts a new call.
+The band turns `--danger-soft`, says "Voice chat failed" and one reason, with "Dismiss". When nothing may still be open and the connection is there, the voice chat button offers "Start voice chat", which starts a new call.
 
-| Reason                        | Second line                                                                                                           | When                                                                                                       |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| "Connection lost"             | "The connection to Home gateway dropped and didn't come back within 30 seconds. What was said is saved in this task." | The connection stays down past 30 seconds during a call, or drops while connecting                         |
-| "No connection"               | "This device isn't connected to Home gateway. Start again when it reconnects."                                        | Pressed while not connected                                                                                |
-| "The call ended unexpectedly" | "Home gateway ended the call: <its reason, as text>."                                                                 | An `error` or `close` frame with reason `error` (research §2), or a refusal at the start or at a reconnect |
+| Reason | Second line | When |
+|---|---|---|
+| "Connection lost" | As above | The connection drops during a call, or while one was starting |
+| "No connection" | "This device isn't connected to Home gateway. Start again when it reconnects." | Pressed while not connected |
+| "The call ended unexpectedly" | "Home gateway ended the call: <its reason, as text>." | An `error` frame, or a `close` frame with reason `error`, for a relay that was ready (research §2) |
+
+A refusal at the start is not a failed call: it is "Couldn't start voice chat" (section 5).
 
 ## 9. One call at a time
 
-- **This device holds at most one call** (F-412), across all its windows and tabs, since they share one connection (research §5). The gateway itself allows two sessions per connection, and Clawtrate uses the second only for a moment, while a change of voice or language hands the call over to a new session (section 7); another device can hold its own call with the same bot at the same time.
-- Pressing "Start voice chat" in another task while a call is on asks, in a small dialog: title "End the current voice chat?", body "You're in a voice chat with Otto. Ending it starts one with Juniper.", buttons "End and Chat" (default) and "Cancel". "End and Chat" hangs up (section 8) and, once the band has gone, starts the new call from step 1 or 2. "Cancel" leaves the call as it was and returns focus. Escape is Cancel.
+- **This device holds at most one call** (F-412), across all its windows and tabs, since they share one connection (research §5). The gateway itself allows two relay sessions per connection, and another device can hold its own call with the same bot at the same time.
+- Pressing "Start voice chat" in another task while a call is on asks, in a small dialog: title "End the current voice chat?", body "You're in a voice chat with Otto. Ending it starts one with Juniper.", buttons "End and Chat" (default) and "Cancel". "End and Chat" hangs up (section 8): the next call starts only after the gateway confirms the old relay ended, and then goes through the whole gate (section 5). If the end isn't confirmed, nothing starts, and the line and the button say why. "Cancel" leaves the call as it was and returns focus. Escape is Cancel.
+- The call is shown wherever its bot and task are listed, on every width, the phone's list included: the rail's preview and the task row say "In a voice chat · Microphone on" (or off). In another task the conversation shows "In a voice chat with Otto · Microphone on" with "Show", which opens the call's task and moves focus to the band; it never captures audio by itself.
 - Another device sees nothing of this call while it runs: the gateway sends its frames only to the connection that holds it (research §2). It sees the saved turns arrive in the task.
 
 ## 10. After a call: the "Voice chat" line
@@ -470,6 +476,8 @@ Rows left as they are, for a decision. This design meets each target as it stand
 - **Packaging, for the packaging owner** (not changed here): `NSMicrophoneUsageDescription` in `mac.extendInfo`; an entitlements file with `com.apple.security.device.audio-input` for the hardened runtime; for the on-device dictation route, `NSSpeechRecognitionUsageDescription` and the native recognizer (a helper or a native module); `media-src` already allows `data:` for a memo's bytes. Nothing on Windows.
 - **Audio.** The renderer captures and plays; the host sends and receives. Captured audio crosses the bridge to the host, which calls `appendAudio` only for a relay that is ready, whose provider was checked against the accepted one; reply audio crosses back. The web host's bridge frame limit (`MAX_BRIDGE_FRAME_BYTES`) bounds a frame on the bridge and nothing else. No audio is written to disk, a log, the bridge's replay or a crash report, and in-memory audio is dropped when capture or playback stops. The on-device dictation route gives raw audio only to the recognizer with on-device recognition required; it never crosses the gateway bridge.
 - **Permission loss or a track that ends** stops capture and drops what wasn't sent (section 2); capture is opened again only by the person's choice.
+- **One call per host**, across windows and tabs. A start is refused by the host before it reaches the gateway while any relay of this device is being created, is open, is closing or may still be open; a cancelled start's late answer is closed at once.
+- **On a dropped connection**, the host stops capture and playback at once, marks every relay of that connection as possibly open until its scheduled end, and never starts a call by itself.
 
 ### What the engine supplies
 
