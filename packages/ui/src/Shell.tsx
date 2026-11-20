@@ -17,6 +17,7 @@ import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
+import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
 import { accountLines } from "./bots/lines.ts";
 import "./bots/bots.css";
@@ -44,6 +45,7 @@ export function Shell({
   bubbles,
   onBubbles,
   onUnreadCount,
+  updateEntry,
   onOpenSettings,
   inert = false,
   onCaughtUp,
@@ -55,7 +57,8 @@ export function Shell({
   bubbles: BubbleChoice;
   onBubbles: (choice: BubbleChoice) => void;
   onUnreadCount?: ((count: number) => void) | undefined;
-  onOpenSettings: () => void;
+  updateEntry: boolean;
+  onOpenSettings: (section?: "updates") => void;
   /** Set while Settings covers the shell. */
   inert?: boolean;
   /** Whether the open task has caught up since the latest connect: until then work is last seen. */
@@ -127,6 +130,15 @@ export function Shell({
     setWorkTabState(next);
     writePreference("workTab", next);
   }, []);
+  // "Raise budget" above the composer opens the bot's Usage page in the Settings tab.
+  useEffect(
+    () =>
+      setUsageOpener(() => {
+        setPanel(true);
+        setWorkTab("settings");
+      }),
+    [setPanel, setWorkTab],
+  );
   // "Open file" on a step, the file the reader shows, and the way back after "Show in chat".
   const [fileRequest, setFileRequest] = useState<FileRequest | null>(null);
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
@@ -442,6 +454,7 @@ export function Shell({
         onTheme={onTheme}
         bubbles={bubbles}
         onBubbles={onBubbles}
+        updateEntry={updateEntry}
         onOpenSettings={onOpenSettings}
         onNewBot={interactive ? openNewBot : null}
         inert={drawerOpen || inert}

@@ -14,8 +14,17 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
+import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { AccountsEngine, type CreateBotInput, type CreatedBot } from "./accounts-engine.ts";
+import {
+  MachinesEngine,
+  type ApprovalsFile,
+  type BotPlacement,
+  type ConfigSave,
+  type DefaultsChoice,
+  type MachinesView,
+} from "./machines.ts";
 import {
   admitApproval,
   applyApprovalRequested,
@@ -62,9 +71,13 @@ import {
   recipientRunIds,
   type LinkedRun,
 } from "./cards.ts";
-import { MAX_FILE_BYTES, MAX_IMAGE_BYTES, validateAttachmentMeta } from "./attachments.ts";
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_FILE_BYTES,
+  MAX_IMAGE_BYTES,
+  validateAttachmentMeta,
+} from "./attachments.ts";
 import { ChatTextBaselines } from "./chat-text.ts";
-import { utf8Length } from "./encoding.ts";
 import {
   FileTransfers,
   listTaskFiles,
@@ -112,11 +125,20 @@ import {
   questionMarkers,
   runsWithQuestionMarkers,
   bindRun,
+  markStoppedForTimeouts,
+  noteRunRequest,
+  timeoutsInARow,
+  TIMEOUTS_IN_A_ROW,
+  markStopAsked,
+  MAX_RAW_ENTRY_CHARS,
+  runErrorRawId,
+  markTurnLimit,
+  runningRunId,
+  noteStoppedWith,
   cancelQueuedRun,
   dropUnboundRun,
   dropUnboundRunUnlessStopping,
   emptyActivity,
-  failRun,
   failRunStart,
   findRun,
   finishRun,
@@ -156,6 +178,7 @@ import {
   type QuestionOption,
   type Run,
   type StepRaw,
+  type RunRawRead,
   type StepRead,
   type TaskActivity,
 } from "./runs.ts";
@@ -163,6 +186,7 @@ import {
   APPROVALS_SCOPE,
   ADMIN_SCOPE,
   ADMIN_SCOPES,
+  PAIRING_SCOPE,
   heldFromGrant,
   INTERACTIVE_SCOPES,
   normalizeHeldScopes,
@@ -186,6 +210,7 @@ import {
   MAX_MESSAGE_JSON_CHARS,
   MAX_OUTBOX,
   MAX_PENDING_APPROVAL_COUNT,
+  MAX_REACTIONS_PER_MESSAGE,
   MAX_RUN_TEXT_CHARS,
   MAX_TASK_LINE_CHARS,
   MAX_TRACKED_TASKS as TRACKED_TASKS,
@@ -207,6 +232,13 @@ import {
   type SidebarState,
 } from "./sidebar.ts";
 import {
+  UsageEngine,
+  type UsageBusy,
+  type UsageReport,
+  type UsageReportRequest,
+} from "./usage-engine.ts";
+import { initialUsage, type BudgetChange, type Routine } from "./usage.ts";
+import {
   archiveTask,
   deleteTask,
   listArchived,
@@ -222,6 +254,7 @@ import {
   type TaskActionContext,
 } from "./task-actions.ts";
 import { fromActivity, WaitingIndex } from "./waiting.ts";
+import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
 import {
   initialConnectionState,
   initialScopeUpgrade,
@@ -229,7 +262,9 @@ import {
   type ClawtrateState,
   type ConnectionState,
   type DiscoveryState,
+  type MessageReaction,
   type ScopeUpgradeState,
+  type SendLimits,
   type TaskCreation,
   type TranscriptItem,
   type Transcript,
@@ -269,6 +304,13 @@ export const SESSION_PAGE_SIZE = 200;
 export const MAX_SESSION_PAGES = 50;
 /** Clawtrate's turn limit (F-100): a run this client started fails after it. */
 export const DEFAULT_TURN_LIMIT_MS = 50 * 60_000;
+/** The "Turn time limit" a person may choose, in minutes (F-100). */
+export const MIN_TURN_LIMIT_MINUTES = 1;
+export const MAX_TURN_LIMIT_MINUTES = 24 * 60;
+/** Where the host keeps the chosen turn limit. */
+/** Reads of a task's reactions, the first and again each time a newer change overtook one. */
+const REACTION_LIST_ATTEMPTS = 3;
+const TURN_LIMIT_KEY = "turn-limit-minutes";
 /** Tasks the client follows at once: open in some viewer, kept for their unsent work, or being created. */
 export const MAX_TRACKED_TASKS = TRACKED_TASKS;
 /**
@@ -325,8 +367,6 @@ export const REQUEST_TIMEOUT_MS = 60_000;
 export const MAX_MESSAGE_CHARS = 32_000;
 /** The gateway's frame ceiling after `connect` when `hello-ok.policy.maxPayload` is absent (25 MiB). */
 export const DEFAULT_MAX_PAYLOAD_BYTES = 26_214_400;
-/** Room left in a frame for the request envelope around the params. */
-const FRAME_SLACK_BYTES = 1024;
 const SESSION_LIST_PARAMS = {
   limit: SESSION_PAGE_SIZE,
   includeDerivedTitles: true,
@@ -427,7 +467,12 @@ export type OutgoingAttachment = {
   content: string;
 };
 
-export type SendOptions = { mode?: SendMode; attachments?: OutgoingAttachment[] };
+export type SendOptions = {
+  mode?: SendMode;
+  attachments?: OutgoingAttachment[];
+  /** The gateway's id of the message this one replies to (F-067). */
+  replyToId?: string;
+};
 
 /**
  * A send that would break a gateway ceiling. Checked before anything reaches
@@ -447,10 +492,6 @@ function decodedBytes(base64: string): number {
   return Math.max(0, Math.floor((clean.length * 3) / 4) - padding);
 }
 
-function isImage(attachment: OutgoingAttachment): boolean {
-  return attachment.type === "image" || attachment.mimeType.toLowerCase().startsWith("image/");
-}
-
 type Plan = GatewayBrowserDeviceAuthPlan;
 
 /**
@@ -464,6 +505,8 @@ type StoredDeviceToken = {
   heldScopes: string[];
   /** This client asked for admin itself and the gateway granted it: connect asks for it again. */
   adminHeld?: boolean;
+  /** The same for device access (`operator.pairing`), asked for by name. */
+  pairingHeld?: boolean;
 };
 
 type Waiter = {
@@ -675,6 +718,14 @@ export class ClawtrateClient {
    * the hello does not carry one.
    */
   private gatewayBootId: string | null = null;
+  /** The turn limit in force (F-100): the host's option, else the person's choice, else 50 minutes. */
+  private turnLimitMs = DEFAULT_TURN_LIMIT_MS;
+  /**
+   * The person this connection acts for, as the gateway names them (`users.self` profile id):
+   * which reactions are this person's own. Read once per connection; null until then, or when
+   * the gateway names nobody.
+   */
+  private selfId: string | null = null;
   private rows = new Map<string, RawRecord>();
   /** Which tasks wait for the person, across every bot (`waiting.ts`), for the rail. */
   private readonly waiting = new WaitingIndex();
@@ -683,6 +734,9 @@ export class ClawtrateClient {
   /** Reads and writes of the rail's arrangement in the order they were asked, and the latest shown. */
   private sidebarIssued = 0;
   private sidebarShown = 0;
+  /** Reads of the bot list in the order they were asked, and the latest shown. */
+  private botsIssued = 0;
+  private botsShown = 0;
   /** Open transcripts, counted, so several viewers can share one. */
   private readonly openSessions = new Map<string, number>();
   /** The streaming reply text of each task's newest `MAX_STREAMS_PER_TASK` runs, only while they stream. */
@@ -728,14 +782,26 @@ export class ClawtrateClient {
   private quietReconnect = false;
   /** The user asked for write access and it is not settled yet. */
   private upgradeWanted = false;
-  /** What the request under way asks for: the interactive tier, or admin with it. */
-  private upgradeTier: "interactive" | "admin" = "interactive";
+  /**
+   * What the request under way asks for: the interactive tier, admin with it, or
+   * (`held`) the scopes the connection held when device access was asked for.
+   */
+  private upgradeTier: "interactive" | "admin" | "held" = "interactive";
+  /** The scopes a `held` request keeps, as the connection held them when it was made. */
+  private heldBase: readonly string[] = [];
+  /** The access request under way also asks for device access (`operator.pairing`). */
+  private pairingWanted = false;
   private scopeUpgrade: GatewayScopeUpgrade | null = null;
   private accessWaiters: Waiter[] = [];
-  /** The frame and image ceilings from `hello-ok.policy`; nothing else of it is kept. */
-  private payloadLimits: { maxPayload: number | null; maxImageBytes: number | null } = {
+  /** The frame, image and file ceilings from `hello-ok.policy`; nothing else of it is kept. */
+  private payloadLimits: {
+    maxPayload: number | null;
+    maxImageBytes: number | null;
+    maxFileBytes: number | null;
+  } = {
     maxPayload: null,
     maxImageBytes: null,
+    maxFileBytes: null,
   };
   /** Attachment content for outgoing messages, kept off the state snapshots, with its decoded size and the characters it holds. */
   private readonly attachmentContent = new Map<
@@ -817,6 +883,39 @@ export class ClawtrateClient {
     randomId: () => this.randomId(),
     log: (message) => this.log("warn", message),
   });
+  /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
+  private readonly usage = new UsageEngine({
+    request: (method, params) => this.request(method, params),
+    get: () => this.state.usage ?? initialUsage,
+    update: (change) =>
+      this.store.update((state) => ({ ...state, usage: change(state.usage ?? initialUsage) })),
+    connected: () => this.state.connection.status === "connected",
+    now: () => this.now(),
+    log: (message) => this.log("warn", message),
+  });
+  /**
+   * Where a bot runs and the gateway's machines (`machines.ts`): read when a page
+   * asks and answered, never kept; writes read back before they answer.
+   */
+  private readonly machines = new MachinesEngine({
+    request: (method, params) => this.request(method, params),
+    connected: () => this.state.connection.status === "connected",
+    admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
+    pairing: () => this.holds(PAIRING_SCOPE),
+    readOnly: () => this.options.readOnly === true,
+    bots: () => this.state.bots.map((bot) => ({ id: bot.id, name: bot.name })),
+    latestTask: (botId) => {
+      const tasks = this.state.tasksByBot[botId] ?? [];
+      let latest: { key: string; at: number } | null = null;
+      for (const task of tasks) {
+        const at = task.updatedAt ?? 0;
+        if (!latest || at > latest.at) latest = { key: task.key, at };
+      }
+      return latest?.key ?? null;
+    },
+    deviceId: () => this.state.connection.deviceId,
+    now: () => this.now(),
+  });
   /**
    * Task lists being read, each its rows so far, already bounded: at most two,
    * a hello's and one refresh (refreshes run one at a time; a changed
@@ -832,6 +931,7 @@ export class ClawtrateClient {
   constructor(host: ClawtrateHost, options: ClientOptions = {}) {
     this.host = host;
     this.options = options;
+    this.turnLimitMs = options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS;
     this.trackedLimit = hostLimit(options.limits?.trackedTasks, MAX_TRACKED_TASKS, "trackedTasks");
   }
 
@@ -854,6 +954,12 @@ export class ClawtrateClient {
   async start(): Promise<void> {
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
+    // A turn limit the person chose earlier, unless the host was given one.
+    if (this.options.turnLimitMs === undefined) {
+      const saved = Number(await this.host.storage.get(TURN_LIMIT_KEY).catch(() => null));
+      if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
+    }
+    this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
     this.settings = await this.savedSettings();
     if (this.settings?.suspended) {
       this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });
@@ -887,6 +993,7 @@ export class ClawtrateClient {
     await this.host.storage.delete(SETTINGS_KEY);
     this.store.set({
       ...initialState,
+      turnLimitMinutes: this.turnLimitMs / 60_000,
       connection: { ...initialConnectionState, deviceId: this.identity?.deviceId ?? null },
     });
   }
@@ -946,14 +1053,15 @@ export class ClawtrateClient {
     if (this.state.connection.status === "connected") void this.loadTranscript(key, !kept, null);
   }
 
-  /** Raw payloads of steps retention took out of view go too. */
-  private dropRawOfRemovedSteps(key: string, before: TaskActivity, after: TaskActivity): void {
-    if (before.runs === after.runs) return;
-    const kept = new Set(after.runs.flatMap((run) => run.steps.map((step) => step.id)));
-    const gone = before.runs.flatMap((run) =>
-      run.steps.filter((step) => !kept.has(step.id)).map((step) => step.id),
+  /** Keep only Raw entries that still belong to this task's retained state. */
+  private retainTaskRaw(key: string, after: TaskActivity): void {
+    this.raw.retainTask(
+      key,
+      after.runs.flatMap((run) => [
+        ...run.steps.map((step) => step.id),
+        ...(run.error?.raw ? [runErrorRawId(run.id)] : []),
+      ]),
     );
-    if (gone.length > 0) this.raw.dropSteps(key, gone);
   }
 
   /**
@@ -1058,28 +1166,52 @@ export class ClawtrateClient {
    * When it is approved the client stores the rotated device token and
    * reconnects asking for exactly what was granted of that set.
    */
-  async requestAccess(tier: "interactive" | "admin" = "interactive"): Promise<void> {
+  async requestAccess(tier: "interactive" | "admin" | "pairing" = "interactive"): Promise<void> {
     if (this.options.readOnly)
       throw new Error("This host only reads; it does not ask for more access.");
-    // A request for admin is never narrowed by a later one for less.
+    // A request for admin is never narrowed by a later one for less, and device access
+    // (`operator.pairing`) is asked for only by name, added to the scopes the connection
+    // holds and nothing else: from a read connection it asks for no power to send or answer.
+    const pairing = tier === "pairing" || (this.upgradeWanted && this.pairingWanted);
+    const waiting = this.upgradeWanted ? this.upgradeTier : null;
     const wanted =
-      tier === "admin" || (this.upgradeWanted && this.upgradeTier === "admin")
+      tier === "admin" || waiting === "admin"
         ? "admin"
-        : "interactive";
-    if (this.tierScopes(wanted).every((scope) => this.holds(scope))) return;
+        : tier === "interactive" || waiting === "interactive"
+          ? "interactive"
+          : "held";
+    if (wanted === "held" && waiting !== "held")
+      this.heldBase = ADMIN_SCOPES.filter((scope) => this.state.connection.scopes.includes(scope));
+    const target = [...this.tierScopes(wanted), ...(pairing ? [PAIRING_SCOPE] : [])];
+    if (target.every((scope) => this.holdsExactly(scope))) return;
     if (!this.settings) throw new Error("Connect to a gateway first.");
-    if (this.scopeUpgrade && wanted === "admin" && this.upgradeTier !== "admin") {
-      // An interactive request is waiting; ask again, for admin with it.
+    if (this.scopeUpgrade && (wanted !== this.upgradeTier || (pairing && !this.pairingWanted))) {
+      // A narrower request is waiting; ask again, for this with it.
       this.scopeUpgrade.cancelScopeUpgrade();
       this.scopeUpgrade = null;
     }
     this.upgradeTier = wanted;
+    this.pairingWanted = pairing;
     this.upgradeWanted = true;
     if (this.state.connection.status === "connected") this.startUpgrade();
   }
 
-  private tierScopes(tier: "interactive" | "admin"): readonly string[] {
-    return tier === "admin" ? ADMIN_SCOPES : INTERACTIVE_SCOPES;
+  private tierScopes(tier: "interactive" | "admin" | "held"): readonly string[] {
+    return tier === "admin" ? ADMIN_SCOPES : tier === "held" ? this.heldBase : INTERACTIVE_SCOPES;
+  }
+
+  /** What an access request asks for: its tier, device access when asked for or held. */
+  private upgradeTarget(): string[] {
+    const keepPairing = this.pairingWanted || this.state.connection.scopes.includes(PAIRING_SCOPE);
+    return [...this.tierScopes(this.upgradeTier), ...(keepPairing ? [PAIRING_SCOPE] : [])];
+  }
+
+  /** Device access counts only when granted by name: admin implies it, but was not asked for it. */
+  private holdsExactly(scope: string): boolean {
+    return scope === PAIRING_SCOPE
+      ? this.state.connection.status === "connected" &&
+          this.state.connection.scopes.includes(PAIRING_SCOPE)
+      : this.holds(scope);
   }
 
   private holds(scope: string): boolean {
@@ -1102,7 +1234,8 @@ export class ClawtrateClient {
     if (this.scopeUpgrade || !protocol || !identity || !url || !auth || auth.url !== url) return;
     const generation = this.generation;
     const tier = this.upgradeTier;
-    const target = [...this.tierScopes(tier)];
+    const target = this.upgradeTarget();
+    const askedPairing = target.includes(PAIRING_SCOPE);
     const upgrade = new GatewayScopeUpgrade({
       request: (method, params, options) => protocol.request(method, params, options),
       tokenStore: {
@@ -1111,15 +1244,25 @@ export class ClawtrateClient {
         // The rotated token carries the new grant; from now on connect asks for exactly what it covers.
         // It belongs to this gateway and this connection only.
         store: async ({ deviceId, role, token, scopes }) => {
-          if (generation !== this.generation || this.settings?.url !== url) {
+          if (
+            generation !== this.generation ||
+            this.settings?.url !== url ||
+            this.scopeUpgrade !== upgrade
+          ) {
             throw new Error("The gateway changed while access was being approved.");
           }
-          const admin = tier === "admin" && scopeSatisfied(scopes, ADMIN_SCOPE);
+          const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(scopes, ADMIN_SCOPE);
+          const pairing = askedPairing && scopes.includes(PAIRING_SCOPE);
           await this.writeToken(url, deviceId, role, {
             token,
             grantedScopes: scopes,
-            heldScopes: [...heldFromGrant(scopes), ...(admin ? [ADMIN_SCOPE] : [])],
+            heldScopes: [
+              ...heldFromGrant(scopes),
+              ...(admin ? [ADMIN_SCOPE] : []),
+              ...(pairing ? [PAIRING_SCOPE] : []),
+            ],
             ...(admin ? { adminHeld: true } : {}),
+            ...(pairing ? { pairingHeld: true } : {}),
           });
         },
       },
@@ -1154,9 +1297,14 @@ export class ClawtrateClient {
       })
       .then(
         (outcome) => {
-          if (this.scopeUpgrade === upgrade) this.scopeUpgrade = null;
+          if (this.scopeUpgrade !== upgrade) return;
+          this.scopeUpgrade = null;
           if (outcome.status === "approved") {
-            if (!scopeSatisfied(outcome.scopes, tier === "admin" ? ADMIN_SCOPE : WRITE_SCOPE)) {
+            if (
+              (tier !== "held" &&
+                !scopeSatisfied(outcome.scopes, tier === "admin" ? ADMIN_SCOPE : WRITE_SCOPE)) ||
+              (askedPairing && !outcome.scopes.includes(PAIRING_SCOPE))
+            ) {
               this.failAccess(
                 new AccessRequestError(
                   "error",
@@ -1167,13 +1315,15 @@ export class ClawtrateClient {
             }
             // Settled. The reconnect is under way; its hello settles the waiters.
             this.upgradeWanted = false;
+            this.pairingWanted = false;
             this.setUpgrade({ status: "approved", error: null });
             return;
           }
           this.failAccess(new AccessRequestError(outcome.status));
         },
         (error: unknown) => {
-          if (this.scopeUpgrade === upgrade) this.scopeUpgrade = null;
+          if (this.scopeUpgrade !== upgrade) return;
+          this.scopeUpgrade = null;
           if (!this.upgradeWanted) return;
           if (!(error instanceof GatewayProtocolRequestError) && !this.protocol?.connected) {
             // The connection dropped while waiting. Ask again after the next hello.
@@ -1186,6 +1336,7 @@ export class ClawtrateClient {
 
   private failAccess(error: AccessRequestError): void {
     this.upgradeWanted = false;
+    this.pairingWanted = false;
     this.setUpgrade({ status: error.status, error: error.message });
     const waiters = this.accessWaiters;
     this.accessWaiters = [];
@@ -1196,6 +1347,7 @@ export class ClawtrateClient {
     this.scopeUpgrade?.cancelScopeUpgrade();
     this.scopeUpgrade = null;
     this.upgradeWanted = false;
+    this.pairingWanted = false;
     const waiters = this.accessWaiters;
     this.accessWaiters = [];
     for (const waiter of waiters) waiter.reject(new Error(reason));
@@ -1347,7 +1499,14 @@ export class ClawtrateClient {
       if (typeof each.type !== "string" || each.type.length > 32)
         throw new Error("invalid file type");
     }
-    this.checkSize(this.sendParams(key, body, "x".repeat(36), "followup", attachments));
+    if (attachments.length > MAX_ATTACHMENTS_PER_MESSAGE)
+      throw new SendTooLargeError(
+        `${attachments.length} files; one message can carry at most ${MAX_ATTACHMENTS_PER_MESSAGE}.`,
+      );
+    // As it will be sent, its reply reference included; checked again at delivery.
+    this.checkSize(
+      this.sendParams(key, body, "x".repeat(36), "followup", attachments, options.replyToId),
+    );
     const bytes = attachments.reduce((sum, each) => sum + decodedBytes(each.content), 0);
     if (this.attachmentBytes + bytes > MAX_RETAINED_ATTACHMENT_BYTES) {
       throw new Error(
@@ -1362,8 +1521,13 @@ export class ClawtrateClient {
         : "steer";
     // A pending question holds every outgoing message in the task, however it
     // was sent; it is released when the last pending question settles.
-    const held =
-      active !== undefined && active.state !== "stopping" && questionPending(transcript, active);
+    const held = active?.state !== "stopping" && questionPending(transcript, active);
+    const replyToId = options.replyToId;
+    if (
+      replyToId !== undefined &&
+      (typeof replyToId !== "string" || !replyToId || replyToId.length > MAX_ID_CHARS)
+    )
+      throw new Error("That message can't be replied to.");
     const message: OutgoingMessage = {
       id: this.randomId(),
       text: body,
@@ -1379,6 +1543,7 @@ export class ClawtrateClient {
         mimeType: attachment.mimeType,
         sizeBytes: decodedBytes(attachment.content),
       })),
+      ...(replyToId ? { replyToId } : {}),
     };
     if (attachments.length > 0) {
       this.attachmentContent.set(message.id, { task: key, files: attachments, bytes });
@@ -1386,7 +1551,8 @@ export class ClawtrateClient {
     }
     this.updateActivity(key, (activity) => {
       const withMessage = { ...activity, outbox: [...activity.outbox, message] };
-      if (resolved === "new") return startLocalRun(withMessage, message, this.now());
+      // A held message starts nothing: once the question settles it is queued, as a turn of its own.
+      if (resolved === "new" && !held) return startLocalRun(withMessage, message, this.now());
       if (resolved === "queue" && !held) return queueLocalRun(withMessage, message, this.now());
       return withMessage;
     });
@@ -1428,39 +1594,56 @@ export class ClawtrateClient {
     idempotencyKey: string,
     queueMode: "steer" | "followup",
     attachments: OutgoingAttachment[],
+    replyToId?: string,
   ) {
+    return chatSendParams(
+      { sessionKey: key, text, idempotencyKey, queueMode, replyToId: replyToId ?? null },
+      attachments,
+    );
+  }
+
+  /** What one message may carry: the smaller of Clawtrate's own ceilings and the gateway's. */
+  private sendLimits(): SendLimits {
+    const { maxPayload, maxImageBytes, maxFileBytes } = this.payloadLimits;
     return {
-      sessionKey: key,
-      message: text,
-      idempotencyKey,
-      // Always the mode meant: with none the gateway steers.
-      queueMode,
-      ...(attachments.length > 0 ? { attachments } : {}),
+      imageBytes:
+        maxImageBytes !== null ? Math.min(maxImageBytes, MAX_IMAGE_BYTES) : MAX_IMAGE_BYTES,
+      fileBytes: maxFileBytes !== null ? Math.min(maxFileBytes, MAX_FILE_BYTES) : MAX_FILE_BYTES,
+      payloadBytes: maxPayload ?? DEFAULT_MAX_PAYLOAD_BYTES,
+      files: MAX_ATTACHMENTS_PER_MESSAGE,
     };
   }
 
-  /** Refuse a send that breaks the image, file or frame ceiling, before it reaches the socket. */
-  private checkSize(params: { attachments?: OutgoingAttachment[] }): void {
-    const imageLimit =
-      this.payloadLimits.maxImageBytes !== null
-        ? Math.min(this.payloadLimits.maxImageBytes, MAX_IMAGE_BYTES)
-        : MAX_IMAGE_BYTES;
-    for (const attachment of params.attachments ?? []) {
-      const size = decodedBytes(attachment.content);
-      const limit = isImage(attachment) ? imageLimit : MAX_FILE_BYTES;
-      if (size > limit) {
-        throw new SendTooLargeError(
-          `${attachment.fileName} is ${size} bytes; the gateway accepts ${isImage(attachment) ? "images" : "files"} up to ${limit} bytes.`,
-        );
-      }
-    }
-    const maxPayload = this.payloadLimits.maxPayload ?? DEFAULT_MAX_PAYLOAD_BYTES;
-    const frame = utf8Length(JSON.stringify(params)) + FRAME_SLACK_BYTES;
-    if (frame > maxPayload) {
-      throw new SendTooLargeError(
-        `The message and its files come to ${frame} bytes; one message can carry at most ${maxPayload}.`,
-      );
-    }
+  /**
+   * Refuse a send past the file count, an image or file ceiling or the frame ceiling, before it
+   * reaches the socket: `sendRefusal`, the function the composer checks a draft with, over the
+   * request as built and the gateway's current policy.
+   */
+  private checkSize(params: ReturnType<typeof chatSendParams<OutgoingAttachment>>): void {
+    const files = (params.attachments ?? []).map((each) => ({
+      fileName: each.fileName,
+      mimeType: each.mimeType,
+      bytes: decodedBytes(each.content),
+    }));
+    const refused = sendRefusal(
+      {
+        sessionKey: params.sessionKey,
+        text: params.message,
+        idempotencyKey: params.idempotencyKey,
+        queueMode: params.queueMode,
+        replyToId: params.replyToId ?? null,
+        files,
+      },
+      this.sendLimits(),
+    );
+    if (!refused) return;
+    throw new SendTooLargeError(
+      refused.kind === "count"
+        ? `${refused.count} files; one message can carry at most ${refused.limit}.`
+        : refused.kind === "frame"
+          ? `The message and its files come to ${refused.bytes} bytes; one message can carry at most ${refused.limit}.`
+          : `${files[refused.index]!.fileName} is ${refused.bytes} bytes; the gateway accepts ${refused.kind === "image" ? "images" : "files"} up to ${refused.limit} bytes.`,
+    );
   }
 
   /**
@@ -1483,7 +1666,9 @@ export class ClawtrateClient {
     // A message that came from the queue keeps that origin through every attempt, until
     // it starts or is removed: it starts now with no run active, and otherwise waits
     // behind the active run, so a refusal still reads "Couldn't start" on the shelf.
-    const fromQueue = message.mode === "queue";
+    // "Send" on one left Not sent after a Stop follows the normal send rules instead: it goes
+    // as a message sent at that moment would, a steer into a run the person has since started.
+    const fromQueue = message.mode === "queue" && message.status !== "not-sent";
     const mode = fromQueue
       ? "queue"
       : !active
@@ -1491,8 +1676,7 @@ export class ClawtrateClient {
         : active.state === "stopping"
           ? "queue"
           : "steer";
-    const held =
-      active !== undefined && active.state !== "stopping" && questionPending(transcript, active);
+    const held = active?.state !== "stopping" && questionPending(transcript, active);
     const status = held ? "held" : mode === "queue" && active ? "queued" : "sending";
     this.updateActivity(key, (activity) => {
       // A run the gateway refused never started; the retry is a new attempt.
@@ -1587,9 +1771,9 @@ export class ClawtrateClient {
 
   /**
    * "Try again" on a turn that failed: the same words and files, sent now as
-   * a new message with its own key. The files must still be held for the
-   * message (until history holds it); otherwise it is refused, never sent
-   * without them.
+   * a new message with its own key, a reply to the same message when it was
+   * one. The files must still be held for the message (until history holds
+   * it); otherwise it is refused, never sent without them.
    */
   sendAgain(key: string, messageId: string): string {
     const message = this.outgoing(key, messageId);
@@ -1597,14 +1781,20 @@ export class ClawtrateClient {
     const files = this.attachmentContent.get(messageId)?.files ?? [];
     if (message.attachments.length > 0 && files.length === 0)
       throw new Error("Its files are no longer held; attach them again.");
-    return this.sendMessage(key, message.text, { attachments: [...files] });
+    return this.sendMessage(key, message.text, {
+      attachments: [...files],
+      ...(message.replyToId ? { replyToId: message.replyToId } : {}),
+    });
   }
 
   /** "Send now" on a queued message's chip: a steer into the running or waiting run. */
   sendQueuedNow(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);
     if (!message || message.status !== "queued") return;
-    const active = activeRun(this.state.transcripts[key]!);
+    const transcript = this.state.transcripts[key]!;
+    const active = activeRun(transcript);
+    if (questionPending(transcript, active))
+      throw new Error("Send now is unavailable while a question is pending.");
     if (active?.state === "stopping")
       throw new Error("Send now is unavailable while the run stops.");
     this.updateActivity(key, (activity) => {
@@ -1984,6 +2174,19 @@ export class ClawtrateClient {
     let message = this.outgoing(key, messageId);
     if (!message || (message.status !== "sending" && message.status !== "awaiting-access")) return;
 
+    // A pending question holds every send, whatever run it was meant for and whether or not
+    // a run is still shown as active: the question's own state is the guard.
+    {
+      const current = this.state.transcripts[key];
+      const currentRun = current ? activeRun(current) : undefined;
+      if (current && questionPending(current, currentRun)) {
+        this.updateActivity(key, (activity) =>
+          updateMessage(activity, messageId, { status: "held", runId: currentRun?.id ?? null }),
+        );
+        return;
+      }
+    }
+
     // The active run may have changed while access was pending.
     if (message.mode === "steer") {
       const active = activeRun(this.state.transcripts[key]!);
@@ -2010,12 +2213,6 @@ export class ClawtrateClient {
           );
         });
         return;
-      } else if (questionPending(this.state.transcripts[key]!, active)) {
-        // A plain message would answer the question and break the run; hold it.
-        this.updateActivity(key, (activity) =>
-          updateMessage(activity, messageId, { status: "held", runId: active.id }),
-        );
-        return;
       } else if (active.id !== message.runId) {
         this.updateActivity(key, (activity) =>
           updateMessage(activity, messageId, { runId: active.id }),
@@ -2035,9 +2232,18 @@ export class ClawtrateClient {
         message.id,
         message.mode === "steer" ? "steer" : "followup",
         this.attachmentContent.get(messageId)?.files ?? [],
+        message.replyToId,
       );
       this.checkSize(params);
-      const sent = this.request("chat.send", params);
+      // A send that starts its own run names that run's request: what a failed turn's
+      // "Copy request ID" gives (F-301). A steer joins a run another frame started.
+      const starts = message.mode !== "steer";
+      const sent = this.request("chat.send", params, {
+        onSent: (requestId) => {
+          if (!starts) return;
+          this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
+        },
+      });
       // The frame has left: from here a Stop no longer parks it.
       this.updateActivity(key, (activity) =>
         updateMessage(activity, messageId, { leftAt: this.now() }),
@@ -2080,14 +2286,23 @@ export class ClawtrateClient {
     const command = runId === null && typeof result?.aborted === "boolean";
     this.updateActivity(key, (activity, ctx) => {
       if (command) {
-        return dropUnboundRun(
-          updateMessage(activity, messageId, {
-            status: "handled",
-            messageSeq: null,
-            runId: null,
-            error: null,
-          }),
-          messageId,
+        // A stop command of this task's stopped the runs its answer names: as this client's Stop.
+        const stopped =
+          result?.aborted === true && Array.isArray(result.runIds)
+            ? result.runIds.filter((id): id is string => typeof id === "string")
+            : [];
+        return markStopAsked(
+          dropUnboundRun(
+            updateMessage(activity, messageId, {
+              status: "handled",
+              messageSeq: null,
+              runId: null,
+              error: null,
+            }),
+            messageId,
+          ),
+          stopped,
+          this.now(),
         );
       }
       if (runId === null && message.mode !== "steer") {
@@ -2155,8 +2370,23 @@ export class ClawtrateClient {
    * until the gateway reports how it ended: `stopped` when the abort took,
    * `completed` with `finishedBeforeStop` when the run finished first.
    */
-  async stopRun(key: string, runId: string, options: { owner?: object } = {}): Promise<void> {
-    const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
+  async stopRun(
+    key: string,
+    asked: string,
+    options: { owner?: object; everyRun?: boolean } = {},
+  ): Promise<void> {
+    const transcript = this.state.transcripts[key];
+    const runId = transcript
+      ? (runningRunId(transcript, asked) ??
+        // Archive and delete stop every active run of the task, so each is aborted by its own
+        // id even when none of them is established as the current one.
+        (options.everyRun
+          ? (transcript.steerAliases[asked] ?? transcript.queueAliases[asked] ?? asked)
+          : null))
+      : asked;
+    // No one current run is established: Stop is withheld until the gateway identifies it.
+    if (runId === null) return;
+    const run = transcript && findRun(transcript, runId);
     if (!run || (run.state !== "running" && run.state !== "waiting")) return;
     this.updateActivity(key, (activity) => requestStop(activity, runId, this.now()));
     try {
@@ -2187,6 +2417,7 @@ export class ClawtrateClient {
       const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
       // Nothing was aborted: the run ended already. Its terminal event or history settles it.
       if (result?.aborted === false) this.scheduleHistory(key);
+      else if (result?.aborted === true) this.noteHelpers(key, runId, result);
     } catch (error) {
       this.noteMissingScope(error);
       if (error instanceof GatewayProtocolRequestError) {
@@ -2206,6 +2437,68 @@ export class ClawtrateClient {
       const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
       if (run?.state === "stopping" && run.bound) await this.abortRun(key, runId);
     }
+  }
+
+  /** The helper runs the gateway's confirmation of a Stop names besides the run (F-098). */
+  private noteHelpers(key: string, runId: string, answer: RawRecord): void {
+    const helpers = (Array.isArray(answer.runIds) ? answer.runIds : []).filter(
+      (id) => typeof id === "string" && id !== runId,
+    ).length;
+    if (helpers > 0)
+      this.updateActivity(key, (activity) =>
+        noteStoppedWith(activity, runId, (now) => ({ ...now, helpers: now.helpers + helpers })),
+      );
+  }
+
+  /**
+   * A run this client stopped (Stop, a typed `/stop`, the timeouts' own stop) has ended as
+   * stopped, however that reached it: the abort's answer, the run's end event after a lost
+   * answer, or history after a reconnect. The runs of other bots its messages started are then
+   * stopped too (F-296), each recipient taken from the run's own record (its `sessions_send`
+   * results), every one of them asked, not only the first `MAX_STOPPED_NAMED`. Each is recorded
+   * as the gateway answered: stopped, refused, unanswered, or, with no run named, uncertain. A
+   * recipient whose run had ended already is not named.
+   */
+  private async stopRecipients(key: string, runId: string): Promise<void> {
+    const transcript = this.state.transcripts[key];
+    const run = transcript && findRun(transcript, runId);
+    if (!transcript || !run) return;
+    this.updateActivity(key, (activity) =>
+      noteStoppedWith(activity, runId, (now) => ({ ...now, recipientsAsked: true })),
+    );
+    const note = (kind: "bots" | "uncertain" | "refused" | "unanswered", sessionKey: string) =>
+      this.updateActivity(key, (activity) =>
+        noteStoppedWith(activity, runId, (now) => ({ ...now, [kind]: [...now[kind], sessionKey] })),
+      );
+    const rawOf = (step: Run["steps"][number]) => step.raw ?? this.raw.get(key, step.id);
+    const recipients = recipientLinks([run], rawOf).map(async (link) => {
+      if (!link.sessionKey) return;
+      const known = link.runId ? transcript.linkedRuns[link.runId] : undefined;
+      if (known && isTerminal(known.state)) return;
+      if (!link.runId) return note("uncertain", link.sessionKey);
+      const params = { sessionKey: link.sessionKey, runId: link.runId };
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          const stopped = asRecord(await this.request("chat.abort", params));
+          // `aborted: false`: nothing of it was running any more.
+          if (stopped?.aborted === true) note("bots", link.sessionKey);
+          return;
+        } catch (error) {
+          this.log("warn", `chat.abort of a recipient failed: ${errorMessage(error)}`);
+          if (error instanceof GatewayProtocolRequestError) return note("refused", link.sessionKey);
+          // No answer: once the connection is back, asked once more.
+          if (attempt > 0) return note("unanswered", link.sessionKey);
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          if (!this.protocol) return note("unanswered", link.sessionKey);
+          try {
+            await this.ensureScope(WRITE_SCOPE);
+          } catch {
+            return note("unanswered", link.sessionKey);
+          }
+        }
+      }
+    });
+    await Promise.all(recipients);
   }
 
   // Approvals -------------------------------------------------------------------
@@ -3012,6 +3305,167 @@ export class ClawtrateClient {
   }
 
   /**
+   * Read the reactions on a task's messages (`session.reactions.list`, `operator.read`) once its
+   * history loads, keeping those of the messages it shows. Later changes come as
+   * `session.reaction` events. A failed read leaves what was shown before (F-283).
+   */
+  private async readReactions(key: string, generation: number, attempt = 0): Promise<void> {
+    const incarnation = this.incarnations.get(key);
+    let answer: unknown;
+    let before: Transcript["reactions"];
+    try {
+      if (this.selfId === null) await this.readSelf(generation);
+      // What the list will replace: an event, a change of this person's or a new history page
+      // after it was asked for is newer than the list, and the list then gives way to it.
+      before = this.state.transcripts[key]?.reactions;
+      answer = await this.request("session.reactions.list", { sessionKey: key });
+    } catch (error) {
+      if (generation === this.generation)
+        this.log("warn", `session.reactions.list failed: ${errorMessage(error)}`);
+      return;
+    }
+    if (
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation
+    )
+      return;
+    if (this.state.transcripts[key]!.reactions !== before) {
+      // Changed while the list was on its way: ask again, a few times, rather than go back.
+      if (attempt < REACTION_LIST_ATTEMPTS - 1)
+        void this.readReactions(key, generation, attempt + 1);
+      return;
+    }
+    const listed = asRecord(asRecord(answer)?.reactions) ?? {};
+    this.setTranscript(key, () => {
+      const current = this.state.transcripts[key]!;
+      const shown = shownMessageIds(current);
+      const reactions: Record<string, MessageReaction[]> = {};
+      for (const [messageId, summary] of Object.entries(listed)) {
+        if (!shown.has(messageId)) continue;
+        const kept = reactionsOf(summary, this.selfId);
+        if (kept.length > 0) reactions[messageId] = kept;
+      }
+      return { ...current, reactions };
+    });
+  }
+
+  /**
+   * What the composer's "/" or "@" menu lists for a task (`composer-menus.ts`), read now and
+   * kept nowhere (F-071, F-070). Each read is `operator.read`.
+   */
+  async readComposerMenu(key: string, trigger: "/" | "@"): Promise<MenuRow[]> {
+    if (this.state.connection.status !== "connected")
+      throw new Error("Not connected to the gateway.");
+    if (trigger === "@") {
+      const generation = this.generation;
+      const routines = await this.request("cron.list", {}).catch(() => null);
+      // The bots are read now: from the gateway the routines came from, or not at all.
+      if (generation !== this.generation)
+        throw new Error("The gateway changed while the list was read.");
+      return mentionRows(this.state.bots, routines);
+    }
+    const agentId = botIdFromSessionKey(key);
+    const [skills, metadata] = await Promise.all([
+      agentId ? this.request("skills.status", { agentId }).catch(() => null) : null,
+      this.request("chat.metadata", { sessionKey: key }).catch(() => null),
+    ]);
+    if (skills === null && metadata === null) throw new Error("The gateway did not list them.");
+    return slashRows(skills, metadata);
+  }
+
+  /** Who this connection acts for (`users.self`), for which reactions are the person's own. */
+  private async readSelf(generation: number): Promise<void> {
+    try {
+      const answer = asRecord(await this.request("users.self", {}));
+      if (generation !== this.generation) return;
+      const id = asRecord(answer?.profile)?.id;
+      this.selfId = typeof id === "string" && id.length <= MAX_ID_CHARS ? id : null;
+    } catch {
+      // A refusal on an earlier connection says nothing of a later one's identity.
+      if (generation === this.generation) this.selfId = null;
+    }
+  }
+
+  /**
+   * Add or remove this person's reaction on a message (`session.reactions.set`,
+   * `operator.write`). The gateway's answer is the message's reactions now (F-283).
+   */
+  async setReaction(
+    key: string,
+    messageId: string,
+    emoji: string,
+    remove: boolean,
+    options: { owner?: object } = {},
+  ): Promise<void> {
+    const transcript = this.state.transcripts[key];
+    if (!transcript) throw new Error("Open the task before reacting in it.");
+    if (!shownMessageIds(transcript).has(messageId))
+      throw new Error("That message is no longer shown here.");
+    if (typeof emoji !== "string" || !emoji || emoji.length > 64)
+      throw new Error("Choose one emoji.");
+    if (this.options.readOnly) throw new Error("This host only reads; it does not react.");
+    const generation = this.generation;
+    // The opening of the task the message was chosen in; a scope upgrade keeps it.
+    const incarnation = this.incarnations.get(key);
+    await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
+    if (this.selfId === null) await this.readSelf(generation);
+    // After every wait, immediately before the write: its viewer is still here, and the same
+    // opening of the task still shows the message.
+    this.checkNotWithdrawn(options.owner);
+    const now = this.state.transcripts[key];
+    if (
+      generation !== this.generation ||
+      this.incarnations.get(key) !== incarnation ||
+      !now ||
+      !shownMessageIds(now).has(messageId)
+    )
+      throw new Error("That message is no longer shown here.");
+    // Any change of the task's reactions after the request is newer than its answer.
+    const before = this.state.transcripts[key]?.reactions;
+    let answer: RawRecord | null;
+    try {
+      answer = asRecord(
+        await this.request("session.reactions.set", {
+          sessionKey: key,
+          messageId,
+          emoji,
+          ...(remove ? { remove: true } : {}),
+        }),
+      );
+    } catch (error) {
+      this.noteMissingScope(error);
+      throw error;
+    }
+    if (
+      generation !== this.generation ||
+      !this.tracked(key) ||
+      this.incarnations.get(key) !== incarnation
+    )
+      return;
+    if (this.state.transcripts[key]?.reactions !== before) {
+      // Something newer changed them: the gateway's list says what is true now.
+      void this.readReactions(key, generation);
+      return;
+    }
+    this.applyReactions(key, messageId, answer?.reactions);
+  }
+
+  /** A message's reactions as the gateway now counts them, kept if the task shows the message. */
+  private applyReactions(key: string, messageId: string, summary: unknown): void {
+    const current = this.state.transcripts[key];
+    if (!current || !shownMessageIds(current).has(messageId)) return;
+    const kept = reactionsOf(summary, this.selfId);
+    this.setTranscript(key, () => {
+      const latest = this.state.transcripts[key]!;
+      const reactions = { ...latest.reactions };
+      if (kept.length > 0) reactions[messageId] = kept;
+      else delete reactions[messageId];
+      return { ...latest, reactions };
+    });
+  }
+
+  /**
    * Read the bot's workspace root, as the gateway names it
    * (`agents.files.list`, `operator.read`, its `workspace`), once a task's
    * history loads. A failed read leaves it unknown: an absolute path is then
@@ -3510,12 +3964,80 @@ export class ClawtrateClient {
     return this.accounts.removeFallbacks(botId);
   }
 
+  // Where a bot runs and Machines (`machines.ts`; controls.md sections 14 and 15) ----------
+
+  /** A bot's command machine, workspace, browser and inventory, read now. */
+  readPlacement(botId: string): Promise<BotPlacement> {
+    return this.machines.readPlacement(botId);
+  }
+
+  /** The gateway's machines, their approvals files (admin) and paired devices (pairing), read now. */
+  readMachines(): Promise<MachinesView> {
+    return this.machines.readMachines();
+  }
+
+  setCommandMachine(
+    botId: string,
+    target: { host: "gateway" } | { host: "node"; nodeId: string },
+    baseHash: string | null,
+  ): Promise<ConfigSave> {
+    return this.machines.setCommandMachine(botId, target, baseHash);
+  }
+
+  async setBotWorkspace(
+    botId: string,
+    path: string,
+  ): Promise<{ workspace: string | null; asTyped: boolean }> {
+    // The bot list carries no workspace: nothing else is read, so no late list can replace a newer one.
+    return this.machines.setWorkspace(botId, path);
+  }
+
+  /** `owner` names the viewer that asked: once it is withdrawn, the write read first is not sent. */
+  setMachineDefaults(
+    machineId: string,
+    choice: DefaultsChoice,
+    expectedHash: string | null,
+    options: { owner?: object } = {},
+  ): Promise<ApprovalsFile> {
+    return this.machines.setMachineDefaults(machineId, choice, expectedHash, () =>
+      this.checkNotWithdrawn(options.owner),
+    );
+  }
+
+  renameMachine(nodeId: string, name: string): Promise<void> {
+    return this.machines.renameMachine(nodeId, name);
+  }
+
+  removeMachine(nodeId: string): Promise<void> {
+    return this.machines.removeMachine(nodeId);
+  }
+
+  renameDevice(deviceId: string, name: string, options: { owner?: object } = {}): Promise<void> {
+    return this.machines.renameDevice(deviceId, name, () => this.checkNotWithdrawn(options.owner));
+  }
+
+  removeDevice(deviceId: string): Promise<void> {
+    return this.machines.removeDevice(deviceId);
+  }
+
   /** Read the bot list again, after a bot was created. */
   private async refreshBots(): Promise<void> {
     const generation = this.generation;
+    const issued = ++this.botsIssued;
     const result = await this.request("agents.list", {});
-    if (generation !== this.generation) return;
+    if (generation !== this.generation || !this.newestBots(issued)) return;
     this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+  }
+
+  /**
+   * Whether a read of the bot list may be shown, marking it shown: answers are ordered by when
+   * they were asked, never by when they arrive, so a late answer never hides a bot a later read
+   * showed.
+   */
+  private newestBots(issued: number): boolean {
+    if (issued < this.botsShown) return false;
+    this.botsShown = issued;
+    return true;
   }
 
   // The Work pane's files (`files.ts`). All `operator.read`; nothing is kept in the state.
@@ -3599,6 +4121,28 @@ export class ClawtrateClient {
   stepRaw(key: string, stepId: string): StepRaw | null {
     if (!this.state.transcripts[key]) return null;
     return this.raw.get(key, stepId);
+  }
+
+  /**
+   * A failed run's Raw (F-301), read only when it is opened and returned without being kept in
+   * the state. Null when the task has no such run.
+   */
+  readRunRaw(key: string, runId: string): RunRawRead | null {
+    const transcript = this.state.transcripts[key];
+    const run = transcript && findRun(transcript, runId);
+    if (!run) return null;
+    const described = run.error?.raw;
+    if (!described) return { status: "not-kept", holds: null };
+    const kept = this.raw.get(key, runErrorRawId(run.id));
+    if (kept) return { status: "available", holds: described.holds, payload: kept.call };
+    if (described.chars > MAX_RAW_ENTRY_CHARS)
+      return {
+        status: "too-large",
+        holds: described.holds,
+        chars: described.chars,
+        limit: MAX_RAW_ENTRY_CHARS,
+      };
+    return { status: "not-kept", holds: described.holds };
   }
 
   /**
@@ -3704,7 +4248,8 @@ export class ClawtrateClient {
       ),
     );
     if (next === current) return;
-    this.dropRawOfRemovedSteps(key, current, next);
+    // Only a change of runs can take a payload out of what the task retains.
+    if (next.runs !== current.runs) this.retainTaskRaw(key, next);
     this.setTranscript(key, () => withLive({ ...current, ...next }));
     this.afterActivity(key);
     this.refreshLinkersOf(key, current.runs, next.runs);
@@ -3761,13 +4306,47 @@ export class ClawtrateClient {
     this.refreshLinkedRuns(key);
     this.scheduleApprovalExpiry(key);
     for (const run of transcript.runs) {
+      // A run this client stopped has ended as stopped: stop what its messages started (F-296).
+      if (
+        run.state === "stopped" &&
+        run.outcomeKnown &&
+        run.stopRequestedAt !== null &&
+        !run.stoppedWith?.recipientsAsked &&
+        this.state.connection.canWrite &&
+        !this.options.readOnly
+      )
+        void this.stopRecipients(key, run.id);
+      // Tool calls that keep timing out: the machine may not be responding. Stop the run (F-101).
+      if (
+        (run.state === "running" || run.state === "waiting") &&
+        run.stoppedForTimeouts === undefined &&
+        this.state.connection.canWrite &&
+        !this.options.readOnly
+      ) {
+        const count = timeoutsInARow(run);
+        if (count >= TIMEOUTS_IN_A_ROW && runningRunId(transcript, run.id) === run.id) {
+          this.updateActivity(key, (activity) => markStoppedForTimeouts(activity, run.id, count));
+          void this.stopRun(key, run.id).then(() => {
+            // The stop was refused or could not be asked: the run goes on, not as stopped for this.
+            const now = this.state.transcripts[key] && findRun(this.state.transcripts[key], run.id);
+            if (now && (now.state === "running" || now.state === "waiting"))
+              this.updateActivity(key, (activity) => markStoppedForTimeouts(activity, run.id, 0));
+          });
+        }
+      }
       const timerKey = `${key}\u0000${run.id}`;
       const timer = this.turnTimers.get(timerKey);
       if (isTerminal(run.state)) {
         if (timer) clearTimeout(timer);
         this.turnTimers.delete(timerKey);
-      } else if (!timer && run.origin === "local" && run.bound && isActive(run.state)) {
-        const limit = this.options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS;
+      } else if (
+        !timer &&
+        run.origin === "local" &&
+        run.bound &&
+        run.turnLimit === undefined &&
+        isActive(run.state)
+      ) {
+        const limit = this.turnLimitMs;
         const elapsed = this.now() - (run.startedAt ?? this.now());
         this.turnTimers.set(
           timerKey,
@@ -3782,7 +4361,7 @@ export class ClawtrateClient {
     const held = transcript.outbox
       .filter((message) => message.status === "held")
       .map((message) => message.id);
-    if (held.length > 0 && !(active && questionPending(transcript, active))) {
+    if (held.length > 0 && !questionPending(transcript, active)) {
       // The question is settled: release every held message at once, in the
       // order sent, each as a message sent now would go. Into a running run
       // as a steer, unless it was queued; queued while the run stops; and
@@ -3812,9 +4391,10 @@ export class ClawtrateClient {
     }
     const current = this.state.transcripts[key];
     if (!current) return;
-    const next = activeRun(current)
-      ? undefined
-      : current.runs.find((run) => run.state === "queued");
+    const next =
+      activeRun(current) || questionPending(current)
+        ? undefined
+        : current.runs.find((run) => run.state === "queued");
     if (next) {
       this.updateActivity(key, (activity) =>
         // It keeps `mode: "queue"`: if the gateway refuses to start it, the
@@ -3854,28 +4434,51 @@ export class ClawtrateClient {
     });
   }
 
+  /**
+   * Set the "Turn time limit" (F-100), in whole minutes, and keep it for the next start. Runs
+   * already going are timed against the new limit from when they started.
+   */
+  async setTurnLimit(minutes: number): Promise<void> {
+    if (!validTurnLimit(minutes))
+      throw new Error(
+        `A turn limit is a whole number of minutes from ${MIN_TURN_LIMIT_MINUTES} to ${MAX_TURN_LIMIT_MINUTES}.`,
+      );
+    // Kept first: a limit the host could not keep is not taken, and the old one and its timers stay.
+    await this.host.storage.set(TURN_LIMIT_KEY, String(minutes));
+    this.turnLimitMs = minutes * 60_000;
+    this.store.update((state) => ({ ...state, turnLimitMinutes: minutes }));
+    for (const [timerKey, timer] of this.turnTimers) {
+      clearTimeout(timer);
+      this.turnTimers.delete(timerKey);
+    }
+    for (const key of Object.keys(this.state.transcripts)) this.afterActivity(key);
+  }
+
   private turnLimitReached(key: string, runId: string): void {
     this.turnTimers.delete(`${key}\u0000${runId}`);
     const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
-    if (!run || !isActive(run.state)) return;
-    const limit = this.options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS;
+    if (!run || (run.state !== "running" && run.state !== "waiting")) return;
+    const limit = this.turnLimitMs;
     if (this.now() - (run.startedAt ?? this.now()) < limit) {
       // Woken early by the timer ceiling: arm again.
       this.afterActivity(key);
       return;
     }
-    const minutes = Math.round((this.options.turnLimitMs ?? DEFAULT_TURN_LIMIT_MS) / 60_000);
-    this.updateActivity(key, (activity, ctx) =>
-      failRun(
-        activity,
-        runId,
-        { message: `Stopped at the ${minutes}-minute turn limit.`, kind: "turn-limit" },
-        ctx,
-      ),
-    );
-    if (this.state.connection.canWrite) {
-      this.request("chat.abort", { sessionKey: key, runId }).catch(() => {});
+    // Stopped as any Stop is: "Stopping…" until the gateway confirms, put back if it refuses,
+    // and asked again after a reconnect if unanswered. Nothing fails and nothing queued is
+    // released on the limit alone; the limit is reached once per run.
+    const minutes = Math.round(this.turnLimitMs / 60_000);
+    if (
+      !this.state.connection.canWrite ||
+      this.options.readOnly ||
+      runningRunId(this.state.transcripts[key]!, runId) !== runId
+    ) {
+      // Not stopped by the limit: it is not asked again, and no later stop is put down to it.
+      this.updateActivity(key, (activity) => markTurnLimit(activity, runId, 0));
+      return;
     }
+    this.updateActivity(key, (activity) => markTurnLimit(activity, runId, minutes));
+    void this.stopRun(key, runId);
   }
 
   private clearTurnTimers(key: string): void {
@@ -3920,6 +4523,7 @@ export class ClawtrateClient {
       this.rows = new Map();
       this.store.set({
         ...initialState,
+        turnLimitMinutes: this.turnLimitMs / 60_000,
         connection: {
           ...initialConnectionState,
           status: "error",
@@ -3950,7 +4554,7 @@ export class ClawtrateClient {
     }
     this.everConnected = hasData;
     this.store.update((state) => ({
-      ...(sameGateway ? state : initialState),
+      ...(sameGateway ? state : { ...initialState, turnLimitMinutes: this.turnLimitMs / 60_000 }),
       connection: {
         ...initialConnectionState,
         status: hasData ? "reconnecting" : "connecting",
@@ -4103,6 +4707,7 @@ export class ClawtrateClient {
         if (generation !== this.generation) return;
         this.streams.clear();
         this.accounts.onClose();
+        this.usage.onClose();
         const status = this.state.connection.status;
         if (status !== "pairing" && status !== "error") {
           // Once this gateway has answered, every later drop is a reconnect, not a first connect.
@@ -4167,6 +4772,7 @@ export class ClawtrateClient {
   /** What one gateway reported that must never be read against another. */
   private forgetGatewayState(): void {
     this.accounts.reset();
+    this.store.update((state) => ({ ...state, usage: initialUsage }));
     // A creation belongs to the gateway it was asked of; it is never asked of another.
     for (const timer of this.creationTimers.values()) clearTimeout(timer);
     this.creationTimers.clear();
@@ -4193,6 +4799,7 @@ export class ClawtrateClient {
   private close(): void {
     this.generation += 1;
     this.accounts.onClose();
+    this.usage.onClose();
     this.protocol?.stop();
     this.protocol = null;
     this.streams.clear();
@@ -4307,6 +4914,8 @@ export class ClawtrateClient {
     const wasConnected = this.everConnected;
     this.everConnected = true;
     this.pairingSeen = null;
+    // Each connection may act for another person: read who again before marking reactions.
+    this.selfId = null;
     // The protocol gives a boot id at most 96 characters; anything else names no start.
     const bootId = asRecord(hello.server)?.bootId;
     this.gatewayBootId =
@@ -4319,6 +4928,7 @@ export class ClawtrateClient {
     this.payloadLimits = {
       maxPayload: number(policy?.maxPayload),
       maxImageBytes: number(asRecord(policy?.attachments)?.maxImageBytes),
+      maxFileBytes: number(asRecord(policy?.attachments)?.maxBytes),
     };
     this.setConnection({
       status: "connected",
@@ -4334,10 +4944,18 @@ export class ClawtrateClient {
       retryAt: null,
       connectedAt: this.now(),
       paired: true,
+      sendLimits: this.sendLimits(),
     });
-    if (this.tierScopes(this.upgradeTier).every((scope) => scopeSatisfied(scopes, scope))) {
+    // Device access asked for before this hello asks with what this connection holds, and no more.
+    if (this.upgradeWanted && this.upgradeTier === "held" && !this.scopeUpgrade)
+      this.heldBase = ADMIN_SCOPES.filter((scope) => scopes.includes(scope));
+    if (
+      this.tierScopes(this.upgradeTier).every((scope) => scopeSatisfied(scopes, scope)) &&
+      (!this.pairingWanted || scopes.includes(PAIRING_SCOPE))
+    ) {
       this.upgradeWanted = false;
       this.upgradeTier = "interactive";
+      this.pairingWanted = false;
     } else if (this.upgradeWanted) {
       this.startUpgrade();
     }
@@ -4349,7 +4967,10 @@ export class ClawtrateClient {
     this.pendingResync = null;
     this.quietReconnect = false;
     void this.bootstrap(generation, reason).then(() => {
-      if (generation === this.generation) this.accounts.onHello();
+      if (generation === this.generation) {
+        this.accounts.onHello();
+        this.usage.onHello();
+      }
     });
   }
 
@@ -4393,14 +5014,17 @@ export class ClawtrateClient {
     );
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
+    const botsIssued = ++this.botsIssued;
     const [agents, sessions] = await Promise.allSettled([
       this.request("agents.list", {}).then(async (result) => {
         const id = await gatewayId;
         if (generation === this.generation) {
+          // A read asked later, after a bot was created, may have answered first.
+          const newest = this.newestBots(botsIssued);
           this.store.update((state) => ({
             ...state,
             connection: { ...state.connection, gatewayId: id },
-            bots: mapAgents(result),
+            ...(newest ? { bots: mapAgents(result) } : {}),
           }));
         }
         return result;
@@ -4756,14 +5380,19 @@ export class ClawtrateClient {
       const ctx = this.context(key);
       // History is built aside; only the steps the merge takes from it bring their raw payloads.
       const scratch = new RawTable();
+      // The gateway has a turn of this task in flight or queued: a run history only infers to
+      // have ended is not ended by this read.
+      const pendingInputs = asRecord(history?.pendingInputs)?.items;
+      const busy =
+        inFlightId !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
       const fromHistory = runsFromHistory(
         messages,
         inFlight,
         { ...ctx, raw: scratch },
-        { windowCut: history?.hasMore === true },
+        { windowCut: history?.hasMore === true, busy },
       );
       const current = this.state.transcripts[key] ?? this.emptyTranscript(key);
-      const merge = mergeHistoryRuns(current.runs, fromHistory, ctx);
+      const merge = mergeHistoryRuns(current.runs, fromHistory, ctx, busy);
       for (const stepId of merge.fromHistory) {
         const payload = scratch.get(key, stepId);
         if (payload) this.raw.set(key, stepId, payload);
@@ -4775,7 +5404,7 @@ export class ClawtrateClient {
           .map((message) => message.id),
       );
       const runs = settleUnboundStops(
-        settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx),
+        settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx, busy),
         inFlightId,
         historyIds,
         awaitingAnswer,
@@ -4800,6 +5429,7 @@ export class ClawtrateClient {
           this.dropAttachments(message.id);
       }
       const activity = markUnconfirmed(reconciled);
+      const items = mapHistory(messages);
       const rebuilt: Transcript = {
         ...current,
         ...retainActivity(
@@ -4807,14 +5437,16 @@ export class ClawtrateClient {
         ),
         sessionKey: key,
         status: "ready",
-        items: mapHistory(messages),
+        items,
         interSession: interSessionMessages(messages),
+        // Reactions leave with the history they belonged to (F-283).
+        ...(current.reactions ? { reactions: reactionsShown(current.reactions, items) } : {}),
         error: null,
         hasMore: history?.hasMore === true,
         caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
         loadedAt: this.now(),
       };
-      this.dropRawOfRemovedSteps(key, current, rebuilt);
+      this.retainTaskRaw(key, rebuilt);
       this.setTranscript(key, () => withLive(rebuilt));
       this.afterActivity(key);
       // A run settled from history may be a recipient another open task's card follows.
@@ -4824,6 +5456,7 @@ export class ClawtrateClient {
       void this.backfillQuestions(key, generation);
       void this.backfillApprovals(key, generation);
       void this.readToolMap(key, generation);
+      void this.readReactions(key, generation);
       if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
     } catch (error) {
       if (stale()) return;
@@ -4855,6 +5488,10 @@ export class ClawtrateClient {
     const runId = typeof payload?.runId === "string" ? payload.runId : null;
     if (!payload || !key || !runId) return;
     this.noteSpawnedBy(payload);
+    if (payload.state === "final" || payload.state === "error" || payload.state === "aborted") {
+      const botId = botIdFromSessionKey(key);
+      if (botId) this.usage.onRunEnded(botId);
+    }
     if (!this.tracked(key)) {
       this.updateForeign(key, (activity, ctx) => applyChatEvent(activity, payload, null, ctx));
       return;
@@ -4931,10 +5568,20 @@ export class ClawtrateClient {
         this.handleAgent(event);
         return;
       }
+      case "session.reaction": {
+        // Someone, here or elsewhere, added or removed a reaction: the message's reactions now.
+        const payload = asRecord(event.payload);
+        const key = typeof payload?.sessionKey === "string" ? payload.sessionKey : null;
+        const messageId = typeof payload?.messageId === "string" ? payload.messageId : null;
+        if (key && messageId && this.tracked(key))
+          this.applyReactions(key, messageId, payload?.reactions);
+        return;
+      }
       case "users.prefs.changed": {
         const keys = asRecord(event.payload)?.keys;
         if (Array.isArray(keys) && keys.includes(SIDEBAR_PREF_KEY))
           void this.loadSidebar(this.generation);
+        this.usage.onPrefsChanged(keys);
         return;
       }
       case "question.requested": {
@@ -5050,7 +5697,9 @@ export class ClawtrateClient {
         await Promise.all(
           runs
             .filter((run) => run.state === "running" || run.state === "waiting")
-            .map((run) => this.stopRun(key, run.id, owner ? { owner } : {})),
+            .map((run) =>
+              this.stopRun(key, run.id, owner ? { owner, everyRun: true } : { everyRun: true }),
+            ),
         );
         return (this.state.transcripts[key]?.runs ?? []).filter((run) => isActive(run.state))
           .length;
@@ -5164,6 +5813,41 @@ export class ClawtrateClient {
     if (generation === this.generation) this.setSidebar(next, issued);
   }
 
+  // Usage and warning budgets (`usage.ts`, `usage-engine.ts`; controls.md sections 16, 17) ------
+
+  /** A page's usage figures, read now and not kept; `busy` while the host reads as many as it reads at once. */
+  readUsage(request: Omit<UsageReportRequest, "bots">): Promise<UsageReport | UsageBusy> {
+    if (this.state.connection.status !== "connected")
+      return Promise.reject(new Error("Not connected to the gateway."));
+    return this.usage.readReport({ ...request, bots: this.state.bots.map((bot) => bot.id) });
+  }
+
+  /** Set or remove a warning budget, kept with the gateway as this person's preference. */
+  async changeBudget(change: BudgetChange, options: { owner?: object } = {}): Promise<void> {
+    if (this.options.readOnly) throw new Error("This host only reads; it does not change budgets.");
+    const owner = options.owner ?? null;
+    const url = this.settings?.url;
+    await this.actionContext(owner).ensureWrite();
+    // A grant of write access reconnects to the same gateway, so the write is bound to the
+    // connection that holds it now. A switch to another gateway is never written to.
+    if (this.settings?.url !== url) throw new Error("Switched to another gateway.");
+    // Every request of the write is the viewer's: none is sent once that viewer has gone.
+    await this.usage.changeBudget(change, this.actionContext(owner).request);
+  }
+
+  /** The routines a budget can be set for, read now and not kept. */
+  listRoutines(): Promise<Routine[]> {
+    if (this.state.connection.status !== "connected")
+      return Promise.reject(new Error("Not connected to the gateway."));
+    return this.usage.listRoutines();
+  }
+
+  /** Count every budget, and read the providers' limits, again now. */
+  async refreshUsage(): Promise<void> {
+    if (this.state.connection.status !== "connected") return;
+    await Promise.all([this.usage.countBudgets(), this.usage.refreshLimits()]);
+  }
+
   /**
    * Show an arrangement unless a newer one is shown: answers are ordered by the revision the
    * gateway holds with the arrangement (`SidebarPrefs.rev`), never by when they arrive, so a
@@ -5241,9 +5925,13 @@ export class ClawtrateClient {
 
   // Helpers --------------------------------------------------------------------
 
-  private request(method: string, params: unknown): Promise<unknown> {
+  private request(
+    method: string,
+    params: unknown,
+    options?: { onSent?: (requestId: string) => void },
+  ): Promise<unknown> {
     if (!this.protocol) return Promise.reject(new NotSentError());
-    return this.protocol.request(method, params);
+    return this.protocol.request(method, params, options);
   }
 
   private setConnection(patch: Partial<ConnectionState>): void {
@@ -5273,8 +5961,10 @@ export class ClawtrateClient {
       heldScopes: [
         ...normalizeHeldScopes(parsed.heldScopes),
         ...(parsed.adminHeld === true ? [ADMIN_SCOPE] : []),
+        ...(parsed.pairingHeld === true ? [PAIRING_SCOPE] : []),
       ],
       ...(parsed.adminHeld === true ? { adminHeld: true } : {}),
+      ...(parsed.pairingHeld === true ? { pairingHeld: true } : {}),
     };
   }
 
@@ -5323,6 +6013,7 @@ export class ClawtrateClient {
           grantedScopes: scopes,
           heldScopes: existing?.heldScopes ?? [...READ_SCOPES],
           ...(existing?.adminHeld ? { adminHeld: true } : {}),
+          ...(existing?.pairingHeld ? { pairingHeld: true } : {}),
         });
       },
       clear: async ({ deviceId, role }) => {
@@ -5453,4 +6144,54 @@ export function hostLimit(value: number | undefined, max: number, name: string):
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The reactions kept for the messages these history items show, and no others (F-283). */
+function reactionsShown(
+  reactions: Record<string, MessageReaction[]>,
+  items: TranscriptItem[],
+): Record<string, MessageReaction[]> {
+  const shown = shownMessageIds({ items } as Transcript);
+  const kept = Object.fromEntries(Object.entries(reactions).filter(([id]) => shown.has(id)));
+  return Object.keys(kept).length === Object.keys(reactions).length ? reactions : kept;
+}
+
+/** The gateway's message ids a transcript shows: its history items' and their bubbles' (F-283). */
+function shownMessageIds(transcript: Transcript): Set<string> {
+  const ids = new Set<string>();
+  for (const item of transcript.items) {
+    if (item.messageId) ids.add(item.messageId);
+    for (const block of item.blocks)
+      if (block.kind === "text" && block.messageId) ids.add(block.messageId);
+  }
+  return ids;
+}
+
+/**
+ * A message's reactions as the gateway summarises them (`[{emoji, count, identities}]`), the
+ * most counted first, at most `MAX_REACTIONS_PER_MESSAGE`; `mine` when `selfId` reacted.
+ */
+function reactionsOf(summary: unknown, selfId: string | null): MessageReaction[] {
+  if (!Array.isArray(summary)) return [];
+  const out: MessageReaction[] = [];
+  for (const entry of summary) {
+    const row = asRecord(entry);
+    const emoji = row?.emoji;
+    const count = row?.count;
+    if (typeof emoji !== "string" || !emoji || emoji.length > 64) continue;
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 1) continue;
+    const identities = Array.isArray(row?.identities) ? row.identities : [];
+    const mine =
+      selfId !== null && identities.some((each: unknown) => asRecord(each)?.id === selfId);
+    out.push({ emoji, count, mine });
+  }
+  return out.sort((a, b) => b.count - a.count).slice(0, MAX_REACTIONS_PER_MESSAGE);
+}
+
+function validTurnLimit(minutes: number): boolean {
+  return (
+    Number.isInteger(minutes) &&
+    minutes >= MIN_TURN_LIMIT_MINUTES &&
+    minutes <= MAX_TURN_LIMIT_MINUTES
+  );
 }

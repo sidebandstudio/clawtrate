@@ -1,0 +1,387 @@
+// The release side of packaging, without any identity: which signing a build
+// does and the line it prints, the constants it writes for the update engine,
+// and the feed it writes for its artifacts. Every value here is made up.
+
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { artifactName, makeFeed } from "../packaging/feed.ts";
+import {
+  checkMacSignature,
+  macSignatureKind,
+  signingPlan,
+  signingProblems,
+  signingSummary,
+} from "../packaging/signing.ts";
+import { releaseDate, updateDefines } from "../packaging/update-defines.ts";
+import { parseFeed } from "../src/main/update/feed.ts";
+
+const APP = join(import.meta.dirname, "..");
+
+describe("signing", () => {
+  it("without identities, signs ad hoc, notarizes nothing, leaves Windows unsigned and says so", () => {
+    const plan = signingPlan({});
+    expect(plan).toEqual({ mac: "ad-hoc", notarize: null, windows: "unsigned" });
+    expect(signingProblems({}, "mac")).toEqual([]);
+    expect(signingSummary(plan, "mac")).toBe(
+      "Signing plan: none. The macOS app will be signed ad hoc and not notarized.",
+    );
+    expect(signingSummary(plan, "win")).toBe(
+      "Signing plan: none. The Windows installer will be unsigned.",
+    );
+  });
+
+  it("signs and notarizes from the owner's variables, naming the method and never a value", () => {
+    const apple = { APPLE_ID: "a", APPLE_APP_SPECIFIC_PASSWORD: "b", APPLE_TEAM_ID: "c" };
+    const key = { APPLE_API_KEY: "k.p8", APPLE_API_KEY_ID: "d", APPLE_API_ISSUER: "e" };
+    const cert = { CSC_LINK: "x", CSC_KEY_PASSWORD: "y" };
+    expect(signingPlan({ CSC_NAME: "x", ...apple }).notarize).toBe("apple-id");
+    expect(signingPlan({ ...cert, ...key }).notarize).toBe("api-key");
+    expect(signingPlan({ ...cert, APPLE_KEYCHAIN_PROFILE: "p" }).notarize).toBe("keychain-profile");
+    expect(signingPlan(cert)).toEqual({
+      mac: "developer-id",
+      notarize: null,
+      windows: "certificate",
+    });
+    expect(signingProblems(cert, "mac")).toEqual([]);
+    expect(signingProblems(cert, "win")).toEqual([]);
+    expect(signingPlan({ WIN_CSC_LINK: "x", WIN_CSC_KEY_PASSWORD: "y" }).windows).toBe(
+      "certificate",
+    );
+    const summary = signingSummary(
+      signingPlan({ CSC_LINK: "secret-file", CSC_KEY_PASSWORD: "y", ...key }),
+      "mac",
+    );
+    expect(summary).toBe(
+      "Signing plan: the macOS app will be signed with a Developer ID and notarized (api-key).",
+    );
+    expect(summary).not.toMatch(/secret|k\.p8/);
+    expect(
+      signingSummary(
+        signingPlan({ WIN_CSC_LINK: "secret-file", WIN_CSC_KEY_PASSWORD: "y" }),
+        "win",
+      ),
+    ).not.toMatch(/secret/);
+    const inputs = {
+      CSC_LINK: "data:application/x-pkcs12;base64,Rml4dHVyZQ==",
+      CSC_KEY_PASSWORD: "FixturePassWord",
+      APPLE_API_KEY: "FixtureNotaryKey",
+    };
+    for (const target of ["mac", "win"] as const) {
+      const planLine = signingSummary(signingPlan(inputs), target);
+      const partialErrors = signingProblems(inputs, target);
+      if (target === "mac") {
+        expect(partialErrors).toEqual([
+          "APPLE_API_KEY set without APPLE_API_KEY_ID, APPLE_API_ISSUER",
+        ]);
+      }
+      for (const value of Object.values(inputs)) {
+        expect(planLine).not.toContain(value);
+        expect(partialErrors.join("\n")).not.toContain(value);
+      }
+    }
+  });
+
+  it("takes a certificate and its password together, read as electron-builder reads them, on each system", () => {
+    // A certificate alone, or a password alone, never becomes a silent unsigned or passwordless build.
+    expect(signingProblems({ CSC_LINK: "x" }, "mac")).toEqual([
+      "CSC_LINK set without CSC_KEY_PASSWORD (set it empty for a certificate without a password)",
+    ]);
+    expect(signingProblems({ CSC_KEY_PASSWORD: "y" }, "mac")).toEqual([
+      "CSC_KEY_PASSWORD set without CSC_LINK",
+    ]);
+    expect(signingProblems({ CSC_NAME: "n", CSC_KEY_PASSWORD: "y" }, "mac")).toEqual([
+      "CSC_KEY_PASSWORD set without CSC_LINK",
+    ]);
+    expect(signingProblems({ WIN_CSC_LINK: "x" }, "win")).toEqual([
+      "WIN_CSC_LINK set without WIN_CSC_KEY_PASSWORD or CSC_KEY_PASSWORD (set it empty for a certificate without a password)",
+    ]);
+    expect(signingProblems({ CSC_LINK: "x" }, "win")).toEqual([
+      "CSC_LINK set without WIN_CSC_KEY_PASSWORD or CSC_KEY_PASSWORD (set it empty for a certificate without a password)",
+    ]);
+    expect(signingProblems({ WIN_CSC_KEY_PASSWORD: "y" }, "win")).toEqual([
+      "WIN_CSC_KEY_PASSWORD set without WIN_CSC_LINK or CSC_LINK",
+    ]);
+    // Windows falls back to the generic variables, each on its own.
+    expect(signingProblems({ WIN_CSC_LINK: "x", CSC_KEY_PASSWORD: "y" }, "win")).toEqual([]);
+    expect(signingProblems({ CSC_LINK: "x", WIN_CSC_KEY_PASSWORD: "y" }, "win")).toEqual([]);
+    // A certificate without a password, only when the password is set empty on purpose.
+    expect(signingProblems({ CSC_LINK: "x", CSC_KEY_PASSWORD: "" }, "mac")).toEqual([]);
+    expect(signingProblems({ WIN_CSC_LINK: "x", WIN_CSC_KEY_PASSWORD: "" }, "win")).toEqual([]);
+    for (const target of ["mac", "win"] as const) {
+      expect(signingProblems({ CSC_LINK: "x", CSC_KEY_PASSWORD: " " }, target)).toEqual([
+        "CSC_KEY_PASSWORD contains only whitespace (set it empty for a certificate without a password)",
+      ]);
+    }
+    // A blank variable electron-builder would take instead of a good one after it.
+    expect(
+      signingProblems({ WIN_CSC_LINK: "", CSC_LINK: "x", CSC_KEY_PASSWORD: "y" }, "win"),
+    ).toEqual(["WIN_CSC_LINK is set but blank, and hides CSC_LINK"]);
+    expect(signingPlan({ WIN_CSC_LINK: "", CSC_LINK: "x" }).windows).toBe("unsigned");
+    expect(
+      signingProblems(
+        { WIN_CSC_LINK: "x", WIN_CSC_KEY_PASSWORD: " ", CSC_KEY_PASSWORD: "y" },
+        "win",
+      ),
+    ).toEqual(["WIN_CSC_KEY_PASSWORD is set but blank, and hides CSC_KEY_PASSWORD"]);
+    expect(signingProblems({ CSC_LINK: " " }, "mac")).toEqual(["CSC_LINK is set but blank"]);
+    // A system's build reads only its own variables.
+    expect(signingProblems({ WIN_CSC_LINK: "x" }, "mac")).toEqual([]);
+    expect(signingProblems({ CSC_NAME: "n" }, "mac")).toEqual([]);
+  });
+
+  it("stops on a partial set, or on notarizing without an identity, naming only the variables", () => {
+    const cert = { CSC_LINK: "x", CSC_KEY_PASSWORD: "y" };
+    expect(signingProblems({ ...cert, APPLE_ID: "someone" }, "mac")).toEqual([
+      "APPLE_ID set without APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID",
+    ]);
+    expect(signingProblems({ ...cert, APPLE_API_KEY: "k", APPLE_API_ISSUER: "i" }, "mac")).toEqual([
+      "APPLE_API_KEY, APPLE_API_ISSUER set without APPLE_API_KEY_ID",
+    ]);
+    expect(signingProblems({ ...cert, APPLE_KEYCHAIN: "k" }, "mac")).toEqual([
+      "APPLE_KEYCHAIN set without APPLE_KEYCHAIN_PROFILE",
+    ]);
+    expect(signingProblems({ APPLE_KEYCHAIN_PROFILE: "p" }, "mac")).toEqual([
+      "notarizing credentials set without CSC_LINK or CSC_NAME to sign with",
+    ]);
+    expect(signingProblems({ APPLE_ID: "someone" }, "win")).toEqual([]);
+  });
+
+  it("refuses a blank notarizing value, so the build and electron-builder pick the same method", () => {
+    const cert = { CSC_LINK: "x", CSC_KEY_PASSWORD: "y" };
+    const key = { APPLE_API_KEY: "k.p8", APPLE_API_KEY_ID: "d", APPLE_API_ISSUER: "e" };
+    // electron-builder would take this APPLE_ID and stop for its missing password after signing.
+    expect(signingProblems({ ...cert, ...key, APPLE_ID: " " }, "mac")).toEqual([
+      "APPLE_ID is set but blank",
+    ]);
+    expect(signingProblems({ ...cert, APPLE_KEYCHAIN_PROFILE: "\t" }, "mac")).toEqual([
+      "APPLE_KEYCHAIN_PROFILE is set but blank",
+    ]);
+    expect(signingProblems({ ...cert, CSC_NAME: " " }, "mac")).toEqual([
+      "CSC_NAME is set but blank",
+    ]);
+    expect(signingProblems({ ...cert, ...key }, "mac")).toEqual([]);
+  });
+
+  it("reads what codesign says of a bundle's signature", () => {
+    expect(
+      macSignatureKind(
+        "Executable=/x\nIdentifier=dev.clawtrate.desktop\nSignature=adhoc\nTeamIdentifier=not set\n",
+      ),
+    ).toBe("ad hoc");
+    expect(
+      macSignatureKind(
+        "Identifier=dev.clawtrate.desktop\nAuthority=Developer ID Application: Example (ABCDE12345)\nAuthority=Apple Root CA\n",
+      ),
+    ).toBe("certificate");
+    expect(macSignatureKind("x: code object is not signed at all\n")).toBe("none");
+  });
+
+  it("the build prints the plan before building and checks the signature after", () => {
+    const build = readFileSync(join(APP, "packaging/build.ts"), "utf8");
+    expect(build).toContain("signingProblems(process.env, target)");
+    expect(build).toContain("console.log(signingSummary(plan, target));");
+    expect(build).toContain('spawnSync("codesign", ["--display", "--verbose=2", app]');
+    expect(build.indexOf("signingSummary(")).toBeLessThan(build.indexOf("await build("));
+  });
+
+  it("requires a successful readback of the requested signature on each macOS bundle", () => {
+    const adHoc = { status: 0, stderr: "Signature=adhoc\n" };
+    const certificate = { status: 0, stderr: "Authority=Example\n" };
+    expect(checkMacSignature("ad-hoc", adHoc).matches).toBe(true);
+    expect(checkMacSignature("developer-id", certificate).matches).toBe(true);
+    expect(checkMacSignature("ad-hoc", certificate).matches).toBe(false);
+    expect(checkMacSignature("developer-id", adHoc).matches).toBe(false);
+    for (const plan of ["ad-hoc", "developer-id"] as const) {
+      for (const result of [
+        { status: 1, stderr: "Signature=adhoc\n" },
+        { status: 1, stderr: "Authority=Example\n" },
+        { status: 0, stderr: "code object is not signed at all" },
+        { status: null, stderr: null },
+      ]) {
+        expect(checkMacSignature(plan, result)).toEqual({ kind: "none", matches: false });
+      }
+    }
+  });
+});
+
+describe("the constants the build writes for the update engine", () => {
+  const now = new Date("2026-11-19T12:00:00.000Z");
+
+  it("without a feed address the build has none, and its release date is the build's time", () => {
+    expect(updateDefines({}, now)).toEqual({
+      __CLAWTRATE_UPDATE_FEED__: "null",
+      __CLAWTRATE_NIGHTLY_UPDATE_FEED__: "null",
+      __CLAWTRATE_RELEASE_DATE__: JSON.stringify("2026-11-19T12:00:00.000Z"),
+    });
+  });
+
+  it("fixes the optional nightly address under the same build rules", () => {
+    const env = { CLAWTRATE_UPDATE_FEED_URL: "https://updates.example/stable" };
+    const url = "https://updates.example/nightly";
+    expect(
+      updateDefines({ ...env, CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: url }, now)
+        .__CLAWTRATE_NIGHTLY_UPDATE_FEED__,
+    ).toBe(JSON.stringify(url));
+    expect(updateDefines({ CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: url }, now)).toMatchObject({
+      __CLAWTRATE_UPDATE_FEED__: "null",
+      __CLAWTRATE_NIGHTLY_UPDATE_FEED__: JSON.stringify(url),
+    });
+    expect(() =>
+      updateDefines(
+        { ...env, CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: "http://updates.example/nightly" },
+        now,
+      ),
+    ).toThrow(/https/);
+  });
+
+  it("takes the feed address and SOURCE_DATE_EPOCH from the build's environment", () => {
+    const defines = updateDefines(
+      {
+        CLAWTRATE_UPDATE_FEED_URL: "https://updates.example/clawtrate/feed.json",
+        SOURCE_DATE_EPOCH: "1762000000",
+      },
+      now,
+    );
+    expect(defines.__CLAWTRATE_UPDATE_FEED__).toBe(
+      JSON.stringify("https://updates.example/clawtrate/feed.json"),
+    );
+    expect(defines.__CLAWTRATE_RELEASE_DATE__).toBe(JSON.stringify("2025-11-01T12:26:40.000Z"));
+  });
+
+  it("refuses an address that is not https, carries credentials or is loopback, and a bad epoch", () => {
+    for (const address of [
+      "http://updates.example/feed.json",
+      "https://u:p@updates.example/f",
+      "https://127.0.0.1/f",
+      "nonsense",
+    ]) {
+      expect(() => updateDefines({ CLAWTRATE_UPDATE_FEED_URL: address }, now), address).toThrow(
+        /CLAWTRATE_UPDATE_FEED_URL/,
+      );
+    }
+    expect(() => releaseDate({ SOURCE_DATE_EPOCH: "yesterday" }, now)).toThrow(/SOURCE_DATE_EPOCH/);
+  });
+
+  it("electron-vite writes them into the main process's bundle only", () => {
+    const config = readFileSync(join(APP, "electron.vite.config.ts"), "utf8");
+    expect(config).toContain("define: updateDefines(process.env, new Date()),");
+    expect(config.indexOf("define:")).toBeLessThan(config.indexOf("preload:"));
+  });
+});
+
+describe("the feed the release writes", () => {
+  let dir: string | undefined;
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  it("labels a generated nightly feed from the validated package version", () => {
+    dir = mkdtempSync(join(tmpdir(), "clawtrate-feed-"));
+    const options = {
+      dir,
+      folder: "https://updates.example/nightly",
+      releaseDate: "2026-11-01T00:00:00Z",
+    };
+    expect(makeFeed({ ...options, version: "1.0.0-nightly.20261101.1" }).track).toBe("nightly");
+    expect(() => makeFeed({ ...options, version: "1.0.0-alpha.1" })).toThrow(/version/);
+  });
+
+  it.each(["/releases", "/releases/", "/releases?dummy=1", "/releases#fixture"])(
+    "keeps the installer in the supplied folder %s",
+    (folder) => {
+      dir = mkdtempSync(join(tmpdir(), "clawtrate-feed-"));
+      writeFileSync(join(dir, artifactName("0.2.0", "win-x64")), "a Windows installer");
+      const feed = makeFeed({
+        version: "0.2.0",
+        releaseDate: "2026-11-01T00:00:00.000Z",
+        folder: `https://updates.example${folder}`,
+        dir,
+      });
+      expect(feed.files["win-x64"]?.url).toBe(
+        "https://updates.example/releases/Clawtrate-0.2.0-win-x64.exe",
+      );
+      expect(
+        parseFeed(
+          JSON.stringify(feed),
+          new URL("https://updates.example/releases/feed.json"),
+          "win-x64",
+        ),
+      ).toMatchObject({ ok: true, feed: { file: { size: 19 } } });
+    },
+  );
+
+  it.each(["empty file", "directory"])(
+    "refuses a Windows installer at an invalid path (%s)",
+    (kind) => {
+      dir = mkdtempSync(join(tmpdir(), "clawtrate-feed-"));
+      writeFileSync(join(dir, artifactName("0.2.0", "mac-arm64")), "a macOS zip");
+      const path = join(dir, artifactName("0.2.0", "win-x64"));
+      if (kind === "directory") mkdirSync(path);
+      else writeFileSync(path, "");
+      const options = {
+        version: "0.2.0",
+        releaseDate: "2026-11-01T00:00:00.000Z",
+        folder: "https://updates.example/releases",
+        dir,
+      };
+      expect(() => makeFeed(options)).toThrow(new Error("win-x64 must be a non-empty artifact."));
+    },
+  );
+
+  it("names each artifact with its size and SHA-512, and the engine reads it back", () => {
+    dir = mkdtempSync(join(tmpdir(), "clawtrate-feed-"));
+    const zip = Buffer.from("a macOS zip");
+    const exe = Buffer.from("a Windows installer");
+    writeFileSync(join(dir, artifactName("0.2.0", "mac-arm64")), zip);
+    writeFileSync(join(dir, artifactName("0.2.0", "win-x64")), exe);
+    const feed = makeFeed({
+      version: "0.2.0",
+      releaseDate: "2026-11-01T00:00:00.000Z",
+      folder: "https://updates.example/clawtrate",
+      dir,
+    });
+    expect(feed).toEqual({
+      format: 1,
+      track: "stable",
+      version: "0.2.0",
+      releaseDate: "2026-11-01T00:00:00.000Z",
+      files: {
+        "mac-arm64": {
+          url: "https://updates.example/clawtrate/Clawtrate-0.2.0-mac-arm64.zip",
+          size: zip.length,
+          sha512: createHash("sha512").update(zip).digest("base64"),
+        },
+        "win-x64": {
+          url: "https://updates.example/clawtrate/Clawtrate-0.2.0-win-x64.exe",
+          size: exe.length,
+          sha512: createHash("sha512").update(exe).digest("base64"),
+        },
+      },
+    });
+    const read = parseFeed(
+      JSON.stringify(feed),
+      new URL("https://updates.example/clawtrate/feed.json"),
+      "win-x64",
+    );
+    expect(read).toMatchObject({
+      ok: true,
+      feed: { version: [0, 2, 0], file: { size: exe.length } },
+    });
+  });
+});
+
+it("accepts the example release feed in the decision", () => {
+  const decisions = readFileSync(join(APP, "../../docs/decisions.md"), "utf8");
+  const section = decisions.split("## Updates and release signing")[1]!;
+  const example = section.match(/```json\s+([\s\S]*?)```/)![1]!;
+  const result = parseFeed(
+    example,
+    new URL("https://updates.example/clawtrate/feed.json"),
+    "mac-arm64",
+  );
+  expect(result).toMatchObject({ ok: true, feed: { file: { size: expect.any(Number) } } });
+});
