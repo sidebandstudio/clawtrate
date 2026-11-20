@@ -65,6 +65,24 @@
     }
   }
 
+  // One canonical key for a task, used both for the byte check and for the stored map.
+  const taskKey = (id) => `agent:${findTask(id)?.b.id ?? "otto"}:dashboard:${id}-3f9a2c71-4b0e-4d7a-9a51-6c0f2e1d8b44`;
+  // Other bots switched off, filling the shared value to 5 bytes under the limit (botsfull=1),
+  // with quiet hours never saved, so turning a bot off or saving quiet hours would not fit.
+  function botsFiller() {
+    const out = {};
+    const size = (extra) => bytes({ version: 1, bots: { ...out, ...extra } });
+    for (let i = 0; size({ [`bot-${i}-${"x".repeat(40)}`]: false }) <= LIMIT - 60; i += 1) out[`bot-${i}-${"x".repeat(40)}`] = false;
+    for (let n = 160; n > 0; n -= 1) {
+      const key = `pad-${"y".repeat(n)}`;
+      if (size({ [key]: false }) <= LIMIT - 5) {
+        out[key] = false;
+        break;
+      }
+    }
+    return out;
+  }
+
   // The events of the prototype's bar, and what each carries (section 3).
   const EVENTS = {
     finished: { label: "Otto finishes", bot: "otto", task: "o3", kind: "finished", run: "r-o3-1" },
@@ -94,7 +112,8 @@
     budgetsw: p("budgetsw") !== "0",
     bots: { juniper: true, marlow: true, otto: p("bot") !== "otto=off", pip: true },
     botsFull: p("botsfull") === "1",
-    tasks: Object.assign({ o4: "off" }, p("task") ? { o3: p("task") } : {}, p("tasks") === "full" ? filler() : {}),
+    tasks: {},
+    extraOff: {},
     quiet: {
       enabled: p("quiet") === "1" || p("quietset") === "1",
       from: p("qfrom") || "22:00",
@@ -102,6 +121,7 @@
       // The saved zone, and the date tonight's interval starts on (quietzone=ny&quietdate=…).
       zone: p("quietzone") === "ny" ? "America/New_York" : "Europe/Lisbon",
       date: p("quietdate") || "2026-11-19",
+      saved: p("botsfull") !== "1",
     },
     quietNow: p("quiet") === "1",
     focus: p("focus") || null, // the bot on screen in a focused window
@@ -132,12 +152,24 @@
     conflictNote: false,
     timeError: false,
     taskRoom: false,
-    botRoom: false,
     resolved: new Set(), // waits answered or ended
     sectionOpen: "notifications",
     settingsPane: "section",
   };
   if (["conflict", "savefail", "unknown"].includes(S.prefs)) S.prefsFail = S.prefs; // the next write ends that way
+  S.tasks = Object.assign({ [taskKey("o4")]: "off" }, p("task") ? { [taskKey("o3")]: p("task") } : {}, p("tasks") === "full" ? filler() : {});
+  if (S.botsFull) S.extraOff = botsFiller();
+  const ownOf = (id) => S.tasks[taskKey(id)];
+  const minutesOf = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3));
+  /** The exact `clawtrate.notifications` value a write would send. */
+  function sharedValue(bots, quiet) {
+    const off = Object.fromEntries(Object.entries(bots).filter(([, on]) => !on).map(([id]) => [id, false]));
+    return {
+      version: 1,
+      bots: { ...S.extraOff, ...off },
+      ...(quiet.saved ? { quiet: { enabled: quiet.enabled, startMinute: minutesOf(quiet.from), endMinute: minutesOf(quiet.to), timeZone: quiet.zone } } : {}),
+    };
+  }
   const sharedReadable = () => S.prefs !== "reading" && S.prefs !== "readfail";
   const canChangeShared = () => S.access !== "read" && sharedReadable() && !S.unconfirmed;
 
@@ -167,7 +199,7 @@
   // The host's decision (section 3) ------------------------------------------------------------------
 
   const eff = (ev) => {
-    const own = S.tasks[ev.task];
+    const own = ownOf(ev.task);
     if (own === "on") return true;
     if (own === "off") return false;
     return S.bots[ev.bot];
@@ -193,7 +225,7 @@
       if (S.warned.has(budgetKey(ev))) return { none: "This budget was already warned about in this period." };
       if (!release && ev.percent >= 100) return { none: "A count first observed at 100% or more posts nothing: the note above the composer is the warning." };
     } else if (!eff(ev)) {
-      return { none: S.tasks[ev.task] === "off" ? `This task's notifications are off.` : `Notifications for ${b.name} are off.` };
+      return { none: ownOf(ev.task) === "off" ? `This task's notifications are off.` : `Notifications for ${b.name} are off.` };
     }
     if (S.focus) {
       if (S.os === "linux") return { none: "Clawtrate's window is focused. On Linux nothing is shown then." };
@@ -722,7 +754,7 @@
   const NEED = "Changing quiet hours and your bots' notifications needs more access.";
 
   const taskValue = (taskId, botId) => {
-    const own = S.tasks[taskId];
+    const own = ownOf(taskId);
     if (own === "on") return "On";
     if (own === "off") return "Off";
     return `Same as ${bot(botId).name} (${S.bots[botId] ? "on" : "off"})`;
@@ -792,7 +824,7 @@
 
   function botPage(b) {
     const shared = canChangeShared();
-    const own = b.tasks.filter((t) => S.tasks[t.id]);
+    const own = b.tasks.filter((t) => ownOf(t.id));
     let html =
       `<div class="b-subhead"><button type="button" class="icon-button" data-variant="quiet" data-n="bot-back" aria-label="Back to settings">${icon("back")}</button><h3 tabindex="-1" data-n-focus>Notifications</h3></div>`;
     if (S.none) html += note(`<p>${NONE_HERE("This switch")}</p>`);
@@ -809,7 +841,7 @@
       kept("bot", keptShared()) +
       `<h4 class="b-group">Tasks with their own setting</h4>` +
       (own.length
-        ? `<dl class="facts">${own.map((t) => `<div><dt>${esc(t.title)}</dt><dd>${S.tasks[t.id] === "on" ? "On" : "Off"}</dd></div>`).join("")}</dl>`
+        ? `<dl class="facts">${own.map((t) => `<div><dt>${esc(t.title)}</dt><dd>${ownOf(t.id) === "on" ? "On" : "Off"}</dd></div>`).join("")}</dl>`
         : `<p class="b-hint">No task has its own setting. Choose one in the task's Details.</p>`);
     if (S.access === "read") html += `<div class="b-panel-foot">${accessBar(NEED)}</div>`;
     return html;
@@ -819,7 +851,7 @@
   function openTaskMenu(button) {
     const t = findTask(S.sel.task).t;
     const b = bot(S.sel.bot);
-    const current = S.tasks[t.id] || "same";
+    const current = ownOf(t.id) || "same";
     const items = [["same", `Same as ${b.name} (${S.bots[b.id] ? "on" : "off"})`], ["on", "On"], ["off", "Off"]];
     const menu = $("#n-menu");
     menu.innerHTML = items
@@ -901,11 +933,12 @@
     const b = bot(S.sel.bot);
     closeMenu(false);
     S.taskRoom = false;
-    // The encoded value is measured before the write; removing an entry always fits.
+    // The exact proposed value is measured before the write; removing an entry cannot hit the limit.
     const next = { ...S.tasks };
-    if (value === "same") delete next[t.id];
-    else next[`agent:${b.id}:dashboard:${t.id}-3f9a2c71-4b0e-4d7a-9a51-6c0f2e1d8b44`] = value;
+    if (value === "same") delete next[taskKey(t.id)];
+    else next[taskKey(t.id)] = value;
     if (value !== "same" && bytes(next) > LIMIT) {
+      S.lastRefused = { value: next, bytes: bytes(next), before: bytes(S.tasks) };
       S.taskRoom = true;
       renderPanel();
       return $('[data-n="task-menu"]').focus();
@@ -914,8 +947,8 @@
     saveShared(
       "task",
       () => {
-        if (value === "same") delete S.tasks[t.id];
-        else S.tasks[t.id] = value;
+        if (value === "same") delete S.tasks[taskKey(t.id)];
+        else S.tasks[taskKey(t.id)] = value;
       },
       `This task was last read as ${before}.`,
       () => `This task: ${taskValue(t.id, b.id)}`,
@@ -1055,12 +1088,12 @@
       body +=
         `<h4 class="b-group">Your bots</h4><dl class="facts">` +
         BOTS.map((b) => {
-          const own = b.tasks.filter((t) => S.tasks[t.id] && S.tasks[t.id] !== (S.bots[b.id] ? "on" : "off")).length;
+          const own = b.tasks.filter((t) => ownOf(t.id) && ownOf(t.id) !== (S.bots[b.id] ? "on" : "off")).length;
           const line = `${S.bots[b.id] ? "On" : "Off"}${own ? ` · ${own} task${own === 1 ? "" : "s"} ${S.bots[b.id] ? "off" : "on"}` : ""}`;
           return switchRow(`bot-${b.id}`, `<span class="n-botname"><span class="avatar" data-bot="${b.id}"></span>${b.name}</span>`, savingLine(`bot-${b.id}`, line), S.bots[b.id], `data-n-bot="${b.id}"${dis(`bot-${b.id}`)}`, `${b.name}'s notifications`);
         }).join("") +
         `</dl>` +
-        (S.botRoom ? `<p class="b-field-error" data-testid="bot-room">There's no room to save this switch with your quiet hours. Turn another bot back on first.</p>` : "") +
+
         kept("bots", keptShared());
     }
     const foot = S.access === "read" ? accessBar(NEED) : "";
@@ -1087,20 +1120,27 @@
   }
 
   const lastReadOf = (on) => (on ? "On" : "Off");
+  const QUIET_ROOM = "There's no room to save quiet hours. Turn a bot's notifications back on first.";
+  /** Measures the exact proposed shared value; on no room keeps the previous values and says so beneath the control. */
+  function roomFor(key, proposed, words, where) {
+    const size = bytes(proposed);
+    if (size <= LIMIT) return true;
+    S.lastRefused = { value: proposed, bytes: size, before: bytes(sharedValue(S.bots, S.quiet)) };
+    S.error[key] = words;
+    repaint(where);
+    return false;
+  }
   function toggleQuiet() {
     const next = !S.quiet.enabled;
-    saveShared("quiet", () => (S.quiet.enabled = next), `Quiet hours were last read as ${lastReadOf(S.quiet.enabled)}.`, () => (S.quiet.enabled ? `Quiet hours are on, ${S.quiet.from} to ${S.quiet.to}` : "Quiet hours are off"), "settings");
+    if (!roomFor("quiet", sharedValue(S.bots, { ...S.quiet, enabled: next, saved: true }), QUIET_ROOM, "settings")) return;
+    saveShared("quiet", () => Object.assign(S.quiet, { enabled: next, saved: true }), `Quiet hours were last read as ${lastReadOf(S.quiet.enabled)}.`, () => (S.quiet.enabled ? `Quiet hours are on, ${S.quiet.from} to ${S.quiet.to}` : "Quiet hours are off"), "settings");
   }
 
   function toggleBot(id, where) {
     const b = bot(id);
     const next = !S.bots[id];
-    S.botRoom = false;
-    // Turning a bot off adds an entry; the encoded value is measured first. Turning one on always fits.
-    if (!next && S.botsFull) {
-      S.botRoom = true;
-      return repaint(where);
-    }
+    // Turning a bot off adds an entry; the exact proposed value is measured first. Turning one on removes it.
+    if (!next && !roomFor(`bot-${id}`, sharedValue({ ...S.bots, [id]: false }, S.quiet), "There's no room to save this switch with your quiet hours. Turn another bot back on first.", where)) return;
     saveShared(`bot-${id}`, () => (S.bots[id] = next), `${b.name}'s notifications were last read as ${lastReadOf(S.bots[id])}.`, () => `${b.name}'s notifications are ${S.bots[id] ? "on" : "off"}`, where);
   }
 
@@ -1112,7 +1152,8 @@
       return;
     }
     S.timeError = false;
-    saveShared("quiet", () => (S.quiet[which] = value), `Quiet hours were last read as ${S.quiet.from} to ${S.quiet.to}.`, () => `Quiet hours are on, ${S.quiet.from} to ${S.quiet.to}`, "settings");
+    if (!roomFor("quiet", sharedValue(S.bots, { ...S.quiet, [which]: value, saved: true }), QUIET_ROOM, "settings")) return;
+    saveShared("quiet", () => Object.assign(S.quiet, { [which]: value, saved: true }), `Quiet hours were last read as ${S.quiet.from} to ${S.quiet.to}.`, () => `Quiet hours are on, ${S.quiet.from} to ${S.quiet.to}`, "settings");
   }
 
   // The prototype's bar -----------------------------------------------------------------------------------
@@ -1305,5 +1346,5 @@
     S.tab = "details";
     render();
   }
-  window.notif = { S, fire, decide, open, quietEnds, wakeAfterEnd, answeredElsewhere, dropConnection, reconnect, quietInterval, continuousInterval, nativeTitle, resolveReq, bytes, LIMIT };
+  window.notif = { S, fire, decide, open, quietEnds, wakeAfterEnd, answeredElsewhere, dropConnection, reconnect, quietInterval, continuousInterval, nativeTitle, sharedValue, resolveReq, bytes, LIMIT };
 })();
