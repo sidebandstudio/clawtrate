@@ -31,6 +31,7 @@ import { ActionScope, ItemFeed, RunFeed, RunLine, showAction } from "./actions/i
 import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { FindBar } from "./Find.tsx";
 import { contextWords, daysAgo, fullDate, stampTime } from "./format.ts";
+import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
@@ -436,6 +437,7 @@ function TranscriptView({
               <TaskContext task={task} />
               {note}
               {rows}
+              <BudgetLine bot={bot} />
               <TrailingCards except={live.drawsCards} />
               {live.foot}
             </ActionScope>
@@ -1127,6 +1129,7 @@ export function Conversation({
         </div>
       </header>
       {body}
+      {task && bot && <UsageNotes bot={bot} canSet={!info.readOnly} />}
       {task && bot && interactive && (
         <Composer
           key={`composer:${connection.gatewayUrl ?? ""}:${task.key}`}
