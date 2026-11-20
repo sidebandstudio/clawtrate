@@ -378,7 +378,7 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
     });
     const sha256 = (key: string) => createHash("sha256").update(`zip of ${key}`).digest("hex");
     expect(JSON.parse(latestText)).toEqual({
-      teamId: TEAM,
+      teamIdentifier: TEAM,
       arm64: {
         version,
         url: `${download}Clawtrate-${version}-mac-arm64.zip`,

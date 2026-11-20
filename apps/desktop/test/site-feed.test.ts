@@ -84,7 +84,7 @@ describe("what the site checks before it serves a beta's files", () => {
     [
       "latest-mac.json without a team",
       good.feed,
-      JSON.stringify({ ...JSON.parse(good.latest), teamId: "" }),
+      JSON.stringify({ ...JSON.parse(good.latest), teamIdentifier: "" }),
     ],
     [
       "a file in another release",

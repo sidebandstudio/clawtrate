@@ -21,7 +21,7 @@ export type MacArchitecture = keyof typeof MAC_ARCHITECTURES;
 
 export interface LatestMac {
   /** The Developer ID team the apps are signed by, read from their signatures. */
-  teamId: string;
+  teamIdentifier: string;
   arm64: { version: string; url: string; sha256: string };
   x86_64: { version: string; url: string; sha256: string };
 }
@@ -51,7 +51,7 @@ export function makeLatestMac(
     if (!file || !SHA256_HEX.test(file.sha256)) throw new Error(`No ${key} file to name.`);
     return { version, url: file.url, sha256: file.sha256 };
   };
-  return { teamId, arm64: entry("mac-arm64"), x86_64: entry("mac-x64") };
+  return { teamIdentifier: teamId, arm64: entry("mac-arm64"), x86_64: entry("mac-x64") };
 }
 
 /**
@@ -80,7 +80,7 @@ export function checkBetaFiles(tag: string, feedText: string, latestText: string
   } catch {
     throw new Error(`The latest-mac.json of ${tag} is not JSON.`);
   }
-  if (typeof latest?.teamId !== "string" || !TEAM_ID.test(latest.teamId))
+  if (typeof latest?.teamIdentifier !== "string" || !TEAM_ID.test(latest.teamIdentifier))
     throw new Error(`The latest-mac.json of ${tag} has no team identifier.`);
   for (const [arch, key] of Object.entries(MAC_ARCHITECTURES)) {
     const entry = latest[arch as MacArchitecture];

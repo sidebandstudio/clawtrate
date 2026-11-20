@@ -514,7 +514,7 @@ export async function publish(runner: Run, version: string): Promise<void> {
   requireNewest(version, tags);
   const current = await download(BETA_LATEST_MAC_URL);
   if (current) {
-    const team = (JSON.parse(current.toString("utf8")) as LatestMac).teamId;
+    const team = (JSON.parse(current.toString("utf8")) as LatestMac).teamIdentifier;
     if (team !== plan.teamId)
       stop(`The published beta is signed by team ${team}, this one by ${plan.teamId}.`);
   }
