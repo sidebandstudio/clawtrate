@@ -323,6 +323,48 @@ test("F-201: a save the host reports as not confirmed ends Saving before its com
   await expect(marlow).toHaveCount(0);
 });
 
+test("F-201: an earlier save's late answer does not unlock a later save the host has not published", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await checkIns(page);
+  await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();
+  const marlow = dialog(page, "Marlow");
+  await marlow.getByRole("radio", { name: /^Every…/ }).click();
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      clawtrateFixture: ClawtrateBridge;
+      held: Array<{ saveId: string; release: () => void }>;
+    };
+    w.held = [];
+    const send = w.clawtrateFixture.send;
+    w.clawtrateFixture.send = (command) =>
+      command.type === "saveCheckIn"
+        ? new Promise<void>((release) => w.held.push({ saveId: command.saveId, release }))
+        : send(command);
+  });
+  const held = () =>
+    page.evaluate(() =>
+      (window as unknown as { held: Array<{ saveId: string }> }).held.map((each) => each.saveId),
+    );
+  const publish = (id: string) =>
+    change(
+      page,
+      `return { ...state, checkIns: { ...state.checkIns, save: { id: ${JSON.stringify(id)}, botId: "marlow", status: "unknown", error: null } } };`,
+    );
+  await marlow.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(held).toHaveLength(1);
+  await publish((await held())[0]!);
+  await expect(marlow.getByTestId("save-unknown")).toBeVisible();
+  await marlow.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.poll(held).toHaveLength(2);
+  await page.evaluate(() =>
+    (window as unknown as { held: Array<{ release: () => void }> }).held[0]!.release(),
+  );
+  await expect(marlow.getByRole("button", { name: "Saving…" })).toBeVisible();
+  await expect(marlow.getByRole("radio", { name: /^Off/ })).toBeDisabled();
+});
+
 test("F-201: As needed sends every 30m, and the bot is then shown checking in every 30 minutes", async ({
   page,
 }) => {

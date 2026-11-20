@@ -287,7 +287,9 @@ function CheckInsDialog({
         change({ refused: error instanceof Error ? error.message : String(error) }),
       )
       .finally(() => {
-        if (submitting.current === id) submitting.current = null;
+        // A later save owns the lock now; this one's late answer must not release it.
+        if (submitting.current !== id) return;
+        submitting.current = null;
         setPending(false);
       });
   };
