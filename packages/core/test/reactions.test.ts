@@ -109,4 +109,22 @@ describe("reactions (F-283)", () => {
     expect(transcript().reactions?.m1).toBeUndefined();
     client.stop();
   });
+
+  it("F-283: a viewer gone while its identity was being read sends no reaction", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = history(["m1"]);
+    gateway.handlers["session.reactions.list"] = () => ({ reactions: {} });
+    const self = deferred<unknown>();
+    gateway.handlers["users.self"] = () => self.promise;
+    gateway.handlers["session.reactions.set"] = () => ({ reactions: summary("👍", "me") });
+    const { client } = await openTask({ gateway });
+    const owner = {};
+    const reacting = client.setReaction(KEY, "m1", "👍", false, { owner });
+    await until(() => gateway.calls("users.self").length > 0);
+    client.withdraw(owner);
+    self.resolve({ profile: { id: "me" } });
+    await expect(reacting).rejects.toThrow();
+    expect(gateway.calls("session.reactions.set")).toEqual([]);
+    client.stop();
+  });
 });

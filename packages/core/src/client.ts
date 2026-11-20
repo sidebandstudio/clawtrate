@@ -3403,8 +3403,9 @@ export class ClawtrateClient {
     if (this.options.readOnly) throw new Error("This host only reads; it does not react.");
     const generation = this.generation;
     await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
-    this.checkNotWithdrawn(options.owner);
     if (this.selfId === null) await this.readSelf(generation);
+    // After every wait, immediately before the write: its viewer is still here.
+    this.checkNotWithdrawn(options.owner);
     // Any change of the task's reactions after the request is newer than its answer.
     const incarnation = this.incarnations.get(key);
     const before = this.state.transcripts[key]?.reactions;
