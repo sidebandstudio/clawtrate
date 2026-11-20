@@ -58,7 +58,11 @@ function canonicalFile(path: string): string | null {
     }
     current = join(current, part);
     if (!localPath(current)) return null;
-    if (!lstatSync(current).isSymbolicLink()) continue;
+    const entry = lstatSync(current);
+    if (!entry.isSymbolicLink()) {
+      if (parts.length > 0 && !entry.isDirectory()) return null;
+      continue;
+    }
     if (++links > 40) return null;
     const target = readlinkSync(current);
     if (

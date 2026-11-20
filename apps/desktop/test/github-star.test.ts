@@ -8,6 +8,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -191,4 +192,32 @@ it("F-521: a local link is resolved before the following parent component", asyn
   symlinkSync(join(dir, "nested", "child"), join(dir, "redirect"));
   symlinkSync("redirect/../program", gh);
   expect(await starRepository(findGitHubCli([gh]))).toBe(true);
+});
+
+it("F-521: a listed link with a regular-file parent is unavailable and cannot launch", async () => {
+  const folder = join(dir, "listed");
+  mkdirSync(folder);
+  const link = join(folder, "gh");
+  const program = join(dir, "program");
+  writeFileSync(program, `#!/bin/sh\nprintf ran >> "${log}"\n${success}`, { mode: 0o700 });
+  const fresh = join(folder, "invalid");
+  symlinkSync(program + "/", fresh);
+  expect(() => statSync(fresh)).toThrow(expect.objectContaining({ code: "ENOTDIR" }));
+  for (const target of [program + "/", program + "/../program"]) {
+    symlinkSync(target, link);
+    expect(findGitHubCli([link])).toBeNull();
+    expect(existsSync(log)).toBe(false);
+    rmSync(link);
+    symlinkSync(program, link);
+    const cli = findGitHubCli([link]);
+    expect(cli).not.toBeNull();
+    rmSync(link);
+    symlinkSync(target, link);
+    expect(await starRepository(cli)).toBe(false);
+    expect(existsSync(log)).toBe(false);
+    rmSync(link);
+  }
+  symlinkSync(program, link);
+  expect(await starRepository(findGitHubCli([link]))).toBe(true);
+  expect(readFileSync(log, "utf8")).toBe("ran");
 });
