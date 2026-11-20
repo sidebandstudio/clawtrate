@@ -4,19 +4,19 @@ Speaking to a bot instead of typing: dictation into the composer, a voice chat w
 
 What must be true is in `docs/parity.md`, rows F-111, F-253 to F-255, F-392, F-407 to F-413 and F-460 to F-463. What the gateway, the operating systems and the browser engine do is in `docs/research/voice.md` (cited as research §n); every state below names the fact it rests on, and section 13 lists them. Section 15 is for builders.
 
-One rule sits above the rest: **before the microphone first opens for a route, the screen names where the audio goes, and the app never sends it anywhere else.** Nothing is called private. "Mute" and "Hang up" say what happened on this device, and say more only when the gateway answered.
+Two rules sit above the rest. **Before the microphone opens, every time, the screen has named in full where the audio goes, and the person has accepted that destination; the app never sends it anywhere else.** And **the screen says only what the gateway or the device established**: where a thing cannot be made true, the claim is taken away rather than held up. Nothing is called private. "Mute" and "Hang up" say what happened on this device, and say more only when the gateway answered.
 
-Seven facts from the research and from `main` shape the design:
+Seven facts from the research, the gateway's source and `main` shape the design:
 
-- **A call is relayed through the gateway, or it is not made** (research §2). On a relayed call the audio goes from this device to the person's gateway over the connection Clawtrate already holds, and the gateway sends it on to the voice provider it names. The other route the gateway offers, a client-owned call, has the device connect to the provider's own host; Clawtrate does not use it, because the app contacts no host but the gateway by itself.
-- **A relayed session ends with its connection, and after 30 minutes** (research §5). The gateway closes every session a connection owned when that connection closes, so the gateway never resumes one after a drop. The app reconnects to the gateway by itself, as it always does, and after a short drop it starts the call again by itself, as a new relayed session on the same task, and says so (section 8).
-- **What was said is saved in the task as text** (research §6). Each finalized utterance becomes an ordinary message, marked as spoken. Every device sees it. Only the device that held the call knows how long it lasted.
-- **The gateway says whether voice is set up, at the read tier** (research §1). `talk.catalog` answers `ready` for voice chat and for dictation through the gateway, and names the provider. A read-only connection is refused every call and every gateway dictation with `operator.talk` missing.
+- **A call is relayed through the gateway, or it is not made** (research §2). On a relayed call the audio goes from this device to the person's gateway over the connection Clawtrate already holds, and the gateway sends it on to the voice provider it names. The other route the gateway offers, a client-owned call, has the device connect to the provider's own address; Clawtrate does not use it (section 2).
+- **A relayed session cannot be resumed, and its end is known only from the gateway** (research §5). When a connection closes, the gateway starts its cleanup without waiting for it, and a new connection can neither use the old session nor learn when it is gone. So after a drop the call has failed, and a new one waits until the old one is known to have ended (section 8).
+- **What was said can be saved in the task as text** (research §6). The gateway queues each finalized caption to be saved as an ordinary message, marked as spoken, with an id that names its voice session; every device sees what was saved. Only the device that held the call knows how long it lasted.
+- **The gateway says whether voice is set up, at the read tier** (research §1). `talk.catalog` answers `ready` for voice chat and for dictation through the gateway, and names the provider. It is a snapshot: the start asks for that provider by its id and checks the answer.
 - **Dictation has two routes with a stated destination** (research §3): Apple's recognizer on this Mac or iPhone, with on-device recognition required, and the gateway's transcription session. Chromium's own speech recognition is not used: it sends audio to a Google service. Windows has the gateway route only.
-- **Speed is the device's; a session's language is set when it starts; a voice is changed on the call by the gateway** (research §7). Changing the language during a call starts a new relayed session for the call before the old one closes, as the gateway itself does for a voice (section 7). There are no word timings for a memo (research §8).
-- **What a bot or the gateway supplies follows `docs/decisions.md`, "Addresses a gateway hands the client"**: a memo is played from bytes the gateway returns or from a download grant the host fetches; any other address is never fetched by itself; a provider's name and a gateway's message are text (sections 2 and 11).
+- **Speed is the device's; a session's language is fixed when it starts; a voice is changed on the call only through the gateway's change** (research §7). A language chosen during a call is for the next calls. There are no word timings for a memo (research §8).
+- **What a bot or the gateway supplies follows `docs/decisions.md`, "Addresses a gateway hands the client"**: a memo is played from bytes the gateway returns or from a download grant the host fetches, only after Play; any other address is never fetched; names, messages and addresses are text (sections 2 and 11).
 
-The prototype walks every path to its outcome: `prototype/voice.html`, with the state in the address (section 15). Its styles are in `prototype/css/voice.css`, its behaviour in `prototype/js/voice.js`, and `prototype/tools/checks/voice.mjs` clicks through every walk and asserts each state's words and structure. The system's own microphone prompt is drawn as Clawtrate's picture of one, labelled as a picture.
+The prototype walks every path to its outcome: `prototype/voice.html`, with the state in the address (section 15). Its styles are in `prototype/css/voice.css`, its behaviour in `prototype/js/voice.js`, and `prototype/tools/checks/voice.mjs` fires the gateway's and the device's events one at a time and asserts each state's words and structure, and what the fixture would have opened, sent, fetched or played. The system's own prompts are drawn as Clawtrate's pictures of them, labelled as pictures.
 
 ## Contents
 
@@ -93,21 +93,22 @@ No new token. The microphone mark is `--danger` (a filled dot) while the microph
 
 ### Where the audio goes
 
-Every route has one sentence, said before its first use (the consent sheet, sections 4 and 5) and always in Settings › Voice (section 12). The gateway's name is its name in the rail's footer; the provider's is its `label` in `talk.catalog`, shown as text.
+Every route has one sentence. Before the microphone opens, the consent sheet names, in full and never cut short, the gateway (its name in the rail's footer) and the provider (its `label` in `talk.catalog`, as text), and says the sentence; Settings › Voice says it too (section 12). Long names wrap.
 
-| Route                             | The sentence                                                                                                                                                                                                                               | Rests on        |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- |
-| Voice chat                        | "Your voice goes to Home gateway over this connection, and the gateway sends it to OpenAI Realtime Voice, which listens and speaks Otto's replies. What you both say is saved as text in this task. Clawtrate doesn't keep the recording." | research §2, §6 |
-| Dictation through the gateway     | "Your voice goes to Home gateway, which sends it to OpenAI Realtime Transcription and sends the text back. Nothing of it is saved in the task. Clawtrate doesn't keep the recording."                                                      | research §3     |
-| Dictation on this Mac (or iPhone) | "Apple's speech recognition turns your voice into text on this Mac, with its network use turned off. It's offered only for languages this Mac can recognize on its own."                                                                   | research §3     |
+| Route | The sentence | Rests on |
+|---|---|---|
+| Voice chat | "Your voice goes to Home gateway, which sends it to OpenAI Realtime Voice. The gateway can save finalized captions as text in this task. Clawtrate discards its audio buffers when capture or playback stops. The gateway and provider manage their own copies." | research §2, §6 |
+| Dictation through the gateway | "Your voice goes to Home gateway, which sends it to OpenAI Realtime Transcription and sends the text back. The words go into your message as an editable draft, and nothing is posted to the task until you send it. Clawtrate discards its audio buffers when capture stops. The gateway and provider manage their own copies." | research §3 |
+| Dictation on this Mac or iPhone | "Apple's speech recognition turns your voice into text on this Mac. Clawtrate requires on-device recognition, so the recognizer doesn't send your voice over the network. The words go into your message as an editable draft." Offered only where the recognizer is eligible with on-device recognition required, on the Mac and the iPhone alike. | research §3 |
 
-"Clawtrate doesn't keep the recording" is a rule for the builder: no audio is written to disk, to a log, to a crash report or to the bridge's history (section 15). Nothing here says what the gateway or the provider keep: the gateway saves the text (research §6), and what a provider does is the provider's.
+"Clawtrate discards its audio buffers" is a rule for the builder: no audio is written to disk, to a log, to a crash report or to the bridge's history, and in-memory audio is dropped when capture or playback stops (section 15). Nothing here promises what the gateway or the provider keep. A route whose destination cannot be stated is not offered: Chromium's speech recognition, and on-device dictation on Windows (research §3).
 
-A route whose destination cannot be stated is not offered: Chromium's speech recognition, and on-device dictation on Windows (research §3).
+**Consent.** Acceptance is remembered on this device for the gateway identity (`gateway.identity.get`), the route and the provider's id; it is asked for again when the provider's id or its label changes. Its buttons are the route's action ("Start voice chat", "Start dictation") and "Cancel". A route chosen in Settings is a choice, not consent. The gate is the same for every entry point (the buttons, ⌘D, Siri, Shortcuts, the Action Button), for every retry and for every new session.
 
-**What the gateway hands the client** follows `docs/decisions.md`, "Addresses a gateway hands the client". A call's audio is bytes on the connection Clawtrate already holds (`appendAudio` out, `talk.event` in), never an address. A client-owned call would hand the device a provider's address and credential to connect to, an address the gateway supplies, which that rule never fetches or opens: so Clawtrate does not create one (section 16). The provider's `label`, a gateway's refusal and a voice's name are shown as text: an address inside one stays text, never a link. The bot's picture in the call band is the rail's, under the same rule (a checked `data:` picture, otherwise its letter). A memo is section 11. "Open System Settings" opens the system's own Microphone pane, an address Clawtrate writes, not one the gateway supplies.
+- **An unknown destination.** When `talk.catalog` couldn't be read, the sheet says "Can't verify where your voice would go" and "Clawtrate couldn't read which voice provider Home gateway uses, so it doesn't start a voice chat.", with "Retry", which reads the catalog again, and "Cancel". Nothing is created and the microphone stays closed.
+- **The provider asked for by id.** A call is created with the accepted provider's id (`talk.session.create {provider, …}`), and the answer's `provider` is checked before any audio is sent. If the gateway chose another provider, or the answer can't be checked, the unused session is closed at once, nothing is sent, and the sheet asks again for what the gateway did choose: "Home gateway chose a different voice provider than it listed. Nothing was sent." (The catalog is a snapshot, and can change between reading it and starting.)
 
-The consent sheet is shown once per route, per gateway and per provider, on this device; it is shown again when the provider's label changes. Its buttons are the route's action ("Start voice chat", "Start dictation") and "Cancel". Nothing opens the microphone before the person chooses the action.
+**What the gateway hands the client** follows `docs/decisions.md`, "Addresses a gateway hands the client". A call's audio is bytes on the connection Clawtrate already holds (`appendAudio` out, `talk.event` in), never an address. A client-owned call would hand the device a provider's address and credential to connect to, an address the gateway supplies, which that rule never fetches or opens: so Clawtrate does not create one (section 16). Every name, message, caption, voice and address a bot or the gateway supplies is shown as text, never as markup, and an address in one stays text, never a link. The bot's picture in the call band is the rail's, under the same rule (a checked `data:` picture, otherwise its letter). A memo is section 11. "Open System Settings" and "Open Settings" open the system's own pages, addresses Clawtrate writes, not ones the gateway supplies.
 
 ### Where settings are kept
 
@@ -135,12 +136,20 @@ On a read-only connection the built conversation shows the access bar in the com
 
 ### The microphone
 
-- **At most one route has the microphone at a time.** Starting a call while dictating stops dictation and keeps its text; the microphone button is disabled during a call ("The microphone is in use by the voice chat.").
-- **While the microphone is open there is always a mark**: in the microphone button while dictating, in the call band while on a call, with the words "Microphone on" or "Microphone off". The system's own indicator is the system's.
-- **The system's prompt** (macOS, the first time; never on Windows, research §4): while it is open the button or band says "Waiting for microphone access…". Refused: "Clawtrate can't use the microphone. Allow it in System Settings › Privacy & Security › Microphone." with "Open System Settings". On Windows, when the device can't be opened: "Clawtrate can't use the microphone. Check Settings › Privacy & security › Microphone." Nothing else is recorded or sent.
+- **Asked for only after Start.** The person's Start (after consent) is what asks the system:
+  - macOS: the microphone permission (`askForMediaAccess`), and for dictation on the Mac also Speech Recognition. Refused: "Clawtrate can't use the microphone. Allow it in System Settings › Privacy & Security › Microphone." with "Open System Settings"; for speech, "Clawtrate can't use speech recognition. Allow it in System Settings › Privacy & Security › Speech Recognition."
+  - iPhone: the microphone, and for Apple dictation speech recognition, each asked separately. Refused: "Clawtrate can't use the microphone. Allow it in Settings › Clawtrate." with "Open Settings"; for speech, "Clawtrate can't use speech recognition. Allow it in Settings › Clawtrate."
+  - Windows: no prompt; the desktop microphone privacy setting decides, and a device that won't open says "Clawtrate couldn't open the microphone. Check Settings › Privacy & security › Microphone."
+  - The web preview: its own origin's audio-only permission, in a secure context; refused: "This page can't use the microphone. Allow it in this browser's site settings." Over plain http from another computer it has no microphone (research §4): both buttons are disabled, described "This page can't use a microphone: a browser allows one only over https or on this computer itself."
+  While a prompt is open, the band or the dictation line says "Waiting for microphone access…". Nothing is recorded or sent before it is allowed.
+- **At most one route has the microphone at a time.** The microphone button is disabled during a call ("The microphone is in use by the voice chat.").
+- **While the microphone is open there is always a mark**, "Microphone on" or "Microphone off", in the dictation line or in the call band, and the band says "Listening" only once a capture track is live and the relay is ready (section 6).
 - **No microphone**: "No microphone found."
-- **The chosen microphone is not connected**: "USB Microphone isn't connected." with "Use System Default this time" and "Choose another". It never uses another microphone silently (section 12).
-- **The browser preview from another computer over plain http** has no microphone (research §4): both buttons are disabled, with the description "This page can't use a microphone: a browser allows one only over https or on this computer itself." From `localhost`, the browser's own prompt applies, drawn as "Waiting for microphone access…".
+- **The chosen microphone is not connected**: "USB Microphone isn't connected." with "Use System Default this time", which leaves the stored choice as it is, and "Choose another". It never uses another microphone silently (section 12).
+- **The microphone stops** (its track ends, the device goes away or permission is withdrawn): capture stops, audio not yet sent is dropped, and the band says "Microphone stopped. No new audio is being sent." It names a cause only when it is known: "USB Microphone was disconnected." (from `devicechange`) or "Microphone access was turned off." (from the permission). Capture comes back only when the person chooses "Turn microphone back on", after permission and the device are checked again.
+- **Unmute** reopens capture the same way, and says "Unmuted" only once the track is live.
+- **Going to the background** (iPhone) stops capture and playback; the call stays muted, "Muted when Clawtrate went to the background. Unmute to go on.", until the person unmutes. Closing the window or the app, or leaving the task's page, ends dictation and hangs up (section 8).
+- **Device names in Settings** (F-392): names are shown only after access is allowed. "Allow" first says "To show your microphones' names, Clawtrate opens the microphone for a moment and closes it at once. Nothing is recorded or sent." with "Continue" and "Cancel"; the stream it opens is stopped as soon as the list is read.
 
 ### Widths, themes, keyboard, screen readers, motion
 
@@ -223,40 +232,45 @@ What is known before pressing disables the button with its reason; what is learn
 
 The client reads `talk.catalog` after every hello and when Settings › Voice opens (research §1).
 
-| The catalog says                                                   | The voice chat button                                                                         | Pressing it                      |
-| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- | -------------------------------- |
-| `realtime.ready: true`, its active provider offers `gateway-relay` | Ready                                                                                         | Starts (below)                   |
-| `realtime.ready: false`                                            | Disabled: "Voice chat isn't set up on Home gateway."                                          | Nothing                          |
-| Ready, but the active provider offers no `gateway-relay`           | Disabled: "Home gateway's voice provider talks to apps directly, which Clawtrate doesn't do." | Nothing                          |
-| Couldn't be read (`AGENT_SELECTION_REQUIRED`, a failure)           | Ready, described "Can't tell whether voice chat is set up on Home gateway."                   | Starts; the create's answer says |
+| The catalog says | The voice chat button | Pressing it |
+|---|---|---|
+| `realtime.ready: true`, its active provider offers `gateway-relay` | Ready | The walk below |
+| `realtime.ready: false` | Disabled: "Voice chat isn't set up on Home gateway." | Nothing |
+| Ready, but the active provider offers no `gateway-relay` | Disabled: "Home gateway's voice provider talks to apps directly, which Clawtrate doesn't do." | Nothing |
+| Couldn't be read (`AGENT_SELECTION_REQUIRED`, a failure) | Ready, described "Can't tell whether voice chat is set up on Home gateway." | "Can't verify where your voice would go", with "Retry" (section 2); nothing is created |
 
-The not-set-up sentence is all the client can establish: the provider is set up by the gateway's owner in OpenClaw's own Talk settings, which need admin (research §1). Settings › Voice says that much.
+The not-set-up sentence is all the client can establish: the provider is set up by the gateway's owner in OpenClaw's own Talk settings, which need admin (research §1). Settings › Voice says that much. A ready catalog means the gateway is configured; it does not establish that a session will be ready.
 
 ### The walk
 
-1. **Where your voice goes**, the first time (section 2). "Cancel" returns focus to the button and nothing opens.
-2. **The microphone.** If the system must ask: "Waiting for microphone access…" in the call band, with "Cancel". Refused or no device: section 2, and nothing is sent to the gateway.
-3. **Connecting.** `talk.session.create {sessionKey, voice?, language?, capabilities: ["voice-selection"]}` for the open task (research §2, §7); every call asks for `voice-selection`, so the gateway lets it change voices (section 7). The band says "Connecting to Otto…" with "Cancel". The microphone is open from step 2, the mark says "Microphone on", and no audio is sent until the gateway answers.
-4. **Ready.** The answer, then the session's `ready` event: the band says "Listening", the time starts, and the region says "Voice chat with Otto started".
+Every start passes the same gate, in this order: connected; no earlier relay of this device that is being created, is open, is closing or may still be open (section 8); a known destination; consent for it (section 2); then the system's permission and the device.
 
-| At step 3 the gateway answers                               | The band                                                                                                                                                         |
-| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `UNAVAILABLE` with `talkIssue.code: "realtime_unavailable"` | "Voice chat failed", "The call ended unexpectedly", and the gateway's message as text: "Realtime voice provider "openai" is not configured." (live, research §1) |
-| "Too many active realtime relay sessions…"                  | "Voice chat failed", "The call ended unexpectedly", "Home gateway has too many calls open right now."                                                            |
-| No answer and the connection drops                          | "Voice chat failed", "Connection lost" (section 8)                                                                                                               |
-| Not connected when pressed                                  | "Voice chat failed", "No connection"                                                                                                                             |
+1. **Where your voice goes**, when this destination hasn't been accepted (section 2). "Cancel" returns focus to the button, and nothing opens.
+2. **The microphone.** "Waiting for microphone access…" while the system asks; refused or no device: section 2, and nothing is sent to the gateway.
+3. **Connecting.** `talk.session.create {sessionKey, provider, voice?, language?, capabilities: ["voice-selection"]}` for the open task (research §2, §7). The band says "Connecting to Otto…" with "Cancel". Capture may already be open, and the mark says so, but nothing is sent until the relay is ready.
+4. **Ready.** The create's answer (with the provider checked, section 2), then the `ready` event of that same relay, matched by id; a `ready` that arrives before the answer is held until its id matches it. With a live capture track and a ready relay the band says "Listening", the time starts, and the region says "Voice chat with Otto started".
+
+| At step 3 the gateway answers | The band |
+|---|---|
+| A refusal, such as `UNAVAILABLE` with `talkIssue.code: "realtime_unavailable"` | "Couldn't start voice chat", and the gateway's message as text: "Realtime voice provider "openai" is not configured." (live, research §1). No call was made, so nothing says one ended. |
+| "Too many active realtime relay sessions…" | "Couldn't start voice chat", with that message |
+| Another provider than the one asked for | The unused session is closed and the sheet asks again (section 2) |
+| No answer, and the connection drops | "Voice chat failed", "Connection lost" (section 8) |
+| Not connected when pressed | "Voice chat failed", "No connection" |
+
+**"Cancel" during connecting** stops capture at once and drops the attempt. If the create answers afterwards, that relay is closed at once and nothing is attached to it; until its close is confirmed, the next start waits ("Ending the previous voice session…").
 
 A call is started only on the open task, so the bot is the task's (`sessionKey` selects it; research §2, the map's section 17).
 
 ### Entry points (iPhone)
 
-Siri, Shortcuts and the Action Button only open states this design already has (F-407, F-408, F-460):
+Siri, Shortcuts and the Action Button only open states this design already has (F-407, F-408, F-460), through the same gate:
 
-| Entry point                                      | Opens                                                                                                  |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| "Start Dictation" (Siri, Shortcuts)              | The last open task's composer, dictating on the iPhone route; the consent sheet if it was never chosen |
-| "Start Voice Chat" (Siri, Shortcuts), with a bot | That bot's last task, and step 1 or 2 of the walk above                                                |
-| The Action Button, "Start Voice Chat"            | The same; pressed during a call, it hangs up (section 8)                                               |
+| Entry point | Opens |
+|---|---|
+| "Start Dictation" (Siri, Shortcuts) | The last open task's composer, dictating on the chosen route, after consent and permission as above; an existing draft is kept, and the words go in at the caret |
+| "Start Voice Chat" (Siri, Shortcuts), with a bot | That bot's last task, never another bot's, and the walk above. If that task has a draft, nothing starts: the draft is kept and the shelf says "Voice chat not started. Start Voice Chat needs an empty message. Your draft is kept." |
+| The Action Button, "Start Voice Chat" | The same, for the bot it was set up with; pressed during a call, it hangs up as Hang up does (section 8) |
 
 No system screen is drawn here: the system draws its own.
 
@@ -452,12 +466,10 @@ Rows left as they are, for a decision. This design meets each target as it stand
 
 ### What the host does
 
-- **Permissions.** `lockDownSession` grants `media` for audio only, to the app's own pages, and nothing else. On macOS, `systemPreferences.getMediaAccessStatus` and `askForMediaAccess("microphone")` before the first capture.
+- **Permissions.** Electron's permission handler grants `media` for audio only, to the app's own audio requester and its own origin, and nothing else (`lockDownSession` allows only the clipboard today). On macOS, `systemPreferences.getMediaAccessStatus` and `askForMediaAccess("microphone")` after the person chose Start, and Speech Recognition for Apple dictation. The web preview asks its own origin for audio only, in a secure context. The iPhone asks for the microphone and speech recognition separately.
 - **Packaging, for the packaging owner** (not changed here): `NSMicrophoneUsageDescription` in `mac.extendInfo`; an entitlements file with `com.apple.security.device.audio-input` for the hardened runtime; for the on-device dictation route, `NSSpeechRecognitionUsageDescription` and the native recognizer (a helper or a native module); `media-src` already allows `data:` for a memo's bytes. Nothing on Windows.
-- **Audio.** The renderer captures and plays; the host sends and receives. Captured audio crosses the bridge to the host, which calls `appendAudio`; reply audio crosses back. The web host's bridge frame limit (`MAX_BRIDGE_FRAME_BYTES`) bounds a chunk. No audio is written to disk, a log, the bridge's replay or a crash report. Captured audio goes nowhere but the gateway, and only while a session the gateway accepted is open.
-- **One call per host**, across windows and tabs. A second call's create is refused by the host before it reaches the gateway; the second session of a language change belongs to the same call.
-- **On a dropped connection**, the host releases the microphone at once and sends no close (the gateway has closed the session). If the connection is back within 30 seconds and the person has not hung up, it creates the call's new session (section 8); otherwise the call has failed. It never starts a call the person did not start.
-- **The voice preference.** `clawtrate.voice` is read at every connect and on `users.prefs.changed`, and changed with a compare-and-set, as `clawtrate.sidebar` is.
+- **Audio.** The renderer captures and plays; the host sends and receives. Captured audio crosses the bridge to the host, which calls `appendAudio` only for a relay that is ready, whose provider was checked against the accepted one; reply audio crosses back. The web host's bridge frame limit (`MAX_BRIDGE_FRAME_BYTES`) bounds a frame on the bridge and nothing else. No audio is written to disk, a log, the bridge's replay or a crash report, and in-memory audio is dropped when capture or playback stops. The on-device dictation route gives raw audio only to the recognizer with on-device recognition required; it never crosses the gateway bridge.
+- **Permission loss or a track that ends** stops capture and drops what wasn't sent (section 2); capture is opened again only by the person's choice.
 
 ### What the engine supplies
 
