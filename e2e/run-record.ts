@@ -48,6 +48,13 @@ const isProc = (p: unknown): p is Proc =>
   typeof (p as Proc).identity === "string" &&
   (p as Proc).identity !== "";
 
+/** Whether a name is one of a run's own instances: only these are ever reset from its record. */
+function runInstance(run: string, name: unknown): boolean {
+  return [`e2e-${run}`, `e2e-${run}-other`, `e2e-${run}-acct`, `e2e-${run}-rules`].includes(
+    String(name),
+  );
+}
+
 export function readRecord(path: string): RunRecord | null {
   try {
     const record = JSON.parse(readFileSync(path, "utf8")) as RunRecord;
@@ -60,9 +67,7 @@ export function readRecord(path: string): RunRecord | null {
       // Only this run's own instances, each with a run id of the tool's format.
       record.instances.every(
         (entry) =>
-          (entry?.name === `e2e-${record.run}` ||
-            entry?.name === `e2e-${record.run}-other` ||
-            entry?.name === `e2e-${record.run}-acct`) &&
+          runInstance(record.run, entry?.name) &&
           typeof entry.runId === "string" &&
           /^[0-9a-f]{48}$/.test(entry.runId),
       ) &&
@@ -74,6 +79,36 @@ export function readRecord(path: string): RunRecord | null {
     // unreadable: left alone
   }
   return null;
+}
+
+/**
+ * An instance a spec starts for itself, in the shard that runs it, added to the
+ * run's record before it starts and taken out once it is reset. The run's own
+ * cleanup reads the record again, so it resets one a spec left behind.
+ */
+export function recordInstance(
+  dir: string,
+  run: string,
+  entry: { name: string; runId: string },
+): void {
+  if (!runInstance(run, entry.name)) throw new Error(`${entry.name} is not run ${run}'s instance`);
+  const record = readRecord(recordPath(dir, run));
+  if (!record) throw new Error(`no record of end-to-end run ${run}`);
+  record.instances.push(entry);
+  saveRecord(dir, record);
+}
+
+export function forgetInstance(
+  dir: string,
+  run: string,
+  entry: { name: string; runId: string },
+): void {
+  const record = readRecord(recordPath(dir, run));
+  if (!record) return;
+  record.instances = record.instances.filter(
+    (each) => each.name !== entry.name || each.runId !== entry.runId,
+  );
+  saveRecord(dir, record);
 }
 
 /** A temporary folder a run may have created: directly in the system temp folder, with our prefix. */

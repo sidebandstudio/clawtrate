@@ -10,6 +10,15 @@ import {
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
+import {
+  AUDIT_STATUSES,
+  type ActivityPage,
+  type AllowlistRemoveResult,
+  type AuditStatus,
+  type GrantRevokeResult,
+  type RulesPluginState,
+  type SavedApprovals,
+} from "./permissions.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
 import {
   MAX_SIDEBAR_BOTS,
@@ -51,9 +60,12 @@ export type BridgeCommand =
   | { type: "retry" }
   | { type: "openSession"; key: string }
   | { type: "closeSession"; key: string }
-  /** Ask the gateway's owner for the interactive scopes; shown in `connection.upgrade`. */
-  /** Ask the gateway's owner for the interactive tier, or with `tier: "admin"` for admin with it. */
-  | { type: "requestAccess"; tier?: "admin" | "pairing" }
+  /**
+   * Ask the gateway's owner for the interactive tier; with `tier: "admin"` for admin with it;
+   * with `tier: "pairing"` or `tier: "approvals"` for that scope alone, added to what the
+   * connection holds. Shown in `connection.upgrade`.
+   */
+  | { type: "requestAccess"; tier?: "admin" | "pairing" | "approvals" }
   /**
    * Send to a task this viewer has open. Files are not carried in the command:
    * they are added first (web upload path or Electron IPC) and named by id.
@@ -209,6 +221,36 @@ export type BridgeCommand =
   | { type: "listArchived"; botId: string }
   /** Change the rail's arrangement on the gateway; `base` is this device's, used when the gateway holds none. */
   | { type: "changeSidebar"; change: SidebarChange; base: SidebarPrefs | null }
+  // Settings, Permissions (`permissions.ts`): each read now and not kept.
+  /** The rules plugin's state, from its status method. */
+  | { type: "readRulesPlugin" }
+  /** The routines' grants and the gateway machine's allowlist. */
+  | { type: "readSavedApprovals" }
+  /** Revoke a routine's grant, then read the grants back. */
+  | { type: "revokeGrant"; grantId: string }
+  /**
+   * Remove one allowlist entry of the gateway's machine by its id, only from the
+   * file's revision the page showed (`shownHash`), then read the whole file back.
+   */
+  | {
+      type: "removeAllowlistEntry";
+      agentId: string;
+      entryId: string;
+      shownHash: string;
+      /** The shown file's `snapshotDigest`: 64 lower-case hex characters. */
+      shownDigest: string;
+      /** The connection the person confirmed on: its hello, gateway identity and address. */
+      connectedAt: number;
+      gatewayId: string | null;
+      gatewayUrl: string;
+    }
+  /** One page of the audit log's tool actions, newest first; `cursor` from the page before. */
+  | {
+      type: "readActivity";
+      cursor: string | null;
+      agentId: string | null;
+      status: AuditStatus | null;
+    }
   /** A bot's usage, or every bot's (`botId` null), for a period in this person's time zone; read now. */
   | {
       type: "readUsage";
@@ -309,7 +351,23 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                           }
                                                         : C extends { type: "setMachineDefaults" }
                                                           ? ApprovalsFile
-                                                          : void;
+                                                          : C extends { type: "readRulesPlugin" }
+                                                            ? RulesPluginState
+                                                            : C extends {
+                                                                  type: "readSavedApprovals";
+                                                                }
+                                                              ? SavedApprovals
+                                                              : C extends { type: "revokeGrant" }
+                                                                ? GrantRevokeResult
+                                                                : C extends {
+                                                                      type: "removeAllowlistEntry";
+                                                                    }
+                                                                  ? AllowlistRemoveResult
+                                                                  : C extends {
+                                                                        type: "readActivity";
+                                                                      }
+                                                                    ? ActivityPage
+                                                                    : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -398,6 +456,20 @@ function sessionKey(value: unknown): string {
   if (typeof value !== "string" || !SESSION_KEY_PATTERN.test(value)) {
     throw new Error("invalid session key");
   }
+  return value;
+}
+
+/** A whole SHA-256 in lower-case hex. */
+function digest(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value))
+    throw new Error("invalid file digest");
+  return value;
+}
+
+/** A hello's time in epoch ms. */
+function helloTime(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    throw new Error("invalid connection time");
   return value;
 }
 
@@ -616,9 +688,42 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return { type: "connect", url: command.url, token: token ?? null };
     }
     case "requestAccess":
-      return command.tier === "admin" || command.tier === "pairing"
+      return command.tier === "admin" || command.tier === "pairing" || command.tier === "approvals"
         ? { type: "requestAccess", tier: command.tier }
         : { type: "requestAccess" };
+    case "readRulesPlugin":
+    case "readSavedApprovals":
+      return { type: command.type };
+    case "revokeGrant":
+      return { type: "revokeGrant", grantId: id(command.grantId, "grant id") };
+    case "removeAllowlistEntry":
+      return {
+        type: "removeAllowlistEntry",
+        agentId: botId(command.agentId),
+        entryId: id(command.entryId, "entry id"),
+        shownHash: id(command.shownHash, "file revision"),
+        shownDigest: digest(command.shownDigest),
+        connectedAt: helloTime(command.connectedAt),
+        gatewayId:
+          command.gatewayId === null || command.gatewayId === undefined
+            ? null
+            : id(command.gatewayId, "gateway id"),
+        gatewayUrl: id(command.gatewayUrl, "gateway address"),
+      };
+    case "readActivity": {
+      const status = (command.status ?? null) as AuditStatus | null;
+      if (status !== null && !AUDIT_STATUSES.includes(status)) throw new Error("invalid status");
+      return {
+        type: "readActivity",
+        cursor:
+          command.cursor === null || command.cursor === undefined
+            ? null
+            : id(command.cursor, "cursor"),
+        agentId:
+          command.agentId === null || command.agentId === undefined ? null : botId(command.agentId),
+        status,
+      };
+    }
     case "refreshAccounts":
     case "cancelSignIn":
     case "dismissSignIn":
@@ -1140,6 +1245,31 @@ class ViewerSession implements BridgeSession {
         return;
       case "requestAccess":
         return client.requestAccess(command.tier ?? "interactive");
+      case "readRulesPlugin":
+        return client.readRulesPlugin();
+      case "readSavedApprovals":
+        return client.readSavedApprovals();
+      case "revokeGrant":
+        return client.revokeGrant(command.grantId);
+      case "removeAllowlistEntry":
+        return client.removeAllowlistEntry({
+          owner,
+          agentId: command.agentId,
+          entryId: command.entryId,
+          shownHash: command.shownHash,
+          shownDigest: command.shownDigest,
+          connection: {
+            connectedAt: command.connectedAt,
+            gatewayId: command.gatewayId,
+            gatewayUrl: command.gatewayUrl,
+          },
+        });
+      case "readActivity":
+        return client.readActivity({
+          cursor: command.cursor,
+          agentId: command.agentId,
+          status: command.status,
+        });
       case "refreshAccounts":
         return client.refreshAccounts();
       case "checkLock":

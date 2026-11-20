@@ -433,11 +433,11 @@ Saved approvals lists the standing approvals the gateway keeps and Clawtrate can
 
 ## 9. Activity
 
-Activity lists the tool actions the gateway's audit log holds, newest first, and what caused each where a record says so (F-324).
+Activity lists the tool actions the gateway's audit log holds, newest first, and what caused each where a record says so (F-324). Activity's badge uses the audit event's own outcome. A matching rules plugin decision can explain the outcome. Some approval and review events carry additional evidence while the run is happening. The retained sources do not cover every call.
 
 **A row**: the time; the bot; the task; the action as the audit log names it (the tool, and a command or target only when an independently readable tool result in the task's own transcript has it); a tag, **Allowed**, **Asked**, **Denied** or **Blocked**; and on the second line its cause, labelled:
 
-- **Recorded**: a record made with this call shares its run and call identity: the call's own result in a task this connection can read ("the gateway's sentence"), the rules plugin's decision record (read scope: "Recorded: Otto's rule 'never under secrets/**', version 1 (now version 2)"), or the gateway's approval history (approvals scope: "Recorded: answered Allow once"; "your answer" only when this reader is established as its resolver).
+- **Recorded**: a record made with this call shares its run and call identity: the call's own result in a task this connection can read ("the gateway's sentence"), or the rules plugin's decision record (read scope: "Recorded: Otto's rule 'never under secrets/**', version 1 (now version 2)").
 - **Inferred**: Clawtrate read something before the call that would explain it, and nothing contradicts it; the row says what and when ("Inferred: Marlow's messaging list didn't name Pip when it was read at 5:30 PM"). A call a routine's grant may have passed reads "Cause not recorded". An earlier read of a rule is never Recorded.
 - **Cause not recorded**: nothing joins, or the gateway's answer names no cause ("Plugin approval required (gateway unavailable)", "Tool read not found" with no read naming the tool). The row shows the tool and the time.
 

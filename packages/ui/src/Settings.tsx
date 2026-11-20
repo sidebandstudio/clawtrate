@@ -12,8 +12,10 @@ import {
   type Bot,
   type ConnectionState,
   type HostInfo,
+  type Task,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
@@ -28,6 +30,7 @@ import { CopyValue } from "./AccessBar.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
 import { BackIcon, ChevronIcon, CloseIcon } from "./icons.tsx";
+import { PermissionsSection, type ShowInChat } from "./permissions/PermissionsSection.tsx";
 
 /** The connection's state, as the Gateway pane names it. */
 export function gatewayState(connection: ConnectionState): string {
@@ -69,13 +72,15 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = "gateway" | "accounts" | "conversation" | "usage" | "machines" | "updates";
+type Section =
+  "gateway" | "accounts" | "conversation" | "usage" | "machines" | "permissions" | "updates";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
   ["conversation", "Conversation"],
   ["usage", "Usage"],
   ["machines", "Machines"],
+  ["permissions", "Permissions"],
   ["updates", "Updates"],
 ];
 
@@ -147,6 +152,8 @@ export function Settings({
   info,
   accounts,
   bots,
+  tasksByBot = {},
+  onShowInChat,
   initialUpdates,
   updateReading,
   onClose,
@@ -155,6 +162,10 @@ export function Settings({
   info: HostInfo;
   accounts: AccountsState;
   bots: readonly Bot[];
+  /** The rail's tasks, for Activity's task names. */
+  tasksByBot?: Record<string, Task[]>;
+  /** Activity's "Show in chat": close Settings and bring that step into view. */
+  onShowInChat?: ShowInChat;
   initialUpdates: boolean;
   updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
   onClose: () => void;
@@ -169,11 +180,12 @@ export function Settings({
   const [announcer, announce] = useAnnouncer();
   const setSection = (next: Section) => {
     remember(SHOWN_LAST, next);
-    setSectionState(next);
-    setPane("section");
-    requestAnimationFrame(() =>
-      dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus(),
-    );
+    // Focus the mounted heading during navigation, before the next key can reach a control.
+    flushSync(() => {
+      setSectionState(next);
+      setPane("section");
+    });
+    dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus();
   };
   const state = gatewayState(connection);
   const problem = gatewayProblem(connection);
@@ -407,6 +419,21 @@ export function Settings({
 
   let content: ReactNode;
   if (section === "accounts" && accountsSection.connect) content = accountsSection.connect;
+  else if (section === "permissions")
+    content = (
+      <PermissionsSection
+        connection={connection}
+        info={info}
+        bots={bots}
+        tasksByBot={tasksByBot}
+        announce={announce}
+        toNav={toNav}
+        onShowInChat={(target) => {
+          onClose();
+          onShowInChat?.(target);
+        }}
+      />
+    );
   else {
     const view =
       section === "accounts" && accountsSection.view

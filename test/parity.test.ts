@@ -160,6 +160,38 @@ describe("the parity table", () => {
 // of a row is a check that never runs, lists them with the real runners, and
 // expects the row marked done to fail. The folder is inside the checkout so the
 // specs can import the runners; test-results/ is ignored by git.
+describe("the gateway dependency of the saved approvals and activity rows", () => {
+  /** A row's gateway dependency cell, apart from its target and status. */
+  const dependency = (id: string) => {
+    const line = readFileSync(join(ROOT, "docs/parity.md"), "utf8")
+      .split("\n")
+      .find((each) => each.startsWith(`| ${id} |`));
+    return line?.split("|")[6]?.trim() ?? "";
+  };
+
+  it("F-324 names the native request, its history join, history's missing ids, the review event and the missing ledger", () => {
+    const cell = dependency("F-324");
+    expect(cell).toContain("For observed native exec requests, the event's run and call identify");
+    expect(cell).toContain("its approval id joins to the answer in approval history");
+    expect(cell).toContain("Approval history alone carries no run or call id.");
+    expect(cell).toContain(
+      "The Guardian review event can name a command's run, call, outcome and rationale",
+    );
+    expect(cell).toContain(
+      "A complete retained ledger needs each reviewed action's verdict and source",
+    );
+  });
+
+  it("F-326 names the plugin's Ask and no standing grant, the days-only routine grant, the capped placement end and the missing hour grant", () => {
+    const cell = dependency("F-326");
+    expect(cell).toContain("The rules plugin can ask and record Allow once or Deny.");
+    expect(cell).toContain("It issues no standing grant from that answer.");
+    expect(cell).toContain("takes whole days, 1 to 3650");
+    expect(cell).toContain("a recorded end at most 30 days after minting");
+    expect(cell).toContain("The target needs an authorized, action-scoped one-hour grant");
+  });
+});
+
 describe("the parity table does not count a check that never runs", () => {
   let dir: string;
   const ROWS = [

@@ -54,6 +54,14 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/scopes.ts:READ_SCOPES": "static, one scope",
   "packages/core/src/scopes.ts:INTERACTIVE_SCOPES": "static, four scopes",
   "packages/core/src/scopes.ts:ADMIN_SCOPES": "static, five scopes",
+  "packages/core/src/scopes.ts:APPROVALS_TIER_SCOPES": "static, two scopes",
+  "packages/core/src/permissions.ts:AUDIT_STATUSES": "static, the audit log's tool statuses",
+  "packages/core/src/permissions.ts:INCOMPLETE_MARKS":
+    "static, the eight fields that mark an approvals answer incomplete",
+  "packages/core/src/client.ts:readActivity>loaded":
+    "one Activity read's index of the calls the open transcripts hold, bounded by the state's own bounds, dropped when the read answers",
+  "packages/core/src/permissions.ts:allowlistOf>items":
+    "one read's entries, at most `MAX_ALLOWLIST_LISTED`, returned to the caller",
   "packages/core/src/accounts-engine.ts:CERTAIN_REFUSALS": "static, seven error codes",
   "packages/core/src/accounts.ts:KIND_RECORDS": "static, the four kinds Clawtrate records",
   "packages/core/src/machines.ts:NODE_APPROVALS_COMMANDS": "static, two command names",

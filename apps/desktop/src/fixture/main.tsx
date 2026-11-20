@@ -14,6 +14,7 @@
 //   &tab=files             the Work pane's tab
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
 //   &usage=…, &budget=…, &plimit=…, &uview=usage     usage and budgets (usage.ts)
+//   &rules=stopped, &saved=empty, &revoke=refused, &audit=off …   Settings → Permissions (permissions.ts)
 
 import { App, BridgeProvider, requestUsagePage, rosterKey, rosterScope } from "@clawtrate/ui";
 import { StrictMode } from "react";
@@ -26,6 +27,7 @@ import { accountParams } from "./accounts.ts";
 import { usageParams } from "./usage.ts";
 import { fixtureUpdates } from "./updates.ts";
 import { machineParams } from "./machines.ts";
+import { permissionParams } from "./permissions.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -83,6 +85,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   accounts: accountParams(params),
   usage: usageParams(params),
   machines: machineParams(params),
+  permissions: permissionParams(params),
 });
 if (params.has("hold")) bridge.hold();
 // Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.

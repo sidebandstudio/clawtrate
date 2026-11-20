@@ -189,6 +189,7 @@ import {
   PAIRING_SCOPE,
   heldFromGrant,
   INTERACTIVE_SCOPES,
+  type AccessTier,
   normalizeHeldScopes,
   QUESTIONS_SCOPE,
   READ_SCOPES,
@@ -220,6 +221,23 @@ import {
   WORST_STATE_CHARS,
 } from "./state-bounds.ts";
 import { createStore, type Store } from "./store.ts";
+import {
+  auditCallId,
+  readActivity,
+  readRulesPlugin,
+  readSavedApprovals,
+  removeAllowlistEntry,
+  revokeGrant,
+  RULES_STATUS_METHOD,
+  type ActivityPage,
+  type ActivityQuery,
+  type AllowlistRemoveResult,
+  type GrantRevokeResult,
+  type LoadedCall,
+  type PermissionsContext,
+  type RulesPluginState,
+  type SavedApprovals,
+} from "./permissions.ts";
 import {
   changeSidebar,
   initialSidebar,
@@ -718,6 +736,8 @@ export class ClawtrateClient {
    * the hello does not carry one.
    */
   private gatewayBootId: string | null = null;
+  /** Whether the latest hello listed the rules plugin's status method (`hello-ok.features.methods`). */
+  private rulesListed = false;
   /** The turn limit in force (F-100): the host's option, else the person's choice, else 50 minutes. */
   private turnLimitMs = DEFAULT_TURN_LIMIT_MS;
   /**
@@ -791,6 +811,8 @@ export class ClawtrateClient {
   private heldBase: readonly string[] = [];
   /** The access request under way also asks for device access (`operator.pairing`). */
   private pairingWanted = false;
+  /** The access request under way also asks for approvals (`operator.approvals`) by name. */
+  private approvalsWanted = false;
   private scopeUpgrade: GatewayScopeUpgrade | null = null;
   private accessWaiters: Waiter[] = [];
   /** The frame, image and file ceilings from `hello-ok.policy`; nothing else of it is kept. */
@@ -1166,13 +1188,15 @@ export class ClawtrateClient {
    * When it is approved the client stores the rotated device token and
    * reconnects asking for exactly what was granted of that set.
    */
-  async requestAccess(tier: "interactive" | "admin" | "pairing" = "interactive"): Promise<void> {
+  async requestAccess(tier: AccessTier = "interactive"): Promise<void> {
     if (this.options.readOnly)
       throw new Error("This host only reads; it does not ask for more access.");
-    // A request for admin is never narrowed by a later one for less, and device access
-    // (`operator.pairing`) is asked for only by name, added to the scopes the connection
-    // holds and nothing else: from a read connection it asks for no power to send or answer.
+    // A request for admin is never narrowed by a later one for less. Device access
+    // (`operator.pairing`) and approvals (`operator.approvals`) are asked for only by name,
+    // added to the scopes the connection holds and nothing else: from a read connection
+    // neither asks for the power to send or answer.
     const pairing = tier === "pairing" || (this.upgradeWanted && this.pairingWanted);
+    const approvals = tier === "approvals" || (this.upgradeWanted && this.approvalsWanted);
     const waiting = this.upgradeWanted ? this.upgradeTier : null;
     const wanted =
       tier === "admin" || waiting === "admin"
@@ -1182,16 +1206,22 @@ export class ClawtrateClient {
           : "held";
     if (wanted === "held" && waiting !== "held")
       this.heldBase = ADMIN_SCOPES.filter((scope) => this.state.connection.scopes.includes(scope));
-    const target = [...this.tierScopes(wanted), ...(pairing ? [PAIRING_SCOPE] : [])];
+    const target = this.targetOf(wanted, approvals, pairing);
     if (target.every((scope) => this.holdsExactly(scope))) return;
     if (!this.settings) throw new Error("Connect to a gateway first.");
-    if (this.scopeUpgrade && (wanted !== this.upgradeTier || (pairing && !this.pairingWanted))) {
+    if (
+      this.scopeUpgrade &&
+      (wanted !== this.upgradeTier ||
+        (pairing && !this.pairingWanted) ||
+        (approvals && !this.approvalsWanted))
+    ) {
       // A narrower request is waiting; ask again, for this with it.
       this.scopeUpgrade.cancelScopeUpgrade();
       this.scopeUpgrade = null;
     }
     this.upgradeTier = wanted;
     this.pairingWanted = pairing;
+    this.approvalsWanted = approvals;
     this.upgradeWanted = true;
     if (this.state.connection.status === "connected") this.startUpgrade();
   }
@@ -1200,10 +1230,18 @@ export class ClawtrateClient {
     return tier === "admin" ? ADMIN_SCOPES : tier === "held" ? this.heldBase : INTERACTIVE_SCOPES;
   }
 
-  /** What an access request asks for: its tier, device access when asked for or held. */
+  /** A tier's scopes, with approvals and device access when asked for by name. */
+  private targetOf(tier: "interactive" | "admin" | "held", approvals: boolean, pairing: boolean) {
+    const scopes = [...this.tierScopes(tier)];
+    if (approvals && !scopes.includes(APPROVALS_SCOPE)) scopes.push(APPROVALS_SCOPE);
+    if (pairing) scopes.push(PAIRING_SCOPE);
+    return scopes;
+  }
+
+  /** What an access request asks for: its tier, approvals and device access when asked for or held. */
   private upgradeTarget(): string[] {
     const keepPairing = this.pairingWanted || this.state.connection.scopes.includes(PAIRING_SCOPE);
-    return [...this.tierScopes(this.upgradeTier), ...(keepPairing ? [PAIRING_SCOPE] : [])];
+    return this.targetOf(this.upgradeTier, this.approvalsWanted, keepPairing);
   }
 
   /** Device access counts only when granted by name: admin implies it, but was not asked for it. */
@@ -1236,6 +1274,7 @@ export class ClawtrateClient {
     const tier = this.upgradeTier;
     const target = this.upgradeTarget();
     const askedPairing = target.includes(PAIRING_SCOPE);
+    const askedApprovals = target.includes(APPROVALS_SCOPE);
     const upgrade = new GatewayScopeUpgrade({
       request: (method, params, options) => protocol.request(method, params, options),
       tokenStore: {
@@ -1303,6 +1342,7 @@ export class ClawtrateClient {
             if (
               (tier !== "held" &&
                 !scopeSatisfied(outcome.scopes, tier === "admin" ? ADMIN_SCOPE : WRITE_SCOPE)) ||
+              (askedApprovals && !scopeSatisfied(outcome.scopes, APPROVALS_SCOPE)) ||
               (askedPairing && !outcome.scopes.includes(PAIRING_SCOPE))
             ) {
               this.failAccess(
@@ -1316,6 +1356,7 @@ export class ClawtrateClient {
             // Settled. The reconnect is under way; its hello settles the waiters.
             this.upgradeWanted = false;
             this.pairingWanted = false;
+            this.approvalsWanted = false;
             this.setUpgrade({ status: "approved", error: null });
             return;
           }
@@ -1337,6 +1378,7 @@ export class ClawtrateClient {
   private failAccess(error: AccessRequestError): void {
     this.upgradeWanted = false;
     this.pairingWanted = false;
+    this.approvalsWanted = false;
     this.setUpgrade({ status: error.status, error: error.message });
     const waiters = this.accessWaiters;
     this.accessWaiters = [];
@@ -1348,6 +1390,7 @@ export class ClawtrateClient {
     this.scopeUpgrade = null;
     this.upgradeWanted = false;
     this.pairingWanted = false;
+    this.approvalsWanted = false;
     const waiters = this.accessWaiters;
     this.accessWaiters = [];
     for (const waiter of waiters) waiter.reject(new Error(reason));
@@ -4921,6 +4964,8 @@ export class ClawtrateClient {
       typeof bootId === "string" && bootId.length > 0 && bootId.length <= 96 ? bootId : null;
     const scopes = [...(hello.auth.scopes ?? [])];
     const canWrite = scopeSatisfied(scopes, WRITE_SCOPE);
+    const methods = asRecord(asRecord(hello)?.features)?.methods;
+    this.rulesListed = Array.isArray(methods) && methods.includes(RULES_STATUS_METHOD);
     const policy = asRecord(hello.policy);
     const number = (value: unknown) =>
       typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -4950,11 +4995,13 @@ export class ClawtrateClient {
       this.heldBase = ADMIN_SCOPES.filter((scope) => scopes.includes(scope));
     if (
       this.tierScopes(this.upgradeTier).every((scope) => scopeSatisfied(scopes, scope)) &&
-      (!this.pairingWanted || scopes.includes(PAIRING_SCOPE))
+      (!this.pairingWanted || scopes.includes(PAIRING_SCOPE)) &&
+      (!this.approvalsWanted || scopeSatisfied(scopes, APPROVALS_SCOPE))
     ) {
       this.upgradeWanted = false;
       this.upgradeTier = "interactive";
       this.pairingWanted = false;
+      this.approvalsWanted = false;
     } else if (this.upgradeWanted) {
       this.startUpgrade();
     }
@@ -5789,6 +5836,115 @@ export class ClawtrateClient {
 
   async deleteTask(key: string, options: { owner?: object } = {}): Promise<void> {
     await deleteTask(this.actionContext(options.owner ?? null), key);
+  }
+
+  // Settings, Permissions (`permissions.ts`): read now and not kept ------------------------
+
+  private permissionsContext(): PermissionsContext {
+    if (this.state.connection.status !== "connected")
+      throw new Error("Not connected to the gateway.");
+    const generation = this.generation;
+    return {
+      request: async (method, params) => {
+        if (generation !== this.generation) throw new Error("Switched to another gateway.");
+        try {
+          return await this.request(method, params);
+        } catch (error) {
+          this.noteMissingScope(error);
+          throw error;
+        }
+      },
+      now: () => this.now(),
+    };
+  }
+
+  /** The rules plugin's state, from its status method when the hello listed it (`operator.read`). */
+  async readRulesPlugin(): Promise<RulesPluginState> {
+    return readRulesPlugin(this.permissionsContext(), this.rulesListed);
+  }
+
+  /** The routines' grants (`operator.approvals`) and the gateway machine's allowlist (`operator.admin`). */
+  async readSavedApprovals(): Promise<SavedApprovals> {
+    const ctx = this.permissionsContext();
+    return readSavedApprovals(ctx, {
+      canApprove: this.holds(APPROVALS_SCOPE),
+      canAdmin: this.state.connection.canAdmin,
+    });
+  }
+
+  /** Revoke a routine's grant and read the list back. Never asks for access by itself. */
+  async revokeGrant(grantId: string): Promise<GrantRevokeResult> {
+    if (this.options.readOnly) throw new Error("This host only reads; it does not revoke.");
+    if (!this.holds(APPROVALS_SCOPE)) throw new Error("Revoking a grant needs approvals access.");
+    return revokeGrant(this.permissionsContext(), grantId);
+  }
+
+  /** Remove one entry of the gateway machine's allowlist, then read the file back (`operator.admin`). */
+  async removeAllowlistEntry(target: {
+    owner?: object;
+    agentId: string;
+    entryId: string;
+    shownHash: string;
+    shownDigest: string;
+    /** The connection the person confirmed on. */
+    connection: { connectedAt: number; gatewayId: string | null; gatewayUrl: string };
+  }): Promise<AllowlistRemoveResult> {
+    if (this.options.readOnly)
+      throw new Error("This host only reads; it does not change settings.");
+    if (!this.state.connection.canAdmin)
+      throw new Error("Removing an allowlist entry needs admin access.");
+    // Only on the connection the person confirmed on: checked now, and again before the write.
+    const assertCurrent = () => {
+      this.checkNotWithdrawn(target.owner);
+      const now = this.state.connection;
+      if (
+        now.status !== "connected" ||
+        now.connectedAt !== target.connection.connectedAt ||
+        now.gatewayId !== target.connection.gatewayId ||
+        now.gatewayUrl !== target.connection.gatewayUrl
+      )
+        throw new Error("The connection changed since this entry was shown; nothing was removed.");
+    };
+    assertCurrent();
+    return removeAllowlistEntry(this.permissionsContext(), {
+      agentId: target.agentId,
+      entryId: target.entryId,
+      shownHash: target.shownHash,
+      shownDigest: target.shownDigest,
+      assertCurrent,
+    });
+  }
+
+  /** One page of the audit log's tool actions with their recorded causes (`operator.read`). */
+  async readActivity(query: ActivityQuery): Promise<ActivityPage> {
+    const ctx = this.permissionsContext();
+    // The calls of every task this host follows, by the audit log's hash of their id, with
+    // their task, where each is drawn, and the run that drawing names itself.
+    const loaded = new Map<string, LoadedCall[]>();
+    const add = (call: LoadedCall) => {
+      const hash = auditCallId(call.callId);
+      loaded.set(hash, [...(loaded.get(hash) ?? []), call]);
+    };
+    for (const [key, transcript] of Object.entries(this.state.transcripts)) {
+      for (const item of transcript.items) {
+        for (const block of item.blocks) {
+          if (block.kind === "tool-call" && block.callId)
+            add({ key, callId: block.callId, runId: block.runId ?? null, kind: "history" });
+        }
+      }
+      for (const run of transcript.runs) {
+        for (const step of run.steps) {
+          if (step.toolCallId)
+            add({
+              key,
+              callId: step.toolCallId,
+              runId: run.bound ? run.id : null,
+              kind: "step",
+            });
+        }
+      }
+    }
+    return readActivity(ctx, query, { rulesListed: this.rulesListed, loaded });
   }
 
   /** A bot's archived tasks, read now and not kept (`operator.read`). */

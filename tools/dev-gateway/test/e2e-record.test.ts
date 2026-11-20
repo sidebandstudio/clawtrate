@@ -8,7 +8,9 @@ import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   cleanUp,
+  forgetInstance,
   readRecord,
+  recordInstance,
   recordPath,
   recoverDeadRuns,
   saveRecord,
@@ -150,5 +152,30 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     expect(run.kept()).toBe(true);
     expect(run.resets).toEqual([]);
     expect(run.lines.join("\n")).toMatch(/not a run record this version wrote/);
+  });
+});
+
+describe("an instance a spec starts for itself", () => {
+  it("is in the run's record before it starts, out of it once reset, and reset by a recovery that finds it", () => {
+    const run = aRun(deadProcess());
+    const rules = { name: `e2e-${run.record.run}-rules`, runId: newRunId() };
+    recordInstance(run.records, run.record.run, rules);
+    expect(readRecord(recordPath(run.records, run.record.run))?.instances).toContainEqual(rules);
+    // Another name is not this run's to reset.
+    const foreign = { name: "review", runId: newRunId() };
+    expect(() => recordInstance(run.records, run.record.run, foreign)).toThrow(/not run/);
+    expect(readRecord(recordPath(run.records, run.record.run))?.instances).not.toContainEqual(
+      foreign,
+    );
+    // A record a spec left with its instance in it: recovery resets that instance by its run id.
+    saveRecord(run.records, { ...run.record, instances: [...run.record.instances, rules] });
+    recoverDeadRuns(run.records, run.reset, run.log);
+    expect(run.resets).toContain(`${rules.name} ${rules.runId}`);
+    // Once reset, the spec takes it out again.
+    saveRecord(run.records, { ...run.record, instances: [...run.record.instances, rules] });
+    forgetInstance(run.records, run.record.run, rules);
+    expect(readRecord(recordPath(run.records, run.record.run))?.instances).not.toContainEqual(
+      rules,
+    );
   });
 });

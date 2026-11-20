@@ -20,7 +20,13 @@ import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
 import "./bots/bots.css";
-import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
+import {
+  revealStep,
+  revealTaskCall,
+  WorkLinksContext,
+  type FileRequest,
+  type WorkLinks,
+} from "./work/links.tsx";
 
 /** A control that can take focus now: in the page, shown, and not behind the drawer. */
 function canFocus(element: HTMLElement | null): element is HTMLElement {
@@ -48,6 +54,7 @@ export function Shell({
   onOpenSettings,
   inert = false,
   onCaughtUp,
+  reveal = null,
 }: {
   state: ClawtrateState;
   info: HostInfo;
@@ -62,6 +69,8 @@ export function Shell({
   inert?: boolean;
   /** Whether the open task has caught up since the latest connect: until then work is last seen. */
   onCaughtUp?: (caughtUp: boolean) => void;
+  /** Settings → Permissions → Activity's "Show in chat": open that task with the call in view. */
+  reveal?: { botId: string; key: string; callId: string; runId: string; nonce: number } | null;
 }) {
   const send = useCommand();
   const interactive = canWrite(state.connection, info);
@@ -313,6 +322,30 @@ export function Shell({
     },
     [onePane],
   );
+  // "Show in chat" from Activity: open the task, then bring the call into view once it is drawn.
+  const selectTask = selection.selectTask;
+  useEffect(() => {
+    if (!reveal) return;
+    let frame = requestAnimationFrame(() => {
+      selectTask(reveal.botId, reveal.key);
+      openDetail();
+      const until = Date.now() + 5000;
+      const attempt = () => {
+        if (
+          revealTaskCall(reveal.key, reveal.callId, () =>
+            setChatNote("Clawtrate couldn't match this call to a step in a loaded task."),
+          )
+        )
+          return;
+        if (Date.now() < until) frame = requestAnimationFrame(attempt);
+        else setChatNote("This step isn't in the chat: it is not loaded here, or not kept.");
+      };
+      frame = requestAnimationFrame(attempt);
+    });
+    return () => cancelAnimationFrame(frame);
+    // Once per request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal?.nonce]);
   const showList = useCallback(() => setView("list"), []);
   const backToList = useCallback(() => {
     navigatedTo.current = "list";

@@ -104,6 +104,7 @@ import {
   type SidebarState,
 } from "./sidebar.ts";
 import type { Digest } from "./bounds.ts";
+import { MAX_BLOCK_RUN_CHARS } from "./mapping.ts";
 import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
 import type {
   Bot,
@@ -525,6 +526,7 @@ const block = union<TranscriptBlock, "kind">("kind")({
     argumentsText: text(MAX_ITEM_TOOL_CHARS),
     argumentsAbsent: FLAG,
     result: toolResult,
+    runId: id(MAX_BLOCK_RUN_CHARS),
   }),
 });
 const item = flagged<TranscriptItem>()({
