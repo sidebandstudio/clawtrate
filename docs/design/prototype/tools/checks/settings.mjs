@@ -278,6 +278,30 @@ const SWITCHED = 1700; // connecting, then the identity check
   await p.close();
 }
 
+{
+  // CodeRabbit 1: while the identity is unconfirmed, nothing of Home's opens or starts by its shortcuts.
+  const p = await open("bot=otto&task=o1&switchid=pending");
+  const tasksBefore = await p.evaluate(() => window.app.bots.reduce((n, x) => n + x.tasks.length, 0));
+  await click(p, ".gateway-pill");
+  await click(p, '#gateway-menu [data-gw="studio"]', SWITCHED);
+  await p.keyboard.press("Control+Backslash");
+  await p.keyboard.press("Alt+KeyT");
+  await p.keyboard.press("Control+KeyN");
+  await p.waitForTimeout(150);
+  const state = await p.evaluate(() => ({ panel: window.app.model.panel, create: document.querySelector("#create-dialog").open, button: document.querySelector("#panel-button").hidden, tasks: window.app.bots.reduce((n, x) => n + x.tasks.length, 0) }));
+  check("walk: switch, identity unconfirmed: no Work pane, no New task, no New bot, no panel button", !state.panel && !state.create && state.button && state.tasks === tasksBefore && (await rail(p)).includes("Confirming this is Studio gateway…"), JSON.stringify(state));
+  await p.close();
+}
+{
+  const p = await open("bot=otto&task=o1");
+  await click(p, ".gateway-pill");
+  await click(p, '#gateway-menu [data-gw="studio"]', SWITCHED + 300);
+  await p.keyboard.press("Control+Backslash");
+  await p.waitForTimeout(150);
+  check("walk: switch, identity confirmed: the Work pane and its button come back", (await p.locator("#panel-button").isVisible()) && (await p.evaluate(() => window.app.model.panel)));
+  await p.close();
+}
+
 // Part 4: adding (section 5) --------------------------------------------------------------------------------
 
 async function addWalk(name, choice, words, rows, railWord, query = "") {

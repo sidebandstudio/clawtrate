@@ -278,9 +278,35 @@
       $("#composer").hidden = true;
       $("#title-pill").hidden = true;
       $("#new-button").hidden = true;
+      $("#panel-button").hidden = true;
       app.setPanel(false);
       $$(".s-disk-note").forEach((n) => n.remove());
     }
+    // Until a gateway's identity is confirmed, the shared Work pane, New task and New bot stay closed, by
+    // click or by shortcut: the old gateway's markup is still behind them.
+    const confirmed = () => S.conn === "connected" && Boolean(S.inUse);
+    window.addEventListener(
+      "click",
+      (event) => {
+        if (!confirmed() && event.target.closest?.('[data-action="panel"], [data-action="new-bot"], [data-new]')) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      },
+      true,
+    );
+    window.addEventListener(
+      "keydown",
+      (event) => {
+        const mod = event.metaKey || event.ctrlKey;
+        const shortcut = (mod && event.key === "\\") || ((mod || event.altKey) && event.code === "KeyT") || (mod && event.key.toLowerCase() === "n");
+        if (!confirmed() && shortcut) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      },
+      true,
+    );
 
     // Switching (section 6) ------------------------------------------------------------------------------
     // Connecting, then the identity check, then the gateway in use. Until the check passes the
@@ -395,6 +421,7 @@
       app.model.unfolded.clear();
       $("#composer").hidden = false;
       $("#title-pill").hidden = false;
+      $("#panel-button").hidden = false;
       $("#new-button").hidden = app.model.access === "read";
       app.setConnection("connected");
       app.selectBot(set[0].id === "juniper" && id === "home" ? "otto" : set[0].id);
