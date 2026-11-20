@@ -1,0 +1,13 @@
+{
+  "id": "clawtrate-memory",
+  "name": "Clawtrate memory",
+  "description": "List, read and safely change memory notes and shared memory.",
+  "categories": ["developer-tools"],
+  "activation": { "onStartup": true },
+  "contracts": { "gatewayMethodDispatch": ["authenticated-request"] },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

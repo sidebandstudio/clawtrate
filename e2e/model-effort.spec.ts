@@ -424,7 +424,7 @@ test("F-042 F-043: a read-only connection sees the task's model and effort, and 
 }) => {
   test.setTimeout(180_000);
   const data = mkdtempSync(join(tmpdir(), "clawtrate-models-read-"));
-  const started = startHost(INSTANCE, STATIC, data, ["--read-only"]);
+  const started = startHost(INSTANCE, STATIC, data, { readOnly: true });
   started.gated.release();
   const host = { child: started.host, url: await started.url, data };
   hosts.push(host);

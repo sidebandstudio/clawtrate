@@ -158,15 +158,25 @@ async function gatewayTaskCount(botId: string): Promise<number> {
  * queued message can be in it. Its title is its label.
  */
 async function ownTask(page: Page, label: string): Promise<{ key: string; title: string }> {
-  const { key, title } = await gatewayTask("otto", label);
+  return ownTaskOf(page, "otto", "Otto", label);
+}
+
+/** A new task of a bot's own, opened in the page. */
+async function ownTaskOf(
+  page: Page,
+  botId: string,
+  bot: string,
+  label: string,
+): Promise<{ key: string; title: string }> {
+  const { key, title } = await gatewayTask(botId, label);
   await expect(
-    page.getByRole("list", { name: "Otto's tasks" }).or(page.getByTestId("bot-list")),
+    page.getByRole("list", { name: `${bot}'s tasks` }).or(page.getByTestId("bot-list")),
   ).not.toHaveCount(0);
   await expect
     .poll(
       async () => {
-        await openBot(page, "Otto");
-        const list = page.getByRole("list", { name: "Otto's tasks" });
+        await openBot(page, bot);
+        const list = page.getByRole("list", { name: `${bot}'s tasks` });
         const showAll = list.getByRole("button", { name: /^Show all/ });
         if ((await showAll.count()) > 0) await showAll.click();
         return list.getByTestId("task").filter({ hasText: title }).count();
@@ -175,13 +185,13 @@ async function ownTask(page: Page, label: string): Promise<{ key: string; title:
     )
     .toBeGreaterThan(0);
   await page
-    .getByRole("list", { name: "Otto's tasks" })
+    .getByRole("list", { name: `${bot}'s tasks` })
     .getByTestId("task")
     .filter({ hasText: title })
     .first()
     .click();
   // A task with no message yet has no title heading ("Nothing here yet"); its title pill names it.
-  await expect(page.getByRole("button", { name: `Otto, ${title}. Show details.` })).toBeVisible();
+  await expect(page.getByRole("button", { name: `${bot}, ${title}. Show details.` })).toBeVisible();
   return { key, title };
 }
 
@@ -1116,7 +1126,9 @@ test("F-088: a gateway run that narrates between its tool calls shows each narra
   const turn = page.getByTestId("transcript-turn").last();
   await expect(turn).toContainText("I wrote notes/scratch.md.");
   const parts = await turn
-    .locator(':scope > .msg[data-role="assistant"], :scope > .action')
+    .locator(
+      ':scope > .msg[data-role="assistant"], :scope > .msg-unit > .msg[data-role="assistant"], :scope > .action',
+    )
     .evaluateAll((nodes) =>
       nodes.map((node) =>
         node.classList.contains("action")
@@ -1253,7 +1265,7 @@ async function watchRun(page: Page) {
         status: !!document.querySelector("[data-testid=status-line]"),
         phrase: document.querySelector("[data-testid=status-phrase]")?.textContent ?? null,
         steer: [...document.querySelectorAll("[data-testid=outgoing] .msg-caption")].some(
-          (caption) => caption.textContent === "Steer",
+          (caption) => caption.textContent === "Steer requested",
         ),
       });
     }).observe(document.body, { subtree: true, childList: true, characterData: true });
@@ -1360,7 +1372,7 @@ test("F-097: Stop during a real run is offered beside Send, and the gateway's co
   await composer(page).fill("Check the backup disk once more, slowly. #slow 15");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("status-line")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Steer this turn" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Request a steer" })).toBeVisible();
   // Pressed at once, before the gateway may have named the run: the engine aborts it once named.
   await page.getByRole("button", { name: "Stop Otto" }).click();
   const runId = await inFlightRunId(key).catch(() => "");
@@ -1393,6 +1405,399 @@ test("F-097: a typed /stop stops the run, and the note does not say it came from
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
+test("F-097: a typed Stop now stops the run through the gateway, as the Stop button does", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { key } = await ownTask(page, "Typed stop now");
+  await composer(page).fill("Go through the old logs. #slow 15");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("status-line")).toBeVisible();
+  const runId = await inFlightRunId(key);
+  await composer(page).fill("Stop now");
+  await page.keyboard.press("Enter");
+  const note = stopNote(page, runId);
+  await expect(note).toContainText("Completed actions are not undone.", { timeout: 30_000 });
+  await expect(note).not.toContainText("another device");
+  await expect(page.getByTestId("status-line")).toHaveCount(0);
+  // The words were Stop, not a message: none reached the task.
+  await expect(page.getByTestId("outgoing").filter({ hasText: "Stop now" })).toHaveCount(0);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+  expect(await gatewayHasMessage(key, "Stop now")).toBe(false);
+});
+
+test("F-074 F-285: a file chosen with + reaches the gateway; one over the gateway's limit stays a marked chip, holds Send until removed, and the valid 1 MiB file then sends", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { key } = await ownTask(page, "Files and limits");
+  const chooser = page.waitForEvent("filechooser");
+  await page.getByTestId("composer").getByRole("button", { name: "Attach files" }).click();
+  await (
+    await chooser
+  ).setFiles([
+    { name: "notes.txt", mimeType: "text/plain", buffer: Buffer.alloc(1024 * 1024, 65) },
+    { name: "photo.png", mimeType: "image/png", buffer: Buffer.alloc(7 * 1024 * 1024) },
+  ]);
+  const chips = page.locator(".attachments .chip");
+  await expect(chips).toHaveCount(2);
+  await expect(chips.filter({ hasText: "notes.txt" })).toContainText("1.0 MB");
+  // The gateway's own image ceiling, as its hello said it.
+  await expect(chips.filter({ hasText: "photo.png" })).toContainText(
+    "7.0 MB. Images can be up to 6 MB.",
+  );
+  await expect(chips.filter({ hasText: "photo.png" })).toHaveAttribute("data-tone", "danger");
+  await composer(page).fill("Two files, one too large. #text");
+  const send = page.getByRole("button", { name: "Send", exact: true });
+  await expect(send).toBeDisabled();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("outgoing")).toHaveCount(0);
+  await page.getByRole("button", { name: "Remove photo.png" }).click();
+  await expect(chips).toHaveCount(1);
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(chips).toHaveCount(0);
+  type Media = { fileName?: string; sizeBytes?: number };
+  const sentMedia = async () => {
+    const history = await gatewayCall<{
+      messages: Array<{ role: string; __openclaw?: { media?: Media[] } }>;
+    }>("chat.history", { sessionKey: key, limit: 10 });
+    return history.messages
+      .filter((row) => row.role === "user")
+      .flatMap((row) => row.__openclaw?.media ?? [])
+      .map((media) => [media.fileName, media.sizeBytes]);
+  };
+  await expect.poll(sentMedia, { timeout: 30_000 }).toEqual([["notes.txt", 1024 * 1024]]);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+});
+
+test("F-301: a turn the gateway fails offers Copy request ID, which copies the id Raw shows beside the gateway's error event", async ({
+  page,
+}) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await openShell(page);
+  const { key } = await ownTask(page, "Copy request id");
+  await composer(page).fill("This one fails. #model-error");
+  await page.keyboard.press("Enter");
+  const card = page.getByTestId("turn-error");
+  await expect(card).toBeVisible({ timeout: 60_000 });
+  await card.getByRole("button", { name: "Raw" }).click();
+  const shown = ((await card.getByTestId("request-id").textContent()) ?? "").trim();
+  // The protocol client's own id for the frame, as it set it ("<n>:<uuid>").
+  expect(shown).toMatch(/^\S{8,}$/);
+  // Read when opened: what the gateway sent that ended the run, labelled as exactly that.
+  await expect(card.getByTestId("turn-error-raw")).toContainText(
+    /The (chat event|data of the agent lifecycle event) that ended the turn, as received/,
+  );
+  await expect(card.getByTestId("run-raw")).toBeVisible();
+  // One failure is shown once: no bot bubble repeats it, and nothing is "Incomplete".
+  await expect(page.getByTestId("incomplete")).toHaveCount(0);
+  await expect(
+    page.getByTestId("transcript-turn").and(page.locator('[data-role="assistant"]')),
+  ).toHaveCount(0);
+  await page.evaluate(() => navigator.clipboard.writeText(""));
+  await card.getByRole("button", { name: "Copy request ID" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(shown);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+});
+
+test("F-066 F-283 F-067: on a real turn of a progress bubble and a final one, each bubble's actions name its own row: a reaction is set and taken back on the gateway, and a reply sent from its thread names it", async ({
+  page,
+}) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await openShell(page);
+  const { key } = await ownTask(page, "React and reply");
+  // Text beside a call, then the answer: one turn, two rows of the gateway's, two bubbles.
+  await composer(page).fill("Say something short. #text #read");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+  type Row = {
+    role: string;
+    content?: unknown;
+    __openclaw?: { id?: string; replyToId?: string };
+  };
+  const rows = async () =>
+    (await gatewayCall<{ messages: Row[] }>("chat.history", { sessionKey: key, limit: 20 }))
+      .messages;
+  const hasText = (row: Row) =>
+    typeof row.content === "string"
+      ? row.content.trim() !== ""
+      : Array.isArray(row.content) &&
+        row.content.some(
+          (part: { type?: string; text?: string }) => part.type === "text" && part.text?.trim(),
+        );
+  const answers = (await rows()).filter((row) => row.role === "assistant" && hasText(row));
+  expect(answers).toHaveLength(2);
+  const progressId = answers[0]!.__openclaw!.id!;
+  const finalId = answers[1]!.__openclaw!.id!;
+  expect(progressId).not.toBe(finalId);
+  const progress = page.locator(`[data-testid="message"][data-message="${progressId}"]`);
+  const final = page.locator(`[data-testid="message"][data-message="${finalId}"]`);
+  await expect(progress).toBeVisible({ timeout: 30_000 });
+  await expect(final).toBeVisible();
+  await expect(progress).toContainText("Here is a plain reply");
+  await expect(final).toContainText("I read my instructions file.");
+  const opacity = (actions: ReturnType<typeof progress.getByTestId>) =>
+    actions.evaluate((el) => Number(getComputedStyle(el).opacity));
+  const actions = progress.getByTestId("message-actions");
+  await progress.locator(".msg > .bubble").hover();
+  await expect.poll(() => opacity(actions)).toBe(1);
+
+  // F-283: a reaction on the progress bubble, as the gateway records it under its row, and taken back.
+  const listed = async (id: string) => {
+    const answer = await gatewayCall<{ reactions: Record<string, Array<{ emoji: string }>> }>(
+      "session.reactions.list",
+      { sessionKey: key },
+    );
+    return (answer.reactions[id] ?? []).map((each) => each.emoji);
+  };
+  await actions.getByRole("button", { name: "Add a reaction" }).click();
+  await page
+    .getByRole("menu", { name: "Add a reaction" })
+    .getByRole("menuitem", { name: /Thumbs up/ })
+    .click();
+  const badge = progress.getByTestId("reaction");
+  await expect(badge).toHaveText("👍1", { timeout: 30_000 });
+  await expect(badge).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => listed(progressId), { timeout: 30_000 }).toEqual(["👍"]);
+  expect(await listed(finalId)).toEqual([]);
+  await expect(final.getByTestId("reactions")).toHaveCount(0);
+  await badge.click();
+  await expect(progress.getByTestId("reactions")).toHaveCount(0, { timeout: 30_000 });
+  await expect.poll(() => listed(progressId), { timeout: 30_000 }).toEqual([]);
+
+  // F-066: the final bubble's More copies the final row's id.
+  await final.locator(".msg > .bubble").hover();
+  const finalActions = final.getByTestId("message-actions");
+  await expect.poll(() => opacity(finalActions)).toBe(1);
+  await finalActions.getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: "Copy message ID" }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(finalId);
+
+  // F-067: Reply on the progress bubble opens its thread, and the reply names its row.
+  await progress.locator(".msg > .bubble").hover();
+  await actions.getByRole("button", { name: "Reply in a thread" }).click();
+  const thread = page.getByRole("dialog", { name: "Thread" });
+  await expect(thread.getByTestId("thread-message").first()).toContainText("Here is a plain reply");
+  await thread.getByTestId("thread-input").fill("A reply to that. #text");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(
+      async () =>
+        (await rows()).some(
+          (row) => row.role === "user" && row.__openclaw?.replyToId === progressId,
+        ),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  await expect(thread).toContainText("1 reply", { timeout: 30_000 });
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("reply-quote")).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+});
+
+test("F-071 F-070: / lists the bot's own skills by name and the gateway's commands, a chosen skill goes to the gateway with the words, and @ lists the bots", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { key } = await ownTask(page, "Slash and mention");
+  type Skill = { name: string; userInvocable?: boolean; eligible?: boolean; disabled?: boolean };
+  const listed = await gatewayCall<{ skills: Skill[] }>("skills.status", { agentId: "otto" });
+  const runnable = listed.skills
+    .filter((each) => each.userInvocable && each.eligible && !each.disabled)
+    .map((each) => each.name);
+  expect(runnable).toContain("weather");
+  await composer(page).click();
+  await page.keyboard.type("/");
+  const rows = page.getByRole("listbox", { name: "Skills and commands" }).getByRole("option");
+  await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+  const skills = await rows
+    .and(page.locator('[data-kind="skill"]'))
+    .evaluateAll((all) => all.map((each) => each.getAttribute("data-name")));
+  // The skills this bot may run, by name and in the gateway's order, and nothing else, are
+  // the Skill rows (the first 50 the list shows).
+  expect(skills).toEqual(runnable.slice(0, Math.min(50, runnable.length)));
+  await expect(rows.filter({ hasText: "/status" }).locator(".composer-menu-tag")).toHaveText(
+    "Command",
+  );
+  // No app's action is offered: the gateway lists none here, and the menu does not read them.
+  expect(await rows.locator(".composer-menu-tag", { hasText: "Action" }).count()).toBe(0);
+  await page.keyboard.type("weath");
+  await expect(rows).toHaveCount(1);
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("token-chip")).toContainText("/weather");
+  await page.keyboard.type("in Lisbon #text");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => gatewayHasMessage(key, "/weather in Lisbon #text"), { timeout: 30_000 })
+    .toBe(true);
+  await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+
+  await composer(page).click();
+  await page.keyboard.type("Ask @");
+  const mentions = page
+    .getByRole("listbox", { name: "Mention a bot or routine" })
+    .getByRole("option");
+  await expect(mentions.filter({ hasText: "@Marlow" })).toContainText("Bot", { timeout: 30_000 });
+  await expect(mentions.filter({ hasText: /Bot$/ })).toHaveCount(4);
+  await page.keyboard.press("Escape");
+  await composer(page).fill("");
+});
+
+test("F-100: with the Turn time limit set to 1 minute, a longer turn is stopped through the gateway, and once it confirms the card names the limit and who stopped it", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await openShell(page);
+  const setLimit = async (minutes: string) => {
+    await page.keyboard.press("ControlOrMeta+,");
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await settings.getByRole("button", { name: "Conversation", exact: true }).click();
+    const field = settings.getByLabel("Turn time limit");
+    await field.fill(minutes);
+    await field.press("Enter");
+    await page.keyboard.press("Escape");
+    await expect(settings).toHaveCount(0);
+    await page.keyboard.press("ControlOrMeta+,");
+    await expect(settings.getByLabel("Turn time limit")).toHaveValue(minutes);
+    await page.keyboard.press("Escape");
+  };
+  // The host is shared by later checks: its limit goes back to the default whatever happens.
+  try {
+    await setLimit("1");
+    const { key } = await ownTask(page, "Turn limit");
+    await composer(page).fill("Write it out very slowly. #slow 120");
+    await page.keyboard.press("Enter");
+    const runId = await inFlightRunId(key);
+    await expect(page.getByTestId("status-line")).toBeVisible();
+    const card = page.getByTestId("turn-error");
+    await expect(card).toContainText("Otto's turn reached its 1 minute limit", {
+      timeout: 120_000,
+    });
+    await expect(card).toContainText("Clawtrate stopped it at the Turn time limit in Settings");
+    await expect(page.getByTestId("status-line")).toHaveCount(0);
+    // The gateway ended that run because it was asked to (`rpc`), not by a limit of its own.
+    const ended = await gatewayCall<{ stopReason?: string }>("agent.wait", {
+      runId,
+      timeoutMs: 10_000,
+    });
+    expect(ended.stopReason).toBe("rpc");
+    await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+  } finally {
+    await setLimit("50");
+  }
+});
+
+test("F-099: a run stuck on a tool call that never returns reaches stopped within 30 seconds of Stop", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { key } = await ownTask(page, "Stuck tool");
+  // The stand-in coding agent's call that does not finish for an hour.
+  await composer(page).fill("Start the long coding task. #mcp-stop");
+  await page.keyboard.press("Enter");
+  const runId = await inFlightRunId(key);
+  await expect.poll(() => toolStarted(key, runId), { timeout: 60_000 }).toBe(true);
+  const pressed = Date.now();
+  await page.getByRole("button", { name: "Stop Otto" }).click();
+  const note = stopNote(page, runId);
+  await expect(note).toContainText("Completed actions are not undone.", { timeout: 30_000 });
+  expect(Date.now() - pressed).toBeLessThan(30_000);
+  await expect(page.getByTestId("status-line")).toHaveCount(0);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+});
+
+test("F-296 F-298: Stop also stops the exact run of the bot this run messaged, and the note names it", async ({
+  page,
+}) => {
+  await openShell(page);
+  const { key } = await ownTaskOf(page, "pip", "Pip", "Stop the messaged bot");
+  // Pip messages Marlow, whose answer takes 15 seconds, then keeps writing.
+  await composer(page).fill("Ask Marlow, then write slowly. #message-slow #slow 30");
+  await page.keyboard.press("Enter");
+  const runId = await inFlightRunId(key);
+  type Row = { role: string; toolName?: string; details?: { runId?: string; sessionKey?: string } };
+  // The recipient's run, as the send's result names it.
+  let recipient: { runId: string; sessionKey: string } | null = null;
+  await expect
+    .poll(
+      async () => {
+        const history = await gatewayCall<{
+          inFlightRun?: {
+            events?: Array<{
+              stream?: string;
+              data?: { phase?: string; name?: string; result?: { details?: Row["details"] } };
+            }>;
+          };
+        }>("chat.history", { sessionKey: key, limit: 5 });
+        const result = (history.inFlightRun?.events ?? []).find(
+          (event) =>
+            event.stream === "tool" &&
+            event.data?.phase === "result" &&
+            event.data.name === "sessions_send",
+        );
+        const details = result?.data?.result?.details;
+        if (details?.runId && details.sessionKey)
+          recipient = { runId: details.runId, sessionKey: details.sessionKey };
+        return recipient !== null;
+      },
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+  const peer = recipient as unknown as { runId: string; sessionKey: string };
+  // Marlow is working on it when Stop is pressed.
+  await expect.poll(() => gatewayIdle(peer.sessionKey), { timeout: 30_000 }).toBe(false);
+  await page.getByRole("button", { name: "Stop Pip" }).click();
+  const note = stopNote(page, runId);
+  await expect(note).toContainText("Completed actions are not undone.", { timeout: 30_000 });
+  await expect(note.getByTestId("stopped-with")).toContainText(
+    "Stopped with it: Marlow's run for this message.",
+    { timeout: 30_000 },
+  );
+  // Marlow's own run, the one the send named, ended on the gateway by an abort request (`rpc`),
+  // long before its 15 seconds.
+  const ended = await gatewayCall<{ runId?: string; stopReason?: string; endedAt?: number }>(
+    "agent.wait",
+    { runId: peer.runId, timeoutMs: 10_000 },
+  );
+  expect(ended).toMatchObject({ runId: peer.runId, stopReason: "rpc" });
+  await expect.poll(() => gatewayIdle(peer.sessionKey), { timeout: 10_000 }).toBe(true);
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+});
+
+test("F-101: after three of the run's tool calls in a row time out, the run is stopped and its note says why", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await openShell(page);
+  const { key } = await ownTask(page, "Three timeouts");
+  // Three commands that each run past their one-second limit, then a slow reply that would go on.
+  await composer(page).fill("#exec-timeout #exec-timeout #exec-timeout #slow 60");
+  await page.keyboard.press("Enter");
+  const runId = await inFlightRunId(key);
+  for (let n = 0; n < 3; n += 1) {
+    const pending = page
+      .getByTestId("approval-card")
+      .filter({ has: page.getByRole("button", { name: "Allow once" }) });
+    await expect(pending).toHaveCount(1, { timeout: 60_000 });
+    await pending.getByRole("button", { name: "Allow once" }).click();
+    await expect(pending).toHaveCount(0, { timeout: 30_000 });
+  }
+  const note = stopNote(page, runId);
+  await expect(note.locator("b")).toHaveText("Stopped after 3 tool calls in a row timed out.", {
+    timeout: 60_000,
+  });
+  await expect(note).toContainText("may not be responding");
+  await expect(page.getByTestId("status-line")).toHaveCount(0);
+  // Stopped before its slow reply could finish.
+  await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
+  const history = await gatewayCall<{ messages: Array<{ role: string; content?: unknown }> }>(
+    "chat.history",
+    { sessionKey: key, limit: 40 },
+  );
+  expect(JSON.stringify(history.messages)).not.toContain("part 240 of 240");
+});
+
 test("F-061: Queue after this turn holds a message on the shelf and runs it once the turn ends", async ({
   page,
 }) => {
@@ -1418,6 +1823,222 @@ test("F-061: Queue after this turn holds a message on the shelf and runs it once
   const queued = order.findIndex((text) => text === "And when does it renew?");
   expect(first).toBeGreaterThan(-1);
   expect(queued).toBeGreaterThan(first + 1);
+});
+
+/** A task's rows on the gateway: each row's role and visible text, in order. */
+async function historyRows(key: string): Promise<Array<{ role: string; text: string }>> {
+  const history = await gatewayCall<{
+    messages: Array<{ role: string; content?: unknown }>;
+  }>("chat.history", { sessionKey: key, limit: 60 });
+  const textOf = (content: unknown): string =>
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content
+            .map((part: { type?: string; text?: string }) =>
+              part.type === "text" ? (part.text ?? "") : "",
+            )
+            .join("")
+        : "";
+  return history.messages
+    .map((row) => ({ role: row.role, text: textOf(row.content).trim() }))
+    .filter((row) => (row.role === "user" || row.role === "assistant") && row.text !== "");
+}
+
+/** The transcript's turns as the page shows them: each one's role and text, in order. */
+async function shownTurns(page: Page): Promise<Array<{ role: string; text: string }>> {
+  return page.getByTestId("transcript-turn").evaluateAll((all) =>
+    all.map((turn) => ({
+      role: turn.getAttribute("data-role") ?? "",
+      text: (turn.textContent ?? "").trim(),
+    })),
+  );
+}
+
+/** Where each message is among a task's rows of that role: once, and in the order sent. */
+function placesOf(rows: Array<{ role: string; text: string }>, texts: string[]): number[] {
+  return texts.map((text) => {
+    const at = rows.flatMap((row, index) =>
+      row.role === "user" && row.text.includes(text) ? [index] : [],
+    );
+    expect(at, `"${text}" appears once`).toHaveLength(1);
+    return at[0]!;
+  });
+}
+
+const QUICK = ["Also the photos folder.", "And the music folder.", "Then send me a summary."];
+
+/**
+ * Enter on the words in the composer until it takes them. The field empties as a send starts,
+ * before the host has taken it; an Enter in that moment is not taken, the words stay with a
+ * notice, and the person sends them again, as this does.
+ */
+async function enterUntilTaken(page: Page): Promise<void> {
+  await expect(async () => {
+    if ((await composer(page).inputValue()) !== "") await page.keyboard.press("Enter");
+    await expect(composer(page)).toHaveValue("", { timeout: 1_000 });
+  }).toPass({ timeout: 10_000 });
+}
+
+test("F-106: under Steer, a slow message and three quick ones each appear once, shown in the order the gateway records them, and the last is answered; again after a reload", async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await openShell(page);
+  const { key, title } = await ownTask(page, "Quick messages, steered");
+  await composer(page).fill("Look at the disk use. #slow 15");
+  await page.keyboard.press("Enter");
+  // The run is under way on the gateway: the next three go as steers, the default.
+  await inFlightRunId(key);
+  for (const text of QUICK) {
+    await composer(page).fill(text);
+    await expect(page.getByRole("button", { name: "How to send: Steer" })).toBeVisible();
+    // The next message is typed only once the composer took this one.
+    await enterUntilTaken(page);
+  }
+  await expect.poll(() => gatewayIdle(key), { timeout: 120_000 }).toBe(true);
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
+  const all = ["Look at the disk use.", ...QUICK];
+  /** The messages in the order these rows hold them, each once, the first one first. */
+  const check = (rows: Array<{ role: string; text: string }>) => {
+    const places = placesOf(rows, all);
+    expect(Math.min(...places)).toBe(places[0]);
+    // A steer is a request: the gateway joins it to the turn or holds it as a turn of its own,
+    // which it records when it runs, so how the steers are answered, and in which order they
+    // are recorded, is its own. Whichever is last is answered.
+    expect(
+      rows.slice(Math.max(...places) + 1).filter((row) => row.role === "assistant").length,
+      "a reply after the last message",
+    ).toBeGreaterThan(0);
+    return [...all].sort((a, b) => places[all.indexOf(a)]! - places[all.indexOf(b)]!);
+  };
+  await expect
+    .poll(async () => (await historyRows(key)).length, { timeout: 30_000 })
+    .toBeGreaterThan(4);
+  const recorded = check(await historyRows(key));
+  await expect
+    .poll(async () => (await shownTurns(page)).filter((t) => t.role === "user").length, {
+      timeout: 30_000,
+    })
+    .toBe(4);
+  // The page shows them as the gateway's history records them.
+  await expect
+    .poll(async () => check(await shownTurns(page)), { timeout: 30_000 })
+    .toEqual(recorded);
+  // No message the gateway took is shown as not sent, and none is left on the shelf.
+  await expect(page.getByTestId("shelf-row")).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  await openTask(page, "Otto", title);
+  await expect
+    .poll(async () => (await shownTurns(page)).filter((t) => t.role === "user").length, {
+      timeout: 30_000,
+    })
+    .toBe(4);
+  expect(check(await shownTurns(page))).toEqual(recorded);
+});
+
+test("F-106: under Queue, a slow message and three quick ones each start a turn of their own, in order, each with its own reply; again after a reload", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await openShell(page);
+  const { key, title } = await ownTask(page, "Quick messages, queued");
+  await composer(page).fill("Look at the disk use. #slow 15");
+  await page.keyboard.press("Enter");
+  await inFlightRunId(key);
+  await composer(page).fill(QUICK[0]!);
+  // The mode menu sets Queue for the rest of this run.
+  await page.getByRole("button", { name: "How to send: Steer" }).click();
+  await page.getByRole("menuitemradio", { name: /Queue after this turn/ }).click();
+  await expect(page.getByRole("button", { name: "How to send: Queue" })).toBeVisible();
+  await composer(page).focus();
+  await enterUntilTaken(page);
+  for (const text of QUICK.slice(1)) {
+    await composer(page).fill(text);
+    // As above: the next message is typed only once the composer took this one.
+    await enterUntilTaken(page);
+  }
+  await expect(page.getByTestId("shelf-row")).toHaveCount(0, { timeout: 180_000 });
+  await expect.poll(() => gatewayIdle(key), { timeout: 120_000 }).toBe(true);
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
+  const check = (rows: Array<{ role: string; text: string }>) => {
+    const places = placesOf(rows, ["Look at the disk use.", ...QUICK]);
+    expect(places).toEqual([...places].sort((a, b) => a - b));
+    // Four pairs in order: each message, then its own reply before the next message.
+    const bounds = [...places, rows.length];
+    for (let n = 0; n < 4; n += 1) {
+      const between = rows.slice(bounds[n]! + 1, bounds[n + 1]);
+      expect(
+        between.filter((row) => row.role === "assistant").length,
+        `reply to message ${n + 1}`,
+      ).toBeGreaterThan(0);
+    }
+  };
+  await expect
+    .poll(async () => (await historyRows(key)).filter((r) => r.role === "assistant").length, {
+      timeout: 30_000,
+    })
+    .toBeGreaterThanOrEqual(4);
+  check(await historyRows(key));
+  await expect
+    .poll(async () => (await shownTurns(page)).filter((t) => t.role === "user").length, {
+      timeout: 30_000,
+    })
+    .toBe(4);
+  check(await shownTurns(page));
+  await page.reload();
+  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  await openTask(page, "Otto", title);
+  await expect
+    .poll(async () => (await shownTurns(page)).filter((t) => t.role === "user").length, {
+      timeout: 30_000,
+    })
+    .toBe(4);
+  check(await shownTurns(page));
+});
+
+test("F-106: a steer acknowledged into the gateway's queue is described as a request", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await openShell(page);
+  const { key } = await ownTask(page, "Steer requested");
+  await composer(page).fill("#approve");
+  await page.keyboard.press("Enter");
+  const runId = await inFlightRunId(key);
+  await expect(page.getByTestId("status-line")).toContainText("Waiting for you", {
+    timeout: 30_000,
+  });
+  await composer(page).fill("Only the notes folder.");
+  await page.keyboard.press("Enter");
+  await expect(composer(page)).toHaveValue("");
+  // The gateway holds the steer as a queued turn under an id of its own.
+  type Pending = { pendingInputs?: { items?: Array<{ runId?: string }> } };
+  await expect
+    .poll(
+      async () =>
+        (
+          (await gatewayCall<Pending>("chat.history", { sessionKey: key, limit: 5 })).pendingInputs
+            ?.items ?? []
+        ).some((item) => typeof item.runId === "string" && item.runId !== runId),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  // No caption promises that it joined the turn.
+  const steer = page.getByTestId("outgoing").filter({ hasText: "Only the notes folder." });
+  await expect(steer.locator(".msg-caption")).toHaveText("Steer requested", { timeout: 30_000 });
+  await page.getByRole("button", { name: "Stop Otto" }).click();
+  // The waiting approval's run is the one stopped, and the note is that run's.
+  const note = page.locator(`[data-testid="stop-note"][data-run="${runId}"]`);
+  await expect(note).toContainText("Completed actions are not undone.", { timeout: 30_000 });
+  await expect(note).toContainText("The gateway may still run messages it already accepted.");
+  const ended = await gatewayCall<{ stopReason?: string }>("agent.wait", {
+    runId,
+    timeoutMs: 10_000,
+  });
+  expect(ended.stopReason).toBe("rpc");
+  await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
 });
 
 test("F-096: a message sent while the run works is steered into it and captioned Steer once accepted", async ({

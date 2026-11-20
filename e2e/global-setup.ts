@@ -29,8 +29,8 @@ const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
 /** Run records of this checkout's end-to-end runs. Git-ignored. */
 const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
-/** The default instance's ports and the web preview's. An e2e run uses none of them. */
-export const FORBIDDEN_PORTS = [19001, 19091, 5310, 5311];
+import { FORBIDDEN_PORTS } from "./ports.ts";
+export { FORBIDDEN_PORTS } from "./ports.ts";
 
 export type ListedInstance = {
   name: string | null;
@@ -114,8 +114,7 @@ export function startHost(
   instance: string,
   staticDir: string,
   dataDir: string,
-  /** More of the host's own flags, such as `--read-only`. */
-  extra: string[] = [],
+  options: { readOnly?: boolean } = {},
 ) {
   const gated: Gated = gatedSpawn(
     spawn,
@@ -133,7 +132,8 @@ export function startHost(
       staticDir,
       "--data-dir",
       dataDir,
-      ...extra,
+      // A host pinned to the read tier: it never asks for more access.
+      ...(options.readOnly ? ["--read-only"] : []),
     ],
     // The instance is named by the flag alone, never inherited from the environment.
     { cwd: ROOT, env: cliEnv(), stdio: ["ignore", "pipe", "inherit"] },
@@ -283,11 +283,13 @@ export default async function globalSetup() {
     process.env.CLAWTRATE_E2E_OTHERS = JSON.stringify(runningOthers([name], [sentinel]));
     // Every start is a fresh, seeded gateway.
     await startInstance(name);
+    // It also has a paired machine (`--with-node`), for Settings, Machines and "Where a bot runs".
     await startInstance(
       accounts,
       "--with-accounts",
       "--with-plugin",
       "clawtrate-dev-signin",
+      "--with-node",
       "--no-seed",
     );
     for (const instance of [name, accounts]) {

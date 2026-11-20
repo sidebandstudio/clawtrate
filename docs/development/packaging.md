@@ -6,7 +6,7 @@ pnpm package:win      # on Windows: an NSIS installer for x64
 pnpm check:packaged   # launches the app the command above built; on macOS it also pairs it with a development gateway
 ```
 
-The output goes to `apps/desktop/dist`, which git ignores. Each command packages only on its own operating system. The icons come from `assets/brand/logo.png` through `pnpm brand:icons`; packaging refuses icons older than the logo. Nothing is published or uploaded: releasing belongs to the project's owner. A packaged app does not offer the development gateway.
+The output goes to `apps/desktop/dist`, which git ignores. Each command packages only on its own operating system. The icons come from `assets/brand/logo.png` through `pnpm brand:icons`; packaging refuses icons older than the logo. The owner publishes releases separately. Enabled macOS notarization submits the build to Apple. A packaged app does not offer the development gateway.
 
 `pnpm check:packaged` runs the app from `apps/desktop/dist`, not from source, with a temporary data folder (`--user-data-dir`), so it never touches the data of a Clawtrate you use. It checks the window, its title and the connect screen, that the binary's fuses are the ones packaging sets, that its renderer runs in the operating system's sandbox, that the page has no Node and stays on its own content, then pairs with a new development gateway instance, shows the seeded bots and a transcript, checks the data folder is private, and quits the app. It then removes its instances and temporary folder, and puts back the one file a launch changes outside that folder: the bundle id's preferences in `~/Library/Preferences`, restored to its earlier bytes or removed if the run created it. Apple's Python, which the command line tools install, must be present: the check uses it to ask the kernel whether the renderer is sandboxed.
 
@@ -39,9 +39,25 @@ macOS, notarizing, which runs only when signing is on, one of:
 - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`;
 - `APPLE_KEYCHAIN_PROFILE` (a `notarytool store-credentials` profile), optionally with `APPLE_KEYCHAIN`.
 
-Signing turns on the hardened runtime with electron-builder's default entitlements.
+Signing turns on the hardened runtime with electron-builder's default entitlements. Notarizing runs only with one complete set; a partial set (an `APPLE_ID` without its password, say), or notarizing credentials without a signing identity, stops packaging before electron-builder starts, naming the variables and never their values. So does a notarizing variable or `CSC_NAME` that is set but blank: electron-builder counts a value of spaces as given and would pick a different method than the build announced.
 
-Windows: `WIN_CSC_LINK` (a `.pfx` file's path, or its base64) and `WIN_CSC_KEY_PASSWORD`. `CSC_LINK` and `CSC_KEY_PASSWORD` also work when the build runs on Windows.
+Windows: `WIN_CSC_LINK` (a `.pfx` file's path, or its base64) and `WIN_CSC_KEY_PASSWORD`. `CSC_LINK` and `CSC_KEY_PASSWORD` also work when the build runs on Windows: electron-builder takes `WIN_CSC_LINK` if it is set at all, even empty, and `CSC_LINK` otherwise, and the password the same way, each on its own.
+
+For inline base64 use the `data:application/x-pkcs12;base64,` prefix so electron-builder treats the value as certificate data.
+
+A certificate and its password go together. A build given one without the other stops packaging before electron-builder starts, naming the missing variable; it never builds unsigned, or with an empty password, without saying so. For a certificate that has no password, set the password variable to an empty string (`CSC_KEY_PASSWORD=`). A certificate variable that is set but blank stops the build too, and so does a blank `WIN_` variable that would hide a generic one electron-builder would otherwise use.
+
+Before electron-builder starts, Clawtrate prints the signing plan. On macOS it checks both app bundles after packaging. The build fails if it cannot read a bundle's signature or if the signature differs from the plan. Keep the entire output of a signed build private. Clawtrate's plan, preflight and signature-kind lines omit input values. The build passes through electron-builder's output, which can include identity names, hashes, paths and signing input values in errors.
+
+## The update feed
+
+The build fixes the update sources in the Electron main process. Check fetches the selected feed. Download fetches the file named by that check. Leave both addresses unset to package without an update source.
+
+- `CLAWTRATE_UPDATE_FEED_URL` supplies the Stable HTTPS feed.
+- `CLAWTRATE_NIGHTLY_UPDATE_FEED_URL` supplies the Nightly HTTPS feed independently of Stable. Each feed must serve its artifacts from its own origin without redirects or credentials.
+- `SOURCE_DATE_EPOCH`: the build's own release date, in seconds; the time of the build without it. The engine’s age helper uses this date for a later required-update feature.
+
+After packaging, `node packaging/feed.ts <https address of the folder>` in `apps/desktop` writes `dist/update-feed.json`, naming each artifact of this version in `dist` with its size and SHA-512. The generator sets the feed track from the package version, `X.Y.Z` for stable or `X.Y.Z-nightly.YYYYMMDD.N` for nightly, with a calendar year from 1000 to 9999 and a numeric run number N. Run it with the build's `SOURCE_DATE_EPOCH`. It uploads nothing: publish the feed at the build's address and the files in that folder, on the same HTTPS origin, including the same port, served directly, since the app follows no redirect. [docs/decisions.md](../decisions.md#updates-and-release-signing) has the format and what is checked before an install.
 
 ## Opening an unsigned build
 
@@ -50,8 +66,6 @@ An app you built yourself opens normally. One downloaded from elsewhere is quara
 ```bash
 xattr -dr com.apple.quarantine /Applications/Clawtrate.app
 ```
-
-On Windows, SmartScreen warns about an unsigned installer; choose **More info**, then **Run anyway**.
 
 ## Logo and icons
 
