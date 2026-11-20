@@ -117,17 +117,29 @@ public static class VerifiedInstaller {
     bool inherit, uint flags, IntPtr env, string cwd, ref Startup startup, out ProcessInfo info);
   [DllImport("kernel32")] static extern bool CloseHandle(IntPtr handle);
 
-  static void LockParents(string path, Stack<SafeFileHandle> locks) {
-    var order = new Stack<DirectoryInfo>();
-    for (var dir = new FileInfo(path).Directory; dir != null; dir = dir.Parent) order.Push(dir);
-    foreach (var dir in order) {
-      // Open the reparse point itself. Deny directory writes and renames.
-      var h = CreateFileW(dir.FullName, 0x80, 1, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+  [DllImport("kernel32", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern bool GetVolumeNameForVolumeMountPointW(string root, StringBuilder volume, uint length);
+
+  // Pin the namespace used by CreateProcessW as well as the leaf. A drive
+  // letter is an alias; the OS volume GUID still names the same local volume.
+  static string LockParents(string path, Stack<SafeFileHandle> locks) {
+    string root = Path.GetPathRoot(path);
+    var volume = new StringBuilder(64);
+    if (!GetVolumeNameForVolumeMountPointW(root, volume, (uint)volume.Capacity)) throw new IOException();
+    string current = volume.ToString();
+    string[] parts = path.Substring(root.Length).Split('\\');
+    foreach (var part in parts) {
+      if (part.Length == 0 || part == "." || part == ".." || part.Contains(":")) throw new IOException();
+      // FILE_LIST_DIRECTORY participates in share-access checks. Attribute-only
+      // access cannot hold an entry against deletion or reparse writes.
+      var h = CreateFileW(current, 0x81, 1, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
       locks.Push(h);
       Info info;
       if (h.IsInvalid || !GetFileInformationByHandle(h, out info) ||
           (info.attributes & 0x410) != 0x10) throw new IOException();
+      current = current.TrimEnd('\\') + "\\" + part;
     }
+    return current;
   }
 
   public static string Run(string path, long size, string app, bool launch) {
@@ -140,24 +152,24 @@ public static class VerifiedInstaller {
       return "installation-context";
     var locks = new Stack<SafeFileHandle>();
     try {
-      LockParents(path, locks);
-      LockParents(app, locks);
+      string imagePath = LockParents(path, locks);
+      string runningPath = LockParents(app, locks);
       string scope = Scope(dir);
       if (scope == null) return "installation-context";
-      using (var running = CreateFileW(app, 0x80000000, 1, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero))
-      using (var image = CreateFileW(path, 0x80000000, 1, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero)) {
+      using (var running = CreateFileW(runningPath, 0x80000000, 1, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero))
+      using (var image = CreateFileW(imagePath, 0x80000000, 1, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero)) {
         Info info;
         if (running.IsInvalid) return "build-not-signed";
-        string runningPublisher = TrustedPublisher(app, running);
+        string runningPublisher = TrustedPublisher(runningPath, running);
         if (runningPublisher == null) return "build-not-signed";
         if (image.IsInvalid || GetFileType(image) != 1 || !GetFileInformationByHandle(image, out info) ||
-            (info.attributes & 0x410) != 0 || info.links != 1) return "artifact-changed";
+            (info.attributes & 0x410) != 0 || info.links != 1 || (info.indexHigh == 0 && info.indexLow == 0)) return "artifact-changed";
         using (var file = new FileStream(image, FileAccess.Read))
         using (var hash = SHA512.Create()) {
           if (file.Length != size) return "artifact-changed";
           string digest = Convert.ToBase64String(hash.ComputeHash(file));
           file.Position = 0;
-          string publisher = TrustedPublisher(path, image);
+          string publisher = TrustedPublisher(imagePath, image);
           if (publisher == null) return "authenticode-trust";
           string identity = info.volume + "." + info.indexHigh + "." + info.indexLow;
           Console.WriteLine("proof " + identity + " " + file.Length + " " + digest + " " + runningPublisher + " " + publisher);
@@ -167,7 +179,7 @@ public static class VerifiedInstaller {
           var startup = new Startup { size = Marshal.SizeOf(typeof(Startup)) };
           var args = new StringBuilder("\"" + path + "\" /S --updated --force-run " + scope + " /D=" + dir);
           ProcessInfo child;
-          if (!CreateProcessW(path, args, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero,
+          if (!CreateProcessW(imagePath, args, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero,
                               Environment.SystemDirectory, ref startup, out child)) return "installer-failed";
           CloseHandle(child.thread);
           CloseHandle(child.process);
