@@ -400,6 +400,8 @@
     return `<div class="viewer-image" data-zoom="fit" role="img" aria-label="${esc(a.name)}">${a.art()}</div>`;
   }
   function openViewer(id, opener, page) {
+    // Where the Library and Pages page is loaded, a page opens through its gate (library.md, section 6), never in this viewer.
+    if (id === "page" && CT.openPage) return CT.openPage("pj", opener);
     const ids = sequence(id);
     const i = ids.indexOf(id);
     viewerOpener = opener || document.activeElement;

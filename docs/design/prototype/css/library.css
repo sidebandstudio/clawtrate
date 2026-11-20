@@ -111,11 +111,6 @@
   inset: -8px;
 }
 
-.lib-row[data-gone="true"] .file-row {
-  cursor: default;
-  padding-right: 88px;
-}
-
 .lib-unpin {
   position: absolute;
   top: 50%;
@@ -556,4 +551,61 @@
 .export-choice input {
   align-self: start;
   margin: 3px 0 0;
+}
+
+/* Round 1: the chat drawer's own Close, the read-only line, the confirmation's warning. */
+.page-chat-close {
+  display: none;
+  margin-left: auto;
+}
+
+[data-width="800"] .page-chat-close,
+[data-width="phone"] .page-chat-close {
+  display: inline-grid;
+}
+
+@media (max-width: 999px) {
+  .page-chat-close {
+    display: inline-grid;
+  }
+}
+
+.page-chat-readonly {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 12px 12px;
+  padding: 10px 12px;
+  border-radius: 18px;
+  background: var(--bg-bubble);
+  font-size: var(--text-md);
+}
+
+#page-access:empty {
+  display: none;
+}
+
+#page-access .lib-access {
+  margin: 8px 16px 0;
+}
+
+.confirm-warning {
+  font-weight: var(--weight-medium);
+}
+
+.page-chat-log .event-line {
+  justify-self: end;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.lib-row[data-unresolved="true"] .file-row {
+  cursor: default;
+  padding-right: 88px;
+}
+
+.lib-row .file-row[aria-disabled="true"] {
+  cursor: default;
+  color: var(--text-muted);
 }
