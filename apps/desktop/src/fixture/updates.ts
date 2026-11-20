@@ -115,9 +115,12 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
         ? { kind: "restart-available", offerId: offer.offerId, completesOnQuit: true }
         : {
             kind: "unavailable-in-this-build",
-            reason: ["offered", "inspecting"].includes(kind)
-              ? "no-verified-download"
-              : "build-not-signed",
+            reason:
+              kind === "unsupported"
+                ? "no-installer-path"
+                : ["offered", "inspecting"].includes(kind)
+                  ? "no-verified-download"
+                  : "build-not-signed",
           },
   };
   const listeners = new Set<(s: DesktopUpdateSnapshot) => void>();
