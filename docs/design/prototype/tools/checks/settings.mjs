@@ -545,10 +545,15 @@ await stateWords("System: turned on again, not restarted", "open=settings&sectio
   const p = await open("open=settings&section=updates");
   const [ok, miss] = await has(p, settings, ["Version", "Clawtrate 0.1.0", "This copy can't check for updates: no update source is set up for it."]);
   check("walk: Updates, no source: its words", ok, miss);
-  check("Updates, no source: no Check for Updates, no switch, no track", !/Check for Updates|Automatic Updates|Update Track|Stable/.test(await text(p, settings)));
+  check("Updates, no source: no Check for Updates, no switch, no track", !/Check for Updates|Automatic Updates|Update Track|Stable/.test(await text(p, settings)) && (await p.locator('#settings-dialog [role="switch"]').count()) === 0);
   await p.close();
 }
 await stateWords("Updates, a development build", "open=settings&section=updates&build=dev", settings, ["A development build. It doesn't update itself."]);
+{
+  const p = await open("open=settings&section=updates&build=dev&feed=1");
+  check("Updates, a development build: no automatic-update switch", (await p.locator('#settings-dialog [role="switch"]').count()) === 0 && !/Automatic Updates/.test(await text(p, settings)));
+  await p.close();
+}
 {
   const p = await open("open=settings&section=updates&os=linux&feed=1");
   const t = await text(p, settings);
@@ -568,6 +573,7 @@ await stateWords("Updates, a development build", "open=settings&section=updates&
   check("walk: Check for Updates: checking the named source", (await text(p, settings)).includes("Checking updates.example.com…"));
   await p.waitForTimeout(1000);
   check("walk: Check for Updates, nothing newer: not 'up to date'", (await text(p, settings)).includes("No newer version was offered for this build by its update source. Checked at 5:41 PM.") && !/up to date/i.test(await text(p, settings)));
+  check("Updates, a configured source: automatic restart unavailable, and no switch for it", (await text(p, settings)).includes("Automatic restart is unavailable in this build.") && (await p.locator('#settings-dialog [role="switch"]').count()) === 0);
   await p.close();
 }
 {
