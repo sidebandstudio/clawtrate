@@ -873,7 +873,7 @@ describe("nothing remote loads by itself", () => {
     });
   });
 
-  it("F-116: a link is previewed only for http and https, without credentials, through the host", async () => {
+  it("F-116: a link is previewed only over https, without credentials, through the host", async () => {
     const asked: string[] = [];
     const previewer = async (url: string) => {
       asked.push(url);
@@ -893,6 +893,9 @@ describe("nothing remote loads by itself", () => {
       status: "none",
     });
     expect(await previewLink(previewer, "file:///etc/passwd")).toMatchObject({ status: "none" });
+    expect(await previewLink(previewer, "http://library.example/")).toMatchObject({
+      status: "none",
+    });
     expect(await previewLink(null, "https://library.example/")).toMatchObject({ status: "none" });
     const ok = await previewLink(previewer, "https://library.example/");
     expect(ok).toMatchObject({ status: "ok" });

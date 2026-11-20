@@ -1,10 +1,13 @@
-// A link's preview, fetched by the device itself on the person's gesture
-// (work-pane.md, section 12, F-116): the page's title, its description and its
-// preview picture. Nothing calls this when a card is drawn; the interface asks
-// for it after a hover of 500 ms, or a touch and hold.
+// A link's preview, fetched by the host itself when the person chooses it
+// (work-pane.md, section 12, F-116; docs/decisions.md, "Addresses a gateway
+// hands the client"): the page's title, its description and its preview
+// picture. Nothing calls this when a card is drawn or hovered; the interface
+// asks for it only from the card's own Preview control, which names the host
+// and the machine that fetches it.
 //
-// What it fetches is a bot's text, so it is untrusted: `http:` and `https:`
-// only, no cookies or credentials, and never an address on this machine or a
+// What it fetches is a bot's text, so it is untrusted: `https:` only, and
+// every redirect and the picture only on the first page's origin (anything
+// else is skipped), no cookies or credentials, and never an address on this machine or a
 // network that is not the public internet, decided on the parsed address
 // however it is written. A name is resolved once; if any address it resolves
 // to is inward the preview is refused, and otherwise the connection goes to
@@ -12,7 +15,8 @@
 // header), so a second lookup cannot answer differently. At most three
 // redirects, each checked and pinned the same way before it is followed. What
 // is read is bounded: the first 512 KB of the page, a picture of at most
-// 512 KB, 8 seconds in all.
+// 512 KB, 8 seconds in all, the name's lookup included; and at most
+// `MAX_OUTSTANDING_PREVIEWS` previews are under way at once.
 
 import { lookup as dnsLookup } from "node:dns/promises";
 import { request as httpRequest, type IncomingMessage } from "node:http";
@@ -24,6 +28,8 @@ export const PREVIEW_PAGE_BYTES = 524_288;
 export const PREVIEW_IMAGE_BYTES = 524_288;
 export const PREVIEW_TIMEOUT_MS = 8_000;
 const MAX_REDIRECTS = 3;
+/** Previews one host has under way at once; another asked meanwhile has none. */
+export const MAX_OUTSTANDING_PREVIEWS = 2;
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 type Lookup = (hostname: string) => Promise<{ address: string; family: number }[]>;
@@ -190,7 +196,7 @@ const INWARD_NAMES = /(^|\.)(localhost|local|internal|home\.arpa|localdomain)$/;
  * the rest.
  */
 async function checkedTarget(url: URL, lookup: Lookup): Promise<PinnedTarget | null> {
-  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.protocol !== "https:") return null;
   if (url.username || url.password) return null;
   const host = plainName(url.hostname.replace(/^\[|\]$/g, ""));
   const literal = parseAddress(host);
@@ -273,22 +279,31 @@ async function readBounded(
   return { data: Buffer.concat(parts), whole: true };
 }
 
-/** GET an address, following at most three redirects, each hop checked and pinned before it is made. */
+/**
+ * GET an address on `origin`, following redirects within it while `hops`
+ * allows (the page and its picture share three), each hop checked and pinned
+ * before it is made. A hop to another origin is not followed.
+ */
 async function getPublic(
   start: string,
+  origin: string,
   accept: string,
   get: PreviewGet,
   lookup: Lookup,
   signal: AbortSignal,
+  hops: { left: number },
 ): Promise<{ response: PreviewResponse; url: URL } | null> {
   let url = new URL(start);
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
+  for (;;) {
+    if (url.origin !== origin) return null;
     const target = await checkedTarget(url, lookup);
     if (!target) return null;
     const response = await get(target, accept, signal);
     const location = response.header("location");
     if (response.status >= 300 && response.status < 400 && location) {
       response.close();
+      if (hops.left === 0) return null;
+      hops.left -= 1;
       url = new URL(location, url);
       continue;
     }
@@ -296,7 +311,6 @@ async function getPublic(
     response.close();
     return null;
   }
-  return null;
 }
 
 const decodeEntities = (text: string) =>
@@ -336,12 +350,39 @@ export function createLinkPreviewer(
 ): LinkPreviewer {
   const get = options.get ?? pinnedGet();
   const lookup: Lookup = options.lookup ?? ((host) => dnsLookup(host, { all: true }));
+  let outstanding = 0;
   return async (link: string): Promise<LinkPreview> => {
     const none: LinkPreview = { status: "none", url: link };
+    if (outstanding >= MAX_OUTSTANDING_PREVIEWS) return none;
+    outstanding += 1;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? PREVIEW_TIMEOUT_MS);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // The deadline ends the preview, wherever it is: a lookup that never answers included.
+    const deadline = new Promise<LinkPreview>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        resolve(none);
+      }, options.timeoutMs ?? PREVIEW_TIMEOUT_MS);
+    });
     try {
-      const page = await getPublic(link, "text/html", get, lookup, controller.signal);
+      return await Promise.race([preview(link, none, controller.signal), deadline]);
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+      outstanding -= 1;
+    }
+  };
+
+  async function preview(link: string, none: LinkPreview, signal: AbortSignal) {
+    try {
+      let origin: string;
+      try {
+        origin = new URL(link).origin;
+      } catch {
+        return none;
+      }
+      const hops = { left: MAX_REDIRECTS };
+      const page = await getPublic(link, origin, "text/html", get, lookup, signal, hops);
       if (!page || !/text\/html/i.test(page.response.header("content-type") ?? "")) {
         page?.response.close();
         return none;
@@ -352,10 +393,12 @@ export function createLinkPreviewer(
       if (found.image) {
         const got = await getPublic(
           new URL(found.image, page.url).toString(),
+          origin,
           IMAGE_TYPES.join(","),
           get,
           lookup,
-          controller.signal,
+          signal,
+          hops,
         ).catch(() => null);
         const type = got?.response.header("content-type")?.split(";")[0]?.trim() ?? "";
         if (got && IMAGE_TYPES.includes(type)) {
@@ -364,11 +407,16 @@ export function createLinkPreviewer(
         } else got?.response.close();
       }
       if (!found.title && !found.description && !image) return none;
-      return { status: "ok", url: link, title: found.title, description: found.description, image };
+      const ok: LinkPreview = {
+        status: "ok",
+        url: link,
+        title: found.title,
+        description: found.description,
+        image,
+      };
+      return ok;
     } catch {
       return none;
-    } finally {
-      clearTimeout(timer);
     }
-  };
+  }
 }

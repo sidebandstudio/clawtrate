@@ -287,6 +287,36 @@ button.artifact-main:hover {
 }
 
 /* The link card's preview, fetched by the device on hover. */
+/* A link card: the whole address under its text, and its own Preview control under that. */
+.artifact[data-kind="link"] {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.artifact-sub.link-address {
+  display: block;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.link-preview-button {
+  align-self: flex-start;
+  margin: -6px 0 8px 56px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-preview-button:hover {
+  color: var(--text);
+}
+
 .link-preview {
   position: absolute;
   top: calc(100% + 6px);

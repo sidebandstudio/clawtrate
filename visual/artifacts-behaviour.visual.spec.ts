@@ -495,7 +495,7 @@ test.describe("a Page", () => {
 });
 
 test.describe("nothing remote loads by itself", () => {
-  test("F-116 F-117: drawing the task asks no address but the app's own, and a link's preview only after a 500 ms hover", async ({
+  test("F-116 F-117: drawing the task asks no address but the app's own; a link's card shows its whole address, and its preview is fetched only from its own control, which names the host and the machine", async ({
     page,
   }) => {
     const away = offsite(page);
@@ -508,22 +508,40 @@ test.describe("nothing remote loads by itself", () => {
       (c) => c.type === "readArtifact" && c.part === "preview",
     );
     expect(previews.map((c) => c.artifactId)).not.toContain("artifact_cover");
-    expect((await sent(page)).filter((c) => c.type === "previewLink")).toEqual([]);
+    const asked = async () => (await sent(page)).filter((c) => c.type === "previewLink");
+    expect(await asked()).toEqual([]);
     await page.locator(".transcript").hover();
     await page.mouse.wheel(0, -10000);
     const link = page.getByTestId("link-card");
     await expect(link).toBeInViewport();
-    await link.getByRole("button").hover();
-    await page.waitForTimeout(200);
-    expect((await sent(page)).filter((c) => c.type === "previewLink")).toEqual([]);
+    await expect(link.getByTestId("link-address")).toHaveText("https://library.example/ebooks");
+    // A hover, however long, fetches nothing.
+    await link.getByRole("button", { name: /Opens in your browser/ }).hover();
+    await page.waitForTimeout(800);
+    expect(await asked()).toEqual([]);
+    await expect(page.getByTestId("link-preview")).toHaveCount(0);
+    // The fixture is the web preview: its host machine is the one that fetches.
+    const control = link.getByRole("button", {
+      name: "Preview library.example from the computer running the preview",
+    });
+    await control.click();
     await expect(page.getByTestId("link-preview")).toContainText("Library e-books");
-    expect((await sent(page)).filter((c) => c.type === "previewLink")).toEqual([
-      { type: "previewLink", url: "https://library.example/ebooks" },
-    ]);
-    // Choosing the card opens the address in the browser; nothing else went out.
+    expect(await asked()).toEqual([{ type: "previewLink", url: "https://library.example/ebooks" }]);
+    // Closed, nothing of it is kept: opening it again asks again.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("link-preview")).toHaveCount(0);
+    await expect(control).toBeFocused();
+    await control.click();
+    await expect(page.getByTestId("link-preview")).toContainText("Library e-books");
+    expect(await asked()).toHaveLength(2);
+    // Choosing the card opens the address it shows in the browser; nothing else went out.
     const [popup] = await Promise.all([
       page.waitForEvent("popup"),
-      link.getByRole("button").click(),
+      link
+        .getByRole("button", {
+          name: "library.example/ebooks, https://library.example/ebooks. Opens in your browser.",
+        })
+        .click(),
     ]);
     expect(popup.url()).toBe("https://library.example/ebooks");
     await popup.close();

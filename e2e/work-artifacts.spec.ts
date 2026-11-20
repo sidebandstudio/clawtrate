@@ -231,7 +231,7 @@ test("F-116 F-304: a link card and a page, and four items at once with Download 
   const link = page.getByTestId("link-card");
   await expect(
     link.getByRole("button", {
-      name: "trails.example/conditions, trails.example. Opens in your browser.",
+      name: "trails.example/conditions, https://trails.example/conditions. Opens in your browser.",
     }),
   ).toBeVisible({ timeout: 30_000 });
   await shoot("card-link");

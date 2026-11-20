@@ -423,67 +423,87 @@ function MediaGrid({
   );
 }
 
-/** A link the bot ended its message with: opens in the system browser; its preview on hover or hold. */
+/**
+ * A link the bot ended its message with. The card shows the whole address, so
+ * choosing it opens that address in the system browser. Its preview is fetched
+ * only from its own control, which names the host and the machine that will
+ * fetch it, never on hover or hold; https only, as the host fetches. Nothing of
+ * a preview is kept once it closes, so a card holds no picture after.
+ */
 function LinkCard({ link }: { link: LinkTarget }) {
   const bridge = useBridge();
   const [preview, setPreview] = useState<LinkPreview | "loading" | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const asked = useRef(false);
-  const ask = () => {
-    if (!asked.current) {
-      asked.current = true;
-      setPreview("loading");
-      bridge
-        .invoke({ type: "previewLink", url: link.url })
-        .then(setPreview, () => setPreview({ status: "none", url: link.url }));
-    } else if (preview === null) setPreview({ status: "none", url: link.url });
-  };
-  const [shown, setShown] = useState(false);
-  const start = () => {
-    timer.current = setTimeout(() => {
-      setShown(true);
-      ask();
-    }, 500);
-  };
-  const stop = () => {
-    if (timer.current) clearTimeout(timer.current);
-    setShown(false);
+  // Which opening of the preview an answer belongs to: one that arrives after it closed is dropped.
+  const opening = useRef(0);
+  const machine = bridge.info.kind === "web" ? "the computer running the preview" : "this computer";
+  const previewable = link.url.startsWith("https://");
+  const toggle = () => {
+    opening.current += 1;
+    if (preview !== null) {
+      setPreview(null);
+      return;
+    }
+    const at = opening.current;
+    setPreview("loading");
+    bridge
+      .invoke({ type: "previewLink", url: link.url })
+      .then(
+        (got) => got,
+        (): LinkPreview => ({ status: "none", url: link.url }),
+      )
+      .then((got) => {
+        if (opening.current === at) setPreview(got);
+      });
   };
   return (
     <div
       className="artifact"
       data-kind="link"
       data-testid="link-card"
-      onMouseEnter={start}
-      onMouseLeave={stop}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && preview !== null) {
+          event.stopPropagation();
+          opening.current += 1;
+          setPreview(null);
+        }
+      }}
     >
       <button
         type="button"
         className="artifact-main"
-        aria-label={`${link.text}, ${link.host}. Opens in your browser.`}
+        aria-label={`${link.text}, ${link.url}. Opens in your browser.`}
         onClick={() => openInBrowser(link.url)}
-        onPointerDown={(event) => {
-          if (event.pointerType === "touch") start();
-        }}
-        onPointerUp={(event) => {
-          if (event.pointerType === "touch" && timer.current) clearTimeout(timer.current);
-        }}
-        onContextMenu={(event) => {
-          if (shown) event.preventDefault();
-        }}
       >
         <span className="artifact-tile">
           <LinkIcon />
         </span>
         <span className="artifact-text">
           <span className="artifact-name">{link.text}</span>
-          <span className="artifact-sub">{link.host}</span>
+          <span className="artifact-sub link-address" data-testid="link-address">
+            {link.url}
+          </span>
         </span>
       </button>
-      {shown && preview !== null && (
-        <div className="link-preview" role="tooltip" data-testid="link-preview">
+      {previewable && (
+        <button
+          type="button"
+          className="link-preview-button"
+          aria-expanded={preview !== null}
+          data-testid="link-preview-button"
+          onClick={toggle}
+        >
+          {preview === null ? `Preview ${link.host} from ${machine}` : "Hide the preview"}
+        </button>
+      )}
+      {preview !== null && (
+        <div
+          className="link-preview"
+          role="region"
+          aria-label={`Preview of ${link.url}`}
+          data-testid="link-preview"
+        >
           {preview === "loading" ? (
-            <span>Loading the preview…</span>
+            <span aria-busy="true">Loading the preview…</span>
           ) : preview.status === "ok" ? (
             <>
               {preview.image && (

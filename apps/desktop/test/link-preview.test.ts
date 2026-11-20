@@ -80,19 +80,23 @@ describe("a link's preview", () => {
 
   it("F-116: never an address on this machine or a private network, before or after a redirect", async () => {
     const { fetch, asked } = web({
-      "https://jump.example/": { status: 302, headers: { location: `http://${ROUTER}/admin` } },
+      "https://jump.example/": { status: 302, headers: { location: "/admin" } },
     });
+    // jump.example answers a public address first, then its own network's.
+    let jumps = 0;
     const preview = createLinkPreviewer({
       get: fetch,
       lookup: async (host) =>
-        host === "inside.example" ? [{ address: INSIDE, family: 4 }] : PUBLIC,
+        host === "inside.example" || (host === "jump.example" && (jumps += 1) > 1)
+          ? [{ address: host === "jump.example" ? ROUTER : INSIDE, family: 4 }]
+          : PUBLIC,
     });
     for (const url of [
-      "http://127.0.0.1:19980/api/chat/media/outgoing/a/b/full",
-      "http://localhost:5173/",
-      "http://[::1]/",
+      "https://127.0.0.1:19980/api/chat/media/outgoing/a/b/full",
+      "https://localhost:5173/",
+      "https://[::1]/",
       "https://inside.example/",
-      `http://${SHARED}/`,
+      `https://${SHARED}/`,
     ]) {
       expect(await preview(url)).toEqual({ status: "none", url });
     }
@@ -117,23 +121,23 @@ describe("a link's preview", () => {
       lookup: async (host) => (host in answers ? [{ address: answers[host]!, family: 6 }] : PUBLIC),
     });
     const inward = [
-      `http://[${join6("", "", "ffff", loop)}]/`,
-      `http://[${join6("", "", "ffff", INSIDE)}]/`,
-      `http://[${join6("", "", loop)}]/`,
-      `http://[${join6("", "", "ffff", "0", loop)}]/`,
-      `http://[${join6("64", "ff9b", "", ROUTER)}]/`,
-      `http://[${join6("2002", "a00", "8", "", "1")}]/`,
-      `http://[${join6("", "")}]/`,
-      `http://[${join6("fe80", "", "1")}%25eth0]/`,
-      `http://${["0x7f", "1"].join(".")}/`,
-      `http://${String(127 * 2 ** 24 + 1)}/`,
-      `http://${["0177", "0", "0", "1"].join(".")}/`,
-      `http://${join4(0, 0, 0, 0)}/`,
-      "http://localhost./",
-      "http://printer.local./",
-      "http://mapped.example/",
-      "http://zoned.example/",
-      "http://garbled.example/",
+      `https://[${join6("", "", "ffff", loop)}]/`,
+      `https://[${join6("", "", "ffff", INSIDE)}]/`,
+      `https://[${join6("", "", loop)}]/`,
+      `https://[${join6("", "", "ffff", "0", loop)}]/`,
+      `https://[${join6("64", "ff9b", "", ROUTER)}]/`,
+      `https://[${join6("2002", "a00", "8", "", "1")}]/`,
+      `https://[${join6("", "")}]/`,
+      `https://[${join6("fe80", "", "1")}%25eth0]/`,
+      `https://${["0x7f", "1"].join(".")}/`,
+      `https://${String(127 * 2 ** 24 + 1)}/`,
+      `https://${["0177", "0", "0", "1"].join(".")}/`,
+      `https://${join4(0, 0, 0, 0)}/`,
+      "https://localhost./",
+      "https://printer.local./",
+      "https://mapped.example/",
+      "https://zoned.example/",
+      "https://garbled.example/",
     ];
     for (const url of inward) expect(await preview(url), url).toEqual({ status: "none", url });
     expect(asked).toEqual([]);
@@ -144,31 +148,34 @@ describe("a link's preview", () => {
   });
 
   it("F-116: a name is looked up once, and the connection goes to the address that was checked", async () => {
-    // A name that answers a public address the first time and an inward one after.
+    // A name that answers a public address twice, and an inward one after.
     const lookups: string[] = [];
     const lookup = async (host: string) => {
       lookups.push(host);
-      const first = lookups.filter((name) => name === host).length === 1;
-      return host === "rebind.example" && !first ? [{ address: INSIDE, family: 4 }] : PUBLIC;
+      const early = lookups.filter((name) => name === host).length <= 2;
+      return host === "rebind.example" && !early ? [{ address: INSIDE, family: 4 }] : PUBLIC;
     };
     const { fetch, asked, pinned } = web({
-      "http://rebind.example/": html("<title>Rebind</title>"),
-      "http://hop.example/": { status: 302, headers: { location: "http://rebind.example/" } },
+      "https://rebind.example/": html("<title>Rebind</title>"),
+      "https://rebind.example/old": {
+        status: 302,
+        headers: { location: "https://rebind.example/" },
+      },
     });
     const preview = createLinkPreviewer({ get: fetch, lookup });
-    expect(await preview("http://rebind.example/")).toMatchObject({
+    expect(await preview("https://rebind.example/")).toMatchObject({
       status: "ok",
       title: "Rebind",
     });
     expect(lookups).toEqual(["rebind.example"]);
     expect(pinned).toEqual(["203.0.113.7"]);
     // A redirect's destination is looked up and checked before it is followed: now it answers inward.
-    expect(await preview("http://hop.example/")).toEqual({
+    expect(await preview("https://rebind.example/old")).toEqual({
       status: "none",
-      url: "http://hop.example/",
+      url: "https://rebind.example/old",
     });
-    expect(lookups).toEqual(["rebind.example", "hop.example", "rebind.example"]);
-    expect(asked).toEqual(["http://rebind.example/", "http://hop.example/"]);
+    expect(lookups).toEqual(["rebind.example", "rebind.example", "rebind.example"]);
+    expect(asked).toEqual(["https://rebind.example/", "https://rebind.example/old"]);
   });
 
   it("F-116: the default GET connects to the checked address and keeps the name in the Host header", async () => {
@@ -219,6 +226,100 @@ describe("a link's preview", () => {
       status: "none",
       url: "https://c.example/file.zip",
     });
+  });
+
+  it("F-116: https only; a redirect and the picture only on the first page's origin, three hops in all, anything else skipped", async () => {
+    const { fetch, asked } = web({
+      "https://library.example/away": {
+        status: 302,
+        headers: { location: "https://elsewhere.example/" },
+      },
+      "https://library.example/down": {
+        status: 302,
+        headers: { location: "http://library.example/plain" },
+      },
+      "https://library.example/page": html(
+        '<title>Page</title><meta property="og:image" content="https://cdn.example/cover.png">',
+      ),
+      "https://library.example/own": html(
+        '<title>Own</title><meta property="og:image" content="/cover.png">',
+      ),
+      "https://library.example/cover.png": {
+        body: new Uint8Array([137, 80, 78, 71]),
+        headers: { "content-type": "image/png" },
+      },
+      "https://library.example/1": { status: 302, headers: { location: "/2" } },
+      "https://library.example/2": { status: 302, headers: { location: "/3" } },
+      "https://library.example/3": { status: 302, headers: { location: "/4" } },
+      "https://library.example/4": { status: 302, headers: { location: "/own" } },
+    });
+    const preview = createLinkPreviewer({ get: fetch, lookup: async () => PUBLIC });
+    expect(await preview("http://library.example/own")).toEqual({
+      status: "none",
+      url: "http://library.example/own",
+    });
+    expect(asked).toEqual([]);
+    // A hop to another origin, or down to http, is not followed.
+    expect(await preview("https://library.example/away")).toMatchObject({ status: "none" });
+    expect(await preview("https://library.example/down")).toMatchObject({ status: "none" });
+    expect(asked).toEqual(["https://library.example/away", "https://library.example/down"]);
+    asked.length = 0;
+    // A picture on another origin is skipped; the page's title stays.
+    expect(await preview("https://library.example/page")).toMatchObject({
+      status: "ok",
+      title: "Page",
+      image: null,
+    });
+    expect(await preview("https://library.example/own")).toMatchObject({
+      image: { mimeType: "image/png" },
+    });
+    expect(asked).toEqual([
+      "https://library.example/page",
+      "https://library.example/own",
+      "https://library.example/cover.png",
+    ]);
+    asked.length = 0;
+    // Three redirects in all: the fourth is not followed.
+    expect(await preview("https://library.example/1")).toMatchObject({ status: "none" });
+    expect(asked).toEqual([
+      "https://library.example/1",
+      "https://library.example/2",
+      "https://library.example/3",
+      "https://library.example/4",
+    ]);
+  });
+
+  it("F-116: the deadline covers the name's lookup, and at most two previews are under way at once", async () => {
+    const lookups: string[] = [];
+    // A resolver that never answers.
+    const stalled = (host: string) => {
+      lookups.push(host);
+      return new Promise<{ address: string; family: number }[]>(() => {});
+    };
+    const { fetch, asked } = web({});
+    const preview = createLinkPreviewer({ get: fetch, lookup: stalled, timeoutMs: 20 });
+    const started = Date.now();
+    expect(await preview("https://stalled.example/")).toEqual({
+      status: "none",
+      url: "https://stalled.example/",
+    });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    // Two under way; a third asked meanwhile has none, and looks nothing up.
+    const slow = createLinkPreviewer({ get: fetch, lookup: stalled, timeoutMs: 300 });
+    lookups.length = 0;
+    const first = slow("https://a.example/");
+    const second = slow("https://b.example/");
+    expect(await slow("https://c.example/")).toEqual({ status: "none", url: "https://c.example/" });
+    expect(lookups).toEqual(["a.example", "b.example"]);
+    expect(await Promise.all([first, second])).toEqual([
+      { status: "none", url: "https://a.example/" },
+      { status: "none", url: "https://b.example/" },
+    ]);
+    // Once they ended, the next is made.
+    void slow("https://d.example/");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(lookups).toEqual(["a.example", "b.example", "d.example"]);
+    expect(asked).toEqual([]);
   });
 
   it("F-116: the private ranges", () => {

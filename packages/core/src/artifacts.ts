@@ -661,15 +661,15 @@ export async function readPage(ctx: ArtifactContext, docId: string): Promise<Pag
 // Link previews ---------------------------------------------------------------
 
 /**
- * Whether a link may be previewed: `http:` or `https:`, with no user name or
- * password in it, and not too long. Previews are asked for only on the
- * person's gesture (hover or touch and hold), never when a card is drawn.
+ * Whether a link may be previewed: `https:`, with no user name or password
+ * in it, and not too long. Previews are asked for only when the person
+ * chooses the card's Preview control, never when a card is drawn or hovered.
  */
 export function previewableLink(url: string): boolean {
   if (url.length > MAX_ADDRESS_CHARS) return false;
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    if (parsed.protocol !== "https:") return false;
     return !/^[a-z]+:\/\/[^/]*@/i.test(url);
   } catch {
     return false;
