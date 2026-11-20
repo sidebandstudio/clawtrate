@@ -29,6 +29,7 @@ import { startDesktopUpdates } from "./update/build-info.ts";
 import { createUpdatePreferenceStore } from "./update/preferences.ts";
 import { windowsAppUserModelId } from "./identity.ts";
 import {
+  diskFolderFs,
   safeFileName,
   writeExactly,
   writeInFolder,
@@ -346,7 +347,7 @@ async function main(): Promise<void> {
       const ticket = saves.hold(event.sender.id, data);
       try {
         return await writeInFolder(
-          { readFile, writeFile, rm },
+          diskFolderFs,
           chosen.path,
           file?.name,
           new Uint8Array(saves.get(ticket)!),

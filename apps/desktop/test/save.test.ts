@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  diskFolderFs,
   safeFileName,
   writeExactly,
   writeInFolder,
@@ -170,7 +171,7 @@ describe("saving a file the Work pane holds", () => {
 });
 
 describe("saving several items into one folder", () => {
-  const into: FolderFs = { readFile, writeFile, rm };
+  const into = diskFolderFs;
 
   it("F-304: writes each item's exact bytes as a new file in the folder, and never over a file that is there", async () => {
     const dir = folder();
@@ -220,22 +221,62 @@ describe("saving several items into one folder", () => {
 
   it("F-304: a write that fails, or reads back different bytes, is said as failed and leaves nothing", async () => {
     const dir = folder();
-    const full: FolderFs = {
+    /** The disk's operations, with the file this save opened changed by `change`. */
+    const opened = (change: (file: Awaited<ReturnType<FolderFs["open"]>>) => object): FolderFs => ({
       ...into,
-      writeFile: async () => Promise.reject(new Error("disk full")),
-    };
+      open: async (...args) => {
+        const file = await into.open(...args);
+        return { ...file, ...change(file) };
+      },
+    });
+    const full = opened(() => ({ write: async () => Promise.reject(new Error("disk full")) }));
     expect(await writeInFolder(full, dir, "a.md", Uint8Array.from([1]))).toEqual({
       status: "failed",
       name: "a.md",
       message: "disk full",
     });
-    const changed: FolderFs = { ...into, readFile: async () => Uint8Array.from([9]) };
+    const changed = opened(() => ({ read: async () => Uint8Array.from([9]) }));
     expect(await writeInFolder(changed, dir, "b.md", Uint8Array.from([1]))).toEqual({
       status: "failed",
       name: "b.md",
       message: "The saved file does not hold the same bytes.",
     });
     expect(readdirSync(dir)).toEqual([]);
+    // A file that took the name after this save created its own is left where it is.
+    const replaced = opened(() => ({
+      read: async () => {
+        rmSync(join(dir, "c.md"));
+        writeFileSync(join(dir, "c.md"), "someone else's");
+        return Uint8Array.from([9]);
+      },
+    }));
+    expect(await writeInFolder(replaced, dir, "c.md", Uint8Array.from([1]))).toMatchObject({
+      status: "failed",
+    });
+    expect(readFileSync(join(dir, "c.md"), "utf8")).toBe("someone else's");
+  });
+
+  it("F-304: an exclusive open that fails leaves the existing file alone", async () => {
+    const dir = folder();
+    writeFileSync(join(dir, "report.md"), "the person's own report");
+    const removed: string[] = [];
+    const denied: FolderFs = {
+      ...into,
+      open: async () =>
+        Promise.reject(Object.assign(new Error("permission denied"), { code: "EACCES" })),
+      rm: async (path, options) => {
+        removed.push(path);
+        await into.rm(path, options);
+      },
+    };
+    expect(await writeInFolder(denied, dir, "report.md", Uint8Array.from([1]))).toEqual({
+      status: "failed",
+      name: "report.md",
+      message: "permission denied",
+    });
+    expect(removed).toEqual([]);
+    expect(readFileSync(join(dir, "report.md"), "utf8")).toBe("the person's own report");
+    expect(readdirSync(dir)).toEqual(["report.md"]);
   });
 });
 
@@ -323,6 +364,49 @@ describe("the main process's save handler", () => {
       ),
     ).rejects.toThrow(/No folder was chosen/);
     expect(existsSync(join(dir, "d.bin"))).toBe(false);
+  });
+
+  it("F-304: a mixed native batch reports each file it wrote and the failure", async () => {
+    const sender = page();
+    const call = (channel: string, raw?: unknown) =>
+      Promise.resolve().then(
+        () => electron.handlers.get(channel)!({ sender }, raw) as Promise<unknown>,
+      );
+    const dir = folder();
+    // Every name the chime could take is the person's already.
+    const taken = ["chime.wav", ...Array.from({ length: 98 }, (_, i) => `chime (${i + 2}).wav`)];
+    for (const name of taken) writeFileSync(join(dir, name), `kept ${name}`);
+    const chosen = call("clawtrate:chooseFolder");
+    await vi.waitFor(() => expect(electron.folderDialogs).toHaveLength(1));
+    electron.folderDialogs.shift()!.answer({ canceled: false, filePaths: [dir] });
+    const choice = (await chosen) as { folder: number };
+    const items = [
+      { name: "photo.png", data: Uint8Array.from([137, 80, 78, 71, 9]) },
+      { name: "chime.wav", data: Uint8Array.from([82, 73, 70, 70]) },
+      { name: "notes/report.md", data: new TextEncoder().encode("# Report\n") },
+    ];
+    const results = [];
+    for (const item of items)
+      results.push(
+        await call("clawtrate:saveInFolder", {
+          folder: choice.folder,
+          name: item.name,
+          data: item.data.slice().buffer,
+        }),
+      );
+    expect(results).toEqual([
+      { status: "saved", name: "photo.png" },
+      {
+        status: "failed",
+        name: "chime.wav",
+        message: "Every name like it is taken in this folder.",
+      },
+      { status: "saved", name: "report.md" },
+    ]);
+    expect(new Uint8Array(readFileSync(join(dir, "photo.png")))).toEqual(items[0]!.data);
+    expect(new Uint8Array(readFileSync(join(dir, "report.md")))).toEqual(items[2]!.data);
+    for (const name of taken) expect(readFileSync(join(dir, name), "utf8")).toBe(`kept ${name}`);
+    expect(readdirSync(dir)).toHaveLength(taken.length + 2);
   });
 
   it("F-304: a cancelled folder dialog writes nothing", async () => {
