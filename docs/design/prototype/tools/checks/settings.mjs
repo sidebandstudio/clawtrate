@@ -524,10 +524,10 @@ const INTRO = "If the record still appears in the gateway's device list, this co
   check("walk: Restart now: off, read back after the restart", (await text(p, settings)).includes("Off. Clawtrate draws without the graphics hardware.") && !(await text(p, settings)).includes("Restart now"));
   await p.close();
 }
-{
-  const p = await open("open=settings&section=system&os=windows");
+for (const query of ["os=windows", "os=windows&spell=off"]) {
+  const p = await open(`open=settings&section=system&${query}`);
   const t = await text(p, settings);
-  check("System, Windows: spelling unavailable in this build, no switch, nothing downloaded", t.includes("Spelling is unavailable in this build.") && (await p.locator('#settings-dialog [data-s="spell"]').count()) === 0 && !/download/i.test(t));
+  check(`System, Windows (${query}): spelling unavailable in this build, no switch, nothing downloaded`, t.includes("Spelling is unavailable in this build.") && !t.includes("Spelling isn't checked.") && (await p.locator('#settings-dialog [data-s="spell"]').count()) === 0 && !/download/i.test(t));
   await p.close();
 }
 await stateWords("System: turned on again, not restarted", "open=settings&section=system&hw=off", settings, ["Off. Clawtrate draws without the graphics hardware."]);

@@ -828,6 +828,7 @@
     const sw = (on, attrs, label, described) =>
       `<button type="button" class="b-switch" role="switch" aria-checked="${on}" aria-label="${label}"${described ? ` aria-describedby="${described}"` : ""} ${attrs}></button>`;
     function spellLine() {
+      if (S.os === "windows") return ["", "Spelling is unavailable in this build."];
       if (S.spell === "off") return ["", "Spelling isn't checked."];
       if (S.os === "mac") return ["", "Uses macOS's own spelling checker, in the languages macOS is set to."];
       return ["", "Spelling is unavailable in this build."];
