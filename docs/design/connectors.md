@@ -396,20 +396,21 @@ There is no Client ID and no Client Secret: the gateway has no field for either 
 | Arguments      | One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay part of that argument, and a line left empty is dropped. Nothing goes through a shell. |
 | Working folder | Optional. Spaces at its start and end are removed; left empty, the entry has no `cwd`.                                                                                                         |
 
-Under the fields: "The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can." and "The gateway can show saved commands and arguments to operators who can read its settings." (a command and its arguments are read back in full, R§6; no secret belongs in them). "Continue" opens the confirmation.
+Under the fields: "The gateway can start this program on its own machine, as the user it runs as, when it needs this server. The program has that user's access to files, programs and the network." and "The gateway can show saved commands and arguments to operators who can read its settings." (a command and its arguments are read back in full, R§6; no secret belongs in them). "Continue" opens the confirmation.
 
 **The confirmation**, before anything is written (role `alertdialog`, focus on Cancel). It shows the reviewed values, and those same values, no others, are what the write sends (section 12's contract):
 
 > **Run this command on the gateway's machine?**
-> Home gateway will run, on its own machine (`studio.example`), as the user it runs as:
+> On Home gateway's machine (`studio.example`):
 > Program: `/opt/example/bin/search-server`
 > Arguments: `--stdio`, `--index ./notes`, each on its own line, or "No arguments"
 > Working folder: `/srv/notes`, shown only when one was given
-> It runs whenever a bot's run needs search-index's tools, with that user's access to files, programs and the network.
+> The gateway can start this program on its own machine, as the user it runs as, when it needs this server. The program has that user's access to files, programs and the network.
 > [Cancel] [Add command server]
 
 Each argument is shown on its own line, in mono, never shortened, so an argument with spaces in it reads as one. The machine is the gateway's address as this device knows it, or "the gateway's machine" when that is all it knows.
 
+- Keep the untouched form in memory until the operation ends or the person leaves it. On Continue, trim the command and working folder, split the textarea on newlines, trim each line and drop empty lines. Cancel or Escape restores the untouched form and puts focus on Continue. The confirmation, patch and read-back comparison all use the resulting program, argument array and optional working folder. Show them independently in the resulting server page. Do not put a draft, header value, program, argument or working folder in a navigation address.
 - Tab and Shift-Tab stay inside the confirmation, as in every dialog here. Cancel and Escape close it and put focus back on "Continue", with every field as it was typed.
 - "Add command server" writes `{command, args, cwd?}` and reads back by section 12's contract; the result compares the command, every argument and the working folder with what was confirmed.
 

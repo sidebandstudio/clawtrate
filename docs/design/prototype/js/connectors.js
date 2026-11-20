@@ -65,7 +65,7 @@
   // The twelve tiles of "What do you use every day?": the catalog's featured apps.
   const TILES = ["Quillnote", "Tasktide", "Calendrop", "Boxwharf", "Chartwick", "Postlark", "Ledgerkin", "Docklet", "Mapwhistle", "Tunebarrow", "Sketchpond", "Huddlewick"];
   const SERVERS = {
-    "notes-work": { kind: "remote", url: "https://notes.example/mcp", headers: ["Authorization"], signin: "oauth", last: "tools" },
+    "notes-work": { kind: "remote", url: "https://notes.example/mcp", headers: ["Authorization", "X-Workspace"], signin: "oauth", last: "tools" },
     "search-index": { kind: "command", command: "/opt/example/bin/search-server", args: ["--stdio", "--index", "./notes"], last: "unavailable" },
     "team-notes": { kind: "remote", url: "https://teamnotes.example/mcp", headers: [], signin: "each", last: "notyet" },
   };
@@ -76,16 +76,28 @@
     SERVERS["notes-work"].diagnostic = "fetch failed <em>refused</em>";
   }
   const app = (id) => APPS.find((a) => a.id === id) || APPS[0];
-  // The command server the person typed, carried from the form to the confirmation and the write.
-  const reviewed = () => {
-    let args = [];
-    try {
-      args = JSON.parse(params.get("args") || "[]");
-    } catch {
-      args = [];
-    }
-    return { name: params.get("name") || "", command: params.get("cmd") || "", args: Array.isArray(args) ? args : [], cwd: params.get("cwd") || "" };
+  // The page's own memory for one operation: the untouched form, the reviewed draft and what was saved.
+  // It lives in this tab's session storage and never in an address. Header values are never kept.
+  const store = {
+    get(key) {
+      try {
+        return JSON.parse(sessionStorage.getItem(`ct-connectors-${key}`) || "null");
+      } catch {
+        return null;
+      }
+    },
+    set(key, value) {
+      try {
+        sessionStorage.setItem(`ct-connectors-${key}`, JSON.stringify(value));
+      } catch {
+        /* private window: the walk still works within this page */
+      }
+    },
   };
+  const draft = () => store.get("draft") || { type: params.get("type") || "remote", raw: {}, reviewed: null };
+  const saved = () => store.get("saved") || {};
+  const serverOf = (name) => SERVERS[name] || saved()[name] || SERVERS["notes-work"];
+  const known = (name) => Boolean(SERVERS[name] || saved()[name]);
   const picked = (params.get("picked") || "").split(",").filter(Boolean);
 
   // Pieces -----------------------------------------------------------------------------
@@ -305,8 +317,8 @@
 
   const serverPage = () => {
     const name = params.get("id") || "notes-work";
-    const s = SERVERS[name];
-    const last = params.get("last") || s.last;
+    const s = serverOf(name);
+    const last = params.get("last") || s.last || "notyet";
     const lastRun = {
       tools: `<p class="c-state">Gateway tool listing for Pip's task, read at 5:12 PM: 8 tools</p><details class="c-details"><summary>The tools</summary><p class="mono c-faint">${esc(name)}__search, ${esc(name)}__read_page, ${esc(name)}__add_page, …</p></details>`,
       notyet: `<p class="c-state">The gateway hasn't listed this server's tools for this task.</p><details class="c-details"><summary>The gateway's notice</summary><p class="c-faint">MCP servers "${esc(name)}" are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them.</p></details>`,
@@ -322,7 +334,11 @@
             ["Headers", s.headers.length ? `${s.headers.map((h) => `<span class="mono">${esc(h)}</span>`).join(", ")}. Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.` : "None"],
             ["Sign-in", s.signin === "oauth" ? "Signs in with OAuth" : s.signin === "each" ? "Uses the gateway\'s requester sign-in. Set up and use it in a channel where the gateway identifies each sender." : "None"],
           ]
-        : [["Command", `<span class="mono">${esc([s.command, ...s.args].join(" "))}</span>`]]),
+        : [
+            ["Program", `<span class="mono" data-c="program">${esc(s.command)}</span>`],
+            ["Arguments", s.args.length ? `<ol class="c-args" data-c="args">${s.args.map((a) => `<li><code class="c-cmd">${esc(a)}</code></li>`).join("")}</ol>` : `<span data-c="args">No arguments</span>`],
+            ...(s.cwd ? [["Working folder", `<span class="mono" data-c="cwd">${esc(s.cwd)}</span>`]] : []),
+          ]),
     ];
     return {
       title: name,
@@ -354,30 +370,35 @@
   const addServerForm = () => {
     const type = params.get("type") || "remote";
     const from = params.get("from");
-    const base = from ? SERVERS[from] : null;
+    const base = from ? serverOf(from) : null;
     const remote = type === "remote";
+    const d = draft();
+    const raw = d.type === type ? d.raw : {};
+    const headerNames = base ? base.headers : raw.headerNames?.length ? raw.headerNames : [""];
     return {
       title: "Add a custom connector",
       body:
         (admin
-          ? `<form class="c-form" id="c-server-form" novalidate data-type="${type}">` +
+          ? `<form class="c-form" id="c-server-form" novalidate data-type="${esc(type)}" data-from="${esc(from || "")}">` +
             `<fieldset class="c-type"><legend>Type</legend><div class="c-seg" role="radiogroup" aria-label="Type">` +
-            `<a role="radio" aria-checked="${remote}" href="${go("add-server", { type: "remote" })}">Remote HTTPS</a>` +
-            `<a role="radio" aria-checked="${!remote}" href="${go("add-server", { type: "command" })}">Command</a></div></fieldset>` +
-            field("c-name", "Name", remote ? "" : reviewed().name, "Letters, digits, hyphens and underscores. Bots see it in tool names.", "notes-work") +
+            `<a role="radio" aria-checked="${remote}" href="${esc(go("add-server", { type: "remote" }))}">Remote HTTPS</a>` +
+            `<a role="radio" aria-checked="${!remote}" href="${esc(go("add-server", { type: "command" }))}">Command</a></div></fieldset>` +
+            field("c-name", "Name", base ? "" : raw.name || "", "Letters, digits, hyphens and underscores. Bots see it in tool names.", "notes-work") +
             (remote
-              ? field("c-url", "Server URL", base ? base.url : "", "", "https://") +
-                `<fieldset class="c-headers"><legend>Headers</legend><div class="c-header-row"><input class="input" id="c-h-name" aria-label="Header name" placeholder="Name" value="${base ? esc(base.headers[0] || "") : ""}" /><input class="input" id="c-h-value" type="password" aria-label="Header value" placeholder="Value" /></div>` +
+              ? field("c-url", "Server URL", base ? base.url : raw.url || "", "", "https://") +
+                `<fieldset class="c-headers"><legend>Headers</legend><div id="c-header-rows">` +
+                headerNames.map((h, i) => `<div class="c-header-row"><input class="input c-h-name" aria-label="Header name ${i + 1}" placeholder="Name" value="${esc(h)}" /><input class="input c-h-value" type="password" aria-label="Header value ${i + 1}" placeholder="Value" /></div>`).join("") +
+                `</div><button type="button" class="button" data-variant="quiet" data-size="sm" id="c-add-header">Add a header</button>` +
                 (base ? `<p class="c-line" data-c="values">Enter any header values this server needs. Saved values are hidden.</p>` : "") +
                 `<p class="c-line">Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved.</p></fieldset>` +
                 `<fieldset class="c-signin"><legend>Sign-in</legend>` +
-                radio("signin", "none", "None", !base) +
-                radio("signin", "oauth", "Sign in with OAuth", Boolean(base)) +
+                radio("signin", "none", "None", base ? false : raw.signin !== "oauth") +
+                radio("signin", "oauth", "Sign in with OAuth", base ? true : raw.signin === "oauth") +
                 `<p class="c-line">OpenClaw registers itself with the server when it signs in.</p></fieldset>`
-              : field("c-command", "Command", reviewed().command, "", "/path/to/server") +
-                `<label class="c-field"><span>Arguments</span><textarea class="input" id="c-args" rows="3" aria-describedby="c-args-hint" placeholder="One per line">${esc(reviewed().args.join("\n"))}</textarea><span class="c-line" id="c-args-hint">One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay, and an empty line is dropped. Nothing goes through a shell.</span></label>` +
-                field("c-cwd", "Working folder", reviewed().cwd, "Optional.", "") +
-                `<p class="c-line">The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can.</p>` +
+              : field("c-command", "Command", raw.command || "", "", "/path/to/server") +
+                `<label class="c-field"><span>Arguments</span><textarea class="input" id="c-args" rows="3" aria-describedby="c-args-hint" placeholder="One per line">${esc(raw.args || "")}</textarea><span class="c-line" id="c-args-hint">One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay, and an empty line is dropped. Nothing goes through a shell.</span></label>` +
+                field("c-cwd", "Working folder", raw.cwd || "", "Optional.", "") +
+                `<p class="c-line">The gateway can start this program on its own machine, as the user it runs as, when it needs this server. The program has that user's access to files, programs and the network.</p>` +
                 `<p class="c-line">The gateway can show saved commands and arguments to operators who can read its settings.</p>`) +
             `<div class="c-actions"><button type="submit" class="button" id="c-submit" data-variant="primary" data-size="sm">${remote ? "Add to gateway" : "Continue"}</button></div>` +
             `</form>`
@@ -639,29 +660,30 @@
     },
     "add-server": () => windowHtml(addServerForm()),
     "command-confirm": () => {
-      const r = reviewed();
-      const carry = { type: "command", name: r.name, cmd: r.command, args: JSON.stringify(r.args), ...(r.cwd ? { cwd: r.cwd } : {}) };
+      const r = draft().reviewed || { name: "", command: "", args: [], cwd: "" };
       return (
         windowHtml(addServerForm()) +
         confirm(
           "Run this command on the gateway's machine?",
-          `<p>Home gateway will run, on its own machine (<span class="mono">studio.example</span>), as the user it runs as:</p>` +
+          `<p>On Home gateway's machine (<span class="mono">studio.example</span>):</p>` +
             `<dl class="c-cmd-facts"><div><dt>Program</dt><dd><code class="c-cmd" data-c="program">${esc(r.command)}</code></dd></div>` +
             `<div><dt>Arguments</dt><dd>${r.args.length ? `<ol class="c-args" data-c="args">${r.args.map((a) => `<li><code class="c-cmd">${esc(a)}</code></li>`).join("")}</ol>` : `<span data-c="args">No arguments</span>`}</dd></div>` +
             (r.cwd ? `<div><dt>Working folder</dt><dd><code class="c-cmd" data-c="cwd">${esc(r.cwd)}</code></dd></div>` : "") +
             `</dl>` +
-            `<p>It runs whenever a bot's run needs ${esc(r.name)}'s tools, with that user's access to files, programs and the network.</p>`,
-          [link("Cancel", "add-server", { ...carry, focus: "c-submit" }, { variant: "quiet" }), link("Add command server", "add-server-saved", carry, { variant: "primary" })],
+            `<p>The gateway can start this program on its own machine, as the user it runs as, when it needs this server. The program has that user's access to files, programs and the network.</p>`,
+          [link("Cancel", "add-server", { type: "command", focus: "c-submit" }, { variant: "quiet" }), link("Add command server", "add-server-saved", { type: "command" }, { variant: "primary" })],
         )
       );
     },
     "add-server-saved": () => {
-      const name = params.get("name") || "notes-work";
-      const cmd = params.get("type") === "command";
+      const r = draft().reviewed || { name: "notes-work", kind: "remote", url: "https://notes.example/mcp", headers: [], signin: "none" };
+      const name = r.name;
+      if (!SERVERS[name]) store.set("saved", { ...saved(), [name]: r });
+      const cmd = r.kind === "command";
       return windowHtml({
         title: "Add a custom connector",
         body:
-          result("ok", "check", `Added ${name}.`, cmd ? `The gateway lists this server. The gateway can start this program when it needs this server.${params.get("cmd") ? ` Read back: <span class="mono">${esc([reviewed().command, ...reviewed().args].join(" "))}</span>${reviewed().cwd ? `, in <span class="mono">${esc(reviewed().cwd)}</span>` : ""}.` : ""}` : "The gateway lists this server.", link(`Open ${name}`, "server", { id: cmd ? "search-index" : "notes-work", last: "notyet" }, { variant: "primary" }) + (params.get("signin") === "oauth" ? link("Sign in", "signin-cli", { id: "notes-work", server: "1" }) : "")) +
+          result("ok", "check", `Added ${name}.`, esc(cmd ? "The gateway lists this server. The gateway can start this program when it needs this server." : `The gateway lists this server.${r.headers?.length ? " The gateway hides saved header values." : ""}`), link(`Open ${name}`, "server", { id: name }, { variant: "primary" }) + (r.signin === "oauth" ? link("Sign in", "signin-cli", { id: name, server: "1" }) : "")) +
           proto("the write", [link("Refused", "add-server-refused", { name }, { variant: "quiet" }), link("No answer", "add-server-checking", { name }, { variant: "quiet" }), link("Settings changed", "add-server-changed", { name }, { variant: "quiet" })]),
       });
     },
@@ -805,6 +827,11 @@
   // The tool server form: Clawtrate's own checks, then the gateway's answer (sections 12, 13).
   const form = document.getElementById("c-server-form");
   if (form) {
+    document.getElementById("c-add-header")?.addEventListener("click", () => {
+      const rowsBox = document.getElementById("c-header-rows");
+      const n = rowsBox.children.length + 1;
+      rowsBox.insertAdjacentHTML("beforeend", `<div class="c-header-row"><input class="input c-h-name" aria-label="Header name ${n}" placeholder="Name" /><input class="input c-h-value" type="password" aria-label="Header value ${n}" placeholder="Value" /></div>`);
+    });
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const errors = [];
@@ -814,10 +841,12 @@
         input.setAttribute("aria-invalid", message ? "true" : "false");
         if (message) errors.push(input);
       };
-      const name = document.getElementById("c-name").value.trim();
-      set("c-name", !name ? "Enter a name." : !/^[A-Za-z0-9_-]+$/.test(name) ? "Use letters, digits, hyphens and underscores." : SERVERS[name] ? `There's already a server named ${name}.` : "");
+      const rawName = document.getElementById("c-name").value;
+      const name = rawName.trim();
+      set("c-name", !name ? "Enter a name." : !/^[A-Za-z0-9_-]+$/.test(name) ? "Use letters, digits, hyphens and underscores." : known(name) ? `There's already a server named ${name}.` : "");
       if (form.dataset.type === "remote") {
-        const url = document.getElementById("c-url").value.trim();
+        const rawUrl = document.getElementById("c-url").value;
+        const url = rawUrl.trim();
         let parsed = null;
         try {
           parsed = new URL(url);
@@ -826,18 +855,22 @@
         }
         set("c-url", !url ? "Enter the server's URL." : !parsed || !/^https?:$/.test(parsed.protocol) ? "Enter a URL that starts with https://." : parsed.protocol !== "https:" ? "Use the server's https:// URL." : "");
         if (errors.length) return errors[0].focus();
-        const signinChoice = form.querySelector("input[name='signin']:checked").value;
-        location.href = go("add-server-saved", { name, signin: signinChoice });
+        const headerNames = [...form.querySelectorAll(".c-h-name")].map((i) => i.value.trim()).filter(Boolean);
+        const signin = form.querySelector("input[name='signin']:checked").value;
+        store.set("draft", { type: "remote", raw: { name: rawName, url: rawUrl, headerNames, signin }, reviewed: { kind: "remote", name, url, headers: headerNames, signin } });
+        location.href = go("add-server-saved", { type: "remote" });
       } else {
-        const cmd = document.getElementById("c-command").value.trim();
+        const rawCommand = document.getElementById("c-command").value;
+        const rawArgs = document.getElementById("c-args").value;
+        const rawCwd = document.getElementById("c-cwd").value;
+        const cmd = rawCommand.trim();
         set("c-command", cmd ? "" : "Enter the command.");
         if (errors.length) return errors[0].focus();
         // Each line is one argument, trimmed at its ends; empty lines are dropped.
-        const argList = document.getElementById("c-args").value.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
-        const cwd = document.getElementById("c-cwd").value.trim();
-        location.href = go("command-confirm", { name, cmd, args: JSON.stringify(argList), ...(cwd ? { cwd } : {}) });
-        return;
-        location.href = go("command-confirm", { name, cmd, args: document.getElementById("c-args").value.trim() || "" });
+        const args = rawArgs.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+        const cwd = rawCwd.trim();
+        store.set("draft", { type: "command", raw: { name: rawName, command: rawCommand, args: rawArgs, cwd: rawCwd }, reviewed: { kind: "command", name, command: cmd, args, ...(cwd ? { cwd } : {}) } });
+        location.href = go("command-confirm", { type: "command" });
       }
     });
   }

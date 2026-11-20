@@ -46,6 +46,12 @@ const link = (name) => (p) => p.getByRole("link", { name, exact: true }).first()
 const row = (name) => (p) => p.locator(`.c-row-main[aria-label^="${name},"]`).first().click();
 const inConfirm = (name) => (p) => p.locator(".c-confirm").getByRole("link", { name, exact: true }).click();
 const typeIn = (sel, value) => (p) => p.fill(sel, value);
+// After a server write is sent: the gateway accepts it, and a fresh read matches what was reviewed.
+const finishWrite = async (p) => {
+  if (await p.getByRole("link", { name: "Accepted", exact: true }).count()) await p.getByRole("link", { name: "Accepted", exact: true }).click();
+  if (await p.getByRole("link", { name: "Matches every reviewed field", exact: true }).count()) await p.getByRole("link", { name: "Matches every reviewed field", exact: true }).click();
+  await p.waitForTimeout(60);
+};
 const submit = (p) => p.locator("#c-server-form button[type=submit]").click();
 const tick = (value) => (p) => p.locator(`.c-tile input[value="${value}"]`).check();
 
@@ -102,7 +108,7 @@ const STATES = [
   ["screen=server&id=notes-work&last=notyet", ["The gateway hasn't listed this server's tools for this task."]],
   ["screen=server&id=notes-work&last=unavailable", ["Gateway tool listing for Pip's task, read at 5:12 PM:", "server unavailable"]],
   ["screen=server&id=notes-work&last=none", ["Not reported: the gateway's tool listing for this task doesn't mention this server."]],
-  ["screen=server&id=search-index", ["Runs a command", "/opt/example/bin/search-server --stdio --index ./notes", "spawn /opt/example/bin/search-server ENOENT"]],
+  ["screen=server&id=search-index", ["Runs a command", "Program", "/opt/example/bin/search-server", "Arguments", "--stdio", "./notes", "spawn /opt/example/bin/search-server ENOENT"]],
   ["screen=server&id=team-notes", ["Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender.", "Clawtrate offers no sign-in for it."]],
   ["screen=server&id=notes-work&device=iphone", ["Change it from Clawtrate on your computer."]],
   ["screen=server-remove-confirm&id=notes-work", ["Remove notes-work from the gateway?", "the server's entry in the gateway's settings, with its headers", "its tools", "Removing this entry leaves any saved sign-ins in the gateway's state. The gateway keeps them unencrypted.", "To clear them, run this on the gateway's machine before removing the entry:", "openclaw mcp logout notes-work", "openclaw mcp unset notes-work"]],
@@ -116,12 +122,8 @@ const STATES = [
   ["screen=add-server-unconfirmed&name=notes-home", ["Couldn't confirm the change.", "Check again"]],
   ["screen=add-server-changed&name=notes-home", ["The gateway's settings changed.", "Review the current entry before trying again."]],
   ["screen=add-server", ["Add a custom connector", "Type", "Remote HTTPS", "Command", "Name", "Server URL", "Headers", "Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved.", "Sign-in", "None", "Sign in with OAuth", "OpenClaw registers itself with the server when it signs in.", "Add to gateway"]],
-  ["screen=add-server&type=command", ["Command", "Arguments", "One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay, and an empty line is dropped. Nothing goes through a shell.", "Working folder", "The gateway runs this program on its own machine, as the user the gateway runs as, whenever a bot's run needs its tools. It can do anything that user can.", "The gateway can show saved commands and arguments to operators who can read its settings.", "Continue"]],
+  ["screen=add-server&type=command", ["Command", "Arguments", "One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay, and an empty line is dropped. Nothing goes through a shell.", "Working folder", "The gateway can start this program on its own machine, as the user it runs as, when it needs this server. The program has that user's access to files, programs and the network.", "The gateway can show saved commands and arguments to operators who can read its settings.", "Continue"]],
   ["screen=add-server&access=read", ["Read-only.", "Adding a custom connector needs admin access."]],
-  ["screen=command-confirm&name=search-index&cmd=/opt/example/bin/search-server&args=%5B%22--stdio%22%5D", ["Run this command on the gateway's machine?", "Home gateway will run, on its own machine (studio.example), as the user it runs as:", "Program", "/opt/example/bin/search-server", "Arguments", "--stdio", "with that user's access to files, programs and the network.", "Add command server"]],
-  ["screen=command-confirm&name=search-index&cmd=/opt/example/bin/search-server&args=%5B%5D", ["No arguments"]],
-  ["screen=add-server-saved&name=notes-work", ["Added notes-work.", "The gateway lists this server."]],
-  ["screen=add-server-saved&name=search-index&type=command", ["Added search-index.", "The gateway lists this server. The gateway can start this program when it needs this server."]],
   ["screen=add-server-refused&name=notes-work", ["Couldn't add notes-work:", "Expected http:// or https:// URL", "Nothing saved."]],
   ["screen=add-server-checking&name=notes-work", ["Checking what the gateway has…"]],
   ["screen=signin-cli&id=notes-work&server=1", ["Sign in to notes-work", "On the gateway's machine, run:", "openclaw mcp login notes-work", "If it prints an address, open it in a browser and sign in.", "If the terminal is listening for the callback, it waits up to five minutes. Follow the terminal's instructions to finish with a code if the callback cannot reach it.", "It may also find a saved sign-in and say so without printing an address.", "Or sign in from Settings on the gateway's own web page.", "Afterwards this page still reads \"Not reported\"", "Back to notes-work"]],
@@ -146,7 +148,7 @@ for (const [query, words] of STATES) {
   const p = await open("screen=add-server");
   const t = await text(p);
   check("no Client ID or Client Secret field (cut, R§5)", !/client id|client secret/i.test(t));
-  check("a header's value is a password field", (await p.locator("#c-h-value").getAttribute("type")) === "password");
+  check("a header's value is a password field", (await p.locator(".c-h-value").first().getAttribute("type")) === "password");
   await p.close();
   const q = await open("screen=browse");
   check("no picture of any connector: only drawn initials", (await q.locator(".c-window img").count()) === 0 && (await q.locator(".c-initial").count()) > 0);
@@ -173,7 +175,7 @@ for (const [query, words] of STATES) {
 // Ruling 7: no screen claims a run, a time of use or every bot that has something.
 {
   const claims = [];
-  for (const q of ["screen=server&id=notes-work", "screen=server&id=notes-work&last=notyet", "screen=server&id=search-index", "screen=add-server-saved&name=notes-work", "screen=add-server-saved&name=search-index&type=command", "screen=add-done&id=quillnote", "screen=remove-confirm&id=tasktide", "screen=server-remove-confirm&id=notes-work", "screen=chat"]) {
+  for (const q of ["screen=server&id=notes-work", "screen=server&id=notes-work&last=notyet", "screen=server&id=search-index", "screen=add-done&id=quillnote", "screen=remove-confirm&id=tasktide", "screen=server-remove-confirm&id=notes-work", "screen=chat"]) {
     const p = await open(q);
     if (/has run|next run|'s run at|from their next|Juniper, Pip/.test(await text(p))) claims.push(q);
     await p.close();
@@ -315,17 +317,29 @@ await walk("add: no answer, then the read-back has no such entry", "screen=add-s
 await walk("add: no answer, then the read-back differs", "screen=add-server-saved&name=notes-home", [[link("No answer"), "add-server-checking"], [link("Differs, or the read fails"), "add-server-unconfirmed"], [link("Check again"), "add-server-checking"], [link("Matches what you reviewed"), "add-server-saved"]]);
 await walk("add: the settings changed since the form opened", "screen=add-server-saved&name=notes-home", [[link("Settings changed"), "add-server-changed"], [link("Back to the form"), "add-server"]]);
 await walk("add another account to a tool server", "screen=server&id=notes-work", [[link("Add another account"), "add-server"]]);
-{
-  const p = await open("screen=server&id=notes-work");
+for (const [width, label] of [[1440, "desktop"], [390, "phone"]]) {
+  const p = await open("screen=server&id=notes-work", { width, height: width === 390 ? 844 : 900 });
   await link("Add another account")(p);
   await at(p, "add-server");
-  check("Add another account fills in the address and header names, leaves the name and every value empty", (await p.inputValue("#c-url")) === "https://notes.example/mcp" && (await p.inputValue("#c-name")) === "" && (await p.inputValue("#c-h-name")) === "Authorization" && (await p.inputValue("#c-h-value")) === "" && (await text(p)).includes("Enter any header values this server needs. Saved values are hidden."));
+  const names = await p.locator(".c-h-name").evaluateAll((els) => els.map((e) => e.value));
+  const values = await p.locator(".c-h-value").evaluateAll((els) => els.map((e) => e.value));
+  check(`${label}: Add another account fills in the address and both header names, and leaves the name and every value empty (change 3)`, (await p.inputValue("#c-url")) === "https://notes.example/mcp" && (await p.inputValue("#c-name")) === "" && JSON.stringify(names) === '["Authorization","X-Workspace"]' && JSON.stringify(values) === '["",""]' && (await text(p)).includes("Enter any header values this server needs. Saved values are hidden."), JSON.stringify(names));
+  await p.fill("#c-name", "notes-home");
+  await submit(p);
+  await finishWrite(p);
+  check(`${label}: the second account is added`, (await text(p)).includes("Added notes-home.") && (await text(p)).includes("The gateway hides saved header values."));
+  await link("Open notes-home")(p);
+  await at(p, "server");
+  const detail = await text(p);
+  check(`${label}: its page shows its own name, the same address, both header names and OAuth`, detail.includes("notes-home") && detail.includes("https://notes.example/mcp") && detail.includes("Authorization") && detail.includes("X-Workspace") && detail.includes("Signs in with OAuth"));
+  await p.close();
+}
+{
   const each = await open("screen=server&id=team-notes");
   const cmd = await open("screen=server&id=search-index");
   check("Add another account only for a shared OAuth server", (await each.getByRole("link", { name: "Add another account" }).count()) === 0 && (await cmd.getByRole("link", { name: "Add another account" }).count()) === 0);
   await each.close();
   await cmd.close();
-  await p.close();
 }
 await walk("sign in to a tool server: the gateway's own steps, then back", "screen=server&id=notes-work", [[link("Sign in"), "signin-cli"], [link("Back to notes-work"), "server"]], ["Not reported."]);
 await walk("add a server by address: Clawtrate's checks, then saved", "screen=add-server", [
@@ -366,14 +380,6 @@ await walk("add a server by address: Clawtrate's checks, then saved", "screen=ad
   await card.close();
   await p.close();
 }
-await walk("add a server started by a command, through its confirmation", "screen=add-server&type=command", [
-  [submit],
-  [typeIn("#c-name", "search-local")],
-  [typeIn("#c-command", "/opt/example/bin/search-server")],
-  [typeIn("#c-args", "--stdio\n--index ./notes")],
-  [submit, "command-confirm"],
-  [inConfirm("Add command server"), "add-server-saved"],
-], ["Added search-local.", "/opt/example/bin/search-server --stdio --index ./notes"]);
 for (const [width, label] of [[1440, "desktop"], [390, "phone"]]) {
   const opts = { width, height: width === 390 ? 844 : 900 };
   const p = await open("screen=add-server&type=command", opts);
@@ -381,26 +387,39 @@ for (const [width, label] of [[1440, "desktop"], [390, "phone"]]) {
   await submit(p);
   await p.waitForTimeout(50);
   check(`${label}: an empty command is refused by Clawtrate`, (await text(p)).includes("Enter the command.") && (await screenOf(p)) === "add-server");
-  await p.fill("#c-command", "/opt/example/bin/search-server");
+  // Zero arguments and a working folder, typed with spaces around them.
+  await p.fill("#c-command", "  /opt/example/bin/search-server ");
   await p.fill("#c-args", "");
-  await p.fill("#c-cwd", "/srv/notes");
+  await p.fill("#c-cwd", " /srv/notes ");
   await submit(p);
   await at(p, "command-confirm");
   const none = await text(p, ".c-confirm");
-  check(`${label}: a command with no arguments says "No arguments" and shows its working folder, and nothing else`, none.includes("No arguments") && none.includes("Working folder") && none.includes("/srv/notes") && !none.includes("--stdio"));
+  check(`${label}: no arguments reads "No arguments", with the working folder trimmed`, none.includes("No arguments") && none.includes("Working folder") && (await p.locator('.c-confirm [data-c="cwd"]').textContent()) === "/srv/notes" && (await p.locator('.c-confirm [data-c="program"]').textContent()) === "/opt/example/bin/search-server");
   for (let i = 0; i < 8; i++) await p.keyboard.press("Tab");
   check(`${label}: Tab stays inside the confirmation`, await p.evaluate(() => Boolean(document.activeElement?.closest(".c-confirm"))));
   await p.keyboard.press("Shift+Tab");
   check(`${label}: Shift-Tab stays inside the confirmation`, await p.evaluate(() => Boolean(document.activeElement?.closest(".c-confirm"))));
   await p.keyboard.press("Escape");
-  check(`${label}: Escape is Cancel and returns focus to Continue, with the fields as typed`, (await at(p, "add-server")) && (await p.evaluate(() => document.activeElement?.id)) === "c-submit" && (await p.inputValue("#c-cwd")) === "/srv/notes" && (await p.inputValue("#c-command")) === "/opt/example/bin/search-server");
-  await p.fill("#c-args", "  --index ./my notes  \n\n--stdio\n   ");
+  check(`${label}: Escape restores the untouched form and puts focus on Continue (change 3)`, (await at(p, "add-server")) && (await p.evaluate(() => document.activeElement?.id)) === "c-submit" && (await p.inputValue("#c-cwd")) === " /srv/notes " && (await p.inputValue("#c-command")) === "  /opt/example/bin/search-server " && (await p.inputValue("#c-args")) === "");
+  // Many arguments, one with spaces, and a secret-looking one.
+  await p.fill("#c-args", "  --index ./my notes  \n\n--stdio\n--token\nexample-argv-secret\n   ");
   await submit(p);
   await at(p, "command-confirm");
   const argsShown = await p.locator(".c-confirm .c-args li").allTextContents();
-  check(`${label}: an argument with spaces stays one argument, ends trimmed, empty lines dropped`, JSON.stringify(argsShown) === JSON.stringify(["--index ./my notes", "--stdio"]), JSON.stringify(argsShown));
+  check(`${label}: the argument array is exact and in order`, JSON.stringify(argsShown) === JSON.stringify(["--index ./my notes", "--stdio", "--token", "example-argv-secret"]), JSON.stringify(argsShown));
+  check(`${label}: no program, argument or folder is in the confirmation's address`, !/example-argv-secret|search-server|srv/.test(decodeURIComponent(p.url())));
+  await p.keyboard.press("Escape");
+  await at(p, "add-server");
+  check(`${label}: Escape again restores the raw arguments`, (await p.inputValue("#c-args")) === "  --index ./my notes  \n\n--stdio\n--token\nexample-argv-secret\n   ");
+  await submit(p);
+  await at(p, "command-confirm");
   await inConfirm("Add command server")(p);
-  check(`${label}: the write reads back the same program, arguments and folder`, (await at(p, "add-server-saved")) && (await text(p)).includes("/opt/example/bin/search-server --index ./my notes --stdio") && (await text(p)).includes("/srv/notes"));
+  await finishWrite(p);
+  check(`${label}: no secret in the result's address either`, !/example-argv-secret|search-server/.test(decodeURIComponent(p.url())) && (await text(p)).includes("Added search-local."));
+  await link("Open search-local")(p);
+  await at(p, "server");
+  const shownArgs = await p.locator('[data-c="args"] li').allTextContents();
+  check(`${label}: the new server's page shows the saved program, every argument and the folder`, (await p.locator('[data-c="program"]').textContent()) === "/opt/example/bin/search-server" && JSON.stringify(shownArgs) === JSON.stringify(["--index ./my notes", "--stdio", "--token", "example-argv-secret"]) && (await p.locator('[data-c="cwd"]').textContent()) === "/srv/notes", JSON.stringify(shownArgs));
   await p.close();
   const q = await open("screen=browse", opts);
   await q.locator("#chip-all").focus();
