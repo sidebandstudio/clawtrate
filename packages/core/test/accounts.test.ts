@@ -19,6 +19,7 @@ import {
   lockCommand,
   MAX_ACCOUNTS,
   MAX_SECRET_CHARS,
+  MAX_SIGNIN_URL_CHARS,
   parseModelRef,
   readBotView,
   readKeyProviders,
@@ -1307,6 +1308,17 @@ describe("a sign-in page's address (ruling: one parsed address)", () => {
     expect(signInAddress("file:///etc/passwd")).toBeNull();
     expect(signInAddress("/relative")).toBeNull();
     expect(signInAddress(`https://a.example/${"x".repeat(2_100)}`)).toBeNull();
+  });
+
+  it("F-474: refuses a sign-in URL whose canonical form exceeds the bound", () => {
+    // 1,021 characters as sent; parsing writes each "é" as "%C3%A9", past 2,048.
+    const raw = `http://127.0.0.1:1/${"é".repeat(1_002)}`;
+    expect(raw.length).toBeLessThan(MAX_SIGNIN_URL_CHARS);
+    expect(new URL(raw).href.length).toBeGreaterThan(MAX_SIGNIN_URL_CHARS);
+    expect(signInAddress(raw)).toBeNull();
+    // Within the bound once parsed, it is kept, with its parsed path.
+    const short = `http://127.0.0.1:1/${"é".repeat(300)}`;
+    expect(signInAddress(short)?.path).toBe(`/${"%C3%A9".repeat(300)}`);
   });
 
   it("knows a loopback address, which points to the device that opens it", () => {

@@ -805,6 +805,10 @@ test("F-474: OpenRouter's order of steps, on Clawtrate's connection: the page, t
   await expect(field).toBeVisible({ timeout: 20_000 });
   // The step is not marked secret, and carries the page: the field is a password field.
   await expect(field).toHaveAttribute("type", "password");
+  // What the gateway's step asks for, as it asks: the redirect URL, not a bare code.
+  await expect(settings.getByTestId("requested")).toHaveText(
+    "Paste the Acme (scripted) redirect URL",
+  );
   await expect(settings.locator(".b-code")).toHaveCount(0);
   await expect(
     settings.getByText(/finishes on the gateway's machine|sends your browser back|by itself/),

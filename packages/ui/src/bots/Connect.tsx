@@ -893,7 +893,7 @@ export function useConnect({
       // A page and no code: the gateway's words, and nothing said of how the sign-in finishes.
       body = (
         <>
-          <p className="b-lead">{step.message ?? `Open ${who}'s sign-in page and sign in.`}</p>
+          {step.message && <p className="b-lead">{step.message}</p>}
           {open(step)}
           <Wait>Waiting for the gateway…</Wait>
           <p className="b-hint">
@@ -948,12 +948,10 @@ export function useConnect({
             {open(step)}
           </li>
           <li>
-            <p>
-              The page then shows a code, or your browser lands on an address that does not open.
-              Copy the code, or that whole address, and paste it here.
-            </p>
+            {/* What the gateway asks for, as it asks: a code, a whole address, or something else. */}
+            <p data-testid="requested">{step.message ?? "Paste the requested answer here."}</p>
             <label className="b-field">
-              <span>Code or address</span>
+              <span>{step.title ?? "Answer"}</span>
               <input
                 ref={pasteRef}
                 className="input"
@@ -970,9 +968,7 @@ export function useConnect({
             </label>
           </li>
         </ol>
-        <p className="b-hint">
-          It goes straight to your gateway, which finishes the sign-in. Clawtrate does not keep it.
-        </p>
+        <p className="b-hint">It goes straight to your gateway. Clawtrate does not keep it.</p>
       </>
     ) : (
       <>

@@ -375,9 +375,11 @@ export function opensIn(address: SignInAddress): string {
     : "Opens in this device's browser.";
 }
 
-/** A page the gateway named that is not offered: user info in it, or not http or https. */
-export const REFUSED_PAGE =
-  "The gateway named a sign-in page Clawtrate won't open: its address has a user name or password in it, or is not an http or https address.";
+/**
+ * A page the gateway named that is not offered: user info in it, not http or https, or too long.
+ * Which of them it was is not said.
+ */
+export const REFUSED_PAGE = "Clawtrate couldn't open the address given for this sign-in.";
 
 export function forwardCommand(message: string | null): { words: string; command: string | null } {
   if (!message) return { words: "", command: null };

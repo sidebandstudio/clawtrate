@@ -892,6 +892,9 @@ export function signInAddress(raw: string | null): SignInAddress | null {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   if (url.username || url.password) return null;
+  // The bound holds for what is shown and opened, not only for what the gateway sent: parsing
+  // can make an address longer (`é` becomes `%C3%A9`).
+  if (url.href.length > MAX_SIGNIN_URL_CHARS) return null;
   const scheme = url.protocol === "https:" ? "https" : "http";
   return {
     href: url.href,
