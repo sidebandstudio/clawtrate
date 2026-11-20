@@ -224,7 +224,7 @@ A task-wide abort can also cancel a gateway-queued input the caller owns. The qu
 
 ## 7. Where the group's record can live
 
-**Live** (`prefs`), with two interactive devices `a` and `b` and a read-only device `r`, a record under one key, `clawtrate.group.<id>`, holding the name, the members (bot and task key) in order, and the time it was made:
+**Live** (`prefs`), with two interactive devices `a` and `b` and a read-only device `r`, a record under one key, `clawtrate.group.<id>`, holding the name, the members in order (each with its bot, its task key and that task's `sessionId`; the probe's fixture record here carried the first two), and the time it was made:
 
 ```
 a: users.prefs.get before: {"status":"ok","entries":{}}
@@ -244,7 +244,7 @@ b: get after delete: {"status":"ok","entries":{}}
 a: users.self and b: users.self: {"profile":{"id":"gateway-owner","displayName":"<the owner's name>",…}}
 ```
 
-- Both devices were the same person (`gateway-owner`) and saw one record. `users.prefs.get` and `users.self` are `operator.read`, `users.prefs.set` is `operator.write` on 2026.10.6 (`<openclaw>/dist/core-method-policy-DkntKRY_.mjs` lines 679-682 and 2429-2438; `gateway-capabilities.md` notes that 2026.11 lowers the write to read).
+- Both devices were the same person (`gateway-owner`) and saw one record. Two writes against the same prior value produced one success and one conflict (`b`'s rename, then `a`'s with the stale record): compare-and-set lets one writer win. Writing needs `operator.write` and nothing else (source: the method policy cited in the next sentence), so a device with read and write but neither approvals nor questions can change the record. `users.prefs.get` and `users.self` are `operator.read`, `users.prefs.set` is `operator.write` on 2026.10.6 (`<openclaw>/dist/core-method-policy-DkntKRY_.mjs` lines 679-682 and 2429-2438; `gateway-capabilities.md` notes that 2026.11 lowers the write to read).
 - A record of six members with task keys of about 60 characters each is under 1,000 bytes, well within 4,096.
 - The 128 keys are shared with every other preference this person keeps on the gateway, Clawtrate's and others'.
 - `{status:"no_durable_identity"}` is what a connection made with the shared token alone gets (`gateway-capabilities.md`, "users.prefs"); the paired devices here all had a profile.
