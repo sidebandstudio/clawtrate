@@ -75,7 +75,7 @@ it.each([
   [1, "artifact-changed"],
   [2, "artifact-changed"],
   [3, "artifact-changed"],
-  [4, "build-not-signed"],
+  [4, "running-publisher-mismatch"],
   [5, "publisher-mismatch"],
 ] as const)("Windows refuses field %i of a mismatching locked proof", async (index, reason) => {
   const native = nativeStandIn();
@@ -87,3 +87,13 @@ it.each([
   native.finish("installer-failed");
   expect(await pending).toBe(reason);
 });
+
+it.each(["running-signature-untrusted", "installation-context", "inspection-failed"])(
+  "preserves the native inspection result %s",
+  async (reason) => {
+    const native = nativeStandIn();
+    const pending = windowsInstall(file, pin, false);
+    native.finish(reason);
+    expect(await pending).toBe(reason);
+  },
+);

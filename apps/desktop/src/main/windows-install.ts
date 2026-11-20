@@ -153,15 +153,18 @@ public static class VerifiedInstaller {
     var locks = new Stack<SafeFileHandle>();
     try {
       string imagePath = LockParents(path, locks);
-      string runningPath = LockParents(app, locks);
-      string scope = Scope(dir);
+      string runningPath, scope;
+      try {
+        runningPath = LockParents(app, locks);
+        scope = Scope(dir);
+      } catch { return "installation-context"; }
       if (scope == null) return "installation-context";
       using (var running = CreateFileW(runningPath, 0x80000000, 1, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero))
       using (var image = CreateFileW(imagePath, 0x80000000, 1, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero)) {
         Info info;
-        if (running.IsInvalid) return "build-not-signed";
+        if (running.IsInvalid) return "installation-context";
         string runningPublisher = TrustedPublisher(runningPath, running);
-        if (runningPublisher == null) return "build-not-signed";
+        if (runningPublisher == null) return "running-signature-untrusted";
         if (image.IsInvalid || GetFileType(image) != 1 || !GetFileInformationByHandle(image, out info) ||
             (info.attributes & 0x410) != 0 || info.links != 1 || (info.indexHigh == 0 && info.indexLow == 0)) return "artifact-changed";
         using (var file = new FileStream(image, FileAccess.Read))
@@ -201,7 +204,7 @@ export async function windowsInstall(
   launch: boolean,
   signal?: AbortSignal,
 ) {
-  const failure = launch ? "installer-failed" : "authenticode-trust";
+  const failure = launch ? "installer-failed" : "inspection-failed";
   try {
     const task = runUpdatePowerShell(
       native,
@@ -236,7 +239,7 @@ export async function windowsInstall(
         digest !== file.sha512
       )
         refusal = "artifact-changed";
-      else if (runningPin !== publisher) refusal = "build-not-signed";
+      else if (runningPin !== publisher) refusal = "running-publisher-mismatch";
       else if (candidatePin !== publisher) refusal = "publisher-mismatch";
       if (launch) task.child.stdin?.end(!refusal && !signal?.aborted ? "launch\n" : "");
     });
@@ -248,7 +251,7 @@ export async function windowsInstall(
         return checked && !signal?.aborted ? null : failure;
       case "authenticode-trust":
       case "publisher-mismatch":
-      case "build-not-signed":
+      case "running-signature-untrusted":
       case "artifact-changed":
       case "installation-context":
         return result as UpdateInstallRefusal;

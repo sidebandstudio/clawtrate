@@ -401,7 +401,7 @@ export class DesktopUpdateService {
             );
             if (this.engine !== engine) return;
             const reason = file
-              ? await installer.inspect(file).catch(() => "no-installer-path" as const)
+              ? await installer.inspect(file).catch(() => "inspection-failed" as const)
               : "artifact-changed";
             if (this.engine !== engine) return;
             if (reason === "artifact-changed") return downloadFailure(reason);
@@ -449,7 +449,7 @@ export class DesktopUpdateService {
     const file = await engine.verifiedArtifact(id, selectedTrack, version);
     if (this.closed) return this.reply("superseded");
     if (!file) return fail("artifact-changed");
-    const refused = await installer.inspect(file).catch(() => "installer-failed" as const);
+    const refused = await installer.inspect(file).catch(() => "inspection-failed" as const);
     if (this.closed) return this.reply("superseded");
     if (refused) return fail(refused);
     try {

@@ -8,15 +8,21 @@ import type { UpdateInstallRefusal } from "@clawtrate/core";
 declare const __CLAWTRATE_SIGNED_MAC__: boolean | undefined;
 declare const __CLAWTRATE_WINDOWS_PUBLISHER__: string | null | undefined;
 
-function buildInstaller(platform: string, packaged: boolean): UpdateInstaller {
+function buildInstaller(platform: string, arch: string, packaged: boolean): UpdateInstaller {
   const publisher =
     typeof __CLAWTRATE_WINDOWS_PUBLISHER__ === "string" ? __CLAWTRATE_WINDOWS_PUBLISHER__ : null;
-  if (packaged && platform === "win32" && publisher && /^[A-F0-9]{64}$/.test(publisher)) {
+  if (
+    packaged &&
+    platform === "win32" &&
+    arch === "x64" &&
+    publisher &&
+    /^[A-F0-9]{64}$/.test(publisher)
+  ) {
     return {
       unavailable: null,
       async inspect(file) {
         const reason = await windowsInstall(file, publisher, false);
-        return reason === "installer-failed" ? "authenticode-trust" : reason;
+        return reason === "installer-failed" ? "inspection-failed" : reason;
       },
       launch: (file, signal) => windowsInstall(file, publisher, true, signal),
     };
@@ -26,7 +32,10 @@ function buildInstaller(platform: string, packaged: boolean): UpdateInstaller {
     typeof __CLAWTRATE_SIGNED_MAC__ !== "undefined" &&
     __CLAWTRATE_SIGNED_MAC__;
   const unavailable: UpdateInstallRefusal =
-    (platform !== "darwin" && platform !== "win32") || signedMac
+    (platform === "win32" && arch !== "x64") ||
+    (platform === "darwin" && arch !== "x64" && arch !== "arm64") ||
+    (platform !== "darwin" && platform !== "win32") ||
+    signedMac
       ? "no-installer-path"
       : "build-not-signed";
   return { unavailable, inspect: async () => unavailable, launch: async () => unavailable };
@@ -64,7 +73,7 @@ export function startDesktopUpdates(
     downloadDir,
     store,
     changed,
-    installer: buildInstaller(platform, packaged && !!quitAfterLaunch),
+    installer: buildInstaller(platform, arch, packaged && !!quitAfterLaunch),
     ...(quitAfterLaunch && { quitAfterLaunch }),
     feeds: { stable: BUILD_FEED_ADDRESS, nightly: BUILD_NIGHTLY_FEED_ADDRESS },
     releaseDate: BUILD_RELEASE_DATE,
