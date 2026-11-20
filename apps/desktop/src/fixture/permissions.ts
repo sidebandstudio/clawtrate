@@ -9,7 +9,8 @@
 // `read=none` (Clawtrate never read its rules), `perm=` the page (`loading`,
 // `error`, `fresh`: before the bot's first task), `override=1` (the gateway's
 // settings deny a tool the bot allows), `write=` how a save goes (`refused`,
-// `conflict`, `hidden`: sent and not shown by the read-back, `lost`: no answer came).
+// `conflict`, `hidden`: sent and not shown by the read-back, `lost`: no answer came,
+// `stored`: stored and not reported in use).
 
 import {
   choiceRefusal,
@@ -203,7 +204,15 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
       (params.read !== "none" && status.kind !== "unchecked" && !(status.kind === "unavailable"));
     return {
       botId,
-      settings: readToolSettings({ config, hash: `fixture-${hash}` }, botId),
+      settings: readToolSettings(
+        {
+          config,
+          hash: `fixture-${hash}`,
+          configRevisionHash: `fixture-${hash}`,
+          appliedConfigHash: `fixture-${hash}`,
+        },
+        botId,
+      ),
       catalog: readToolCatalog(CATALOG),
       offered:
         params.perm === "fresh"
@@ -259,6 +268,15 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
     if (params.write === "refused")
       return delay<PermissionWrite>(
         { outcome: "failed", error: "invalid config", view: view(command.botId) },
+        600,
+      );
+    if (params.write === "stored")
+      return delay<PermissionWrite>(
+        {
+          outcome: "stored",
+          error: "the gateway reports it isn't using the stored revision yet",
+          view: view(command.botId),
+        },
         600,
       );
     if (params.write === "lost")

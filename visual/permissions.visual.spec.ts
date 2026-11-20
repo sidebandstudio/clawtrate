@@ -102,6 +102,18 @@ const SCENES: Scene[] = [
       );
     },
   },
+  {
+    name: "line-stored",
+    ids: "F-176",
+    query: q("write=stored"),
+    ready: async (page) => {
+      await line("read")(page);
+      await page.getByRole("radio", { name: "Never", exact: true }).click();
+      await expect(page.getByTestId("save-note")).toContainText(
+        "Saved in the gateway's settings, and not confirmed in use: the gateway reports it isn't using the stored revision yet. This shows the stored settings.",
+      );
+    },
+  },
 ];
 
 for (const size of SIZES) {

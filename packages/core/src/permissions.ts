@@ -115,6 +115,11 @@ export type ToolSettings = {
   cut: ToolList[];
   /** Settings present that can remove tools and that this page doesn't evaluate, by path. */
   unread: string[];
+  /**
+   * Whether the gateway reports it is using the stored revision read here
+   * (`appliedConfigHash` against `configRevisionHash`); unknown when it doesn't say.
+   */
+  applied: "yes" | "no" | "unknown";
   hash: string | null;
 };
 
@@ -223,6 +228,12 @@ export function readToolSettings(answer: unknown, botId: string): ToolSettings {
     )
       .filter(([, list]) => !readWhole(list))
       .map(([name]) => name),
+    applied:
+      typeof root?.configRevisionHash !== "string"
+        ? "unknown"
+        : root.appliedConfigHash === root.configRevisionHash
+          ? "yes"
+          : "no",
     hash: typeof root?.hash === "string" ? root.hash : null,
   };
 }
@@ -589,6 +600,8 @@ export type BotPermissions = {
   versions: { bot: number | null; every: number | null };
   offered: { status: Offered["status"]; taskKey: string | null; reason: string | null };
   configHash: string | null;
+  /** Whether the gateway reports it is using the settings these lines are read from. */
+  settingsApplied: "yes" | "no" | "unknown";
   /** The gateway's tool lists longer than this page reads, or not read whole. */
   listsCut: ToolList[];
   /** Settings that can remove tools and that this page doesn't evaluate: paths, or list entries. */
@@ -1001,6 +1014,7 @@ export function permissionsView(facts: PermissionFacts): BotPermissions {
       reason: offered.status === "failed" ? offered.reason.slice(0, 200) : null,
     },
     configHash: facts.settings.hash,
+    settingsApplied: facts.settings.applied,
     listsCut: facts.settings.cut,
     unread: [
       ...facts.settings.unread,

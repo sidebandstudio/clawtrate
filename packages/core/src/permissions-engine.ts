@@ -76,13 +76,16 @@ export type PermissionsContext = {
 /** A write's answer: what the read-back shows, never what was meant. */
 export type PermissionWrite = {
   /**
-   * `saved` only when a read after the write shows it; `unconfirmed` when the
+   * `saved` only when a read after the write shows it, and for a settings
+   * write, the gateway reports it is using that revision; `stored` when the
+   * settings read back show it and the gateway doesn't report it in use (`error`
+   * says why); `unconfirmed` when the
    * gateway's answer to the write, or the read after it, was lost; `failed`
    * when the gateway refused it or it was never sent. `partial`: of a choice
    * made in two writes, the rules plugin's was saved and the settings' was not
    * (`error` says why).
    */
-  outcome: "saved" | "not-shown" | "unconfirmed" | "conflict" | "failed" | "partial";
+  outcome: "saved" | "stored" | "not-shown" | "unconfirmed" | "conflict" | "failed" | "partial";
   error: string | null;
   /** What the gateway has now, or null when that read failed too. */
   view: BotPermissions | null;
@@ -128,6 +131,8 @@ export class PermissionsEngine {
   private writeSent = false;
   /** Whether the write being made has had the rules plugin's part saved. */
   private rulesSaved = false;
+  /** Whether the write being made has sent a change of the gateway's settings. */
+  private configSent = false;
 
   /** One bot's permissions, read now. */
   async read(botId: string): Promise<BotPermissions> {
@@ -243,41 +248,60 @@ export class PermissionsEngine {
       if (refusal) throw new Error(refusal);
       this.writeSent = false;
       this.rulesSaved = false;
+      this.configSent = false;
+      let failure: unknown = undefined;
       try {
         await this.apply(request, botId, facts, line, choice, base);
       } catch (error) {
-        const after = await readBack().catch(() => null);
-        // The rules plugin's part landed and the settings' did not: both are said.
-        if (this.rulesSaved) {
-          const shown = after && choiceShown(after, line, choice);
-          return shown
-            ? { outcome: "saved", error: null, view: after }
-            : { outcome: "partial", error: message(error), view: after };
-        }
-        if (error instanceof ConflictError)
-          return { outcome: "conflict", error: null, view: after };
-        // No write left, or the gateway refused it: what it has now is read, and nothing is assumed.
-        if (
-          !this.writeSent ||
-          error instanceof GatewayProtocolRequestError ||
-          (error instanceof Error && error.name === "NotSentError")
-        )
-          return { outcome: "failed", error: message(error), view: after };
-        // No answer came: only a read after it can say it was saved.
-        const shown = after && choiceShown(after, line, choice);
-        return shown
-          ? { outcome: "saved", error: null, view: after }
-          : { outcome: "unconfirmed", error: message(error), view: after };
+        failure = error ?? new Error("The write failed.");
       }
       const after = await readBack().catch(() => null);
+      const shown = after !== null && choiceShown(after, line, choice);
+      // A settings write is saved only once the gateway reports it is using the revision read back.
+      const applied = !this.configSent || after?.settingsApplied === "yes";
+      const stored = (error: string | null): PermissionWrite => ({
+        outcome: "stored",
+        error:
+          error ??
+          (after?.settingsApplied === "no"
+            ? "the gateway reports it isn't using the stored revision yet"
+            : "the gateway doesn't report whether it is using the stored revision"),
+        view: after,
+      });
+      if (failure !== undefined) {
+        const error = message(failure);
+        // The rules plugin's part landed and the settings' did not: both are said.
+        if (this.rulesSaved)
+          return shown && applied
+            ? { outcome: "saved", error: null, view: after }
+            : shown
+              ? stored(error)
+              : { outcome: "partial", error, view: after };
+        if (failure instanceof ConflictError)
+          return { outcome: "conflict", error: null, view: after };
+        // No write left, or the gateway refused it: what it has now is read, and nothing is assumed.
+        // A refusal that says the change was stored and not applied is no refusal of the write.
+        if (
+          !this.writeSent ||
+          (failure instanceof GatewayProtocolRequestError && !persisted(failure)) ||
+          (failure instanceof Error && failure.name === "NotSentError")
+        )
+          return { outcome: "failed", error, view: after };
+        // No answer came, or the change was stored and not applied: only the read after it says.
+        return shown && applied
+          ? { outcome: "saved", error: null, view: after }
+          : shown
+            ? stored(error)
+            : { outcome: "unconfirmed", error, view: after };
+      }
       if (!after)
         return {
           outcome: "unconfirmed",
           error: "The change was sent, and reading it back failed.",
           view: null,
         };
-      const shown = choiceShown(after, line, choice);
-      return { outcome: shown ? "saved" : "not-shown", error: null, view: after };
+      if (shown && applied) return { outcome: "saved", error: null, view: after };
+      return shown ? stored(null) : { outcome: "not-shown", error: null, view: after };
     } finally {
       this.writing = false;
     }
@@ -341,6 +365,7 @@ export class PermissionsEngine {
     if (baseHash !== null && hash !== baseHash) throw new ConflictError();
     try {
       this.writeSent = true;
+      this.configSent = true;
       await request("config.patch", {
         raw: JSON.stringify(write.patch),
         ...(hash ? { baseHash: hash } : {}),
@@ -361,6 +386,10 @@ export class PermissionsEngine {
     }
   }
 }
+
+/** A refusal of `config.patch` that says the change was stored and not applied. */
+const persisted = (error: GatewayProtocolRequestError) =>
+  asRecord(error.details)?.persistedConfig !== undefined;
 
 /** Someone else changed the settings or the rules since the page read them. */
 class ConflictError extends Error {

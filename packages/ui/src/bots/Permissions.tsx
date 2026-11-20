@@ -358,11 +358,12 @@ export function PermissionsRow({
   onOpen: () => void;
 }) {
   const { read } = usePermissions(bot.id, visible, connection);
+  // A read that failed is Unavailable, never the counts of an earlier read.
   const value =
-    read.view !== null
-      ? countWords(read.view)
-      : read.status === "error"
-        ? "Unavailable"
+    read.status === "error"
+      ? "Unavailable"
+      : read.view !== null
+        ? countWords(read.view)
         : "Loading…";
   return (
     <dl className="facts">
@@ -440,10 +441,26 @@ export function Permissions({
   ) : null;
   const view = read.view;
   const line = lineId && view ? view.lines.find((each) => each.id === lineId) : null;
+  // A read again that failed leaves the last view, said as such.
+  const stale =
+    read.status === "error" && view ? (
+      <Note tone="warn" testId="stale-read">
+        <p>
+          Couldn't read {name}'s permissions again: {unstopped(read.error)}. This shows what
+          Clawtrate read at {clock(view.readAt)}.
+        </p>
+        <div style={{ marginTop: 8 }}>
+          <button type="button" className="button" data-size="sm" onClick={reload}>
+            Try again
+          </button>
+        </div>
+      </Note>
+    ) : null;
   if (line && view)
     return (
       <div ref={rootRef} className="b-tab" data-testid="permission-line">
         <Subhead title={line.words} back={`Back to what ${name} may do`} onBack={back} />
+        {stale}
         <LinePage
           key={line.id}
           bot={bot}
@@ -491,7 +508,10 @@ export function Permissions({
           </div>
         )
       ) : (
-        <Overview view={view} name={name} onLine={open} />
+        <>
+          {stale}
+          <Overview view={view} name={name} onLine={open} />
+        </>
       )}
       {foot}
     </div>
@@ -579,6 +599,14 @@ function Overview({
     <>
       <PluginLine view={view} name={name} />
       <NotEnforced view={view} name={name} />
+      {view.settingsApplied === "no" && (
+        <Note tone="warn" testId="not-applied">
+          <p>
+            The gateway reports it isn't using its stored settings yet. These lines show the stored
+            settings, which may not be the ones in force.
+          </p>
+        </Note>
+      )}
       {view.unread.length > 0 && (
         <Note tone="warn" testId="unread">
           <p>
@@ -888,10 +916,16 @@ function LinePage({
       if (result.outcome === "saved") announce(`Saved. ${line.words}: ${SAVED_WORDS[choice]}`);
       else if (result.outcome === "conflict")
         setNote({
-          text: `Someone else changed ${name}'s settings. This shows what the gateway has now.`,
+          text: `Someone else changed ${name}'s settings. ${result.view ? "This shows what the gateway has now." : "Reading what the gateway has now failed."}`,
           tone: "warn",
         });
-      else if (result.outcome === "unconfirmed") {
+      else if (result.outcome === "stored") {
+        announce("Stored, not confirmed in use");
+        setNote({
+          text: `Saved in the gateway's settings, and not confirmed in use: ${unstopped(result.error ?? "the gateway didn't say")}. This shows the stored settings.`,
+          tone: "warn",
+        });
+      } else if (result.outcome === "unconfirmed") {
         announce("Couldn't be confirmed");
         setNote({
           text: `Sent, but whether it was saved couldn't be confirmed: ${unstopped(result.error ?? "the gateway's answer was lost")}. ${result.view ? "This shows what the gateway has now." : "Reading what the gateway has now failed too."}`,

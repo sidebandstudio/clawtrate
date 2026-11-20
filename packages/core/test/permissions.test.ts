@@ -74,6 +74,9 @@ class Gateway {
     mcp: { servers: { coder: { command: "/not/kept", args: ["/not/kept/either"] } } },
   };
   hash = 1;
+  applied = 1;
+  /** The gateway stores a patch and doesn't apply it. */
+  lag = false;
   scopes: Record<string, { version: number; fallback: boolean; rules: Json[] }> = {};
   plugin: "running" | "stopped" | "unavailable" | "lost" | "kept" | "old" = "running";
   sent: Array<{ method: string; params: Json }> = [];
@@ -94,7 +97,13 @@ class Gateway {
     this.sent.push({ method, params });
     switch (method) {
       case "config.get":
-        return { config: this.config, hash: `h${this.hash}` };
+        // The stored revision, and the one the gateway is using (it applies each patch unless `lag`).
+        return {
+          config: this.config,
+          hash: `h${this.hash}`,
+          configRevisionHash: `r${this.hash}`,
+          appliedConfigHash: `r${this.applied}`,
+        };
       case "config.patch": {
         if (params.baseHash !== `h${this.hash}`)
           throw new Error("config changed since last load; re-run config.get and retry");
@@ -102,6 +111,7 @@ class Gateway {
         const paths = (params.replacePaths as string[] | undefined) ?? [];
         merge(this.config, patch, paths, "");
         this.hash += 1;
+        if (!this.lag) this.applied = this.hash;
         return { ok: true };
       }
       case "tools.catalog":
@@ -709,6 +719,46 @@ describe("what a bot may do", () => {
     });
     expect(result).toMatchObject({ outcome: "failed", error: "invalid config" });
     expect(line(result.view!, "files").value).toBe("allowed");
+  });
+
+  it("a settings write the gateway stored and doesn't report in use is said as stored, never saved", async () => {
+    // The gateway keeps using the earlier revision past the wait.
+    const gw = new Gateway();
+    gw.lag = true;
+    let clock = 1_795_000_000_000;
+    const engine = new PermissionsEngine({ ...gw.ctx(), now: () => (clock += 5_000) });
+    const view = await engine.read("pip");
+    expect(view.settingsApplied).toBe("yes");
+    const result = await engine.choose("pip", "files", "never", {
+      configHash: view.configHash,
+      rulesVersion: null,
+    });
+    expect(result.outcome).toBe("stored");
+    expect(result.error).toMatch(/isn't using the stored revision/);
+    expect(result.view!.settingsApplied).toBe("no");
+    // The gateway refuses with the change stored and not applied: stored, not a refusal.
+    const refused = new Gateway();
+    refused.lag = true;
+    const answer = refused.answer.bind(refused);
+    refused.answer = async (method, params) => {
+      if (method !== "config.patch") return answer(method, params);
+      await answer(method, params);
+      throw new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "config.patch persisted but was not applied to the active Gateway (failed)",
+        details: { persistedConfig: { hash: "h2" } },
+      });
+    };
+    const second = new PermissionsEngine(refused.ctx());
+    const before = await second.read("pip");
+    const stored = await second.choose("pip", "files", "never", {
+      configHash: before.configHash,
+      rulesVersion: null,
+    });
+    expect(stored).toMatchObject({
+      outcome: "stored",
+      error: "config.patch persisted but was not applied to the active Gateway (failed)",
+    });
   });
 
   it("F-176: a write whose answer is lost is saved only if the read after it shows it, and else couldn't be confirmed", async () => {
