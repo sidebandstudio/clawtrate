@@ -37,11 +37,17 @@ export type UpdateInstallRefusal =
   | "installer-version"
   | "mac-archive"
   | "mac-bundle-identifier"
-  | "mac-architecture";
+  | "mac-architecture"
+  | "quit-blocked"
+  | "handoff-unconfirmed";
 
 export type UpdateInstallCapability =
   | { kind: "unavailable-in-this-build"; reason: UpdateInstallRefusal }
-  | { kind: "restart-available"; offerId: string; completesOnQuit?: true };
+  | {
+      kind: "restart-available";
+      offerId: string;
+      /** Confirm that macOS installs on the next quit even if restart cannot finish. */ completesOnQuit?: true;
+    };
 
 /** Set only from a prior handoff record and the running version on this launch. */
 export interface UpdateAttemptOutcome {
