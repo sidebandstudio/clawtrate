@@ -196,7 +196,7 @@ it("binds the build receipt to its name, source, date, compiled feed address and
 it("checks version syntax, both track mismatches, commit, date and the HTTPS feed location", () => {
   for (const [version, track] of [
     ["0.1.0", "nightly"],
-    ["0.1.1-nightly.20261119.1", "stable"],
+    ["0.1.1-beta.20261119.1", "stable"],
     ["bad", "stable"],
     ["0.1.0", "bad"],
   ] as const)
@@ -366,22 +366,22 @@ it("compares the supplied track feeds offline, including stale, reused and super
   expect(check("0.2.1", "stable").issues).toContain(
     "stable: candidate must be newer than the supplied release.",
   );
-  expect(check("0.2.1-nightly.20261119.1", "nightly").issues).toContain(
+  expect(check("0.2.1-beta.20261119.1", "nightly").issues).toContain(
     "nightly: candidate must be newer than the supplied release.",
   );
-  expect(check("0.2.0-nightly.20261119.9", "nightly").comparison).toContain("supplied nightly");
-  const nightly = { ...c, track: "nightly", version: "0.2.0-nightly.20261119.9" };
+  expect(check("0.2.0-beta.20261119.9", "nightly").comparison).toContain("supplied nightly");
+  const nightly = { ...c, track: "nightly", version: "0.2.0-beta.20261119.9" };
   expect(check("0.2.0", "stable", nightly).issues).toContain(
     "stable: candidate must be newer than the supplied release.",
   );
-  expect(check("0.2.0-nightly.20261119.10", "nightly", nightly).issues).toContain(
+  expect(check("0.2.0-beta.20261119.10", "nightly", nightly).issues).toContain(
     "nightly: candidate must be newer than the supplied release.",
   );
   expect(plan({ ...c, currentFeed: path("missing") }).issues).toContain(
     "stable: invalid published comparison feed.",
   );
   expect(plan({ ...nightly, buildDate: "2026-11-20T00:00:00.000Z" }).issues).toContain(
-    "Nightly version day differs from the UTC build date.",
+    "Beta version day differs from the UTC build date.",
   );
 });
 

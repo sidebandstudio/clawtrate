@@ -15,7 +15,7 @@ const snapshot: DesktopUpdateSnapshot = {
   selectedTrack: "stable",
   tracks: [
     { track: "stable", source: "stable.example" },
-    { track: "nightly", source: "nightly.example" },
+    { track: "nightly", source: "beta.example" },
   ],
   revision: 1,
   lastCheck: null,
@@ -144,13 +144,13 @@ it("F-231: names the running and selected tracks and shows choices only with two
   const two = render({ kind: "nothing-newer" }, { selectedTrack: "nightly" });
   expect(two.html).toContain("Update track");
   expect(two.html).toContain(
-    "No newer Nightly build was offered. Clawtrate 1.0.0 is still running.",
+    "No newer Beta build was offered. Clawtrate 1.0.0 is still running.",
   );
-  expect(two.html).toContain("Checks nightly.example for a newer build, only when you choose to.");
+  expect(two.html).toContain("Checks beta.example for a newer build, only when you choose to.");
   expect(
     render({ kind: "not-checked" }, { tracks: snapshot.tracks.slice(1), selectedTrack: "nightly" })
       .html,
-  ).toContain("The next check asks the Nightly source.");
+  ).toContain("The next check asks the Beta source.");
 });
 
 it.each([
@@ -192,7 +192,7 @@ it("F-231 F-030: a pending choice hides the retired offer, action and source", (
     { kind: "offered", offerId: "retired", version: "2.0.0", releaseDate: "2026-11-01" },
     { pendingTrack: "nightly" },
   );
-  expect(result.html).toContain("Saving Nightly as the update track…");
+  expect(result.html).toContain("Saving Beta as the update track…");
   expect(result.html).toContain("Not checked yet.");
   expect(result.html).not.toMatch(/stable.example|2.0.0/);
   expect(result.actions).toEqual([]);

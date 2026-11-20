@@ -153,7 +153,7 @@ test("F-030: opens Updates from the footer and keeps keyboard focus on the chose
   await page.keyboard.press("Shift+Tab");
   await expect(group.getByRole("radio", { name: "Stable" })).toBeFocused();
   await page.keyboard.press("ArrowRight");
-  const nightly = group.getByRole("radio", { name: "Nightly" });
+  const nightly = group.getByRole("radio", { name: "Beta" });
   await expect(nightly).toBeChecked();
   await expect(nightly).toBeFocused();
   await expect(page.locator(".update-result dd")).toHaveText("Not checked yet.");
