@@ -266,6 +266,8 @@ export function Shell({
   // opening reads it once; later, a new reply while it is open reads it again; leaving does too.
   const openedKey = useRef<string | null>(null);
   useEffect(() => {
+    // Covered by Routines, it is not open: coming back opens it again.
+    if (!conversationVisible) openedKey.current = null;
     if (!taskKey || !connectedNow || !conversationVisible) return;
     if (openedKey.current !== taskKey) {
       openedKey.current = taskKey;

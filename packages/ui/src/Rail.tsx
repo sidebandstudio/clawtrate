@@ -251,6 +251,7 @@ function TaskRows({
   archived,
   cap,
   now,
+  onScreenKey,
 }: {
   bot: Bot;
   tasks: Task[];
@@ -270,6 +271,8 @@ function TaskRows({
   /** Rows shown before "Show all": fewer in one pane, so the rest of the list stays in view. */
   cap: number;
   now: number;
+  /** The task whose conversation is on screen: none while Routines covers it. */
+  onScreenKey: string | null;
 }) {
   const currentKey = selection.bot?.id === bot.id ? (selection.task?.key ?? null) : null;
   const all = selection.showAll.has(bot.id);
@@ -310,7 +313,8 @@ function TaskRows({
         const { task } = row;
         const current = task.key === currentKey;
         const unread =
-          (!current || selection.keptUnread.has(task.key)) && isUnread(task, selection.unreadSeen);
+          (task.key !== onScreenKey || selection.keptUnread.has(task.key)) &&
+          isUnread(task, selection.unreadSeen);
         const state = taskState(task, selection.seen, selection.task?.key ?? null);
         const spoken =
           task.title +
@@ -1510,7 +1514,7 @@ export function Rail({
   const taskEntries = (bot: Bot, task: Task): MenuEntry[] => {
     const unread =
       isUnread(task, selection.unreadSeen) &&
-      (task.key !== selection.task?.key || selection.keptUnread.has(task.key));
+      (task.key !== onScreenKey || selection.keptUnread.has(task.key));
     const trigger = menu?.trigger ?? null;
     const close = () => setMenu(null);
     return tidy([
@@ -1790,6 +1794,7 @@ export function Rail({
             archived={archivedProps(bot)}
             cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
             now={now}
+            onScreenKey={onScreenKey}
           />
         )}
       </li>
@@ -1996,6 +2001,7 @@ export function Rail({
                   archived={archivedProps(owner)}
                   cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
                   now={now}
+                  onScreenKey={onScreenKey}
                 />
               </li>
             )}
