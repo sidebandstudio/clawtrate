@@ -486,6 +486,31 @@ describe("a task's model and effort", () => {
     expect(shownChoice(r.task(), r.view())).toMatchObject({ model: "acme/dev-2", pending: false });
   });
 
+  it("F-042: a second choice while a save is on its way is refused, and only the first is sent", async () => {
+    const r = rig();
+    await opened(r);
+    let answer!: () => void;
+    const request = r.ctx.request;
+    r.ctx.request = async (method, params) => {
+      if (method === "sessions.patch") await new Promise<void>((resolve) => (answer = resolve));
+      return request(method, params);
+    };
+    const saving = r.engine.choose(KEY, { model: "acme/dev-2", effort: null });
+    await until(() => r.view().saving);
+    // Choosing the model the task had while the new one is on its way: not "unchanged".
+    await expect(r.engine.choose(KEY, { model: "acme/dev-1", effort: null })).rejects.toThrow(
+      "A change is already being saved.",
+    );
+    await expect(r.engine.choose(KEY, { model: null, effort: "high" })).rejects.toThrow(
+      "A change is already being saved.",
+    );
+    answer();
+    await expect(saving).resolves.toBe("saved");
+    expect(r.patches()).toHaveLength(1);
+    expect(r.view().held).toBeNull();
+    expect(r.task().model).toBe("acme/dev-2");
+  });
+
   it("F-045: a save the gateway answers as retryable, as a turn ends, is sent again; any other refusal is not", async () => {
     const r = rig();
     r.ctx.pause = async () => {};

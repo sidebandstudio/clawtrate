@@ -235,7 +235,7 @@ export function ModelChip({
         aria-label={name}
         aria-busy={view?.saving || undefined}
         title={name}
-        disabled={!connected}
+        disabled={!connected || view?.saving === true}
         data-testid="model-chip"
         onClick={(event) => (anchor ? setAnchor(null) : openFrom(event.currentTarget))}
         onKeyDown={(event) => {
@@ -317,7 +317,7 @@ export function TaskModelDetails({
   if (held)
     line = (
       <>
-        Held until {bot.name}'s turn ends, then saved. It applies from the next turn.{" "}
+        Held until {bot.name}'s turn ends. Clawtrate will then try to save it.{" "}
         <button type="button" className="button" data-variant="quiet" data-size="sm" onClick={keep}>
           Keep {was}
         </button>
@@ -366,7 +366,7 @@ export function TaskModelDetails({
             ...(model.available ? {} : { note: "Not available" }),
           }))}
           onChoose={(model) => void choose({ model, effort: null })}
-          disabled={!connected}
+          disabled={!connected || view?.saving === true}
           testId="task-model-select"
         />
         <Select
@@ -374,7 +374,7 @@ export function TaskModelDetails({
           value={levels.length === 0 ? effortWord(shown.effort, known) : (shown.effort ?? "")}
           choices={levels.map((level) => ({ value: level, label: levelWord(level) }))}
           onChoose={(effort) => void choose({ model: null, effort })}
-          disabled={!connected || levels.length === 0}
+          disabled={!connected || view?.saving === true || levels.length === 0}
           testId="task-effort-select"
         />
       </div>

@@ -157,7 +157,7 @@ test.describe("a task's model and effort, behaviour", () => {
     await expect(page.getByTestId("model-line")).toHaveCount(0);
     await openDetails(page);
     await expect(page.getByTestId("task-model-line")).toContainText(
-      "Held until Otto's turn ends, then saved. It applies from the next turn.",
+      "Held until Otto's turn ends. Clawtrate will then try to save it.",
     );
     await page.getByRole("button", { name: "Keep dev-1" }).click();
     await expect(chip(page)).toHaveAccessibleName(
@@ -205,8 +205,12 @@ test.describe("a task's model and effort, behaviour", () => {
     );
     await expect(chip(page)).toHaveAttribute("aria-busy", "true");
     await expect(chip(page)).toHaveText(/dev-2·High/);
+    // Both ways to choose wait for the answer: no second change is offered meanwhile.
+    await expect(chip(page)).toBeDisabled();
     await openDetails(page);
     await expect(page.getByTestId("task-model-line")).toHaveText("Saving…");
+    await expect(page.getByTestId("task-model-select")).toBeDisabled();
+    await expect(page.getByTestId("task-effort-select")).toBeDisabled();
   });
 
   test("F-043: Not offered is said only for a model the gateway lists with no levels; a list not read, a failed read and a model the list lacks each say so, and the last effort stays", async ({
@@ -339,8 +343,10 @@ test.describe("a bot's model and effort in its settings", () => {
     await choose(page, "effort-select", "High");
     await expect(page.getByTestId("work-announcer")).toHaveText("Effort saved");
     await choose(page, "model-select", "gpt-5.5-mini");
-    // On its way: the line does not say the effort changed.
+    // On its way: the line does not say the effort changed, and the pair waits for the answer.
     await expect(line(page)).not.toContainText("Effort is now");
+    await expect(page.getByTestId("model-select")).toBeDisabled();
+    await expect(page.getByTestId("effort-select")).toBeDisabled();
     await expect(page.getByTestId("work-announcer")).toHaveText("Model saved");
     await expect(line(page)).toHaveText("Effort is now Low: gpt-5.5-mini doesn't offer High.");
 

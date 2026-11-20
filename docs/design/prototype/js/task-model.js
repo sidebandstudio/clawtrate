@@ -184,7 +184,7 @@
     const v = shown();
     const line =
       S.state === "held"
-        ? `Held until Otto's turn ends, then saved. It applies from the next turn. <button type="button" class="button" data-variant="quiet" data-size="sm" data-t-keep>Keep ${S.saved.model}</button>`
+        ? `Held until Otto's turn ends. Clawtrate will then try to save it. <button type="button" class="button" data-variant="quiet" data-size="sm" data-t-keep>Keep ${S.saved.model}</button>`
         : S.state === "saving"
           ? "Saving…"
           : S.shown

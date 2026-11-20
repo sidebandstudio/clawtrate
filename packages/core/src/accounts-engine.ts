@@ -441,6 +441,17 @@ export class AccountsEngine {
     return status;
   }
 
+  /** One change of a bot's model or account at a time: the next waits for this one's answer. */
+  private requireNoSave(botId: string): void {
+    const write = this.ctx.get().write;
+    if (
+      write?.status === "saving" &&
+      write.target === botId &&
+      (write.what === "model" || write.what === "account")
+    )
+      throw new Error("A change is already being saved.");
+  }
+
   /** A write the gateway took and could not be read after: the bot keeps what was last read. */
   private unconfirmedWrite(what: "account" | "model", botId: string): "unverified" {
     this.setWrite({
@@ -1498,6 +1509,7 @@ export class AccountsEngine {
     effort: string | null,
   ): Promise<"saved" | "unverified"> {
     this.requireAdmin("Changing a bot's settings");
+    this.requireNoSave(botId);
     if (account && accountProvider(account) !== provider)
       throw new Error("That account belongs to another provider.");
     this.setWrite({
@@ -1570,6 +1582,7 @@ export class AccountsEngine {
     effort: string | null,
   ): Promise<"saved" | "unverified"> {
     this.requireAdmin("Changing a bot's settings");
+    this.requireNoSave(botId);
     const binding = this.ctx.get().bindings.find((b) => b.botId === botId);
     if (!binding?.provider) throw new Error("Choose an account first.");
     const provider = binding.provider;

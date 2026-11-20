@@ -331,6 +331,9 @@ const mergeEvents = (a: TaskModelEvent[], b: TaskModelEvent[]) => {
   return [...byId.values()].sort((x, y) => x.at - y.at).slice(-MAX_TASK_MODEL_EVENTS);
 };
 
+/** A change chosen while the last one is still being saved: the controls are disabled then. */
+export const SAVE_IN_FLIGHT = "A change is already being saved.";
+
 /** Write access is missing: the chip is not offered then, so this is not asked for (25.6). */
 export class TaskModelAccessError extends Error {
   constructor() {
@@ -499,6 +502,8 @@ export class TaskModelsEngine {
     const task = this.ctx.task(key);
     const view = this.ctx.get()[key];
     if (!task || !view) throw new Error("That task is not open here.");
+    // One change at a time: the next is chosen once this one's answer is in.
+    if (this.ownSave(key)) throw new Error(SAVE_IN_FLIGHT);
     const held = view.held;
     const model = choice.model ?? held?.model ?? null;
     // A new model takes the effort with it only when it does not offer the one the task has.
@@ -516,7 +521,7 @@ export class TaskModelsEngine {
       this.keep(key);
       return "unchanged";
     }
-    if (this.ctx.active(key) || this.ownSave(key) || !this.ctx.connected()) {
+    if (this.ctx.active(key) || !this.ctx.connected()) {
       this.patch(key, (current) => ({
         ...current,
         held: { ...desired, at: this.ctx.now(), sessionId: held?.sessionId ?? task.sessionId },

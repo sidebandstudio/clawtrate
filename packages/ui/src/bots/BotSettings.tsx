@@ -113,6 +113,8 @@ export function BotSettings({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [effortNote, setEffortNote] = useState<string | null>(null);
+  // A change of the bot's model or effort on its way: the pair waits for its answer.
+  const [savingModel, setSavingModel] = useState(false);
   // The page's clock: evidence ages while the page stays open, and with every change of the connection.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -368,6 +370,7 @@ export function BotSettings({
     const listed = taskCatalog ? { ...accounts, models: taskCatalog } : accounts;
     const saveModel = async (nextModel: string, nextEffort: string | null, note?: string) => {
       setError(null);
+      setSavingModel(true);
       try {
         const outcome = await bridge.invoke({
           type: "setBotModel",
@@ -393,6 +396,8 @@ export function BotSettings({
         );
         // The select keeps what the gateway has; a save that crossed another change shows it.
         void bridge.send({ type: "refreshAccounts" }).catch(() => {});
+      } finally {
+        setSavingModel(false);
       }
     };
     return (
@@ -436,7 +441,8 @@ export function BotSettings({
                 provider={provider}
                 model={model}
                 effort={binding.effort ?? bot.effort ?? null}
-                disabled={!admin || connection.status !== "connected"}
+                disabled={!admin || connection.status !== "connected" || savingModel}
+                busy={savingModel}
                 onModel={(next) => {
                   const levels =
                     modelsOf(listed, provider).find((m) => m.id === next)?.levels ?? [];
