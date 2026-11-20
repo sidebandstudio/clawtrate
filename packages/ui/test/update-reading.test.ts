@@ -19,7 +19,8 @@ const base: DesktopUpdateSnapshot = {
   pendingTrack: null,
   preferenceIssue: null,
   lastCheck: null,
-  install: { kind: "unavailable-in-this-build" },
+  lastAttempt: null,
+  install: { kind: "unavailable-in-this-build", reason: "build-not-signed" },
   state: { kind: "not-checked" },
 };
 function harness() {
@@ -37,6 +38,7 @@ function harness() {
       return stop;
     }),
     check: vi.fn(() => reply.promise),
+    restart: vi.fn((_id: string) => reply.promise),
     download: vi.fn(() => reply.promise),
     chooseTrack: vi.fn(() => reply.promise),
   } satisfies DesktopUpdates;
@@ -229,4 +231,53 @@ it("F-231: releases unanswered download and track requests without replaying the
     localChoice: null,
     message: "Couldn't get a reply to the track change.",
   });
+});
+
+it.each([
+  ["busy", "Another update action is in progress."],
+  ["stale", "This offer is no longer current."],
+  ["invalid", "Couldn't start the restart."],
+  ["superseded", "This offer is no longer current."],
+  ["rejected", "Couldn't get a reply to the restart request."],
+  ["accepted", null],
+] as const)(
+  "F-231: consumes one %s restart reply for the confirmed offer",
+  async (outcome, message) => {
+    const h = harness();
+    const snapshot = {
+      ...base,
+      state: { kind: "verified", version: "1.1.0", offerId: "shown", size: 10 },
+      install: { kind: "restart-available", offerId: "shown" },
+    } as const;
+    h.event(snapshot);
+    await h.reader.restart("retired");
+    expect(h.host.restart).not.toHaveBeenCalled();
+    const pending = h.reader.restart("shown");
+    await h.reader.restart("shown");
+    await h.reader.chooseTrack("nightly");
+    expect(h.host.chooseTrack).not.toHaveBeenCalled();
+    expect(h.host.restart.mock.calls).toEqual([["shown"]]);
+    if (outcome === "rejected") h.reply.reject(Error());
+    else h.reply.resolve({ outcome, snapshot });
+    await pending;
+    expect(h.reader.get()).toMatchObject({ message, working: false });
+  },
+);
+it("F-231: a stale restart reply cannot replace or contradict a newer handoff", async () => {
+  const h = harness();
+  const snapshot = {
+    ...base,
+    state: { kind: "verified", version: "1.1.0", offerId: "shown", size: 10 },
+    install: { kind: "restart-available", offerId: "shown" },
+  } as const;
+  h.event(snapshot);
+  const pending = h.reader.restart("shown");
+  h.event({
+    ...snapshot,
+    revision: 5,
+    state: { kind: "handed-to-system", version: "1.1.0", offerId: "shown" },
+  });
+  h.reply.resolve({ outcome: "stale", snapshot });
+  await pending;
+  expect(h.reader.get()).toMatchObject({ snapshot: { revision: 5 }, message: null });
 });

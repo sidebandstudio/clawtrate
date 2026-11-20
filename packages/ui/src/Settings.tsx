@@ -147,6 +147,7 @@ export function Settings({
   info,
   accounts,
   bots,
+  waitingMessages,
   initialUpdates,
   updateReading,
   onClose,
@@ -155,6 +156,7 @@ export function Settings({
   info: HostInfo;
   accounts: AccountsState;
   bots: readonly Bot[];
+  waitingMessages: string;
   initialUpdates: boolean;
   updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
   onClose: () => void;
@@ -427,7 +429,7 @@ export function Settings({
                     title: "Updates",
                     back: toNav,
                     foot: null,
-                    body: <Updates {...updateReading} />,
+                    body: <Updates waitingMessages={waitingMessages} {...updateReading} />,
                   }
                 : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (

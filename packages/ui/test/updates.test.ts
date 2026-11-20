@@ -22,7 +22,8 @@ const snapshot: DesktopUpdateSnapshot = {
   pendingTrack: null,
   preferenceIssue: null,
   state: { kind: "not-checked" },
-  install: { kind: "unavailable-in-this-build" },
+  lastAttempt: null,
+  install: { kind: "unavailable-in-this-build", reason: "build-not-signed" },
 };
 function render(
   state: DesktopUpdateState,
@@ -40,6 +41,7 @@ function render(
       retryRead: async () => {},
       chooseTrack: async () => {},
       check: async () => {},
+      restart: async () => {},
       download: async () => {},
     }),
   ).replaceAll("&#x27;", "'");
@@ -154,6 +156,7 @@ it("F-231: names the running and selected tracks and shows choices only with two
 });
 
 it.each([
+  ["attempt-not-read", "Couldn't read the last update attempt."],
   ["preferences-not-read", "Couldn't read the saved update settings."],
   ["last-check-not-saved", "Couldn't save the time of the last check."],
   ["update-folder-unavailable", "Couldn't prepare update storage on this device."],
@@ -197,4 +200,79 @@ it("F-231 F-030: a pending choice hides the retired offer, action and source", (
   expect(result.html).not.toMatch(/stable.example|2.0.0/);
   expect(result.actions).toEqual([]);
   expect(result.footer).toBe(false);
+});
+
+const restartFailures = [
+  ["no-verified-download", "There is no verified update ready to install."],
+  ["build-not-signed", "This build can't install updates itself."],
+  ["no-installer-path", "This build has no installer for this system."],
+  ["artifact-changed", "Couldn't verify the saved update again."],
+  ["mac-designated-requirement", "The update doesn't meet this app's macOS signing requirement."],
+  ["authenticode-trust", "Windows couldn't verify the update's signature."],
+  ["publisher-mismatch", "The update was signed by a different publisher."],
+  ["installation-context", "Couldn't confirm where this copy of Clawtrate is installed."],
+  ["inspection-failed", "Couldn't finish checking the downloaded update."],
+  ["running-signature-untrusted", "Couldn't verify the signature of the running app."],
+  ["running-publisher-mismatch", "The running app was signed by a different publisher."],
+  ["installer-product", "The installer is for a different app."],
+  ["installer-version", "The installer's version doesn't match the offered version."],
+  ["mac-archive", "The downloaded archive can't be used for this update."],
+  ["mac-bundle-identifier", "The downloaded Mac app has a different app identifier."],
+  ["mac-architecture", "The downloaded Mac app is for a different processor."],
+  [
+    "quit-blocked",
+    "Clawtrate stayed open. Close whatever is blocking quit, then check and download the update again before choosing Restart to Update.",
+  ],
+  ["handoff-unconfirmed", "Couldn't confirm the handoff to the system updater."],
+  ["attempt-not-saved", "Couldn't save the restart attempt on this device."],
+  ["installer-failed", "Couldn't hand the update to the installer."],
+] as const;
+const verified = { kind: "verified", offerId: "shown", version: "1.1.0", size: 100 } as const;
+it.each(restartFailures)("F-231: explains the installer refusal %s", (reason, line) => {
+  const failed = render({ kind: "handoff-failed", version: "1.1.0", reason });
+  expect(failed.html).toContain(line);
+  expect(failed.actions).toEqual(reason === "handoff-unconfirmed" ? [] : ["Check for Updates"]);
+  expect(failed.footer).toBe(true);
+  if (reason === "attempt-not-saved" || reason === "installer-failed") return;
+  const unavailable = render(verified, { install: { kind: "unavailable-in-this-build", reason } });
+  expect(unavailable.actions).toEqual([]);
+  expect(unavailable.html).toContain(line);
+});
+it("F-231: only the matching verified offer can open Restart", () => {
+  const install = { kind: "restart-available", offerId: "shown" } as const;
+  expect(render(verified, { install }).actions).toEqual(["Restart to Update"]);
+  expect(render(verified, { install: { ...install, offerId: "other" } }).actions).toEqual([]);
+  expect(render({ kind: "checking" }, { install }).actions).toEqual([]);
+  expect(
+    render(verified, { install: { kind: "unavailable-in-this-build", reason: "future" as never } })
+      .html,
+  ).toContain("This update can't be installed from here.");
+});
+it.each([
+  ["preparing", "Preparing Clawtrate 1.1.0 for restart…"],
+  ["handing-off", "Handing Clawtrate 1.1.0 to the system updater…"],
+  [
+    "handed-to-system",
+    "Clawtrate handed the update to the macOS updater. After restart, Clawtrate reports the version that is running.",
+  ],
+] as const)("F-231 F-030: locks actions during %s", (kind, line) => {
+  const row = render({ kind, version: verified.version, offerId: verified.offerId });
+  expect(row.html).toContain(line);
+  expect(row.html).toMatch(/<fieldset disabled/);
+  expect(row.actions).toEqual([]);
+  expect(row.footer).toBe(true);
+});
+it.each([
+  ["target-running", "2.0.0", "Clawtrate 2.0.0 is running."],
+  ["old-version-running", "1.0.0", "Clawtrate is still running 1.0.0."],
+  ["unconfirmed", "1.5.0", "Clawtrate 1.5.0 is running. Couldn't confirm the update attempt."],
+  ["unconfirmed", null, "Couldn't confirm the update attempt."],
+] as const)("F-231: reports the observed %s version %s", (kind, running, line) => {
+  expect(
+    render(
+      { kind: "not-checked" },
+      { lastAttempt: { kind, running, target: "2.0.0", from: "1.0.0", track: "stable" } },
+    ).html,
+  ).toContain(line);
+  expect(render({ kind: "not-checked" }).html).not.toContain(line);
 });

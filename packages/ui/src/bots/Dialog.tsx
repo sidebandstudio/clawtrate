@@ -3,10 +3,11 @@
 // Escape closes it, unless something inside it (a menu) handled Escape
 // first; focus returns to the control that opened it.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type RefObject, type ReactNode } from "react";
 
 export function Dialog({
   kind,
+  fallbackFocus,
   labelledBy,
   describedBy,
   onClose,
@@ -14,6 +15,7 @@ export function Dialog({
   testId,
   role,
 }: {
+  fallbackFocus?: RefObject<HTMLElement | null> | undefined;
   kind: "create" | "settings" | "confirm";
   labelledBy: string;
   describedBy?: string;
@@ -43,9 +45,10 @@ export function Dialog({
       requestAnimationFrame(() => {
         // Behind a dialog still open, the browser does not let it take focus: nothing happens.
         if (opener?.isConnected && !opener.closest("[inert]")) opener.focus();
+        else fallbackFocus?.current?.focus();
       });
     };
-  }, [opener]);
+  }, [opener, fallbackFocus]);
   return (
     <dialog
       ref={ref}
@@ -101,6 +104,7 @@ export function Confirm({
   onAction,
   onCancel,
   busy,
+  fallbackFocus,
 }: {
   title: string;
   text: ReactNode;
@@ -108,9 +112,11 @@ export function Confirm({
   onAction: () => void;
   onCancel: () => void;
   busy?: boolean;
+  fallbackFocus?: RefObject<HTMLElement | null>;
 }) {
   return (
     <Dialog
+      fallbackFocus={fallbackFocus}
       kind="confirm"
       labelledBy="b-confirm-title"
       describedBy="b-confirm-text"
