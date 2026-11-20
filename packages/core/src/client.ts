@@ -2369,9 +2369,20 @@ export class ClawtrateClient {
    * until the gateway reports how it ended: `stopped` when the abort took,
    * `completed` with `finishedBeforeStop` when the run finished first.
    */
-  async stopRun(key: string, asked: string, options: { owner?: object } = {}): Promise<void> {
+  async stopRun(
+    key: string,
+    asked: string,
+    options: { owner?: object; everyRun?: boolean } = {},
+  ): Promise<void> {
     const transcript = this.state.transcripts[key];
-    const runId = transcript ? runningRunId(transcript, asked) : asked;
+    const runId = transcript
+      ? (runningRunId(transcript, asked) ??
+        // Archive and delete stop every active run of the task, so each is aborted by its own
+        // id even when none of them is established as the current one.
+        (options.everyRun
+          ? (transcript.steerAliases[asked] ?? transcript.queueAliases[asked] ?? asked)
+          : null))
+      : asked;
     // No one current run is established: Stop is withheld until the gateway identifies it.
     if (runId === null) return;
     const run = transcript && findRun(transcript, runId);
@@ -5668,7 +5679,9 @@ export class ClawtrateClient {
         await Promise.all(
           runs
             .filter((run) => run.state === "running" || run.state === "waiting")
-            .map((run) => this.stopRun(key, run.id, owner ? { owner } : {})),
+            .map((run) =>
+              this.stopRun(key, run.id, owner ? { owner, everyRun: true } : { everyRun: true }),
+            ),
         );
         return (this.state.transcripts[key]?.runs ?? []).filter((run) => isActive(run.state))
           .length;
