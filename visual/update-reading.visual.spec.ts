@@ -104,7 +104,9 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
   await page.keyboard.press("ControlOrMeta+,");
   await page.getByRole("button", { name: "Updates", exact: true }).click();
   const retry = page.getByRole("button", { name: "Retry reading settings" });
-  await retry.focus();
+  await expect(page.getByRole("heading", { name: "Updates", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(retry).toBeFocused();
   await page.evaluate(() => {
     window.updateProbe.readable = true;
   });
