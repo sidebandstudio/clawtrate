@@ -167,8 +167,8 @@ export function assemble(candidate: Candidate) {
   );
 }
 
-if (import.meta.main) {
-  const [mode, dir, track, version, commit, buildDate, feedUrl] = process.argv.slice(2);
+export function runPlan(args: string[], print = console.log) {
+  const [mode, dir, track, version, commit, buildDate, feedUrl] = args;
   if (
     !(mode === "assemble" || mode === "check") ||
     !dir ||
@@ -181,7 +181,7 @@ if (import.meta.main) {
     console.error(
       "Usage: release-plan.ts assemble|check DIR TRACK VERSION COMMIT ISO_DATE FEED_URL",
     );
-    process.exit(1);
+    return 1;
   }
   try {
     const candidate = { dir, track, version, commit, buildDate, feedUrl };
@@ -190,14 +190,16 @@ if (import.meta.main) {
     const output = join(dir, "release-plan.json");
     writeFileSync(output + ".tmp", JSON.stringify(record, null, 2) + "\n", { flag: "wx" });
     renameSync(output + ".tmp", output);
-    console.log(
+    print(
       [record.track, record.version, record.verdict].join(" ") +
         "\n" +
         [...record.issues, ...record.holds].join("\n"),
     );
-    process.exitCode = record.issues.length ? 1 : record.holds.length ? 2 : 0;
+    return record.issues.length ? 1 : record.holds.length ? 2 : 0;
   } catch {
     console.error("Could not read the candidate or write a fresh record.");
-    process.exitCode = 1;
+    return 1;
   }
 }
+
+if (import.meta.main) process.exitCode = runPlan(process.argv.slice(2));

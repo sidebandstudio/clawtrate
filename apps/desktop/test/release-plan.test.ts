@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   readFileSync,
@@ -11,7 +10,13 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { assemble, plan, feedFingerprint, type Candidate } from "../packaging/release-plan.ts";
+import {
+  assemble,
+  plan,
+  runPlan,
+  feedFingerprint,
+  type Candidate,
+} from "../packaging/release-plan.ts";
 import { artifactName, sha512Base64 } from "../packaging/feed.ts";
 import { macReadback } from "../packaging/candidate-build.ts";
 import { FILE_KEYS } from "../src/main/update/feed.ts";
@@ -183,34 +188,23 @@ it("refuses unsigned Windows and distinguishes the packager's readback from its 
 });
 
 it("rechecks the saved candidate from the command line and preserves the feed on refusal", () => {
+  const lines: string[] = [];
   const check = () =>
-    spawnSync(
-      process.execPath,
-      [
-        join(import.meta.dirname, "../packaging/release-plan.ts"),
-        "check",
-        c.dir,
-        c.track,
-        c.version,
-        c.commit,
-        c.buildDate,
-        c.feedUrl,
-      ],
-      { encoding: "utf8" },
+    runPlan(["check", c.dir, c.track, c.version, c.commit, c.buildDate, c.feedUrl], (line) =>
+      lines.push(line),
     );
-  expect(check().status).toBe(0);
+  expect(check()).toBe(0);
   for (const key of FILE_KEYS)
     write(key + ".json", {
       ...read(key + ".json"),
       signing: key === "win-x64" ? "unsigned" : "ad hoc",
     });
-  const held = check();
-  expect(held.status).toBe(2);
-  expect(held.stdout).toContain("stable 0.2.0 not publishable");
+  expect(check()).toBe(2);
+  expect(lines.at(-1)).toContain("stable 0.2.0 not publishable");
   expect(read("release-plan.json")).toMatchObject({ issues: [], verdict: "not publishable" });
   const feed = read("update-feed.json");
   writeFileSync(file(), "changed");
-  expect(check().status).toBe(1);
+  expect(check()).toBe(1);
   expect(read("update-feed.json")).toEqual(feed);
 });
 
