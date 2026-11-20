@@ -74,6 +74,33 @@ async function drive(page: Page, ordering: Ordering) {
   );
 }
 
+/**
+ * Grows the spacer at the end of the content by `px` (0 only watches) and
+ * returns each following frame's scroll position and how far it is above the end.
+ */
+const afterGrowth = (page: Page, px: number) =>
+  page.getByTestId("transcript").evaluate(
+    (element, px) =>
+      new Promise<Array<{ top: number; short: number }>>((resolve) => {
+        let spacer = element.querySelector<HTMLElement>("[data-follow-spacer]");
+        if (!spacer) {
+          spacer = document.createElement("div");
+          spacer.dataset.followSpacer = "";
+          element.firstElementChild!.append(spacer);
+        }
+        spacer.style.height = `${(Number.parseFloat(spacer.style.height) || 0) + px}px`;
+        const seen: Array<{ top: number; short: number }> = [];
+        const frame = () => {
+          const top = element.scrollTop;
+          seen.push({ top, short: element.scrollHeight - top - element.clientHeight });
+          if (seen.length < 10) requestAnimationFrame(frame);
+          else resolve(seen);
+        };
+        requestAnimationFrame(frame);
+      }),
+    px,
+  );
+
 const atEnd = (page: Page) =>
   expect
     .poll(() =>
@@ -119,5 +146,59 @@ for (const theme of THEMES) {
         expect(tops, "the reader's scroll position, frame by frame").toEqual(tops.map(() => top));
       });
     }
+
+    // CodeRabbit's case on #222: the held line stops following, the reader comes
+    // back to the end, then scrolls up. Nothing left from the earlier following
+    // interval may take that scroll for the browser's and pull the reader back.
+    test("a reader who scrolls up after a held line and a return to the end stays there", async ({
+      page,
+    }) => {
+      await openFixture(page, `scene=composer&${OTTO_DISK}&panel=closed`, theme);
+      await atEnd(page);
+      const transcript = page.getByTestId("transcript");
+      const tops = (frames: Array<{ top: number }>) => frames.map(({ top }) => top);
+
+      // The reader opens a card in view, and the content grows under it: its
+      // line is held at the top and following stops (section 18).
+      await transcript
+        .locator("details.card.action > summary")
+        .filter({ hasText: "Edited disk-2026-11-16.md" })
+        .click();
+      await settle(page);
+      const held = await afterGrowth(page, 1500);
+      const heldTop = held.at(-1)!.top;
+      expect(held.at(-1)!.short, "the held line stops following").toBeGreaterThan(96);
+      const grown = await afterGrowth(page, 300);
+      expect(tops(grown), "the held place, while the content grows").toEqual(
+        grown.map(() => heldTop),
+      );
+
+      // Back at the end, following resumes; the reader then scrolls up past
+      // the follow distance, still below where the line was held.
+      await transcript.evaluate((element) => (element.scrollTop = element.scrollHeight));
+      await atEnd(page);
+      const top = await transcript.evaluate((element) => {
+        element.scrollTop -= 150;
+        return element.scrollTop;
+      });
+      expect(top).toBeGreaterThan(heldTop);
+      const watched = await afterGrowth(page, 0);
+      expect(tops(watched), "the reader's scroll position, frame by frame").toEqual(
+        watched.map(() => top),
+      );
+      const growing = await afterGrowth(page, 100);
+      expect(tops(growing), "the reader's place while the content grows").toEqual(
+        growing.map(() => top),
+      );
+
+      // Only once the reader is back at the end is the end followed again.
+      await transcript.evaluate((element) => (element.scrollTop = element.scrollHeight));
+      await atEnd(page);
+      const followed = (await afterGrowth(page, 100)).map(({ short }) => short);
+      expect(
+        followed.slice(4).every((short) => short <= 1),
+        `px short of the end, frame by frame: ${followed}`,
+      ).toBe(true);
+    });
   });
 }
