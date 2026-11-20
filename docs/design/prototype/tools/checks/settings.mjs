@@ -488,15 +488,22 @@ await stateWords("Updates, a development build", "open=settings&section=updates&
   await p.close();
 }
 {
-  const p = await open("open=settings&section=updates&feed=1");
-  check("Updates, a build that can't install itself says so", (await text(p, settings)).includes("This build can't install updates itself."));
+  const p = await open("open=settings&section=updates&feed=1&install=0");
+  check("Updates, a build an installer result rules out says it can't install itself", (await text(p, settings)).includes("This build can't install updates itself."));
   check("Updates: automatic restart unavailable, and no switch for it", (await text(p, settings)).includes("Automatic restart is unavailable in this build.") && (await p.locator('#settings-dialog [role="switch"]').count()) === 0 && !(await text(p, settings)).includes("screen saver"));
   await p.close();
 }
 {
   const p = await open("open=settings&section=updates&feed=1&upd=ready");
   const t = await text(p, settings);
-  check("Updates, downloaded but not installable: no Restart to Update", t.includes("This build can't install it itself.") && !t.includes("Restart to Update"));
+  check("Updates, downloaded with no eligible installer result: no Restart to Update", t.includes("Installation isn't available from this screen.") && !t.includes("Restart to Update") && !t.includes("Ready to install") && !t.includes("This build can't install updates itself."));
+  await p.close();
+}
+{
+  const p = await open("open=settings&section=updates&feed=1&install=1&upd=ready&after=same");
+  await press(p, "button", "Restart to Update", 200);
+  const v = await text(p, '#settings-dialog [data-testid="updates"]');
+  check("walk: Restart to Update, the same version comes back: the Version row and the result say so", v.includes("Clawtrate 0.1.0") && v.includes("Clawtrate 0.1.0 is running.") && !v.includes("0.2.0") && (await announced(p)) === "Clawtrate 0.1.0 is running", v);
   await p.close();
 }
 for (const [next, words] of [["failcheck", "Couldn't check for updates."], ["nofile", "The update source has no file for this system."]]) {
@@ -516,6 +523,7 @@ for (const [next, words] of [["failcheck", "Couldn't check for updates."], ["nof
   const p = await open("open=settings&section=updates&feed=1&install=1&next=update&waiting=1");
   await press(p, "button", "Check for Updates", 1100);
   check("walk: an update: offered, then a separate choice to download", (await text(p, settings)).includes("Clawtrate 0.2.0 is offered by the update source.") && (await p.getByRole("button", { name: "Download", exact: true }).count()) === 1);
+  check("walk: an update: the origin Download contacts is named before it", (await text(p, '#settings-dialog [data-testid="update-source"]')).includes("Downloads Clawtrate 0.2.0 from updates.example.com, only when you choose to."));
   await press(p, "button", "Download");
   check("walk: an update: downloading, with what has arrived", (await text(p, settings)).includes("Downloading Clawtrate 0.2.0… 41 of 120 MB"));
   await p.waitForTimeout(1000);
@@ -534,7 +542,7 @@ for (const [dir, theirs] of [["client", 5], ["gateway", 3]]) {
     const p = await open(`required=${dir}${count === "one" ? "&gateways=one" : ""}`);
     const lead = `The address saved for Home gateway replied with protocol ${theirs}. This version of Clawtrate speaks protocol 4.`;
     const words = dir === "client"
-      ? [`Can't use Home gateway`, lead, "Update required to use Home gateway. Other gateways aren't affected.", "This copy can't update itself. A newer Clawtrate is needed to use Home gateway.", "Try again", "Your gateways"]
+      ? [`Can't use Home gateway`, lead, "Update required to use Home gateway. Other gateways aren't affected.", "This copy can't update itself.", "Try again", "Your gateways"]
       : [`Can't use Home gateway`, lead, "Update OpenClaw on the gateway's computer to use it with this version.", "Try again", "Your gateways"];
     const [ok, miss] = await has(p, '[data-testid="refusal"]', words);
     check(`F-518 ${name}: that connection's words`, ok, miss);
@@ -589,21 +597,40 @@ for (const [dir, theirs] of [["client", 5], ["gateway", 3]]) {
 }
 {
   const p = await open("required=client&feed=1");
-  check("F-518: a source alone offers no Update", (await p.getByRole("button", { name: "Update", exact: true }).count()) === 0);
+  const t = await text(p, '[data-testid="refusal"]');
+  check("F-518: a source alone offers no Update; a newer Clawtrate is needed, with Open Updates", (await p.getByRole("button", { name: "Update", exact: true }).count()) === 0 && t.includes("A newer Clawtrate is needed to use Home gateway") && t.includes("Open Updates") && !t.includes("This copy can't update itself"), t);
+  await p.close();
+}
+{
+  const p = await open("required=client&feed=1&install=0&upd=available");
+  const t = await text(p, '[data-testid="refusal"]');
+  check("F-518: a build known to be ineligible can't update itself, even with an offer", (await p.getByRole("button", { name: "Update", exact: true }).count()) === 0 && t.includes("This copy can't update itself.") && !t.includes("Open Updates"), t);
+  await p.close();
+}
+{
+  const p = await open("required=client&feed=1&install=1&upd=available");
+  check("F-518: Update with a current offer this build can install", (await p.getByRole("button", { name: "Update", exact: true }).count()) === 1 && !(await text(p, '[data-testid="refusal"]')).includes("This copy can't update itself") && !(await text(p, '[data-testid="refusal"]')).includes("Open Updates"));
   await p.close();
 }
 {
   const p = await open("required=client&feed=1&install=1");
-  check("F-518: Update only when the updater offers an installable replacement", (await p.getByRole("button", { name: "Update", exact: true }).count()) === 1 && !(await text(p, '[data-testid="refusal"]')).includes("This copy can't update itself"));
-  await press(p, "button", "Update");
+  check("F-518: an installable build with no offer yet: no Update", (await p.getByRole("button", { name: "Update", exact: true }).count()) === 0);
+  await p.close();
+}
+for (const [next, words] of [["failcheck", "Couldn't check for updates."], ["", "No newer version was offered"], ["nofile", "The update source has no file for this system."], ["update", "Clawtrate 0.2.0 is offered by the update source."]]) {
+  const p = await open(`required=client&feed=1&install=1${next ? `&next=${next}` : ""}`);
+  await press(p, "button", "Open Updates");
+  check(`F-518, Open Updates (${next || "nothing newer"}): Check is reachable without a prior offer`, (await text(p, "#b-section-title")) === "Updates" && (await p.getByRole("button", { name: "Check for Updates", exact: true }).count()) === 1);
   await press(p, "button", "Check for Updates", 1100);
+  check(`F-518, Open Updates (${next || "nothing newer"}): the check's own words`, (await text(p, settings)).includes(words));
   await p.keyboard.press("Escape");
   await p.waitForTimeout(100);
-  check("F-518: the refusal stays through a check for updates", (await p.locator('[data-testid="refusal"]').count()) === 1 && (await footer(p)).includes("Can't use it"));
+  const update = await p.getByRole("button", { name: "Update", exact: true }).count();
+  check(`F-518, Open Updates (${next || "nothing newer"}): the refusal stays, ${next === "update" ? "and Update appears with the offer" : "with no Update"}`, (await p.locator('[data-testid="refusal"]').count()) === 1 && (await footer(p)).includes("Can't use it") && update === (next === "update" ? 1 : 0));
   await p.close();
 }
 {
-  const p = await open("required=client&feed=1&install=1&build=dev");
+  const p = await open("required=client&feed=1&install=1&upd=available&build=dev");
   check("F-518: a development build offers no Update", (await p.getByRole("button", { name: "Update", exact: true }).count()) === 0);
   await p.close();
 }

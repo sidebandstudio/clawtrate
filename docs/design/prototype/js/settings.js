@@ -63,7 +63,8 @@
     // or "unknown" (no valid protocol number, or one inside the offered range). It stays on Home's record.
     refused: { client: "client", gateway: "gateway", noprotocol: "unknown" }[p("required")] || null,
     retryOk: p("retryok") === "1", // the next handshake succeeds
-    install: p("install") === "1", // the updater offers a replacement this build can install
+    // An installer result (issue #69): true, this build can install what it downloads; false, one rules it out; null, unknown.
+    install: { 1: true, 0: false }[p("install")] ?? null,
     compact: p("compact") || "none",
     reply: p("reply") || "done",
     foldOpen: false,
@@ -780,11 +781,13 @@
         idle: ["Not checked yet.", check()],
         checking: [`Checking ${SOURCE}…`, ""],
         current: ["No newer version was offered for this build by its update source. Checked at 5:41 PM.", check()],
+        // Download only from the current available state.
         available: ["Clawtrate 0.2.0 is offered by the update source.", button("Download", 'data-s="download" data-size="sm"')],
         downloading: ["Downloading Clawtrate 0.2.0… 41 of 120 MB", ""],
-        ready: S.install
-          ? ["Clawtrate 0.2.0 is downloaded, and its size and checksum match the update source. Ready to install.", button("Restart to Update", 'data-s="restart-update" data-size="sm"', "primary")]
-          : ["Clawtrate 0.2.0 is downloaded, and its size and checksum match the update source. This build can't install it itself.", ""],
+        ready:
+          S.install === true
+            ? ["Clawtrate 0.2.0 is downloaded, and its size and checksum match the update source. Ready to install.", button("Restart to Update", 'data-s="restart-update" data-size="sm"', "primary")]
+            : ["Clawtrate 0.2.0 is downloaded, and its size and checksum match the update source. Installation isn't available from this screen.", ""],
         failcheck: ["Couldn't check for updates.", check("Try again")],
         nofile: ["The update source has no file for this system.", check()],
         faildl: ["Couldn't download the update. Try again.", check("Try again")],
@@ -795,8 +798,16 @@
       const [line, action] = updatesRow();
       const live = S.feed && !S.dev && S.os !== "linux";
       const future = S.feed && !S.dev ? `<p class="s-future">${S.os === "linux" ? "When a Linux package is built" : "When releases are published"}: a future example. No update source exists today.</p>` : "";
-      const source = live && ["idle", "current", "failcheck", "nofile", "faildl", "restarted"].includes(S.upd) ? `<p class="b-hint" data-testid="update-source">Checks ${SOURCE} for a newer build, only when you choose to.</p>` : "";
-      const cannot = live && !S.install ? note("<p>This build can't install updates itself.</p>", "warn") : "";
+      // Before Check and before Download: the origin the action contacts.
+      const source = !live
+        ? ""
+        : ["idle", "current", "failcheck", "nofile", "faildl", "restarted"].includes(S.upd)
+          ? `<p class="b-hint" data-testid="update-source">Checks ${SOURCE} for a newer build, only when you choose to.</p>`
+          : S.upd === "available"
+            ? `<p class="b-hint" data-testid="update-source">Downloads Clawtrate 0.2.0 from ${SOURCE}, only when you choose to.</p>`
+            : "";
+      // Only when an installer or host build result explicitly rules installing out.
+      const cannot = live && S.install === false ? note("<p>This build can't install updates itself.</p>", "warn") : "";
       // The automatic restart waits until the app can establish every condition (settings.md section 10).
       const auto = live ? `<p class="b-hint" data-testid="auto-restart">Automatic restart is unavailable in this build.</p>` : "";
       const body =
@@ -815,6 +826,7 @@
       setTimeout(() => {
         S.upd = { update: "available", failcheck: "failcheck", nofile: "nofile" }[p("next")] || "current";
         rs();
+        renderRequired();
         announce({ current: "No newer version was offered", available: "Clawtrate 0.2.0 is offered", failcheck: "Couldn't check for updates", nofile: "No file for this system" }[S.upd]);
       }, 900);
     }
@@ -825,6 +837,7 @@
         S.upd = p("dl") === "fail" && !S.dlTried ? "faildl" : "ready";
         S.dlTried = true;
         rs();
+        renderRequired();
         announce(S.upd === "ready" ? "Clawtrate 0.2.0 is downloaded" : "Couldn't download the update");
       }, 900);
     }
@@ -857,7 +870,9 @@
       if (!S.refused || S.inUse !== "home" || S.conn !== "refused") return;
       const name = gw("home").name;
       const theirs = { client: 5, gateway: 3 }[S.refused];
-      const canInstall = S.feed && S.install && !S.dev && !phone();
+      // Update needs both a current offer (or a confirmed download) and an installer result that this build can install it.
+      const updater = S.feed && !S.dev && S.os !== "linux";
+      const canInstall = updater && S.install === true && ["available", "ready"].includes(S.upd) && !phone();
       const how =
         S.refused === "unknown"
           ? ""
@@ -868,7 +883,10 @@
               ? `<p>Look for a newer Clawtrate in the App Store, or in TestFlight if you test it there.</p>`
               : canInstall
                 ? ""
-                : `<p>This copy can't update itself. A newer Clawtrate is needed to use ${esc(name)}.</p>`);
+                : !updater || S.install === false
+                  ? `<p>This copy can't update itself.</p>`
+                  : `<p>A newer Clawtrate is needed to use ${esc(name)}.</p>`);
+      const openUpdates = S.refused === "client" && !phone() && !canInstall && updater && S.install !== false;
       const tried = S.lastTry ? `<p class="s-tried" role="status">Tried again at 5:42 PM: ${theirs ? `protocol ${theirs}` : "refused"} again.</p>` : "";
       showEmpty(`Can't use ${esc(name)}`, theirs ? `The address saved for it replied with protocol ${theirs}.` : "The address saved for it refused this connection's protocol.");
       $("#new-button").hidden = true;
@@ -876,7 +894,7 @@
         `<div class="transcript-inner"><section class="s-refusal" aria-labelledby="s-refusal-title" data-testid="refusal">` +
         `<h2 id="s-refusal-title" tabindex="-1">Can't use ${esc(name)}</h2>` +
         `<p>${refusalLead(name)}</p>${how}${tried}` +
-        `<div class="b-actions">${canInstall && S.refused === "client" ? button("Update", 'data-s="refusal-update"', "primary") : ""}` +
+        `<div class="b-actions">${canInstall && S.refused === "client" ? button("Update", 'data-s="refusal-update"', "primary") : ""}${openUpdates ? button("Open Updates", 'data-s="refusal-update"') : ""}` +
         `${button("Try again", 'data-s="refusal-retry"')}${button("Your gateways", 'data-s="refusal-gateways"', "quiet")}</div></section></div>`;
       strip(`Can't use ${esc(name)}`, theirs ? `protocol ${theirs}` : "", `<button type="button" data-s="refusal-retry">Try again</button>`, "danger");
       renderMenu();
@@ -1076,10 +1094,10 @@
           return check();
         case "restart-update":
           return restart("Restart to update?", () => {
-            // After the restart the running version is read from the app itself.
-            S.version = "0.2.0";
+            // After the restart the running version is read from the app itself (app.getVersion()); it may still be the old one.
+            S.version = p("after") === "same" ? "0.1.0" : "0.2.0";
             S.upd = "restarted";
-            announce("Clawtrate 0.2.0 is running");
+            announce(`Clawtrate ${S.version} is running`);
           });
         case "download":
           return download();
