@@ -23,7 +23,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gatedSpawn, type Gated } from "../tools/dev-gateway/src/env.ts";
 import { newRunId, processIdentity, processState } from "../tools/dev-gateway/src/state-guard.ts";
-import { cleanUp, recoverDeadRuns, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
+import {
+  cleanUp,
+  recoverDeadRuns,
+  runIncludes,
+  saveRecord,
+  TEMP_PREFIX,
+  type RunRecord,
+} from "./run-record.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
@@ -172,14 +179,16 @@ export default async function globalSetup() {
   // Provider accounts (docs/design/bots.md) run on an instance of their own, with scripted
   // accounts and sign-ins, so nothing they create reaches the seeded instance's checks.
   const accounts = `e2e-${run}-acct`;
-  // The Computer tab's checks need the computer plugin: an instance of its own.
+  // The Computer tab's checks need the computer plugin: an instance of its own, started only
+  // when this run can include them.
   const computer = `e2e-${run}-computer`;
+  const withComputer = runIncludes(process.argv, "e2e/work-computer.spec.ts");
   const own = [name, sentinel, accounts, computer];
   // The spec's own dev-gateway calls address this run's instance.
   process.env.CLAWTRATE_DEV_INSTANCE = name;
   process.env.CLAWTRATE_E2E_SENTINEL = sentinel;
   process.env.CLAWTRATE_E2E_ACCOUNTS = accounts;
-  process.env.CLAWTRATE_E2E_COMPUTER = computer;
+  if (withComputer) process.env.CLAWTRATE_E2E_COMPUTER = computer;
 
   recoverDeadRuns(RECORDS, resetInstance);
 
@@ -297,8 +306,8 @@ export default async function globalSetup() {
     );
     // With the computer plugin, whose Marlow and Pip have browsers of their own. Seeded: the
     // seed gives the bots their names.
-    await startInstance(computer, "--with-plugin", "clawtrate-computer");
-    for (const instance of [name, accounts, computer]) {
+    if (withComputer) await startInstance(computer, "--with-plugin", "clawtrate-computer");
+    for (const instance of withComputer ? [name, accounts, computer] : [name, accounts]) {
       const mine = listInstances().find((row) => row.name === instance);
       if (!mine?.gatewayRunning) throw new Error(`instance ${instance} is not running`);
       for (const port of [mine.gatewayPort, mine.providerPort]) {

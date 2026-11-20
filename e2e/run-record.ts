@@ -173,3 +173,51 @@ export function recoverDeadRuns(
     for (const problem of problems) log(problem);
   }
 }
+
+/** Playwright options that take a value, so the value is not read as a file filter. */
+const VALUE_OPTIONS = new Set([
+  "-c",
+  "--config",
+  "-g",
+  "--grep",
+  "-gv",
+  "--grep-invert",
+  "-j",
+  "--workers",
+  "--max-failures",
+  "--output",
+  "--project",
+  "--repeat-each",
+  "--reporter",
+  "--retries",
+  "--shard",
+  "--timeout",
+  "--trace",
+]);
+
+/**
+ * Whether this `playwright test` run may run `file`: true unless it names file filters and
+ * none matches it (Playwright reads each filter as a pattern against the file's path).
+ */
+export function runIncludes(argv: readonly string[], file: string): boolean {
+  const start = argv.indexOf("test");
+  const args = start === -1 ? [] : argv.slice(start + 1);
+  const filters: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--") continue;
+    if (arg.startsWith("-")) {
+      if (VALUE_OPTIONS.has(arg)) i++;
+      continue;
+    }
+    filters.push(arg);
+  }
+  if (filters.length === 0) return true;
+  return filters.some((filter) => {
+    try {
+      return new RegExp(filter).test(file);
+    } catch {
+      return file.includes(filter);
+    }
+  });
+}
