@@ -169,4 +169,4 @@ After `start`, the seed has left finished examples, played through a paired clie
 
 ### Scheduled jobs
 
-`pnpm dev-gateway routines --instance <name>` adds two sample routines (`tools/dev-gateway/src/routines.ts`): Marlow's "Morning digest" on weekdays at 8:00 AM New York time, whose message carries `#steps`, and Otto's "Weekly backup check" with `#slow 3`. It adds only those not listed by name yet. The development gateway's scheduler is off, so neither fires on its schedule; `openclaw --profile clawtrate-dev-<name> gateway call cron.run --params '{"id":"<id>","mode":"force"}'` runs one now, and the scripted model answers its directive as in a task. Results stay with the run (`delivery: {mode: "none"}`).
+`pnpm dev-gateway routines --instance <name>` adds the [sample routines](../../tools/dev-gateway/src/routines.ts) when their names are absent. The development gateway's scheduler is off. To run a sample immediately, use `openclaw --profile clawtrate-dev-<name> gateway call cron.run --params '{"id":"<id>","mode":"force"}'`.
