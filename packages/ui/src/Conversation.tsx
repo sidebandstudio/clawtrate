@@ -32,6 +32,7 @@ import { FindBar } from "./Find.tsx";
 import { CONVERSATION_WORDS as W, emptyBody, stampBefore } from "./conversation-words.ts";
 import { contextWords, fullDate, stampTime } from "./format.ts";
 import { noTasksBody, TASK_WORDS } from "./summary.ts";
+import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
@@ -350,6 +351,7 @@ function TranscriptView({
               <TaskContext task={task} />
               {note}
               {rows}
+              <BudgetLine bot={bot} />
               <TrailingCards except={live.drawsCards} />
               {live.foot}
             </ActionScope>
@@ -1026,6 +1028,7 @@ export function Conversation({
         </div>
       </header>
       {body}
+      {task && bot && <UsageNotes bot={bot} canSet={!info.readOnly} />}
       {task && bot && interactive && (
         <Composer
           key={`composer:${connection.gatewayUrl ?? ""}:${task.key}`}
