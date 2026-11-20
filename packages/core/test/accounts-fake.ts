@@ -134,6 +134,8 @@ export class AccountsGateway {
   declineCancel = false;
   /** Fail `models.authStatus` for this bot. */
   failStatusFor: string | null = null;
+  /** The page a device sign-in's step names. */
+  deviceUrl = "http://127.0.0.1:1/scripted/signin/device?code=QK4F-7PZD";
   /** Echo what was typed back in a refusal, as a careless gateway might. */
   echoTyped = false;
 
@@ -414,7 +416,7 @@ export class AccountsGateway {
             id: "code",
             type: "progress",
             executor: "gateway",
-            externalUrl: "http://127.0.0.1:1/scripted/signin/device?code=QK4F-7PZD",
+            externalUrl: this.deviceUrl,
             deviceCode: { code: "QK4F-7PZD", expiresInMinutes: 15 },
           },
         };

@@ -5,6 +5,7 @@
 // their fields are cleared as they are sent.
 
 import {
+  isSecretStep,
   isSignInActive,
   labelProblem,
   normalizeLabel,
@@ -15,6 +16,7 @@ import {
   type HostInfo,
   type SignInMethod,
   type SignInState,
+  type SignInStep,
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
@@ -22,7 +24,15 @@ import { ChevronIcon, ExternalIcon, LockIcon } from "../icons.tsx";
 import { recall, remember } from "./memory.ts";
 import { AdminBar, CodeBlock, CommandBlock, Note, Result, Wait } from "./parts.tsx";
 import { AccountTitle } from "./AccountChoices.tsx";
-import { accountName, flowWords, forwardCommand, providerName } from "./words.ts";
+import {
+  accountName,
+  flowWords,
+  forwardCommand,
+  opensIn,
+  pageDestination,
+  providerName,
+  REFUSED_PAGE,
+} from "./words.ts";
 
 /** A label step left before Done, kept until the app quits so it comes back (section 6). */
 const LABEL_KEPT = "connect-label";
@@ -694,24 +704,32 @@ export function useConnect({
       Choose another way
     </button>
   );
-  const open = (url: string) => (
-    <a
-      className="button"
-      href={url}
-      target="_blank"
-      rel="noreferrer noopener"
-      data-testid="open-page"
-    >
-      Open {who}'s page <ExternalIcon />
-    </a>
-  );
-  const hostOf = (url: string) => {
-    try {
-      return new URL(url).host;
-    } catch {
-      return url;
-    }
-  };
+  // The page the gateway named, as the core parsed it: the button opens that one address, and
+  // the destination it shows is that address's own scheme, host, port and path.
+  const open = (step: SignInStep) =>
+    step.url ? (
+      <div className="b-open" data-testid="open">
+        <a
+          className="button"
+          href={step.url.href}
+          target="_blank"
+          rel="noreferrer noopener"
+          data-testid="open-page"
+        >
+          Open {who}'s page <ExternalIcon />
+        </a>
+        <p className="b-hint" data-testid="page-address">
+          {pageDestination(step.url)}
+        </p>
+        <p className="b-hint" data-testid="page-opens">
+          {opensIn(step.url)}
+        </p>
+      </div>
+    ) : step.urlRefused ? (
+      <p className="b-hint" data-testid="page-refused">
+        {REFUSED_PAGE}
+      </p>
+    ) : null;
   const reread = (sign: SignInState) => {
     const res = sign.result;
     if (!res) return <Wait>Checking the gateway's accounts…</Wait>;
@@ -795,15 +813,13 @@ export function useConnect({
     const saving = current.saving ? (
       <p className="b-hint">Too late to cancel: the gateway is saving the sign-in.</p>
     ) : null;
-    if (step.type === "note" || current.flow === "host") {
-      // It finishes on the gateway's machine: the gateway's own words, and its forward command.
+    if (step.type === "note") {
+      // A note with a page: the gateway's own words, shown as a note. How the provider finishes
+      // the sign-in is not inferred from it.
       const { words, command } = forwardCommand(step.message);
       body = (
         <>
-          <p className="b-lead">
-            This sign-in finishes on the gateway's machine: {who} sends your browser back to an
-            address there. The gateway says:
-          </p>
+          <p className="b-lead">The gateway says:</p>
           {words
             .split(/\n{2,}/)
             .filter((part) => part.trim())
@@ -812,39 +828,24 @@ export function useConnect({
                 {part}
               </p>
             ))}
-          {command ? (
-            <ol className="b-steps">
-              <li>
-                <p>On a computer that isn't the gateway, forward its port first:</p>
-                <CommandBlock command={command} label="Copy forward command" />
-              </li>
-              <li>
-                <p>Then open the sign-in page in that computer's browser.</p>
-                {step.url && open(step.url)}
-              </li>
-            </ol>
-          ) : (
-            step.url && <div className="b-actions">{open(step.url)}</div>
+          {command && (
+            <>
+              <p className="b-step">The command in the gateway's note:</p>
+              <CommandBlock command={command} label="Copy forward command" />
+            </>
           )}
-          <Wait>Waiting for {who} to send your browser back to the gateway…</Wait>
+          {open(step)}
+          <Wait>Waiting for the gateway…</Wait>
           {saving}
         </>
       );
     } else if (!step.code) {
-      // A browser sign-in whose callback the gateway takes itself: nothing to paste.
+      // A page and no code: the gateway's words, and nothing said of how the sign-in finishes.
       body = (
         <>
-          <p className="b-lead">
-            Open {who}'s sign-in page and sign in. {who} then sends your browser back to the
-            gateway, which finishes the sign-in by itself.
-          </p>
-          {step.url && (
-            <div className="b-actions">
-              {open(step.url)}
-              <span className="b-hint">{hostOf(step.url)}</span>
-            </div>
-          )}
-          <Wait>Waiting for {who}…</Wait>
+          <p className="b-lead">{step.message ?? `Open ${who}'s sign-in page and sign in.`}</p>
+          {open(step)}
+          <Wait>Waiting for the gateway…</Wait>
           <p className="b-hint">
             Keep this open until it finishes. Closing Clawtrate or losing the connection to the
             gateway ends the sign-in.
@@ -858,12 +859,7 @@ export function useConnect({
           <ol className="b-steps">
             <li>
               <p>Open {who}'s sign-in page.</p>
-              {step.url && open(step.url)}
-              {step.url && (
-                <p className="b-hint" style={{ marginTop: 6 }}>
-                  {hostOf(step.url)}
-                </p>
-              )}
+              {open(step)}
             </li>
             <li>
               <p>Enter this code there, and approve.</p>
@@ -892,12 +888,14 @@ export function useConnect({
       if (pasteRef.current) pasteRef.current.value = "";
       await bridge.send({ type: "answerSignIn", value }).catch(() => {});
     };
-    body = step.sensitive ? (
+    // A step with a page, or one the gateway marks secret, takes a pasted code or address: kept
+    // from view, as the engine keeps it.
+    body = isSecretStep(step) ? (
       <>
         <ol className="b-steps">
           <li>
             <p>Open {who}'s sign-in page and sign in.</p>
-            {step.url && open(step.url)}
+            {open(step)}
           </li>
           <li>
             <p>

@@ -15,6 +15,7 @@ import {
   MAX_LOCK_CHECKS,
   MAX_ORDER_IDS,
   MAX_SIGNIN_METHODS,
+  MAX_SIGNIN_URL_CHARS,
   type AccountsState,
   type AccountWrite,
   type BotBinding,
@@ -28,6 +29,7 @@ import {
   type SignInMethod,
   type SignInResult,
   type SignInState,
+  type SignInAddress,
   type SignInStep,
   type StoredOrder,
 } from "./accounts.ts";
@@ -912,12 +914,21 @@ const binding = object<BotBinding>()({
   evidence: lockEvidence,
   fallbacksUnwritten: FLAG,
 });
+const signInAddress = object<SignInAddress>()({
+  href: text(MAX_SIGNIN_URL_CHARS),
+  scheme: ENUM,
+  host: text(MAX_SIGNIN_URL_CHARS),
+  port: ENUM,
+  path: text(MAX_SIGNIN_URL_CHARS),
+  loopback: FLAG,
+});
 const signInStep = object<SignInStep>()({
   id: ID,
   type: ENUM,
   title: NAME,
   message: text(MAX_MESSAGE_LINE_CHARS),
-  url: text(MAX_MESSAGE_LINE_CHARS),
+  url: signInAddress,
+  urlRefused: FLAG,
   code: NAME,
   expiresInMinutes: NUMBER,
   placeholder: NAME,

@@ -29,6 +29,8 @@ export const MAX_ORDER_IDS = 16;
 export const MAX_FALLBACKS = 16;
 /** Bots whose lock a sign-in re-checks. */
 export const MAX_LOCK_CHECKS = 32;
+/** The longest sign-in page address read from a step; a longer one is refused. */
+export const MAX_SIGNIN_URL_CHARS = 2_048;
 /** Account changes Clawtrate made and keeps, for the grey line it draws in a task (row 15). */
 export const MAX_ACCOUNT_CHANGES = 32;
 /** Bots whose `models.authStatus` is read at once. */
@@ -263,11 +265,30 @@ export type SignInStep = {
   type: string;
   title: string | null;
   message: string | null;
-  url: string | null;
+  /** The sign-in page, parsed once: what is shown, checked and opened. Null when refused. */
+  url: SignInAddress | null;
+  /** The gateway sent a page this client refuses to open (user info, or not http or https). */
+  urlRefused: boolean;
   code: string | null;
   expiresInMinutes: number | null;
   placeholder: string | null;
   sensitive: boolean;
+};
+
+/**
+ * A sign-in page's address, parsed once in the core (decisions.md, "Addresses
+ * a gateway hands the client"): the destination shown beside the button, and
+ * `href`, its canonical form, is the only one opened.
+ */
+export type SignInAddress = {
+  href: string;
+  scheme: "http" | "https";
+  host: string;
+  /** The effective port: the address's own, or its scheme's. */
+  port: string;
+  path: string;
+  /** It points to the device that opens it: a `localhost` name or a loopback literal. */
+  loopback: boolean;
 };
 
 export type LockCheck = {
@@ -836,17 +857,63 @@ export function unlockCommand(prefix: string, botId: string, provider: string): 
 
 // Sign-in steps ------------------------------------------------------------------------
 
+/** Whether a parsed host names the device itself: `localhost` and its subdomains, or loopback. */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.replace(/\.$/, "").toLowerCase();
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (/^127\.\d+\.\d+\.\d+$/.test(host)) return true;
+  const v6 = host.replace(/^\[|\]$/g, "");
+  if (v6 === "::1") return true;
+  // IPv4-mapped: the URL parser writes ::ffff:127.0.0.1 as ::ffff:7f00:1.
+  const mapped = /^::ffff:([0-9a-f]{1,4}):[0-9a-f]{1,4}$/.exec(v6);
+  if (mapped) return parseInt(mapped[1]!, 16) >> 8 === 127;
+  return /^::ffff:127\.\d+\.\d+\.\d+$/.test(v6);
+}
+
+/**
+ * Parse a sign-in page's address once: `http` or `https` only, and never one
+ * with a user name or password in it. Null when it is refused.
+ */
+export function signInAddress(raw: string | null): SignInAddress | null {
+  if (raw === null || raw.length > MAX_SIGNIN_URL_CHARS) return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.username || url.password) return null;
+  const scheme = url.protocol === "https:" ? "https" : "http";
+  return {
+    href: url.href,
+    scheme,
+    host: url.hostname,
+    port: url.port || (scheme === "https" ? "443" : "80"),
+    path: url.pathname,
+    loopback: isLoopbackHost(url.hostname),
+  };
+}
+
+/** A step whose answer is kept from view: one the gateway marks secret, or one with a page. */
+export function isSecretStep(step: Pick<SignInStep, "sensitive" | "url" | "urlRefused">): boolean {
+  return step.sensitive || step.url !== null || step.urlRefused;
+}
+
 export function readStep(value: unknown): SignInStep | null {
   const step = asRecord(value);
   const id = str(step?.id);
   if (!step || !id) return null;
   const device = asRecord(step.deviceCode);
+  const raw = str(step.externalUrl);
+  const url = signInAddress(raw);
   return {
     id,
     type: str(step.type) ?? "note",
     title: str(step.title),
     message: str(step.message),
-    url: str(step.externalUrl),
+    url,
+    urlRefused: raw !== null && url === null,
     code: str(device?.code),
     expiresInMinutes: num(device?.expiresInMinutes),
     placeholder: str(step.placeholder),

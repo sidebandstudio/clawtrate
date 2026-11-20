@@ -14,6 +14,7 @@ import {
   type ConnectionState,
   type GatewayAccount,
   type HostInfo,
+  type SignInAddress,
   type SignInFlow,
 } from "@clawtrate/core";
 
@@ -343,6 +344,26 @@ export function changeLine(
  * and the command it gives for forwarding its port, when it gives one
  * ("… forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host").
  */
+/**
+ * Where a sign-in page's button goes, before it is chosen: the parsed scheme,
+ * host, effective port and path; its query and fragment are not shown
+ * (decisions.md, "Addresses a gateway hands the client").
+ */
+export function pageDestination(address: SignInAddress): string {
+  return `${address.scheme}://${address.host}:${address.port}${address.path}`;
+}
+
+/** The line beside a sign-in page's button, in the rule's words. */
+export function opensIn(address: SignInAddress): string {
+  return address.loopback
+    ? "Opens in this device's browser. This address points to this device. It points directly to the gateway's machine only when this is the gateway's machine."
+    : "Opens in this device's browser.";
+}
+
+/** A page the gateway named that is not offered: user info in it, or not http or https. */
+export const REFUSED_PAGE =
+  "The gateway named a sign-in page Clawtrate won't open: its address has a user name or password in it, or is not an http or https address.";
+
 export function forwardCommand(message: string | null): { words: string; command: string | null } {
   if (!message) return { words: "", command: null };
   const match = /([^\n.]*forward the port with:\s*)(ssh\s[^\n]+?)\s*$/im.exec(message);

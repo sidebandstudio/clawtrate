@@ -206,16 +206,14 @@ const SCENES: Scene[] = [
     name: "signin-host",
     query: ADMIN,
     ready: signIn(/^Sign in with ChatGPT/, (page) =>
-      expect(
-        page.getByText(/Waiting for OpenAI to send your browser back to the gateway/),
-      ).toBeVisible(),
+      expect(page.getByText("The gateway says:")).toBeVisible(),
     ),
   },
   {
     name: "signin-callback",
     query: `${ADMIN}&signin=callback`,
     ready: signIn(/^ChatGPT in the browser/, (page) =>
-      expect(page.getByText(/which finishes the sign-in by itself/)).toBeVisible(),
+      expect(page.getByText("Complete sign-in in your browser.")).toBeVisible(),
     ),
   },
   {

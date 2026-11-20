@@ -44,6 +44,7 @@ import {
   wholeForms,
   SLOW_CREATE_MS,
   unreadEvidence,
+  isSecretStep,
   withoutSecret,
   type AccountChange,
   type AccountChangeResult,
@@ -565,10 +566,13 @@ export class AccountsEngine {
     if (typeof out.error === "string") out.error = this.scrub(out.error);
     if (out.step) {
       const step: Record<string, unknown> = { ...out.step };
-      for (const field of ["id", "title", "message", "url", "code", "placeholder"]) {
+      for (const field of ["id", "title", "message", "code", "placeholder"]) {
         const value = step[field];
         if (typeof value === "string") step[field] = this.scrub(value);
       }
+      // A page whose address carries what was typed is not offered: it is parsed once, not edited.
+      const url = out.step.url;
+      if (url && this.scrub(url.href) !== url.href) step.url = null;
       out.step = step as SignInState["step"];
     }
     return out;
@@ -650,7 +654,7 @@ export class AccountsEngine {
       // gateway's own instruction for a sign-in that finishes on its machine (`openUrl`, then a
       // note): the person needs it, so it is shown as the wait, then acknowledged, and the gateway
       // waits for the callback. Any other note is acknowledged unseen; the gateway goes on.
-      if (step.type === "note" && step.url && ctx.get().signIn?.step?.url !== step.url) {
+      if (step.type === "note" && step.url && ctx.get().signIn?.step?.url?.href !== step.url.href) {
         this.setSignIn(id, { stage: "waiting", step });
         pause();
         pending = { stepId: step.id, value: true };
@@ -711,7 +715,7 @@ export class AccountsEngine {
       throw new Error("That can't be sent.");
     const stepId = signIn.step.id;
     // A code or an address pasted back is a secret; a company address asked for first is not.
-    const secret = signIn.step.sensitive || signIn.step.url !== null;
+    const secret = isSecretStep(signIn.step);
     this.holdSecret(value);
     this.setSignIn(signIn.id, { stage: "checking" });
     // Compared with the read made just before it started, kept through every step.

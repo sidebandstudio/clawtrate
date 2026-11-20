@@ -1034,60 +1034,83 @@ async function startMethod(page: Page, method: RegExp) {
   await newBot(page).getByRole("button", { name: method }).click();
 }
 
-test("F-474: a sign-in that finishes on the gateway's machine shows the gateway's words, its forward command to copy, then the page", async ({
+test("F-474: a note that carries a page is shown as the gateway's note, with its command to copy and the page, and nothing inferred of how it finishes", async ({
   page,
 }) => {
   await openFixture(page, ADMIN, "light");
   await startMethod(page, /^Sign in with ChatGPT/);
-  await expect(
-    page.getByText(
-      "This sign-in finishes on the gateway's machine: OpenAI sends your browser back to an address there. The gateway says:",
-    ),
-  ).toBeVisible();
+  await expect(page.getByText("The gateway says:")).toBeVisible();
   // The gateway's words as given, without the command it gives, which is its own block.
   await expect(page.getByTestId("gateway-says")).toHaveText([
     "Authorize eligible Responses API calls using your Codex allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.",
     "Open the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process.",
   ]);
-  const steps = newBot(page).locator(".b-steps > li");
-  await expect(steps.nth(0)).toContainText(
-    "On a computer that isn't the gateway, forward its port first:",
-  );
-  await expect(steps.nth(0).getByTestId("command")).toHaveText(
+  await expect(page.getByText("The command in the gateway's note:")).toBeVisible();
+  await expect(newBot(page).getByTestId("command")).toHaveText(
     "ssh -N -L 8080:127.0.0.1:8080 user@gateway-host",
   );
-  await expect(steps.nth(1)).toContainText(
-    "Then open the sign-in page in that computer's browser.",
-  );
-  await expect(steps.nth(1).getByTestId("open-page")).toHaveAttribute(
+  await expect(page.getByTestId("open-page")).toHaveAttribute(
     "href",
     "https://sign-in.example/authorize?state=host",
   );
+  await expect(page.getByText("Waiting for the gateway…")).toBeVisible();
+  // Nothing says where the provider sends the browser, or which machine finishes it.
   await expect(
-    page.getByText("Waiting for OpenAI to send your browser back to the gateway…"),
-  ).toBeVisible();
+    page.getByText(/finishes on the gateway's machine|sends your browser back|by itself/),
+  ).toHaveCount(0);
   await expect(page.getByTestId("paste")).toHaveCount(0);
 });
 
-test("F-474: a browser sign-in whose callback the gateway takes itself shows the page and nothing to paste", async ({
+test("F-474: a page and no code shows the gateway's words and the page, nothing to paste, and nothing inferred of how it finishes", async ({
   page,
 }) => {
   await openFixture(page, `${ADMIN}&signin=callback`, "light");
   await startMethod(page, /^ChatGPT in the browser/);
-  await expect(
-    page.getByText(
-      "Open OpenAI's sign-in page and sign in. OpenAI then sends your browser back to the gateway, which finishes the sign-in by itself.",
-    ),
-  ).toBeVisible();
+  await expect(page.getByText("Complete sign-in in your browser.")).toBeVisible();
   await expect(page.getByTestId("open-page")).toHaveAttribute(
     "href",
     "https://sign-in.example/authorize?state=callback",
   );
-  await expect(page.getByText("sign-in.example", { exact: true })).toBeVisible();
   await expect(page.getByTestId("paste")).toHaveCount(0);
   await expect(page.getByRole("group", { name: /^Code / })).toHaveCount(0);
-  await expect(page.getByText(/finishes on the gateway's machine/)).toHaveCount(0);
+  await expect(
+    page.getByText(/finishes on the gateway's machine|sends your browser back|by itself/),
+  ).toHaveCount(0);
 });
+
+for (const [method, query, href, destination] of [
+  [/^xAI · /, ADMIN, "https://sign-in.example/device", "https://sign-in.example:443/device"],
+  [
+    /^ChatGPT in the browser/,
+    ADMIN,
+    "https://sign-in.example/authorize?state=fixture",
+    "https://sign-in.example:443/authorize",
+  ],
+  [
+    /^Sign in with ChatGPT/,
+    ADMIN,
+    "https://sign-in.example/authorize?state=host",
+    "https://sign-in.example:443/authorize",
+  ],
+  [
+    /^ChatGPT in the browser/,
+    `${ADMIN}&signin=callback`,
+    "https://sign-in.example/authorize?state=callback",
+    "https://sign-in.example:443/authorize",
+  ],
+] as const) {
+  test(`F-474: before it opens, the page's scheme, host, port and path are shown beside its button, and where it opens (${query.includes("callback") ? "callback" : method.source})`, async ({
+    page,
+  }) => {
+    await openFixture(page, query, "light");
+    await startMethod(page, method);
+    const open = page.getByTestId("open");
+    await expect(open.getByTestId("open-page")).toHaveAttribute("href", href);
+    // The query and fragment are not shown; the port is, even when it is the scheme's.
+    await expect(open.getByTestId("page-address")).toHaveText(destination);
+    await expect(open.getByTestId("page-opens")).toHaveText("Opens in this device's browser.");
+  });
+}
 
 test("F-474: too late to cancel: Cancel reads Saving…, disabled, and Back keeps the sign-in while the gateway saves", async ({
   page,

@@ -67,11 +67,16 @@ function isAppContent(raw: string): boolean {
   return url.hostname === dev.hostname && url.port === dev.port;
 }
 
-/** Links leave the app only for the web: http and https open in the system browser. */
+/**
+ * Links leave the app only for the web: http and https open in the system
+ * browser, never an address with a user name or password in it, and only in
+ * the form parsed here.
+ */
 function openExternally(raw: string): void {
   try {
-    const { protocol } = new URL(raw);
-    if (protocol === "http:" || protocol === "https:") void shell.openExternal(raw);
+    const url = new URL(raw);
+    if (url.username || url.password) return;
+    if (url.protocol === "http:" || url.protocol === "https:") void shell.openExternal(url.href);
   } catch {
     // not a URL: ignored
   }

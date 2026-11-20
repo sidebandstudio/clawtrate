@@ -22,6 +22,7 @@ import {
   parseModelRef,
   readBotView,
   retainedOrder,
+  signInAddress,
   unlockCommand,
   unreadEvidence,
   withoutSecret,
@@ -825,7 +826,7 @@ describe("sign-ins, through the gateway's own methods", () => {
       step: {
         code: "QK4F-7PZD",
         expiresInMinutes: 15,
-        url: "http://127.0.0.1:1/scripted/signin/device?code=QK4F-7PZD",
+        url: { href: "http://127.0.0.1:1/scripted/signin/device?code=QK4F-7PZD" },
       },
     });
     const login = fake.gateway.calls("models.authLogin")[0] as {
@@ -1119,7 +1120,7 @@ describe("sign-ins, through the gateway's own methods", () => {
       step: {
         sensitive: true,
         placeholder: "Code or address",
-        url: "http://127.0.0.1:1/scripted/signin/browser?state=s1",
+        url: { href: "http://127.0.0.1:1/scripted/signin/browser?state=s1" },
       },
     });
     const code = "one-time-code-7Q2Z";
@@ -1168,6 +1169,55 @@ function reachable(root: unknown): string[] {
   visit(root, 0);
   return out;
 }
+
+describe("a sign-in page's address (ruling: one parsed address)", () => {
+  it("is parsed once into the destination shown and the one form opened", () => {
+    expect(signInAddress("https://Sign-In.example/device/?code=QK4F#top")).toEqual({
+      href: "https://sign-in.example/device/?code=QK4F#top",
+      scheme: "https",
+      host: "sign-in.example",
+      port: "443",
+      path: "/device/",
+      loopback: false,
+    });
+    expect(signInAddress("http://sign-in.example:8443/a")).toMatchObject({ port: "8443" });
+    expect(signInAddress("http://sign-in.example/a")).toMatchObject({ port: "80" });
+  });
+
+  it("refuses a user name or password, another scheme, and what is not an address", () => {
+    expect(signInAddress("https://name:secret@sign-in.example/")).toBeNull();
+    expect(signInAddress("https://name@sign-in.example/")).toBeNull();
+    expect(signInAddress("javascript:alert(1)")).toBeNull();
+    expect(signInAddress("file:///etc/passwd")).toBeNull();
+    expect(signInAddress("/relative")).toBeNull();
+    expect(signInAddress(`https://a.example/${"x".repeat(2_100)}`)).toBeNull();
+  });
+
+  it("knows a loopback address, which points to the device that opens it", () => {
+    for (const raw of [
+      "http://localhost:1455/auth",
+      "http://LOCALHOST./auth",
+      "http://app.localhost/auth",
+      "http://127.0.0.1:8080/",
+      "http://127.4.5.6/",
+      "http://2130706433/",
+      "http://[::1]:8080/",
+      "http://[::ffff:127.0.0.1]/",
+    ])
+      expect(signInAddress(raw)?.loopback, raw).toBe(true);
+    for (const raw of ["https://sign-in.example/", "http://10.0.0.2/", "http://[::ffff:10.0.0.2]/"])
+      expect(signInAddress(raw)?.loopback, raw).toBe(false);
+  });
+
+  it("a step whose page has a password in it offers no page, and says it refused one", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.deviceUrl = "https://user:hunter2@sign-in.example/device";
+    await client.startSignIn(CHOICES.device, "pip");
+    expect(accounts().signIn?.step).toMatchObject({ url: null, urlRefused: true });
+    expect(JSON.stringify(client.state)).not.toContain("hunter2");
+    client.stop();
+  });
+});
 
 describe("a typed API key leaves no trace", () => {
   const KEY = "clawtrate-dev-key.acme.made-up-0042";
@@ -1798,7 +1848,7 @@ describe("every kind of sign-in, and every stage (F-474)", () => {
       step: {
         type: "note",
         message: HOST_NOTE,
-        url: "http://127.0.0.1:1/scripted/signin/browser/authorize?state=h1",
+        url: { href: "http://127.0.0.1:1/scripted/signin/browser/authorize?state=h1" },
         code: null,
       },
     });
@@ -1819,7 +1869,7 @@ describe("every kind of sign-in, and every stage (F-474)", () => {
       flow: "paste",
       step: { type: "progress", code: null, sensitive: false },
     });
-    expect(accounts().signIn?.step?.url).toMatch(/state=c1$/);
+    expect(accounts().signIn?.step?.url?.href).toMatch(/state=c1$/);
     fake.answerDevice();
     await until(() => accounts().signIn?.stage === "connected");
     client.stop();

@@ -178,6 +178,21 @@
   font-weight: var(--weight-medium);
 }
 
+/* A sign-in page's button, with the destination it opens and where, before it is chosen. */
+.b-open {
+  margin-top: 8px;
+}
+
+.b-open [data-testid="page-address"] {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.b-open [data-testid="page-opens"] {
+  margin-top: 2px;
+}
+
 .b-actions {
   display: flex;
   flex-wrap: wrap;
