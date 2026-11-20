@@ -78,7 +78,9 @@
     marlow: { label: "Marlow asks, for Pip's message", bot: "marlow", task: "m1", kind: "question", run: "r-m1-1", question: "Should the plan keep Saturday morning free?", via: "pip" },
     routinetask: { label: "A routine fails in Otto's task", bot: "otto", task: "o5", kind: "failed", run: "r-o5-routine", routine: "task" },
     routineisolated: { label: "An isolated routine of Otto's ends", bot: "otto", task: null, kind: "routine", run: "r-cron-1" },
-    budget: { label: "Otto passes 80% of its budget", bot: "otto", task: "o1", kind: "budget", budget: "bot:otto", period: "2026-11-16" },
+    budget: { label: "Otto passes 80% of its weekly budget", bot: "otto", task: "o1", kind: "budget", budget: "bot:otto", period: "2026-11-16", percent: 82 },
+    budget2: { label: "Juniper passes 80% of its daily budget", bot: "juniper", task: "j1", kind: "budget", budget: "bot:juniper", period: "2026-11-19", percent: 85 },
+    budget100: { label: "Otto's budget is first counted at 104%", bot: "otto", task: "o1", kind: "budget", budget: "bot:otto", period: "2026-11-16", percent: 104 },
   };
 
   // State --------------------------------------------------------------------------------------------
@@ -113,8 +115,9 @@
     strip: null,
     pics: [], // pictures shown, in the order they were posted
     held: [], // waits held during quiet hours, by task and card
-    budgetHold: null, // the one budget warning held, keyed by budget and period start
-    warned: new Set(), // budget warnings shown, by budget and period start
+    budgetHolds: {}, // budget warnings held, one per budget id and period start
+    warned: new Set(), // budget warnings attempted, by budget and period start (kept across restarts)
+    budgetPercent: { "bot:otto": 82, "bot:juniper": 85 }, // the current count, for the click's destination
     runs: new Set(), // runs already notified as finished or failed
     why: "", // what the host decided when nothing was shown
     saving: null,
@@ -167,7 +170,7 @@
   const budgetKey = (ev) => `${ev.budget}:${ev.period}`;
 
   /** Returns { show: picture } or { hold: why } or { none: why }, by the design's order. */
-  function decide(ev) {
+  function decide(ev, { release = false } = {}) {
     const b = bot(ev.bot);
     if (S.none) return { none: "This copy of Clawtrate can't show notifications here. The rail and the badge show it." };
     if (!S.master) return { none: "Show notifications is off on this computer." };
@@ -181,6 +184,7 @@
     if (ev.kind === "budget") {
       if (!S.budgetsw) return { none: "Budget warnings are off on this computer." };
       if (S.warned.has(budgetKey(ev))) return { none: "This budget was already warned about in this period." };
+      if (!release && ev.percent >= 100) return { none: "A count first observed at 100% or more posts nothing: the note above the composer is the warning." };
     } else if (!eff(ev)) {
       return { none: S.tasks[ev.task] === "off" ? `This task's notifications are off.` : `Notifications for ${b.name} are off.` };
     }
@@ -237,7 +241,7 @@
       post(outcome.show);
       S.why = "";
     } else if (outcome.hold) {
-      if (ev.kind === "budget") S.budgetHold = ev;
+      if (ev.kind === "budget") S.budgetHolds[budgetKey(ev)] = ev;
       else S.held = [...S.held.filter((x) => x.task !== ev.task), ev];
       S.why = outcome.hold;
     } else S.why = `No notification. ${outcome.none}`;
@@ -255,23 +259,47 @@
     if (ev.kind === "failed") t.status = "failed";
   }
 
-  // When quiet hours end: each held wait needs a fresh pending record this device can see, and the
-  // held budget warning a fresh figure for the same budget and period (sections 6 and 11).
-  const BUDGET_END = {
-    still: { show: true, why: "" },
-    raised: { show: true, why: "" },
-    over100: { show: true, why: "" },
-    below: { show: false, why: "the fresh figure is under 80% of the latest saved budget" },
-    refreshing: { show: false, why: "the gateway was still counting, so the figure is unknown" },
-    readfail: { show: false, why: "the usage read failed" },
-    rollover: { show: false, why: "the period rolled over" },
-    removed: { show: false, why: "the budget was removed" },
+  // When quiet hours end: each held wait needs a fresh pending record this device can see, and each
+  // held budget warning a confirmed limit and one count for the same budget and period (sections 6, 11).
+  const BUDGETS = {
+    "bot:otto": { period: "weekly", zone: "Europe/Lisbon", limit: 2_000_000 },
+    "bot:juniper": { period: "daily", zone: "Europe/Lisbon", limit: 500_000 },
   };
+  // What the preference read and the awaited count return at the end, by fixture and budget.
+  // Release is Thursday 2026-11-19 unless the fixture is "friday".
+  function releaseRead(fixture, id) {
+    const b = BUDGETS[id];
+    const friday = fixture === "friday";
+    const startDate = b.period === "weekly" ? (fixture === "rollover" ? "2026-11-23" : "2026-11-16") : friday ? "2026-11-20" : "2026-11-19";
+    const base = { prefs: "ok", present: true, limit: b.limit, period: b.period, zone: b.zone, startDate, used: Math.round(b.limit * 0.86), counting: false, error: null };
+    if (fixture === "raised") return { ...base, limit: Math.round(b.limit * 1.05), used: Math.round(b.limit * 0.855) };
+    if (fixture === "over100") return { ...base, used: Math.round(b.limit * 1.04) };
+    if (fixture === "below") return { ...base, limit: b.limit * 1.5, used: Math.round(b.limit * 0.855) };
+    if (fixture === "refreshing") return { ...base, used: 0, counting: true };
+    if (fixture === "readfail") return { ...base, error: "The usage read failed." }; // the earlier figure retained
+    if (fixture === "prefsfail") return { ...base, prefs: "failed" };
+    if (fixture === "removed") return { ...base, present: false };
+    return base;
+  }
+  const BUDGET_END_FIXTURES = ["still", "raised", "over100", "below", "refreshing", "readfail", "prefsfail", "rollover", "removed", "friday"];
+  /** The first-table-row predicates of section 11, on the confirmed limit and the one count. */
+  function budgetRelease(hold) {
+    const r = releaseRead(S.budgetEnd, hold.budget);
+    const b = BUDGETS[hold.budget];
+    if (r.prefs !== "ok") return { why: "the budgets preference couldn't be read" };
+    if (!r.present) return { why: "the budget was removed" };
+    if (r.period !== b.period || r.zone !== b.zone || r.startDate !== hold.period) return { why: "the period rolled over" };
+    if (r.error) return { why: "the count has an error, though it kept the earlier figure" };
+    if (typeof r.used !== "number" || r.counting) return { why: "the gateway was still counting, so the figure is unknown" };
+    const percent = Math.floor((r.used / r.limit) * 100);
+    if (percent < 80) return { why: "the count is under 80% of the confirmed limit" };
+    return { post: true, percent };
+  }
   function quietEnds() {
     S.quietNow = false;
     if (S.conn === "down") {
       S.held = [];
-      S.budgetHold = null;
+      S.budgetHolds = {};
       S.why = "Quiet hours ended while the connection was down. The holds were dropped; your tasks show what waits.";
       return refresh();
     }
@@ -281,25 +309,29 @@
       const outcome = decide(ev);
       if (outcome.show) shown.push(outcome.show);
     }
-    // A wait is posted before a budget warning when both are due.
-    let budgetWhy = "";
-    if (S.budgetHold) {
-      const end = BUDGET_END[S.budgetEnd] || BUDGET_END.still;
-      if (end.show) {
-        const outcome = decide(S.budgetHold);
-        if (outcome.show) shown.push(outcome.show);
-      } else budgetWhy = ` The budget warning was dropped: ${end.why}.`;
+    // Every eligible wait is attempted before any eligible budget warning, in separate slots.
+    const dropped = [];
+    for (const hold of Object.values(S.budgetHolds)) {
+      const r = budgetRelease(hold);
+      if (!r.post) {
+        dropped.push(`${bot(hold.bot).name}'s budget warning was dropped: ${r.why}.`);
+        continue;
+      }
+      S.budgetPercent[hold.budget] = r.percent;
+      const outcome = decide(hold, { release: true });
+      if (outcome.show) shown.push(outcome.show);
     }
     S.held = [];
-    S.budgetHold = null;
+    S.budgetHolds = {};
     shown.forEach(post);
-    S.why = shown.length ? budgetWhy.trim() : `Quiet hours ended. Nothing still waiting, so nothing was shown.${budgetWhy}`;
+    const budgetWhy = dropped.join(" ");
+    S.why = shown.length ? budgetWhy : `Quiet hours ended. Nothing still waiting, so nothing was shown.${budgetWhy ? ` ${budgetWhy}` : ""}`;
     refresh();
   }
   function wakeAfterEnd() {
     S.quietNow = false;
     S.held = [];
-    S.budgetHold = null;
+    S.budgetHolds = {};
     S.why = "Woke after quiet hours ended. Nothing from while it slept is replayed, and the holds were dropped.";
     refresh();
   }
@@ -878,7 +910,7 @@
     ["updates", "Updates", "settings.md, in review"],
   ];
   const AFTER = "Clawtrate can notify you after quiet hours if the item is still waiting and your settings allow it.";
-  const heldCount = () => S.held.length + (S.budgetHold ? 1 : 0);
+  const heldCount = () => S.held.length + Object.keys(S.budgetHolds).length;
   // "Quiet until" comes from tonight's interval in the saved zone (section 6).
   const quietUntil = () => `Quiet until ${S.quiet.to}, Lisbon time.${heldCount() ? ` ${heldCount() === 1 ? "1 item is" : `${heldCount()} items are`} held. ${AFTER}` : ""}`;
   const RECEIVED = "Clawtrate shows desktop notifications for events it receives while running and connected. Missed events can appear in your tasks when it reconnects.";
@@ -1066,7 +1098,7 @@
       `<label>Focus <select data-bar="focus">${opt("", "none", S.focus || "")}${opt("otto", "Otto on screen", S.focus || "")}${opt("pip", "Pip on screen", S.focus || "")}</select></label>` +
       `<button type="button" data-bar="quiet" aria-pressed="${S.quietNow}">Quiet hours now</button>` +
       `<button type="button" data-bar="answered">Answered elsewhere</button>` +
-      `<label>Budget at the end <select data-bar="budgetend">${Object.keys(BUDGET_END).map((k) => opt(k, k, S.budgetEnd)).join("")}</select></label>` +
+      `<label>Budget at the end <select data-bar="budgetend">${BUDGET_END_FIXTURES.map((k) => opt(k, k, S.budgetEnd)).join("")}</select></label>` +
       `<button type="button" data-bar="quietend">Quiet hours end</button>` +
       `<button type="button" data-bar="wake">Wake after the end</button>` +
       `<button type="button" data-bar="drop">Drop connection</button>` +

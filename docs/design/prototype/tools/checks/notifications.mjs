@@ -163,9 +163,10 @@ for (const [end, show, words] of [
   ["still", true, ""],
   ["raised", true, ""],
   ["over100", true, ""],
-  ["below", false, "under 80% of the latest saved budget"],
+  ["below", false, "the count is under 80% of the confirmed limit"],
   ["refreshing", false, "the gateway was still counting, so the figure is unknown"],
-  ["readfail", false, "the usage read failed"],
+  ["readfail", false, "the count has an error, though it kept the earlier figure"],
+  ["prefsfail", false, "the budgets preference couldn't be read"],
   ["rollover", false, "the period rolled over"],
   ["removed", false, "the budget was removed"],
 ]) {
@@ -174,17 +175,39 @@ for (const [end, show, words] of [
   await p.waitForTimeout(60);
   const list = await pics(p);
   check(
-    `ruling 5: at the end, ${end}: ${show ? "one 80% warning" : "dropped"}`,
+    `fix 2: at the end, ${end}: ${show ? "one 80% warning" : "dropped"}`,
     show ? list.length === 1 && list[0].includes("Reached 80% of its budget.") : list.length === 0 && (await why(p)).includes(words),
     `${JSON.stringify(list)} ${await why(p)}`,
   );
   await p.close();
 }
+await notShown("fix 2: a count first observed at 100% creates no hold and no notification", "event=budget100", ["A count first observed at 100% or more posts nothing"]);
+p = await open("event=budget100&quiet=1");
+check("fix 2: nor a hold during quiet hours", await p.evaluate(() => Object.keys(window.notif.S.budgetHolds).length === 0));
+await p.close();
+p = await open("event=approval&quiet=1");
+await p.evaluate(() => window.notif.fire("budget"));
+await p.evaluate(() => window.notif.fire("budget2"));
+check("fix 2: two budgets are held apart, by budget and period", await p.evaluate(() => Object.keys(window.notif.S.budgetHolds).length === 2));
+await p.evaluate(() => window.notif.quietEnds());
+await p.waitForTimeout(60);
+let both = await pics(p);
+check("fix 2: both budget pictures come after the wait", both.length === 3 && both[0].includes("Wants to run a command.") && both[1].includes("Reached 80%") && both[2].includes("Reached 80%"), JSON.stringify(both));
+await p.evaluate(() => { window.notif.fire("budget"); window.notif.fire("budget2"); });
+await p.waitForTimeout(60);
+check("fix 2: sending both budget events again in that period adds no picture", (await pics(p)).length === 3);
+await p.close();
+p = await open("quiet=1&budgetend=friday");
+await p.evaluate(() => { window.notif.fire("budget"); window.notif.fire("budget2"); window.notif.quietEnds(); });
+await p.waitForTimeout(60);
+const friday = await pics(p);
+check("fix 2: a weekly hold continues from Thursday into Friday, a daily hold drops at midnight", friday.length === 1 && friday[0].startsWith("Picture of a system notification") && friday[0].includes("Otto") && (await why(p)).includes("Juniper's budget warning was dropped: the period rolled over."), `${JSON.stringify(friday)} ${await why(p)}`);
+await p.close();
 p = await open("event=budget&quiet=1");
 await p.evaluate(() => window.notif.quietEnds());
 await p.evaluate(() => window.notif.fire("budget"));
 await p.waitForTimeout(60);
-check("ruling 5: once per budget and period", (await pics(p)).length === 1 && (await why(p)).includes("already warned about in this period"));
+check("fix 2: once per budget and period", (await pics(p)).length === 1 && (await why(p)).includes("already warned about in this period"));
 await p.close();
 p = await open("event=approval&quiet=1");
 await p.evaluate(() => window.notif.fire("budget"));
