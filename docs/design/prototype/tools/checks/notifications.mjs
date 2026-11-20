@@ -103,7 +103,14 @@ await notShown("a wait this device has no request for is not held", "event=appro
 
 let p = await open("event=finished");
 check("ruling 1: the native id and group are opaque, never a task key", await p.evaluate(() => { const el = document.querySelector('[data-testid="n-pic"]'); return /^n\d+$/.test(el.dataset.nativeId) && /^g\d+$/.test(el.dataset.nativeGroup); }));
-check("ruling 1: the title is scrubbed of credentials this device holds", (await p.evaluate(() => window.notif.nativeTitle("Ops gw-sample-token-0000"))) === "Ops …");
+check(
+  "fix 1: the bootstrap token, device token, trimmed sign-in value and derived form are gone before the cut",
+  await p.evaluate(() => {
+    const t = window.notif.nativeTitle("Ops boot-sample-token-0000 dev-sample-token-1111 signin-sample-key-2222 code-sample-3333");
+    return t === "Ops … … … …" && !/sample/.test(t);
+  }),
+);
+check("fix 1: the scrub runs before the 40-code-point cut", await p.evaluate(() => { const t = window.notif.nativeTitle(`${"B".repeat(30)} code-sample-3333 ${"C".repeat(20)}`); return !t.includes("code-sample") && [...t].length === 40; }));
 check("ruling 1: the title is cut to 40 characters", await p.evaluate(() => { const t = window.notif.nativeTitle("A".repeat(60)); return [...t].length === 40 && t.endsWith("…"); }));
 await p.evaluate(() => window.notif.fire("finished"));
 await p.waitForTimeout(60);
@@ -309,7 +316,7 @@ check(
     "Show notifications",
     "When a bot finishes or waits for you.",
     "Show bot names in notifications",
-    "A bot's name can be read on a locked screen and stays in your system's notification list.",
+    "A bot's name can appear on a locked screen and can stay in your system's notification list.",
     "Budget warnings",
     "When a bot has used 80% of a budget.",
     "Clawtrate shows desktop notifications for events it receives while running and connected. Missed events can appear in your tasks when it reconnects.",
@@ -342,7 +349,7 @@ check("saved: the switch shows what was read back", (await p.getAttribute('[data
 check("saved: announced only once read back", (await text(p, "#settings-live")) === "Otto's notifications are off");
 await click(p, '[data-n-set="names"]');
 await p.waitForTimeout(450);
-check("Show bot names off: saved, announced, and its line says what notifications say", (await p.getAttribute('[data-n-set="names"]', "aria-checked")) === "false" && (await text(p, "#settings-live")) === "Bot names are hidden in notifications" && (await text(p, '[data-row="names"]')).includes('Notifications say "Clawtrate" and the kind of event, without a bot\'s name.'));
+check("Show bot names off: saved, announced, and its line says what notifications say", (await p.getAttribute('[data-n-set="names"]', "aria-checked")) === "false" && (await text(p, "#settings-live")) === "Bot names are hidden in notifications" && (await text(p, '[data-row="names"]')).includes('New notifications say "Clawtrate" and the kind of event. Previously posted names can stay in your system\'s notification list.'));
 await click(p, '[data-n-set="master"]');
 await p.waitForTimeout(450);
 check("Show notifications off: the line says what that means", (await text(p, '[data-row="master"]')).includes("No notifications on this computer. Your other devices keep theirs."));

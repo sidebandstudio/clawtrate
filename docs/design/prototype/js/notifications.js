@@ -132,13 +132,20 @@
   const canChangeShared = () => S.access !== "read" && sharedReadable() && !S.unconfirmed;
 
   // What this device holds that is a credential, for the scrub of a bot's name (section 4).
-  const HELD_SECRETS = ["gw-sample-token-0000", "dev-sample-token-1111"];
+  // The connection's bootstrap token (if still held), its device token, and a sign-in's value
+  // (typed with surrounding spaces) with a form derived from it. All fictitious.
+  const HELD_SECRETS = ["boot-sample-token-0000", "dev-sample-token-1111", "  signin-sample-key-2222  ", "code-sample-3333"];
   const NAME_CHARS = 40;
   /** The native title: the bot's name, without the credentials this device holds, cut to 40 characters; or "Clawtrate". */
   function nativeTitle(name) {
     if (!S.names) return "Clawtrate";
     let out = name;
-    for (const secret of [...HELD_SECRETS].sort((a, b) => b.length - a.length)) out = out.split(secret).join("…");
+    // The same replacement as withoutSecret: the value as held, then its trimmed spelling, longest first.
+    for (const secret of [...HELD_SECRETS].sort((a, b) => b.length - a.length)) {
+      out = out.split(secret).join("…");
+      const trimmed = secret.trim();
+      if (trimmed && trimmed !== secret) out = out.split(trimmed).join("…");
+    }
     const chars = [...out];
     return chars.length <= NAME_CHARS ? out : `${chars.slice(0, NAME_CHARS - 1).join("")}…`;
   }
@@ -946,7 +953,7 @@
         switchRow(
           "names",
           "Show bot names in notifications",
-          savingLine("names", S.names ? "A bot's name can be read on a locked screen and stays in your system's notification list." : `Notifications say "Clawtrate" and the kind of event, without a bot's name.`),
+          savingLine("names", S.names ? "A bot's name can appear on a locked screen and can stay in your system's notification list." : `New notifications say "Clawtrate" and the kind of event. Previously posted names can stay in your system's notification list.`),
           S.names,
           `data-n-set="names"${S.saving === "names" ? " disabled" : ""}`,
           "Show bot names in notifications",
