@@ -40,7 +40,11 @@
     "openai-eu": LONG ? "OpenAI Realtime Voice (gpt-realtime, European data residency)" : "OpenAI Realtime Voice",
     xai: "xAI Realtime Voice",
   };
-  const TRANSCRIBER = { id: "openai-transcribe", label: LONG ? "OpenAI Realtime Transcription (gpt-4o-transcribe, European data residency)" : "OpenAI Realtime Transcription" };
+  const TRANSCRIBERS = {
+    "openai-transcribe": LONG ? "OpenAI Realtime Transcription (gpt-4o-transcribe, European data residency)" : "OpenAI Realtime Transcription",
+    "deepgram-live": "Deepgram Live Transcription",
+  };
+  let TRANSCRIBER = { id: "openai-transcribe", label: TRANSCRIBERS["openai-transcribe"] };
   const BOTS = [
     { id: "juniper", name: "Juniper", tasks: [{ id: "j1", title: "Heat pump vs. gas furnace", when: "5:24 PM", ask: "Compare a heat pump with a gas furnace for this house.", reply: "Here's the comparison, with ten-year running costs." }] },
     { id: "otto", name: INJECT ? '<b data-inject="name">Otto</b>' : "Otto", tasks: [{ id: "o1", title: "Disk almost full on the media box", when: "5:36 PM", ask: "Free up space on the media box.", reply: "The transcode cache is the largest folder: 212 GB." }] },
@@ -79,6 +83,7 @@
     catalog: { voice: pick("voice", ["none", "direct", "unknown"], "ready"), dict: p("dict") === "none" ? "none" : "ready", reads: 1 },
     providerId: p("provider") === "openai-eu" ? "openai-eu" : "openai",
     drift: p("drift") === "1", // the gateway answers create with another provider
+    dictDrift: p("dictdrift") === "1", // the gateway's transcription create answers with another provider
     consent: new Set(), // accepted destinations: gateway, route, provider id and label
     mic: pick("mic", ["prompt", "denied", "none", "missing"], "granted"),
     speech: pick("speech", ["prompt", "denied"], "granted"), // Apple speech recognition
@@ -629,30 +634,29 @@
     }
   }
 
-  // The microphone (section 2): opened only after the person chose Start, for a disclosed destination.
+  // The microphone (section 2): opened only for the current attempt, an accepted destination and a granted permission.
   function openMic(authorized) {
+    if (!authorized || !["granted", "missing"].includes(S.mic)) return false;
     S.io.micOpens += 1;
-    if (!authorized) S.io.micOpensUnauthorized += 1;
+    return true;
   }
+  // The accepted destination, the current attempt and the permission, checked before every opening and every frame.
+  const callAudioOk = (c) => Boolean(c) && S.call === c && c.ready && S.consent.has(callKey(c.provider)) && ["granted", "missing"].includes(S.mic);
+  const dictAudioOk = (d) => Boolean(d) && S.dict === d && (d.route === "device" || (d.ready && S.consent.has(dictKey("gateway")))) && ["granted", "missing"].includes(S.mic);
   // One frame a second while capture is on: sent only to a ready relay whose destination was accepted.
   function tick() {
     const c = S.call;
     if (c && c.state === "live" && c.ready) {
       c.secs += 1;
       c.clockAt += 1;
-      if (c.capture && !c.muted && S.connected) {
-        S.io.appends += 1;
-        if (!S.consent.has(callKey(c.provider))) S.io.appendsUnauthorized += 1;
-      }
+      if (c.capture && !c.muted && S.connected && callAudioOk(c)) S.io.appends += 1;
       const el = $('[data-testid="call-time"]');
       if (el) el.textContent = `${mmss(c.secs)} on this device`;
     }
     const d = S.dict;
-    if (d && d.capture && d.state === "listening") {
-      if (d.route === "gateway" && S.connected) {
-        S.io.appends += 1;
-        if (!S.consent.has(dictKey("gateway"))) S.io.appendsUnauthorized += 1;
-      } else if (d.route === "device") S.io.deviceFrames += 1; // to the on-device recognizer only
+    if (d && d.capture && d.state === "listening" && dictAudioOk(d)) {
+      if (d.route === "gateway" && S.connected) S.io.appends += 1;
+      else if (d.route === "device") S.io.deviceFrames += 1; // to the on-device recognizer only
     }
   }
   setInterval(tick, 1000);
@@ -735,6 +739,11 @@
     if (pending.kind === "call") {
       const providerId = pending.providerId || S.providerId;
       S.consent.add(callKey(providerId));
+      if (pending.resume !== undefined) {
+        const c = S.call;
+        if (c && c.attempt === pending.resume) resumeCapture(c, () => ((c.muted = false), (c.unmuting = true)));
+        return;
+      }
       startCall(pending.task || S.sel.task, providerId);
     } else {
       S.dictRoute = S.dictChoice;
@@ -776,14 +785,19 @@
     const begin = () => {
       if (!S.consent.has(dictKey(route))) return openConsent("dict");
       const id = ++S.seq;
-      openMic(true);
       S.notices = S.notices.filter((n) => n.task !== task || !/dictation|microphone|speech/i.test(n.title));
-      S.dict = { id, route, task, state: route === "gateway" ? "connecting" : "listening", capture: true, partial: "", inserted: 0 };
+      S.dict = { id, route, task, state: route === "gateway" ? "connecting" : "listening", capture: false, partial: "", inserted: 0, session: null, ready: false };
       if (route === "gateway") {
-        S.io.creates.push({ kind: "transcription", id });
+        // Created with the accepted transcription provider; the microphone opens after the matching reply and ready.
+        S.io.creates.push({ kind: "transcription", id, provider: TRANSCRIBER.id });
+        const session = `ts${id}`;
         if (S.flags.dictFail) later(() => ev("dictRefused", { message: "No realtime transcription provider registered" }), 120);
-        else later(() => ev("dictReady"), 120);
+        else {
+          later(() => ev("dictCreate", { sessionId: session, provider: S.dictDrift ? "deepgram-live" : TRANSCRIBER.id }), 100);
+          later(() => ev("dictReady", { sessionId: session }), 160);
+        }
       } else {
+        S.dict.capture = openMic(dictAudioOk(S.dict));
         later(() => ev("dictPartial", { text: "check the backup" }), 120);
         later(() => ev("dictFinal", { text: "Check the backup logs too." }), 500);
       }
@@ -911,8 +925,7 @@
         render();
         return focusBand();
       }
-      openMic(S.consent.has(callKey(providerId)));
-      later(() => ev("capture"), 60);
+      // The microphone stays off until the create's provider matches and that relay is ready.
       createRelay(c);
     });
     if (S.os_prompt) {
@@ -1002,6 +1015,24 @@
     }
   }
 
+  // Reopening capture on a call: the destination, the attempt and the permission first (section 2).
+  function resumeCapture(c, then) {
+    if (S.mic === "denied") {
+      c.micStopped = "revoked";
+      return render();
+    }
+    if (!S.consent.has(callKey(c.provider))) {
+      // Consent no longer applies: the microphone stays off and the full destination is offered again.
+      c.muted = true;
+      c.capture = false;
+      render();
+      return openConsent("call", { task: c.task, providerId: c.provider, resume: c.attempt });
+    }
+    then();
+    if (openMic(callAudioOk(c))) later(() => ev("capture", { attempt: c.attempt }), 60);
+    render();
+  }
+
   // Voice (section 7): talk.voice.set, the gateway's request, the replacement, applied ---------------------
 
   function setVoice(v) {
@@ -1024,7 +1055,7 @@
     switch (name) {
       case "capture": {
         // The track is live: only now can the band say Listening or Unmuted take effect.
-        if (!c || !liveCall(c) || c.muted || c.micStopped) return;
+        if (!c || !liveCall(c) || c.muted || c.micStopped || !callAudioOk(c) || (data.attempt !== undefined && data.attempt !== c.attempt)) return;
         c.capture = true;
         if (c.unmuting) (c.unmuting = false), say("Unmuted");
         else if (c.ready && !c.announced) (c.announced = true), say(`Voice chat with ${nameOf(c.bot)} started`);
@@ -1077,7 +1108,7 @@
         // Only the ready of this call's own relay, matched by id.
         if (!c || c.state !== "live" || data.id !== c.relayIds.at(-1) || c.ready) return;
         c.ready = true;
-        if (c.capture && !c.announced) (c.announced = true), say(`Voice chat with ${nameOf(c.bot)} started`);
+        if (openMic(callAudioOk(c))) later(() => ev("capture"), 60);
         break;
       }
       case "responseStarted":
@@ -1168,6 +1199,12 @@
         break;
       }
       case "trackEnded": {
+        if (data.cause === "revoked") S.mic = "denied";
+        if (S.dict) {
+          S.dict.capture = false;
+          stopDictation(`Microphone stopped. No new audio is being sent.${data.cause === "revoked" ? " Microphone access was turned off." : ""}`);
+          return;
+        }
         if (!c || !liveCall(c)) return;
         c.capture = false;
         c.micStopped = data.cause || "unknown";
@@ -1269,9 +1306,31 @@
         pr.notes[data.bot] = `Changed on another device: ${fieldWord[data.field]} ${fieldValue(data.field, data.value)} from ${nameOf(data.bot)}'s next call.`;
         break;
       }
+      case "dictCreate": {
+        const d = S.dict;
+        if (!d || d.route !== "gateway" || d.state !== "connecting" || d.session) return;
+        if (data.provider !== TRANSCRIBER.id) {
+          // Another provider than the one accepted: closed unused; its full name is shown before any consent.
+          S.io.closes.push({ kind: "transcription", id: data.sessionId, why: "provider" });
+          S.dict = null;
+          const label = TRANSCRIBERS[data.provider];
+          if (!label) {
+            notify("Dictation not started.", "Can't verify where your voice would go.", null, d.task);
+            break;
+          }
+          TRANSCRIBER = { id: data.provider, label };
+          render();
+          return openConsent("dict");
+        }
+        d.session = data.sessionId;
+        break;
+      }
       case "dictReady": {
         const d = S.dict;
-        if (!d || d.route !== "gateway" || d.state !== "connecting") return;
+        if (!d || d.route !== "gateway" || d.state !== "connecting" || !d.session || data.sessionId !== d.session) return;
+        d.ready = true;
+        d.capture = openMic(dictAudioOk(d));
+        if (!d.capture) return stopDictation("Microphone not allowed.");
         d.state = "listening";
         say("Listening");
         later(() => ev("dictPartial", { text: "check the backup" }), 120);
@@ -1707,12 +1766,11 @@
         if (!c) return;
         if (c.muted) {
           // Unmuting opens the microphone again: permission is checked first, and the track must start.
-          if (S.mic === "denied") return (c.micStopped = "revoked"), render();
-          c.muted = false;
-          c.background = false;
-          c.unmuting = true; // said once the track has started
-          openMic(S.consent.has(callKey(c.provider)));
-          later(() => ev("capture"), 60);
+          return resumeCapture(c, () => {
+            c.muted = false;
+            c.background = false;
+            c.unmuting = true; // said once the track has started
+          });
         } else {
           c.muted = true;
           c.capture = false;
@@ -1749,22 +1807,14 @@
       case "use-default":
         // For this call only: the stored choice stays.
         S.tempMic = "System Default";
-        openMic(S.consent.has(callKey(c.provider)));
-        later(() => ev("capture"), 60);
+        if (!S.consent.has(callKey(c.provider))) return resumeCapture(c, () => {});
         return createRelay(c);
       case "mic-back": {
         // Back on only by the person's choice, after permission and the device are checked again.
-        if (S.mic === "denied") {
-          c.micStopped = "revoked";
-          return render();
-        }
-        if (c.micStopped === "unplugged" && !S.tempMic && S.storedMic !== "System Default") {
-          S.tempMic = "System Default";
-        }
-        c.micStopped = null;
-        openMic(S.consent.has(callKey(c.provider)));
-        later(() => ev("capture"), 60);
-        return render();
+        return resumeCapture(c, () => {
+          if (c.micStopped === "unplugged" && !S.tempMic && S.storedMic !== "System Default") S.tempMic = "System Default";
+          c.micStopped = null;
+        });
       }
       case "go-call":
         // Show moves focus to the band; it never captures by itself.
