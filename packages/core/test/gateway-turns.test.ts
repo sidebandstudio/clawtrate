@@ -338,6 +338,50 @@ describe("a recipient's task let go while its sender's task is open", () => {
     client.stop();
   });
 
+  it("F-122: settles a released recipient's run whose end a history read cannot explain", async () => {
+    const gateway = grantingGateway();
+    let history: unknown = { messages: [], inFlightRun: { runId: "peer-r" } };
+    gateway.handlers["chat.history"] = (params) =>
+      (params as { sessionKey: string }).sessionKey === PEER ? history : { messages: [] };
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit(
+      "agent",
+      agentEvent("sender-r", 1, "tool", {
+        phase: "start",
+        name: "sessions_send",
+        toolCallId: "send-c",
+        args: { sessionKey: PEER, message: "A message" },
+      }),
+    );
+    gateway.emit(
+      "agent",
+      agentEvent("sender-r", 2, "tool", {
+        phase: "result",
+        name: "sessions_send",
+        toolCallId: "send-c",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "{}" }],
+          details: { status: "accepted", sessionKey: PEER, runId: "peer-r" },
+        },
+      }),
+    );
+    gateway.emit("agent", agentEvent("peer-r", 1, "lifecycle", { phase: "start" }, PEER));
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "running");
+    client.closeSession(PEER);
+    await until(() => client.state.transcripts[PEER] === undefined);
+    gateway.emit("agent", agentEvent("sender-r", 2, "lifecycle", { phase: "end" }));
+    await until(() => transcript().runs[0]?.state === "completed");
+    expect(transcript().linkedRuns["peer-r"]?.state).toBe("running");
+    // The row says the run ended, but its history has no rows of it at all: it
+    // settles as vanished, its outcome unknown, so the card does not stay working.
+    history = { messages: [] };
+    gateway.emit("sessions.changed", { sessionKey: PEER, runId: "peer-r", phase: "end" });
+    await until(() => transcript().linkedRuns["peer-r"]?.state === "completed");
+    expect(transcript().linkedRuns["peer-r"]?.outcomeKnown).toBe(false);
+    client.stop();
+  });
+
   it("F-122: a sender opened after its recipient's task was let go reads the recipient's run from history", async () => {
     const gateway = grantingGateway();
     let peerEnded = false;

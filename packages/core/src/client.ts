@@ -3553,19 +3553,24 @@ export class ClawtrateClient {
     const found = runsFromHistory(messages, inFlight, ctx, { busy }).filter((run) =>
       ids.has(run.id),
     );
-    if (found.length === 0) return;
-    this.updateForeign(sessionKey, (activity) => ({
-      ...activity,
-      runs: [
-        ...activity.runs.filter((run) => !ids.has(run.id)),
-        ...mergeHistoryRuns(
-          activity.runs.filter((run) => ids.has(run.id)),
-          found,
-          ctx,
-          busy,
-        ).runs,
-      ],
-    }));
+    const historyIds = new Set(found.map((run) => run.id));
+    const inFlightId = typeof inFlight?.runId === "string" ? inFlight.runId : null;
+    this.updateForeign(sessionKey, (activity) => {
+      const followed = activity.runs.filter((run) => ids.has(run.id));
+      const merged = mergeHistoryRuns(followed, found, ctx, busy).runs;
+      // A row said the run ended, but idle history cannot say how: settle it as
+      // vanished rather than leave the card working, unless a turn is in flight.
+      const activeBefore = new Set(
+        followed.filter((run) => !isTerminal(run.state)).map((run) => run.id),
+      );
+      const runs = settleVanishedRuns(merged, activeBefore, historyIds, inFlightId, ctx, busy);
+      const settled =
+        runs.length === merged.length && runs.every((run, i) => run === merged[i]) ? merged : runs;
+      return {
+        ...activity,
+        runs: [...activity.runs.filter((run) => !ids.has(run.id)), ...settled],
+      };
+    });
   }
 
   /** Copy the state of every recipient run a task's `sessions_send` results name, where it is known. */
