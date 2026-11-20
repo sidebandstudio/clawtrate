@@ -14,6 +14,7 @@ import {
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
@@ -169,11 +170,12 @@ export function Settings({
   const [announcer, announce] = useAnnouncer();
   const setSection = (next: Section) => {
     remember(SHOWN_LAST, next);
-    setSectionState(next);
-    setPane("section");
-    requestAnimationFrame(() =>
-      dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus(),
-    );
+    // Focus the mounted heading during navigation, before the next key can reach a control.
+    flushSync(() => {
+      setSectionState(next);
+      setPane("section");
+    });
+    dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus();
   };
   const state = gatewayState(connection);
   const problem = gatewayProblem(connection);
