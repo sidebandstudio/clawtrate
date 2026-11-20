@@ -381,15 +381,32 @@ await p.close();
   check("Open in Clawtrate: the composer holds the note exactly as edited, unsent", (await at(q, "share-draft")) && (await q.inputValue("[data-draft]")) === "Edited before a no-send." && (await text(q)).includes("Nothing has been sent."));
   await q.close();
 }
-await walk("a lost reply: couldn't confirm; Check again sends the same request; no draft offered", "screen=share", [
+await walk("a lost reply on the matching start: couldn't confirm; Check again uses the original send; no draft offered", "screen=share", [
   [link("The reply will be lost"), "share"],
-  [click("[data-share-send]"), "share-unsure", ["Clawtrate couldn't confirm whether the gateway received this.", "the gateway makes no second task"]],
+  [click("[data-share-send]"), "share-unsure", ["Clawtrate couldn't confirm whether the gateway received this.", "Check again uses the original send."]],
   [async (p) => check("a lost reply offers no Open in Clawtrate", (await p.locator("[data-open-draft]").count()) === 0 && !(await text(p)).includes("Open in Clawtrate")), null],
+  [async (p) => check("a submitted share offers Close, not Cancel", (await p.locator("[data-close]").count()) === 1 && (await p.getByRole("link", { name: "Cancel", exact: true }).count()) === 0), null],
   [click("[data-check-again]"), "share-sent", ["Sent to Juniper"]],
 ], phone);
-await walk("a lost reply past the key's window: look before sending again", "screen=share-unsure", [[link("Four minutes pass"), "share-unsure", ["Clawtrate still couldn't confirm it.", "Look in Juniper's tasks before sending again."]]], phone);
-await walk("Cancel closes the sheet and sends nothing", "screen=share", [
-  [click("[data-cancel]"), "share-closed", ["The sheet closed and sent nothing."]],
+for (const [label, query] of [
+  ["the key's window passed", "late=1"],
+  ["a changed gateway start", "start=changed"],
+  ["a missing boot ID", "start=missing"],
+  ["changed credentials", "cred=changed"],
+]) {
+  p = await open(`screen=share-unsure&${query}`, phone);
+  check(`a lost reply with ${label}: no Check again, no Open in Clawtrate, Open Juniper to that bot's list`, await p.evaluate(() => {
+    const open = document.querySelector("[data-open-bot]");
+    return !document.querySelector("[data-check-again]") && !document.querySelector("[data-open-draft]") && !document.body.textContent.includes("Open in Clawtrate") && open?.textContent === "Open Juniper" && open.getAttribute("href") === "app.html?bot=juniper";
+  }) && (await text(p)).includes("Clawtrate still couldn't confirm it. Look in Juniper's tasks before sending again."));
+  await p.close();
+}
+await walk("Close from the submitted unknown state keeps its uncertainty", "screen=share-unsure", [
+  [click("[data-close]"), "share-closed", ["Closed. Clawtrate couldn't confirm whether it was sent."]],
+  [async (p) => check("a closed unknown share never says nothing was sent", !(await text(p)).includes("Nothing was sent.")), null],
+], phone);
+await walk("Cancel before submission closes the sheet and says nothing was sent", "screen=share", [
+  [click("[data-cancel]"), "share-closed", ["Nothing was sent."]],
   [async (p) => check("closed: no sheet left", (await p.locator(".d-share").count()) === 0), null],
 ], phone);
 p = await open("screen=share-draft&nobot=1", phone);

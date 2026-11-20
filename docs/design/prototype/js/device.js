@@ -666,9 +666,14 @@
     `<li>${icon("image")}<span>trail-map.png</span><small>240 KB</small></li>`;
   const other = () =>
     `<div class="d-other" aria-hidden="true"><p class="d-other-caption">Another app on the iPhone (a stand-in)</p><div class="d-other-tile"></div><div class="d-other-tile"></div></div>`;
-  const sheet = (inner, title = "Clawtrate") =>
+  // Before submission the sheet offers Cancel; once submitted (pending, unknown or acknowledged), Close.
+  const sheet = (inner, title = "Clawtrate", closed = null) =>
     `<div class="d-share" role="dialog" aria-modal="true" aria-labelledby="d-share-title" data-d-modal>` +
-    `<div class="d-share-head">${link("Cancel", go("share-closed"), { variant: "quiet", attrs: "data-cancel" })}<h2 id="d-share-title" tabindex="-1" data-d-title>${title}</h2><span></span></div>${inner}</div>`;
+    `<div class="d-share-head">${
+      closed
+        ? link("Close", go("share-closed", { closed }), { variant: "quiet", attrs: "data-cancel data-close" })
+        : link("Cancel", go("share-closed", { closed: null }), { variant: "quiet", attrs: "data-cancel" })
+    }<h2 id="d-share-title" tabindex="-1" data-d-title>${title}</h2><span></span></div>${inner}</div>`;
 
   function shareSheet() {
     const bot = toBot();
@@ -706,7 +711,7 @@
         )
       );
     },
-    "share-sent": () => other() + sheet(`<p class="d-lead">The gateway made the task.</p>`, `Sent to ${BOTS[toBot()]}`),
+    "share-sent": () => other() + sheet(`<p class="d-lead">The gateway made the task.</p>`, `Sent to ${BOTS[toBot()]}`, "done"),
     "share-cant": () =>
       other() +
       sheet(
@@ -714,15 +719,26 @@
           `<div class="d-actions">${link("Open in Clawtrate", go("share-draft"), { variant: "primary", size: "md", attrs: "data-open-draft" })}</div>`,
       ),
     "share-unsure": () => {
-      const late = params.get("late") === "1";
+      // Check again may submit the same operation only within four minutes, and only when the current
+      // hello matches the saved address, credential context and nonempty boot ID.
+      const outside = params.get("late") === "1" || ["changed", "missing"].includes(params.get("start")) || params.get("cred") === "changed";
+      const bot = toBot();
       return (
         other() +
         sheet(
-          (late
-            ? note("warn", "Clawtrate still couldn't confirm it.", `Look in ${BOTS[toBot()]}'s tasks before sending again.`) + `<div class="d-actions">${link(`Open ${BOTS[toBot()]}`, "app.html", { variant: "primary", size: "md" })}</div>`
-            : note("warn", "Clawtrate couldn't confirm whether the gateway received this.", "Check again sends the same request; the gateway makes no second task.") +
-              `<div class="d-actions">${act("Check again", go("share-sent", { lost: null, said: `Sent to ${BOTS[toBot()]}` }), { variant: "primary", size: "md", attrs: "data-check-again" })}</div>` +
-              proto(link("Four minutes pass", go("share-unsure", { late: "1" })))),
+          outside
+            ? note("warn", "Clawtrate still couldn't confirm it.", `Look in ${BOTS[bot]}'s tasks before sending again.`) +
+                `<div class="d-actions">${link(`Open ${BOTS[bot]}`, `app.html?bot=${bot}`, { variant: "primary", size: "md", attrs: "data-open-bot" })}</div>`
+            : note("warn", "Clawtrate couldn't confirm whether the gateway received this.", "Check again uses the original send.") +
+                `<div class="d-actions">${act("Check again", go("share-sent", { lost: null, said: `Sent to ${BOTS[bot]}` }), { variant: "primary", size: "md", attrs: "data-check-again" })}</div>` +
+                proto(
+                  link("Four minutes pass", go("share-unsure", { late: "1" })),
+                  link("A new gateway start", go("share-unsure", { start: "changed" })),
+                  link("A hello with no boot ID", go("share-unsure", { start: "missing" })),
+                  link("Other credentials", go("share-unsure", { cred: "changed" })),
+                ),
+          "Clawtrate",
+          "unknown",
         )
       );
     },
@@ -742,7 +758,11 @@
         `<div class="d-actions"><button type="button" class="button" data-variant="primary" data-size="sm"${nobot ? " disabled" : ""}>Send</button></div></div></div></div>`
       );
     },
-    "share-closed": () => other() + `<p class="d-proto" data-closed><span>Prototype:</span>The sheet closed and sent nothing.</p>`,
+    "share-closed": () => {
+      const closed = params.get("closed");
+      const words = closed === "unknown" ? "Closed. Clawtrate couldn't confirm whether it was sent." : closed === "done" ? "Closed." : "Nothing was sent.";
+      return other() + `<p class="d-event" role="status" data-closed>${words}</p>`;
+    },
   });
 
   // Siri and Shortcuts ----------------------------------------------------------
