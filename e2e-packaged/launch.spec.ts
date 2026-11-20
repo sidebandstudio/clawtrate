@@ -111,6 +111,7 @@ test("opens its window from the packaged app on the connect screen", async () =>
   await expect(page.getByRole("heading", { name: "Clawtrate" })).toBeVisible();
   await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+  // This checks the packaged build capability before a verified offer exists.
   const updates = await page.evaluate(() =>
     (
       window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
