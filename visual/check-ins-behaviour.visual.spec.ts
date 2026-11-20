@@ -3,9 +3,11 @@
 // default bot's note, what Off does not stop, the admin guard on every way
 // in, a draft kept across admin and a conflict and bound to its gateway's
 // identity, a save's outcome kept with its own draft, and a check after an
-// outcome that is not known. The fixture plans each save with the core's own
-// planner; that one patch is written and confirmed is checked against the
-// engine in packages/core/test/check-ins.test.ts, and against a gateway in
+// outcome that is not known. The Routines view shows the chosen bot's block
+// above its routines and each group head's cadence in the list across bots.
+// The fixture plans each save with the core's own planner; that one patch is
+// written and confirmed is checked against the engine in
+// packages/core/test/check-ins.test.ts, and against a gateway in
 // e2e/check-ins.spec.ts.
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
@@ -627,4 +629,91 @@ test("F-201: As needed says the prompt asks for quiet only for the gateway's own
   await pip.getByText("What to check").click();
   await pip.getByRole("textbox", { name: "Prompt" }).fill("Always answer; never reply NO_REPLY.");
   await expect(asNeeded).toHaveText(/Every 30 minutes, Pip checks in with a prompt of its own\.$/);
+});
+
+const ROUTINES = "scene=main&routines=on&access=admin";
+const routinesView = (page: Page) => page.getByTestId("routines-view");
+
+async function openRoutines(page: Page, query: string) {
+  await openFixture(page, query, "light");
+  await page.getByRole("button", { name: "Routines", exact: true }).click();
+  await expect(routinesView(page).getByTestId("routine-row").first()).toBeVisible();
+}
+
+const group = (page: Page, name: string) =>
+  routinesView(page)
+    .locator(".r-group")
+    .filter({ has: page.getByRole("heading", { name }) })
+    .getByTestId("check-in-summary");
+
+test("F-201: in the list across bots, each group head says the bot's check-ins", async ({
+  page,
+}) => {
+  await openRoutines(page, `${ROUTINES}&checkins=daily`);
+  await expect(group(page, "Juniper")).toHaveText("Checks in every 30 minutes");
+  await expect(group(page, "Marlow")).toHaveText("Checks in daily");
+  await expect(group(page, "Otto")).toHaveText("No check-ins");
+  await expect(group(page, "Pip")).toHaveText("No check-ins");
+  // A bot the client does not hold is named by id, and its check-ins are not claimed.
+  await expect(
+    routinesView(page)
+      .locator(".r-group", { hasText: "ledger" })
+      .locator('[data-testid="check-in-summary"]'),
+  ).toHaveCount(0);
+});
+
+test("F-201: one bot's routines show its check-ins block first, and with admin Change opens the dialog from Routines", async ({
+  page,
+}) => {
+  await openRoutines(page, `${ROUTINES}&checkins=daily`);
+  await routinesView(page).getByRole("combobox", { name: "Bots" }).selectOption({
+    label: "Marlow",
+  });
+  const section = routinesView(page).getByTestId("routines-check-ins");
+  // The block above the routines, from the confirmed heartbeat job, read-only.
+  const block = section.getByTestId("check-in").filter({ hasText: "Marlow" });
+  await expect(block.getByTestId("check-in-text")).toContainText(
+    "Once a day, Marlow looks for anything that needs you.",
+  );
+  // Nothing here changes anything: the cadence is the gateway's job, shown read-only.
+  await expect(section.locator("input, textarea, [role='switch']")).toHaveCount(0);
+  await section.getByRole("button", { name: "Change Marlow's check-ins" }).click();
+  const dialog = page.getByRole("dialog", { name: "Marlow's check-ins" });
+  await expect(dialog.getByRole("radio", { name: /^Daily/ })).toHaveAttribute(
+    "aria-checked",
+    "true",
+  );
+});
+
+test("F-201: below admin, one bot's check-ins in Routines are read-only, with no Change", async ({
+  page,
+}) => {
+  await openRoutines(page, "scene=main&routines=on&checkins=daily");
+  await routinesView(page).getByRole("combobox", { name: "Bots" }).selectOption({
+    label: "Marlow",
+  });
+  const section = routinesView(page).getByTestId("routines-check-ins");
+  await expect(
+    section.getByTestId("check-in").filter({ hasText: "Marlow" }).getByTestId("check-in-text"),
+  ).toContainText("Once a day, Marlow");
+  await expect(section.getByRole("button", { name: "Change Marlow's check-ins" })).toHaveCount(0);
+});
+
+test("F-201: in the list across bots, a group head claims no check-ins before they are read", async ({
+  page,
+}) => {
+  await openRoutines(page, `${ROUTINES}&checkins=daily`);
+  await expect(group(page, "Marlow")).toHaveText("Checks in daily");
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: Record<string, unknown>) => unknown) => void };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      checkIns: { ...(state.checkIns as object), status: "loading" },
+    }));
+  });
+  await expect(routinesView(page).locator('[data-testid="check-in-summary"]')).toHaveCount(0);
 });

@@ -1,7 +1,8 @@
 // A bot's check-ins (automation.md section 13): each bot's block, read from
-// its heartbeat job, and with admin the dialog that sets it. Shown as a
-// Settings section until the Routines view, which the design gives the block
-// to, exists.
+// its heartbeat job, and with admin the dialog that sets it. The Routines
+// view shows the one bot's block above its routines and each group head's
+// cadence in the list across bots; Settings shows every bot's blocks as a
+// section of its own.
 //
 // The dialog is mounted only while the connection holds admin, whatever
 // opened it: below admin there is nothing that changes anything, and admin
