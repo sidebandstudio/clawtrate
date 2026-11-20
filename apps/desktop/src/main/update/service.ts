@@ -135,19 +135,25 @@ export class DesktopUpdateService {
       this.snapshot.runningVersion,
       track,
     ) ?? { kind: "not-checked" };
+    let issue: DesktopUpdateSnapshot["preferenceIssue"] = "update-folder-unavailable";
     try {
       await this.work;
+      if (this.closed) return this.reply("superseded");
       await this.clearDownloads();
-      try {
-        await this.options.store.set("selectedTrack", track);
-        this.snapshot = { ...this.snapshot, selectedTrack: track };
-        this.clearIssue("track-not-saved");
-        this.clearIssue("update-folder-unavailable");
-      } catch {
-        this.snapshot = { ...this.snapshot, preferenceIssue: "track-not-saved" };
-      }
+      if (this.closed) return this.reply("superseded");
+      issue = "track-not-saved";
+      await this.options.store.set("selectedTrack", track);
+      issue = null;
     } catch {
-      this.snapshot = { ...this.snapshot, preferenceIssue: "update-folder-unavailable" };
+      // The phase identifies the failed local operation.
+    }
+    if (this.closed) return this.reply("superseded");
+    if (issue) {
+      this.snapshot = { ...this.snapshot, preferenceIssue: issue };
+    } else {
+      this.snapshot = { ...this.snapshot, selectedTrack: track };
+      this.clearIssue("track-not-saved");
+      this.clearIssue("update-folder-unavailable");
     }
     this.switching = false;
     this.snapshot = { ...this.snapshot, pendingTrack: null };
@@ -163,6 +169,7 @@ export class DesktopUpdateService {
     this.snapshot = {
       ...this.snapshot,
       revision: this.snapshot.revision + 1,
+      pendingTrack: null,
       state: { kind: "not-checked" },
     };
   }
@@ -199,12 +206,9 @@ export class DesktopUpdateService {
     if (this.switching || this.work) return this.reply("busy");
     if (expectedTrack !== "stable" && expectedTrack !== "nightly") return this.reply("invalid");
     const { runningVersion, selectedTrack } = this.snapshot;
+    if (!selectedTrack) return this.reply("invalid");
     if (expectedTrack !== selectedTrack) return this.reply("stale");
-    if (
-      !runningVersion ||
-      !selectedTrack ||
-      unavailable(this.options, runningVersion, selectedTrack)
-    )
+    if (!runningVersion || unavailable(this.options, runningVersion, selectedTrack))
       return this.reply("invalid");
     this.engine?.cancel();
     const offerId = selectedTrack + "-" + randomUUID();

@@ -133,6 +133,7 @@ test("opens its window from the packaged app on the connect screen", async () =>
       ).clawtrateHost.desktopUpdates.check("stable"),
     ),
   ).toMatchObject({
+    outcome: "invalid",
     snapshot: {
       lastCheck: null,
       state: { kind: "failed", reason: "not-configured" },
