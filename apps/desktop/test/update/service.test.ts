@@ -737,3 +737,27 @@ it("returns invalid for missing idle arguments and busy during a choice", async 
   expect((await service.check("stable")).outcome).toBe("stale");
   expect(server.requests).toEqual([]);
 });
+
+it("defaults an invalid version to Stable and preserves the saved choice when folder cleanup fails", async () => {
+  const service = await start({ version: "invalid" });
+  expect(service.get()).toMatchObject({
+    tracks: [{ track: "stable" }, { track: "nightly" }],
+    runningTrack: null,
+    selectedTrack: "stable",
+  });
+  const prefs = store();
+  await prefs.set("selectedTrack", "stable");
+  const path = join(dir.path, "preferences.json"),
+    old = readFileSync(path);
+  const broken = await start({ store: prefs, downloadDir: join(dir.path, "missing", "updates") });
+  expect(await broken.chooseTrack("nightly")).toMatchObject({
+    outcome: "accepted",
+    snapshot: {
+      preferenceIssue: "update-folder-unavailable",
+      selectedTrack: "stable",
+      pendingTrack: null,
+    },
+  });
+  expect(readFileSync(path)).toEqual(old);
+  expect(server.requests).toEqual([]);
+});
