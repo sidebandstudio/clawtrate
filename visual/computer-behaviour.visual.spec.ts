@@ -541,6 +541,17 @@ test.describe("the computer button, recovery and the machine", () => {
     await expect(actions.getByRole("button").first()).toHaveAccessibleName(
       /, \d+:\d\d (AM|PM)\. Show in chat$/,
     );
+    // The link reaches the step itself in the chat: the command's own call, open and focused.
+    await commands
+      .getByRole("button", {
+        name: "Show mv /var/lib/transcode-cache /var/lib/transcode-cache.old in the chat",
+      })
+      .click();
+    const focused = page.locator(".transcript [data-call]:focus-within");
+    await expect(focused).toHaveCount(1);
+    await expect(focused).toContainText("transcode-cache");
+    await actions.getByRole("button").first().click();
+    await expect(page.locator(".transcript [data-call]:focus-within")).toHaveCount(1);
   });
 });
 

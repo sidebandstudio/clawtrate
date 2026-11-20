@@ -93,21 +93,20 @@ export function browserUse(transcript: Pick<Transcript, "runs"> | undefined): {
   return { used, active };
 }
 
-/** A run's trigger: a routine by its session key, another bot by the message that started it. */
+/**
+ * A run's trigger, only where something ties it to that run: a routine by the task's own key
+ * (every run of a routine's task is the routine's), and another bot by the message the run
+ * belongs under (`Run.anchorItemId`, which the gateway's key for the message names). With no
+ * such tie it is blank, never the last message before the run.
+ */
 function triggerOf(
   key: string,
   run: Run,
-  transcript: Pick<Transcript, "interSession" | "items">,
+  transcript: Pick<Transcript, "interSession">,
 ): RecentAction["trigger"] {
   if (/:cron:[^:]+:run:/.test(key)) return { kind: "routine" };
-  const start = run.startedAt;
-  if (start === null) return null;
-  // The last person's or bot's message before the run: a bot's carries inter-session provenance.
-  const before = transcript.items
-    .filter((item) => item.role === "user" && item.timestamp !== null && item.timestamp <= start)
-    .at(-1);
-  if (!before) return null;
-  const message = transcript.interSession.find((each) => each.itemId === before.id);
+  if (!run.anchorItemId) return null;
+  const message = transcript.interSession.find((each) => each.itemId === run.anchorItemId);
   if (!message) return null;
   const name = message.senderLabel ?? message.senderAgentId;
   return name ? { kind: "bot", name } : null;
@@ -115,7 +114,7 @@ function triggerOf(
 
 /** The task's browser and command actions, newest first. */
 export function recentActions(
-  transcript: Pick<Transcript, "runs" | "interSession" | "items" | "sessionKey">,
+  transcript: Pick<Transcript, "runs" | "interSession" | "sessionKey">,
   title: (step: Step, run: Run) => string,
 ): RecentAction[] {
   const out: RecentAction[] = [];

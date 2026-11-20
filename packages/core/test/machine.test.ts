@@ -248,22 +248,45 @@ describe("recent actions and commands (F-153, F-154, F-139)", () => {
     expect(routine.every((a) => a.trigger?.kind === "routine")).toBe(true);
   });
 
-  it("F-154: a run started by another bot's message carries that bot, from the message's provenance", () => {
-    const t = transcript("agent:pip:main", [run("r", [step("w2", "browser", 2_000)], 1_500)], {
-      items: [{ id: "item-1", role: "user", timestamp: 1_400, blocks: [], model: null }],
-      interSession: [
-        {
-          itemId: "item-1",
-          text: "plan it",
-          sourceSessionKey: "agent:marlow:main",
-          sourceTool: "sessions_send",
-          senderLabel: "Marlow",
-          senderAgentId: "marlow",
-          timestamp: 1_400,
-        },
-      ],
-    });
-    expect(recentActions(t, () => "x")[0]!.trigger).toEqual({ kind: "bot", name: "Marlow" });
+  it("F-154: a run carries another bot only through the message it belongs under; with nothing tying them, the trigger is blank", () => {
+    const marlow = {
+      itemId: "item-1",
+      text: "plan it",
+      sourceSessionKey: "agent:marlow:main",
+      sourceTool: "sessions_send",
+      senderLabel: "Marlow",
+      senderAgentId: "marlow",
+      timestamp: 1_400,
+    };
+    const items = [
+      { id: "item-1", role: "user" as const, timestamp: 1_400, blocks: [], model: null },
+    ];
+    // Tied: the run belongs under Marlow's message (the gateway's `${runId}:user` key named it).
+    const tied = run("r", [step("w2", "browser", 2_000)], 1_500);
+    tied.anchorItemId = "item-1";
+    expect(
+      recentActions(
+        transcript("agent:pip:main", [tied], { items, interSession: [marlow] }),
+        () => "x",
+      )[0]!.trigger,
+    ).toEqual({ kind: "bot", name: "Marlow" });
+    // Not tied: a retry, or a run started another way, after Marlow's message is not Marlow's.
+    const after = run("r2", [step("w3", "browser", 2_000)], 1_500);
+    expect(
+      recentActions(
+        transcript("agent:pip:main", [after], { items, interSession: [marlow] }),
+        () => "x",
+      )[0]!.trigger,
+    ).toBeNull();
+    // Tied to the person's own message: no trigger.
+    const own = run("r3", [step("w4", "browser", 2_000)], 1_500);
+    own.anchorItemId = "item-2";
+    expect(
+      recentActions(
+        transcript("agent:pip:main", [own], { items, interSession: [marlow] }),
+        () => "x",
+      )[0]!.trigger,
+    ).toBeNull();
   });
 
   it("F-139: the computer button shows once the task used the browser tool, and its dot while a browser call runs", () => {
