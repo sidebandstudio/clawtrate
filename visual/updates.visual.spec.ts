@@ -115,7 +115,11 @@ test("F-030: opens Updates from the footer and keeps keyboard focus on the chose
   page,
 }) => {
   await openFixture(page, "scene=main&updates=offered", "light");
-  await page.getByRole("button", { name: "Open Updates" }).click();
+  const entry = page.getByRole("button", { name: "Open Updates" });
+  await entry.click();
+  await page.keyboard.press("Escape");
+  await expect(entry).toBeFocused();
+  await entry.click();
   const group = page.getByRole("radiogroup", { name: "Update track" });
   await group.getByRole("radio", { name: "Stable" }).focus();
   await page.keyboard.press("Tab");
@@ -126,9 +130,8 @@ test("F-030: opens Updates from the footer and keeps keyboard focus on the chose
   const nightly = group.getByRole("radio", { name: "Nightly" });
   await expect(nightly).toBeChecked();
   await expect(nightly).toBeFocused();
-  await expect(page.locator(".updates-section dd,.update-source").last()).toHaveText(
-    "Not checked yet.",
-  );
+  await expect(page.locator(".update-result dd")).toHaveText("Not checked yet.");
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("button", { name: "Open Updates" })).toHaveCount(0);
+  await expect(entry).toHaveCount(0);
+  await expect(page.locator(".gateway-pill")).toBeFocused();
 });
