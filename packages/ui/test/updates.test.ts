@@ -234,6 +234,8 @@ it.each(restartFailures)("F-231: explains the installer refusal %s", (reason, li
   const unavailable = render(verified, { install: { kind: "unavailable-in-this-build", reason } });
   expect(unavailable.actions).toEqual(reason === "artifact-changed" ? ["Check for Updates"] : []);
   expect(unavailable.html).toContain(line);
+  const spoken = unavailable.html.match(/role="status">([^<]*)</)?.[1];
+  expect(spoken?.split(line)).toHaveLength(2);
 });
 it("F-231: only the matching verified offer can open Restart", () => {
   const install = { kind: "restart-available", offerId: "shown" } as const;
