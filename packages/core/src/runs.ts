@@ -18,6 +18,7 @@ import {
   mergeT3Facts,
   structuredFromText,
   t3ArgFacts,
+  t3ArgPart,
   t3ResultFacts,
   type T3Facts,
 } from "./t3-facts.ts";
@@ -2560,8 +2561,9 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
               name ?? step.toolName,
               // The rendered text first, as history keeps it: the live event's details mask a
               // field named `code`, which T3 Code's failures carry.
+              // Only the arguments' facts are kept: a replaced result's are not this result's.
               mergeT3Facts(
-                step.t3,
+                t3ArgPart(step.t3),
                 t3ResultFacts(structuredFromText(text) ?? details?.structuredContent, isError),
               ),
             )

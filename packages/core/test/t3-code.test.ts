@@ -1176,3 +1176,63 @@ describe("a viewer sent only a call's item events", () => {
     expect(call?.thread?.threadId).toBe(THREAD);
   });
 });
+
+describe("a result replaced by the gateway", () => {
+  it("F-313 F-134: the replacement's facts stand alone: a superseded result's thread and status do not stay", () => {
+    const id = "call_replaced";
+    const ctx = { sessionKey: "agent:otto:backup", now: 9_000, raw: new RawTable() };
+    let activity = emptyActivity;
+    const result = (text: string, structured: Rec | null, more: Rec) => ({
+      phase: "result",
+      name: name("t3_thread_wait"),
+      toolCallId: id,
+      isError: false,
+      result: {
+        content: [{ type: "text", text }],
+        details: {
+          mcpServer: SERVER,
+          mcpTool: "t3_thread_wait",
+          ...(structured ? { structuredContent: structured } : {}),
+        },
+      },
+      ...more,
+    });
+    const first = { threadId: THREAD, runId: "run-a", status: "running", timedOut: false };
+    const events: Array<[string, Rec]> = [
+      ["lifecycle", { phase: "start", startedAt: 1_000 }],
+      [
+        "tool",
+        {
+          phase: "start",
+          name: name("t3_thread_wait"),
+          toolCallId: id,
+          args: { threadId: THREAD },
+        },
+      ],
+      ["tool", result(rendered(first), first, { replaceable: true })],
+      ["tool", result("The wait's answer could not be shown.", null, { replace: true })],
+    ];
+    events.forEach(([stream, data], i) => {
+      activity = applyAgentEvent(
+        activity,
+        {
+          runId: "run-1",
+          seq: i + 1,
+          stream,
+          ts: 1_000 + i * 100,
+          sessionKey: ctx.sessionKey,
+          data,
+        },
+        ctx,
+      ).activity;
+    });
+    const run = activity.runs[0]!;
+    const step = run.steps.find((s) => s.toolCallId === id)!;
+    expect(step.correction).toBe(1);
+    // The arguments' thread stays; nothing of the first result's does.
+    expect(step.t3).toEqual({ argThread: THREAD });
+    const call = t3(callFromStep(step, run));
+    expect(call?.unread).toBe(true);
+    expect(call?.reported).toBeNull();
+  });
+});

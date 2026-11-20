@@ -216,6 +216,13 @@ export function t3ResultFacts(structured: unknown, isError: boolean): T3Facts | 
   return out;
 }
 
+/** What of a call's facts its arguments gave (the `arg…` fields), without any result's. */
+export function t3ArgPart(facts: T3Facts | null | undefined): T3Facts | null {
+  if (!facts) return null;
+  const out = Object.fromEntries(Object.entries(facts).filter(([key]) => key.startsWith("arg")));
+  return Object.keys(out).length ? (out as T3Facts) : null;
+}
+
 /** The facts of one call: its arguments' and its result's, the result's winning. */
 export function mergeT3Facts(...parts: Array<T3Facts | null | undefined>): T3Facts | null {
   const out: T3Facts = {};
