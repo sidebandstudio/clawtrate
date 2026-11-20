@@ -80,11 +80,13 @@ The title says what changes for the person using Clawtrate, in plain words and u
 | `fix: a stopped run no longer restarts after a reconnect` | `Merge the engine follow-up: Stop on every path, checks that wait on the gateway's own state, and…` |
 | `docs: explain how to add a scenario`                     | `Update files`                                                                                      |
 
-The body says what changes in one to three sentences, why, and how it was checked. Use short, plain sentences, and delete the template's comments. Interface changes need before and after screenshots at desktop and phone width.
+Describe the problem in a sentence or two, then explain the change and how you checked it. Use short, plain sentences, and delete the template's comments. Interface changes need before and after screenshots at desktop and phone width.
 
 CodeRabbit reviews every pull request into `main` that is not a draft. Its comments are advice: check each one against the code, fix the real ones, and reply with the reason when one is wrong. Nothing waits on it.
 
-Coding agents are welcome here, since most of Clawtrate is written with them. You are still responsible for every line you submit. Read the diff before you open the pull request, and leave co-author trailers, "generated with" lines and any other tool or agent attribution out of commits and pull requests.
+End your pull request with the model and harness that did the work. For example, `AI: gpt-6.2-astra via Codex (T3 Code)` identifies the model and the coding agent that ran it. If several pairs contributed changes, put each on its own line in the final paragraph. If you used no AI, end with `No AI used.` Keep the footer current when someone adds changes. Reviewers must verify it before they approve or merge.
+
+You are responsible for every line you submit. Read the diff before opening the pull request. Keep co-author trailers, "generated with" lines and tool credits out of commit messages and pull request titles.
 
 Keep your branch mergeable. When `main` moves under it and it conflicts, merge `main` into it and run the checks again.
 
