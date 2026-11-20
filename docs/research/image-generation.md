@@ -81,7 +81,7 @@ How the status is decided (`createToolAccessDiagnostics`, `finish`, `<openclaw>/
 - a tool that a policy removes is `excluded`, with the policy's reasons;
 - any other catalogue tool missing from the live list is `unavailable` with `{"kind":"runtime","label":"Not included in the session preview"}`. Without a live list the same tool is `allowed`.
 
-The `runtime` branch takes nothing about providers as input. A factory that built no tool is one way to reach it, the image factory's predicate above among them. So `available` says only that the tool was built for that task, and `unavailable` (`runtime`) says only that it was not. Neither proves a provider is ready, or missing. That needs its own evidence: a picture that came back. The contract allows the tool only together with the stand-in, so `unavailable` could not be produced live here.
+The `runtime` branch takes nothing about providers as input. A factory that built no tool is one way to reach it, the image factory's predicate above among them. `available` says the tool is in the live tool list for the task. `unavailable` with `runtime` says it is missing from that list and no policy reason was reported. Neither proves a provider is ready, or missing. That needs its own evidence: a picture that came back. The contract allows the tool only together with the stand-in, so `unavailable` could not be produced live here.
 
 The model was told, in the system prompt the scripted model received, `- image_generate: Generate/edit images`, and not to call it again while a task for the same request is queued or running.
 
