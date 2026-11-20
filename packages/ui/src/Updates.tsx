@@ -306,6 +306,7 @@ export function Updates({
                 type="button"
                 className="button"
                 aria-disabled={working || undefined}
+                data-variant={action === "Restart to Update" ? "primary" : undefined}
                 aria-describedby={action === "Restart to Update" ? undefined : "update-source"}
                 onClick={() => {
                   if (working) return;
