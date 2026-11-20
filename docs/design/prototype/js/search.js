@@ -142,16 +142,17 @@
 
   const fold = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
   const tokens = (s) => fold(s).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  // sessions.search, scope form: the query is cut at white space, each piece is a phrase of the
-  // words SQLite finds in it (punctuation splits them, and they must stay together and in order),
-  // every piece must match, and the last word of the last piece may be the start of a word.
+  // sessions.search, scope form: whitespace-delimited pieces are quoted as FTS5 phrases, each a
+  // phrase of the words SQLite finds in it (punctuation splits them, and they must stay together and
+  // in order), every piece must match, and the last word of the last piece may be the start of a
+  // word. A piece that does not produce a token matches no messages.
   function messageMatches(text, query) {
     const pieces = query.trim().split(/\s+/u).filter(Boolean);
     if (!pieces.length) return false;
     const w = tokens(text);
     return pieces.every((piece, pi) => {
       const t = tokens(piece);
-      if (!t.length) return true;
+      if (!t.length) return false;
       const prefixLast = pi === pieces.length - 1;
       for (let i = 0; i + t.length <= w.length; i++)
         if (t.every((term, j) => w[i + j] === term || (prefixLast && j === t.length - 1 && w[i + j].startsWith(term)))) return true;
@@ -632,7 +633,8 @@
   // The groups, in order, ready to draw ----------------------------------------------------------------------
 
   function messageRow(r, reply) {
-    const who = r.role === "user" ? "You" : botName(r.bot);
+    // The reply's role says only that a user sent it, not who: never "You".
+    const who = r.role === "user" ? "User" : botName(r.bot);
     const title = listRow(r.sessionKey)?.title || reply.sessions?.find((s) => s.key === r.sessionKey)?.label || "Untitled task";
     return {
       kind: "message",
@@ -643,7 +645,7 @@
       // The snippet as the gateway sent it, as text, with no marks: the reply gives no ranges.
       second: esc(r.snippet.replace(/\s+/g, " ")),
       clamp: true,
-      name: `Message in ${title}, from ${r.role === "user" ? "you" : botName(r.bot)}, ${when(r.timestamp)}: ${r.snippet}`,
+      name: `Message in ${title}, from ${r.role === "user" ? "a user" : botName(r.bot)}, ${when(r.timestamp)}: ${r.snippet}`,
     };
   }
   const byTime = (rows) => [...rows].sort((a, b) => b.timestamp - a.timestamp);
@@ -1162,7 +1164,7 @@
       }, 50);
     } else bubble.addEventListener("animationend", () => bubble.classList.remove("search-hit"), { once: true });
     const task = taskOf(hit.bot, hit.task);
-    said(`Opened ${task.title}, at ${hit.role === "user" ? "your message" : `${botName(hit.bot)}'s reply`} of ${when(hit.timestamp)}.`);
+    said(`Opened ${task.title}, at ${hit.role === "user" ? "the user message" : `${botName(hit.bot)}'s reply`} of ${when(hit.timestamp)}.`);
   }
 
   // Handing a link to the system: directly when its canonical address is shown in full beside the

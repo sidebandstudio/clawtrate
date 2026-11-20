@@ -338,6 +338,10 @@ await type(p, "transcode_cache");
 check("R3 a piece with punctuation is a phrase: its words together, in order", (await groupText(p, "messages")).includes("All 3 matching messages"));
 await type(p, "cache_transcode");
 check("R3 the same words out of order don't match", !(await body(p)).includes("Messages ·"));
+for (const q of ["!", "transcode !"]) {
+  await type(p, q);
+  check(`R3 a piece with no token matches no messages: ${q}`, !(await body(p)).includes("Messages ·") && (await requests(p, "messages")).some((r) => r.query === q));
+}
 await type(p, "borrow");
 check("R3 markup in a snippet is shown as text, never as elements", (await groupText(p, "messages")).includes("Libby shows <em>Borrow</em> once your card is linked.") && (await p.evaluate(() => !document.querySelector("#s-body em"))));
 await p.close();
@@ -425,6 +429,9 @@ p = await open("palette=open");
 await recordLive(p);
 await type(p, "transcode");
 check("S12 the first option is active and named for where it leads", (await p.evaluate(() => document.getElementById(document.querySelector("#s-field").getAttribute("aria-activedescendant"))?.getAttribute("aria-label"))).startsWith("Message in Disk almost full on the media box, from Otto"));
+// The reply's role says a user sent it, not that the searcher did, whichever device made the task.
+const userRow = await p.evaluate(() => { const r = [...document.querySelectorAll('.s-row[data-kind="message"]')].find((x) => x.innerText.includes("Yes, clear the transcode cache.")); return { first: r.querySelector(".s-first").textContent, name: r.getAttribute("aria-label") }; });
+check("R3 a user message is labelled User and named from a user, never You", userRow.first.includes("· User ·") && userRow.name.startsWith("Message in Disk almost full on the media box, from a user,") && !/\byou\b/i.test(userRow.first + userRow.name.split(":")[0]), JSON.stringify(userRow));
 await p.keyboard.press("ArrowDown");
 await p.keyboard.press("Enter");
 await p.waitForTimeout(80);
@@ -432,7 +439,7 @@ check("S9 a message opens its task behind the palette, which says Opening…", (
 await p.waitForTimeout(400);
 check("R4 it lands on the turn whose id is the returned message id", !(await paletteOpen(p)) && (await p.evaluate(() => { const hit = document.querySelector(".bubble.search-hit"); return hit?.closest(".turn").dataset.messageId === "msg-o1-2" && document.activeElement === hit.closest(".turn"); })));
 await p.waitForTimeout(80);
-check("S9 the app announces where it opened", (await text(p, "#search-announce")).startsWith("Opened Disk almost full on the media box, at your message of"));
+check("S9 the app announces where it opened, at the user message", (await text(p, "#search-announce")).startsWith("Opened Disk almost full on the media box, at the user message of"));
 await p.waitForTimeout(2600);
 check("S9 the ring fades after 2 seconds", await p.evaluate(() => !document.querySelector(".bubble.search-hit")));
 await p.close();
