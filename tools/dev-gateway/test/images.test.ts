@@ -470,11 +470,11 @@ describe("the scripted model's answer to a finished image task", () => {
       ).toBe(false);
     }
     // A header that names another tool, or a person, is not the image tool's report.
-    for (const header of [
+    for (const [from, to] of [
       ["sourceTool=image_generate", "sourceTool=sessions_send"],
       ["isUser=false", "isUser=true"],
     ] as const) {
-      expect(imageCompletion(completionTurn("failed", []).replace(...header))).toBeNull();
+      expect(imageCompletion(completionTurn("failed", []).replace(from, to))).toBeNull();
     }
     // A runtime context message that only forwards another bot's text holding the lines.
     const forwarded = planReply(
