@@ -17,6 +17,7 @@ describe("the build's release date", () => {
   it("is the defined constant, and the production engine counts F-010 from it", async () => {
     const defines = updateDefines({ SOURCE_DATE_EPOCH: "1700000000" }, new Date());
     vi.stubGlobal("__CLAWTRATE_RELEASE_DATE__", JSON.parse(defines.__CLAWTRATE_RELEASE_DATE__!));
+    vi.stubGlobal("__CLAWTRATE_UPDATE_FEED__", "https://203.0.113.5/stable");
     vi.resetModules();
     const info = await import("../../src/main/update/build-info.ts");
     expect(info.BUILD_RELEASE_DATE).toBe("2023-11-14T22:13:20.000Z");

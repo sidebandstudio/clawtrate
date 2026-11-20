@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { clearUpdateDirectory, prepareUpdateDirectory } from "../private-update-directory.ts";
 import { checkFeedAddress, type LoopbackHttpForTests } from "./address.ts";
 import { UpdateEngine } from "./engine.ts";
-import { parseReleaseDate } from "./feed.ts";
+import { fileKeyFor, parseReleaseDate } from "./feed.ts";
 import { formatVersion, parseVersion, versionTrack } from "./version.ts";
 
 export interface UpdateServiceOptions {
@@ -30,10 +30,11 @@ export interface UpdateServiceOptions {
 }
 
 export function readCheck(value: unknown): DesktopUpdateSnapshot["lastCheck"] {
-  if (!value || typeof value !== "object" || !("track" in value) || !("readAt" in value)) return null;
-  const {track,readAt} = value;
+  if (!value || typeof value !== "object" || !("track" in value) || !("readAt" in value))
+    return null;
+  const { track, readAt } = value;
   const date = parseReleaseDate(readAt);
-  return (track === "stable" || track === "nightly") && date ? {track,readAt:date} : null;
+  return (track === "stable" || track === "nightly") && date ? { track, readAt: date } : null;
 }
 
 function failed(
@@ -41,6 +42,18 @@ function failed(
   stage: "check" | "preferences" = "check",
 ): DesktopUpdateState {
   return { kind: "failed", stage, reason };
+}
+
+function unavailable(
+  options: UpdateServiceOptions,
+  version: string | null,
+  track: UpdateTrack | null,
+): DesktopUpdateState | null {
+  if (!options.packaged) return failed("development-build");
+  if (!version) return failed("invalid-version");
+  if (!fileKeyFor(options.platform, options.arch)) return failed("unsupported-system");
+  if (!track) return failed("not-configured");
+  return null;
 }
 
 export class DesktopUpdateService {
@@ -62,29 +75,32 @@ export class DesktopUpdateService {
       return address.ok ? [{ track, source: address.url.hostname }] : [];
     });
     let selectedTrack =
-      tracks.find((t) => t.track === runningTrack)?.track ?? tracks[0]?.track ?? runningTrack;
+      tracks.find((t) => t.track === runningTrack)?.track ?? tracks[0]?.track ?? null;
     let lastCheck: DesktopUpdateSnapshot["lastCheck"] = null;
     let state: DesktopUpdateState = { kind: "not-checked" };
     try {
       await clearUpdateDirectory(options.downloadDir);
-    } catch {state = failed("write-failed","preferences");}
+    } catch {
+      state = failed("write-failed", "preferences");
+    }
     try {
       const saved = await options.store.get("selectedTrack");
       selectedTrack = tracks.find((t) => t.track === saved)?.track ?? selectedTrack;
       const raw = await options.store.get("lastCheck");
-      if(raw !== null) lastCheck = readCheck(JSON.parse(raw));
+      if (raw !== null) lastCheck = readCheck(JSON.parse(raw));
     } catch {
       state = failed("write-failed", "preferences");
     }
     return new DesktopUpdateService(options, {
-      revision:0,
+      revision: 0,
       runningVersion: version ? formatVersion(version) : null,
       runningTrack,
       tracks,
       selectedTrack,
-    pendingTrack:null,
-      lastCheck, preferenceIssue:null,
-      state: options.packaged ? state : failed("development-build"),
+      pendingTrack: null,
+      lastCheck,
+      preferenceIssue: null,
+      state: unavailable(options, version ? options.version : null, selectedTrack) ?? state,
       install: { kind: "unavailable-in-this-build" },
     });
   }
@@ -94,7 +110,7 @@ export class DesktopUpdateService {
   }
 
   private publish(state: DesktopUpdateState) {
-    this.snapshot = { ...this.snapshot, state,revision:this.snapshot.revision+1 };
+    this.snapshot = { ...this.snapshot, state, revision: this.snapshot.revision + 1 };
     try {
       this.options.changed(this.snapshot);
     } catch {
@@ -103,7 +119,7 @@ export class DesktopUpdateService {
   }
 
   private reply(outcome: DesktopUpdateOutcome): DesktopUpdateReply {
-    return {outcome, snapshot: this.snapshot};
+    return { outcome, snapshot: this.snapshot };
   }
 
   async chooseTrack(track: unknown): Promise<DesktopUpdateReply> {
@@ -118,19 +134,23 @@ export class DesktopUpdateService {
     const previous = this.engine;
     this.engine = null;
     previous?.cancel();
-    this.snapshot = {...this.snapshot,pendingTrack:track};
-    this.publish({kind:"not-checked"});
-    let state: DesktopUpdateState = this.options.packaged ? {kind:"not-checked"} : failed("development-build");
+    this.snapshot = { ...this.snapshot, pendingTrack: track };
+    this.publish({ kind: "not-checked" });
+    let state: DesktopUpdateState = unavailable(
+      this.options,
+      this.snapshot.runningVersion,
+      track,
+    ) ?? { kind: "not-checked" };
     try {
       await this.work;
       await this.clearDownloads();
-      await this.options.store.set("selectedTrack",track);
-      this.snapshot = {...this.snapshot,selectedTrack:track};
+      await this.options.store.set("selectedTrack", track);
+      this.snapshot = { ...this.snapshot, selectedTrack: track };
     } catch {
-      state = failed("write-failed","preferences");
+      state = failed("write-failed", "preferences");
     }
-    this.switching=false;
-    this.snapshot={...this.snapshot,pendingTrack:null};
+    this.switching = false;
+    this.snapshot = { ...this.snapshot, pendingTrack: null };
     this.publish(state);
     return this.reply("accepted");
   }
@@ -144,9 +164,13 @@ export class DesktopUpdateService {
     if (expectedTrack !== "stable" && expectedTrack !== "nightly") return this.reply("invalid");
     const { runningVersion, selectedTrack } = this.snapshot;
     if (expectedTrack !== selectedTrack) return this.reply("stale");
-    if (!this.options.packaged) this.publish(failed("development-build"));
-    else if (!runningVersion || !selectedTrack) this.publish(failed("invalid-version"));
-    else {
+    if (
+      !runningVersion ||
+      !selectedTrack ||
+      unavailable(this.options, runningVersion, selectedTrack)
+    )
+      return this.reply("invalid");
+    {
       const offerId = selectedTrack + "-" + randomUUID();
       let checkedAt: string | null = null;
       const engine: UpdateEngine = new UpdateEngine({
@@ -180,8 +204,8 @@ export class DesktopUpdateService {
         if (this.engine !== engine) return;
         const result = await engine.check();
         if (this.engine !== engine) return;
-        const lastCheck = checkedAt ? {track:selectedTrack,readAt:checkedAt} : null;
-        if (lastCheck) this.snapshot = {...this.snapshot,lastCheck,preferenceIssue:null};
+        const lastCheck = checkedAt ? { track: selectedTrack, readAt: checkedAt } : null;
+        if (lastCheck) this.snapshot = { ...this.snapshot, lastCheck, preferenceIssue: null };
         switch (result.kind) {
           case "available":
             this.publish({
@@ -203,9 +227,9 @@ export class DesktopUpdateService {
         }
         if (lastCheck) {
           try {
-            await this.options.store.set("lastCheck",JSON.stringify(lastCheck));
+            await this.options.store.set("lastCheck", JSON.stringify(lastCheck));
           } catch {
-            this.snapshot={...this.snapshot,preferenceIssue:"last-check-not-saved"};
+            this.snapshot = { ...this.snapshot, preferenceIssue: "last-check-not-saved" };
             this.publish(this.snapshot.state);
           }
         }
@@ -248,7 +272,12 @@ export class DesktopUpdateService {
         const result = await engine.download();
         if (this.engine !== engine) return;
         if (result.kind === "ready") {
-          this.publish({ kind: "verified", offerId: state.offerId, version: result.version, size: expected });
+          this.publish({
+            kind: "verified",
+            offerId: state.offerId,
+            version: result.version,
+            size: expected,
+          });
         } else if (result.kind === "failed") reportFailure(result.cause);
       })
       .catch(() => {

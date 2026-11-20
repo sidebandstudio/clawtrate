@@ -388,7 +388,7 @@ export const UPDATE_PREFERENCE_OWNERS: Record<string, Owner> = {
   selectedTrack: { max: 1, each: JSON.stringify("nightly").length, row: "updatePreferences" },
   lastCheck: {
     max: 1,
-    each: JSON.stringify({track:"nightly",readAt:"2000-01-01T00:00:00.000Z"}).length,
+    each: JSON.stringify({ track: "nightly", readAt: "2000-01-01T00:00:00.000Z" }).length,
     row: "updatePreferences",
   },
 };

@@ -6,6 +6,7 @@ export type DesktopUpdateFailure =
   | "development-build"
   | "no-updater"
   | "invalid-version"
+  | "unsupported-system"
   | "no-file-for-this-system"
   | "unreachable"
   | "timed-out"
@@ -47,7 +48,7 @@ export interface DesktopUpdateSnapshot {
   selectedTrack: UpdateTrack | null;
   pendingTrack: UpdateTrack | null;
   /** Most recent complete feed read accepted by this host. */
-  lastCheck: {track:UpdateTrack; readAt:string} | null;
+  lastCheck: { track: UpdateTrack; readAt: string } | null;
   preferenceIssue: "last-check-not-saved" | null;
   state: DesktopUpdateState;
   install: { kind: "unavailable-in-this-build" };

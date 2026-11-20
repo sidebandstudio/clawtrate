@@ -51,7 +51,9 @@ const start = (overrides: Partial<Parameters<typeof DesktopUpdateService.start>[
     ...overrides,
   });
 async function offer(service: DesktopUpdateService) {
-  const {snapshot:{ state }} = await service.check(service.get().selectedTrack);
+  const {
+    snapshot: { state },
+  } = await service.check(service.get().selectedTrack);
   if (state.kind !== "offered") throw Error(JSON.stringify(state));
   return state.offerId;
 }
@@ -70,12 +72,12 @@ it("removes old files and makes zero requests at launch, on get, and on choosing
   expect(server.requests).toEqual([]);
   const id = await offer(service);
   expect((await service.download(id)).snapshot).toMatchObject({
-    state: { kind: "verified", offerId:id, version: nightly, size: fixture.body.length },
+    state: { kind: "verified", offerId: id, version: nightly, size: fixture.body.length },
   });
   expect(readdirSync(updates)).toHaveLength(1);
   expect(server.requests).toEqual(["/nightly", "/files/app.zip"]);
   const checked = service.get().lastCheck;
-  expect(checked).toMatchObject({track:"nightly",readAt:expect.stringMatching(/Z$/)});
+  expect(checked).toMatchObject({ track: "nightly", readAt: expect.stringMatching(/Z$/) });
   expect(JSON.stringify(snapshots)).not.toMatch(/https?:|app\.zip|\.partial|sha512|"path"/);
   expect(service.get().tracks).toEqual(
     ["stable", "nightly"].map((track) => ({ track, source: "127.0.0.1" })),
@@ -112,9 +114,13 @@ it.each(["check", "download"] as const)(
       (stage === "check" ? json(document("1.1.0", "stable")) : bytes(fixture.body))(req, res);
     });
     const id = stage === "download" ? await offer(service) : "old";
-    const pending = stage === "check" ? service.check(service.get().selectedTrack) : service.download(id);
+    const pending =
+      stage === "check" ? service.check(service.get().selectedTrack) : service.download(id);
     await entered.promise;
-    const replies = await Promise.all([service.check(service.get().selectedTrack), service.download(id)]);
+    const replies = await Promise.all([
+      service.check(service.get().selectedTrack),
+      service.download(id),
+    ]);
     expect(replies.map((r) => r.outcome)).toEqual(["busy", "busy"]);
     expect(service.get()).not.toHaveProperty("outcome");
     await service.chooseTrack("nightly");
@@ -140,7 +146,7 @@ it("refuses a feed for another track and records only completed reads", async ()
   ] as const) {
     server.route("/stable", json(document(version, track)));
     expect((await service.check(service.get().selectedTrack)).snapshot).toMatchObject({
-      lastCheck: {track:"stable",readAt:expect.stringMatching(/Z$/)},
+      lastCheck: { track: "stable", readAt: expect.stringMatching(/Z$/) },
       state: { kind: "failed", reason: "wrong-track" },
     });
   }
@@ -270,7 +276,10 @@ it("gives same-version offers separate private destinations and removes the olde
   server.route("/files/app.zip", bytes(other.body));
   const second = await offer(service);
   expect(second).not.toBe(first);
-  expect((await service.download(first)).snapshot.state).toMatchObject({ kind: "offered", offerId: second });
+  expect((await service.download(first)).snapshot.state).toMatchObject({
+    kind: "offered",
+    offerId: second,
+  });
   expect(server.requests).toEqual(["/stable", "/files/app.zip", "/stable"]);
   expect(existsSync(old)).toBe(false);
   await service.download(second);
@@ -315,4 +324,121 @@ it("refuses a check for a selection another caller has changed", async () => {
   expect(server.requests).toEqual([]);
   expect((await service.check("nightly")).outcome).toBe("accepted");
   expect(server.requests).toEqual(["/nightly"]);
+});
+
+it("reports check eligibility at launch and stops unsupported checks before transport", async () => {
+  for (const version of ["0.1.0", "1.1.0"]) {
+    const service = await start({ version, platform: "linux" });
+    expect(service.get().state).toMatchObject({ reason: "unsupported-system" });
+    expect((await service.check(service.get().selectedTrack)).outcome).toBe("invalid");
+    await service.chooseTrack("nightly");
+    expect(service.get().state).toMatchObject({ reason: "unsupported-system" });
+  }
+  const empty = await start({ feeds: { stable: null, nightly: null } });
+  expect(empty.get()).toMatchObject({ selectedTrack: null, state: { reason: "not-configured" } });
+  expect((await start({ version: "invalid" })).get().state).toMatchObject({
+    reason: "invalid-version",
+  });
+  expect(server.requests).toEqual([]);
+});
+it("keeps the accepted comparison and its time when history cannot be saved", async () => {
+  const prefs = store();
+  vi.spyOn(prefs, "set").mockRejectedValueOnce(Error("unwritable"));
+  const service = await start({ store: prefs });
+  const reply = await service.check("stable");
+  expect(reply).toMatchObject({
+    outcome: "accepted",
+    snapshot: {
+      lastCheck: { track: "stable", readAt: expect.stringMatching(/Z$/) },
+      preferenceIssue: "last-check-not-saved",
+      state: { kind: "offered" },
+    },
+  });
+});
+it("reads saved preferences even when the download folder cannot be cleaned", async () => {
+  const service = await start();
+  await service.check("stable");
+  await service.chooseTrack("nightly");
+  const broken = await start({ downloadDir: join(dir.path, "missing", "updates") });
+  expect(broken.get()).toMatchObject({
+    selectedTrack: "nightly",
+    lastCheck: { track: "stable" },
+    state: { reason: "write-failed" },
+  });
+});
+it.each(["check", "download"] as const)(
+  "retires %s throughout a delayed track save",
+  async (operation) => {
+    const prefs = store(),
+      service = await start({ store: prefs });
+    const id = await offer(service);
+    const reached = Promise.withResolvers<void>(),
+      hold = Promise.withResolvers<void>();
+    server.route(operation === "check" ? "/stable" : "/files/app.zip", async (req, res) => {
+      reached.resolve();
+      await hold.promise;
+      (operation === "check" ? json(document("1.1.0", "stable")) : bytes(fixture.body))(req, res);
+    });
+    const writing = Promise.withResolvers<void>(),
+      saved = Promise.withResolvers<void>();
+    vi.spyOn(prefs, "set").mockImplementationOnce(async () => {
+      writing.resolve();
+      await saved.promise;
+    });
+    const old = operation === "check" ? service.check("stable") : service.download(id);
+    await reached.promise;
+    const boundary = snapshots.length;
+    const choice = service.chooseTrack("nightly");
+    expect(service.get()).toMatchObject({
+      selectedTrack: "stable",
+      pendingTrack: "nightly",
+      state: { kind: "not-checked" },
+    });
+    await writing.promise;
+    hold.resolve();
+    expect((await old).outcome).toBe("superseded");
+    expect((await service.chooseTrack("stable")).outcome).toBe("busy");
+    expect(snapshots.slice(boundary).every((s) => s.state.kind === "not-checked")).toBe(true);
+    saved.resolve();
+    expect(await choice).toMatchObject({
+      outcome: "accepted",
+      snapshot: { selectedTrack: "nightly", pendingTrack: null },
+    });
+    expect(existsSync(updates)).toBe(false);
+    const revisions = snapshots.map((s) => s.revision);
+    expect(revisions.every((r, i) => i === 0 || revisions[i - 1]! < r)).toBe(true);
+  },
+);
+it("an unsuccessful track choice still retires the file and its offer", async () => {
+  const prefs = store(),
+    service = await start({ store: prefs });
+  const id = await offer(service);
+  await service.download(id);
+  vi.spyOn(prefs, "set").mockRejectedValueOnce(Error("read only"));
+  expect(await service.chooseTrack("nightly")).toMatchObject({
+    snapshot: { selectedTrack: "stable", pendingTrack: null, state: { stage: "preferences" } },
+  });
+  expect((await service.download(id)).outcome).toBe("stale");
+  expect(existsSync(updates)).toBe(false);
+});
+it("attributes a completed read across a switch while its history write drains", async () => {
+  const prefs = store(),
+    service = await start({ store: prefs });
+  const write = prefs.set,
+    saving = Promise.withResolvers<void>(),
+    finish = Promise.withResolvers<void>();
+  vi.spyOn(prefs, "set").mockImplementationOnce(async (key, value) => {
+    saving.resolve();
+    await finish.promise;
+    await write(key, value);
+  });
+  const check = service.check("stable");
+  await saving.promise;
+  const lastCheck = service.get().lastCheck;
+  expect(lastCheck?.track).toBe("stable");
+  const choice = service.chooseTrack("nightly");
+  finish.resolve();
+  await Promise.all([check, choice]);
+  expect(service.get()).toMatchObject({ selectedTrack: "nightly", lastCheck });
+  expect((await start()).get().lastCheck).toEqual(lastCheck);
 });
