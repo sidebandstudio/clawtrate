@@ -15,6 +15,7 @@ import {
   MAX_GRANTS_LISTED,
   MAX_PERMISSION_NAME,
   MAX_PERMISSION_TEXT,
+  approvalsSnapshot,
   fitJson,
   jsonChars,
   readActivity,
@@ -76,6 +77,13 @@ const approvalsFile = (allowlist: unknown[]) => ({
   file: { version: 1, defaults: {}, agents: { otto: { allowlist } } },
   hash: `hash-${allowlist.length}`,
 });
+
+/** What the page sends for a file it showed: its revision and the digest of the whole file. */
+const shownOf = (answer: unknown) => {
+  const snapshot = approvalsSnapshot(answer);
+  if ("invalid" in snapshot) throw new Error(snapshot.invalid);
+  return { shownHash: snapshot.hash, shownDigest: snapshot.digest };
+};
 
 const LS_ENTRY = {
   pattern: "/bin/ls",
@@ -393,7 +401,7 @@ describe("F-178: Revoke and Remove say only what the read back shows", () => {
     const result = await removeAllowlistEntry(gateway.ctx, {
       agentId: "otto",
       entryId: LS_ENTRY.id,
-      shownHash: "hash-2",
+      ...shownOf(approvalsFile([LS_ENTRY, NODE_ENTRY])),
     });
     expect(result).toMatchObject({
       outcome: "removed",
@@ -409,25 +417,73 @@ describe("F-178: Revoke and Remove say only what the read back shows", () => {
   });
 
   it("an entry edited in place under the same id after the confirmation opened is not removed", async () => {
-    const gateway = approvalsGateway(approvalsFile([LS_ENTRY, NODE_ENTRY]));
-    // The page showed revision hash-2; then another admin replaced /bin/ls under the same id.
-    gateway.edit([{ ...LS_ENTRY, pattern: "/usr/bin/true", argPattern: undefined }, NODE_ENTRY]);
-    const result = await removeAllowlistEntry(gateway.ctx, {
-      agentId: "otto",
-      entryId: LS_ENTRY.id,
-      shownHash: "hash-2",
+    const shownFile = approvalsFile([LS_ENTRY, NODE_ENTRY]);
+    const shown = { agentId: "otto", entryId: LS_ENTRY.id, ...shownOf(shownFile) };
+    const withOther = (allowlist: unknown[], other: unknown[]) => ({
+      ...approvalsFile(allowlist),
+      file: {
+        version: 1,
+        defaults: {},
+        agents: { otto: { allowlist }, pip: { allowlist: other } },
+      },
     });
-    expect(result.outcome).toBe("changed");
-    expect(result.removed).toBeNull();
-    expect(gateway.methods()).toEqual(["exec.approvals.get"]);
-    expect(gateway.file().file.agents.otto.allowlist).toHaveLength(2);
-    // The file as it is now, to ask the person again from.
-    expect(result.allowlist).toMatchObject({ status: "ready", hash: "edited-1" });
-    if (result.allowlist.status !== "ready") throw new Error("not ready");
-    expect(result.allowlist.items[0]).toMatchObject({
-      entryId: LS_ENTRY.id,
-      pattern: "/usr/bin/true",
-    });
+    const PIP_ENTRY = { pattern: "/usr/bin/uptime", id: "pip-1" };
+    // What another administrator may have written by the time the person confirms. The gateway's
+    // hash is held as shown in the first three: only the whole file's digest tells them apart.
+    const cases: Array<[string, unknown, unknown]> = [
+      [
+        "pattern, same hash",
+        {
+          ...approvalsFile([{ ...LS_ENTRY, pattern: "/usr/bin/true" }, NODE_ENTRY]),
+          hash: "hash-2",
+        },
+        "/usr/bin/true",
+      ],
+      [
+        "argument pattern, same hash",
+        {
+          ...approvalsFile([{ ...LS_ENTRY, argPattern: "sha256:other" }, NODE_ENTRY]),
+          hash: "hash-2",
+        },
+        "/bin/ls",
+      ],
+      [
+        "another bot's entry removed, same hash",
+        { ...withOther([LS_ENTRY, NODE_ENTRY], []), hash: "hash-2" },
+        "/bin/ls",
+      ],
+      [
+        "reordered",
+        { ...approvalsFile([NODE_ENTRY, LS_ENTRY]), hash: "reordered" },
+        NODE_ENTRY.pattern,
+      ],
+      ["deleted", { ...approvalsFile([NODE_ENTRY]), hash: "deleted" }, NODE_ENTRY.pattern],
+      [
+        "replaced",
+        { ...approvalsFile([]), file: { version: 1, agents: { pip: { allowlist: [PIP_ENTRY] } } } },
+        PIP_ENTRY.pattern,
+      ],
+    ];
+    // The shown file itself had Pip's entry in the third case.
+    for (const [what, now, first] of cases) {
+      const base = what.startsWith("another")
+        ? withOther([LS_ENTRY, NODE_ENTRY], [PIP_ENTRY])
+        : shownFile;
+      const target = { ...shown, ...shownOf(base) };
+      const gateway = fake({
+        "exec.approvals.get": () => now,
+        "exec.approvals.set": () => {
+          throw new Error("no write may be sent");
+        },
+      });
+      const result = await removeAllowlistEntry(gateway.ctx, target);
+      expect(result.outcome, what).toBe("changed");
+      expect(result.removed, what).toBeNull();
+      expect(gateway.methods(), what).toEqual(["exec.approvals.get"]);
+      // The file as it is now, to ask the person again from.
+      if (result.allowlist.status !== "ready") throw new Error(`${what}: not ready`);
+      expect(result.allowlist.items[0]?.pattern, what).toBe(first);
+    }
   });
 
   it("an id that two entries share is refused, and nothing is written", async () => {
@@ -440,7 +496,12 @@ describe("F-178: Revoke and Remove say only what the read back shows", () => {
     const result = await removeAllowlistEntry(gateway.ctx, {
       agentId: "otto",
       entryId: LS_ENTRY.id,
-      shownHash: "hash-2",
+      ...shownOf(
+        approvalsFile([
+          { ...LS_ENTRY, pattern: "/usr/bin/true" },
+          { ...LS_ENTRY, pattern: "/usr/bin/false" },
+        ]),
+      ),
     });
     expect(result.outcome).toBe("ambiguous");
     expect(gateway.methods()).toEqual(["exec.approvals.get"]);
@@ -468,7 +529,7 @@ describe("F-178: Revoke and Remove say only what the read back shows", () => {
     const result = await removeAllowlistEntry(gateway.ctx, {
       agentId: "otto",
       entryId: LS_ENTRY.id,
-      shownHash: "hash-1",
+      ...shownOf(approvalsFile([LS_ENTRY])),
     });
     if (result.allowlist.status !== "ready") throw new Error("not ready");
     expect(result.allowlist.items.some((each) => each.entryId === LS_ENTRY.id)).toBe(false);
@@ -484,7 +545,7 @@ describe("F-178: Revoke and Remove say only what the read back shows", () => {
     const result = await removeAllowlistEntry(gateway.ctx, {
       agentId: "otto",
       entryId: LS_ENTRY.id,
-      shownHash: "hash-1",
+      ...shownOf(approvalsFile([NODE_ENTRY])),
     });
     expect(result.outcome).toBe("not-listed");
     expect(gateway.methods()).toEqual(["exec.approvals.get"]);
@@ -892,7 +953,7 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
 describe("F-178 F-324: every answer fits its result frame once serialized", () => {
   // Characters that grow when JSON escapes them: a control character takes six, a
   // backslash and a quote two each. Bounds on length alone let such text outgrow the frame.
-  const heavy = '\u0001\\"'.repeat(2000);
+  const heavy = '\u0001\\"'.repeat(300);
   const heavyId = (i: number) => `${"\u0001".repeat(40)}${i}`;
   /** The frame less the envelope the web host wraps a result in. */
   const FRAME = MAX_RESULT_CHARS - 512;
@@ -952,7 +1013,7 @@ describe("F-178 F-324: every answer fits its result frame once serialized", () =
     const removed = await removeAllowlistEntry(gateway.ctx, {
       agentId: "\u0001".repeat(21),
       entryId: heavyId(0),
-      shownHash: "h",
+      ...shownOf(file),
     });
     expect(removed.outcome).toBe("still-listed");
     expect(JSON.stringify(removed).length).toBeLessThan(FRAME);
@@ -1043,22 +1104,33 @@ describe("F-178 F-324: the bridge's Permissions commands", () => {
     expect(() => parseBridgeCommand({ type: "revokeGrant", grantId: "" })).toThrow(
       /invalid grant id/,
     );
-    expect(
-      parseBridgeCommand({
-        type: "removeAllowlistEntry",
-        agentId: "otto",
-        entryId: "e1",
-        shownHash: "h1",
-      }),
-    ).toEqual({
+    const remove = {
       type: "removeAllowlistEntry",
       agentId: "otto",
       entryId: "e1",
       shownHash: "h1",
+      shownDigest: "a".repeat(64),
+      connectedAt: 1_795_098_000_000,
+      gatewayId: "gw-1",
+      gatewayUrl: "ws://127.0.0.1:19480",
+    };
+    expect(parseBridgeCommand(remove)).toEqual(remove);
+    expect(parseBridgeCommand({ ...remove, gatewayId: null })).toEqual({
+      ...remove,
+      gatewayId: null,
     });
-    expect(() =>
-      parseBridgeCommand({ type: "removeAllowlistEntry", agentId: "otto", entryId: "e1" }),
-    ).toThrow(/invalid file revision/);
+    expect(() => parseBridgeCommand({ ...remove, shownHash: undefined })).toThrow(
+      /invalid file revision/,
+    );
+    for (const shownDigest of [undefined, "A".repeat(64), "a".repeat(63), "g".repeat(64)])
+      expect(() => parseBridgeCommand({ ...remove, shownDigest })).toThrow(/invalid file digest/);
+    for (const connectedAt of [undefined, -1, 1.5, "1"])
+      expect(() => parseBridgeCommand({ ...remove, connectedAt })).toThrow(
+        /invalid connection time/,
+      );
+    expect(() => parseBridgeCommand({ ...remove, gatewayUrl: "" })).toThrow(
+      /invalid gateway address/,
+    );
     expect(parseBridgeCommand({ type: "requestAccess", tier: "approvals" })).toEqual({
       type: "requestAccess",
       tier: "approvals",

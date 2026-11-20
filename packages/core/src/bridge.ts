@@ -231,7 +231,18 @@ export type BridgeCommand =
    * Remove one allowlist entry of the gateway's machine by its id, only from the
    * file's revision the page showed (`shownHash`), then read the whole file back.
    */
-  | { type: "removeAllowlistEntry"; agentId: string; entryId: string; shownHash: string }
+  | {
+      type: "removeAllowlistEntry";
+      agentId: string;
+      entryId: string;
+      shownHash: string;
+      /** The shown file's `snapshotDigest`: 64 lower-case hex characters. */
+      shownDigest: string;
+      /** The connection the person confirmed on: its hello, gateway identity and address. */
+      connectedAt: number;
+      gatewayId: string | null;
+      gatewayUrl: string;
+    }
   /** One page of the audit log's tool actions, newest first; `cursor` from the page before. */
   | {
       type: "readActivity";
@@ -443,6 +454,20 @@ function sessionKey(value: unknown): string {
   if (typeof value !== "string" || !SESSION_KEY_PATTERN.test(value)) {
     throw new Error("invalid session key");
   }
+  return value;
+}
+
+/** A whole SHA-256 in lower-case hex. */
+function digest(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value))
+    throw new Error("invalid file digest");
+  return value;
+}
+
+/** A hello's time in epoch ms. */
+function helloTime(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+    throw new Error("invalid connection time");
   return value;
 }
 
@@ -675,6 +700,13 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         agentId: botId(command.agentId),
         entryId: id(command.entryId, "entry id"),
         shownHash: id(command.shownHash, "file revision"),
+        shownDigest: digest(command.shownDigest),
+        connectedAt: helloTime(command.connectedAt),
+        gatewayId:
+          command.gatewayId === null || command.gatewayId === undefined
+            ? null
+            : id(command.gatewayId, "gateway id"),
+        gatewayUrl: id(command.gatewayUrl, "gateway address"),
       };
     case "readActivity": {
       const status = (command.status ?? null) as AuditStatus | null;
@@ -1222,6 +1254,12 @@ class ViewerSession implements BridgeSession {
           agentId: command.agentId,
           entryId: command.entryId,
           shownHash: command.shownHash,
+          shownDigest: command.shownDigest,
+          connection: {
+            connectedAt: command.connectedAt,
+            gatewayId: command.gatewayId,
+            gatewayUrl: command.gatewayUrl,
+          },
         });
       case "readActivity":
         return client.readActivity({

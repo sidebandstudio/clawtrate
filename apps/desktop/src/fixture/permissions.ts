@@ -14,10 +14,14 @@
 //                                                expiring: the live grant ends a minute from now)
 //   revoke=refused|gone                          how Revoke goes: the gateway refuses, or lists no such grant
 //   remove=changed                               Remove finds the entry edited in place after the confirmation opened
+//   saved=long                                   two entries whose long patterns share their shown start
+// A hello later than the scene's (connectedAt in the future) reads the file as another revision.
 //   audit=empty|off|error|loading|end            activity (default: a page with older ones after it)
 
 import {
   auditCallId,
+  sha256Hex,
+  utf8Bytes,
   type ActivityPage,
   type ActivityRow,
   type AllowlistEntry,
@@ -160,6 +164,7 @@ function entries(now: number, params: PermissionParams): AllowlistEntry[] {
       fromAlwaysAllow: true,
       lastUsedAt: now - 6 * MINUTE,
       addedAt: null,
+      shownWhole: true,
     },
     {
       agentId: "otto",
@@ -171,7 +176,24 @@ function entries(now: number, params: PermissionParams): AllowlistEntry[] {
       fromAlwaysAllow: true,
       lastUsedAt: null,
       addedAt: now - 3 * DAY,
+      shownWhole: true,
     },
+    // Two patterns longer than the page shows, alike in all it shows: neither can be confirmed.
+    ...(params.saved === "long"
+      ? [0, 1].map((index): AllowlistEntry => ({
+          agentId: "otto",
+          entryId: `long-${index}`,
+          kind: "command",
+          // As the engine shows them: cut to 512, so their different ends are not shown.
+          pattern: `/opt/tools/${"report-".repeat(71)}`,
+          argPattern: null,
+          commandText: null,
+          fromAlwaysAllow: false,
+          lastUsedAt: null,
+          addedAt: null,
+          shownWhole: false,
+        }))
+      : []),
   ];
 }
 
@@ -348,6 +370,11 @@ export function permissionCommand(
   // With `remove=changed`, another admin edits the first entry in place, under the same id,
   // once the person has confirmed its removal: the file is then another revision.
   const edited = () => removed.has("edited");
+  const revision = () => {
+    const base = edited() ? "fixture-hash-2" : "fixture-hash";
+    const at = connection().connectedAt;
+    return at !== null && at > now ? `${base}@${at}` : base;
+  };
   const allowlist = (): SavedApprovals["allowlist"] =>
     connection().canAdmin
       ? {
@@ -360,7 +387,8 @@ export function permissionCommand(
                 : each,
             ),
           omitted: 0,
-          hash: edited() ? "fixture-hash-2" : "fixture-hash",
+          hash: revision(),
+          snapshotDigest: sha256Hex(utf8Bytes(revision())),
         }
       : { status: "needs-admin" };
   switch (command.type) {
@@ -428,7 +456,11 @@ export function permissionCommand(
               (each) => each.agentId === command.agentId && each.entryId === command.entryId,
             )
           : undefined;
-      if (shown.status !== "ready" || shown.hash !== command.shownHash)
+      if (
+        shown.status !== "ready" ||
+        shown.hash !== command.shownHash ||
+        shown.snapshotDigest !== command.shownDigest
+      )
         return Promise.resolve({
           outcome: "changed",
           removed: null,

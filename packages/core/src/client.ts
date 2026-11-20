@@ -5884,12 +5884,33 @@ export class ClawtrateClient {
     agentId: string;
     entryId: string;
     shownHash: string;
+    shownDigest: string;
+    /** The connection the person confirmed on. */
+    connection: { connectedAt: number; gatewayId: string | null; gatewayUrl: string };
   }): Promise<AllowlistRemoveResult> {
     if (this.options.readOnly)
       throw new Error("This host only reads; it does not change settings.");
     if (!this.state.connection.canAdmin)
       throw new Error("Removing an allowlist entry needs admin access.");
-    return removeAllowlistEntry(this.permissionsContext(), target);
+    // Only on the connection the person confirmed on: checked now, and again before the write.
+    const assertCurrent = () => {
+      const now = this.state.connection;
+      if (
+        now.status !== "connected" ||
+        now.connectedAt !== target.connection.connectedAt ||
+        now.gatewayId !== target.connection.gatewayId ||
+        now.gatewayUrl !== target.connection.gatewayUrl
+      )
+        throw new Error("The connection changed since this entry was shown; nothing was removed.");
+    };
+    assertCurrent();
+    return removeAllowlistEntry(this.permissionsContext(), {
+      agentId: target.agentId,
+      entryId: target.entryId,
+      shownHash: target.shownHash,
+      shownDigest: target.shownDigest,
+      assertCurrent,
+    });
   }
 
   /** One page of the audit log's tool actions with their recorded causes (`operator.read`). */

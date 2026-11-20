@@ -193,6 +193,8 @@ export type AllowlistEntry = {
   lastUsedAt: number | null;
   /** When it was added, where the file records it (tool entries do; command entries don't). */
   addedAt: number | null;
+  /** The pattern and argument pattern are shown whole: only then can the person confirm its removal. */
+  shownWhole: boolean;
 };
 
 export type SavedApprovals = {
@@ -203,7 +205,15 @@ export type SavedApprovals = {
     | { status: "failed"; message: string };
   /** The gateway's own machine's approvals file. Paired machines' files are not read here. */
   allowlist:
-    | { status: "ready"; items: AllowlistEntry[]; omitted: number; hash: string | null }
+    | {
+        status: "ready";
+        items: AllowlistEntry[];
+        omitted: number;
+        /** The gateway's revision of the file (`hash`). */
+        hash: string;
+        /** A SHA-256 of the whole file as read, before anything is left out to show it. */
+        snapshotDigest: string;
+      }
     | { status: "needs-admin" }
     | { status: "failed"; message: string };
 };
@@ -251,6 +261,88 @@ export async function readGrants(
   }
 }
 
+/**
+ * A complete answer of `exec.approvals.get` or `exec.approvals.set` for the gateway's
+ * own machine: its revision, a digest of the whole file as read, and the file. Read
+ * and write share it, and anything less is not used: an answer that marks itself
+ * incomplete, has no `exists`, no revision or no version-1 file, or whose bots or
+ * entries are not the protocol's shapes. A file with no `agents` is an empty policy.
+ */
+export type ApprovalsSnapshot = {
+  hash: string;
+  digest: string;
+  file: Record<string, unknown>;
+  agents: Record<string, Record<string, unknown>>;
+};
+
+/** Marks of an answer that is not the whole file. */
+const INCOMPLETE_MARKS = [
+  "hasMore",
+  "incomplete",
+  "partial",
+  "truncated",
+  "omitted",
+  "nextCursor",
+  "cursor",
+  "continuation",
+];
+
+export function approvalsSnapshot(value: unknown): ApprovalsSnapshot | { invalid: string } {
+  const answer = asRecord(value);
+  if (!answer) return { invalid: "The gateway's answer about its approvals file is not a file." };
+  if (INCOMPLETE_MARKS.some((mark) => answer[mark] !== undefined && answer[mark] !== false))
+    return { invalid: "The gateway's answer about its approvals file is incomplete." };
+  if (typeof answer.exists !== "boolean")
+    return { invalid: "The gateway's answer doesn't say whether its approvals file exists." };
+  const hash =
+    typeof answer.hash === "string" && answer.hash.length > 0 && jsonChars(answer.hash) <= 128
+      ? answer.hash
+      : null;
+  if (!hash) return { invalid: "The gateway's answer names no revision of its approvals file." };
+  const file = asRecord(answer.file);
+  if (!file || file.version !== 1)
+    return { invalid: "The gateway's answer has no approvals file of version 1." };
+  const agents: Record<string, Record<string, unknown>> = {};
+  if (file.agents !== undefined) {
+    const listed = asRecord(file.agents);
+    if (!listed) return { invalid: "The approvals file's bots are not a list of bots." };
+    for (const [agentId, value] of Object.entries(listed)) {
+      const agent = asRecord(value);
+      if (!agent) return { invalid: "A bot in the approvals file is not a bot's entry." };
+      if (agent.allowlist !== undefined) {
+        if (!Array.isArray(agent.allowlist))
+          return { invalid: "A bot's allowlist in the approvals file is not a list." };
+        for (const raw of agent.allowlist) {
+          const entry = asRecord(raw);
+          if (
+            !entry ||
+            typeof entry.pattern !== "string" ||
+            (entry.id !== undefined && (typeof entry.id !== "string" || entry.id.length === 0))
+          )
+            return { invalid: "An allowlist entry in the approvals file is not an entry." };
+        }
+      }
+      if (agent.mcpTools !== undefined) {
+        if (!Array.isArray(agent.mcpTools))
+          return { invalid: "A bot's tool entries in the approvals file are not a list." };
+        for (const raw of agent.mcpTools) {
+          const entry = asRecord(raw);
+          if (
+            !entry ||
+            typeof entry.server !== "string" ||
+            entry.server.length === 0 ||
+            typeof entry.tool !== "string" ||
+            entry.tool.length === 0
+          )
+            return { invalid: "A tool entry in the approvals file is not an entry." };
+        }
+      }
+      agents[agentId] = agent;
+    }
+  }
+  return { hash, digest: sha256Hex(utf8Bytes(JSON.stringify(file))), file, agents };
+}
+
 /** Every entry of the approvals file, command and tool, bounded, in the file's order. */
 export function allowlistOf(file: unknown): { items: AllowlistEntry[]; omitted: number } {
   const agents = asRecord(asRecord(file)?.agents) ?? {};
@@ -275,16 +367,22 @@ export function allowlistOf(file: unknown): { items: AllowlistEntry[]; omitted: 
       const entry = asRecord(raw);
       const pattern = cut(entry?.pattern);
       if (!entry || !pattern) continue;
+      const argPattern = cut(entry.argPattern, MAX_ENTRY_DETAIL);
       add({
         agentId,
         entryId: wholeId(entry.id),
         kind: "command",
         pattern,
-        argPattern: cut(entry.argPattern, MAX_ENTRY_DETAIL),
+        argPattern,
         commandText: cut(entry.commandText, MAX_ENTRY_DETAIL),
         fromAlwaysAllow: entry.source === "allow-always",
         lastUsedAt: time(entry.lastUsedAt),
         addedAt: null,
+        shownWhole:
+          pattern === entry.pattern &&
+          (entry.argPattern === undefined ||
+            entry.argPattern === "" ||
+            argPattern === entry.argPattern),
       });
     }
     for (const raw of Array.isArray(agent?.mcpTools) ? agent.mcpTools : []) {
@@ -302,19 +400,29 @@ export function allowlistOf(file: unknown): { items: AllowlistEntry[]; omitted: 
         fromAlwaysAllow: entry.source === "allow-always",
         lastUsedAt: time(entry.lastUsedAt),
         addedAt: time(entry.addedAt),
+        shownWhole: server === entry.server && tool === entry.tool,
       });
     }
   }
   return { items, omitted };
 }
 
-/** The approvals file's answer as Saved approvals shows it: its entries, bounded, and its revision. */
-function allowlistFrom(answer: Record<string, unknown> | null): SavedApprovals["allowlist"] {
+/** The approvals file as Saved approvals shows it: its entries, bounded, its revision and digest. */
+function allowlistFrom(snapshot: ApprovalsSnapshot): SavedApprovals["allowlist"] {
   return {
     status: "ready",
-    ...allowlistOf(answer?.file),
-    hash: wholeId(answer?.hash, 128),
+    ...allowlistOf(snapshot.file),
+    hash: snapshot.hash,
+    snapshotDigest: snapshot.digest,
   };
+}
+
+/** An answer as Saved approvals shows it, or why it can't be used. */
+function allowlistAnswer(value: unknown): SavedApprovals["allowlist"] {
+  const snapshot = approvalsSnapshot(value);
+  return "invalid" in snapshot
+    ? { status: "failed", message: snapshot.invalid }
+    : allowlistFrom(snapshot);
 }
 
 export async function readAllowlist(
@@ -323,7 +431,7 @@ export async function readAllowlist(
 ): Promise<SavedApprovals["allowlist"]> {
   if (!canAdmin) return { status: "needs-admin" };
   try {
-    return allowlistFrom(asRecord(await ctx.request("exec.approvals.get", {})));
+    return allowlistAnswer(await ctx.request("exec.approvals.get", {}));
   } catch (error) {
     if (missingScope(error)) return { status: "needs-admin" };
     return { status: "failed", message: errorText(error) };
@@ -417,22 +525,38 @@ function entriesWithId(file: unknown, agentId: string, entryId: string): Record<
     .filter((each): each is Record<string, unknown> => each?.id === entryId);
 }
 
+/** The revision and digest of the file the person confirmed, and the connection they confirmed on. */
+export type AllowlistRemoveTarget = {
+  agentId: string;
+  entryId: string;
+  shownHash: string;
+  shownDigest: string;
+  /** Throws once the connection the person confirmed on is no longer the client's. */
+  assertCurrent?: () => void;
+};
+
 export async function removeAllowlistEntry(
   ctx: PermissionsContext,
-  target: { agentId: string; entryId: string; shownHash: string },
+  target: AllowlistRemoveTarget,
 ): Promise<AllowlistRemoveResult> {
-  const { agentId, entryId, shownHash } = target;
+  const { agentId, entryId, shownHash, shownDigest } = target;
   let removed: AllowlistRemoveResult["removed"] = null;
   let error: string | null = null;
   try {
-    const before = asRecord(await ctx.request("exec.approvals.get", {}));
-    const file = asRecord(before?.file);
-    const agents = asRecord(file?.agents);
-    const agent = asRecord(agents?.[agentId]);
-    if (before?.hash !== shownHash)
+    const before = approvalsSnapshot(await ctx.request("exec.approvals.get", {}));
+    if ("invalid" in before)
+      return {
+        outcome: "unknown",
+        removed: null,
+        error: before.invalid,
+        allowlist: { status: "failed", message: before.invalid },
+      };
+    // The whole file must be the one shown: its revision and its digest, before anything else.
+    if (before.hash !== shownHash || before.digest !== shownDigest)
       return { outcome: "changed", removed: null, error: null, allowlist: allowlistFrom(before) };
-    const matching = entriesWithId(file, agentId, entryId);
-    if (!file || !agents || !agent || matching.length === 0)
+    const agent = before.agents[agentId];
+    const matching = entriesWithId(before.file, agentId, entryId);
+    if (!agent || matching.length === 0)
       return {
         outcome: "not-listed",
         removed: null,
@@ -443,11 +567,12 @@ export async function removeAllowlistEntry(
       return { outcome: "ambiguous", removed: null, error: null, allowlist: allowlistFrom(before) };
     const entries = agent.allowlist as unknown[];
     removed = { agentId, pattern: cut(matching[0]!.pattern) ?? "(no pattern)" };
+    target.assertCurrent?.();
     await ctx.request("exec.approvals.set", {
       file: {
-        ...file,
+        ...before.file,
         agents: {
-          ...agents,
+          ...before.agents,
           [agentId]: {
             ...agent,
             allowlist: entries.filter((each) => asRecord(each)?.id !== entryId),
@@ -460,9 +585,9 @@ export async function removeAllowlistEntry(
     error = errorText(caught);
   }
   // Whether it is gone is read from the whole file, not from the entries kept to show.
-  let after: Record<string, unknown> | null;
+  let after: ApprovalsSnapshot | { invalid: string };
   try {
-    after = asRecord(await ctx.request("exec.approvals.get", {}));
+    after = approvalsSnapshot(await ctx.request("exec.approvals.get", {}));
   } catch (caught) {
     const message = errorText(caught);
     return {
@@ -472,7 +597,14 @@ export async function removeAllowlistEntry(
       allowlist: missingScope(caught) ? { status: "needs-admin" } : { status: "failed", message },
     };
   }
-  const still = entriesWithId(after?.file, agentId, entryId).length > 0;
+  if ("invalid" in after)
+    return {
+      outcome: "unknown",
+      removed: null,
+      error: error ?? after.invalid,
+      allowlist: { status: "failed", message: after.invalid },
+    };
+  const still = entriesWithId(after.file, agentId, entryId).length > 0;
   return {
     outcome: still ? "still-listed" : "removed",
     removed: still ? null : removed,

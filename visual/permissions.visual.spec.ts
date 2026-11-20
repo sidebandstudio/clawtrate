@@ -4,6 +4,7 @@
 // the design names; then how they behave. The fixture's grants, entries and
 // records are made up (apps/desktop/src/fixture/permissions.ts).
 import { expect, test, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
 import { contextFor, NOW, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 type Scene = { name: string; query: string; ready: (page: Page) => Promise<void> };
@@ -379,6 +380,54 @@ test.describe("behaviour", () => {
     expect(
       (await sent(page)).filter((each) => each.type === "removeAllowlistEntry").at(-1),
     ).toMatchObject({ shownHash: "fixture-hash-2" });
+  });
+
+  test("F-178: a confirmation open when a new connection arrives closes without a command; the new row sends its own revision and digest", async ({
+    page,
+  }) => {
+    await openFixture(page, ADMIN, "light");
+    await permissions("Saved approvals", grants)(page);
+    const entry = () => page.getByTestId("allowlist-entry").filter({ hasText: "/bin/ls" });
+    await entry().getByRole("button", { name: "Remove…" }).click();
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    // A new hello while the dialog is open: the page reads the file again, as another revision.
+    const helloAt = NOW.getTime() + 60_000;
+    await page.evaluate((at) => {
+      (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (change: (state: { connection: object }) => { connection: object }) => void;
+          };
+        }
+      ).clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, connectedAt: at },
+      }));
+    }, helloAt);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    expect((await sent(page)).some((each) => each.type === "removeAllowlistEntry")).toBe(false);
+    await entry().getByRole("button", { name: "Remove…" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Remove" }).click();
+    await expect(page.getByText(/^Removed \/bin\/ls for Otto\./)).toBeVisible();
+    const revision = `fixture-hash@${helloAt}`;
+    expect((await sent(page)).filter((each) => each.type === "removeAllowlistEntry")).toEqual([
+      expect.objectContaining({
+        shownHash: revision,
+        shownDigest: createHash("sha256").update(revision).digest("hex"),
+        connectedAt: helloAt,
+      }),
+    ]);
+  });
+
+  test("F-178: two long patterns alike in all the page shows offer no Remove", async ({ page }) => {
+    await openFixture(page, `${ADMIN}&saved=long`, "light");
+    await permissions("Saved approvals", grants)(page);
+    const long = page.getByTestId("allowlist-entry").filter({ hasText: "/opt/tools/report-" });
+    await expect(long).toHaveCount(2);
+    await expect(long.getByRole("button", { name: "Remove…" })).toHaveCount(0);
+    await expect(long.first().getByTestId("entry-not-removable")).toHaveText(
+      "Clawtrate can't remove this entry because its pattern is too long to show in full.",
+    );
   });
 
   test("F-178: below approvals the page reads nothing and asks for approvals access alone", async ({

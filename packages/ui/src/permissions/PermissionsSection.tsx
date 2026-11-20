@@ -283,8 +283,15 @@ export function PermissionsSection({
       </p>
     );
   } else if (part === "saved") {
+    // A new connection is a new page: any confirmation and notes of the old one are gone.
     const saved = (
-      <SavedPart connection={connection} info={info} botName={botName} announce={announce} />
+      <SavedPart
+        key={savedKey(connection) ?? "disconnected"}
+        connection={connection}
+        info={info}
+        botName={botName}
+        announce={announce}
+      />
     );
     body = saved;
     if (!connection.canApprove)
@@ -437,6 +444,25 @@ function Failed({
 
 // Saved approvals ------------------------------------------------------------------------
 
+/**
+ * The connection Saved approvals reads and confirms on: the gateway, its address,
+ * the hello, and what this connection may do. Null while disconnected.
+ */
+function savedKey(connection: ConnectionState): string | null {
+  return connection.status === "connected"
+    ? JSON.stringify([
+        connection.gatewayId,
+        connection.gatewayUrl,
+        connection.connectedAt,
+        connection.canApprove,
+        connection.canAdmin,
+      ])
+    : null;
+}
+
+/** Whether a listed entry can be confirmed for removal: its id, and its pattern shown whole. */
+const removable = (entry: AllowlistEntry) => entry.entryId !== null && entry.shownWhole;
+
 function SavedPart({
   connection,
   info,
@@ -460,19 +486,19 @@ function SavedPart({
   const [confirm, setConfirm] = useState<{
     entry: AllowlistEntry;
     hash: string;
+    digest: string;
     changed: boolean;
   } | null>(null);
   // A grant's end is judged against the clock as it moves, not as it was when the page opened.
   const now = useNow();
-  const { canApprove, canAdmin, connectedAt } = connection;
+  const { canApprove, connectedAt, gatewayId, gatewayUrl } = connection;
   const connected = connection.status === "connected";
+  const key = savedKey(connection);
   const {
     load,
     set: setValue,
     retry,
-  } = useRead(connected && canApprove ? `${canAdmin}:${connectedAt}` : null, () =>
-    bridge.invoke({ type: "readSavedApprovals" }),
-  );
+  } = useRead(canApprove ? key : null, () => bridge.invoke({ type: "readSavedApprovals" }));
 
   if (!canApprove)
     return <p className="b-hint">A standing approval lets a call run later without a card.</p>;
@@ -513,8 +539,8 @@ function SavedPart({
     }
   };
 
-  const remove = async (entry: AllowlistEntry, shownHash: string) => {
-    if (!entry.entryId) return;
+  const remove = async (entry: AllowlistEntry, shownHash: string, shownDigest: string) => {
+    if (!entry.entryId || !connected || connectedAt === null || gatewayUrl === null) return;
     const entryId = entry.entryId;
     const id = `entry:${entry.agentId}:${entryId}`;
     setConfirm(null);
@@ -525,6 +551,10 @@ function SavedPart({
         agentId: entry.agentId,
         entryId,
         shownHash,
+        shownDigest,
+        connectedAt,
+        gatewayId,
+        gatewayUrl,
       });
       set({ allowlist: result.allowlist });
       const bot = botName(entry.agentId);
@@ -536,8 +566,13 @@ function SavedPart({
           : undefined;
       if (result.outcome === "changed") {
         // Nothing was written: the person is asked again, about the entry as it is now.
-        if (now && result.allowlist.status === "ready" && result.allowlist.hash) {
-          setConfirm({ entry: now, hash: result.allowlist.hash, changed: true });
+        if (now && removable(now) && result.allowlist.status === "ready") {
+          setConfirm({
+            entry: now,
+            hash: result.allowlist.hash,
+            digest: result.allowlist.snapshotDigest,
+            changed: true,
+          });
           setNotes((all) => ({ ...all, [id]: "" }));
         } else
           setNotes((all) => ({
@@ -719,11 +754,16 @@ function SavedPart({
                           that saved it.
                         </small>
                       )}
-                      {!entry.entryId && (
+                      {!entry.entryId ? (
                         <small data-testid="entry-not-removable">
                           Clawtrate can't remove this entry: the file gives it no id.
                         </small>
-                      )}
+                      ) : !entry.shownWhole ? (
+                        <small data-testid="entry-not-removable">
+                          Clawtrate can't remove this entry because its pattern is too long to show
+                          in full.
+                        </small>
+                      ) : null}
                       <GatewayMark />
                       {note && (
                         <small role="status" data-tone="danger">
@@ -731,7 +771,7 @@ function SavedPart({
                         </small>
                       )}
                     </span>
-                    {entry.entryId && allowlist.status === "ready" && allowlist.hash && (
+                    {removable(entry) && connected && allowlist.status === "ready" && (
                       <button
                         type="button"
                         className="button"
@@ -740,8 +780,12 @@ function SavedPart({
                         disabled={busy !== null || info.readOnly}
                         onClick={() =>
                           allowlist.status === "ready" &&
-                          allowlist.hash &&
-                          setConfirm({ entry, hash: allowlist.hash, changed: false })
+                          setConfirm({
+                            entry,
+                            hash: allowlist.hash,
+                            digest: allowlist.snapshotDigest,
+                            changed: false,
+                          })
                         }
                       >
                         {busy === id ? "Removing…" : "Remove…"}
@@ -794,7 +838,7 @@ function SavedPart({
             </>
           }
           action="Remove"
-          onAction={() => void remove(confirm.entry, confirm.hash)}
+          onAction={() => void remove(confirm.entry, confirm.hash, confirm.digest)}
           onCancel={() => setConfirm(null)}
         />
       )}
