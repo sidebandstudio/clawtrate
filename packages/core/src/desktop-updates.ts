@@ -37,6 +37,8 @@ export type DesktopUpdateState =
     };
 
 export interface DesktopUpdateSnapshot {
+  /** Monotonically increasing within this host process. */
+  revision: number;
   /** Null when the host has no desktop release version or its version failed validation. */
   runningVersion: string | null;
   runningTrack: UpdateTrack | null;

@@ -77,6 +77,7 @@ export class DesktopUpdateService {
       state = failed("write-failed", "preferences");
     }
     return new DesktopUpdateService(options, {
+      revision:0,
       runningVersion: version ? formatVersion(version) : null,
       runningTrack,
       tracks,
@@ -93,7 +94,7 @@ export class DesktopUpdateService {
   }
 
   private publish(state: DesktopUpdateState) {
-    this.snapshot = { ...this.snapshot, state };
+    this.snapshot = { ...this.snapshot, state,revision:this.snapshot.revision+1 };
     try {
       this.options.changed(this.snapshot);
     } catch {

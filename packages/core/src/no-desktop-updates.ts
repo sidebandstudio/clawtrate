@@ -5,6 +5,7 @@ async function unavailable(): Promise<DesktopUpdateSnapshot> {
     runningVersion: null,
     runningTrack: null,
     tracks: [],
+    revision:0,
     selectedTrack: null,
     pendingTrack:null,
     lastCheck: null,
