@@ -59,7 +59,7 @@
   const LANGS = [["", "Provider default"], ["en", "English"], ["es", "Español"], ["fr", "Français"], ["de", "Deutsch"], ["ja", "日本語"]];
   const DEVICES = ["System Default", "MacBook Pro Microphone", "USB Microphone"];
   const MEMO_ADDRESS = "https://media.example.net/pip/route-saturday.mp3";
-  const LOCAL_ADDRESS = "http://192.168.1.20:8080/pip/route-saturday.mp3";
+  const LOCAL_ADDRESS = "http://mediabox.local:8080/pip/route-saturday.mp3";
   const REFUSAL = INJECT ? '<u data-inject="refusal">Realtime voice provider "openai" is not configured.</u>' : 'Realtime voice provider "openai" is not configured.';
   const CAPTION = INJECT ? '<s data-inject="caption">Is the media box still nearly full?</s>' : "Is the media box still nearly full?";
   // The fixture clock: 5:36 PM. Times are seconds since midnight.

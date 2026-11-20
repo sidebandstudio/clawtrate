@@ -862,10 +862,10 @@ await p.close();
 p = await open("bot=pip&memo=localaddr");
 await click(p, '[data-v="memo-open"]');
 check("7 a local-network address: the link rule's confirmation, with its address and warning, before any handoff", await q(p, () =>
-  document.querySelector("#confirm-dialog").open && document.querySelector('[data-testid="link-address"]').textContent === "http://192.168.1.20:8080/pip/route-saturday.mp3" &&
+  document.querySelector("#confirm-dialog").open && document.querySelector('[data-testid="link-address"]').textContent === "http://mediabox.local:8080/pip/route-saturday.mp3" &&
   document.querySelector('[data-testid="link-warning"]').textContent === "This address may be on your own network." && window.voice.S.io.opens.length === 0));
 await click(p, '[data-v="link-open"]');
-check("7 …Open hands it off once", (await io(p)).opens.join() === "http://192.168.1.20:8080/pip/route-saturday.mp3");
+check("7 …Open hands it off once", (await io(p)).opens.join() === "http://mediabox.local:8080/pip/route-saturday.mp3");
 await p.close();
 p = await open("bot=pip&memo=two");
 check("7 two clips and an attachment in one run: no text joined to either", await q(p, () =>
