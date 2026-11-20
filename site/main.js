@@ -1,39 +1,33 @@
 // The site's only script: the theme switch, copy buttons, the approval demo,
-// the questions, and the entrances. The page reads fully without it.
+// the questions, and the entrances. The page reads fully without it, in dark.
 
 (function () {
   const root = document.documentElement;
-  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
-  const isDark = () => (root.dataset.theme ? root.dataset.theme === "dark" : darkQuery.matches);
+  const isLight = () => root.dataset.theme === "light";
 
-  // Screenshots follow the page's theme, also when it is chosen by hand.
+  // Screens follow the theme: each image or source names its dark and light file.
   function syncShots() {
-    const dark = isDark();
-    document.querySelectorAll("picture").forEach((picture) => {
-      const img = picture.querySelector("img");
-      const source = picture.querySelector("source[data-dark]");
-      if (!img || !source) return;
-      source.media = root.dataset.theme ? "not all" : "(prefers-color-scheme: dark)";
-      img.src = dark && root.dataset.theme ? img.dataset.darkSrc : img.dataset.lightSrc;
+    const theme = isLight() ? "light" : "dark";
+    document.querySelectorAll("[data-dark][data-light]").forEach((el) => {
+      const file = el.dataset[theme];
+      if (el.tagName === "SOURCE") el.srcset = file;
+      else el.src = file;
     });
   }
 
   const toggle = document.querySelector("[data-theme-toggle]");
   function labelToggle() {
-    toggle.setAttribute("aria-label", isDark() ? "Switch to light" : "Switch to dark");
+    toggle.setAttribute("aria-label", isLight() ? "Switch to dark" : "Switch to light");
   }
   toggle.addEventListener("click", () => {
-    const next = isDark() ? "light" : "dark";
-    root.dataset.theme = next;
+    const next = isLight() ? "dark" : "light";
+    if (next === "light") root.dataset.theme = "light";
+    else delete root.dataset.theme;
     try {
       localStorage.setItem("theme", next);
     } catch {
       // Without storage the choice lasts for this visit.
     }
-    labelToggle();
-    syncShots();
-  });
-  darkQuery.addEventListener("change", () => {
     labelToggle();
     syncShots();
   });
@@ -55,7 +49,7 @@
     });
   });
 
-  // The approval demo: Allow once or Deny, then ask again.
+  // The approval demo: Allow once or Deny, then reset.
   const demo = document.querySelector(".demo");
   const tag = demo.querySelector("[data-tag]");
   const live = demo.querySelector(".demo-live");
@@ -76,6 +70,27 @@
     live.textContent = states[state].say;
     if (focus) focus.focus();
   }
+  // Reserve the tallest state's height, so answering never moves the page.
+  const win = demo.querySelector(".win");
+  function fit() {
+    const current = demo.dataset.state;
+    win.style.minHeight = "0px";
+    let tallest = 0;
+    for (const state of Object.keys(states)) {
+      demo.dataset.state = state;
+      tallest = Math.max(tallest, win.getBoundingClientRect().height);
+    }
+    demo.dataset.state = current;
+    win.style.minHeight = `${Math.ceil(tallest)}px`;
+  }
+  let fitting = 0;
+  window.addEventListener("resize", () => {
+    cancelAnimationFrame(fitting);
+    fitting = requestAnimationFrame(fit);
+  });
+  document.fonts.ready.then(fit);
+  fit();
+
   demo.querySelectorAll("[data-answer]").forEach((button) => {
     button.addEventListener("click", () => {
       show(
@@ -88,26 +103,26 @@
     show("pending", demo.querySelector('[data-answer="allow"]'));
   });
 
-  // Questions: one open at a time. On wide screens the open answer sits to the right.
+  // Questions: one open at a time, chosen by click or arrow keys. On phones a
+  // second click closes it.
   const faq = document.querySelector("[data-faq]");
   const questions = [...faq.querySelectorAll("button[aria-controls]")];
   const wide = window.matchMedia("(min-width: 761px)");
+  const answerOf = (button) => document.getElementById(button.getAttribute("aria-controls"));
   function open(button) {
     questions.forEach((each) => {
       const on = each === button;
       each.setAttribute("aria-expanded", String(on));
-      document.getElementById(each.getAttribute("aria-controls")).hidden = !on;
+      answerOf(each).hidden = !on;
     });
   }
   questions.forEach((button, index) => {
     button.addEventListener("click", () => {
-      const already = button.getAttribute("aria-expanded") === "true";
-      if (already && !wide.matches) {
+      if (button.getAttribute("aria-expanded") === "true" && !wide.matches) {
         button.setAttribute("aria-expanded", "false");
-        document.getElementById(button.getAttribute("aria-controls")).hidden = true;
+        answerOf(button).hidden = true;
       } else open(button);
     });
-    button.addEventListener("mouseenter", () => wide.matches && open(button));
     button.addEventListener("keydown", (event) => {
       const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
       if (!step) return;
