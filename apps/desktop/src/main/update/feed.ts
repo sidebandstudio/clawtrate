@@ -10,7 +10,7 @@ export const FEED_FORMAT = 1;
 /** The artifacts a feed can name, as electron-builder names them: `<os>-<arch>`. */
 export const FILE_KEYS = ["mac-arm64", "mac-x64", "win-x64"] as const;
 export type FileKey = (typeof FILE_KEYS)[number];
-/** Each artifact's extension: the macOS zip Squirrel.Mac installs, and the NSIS installer. */
+/** Each artifact's extension: the macOS zip, and the NSIS installer. */
 export const FILE_EXTENSION: Readonly<Record<FileKey, string>> = {
   "mac-arm64": "zip",
   "mac-x64": "zip",

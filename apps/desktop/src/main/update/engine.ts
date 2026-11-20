@@ -46,6 +46,7 @@ export type UpdateState =
       readonly total: number;
     }
   | {
+      /** The downloaded bytes matched the feed's size and digest. */
       readonly kind: "ready";
       readonly version: string;
       readonly releaseDate: string;
