@@ -546,7 +546,7 @@ test.describe("1440", () => {
     await expect(page.getByTestId("b-announcer")).toHaveText("Changed the time zone of 1 routine");
   });
 
-  test("F-196: a zone change says which of a bot's routines it couldn't list, and doesn't call itself done", async ({
+  test("F-196: a zone change changes nothing when it can't list all of a bot's routines, and says so", async ({
     page,
   }) => {
     await open(page, `${ADMIN}&botomitted=3`);
@@ -556,10 +556,20 @@ test.describe("1440", () => {
     await dialog.getByLabel("Time zone").selectOption("Europe/Berlin");
     await dialog.getByRole("button", { name: "Save" }).click();
     await expect(dialog.getByTestId("zone-failed")).toHaveText(
-      "Changed Nightly backup check. 3 more of Otto's routines weren't listed, so they weren't changed.",
+      "The gateway has 3 more of Otto's routines than Clawtrate can list, so nothing was changed.",
     );
     await expect(dialog.getByRole("button", { name: "Close" })).toBeFocused();
     await expect(page.getByTestId("b-announcer")).not.toHaveText(/Changed the time zone/u);
+    const sent = await page.evaluate(() =>
+      (
+        window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } }
+      ).clawtrateFixture.sent.map((each) => each.type),
+    );
+    expect(sent).not.toContain("updateRoutine");
+    await dialog.getByRole("button", { name: "Close" }).click();
+    await expect(view(page).getByTestId("routines-zone")).toContainText(
+      "Routines' time zone: New York",
+    );
   });
 
   test("F-349 F-358: with admin and the gateway's hooks on, the page shows their address to copy; a routine has none of its own", async ({

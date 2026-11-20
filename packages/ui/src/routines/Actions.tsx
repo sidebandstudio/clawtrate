@@ -489,7 +489,7 @@ function ZoneDialog({
   // A rewrite names the gateway the routines were read from; the engine refuses
   // a write for another (routines.ts `blocked`).
   const gateway = useClawtrateState().connection.gatewayId;
-  // The gateway the writes went to: a read-back from any other proves nothing about them.
+  // The gateway the writes went to: the host refuses a read-back on any other.
   const sentTo = useRef(gateway);
   const [zone, setZone] = useState("auto");
   const [busy, setBusy] = useState(false);
@@ -512,11 +512,11 @@ function ZoneDialog({
     for (const entry of pending) {
       const { routine, schedule } = entry;
       try {
-        const current = await bridge.invoke({ type: "readRoutine", id: routine.id });
-        if (bridge.getState().connection.gatewayId !== sentTo.current) {
-          unresolved.push(entry);
-          continue;
-        }
+        const current = await bridge.invoke({
+          type: "readRoutine",
+          id: routine.id,
+          gateway: sentTo.current,
+        });
         if (current && sameSchedule(current.schedule, schedule)) changed.push(routine.name);
         else if (current?.schedule.tz && current.schedule.tz !== schedule.tz)
           notes.push(
@@ -552,6 +552,19 @@ function ZoneDialog({
       ({ routines: fresh, omitted } = await bridge.invoke({ type: "readBotRoutines", botId }));
     } catch (error) {
       setResult({ changed: [], notes: [errorText(error)], pending: [] });
+      onChecking(false);
+      setBusy(false);
+      return;
+    }
+    // Changing only the listed ones would leave the bot's routines in two zones.
+    if (omitted > 0) {
+      setResult({
+        changed: [],
+        notes: [
+          `The gateway has ${omitted} more of ${botName}'s routines than Clawtrate can list, so nothing was changed.`,
+        ],
+        pending: [],
+      });
       onChecking(false);
       setBusy(false);
       return;
@@ -599,10 +612,6 @@ function ZoneDialog({
         outcome.pending.push({ routine, schedule });
       }
     }
-    if (omitted > 0)
-      outcome.notes.push(
-        `${omitted} more of ${botName}'s routines weren't listed, so they weren't changed.`,
-      );
     await settle(outcome);
   };
   const needsCheck = result && result.pending.length > 0;

@@ -4118,8 +4118,8 @@ export class ClawtrateClient {
   }
 
   /** One routine as the gateway has it now: what a save in doubt is checked against. */
-  readRoutine(id: string): Promise<Routine | null> {
-    return this.routines.readOne(id);
+  readRoutine(id: string, gateway?: string | null): Promise<Routine | null> {
+    return this.routines.readOne(id, gateway);
   }
 
   /** The routine a draft made, if the gateway lists it. */

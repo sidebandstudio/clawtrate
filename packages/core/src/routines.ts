@@ -41,6 +41,8 @@ export const MAX_RUN_CONVERSATION_CHARS = 160_000;
 export const MAX_ROUTINE_RUN_TEXT_CHARS = 2_048;
 /** `cron.list` and `cron.runs` take at most 200 a page (protocol schema). */
 const PAGE = 200;
+const UNCONFIRMED =
+  "Another gateway is connected now, so this routine couldn't be checked on the one it was changed on.";
 /** Pages of a run's conversation read back to its first message (`cron.history`, newest page first). */
 const MAX_HISTORY_PAGES = 5;
 /** While a routine is marked running, the list is read again this often: a `finished` can be dropped. */
@@ -953,8 +955,17 @@ export class RoutinesEngine {
   }
 
   /** One routine as the gateway has it now, or null when it has none by that id. Reads only. */
-  async readOne(id: string): Promise<Routine | null> {
-    return (await this.readRevised(id))?.routine ?? null;
+  async readOne(id: string, gateway?: string | null): Promise<Routine | null> {
+    // A read-back names the gateway its write went to. Another gateway may be
+    // connected by the time it is sent or answered, and its routine by the
+    // same id says nothing about that write.
+    const epoch = this.epoch;
+    const elsewhere = () =>
+      gateway !== undefined && (epoch !== this.epoch || this.ctx.identity() !== gateway);
+    if (elsewhere()) throw new Error(UNCONFIRMED);
+    const read = await this.readRevised(id);
+    if (elsewhere()) throw new Error(UNCONFIRMED);
+    return read?.routine ?? null;
   }
 
   /** A routine with the gateway's token for its definition, which `cron.update` can be held to. */

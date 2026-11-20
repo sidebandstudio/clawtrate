@@ -539,7 +539,14 @@ export function routineCommand(
       return later(300, () => made);
     }
     case "readRoutine":
-      return answer(command.id, () => null).then(() => later(300, () => kept(command.id) ?? null));
+      // As the engine does: a read-back answered on another gateway is refused.
+      return answer(command.id, () => null)
+        .then(() => later(300, () => null))
+        .then(() => {
+          if (command.gateway !== undefined && !bound(command.gateway))
+            throw new Error("Another gateway is connected now.");
+          return kept(command.id) ?? null;
+        });
     case "updateRoutine": {
       if (!admin()) return Promise.resolve({ status: "not-sent", reason: "admin" });
       if (!bound(command.gateway))

@@ -206,8 +206,11 @@ export type BridgeCommand =
   | { type: "createRoutine"; input: NewRoutine; key: string; gateway: string | null }
   /** The routine a draft made, found by the draft's key: after a create whose answer never came. */
   | { type: "findCreatedRoutine"; key: string }
-  /** One routine as the gateway has it now; reads only. */
-  | { type: "readRoutine"; id: string }
+  /**
+   * One routine as the gateway has it now; reads only. With `gateway`, a
+   * read-back of a write: answered by any other gateway, it is refused.
+   */
+  | { type: "readRoutine"; id: string; gateway?: string | null }
   /** `original` is what the editor opened with; only what differs from it is written. */
   | {
       type: "updateRoutine";
@@ -903,7 +906,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "routines list"),
       };
     case "readRoutine":
-      return { type: command.type, id: id(command.id, "routine id") };
+      return {
+        type: command.type,
+        id: id(command.id, "routine id"),
+        ...(command.gateway === undefined ? {} : { gateway: optionalGateway(command.gateway) }),
+      };
     case "readGatewayHooks":
       return { type: "readGatewayHooks" };
     case "refreshAccounts":
@@ -1487,7 +1494,7 @@ class ViewerSession implements BridgeSession {
       case "findCreatedRoutine":
         return client.findCreatedRoutine(command.key);
       case "readRoutine":
-        return client.readRoutine(command.id);
+        return client.readRoutine(command.id, command.gateway);
       case "updateRoutine":
         return client.updateRoutine(
           command.id,
