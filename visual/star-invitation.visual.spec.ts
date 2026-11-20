@@ -108,10 +108,18 @@ for (const size of SIZES.filter((s) => s.phone || s.width === 1440)) {
       await expect(cli).toHaveAccessibleDescription(
         "Stars sidebandstudio/clawtrate as the account the GitHub CLI is signed in to on this computer.",
       );
+      const accent = await page.evaluate(() => {
+        const sample = document.body.appendChild(document.createElement("span"));
+        sample.style.color = "var(--accent-line)";
+        const color = getComputedStyle(sample).color;
+        sample.remove();
+        return color;
+      });
       await browser.focus();
       for (const control of [cli, browser, dismiss]) {
         await page.keyboard.press(control === cli ? "Shift+Tab" : "Tab");
         await expect(control).toBeFocused();
+        await expect(control).toHaveCSS("outline-color", accent);
         await expect(control).toHaveCSS("outline-width", "2px");
         await expect(control).toHaveCSS("outline-offset", "2px");
       }
@@ -121,6 +129,13 @@ for (const size of SIZES.filter((s) => s.phone || s.width === 1440)) {
       await page.keyboard.press("ControlOrMeta+,");
       await page.getByRole("button", { name: "About", exact: true }).click();
       const about = page.getByRole("link", { name: "Star Clawtrate on GitHub" });
+      await about.focus();
+      await page.keyboard.press("Shift+Tab");
+      await page.keyboard.press("Tab");
+      await expect(about).toBeFocused();
+      await expect(about).toHaveCSS("outline-color", accent);
+      await expect(about).toHaveCSS("outline-width", "2px");
+      await expect(about).toHaveCSS("outline-offset", "2px");
       const rect = (await about.boundingBox())!;
       expect(rect.height).toBeGreaterThanOrEqual(44);
       if (size.phone) expect(rect.width).toBeGreaterThanOrEqual(size.width - 40);
