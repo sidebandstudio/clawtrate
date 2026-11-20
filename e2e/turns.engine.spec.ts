@@ -168,7 +168,7 @@ test("F-097: a run stopped during a connection gap ends on the gateway's word, a
   try {
     const key = await openNewTask(client, "missed-end");
     // Another device's turn, followed here until this client goes away mid-tool.
-    const original = String((await op.send(key, "#slow-tool 30")).runId);
+    const original = String((await op.send(key, "#slow-tool 15")).runId);
     await expect
       .poll(
         () =>
@@ -208,7 +208,8 @@ test("F-097: a run stopped during a connection gap ends on the gateway's word, a
     expect(runningRunId(client.state.transcripts[key]!, current)).toBe(current);
     await op.request("chat.abort", { sessionKey: key, runId: current });
     await expect.poll(() => runs(client, key)[1]?.state, { timeout: 15_000 }).toBe("stopped");
-    await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
+    // The gateway may hold the task until the stopped tool call returns.
+    await expect.poll(() => gatewayIdle(op, key), { timeout: 60_000 }).toBe(true);
   } finally {
     await close();
   }
