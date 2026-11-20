@@ -338,7 +338,9 @@ await type(p, "transcode_cache");
 check("R3 a piece with punctuation is a phrase: its words together, in order", (await groupText(p, "messages")).includes("All 3 matching messages"));
 await type(p, "cache_transcode");
 check("R3 the same words out of order don't match", !(await body(p)).includes("Messages ·"));
-for (const q of ["!", "transcode !"]) {
+await type(p, "transcode-cache");
+check("R3 the punctuation example: transcode-cache is the same phrase as transcode_cache", (await groupText(p, "messages")).includes("All 3 matching messages"));
+for (const q of ["!", "transcode !", "cache -"]) {
   await type(p, q);
   check(`R3 a piece with no token matches no messages: ${q}`, !(await body(p)).includes("Messages ·") && (await requests(p, "messages")).some((r) => r.query === q));
 }
@@ -489,6 +491,7 @@ p = await open("palette=open&q=transcode&gone=unlisted");
 await settle(p);
 const un = await groupText(p, "messages");
 check("R4 a task the list never held: its title from the reply, and why it can't open", un.includes("Old transcode settings") && un.includes("This task isn't in this device's task list, which keeps up to 500 tasks."));
+check("R4 its name keeps the returned title and the reason, though the gateway matched a readable task beyond the device's list", (await p.evaluate(() => [...document.querySelectorAll('.s-row[data-kind="message"]')].find((r) => r.innerText.includes("Old transcode settings"))?.getAttribute("aria-label") || "")).match(/^Message in Old transcode settings, .*This task isn't in this device's task list, which keeps up to 500 tasks\.$/) !== null);
 await activate(p, "Old transcode settings");
 check("S9 its active row says Can't open, and Enter does not open it", (await activeText(p)).includes("Can't open") && (await (async () => { await p.keyboard.press("Enter"); return paletteOpen(p); })()));
 await p.close();
