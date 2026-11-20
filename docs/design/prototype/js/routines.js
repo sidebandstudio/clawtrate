@@ -310,7 +310,7 @@
     return [...instants].sort((a, b) => a - b).slice(0, max);
   }
   // What Clawtrate can't expand is drawn only at the gateway's own next run (section 4).
-  const computable = (r) => ["at", "every"].includes(r.schedule.kind) || (r.schedule.kind === "cron" && r.schedule.tz && !r.pacing && !cronSpec(r.schedule.expr).error);
+  const computable = (r) => !r.pacing && (["at", "every"].includes(r.schedule.kind) || (r.schedule.kind === "cron" && r.schedule.tz && !cronSpec(r.schedule.expr).error));
   // The gateway's own `state.nextRunAtMs` when the job carries it; computed only for a fixture without it.
   function nextRun(r) {
     if (!r.enabled) return;
@@ -423,10 +423,10 @@
 
   const S = {
     view: P.get("view") || "list",
-    bot: P.get("bot") || "",
-    routine: P.get("routine") || "digest",
+    bot: bots.find((b) => b.id === P.get("bot"))?.id || "",
+    routine: routines.find((r) => r.id === P.get("routine"))?.id || "digest",
     access: P.get("access") || "admin",
-    req: P.get("req") || "",
+    req: ["asking", "requested", "denied", "expired", "failed", "granted"].includes(P.get("req")) ? P.get("req") : "",
     state: P.get("state") || "",
     run: P.has("run") ? +P.get("run") : null,
     runstate: P.get("runstate") || "",
@@ -446,7 +446,7 @@
   if (S.state === "noruns") r0().runs = [];
   if (S.state === "deleted") S.deleted = true;
   // runs=25: more runs than the page shows, newest first, every six hours.
-  if (P.has("runs")) r0().runs = Array.from({ length: +P.get("runs") }, (_, k) => ({ ...run(0, 10, 0), at: at(0, 10, 0) - k * 6 * HOUR }));
+  if (P.has("runs")) r0().runs = Array.from({ length: Math.min(200, Math.max(0, Number(P.get("runs")) || 0)) }, (_, k) => ({ ...run(0, 10, 0), at: at(0, 10, 0) - k * 6 * HOUR }));
   // A successful one-shot: the gateway sends finished, then removed, and keeps nothing of it.
   if (S.state === "ran-once") {
     r0().runs = [run(0, 9, 0, { sessionKey: "agent:marlow:main", summary: "Posted the reminder in Marlow's main conversation.", dur: 0.4, tokens: 0 })];
@@ -518,12 +518,12 @@
   // The rail ------------------------------------------------------------------------------------
 
   function renderRail() {
-    const running = routines.find((r) => r.running);
     $("#bot-list").innerHTML = bots
       .map((b) => {
         // An isolated agent routine's latest run of the last 24 hours (Clawtrate's choice).
         const runRow = routines.filter((r) => !r.gone && r.bot === b.id && r.sessionTarget === "isolated" && r.payload.kind === "agentTurn" && r.runs.length && r.runs[0].at > NOW - DAY);
-        const busy = running && running.bot === b.id;
+        const running = routines.find((r) => !r.gone && r.bot === b.id && r.running);
+        const busy = !!running;
         // checkin=running: a run whose agent events carry isHeartbeat is in progress.
         const checking = P.get("checkin") === "running" && b.id === "juniper";
         const preview = S.view === "convo" && b.id === "juniper" ? `${liveCheckin ? "Checked in: " : ""}The rebate form is due in three days and still needs the model number.` : b.preview;
@@ -574,7 +574,7 @@
     const [text, actions] = rows[S.req] || rows[""];
     return (
       `<footer class="composer r-access" data-run="read"><div class="composer-inner">` +
-      `<section class="access-bar" role="region" aria-label="Access" data-state="${S.req || "read"}"${S.req === "failed" ? ' data-tone="danger"' : ""}>` +
+      `<section class="access-bar" role="region" aria-label="Access" data-state="${esc(S.req || "read")}"${S.req === "failed" ? ' data-tone="danger"' : ""}>` +
       `<div class="access-row">${text}${actions}</div>` +
       (S.req === "requested"
         ? `<div class="command-line"><code>${cmd}</code></div><div class="access-row"><span class="access-id">Request <span class="mono">3f9a2c71</span>` +
@@ -607,8 +607,8 @@
 
   const visibleRoutines = () => routines.filter((r) => !r.gone && (!S.bot || r.bot === S.bot));
   function botSelect() {
-    return `<button type="button" class="b-select" data-r="bot-menu" aria-haspopup="menu" aria-expanded="false" aria-label="Bots: ${S.bot ? botName(S.bot) : "All bots"}">` +
-      `<span>${S.bot ? botName(S.bot) : "All bots"}</span>${icon("chevron")}</button>`;
+    return `<button type="button" class="b-select" data-r="bot-menu" aria-haspopup="menu" aria-expanded="false" aria-label="Bots: ${S.bot ? esc(botName(S.bot)) : "All bots"}">` +
+      `<span>${S.bot ? esc(botName(S.bot)) : "All bots"}</span>${icon("chevron")}</button>`;
   }
   function row(r) {
     const [line, spoken] = rowLine(r);
@@ -653,7 +653,7 @@
     );
   }
   function renderList() {
-    const list = visibleRoutines();
+    const list = S.state === "empty" ? [] : visibleRoutines();
     const head =
       `<header class="r-head">${phone() ? backButton("Back to bots", "to-bots") : ""}<h1 id="view-title">Routines</h1><span class="spacer"></span>${seg()}` +
       (isAdmin() ? newButton(S.bot ? `New routine for ${botName(S.bot)}` : "New routine") : "") + `</header>`;
@@ -711,7 +711,7 @@
       heads += `<div class="r-cal-dayhead" aria-hidden="true" data-today="${today}">${today ? "Today" : WEEK[p.dow]}<small>${MONTHS[p.m - 1]} ${p.d}</small></div>`;
       bands += `<div class="r-cal-bands">${e > NOW ? frequent.map((r) => { const w = r.schedule.kind === "every" ? everyWords(r.schedule.everyMs).toLowerCase() : r.schedule.expr; return `<div class="r-cal-band" title="${esc(`${w} · ${botName(r.bot)}'s ${r.name}${r.trigger ? ", only when its check passes" : ""}`)}">${esc(`${r.name} · ${w}`)}</div>`; }).join("") : ""}</div>`;
       const items = [];
-      for (const r of mine) for (const x of r.runs) if (x.at >= s0 && x.at < Math.min(e, NOW)) items.push({ r, t: x.at, ran: x });
+      for (const r of mine) for (const x of r.runs.slice(0, 20)) if (x.at >= s0 && x.at < Math.min(e, NOW)) items.push({ r, t: x.at, ran: x });
       if (e > NOW)
         for (const r of placed) {
           if (computable(r)) for (const t of occurrences(r.schedule, Math.max(s0, NOW), e)) items.push({ r, t });
@@ -787,7 +787,7 @@
       ? note(`<p><b>This routine ran once, and the gateway removed it.</b> Its run succeeded ${esc(when(lastRun(r).at))}. The gateway keeps nothing more of it, so once you leave this page it isn't shown again.</p><div class="b-actions">${button("Back to routines", 'data-r="back"')}</div>`)
       : S.deleted ? note(`<p><b>This routine was deleted.</b> It won't run again.</p><div class="b-actions">${button("Back to routines", 'data-r="back"')}</div>`, "warn") : "";
     body += `<p class="r-state" role="status" data-testid="state-line">${state}${S.already ? `<span class="r-already">It's already running.</span>` : ""}</p>` +
-      (S.runError ? `<p class="r-row-error" role="alert" data-testid="run-error-line">Couldn't start a run: ${esc(S.runError)}</p>` : "");
+      (S.runError?.id === r.id ? `<p class="r-row-error" role="alert" data-testid="run-error-line">Couldn't start a run: ${esc(S.runError.message)}</p>` : "");
     // Instruction
     let instruction;
     if (r.payload.kind === "systemEvent") instruction = `<p class="r-hint">Posts a reminder in ${botName(r.bot)}'s main conversation:</p><p class="r-instruction">${esc(r.payload.text)}</p>`;
@@ -902,6 +902,7 @@
   // Paint ----------------------------------------------------------------------------------------------------
 
   function paint(focusSel) {
+    if (phone() && ["3day", "week"].includes(S.view)) S.view = "day";
     const v = S.view;
     const out = v === "routine" ? renderRoutine() : v === "run" ? renderRun() : v === "convo" ? renderConvo() : ["day", "3day", "week"].includes(v) ? renderCalendar() : renderList();
     const el = $("#view");
@@ -935,8 +936,14 @@
     at: ev.runAtMs, status: ev.status, completion: ev.completionStatus, error: ev.error, delivery: ev.deliveryError, summary: ev.summary,
     dur: (ev.durationMs ?? 0) / 1000, inT: ev.usage?.input_tokens ?? 0, outT: ev.usage?.output_tokens ?? 0, tokens: ev.usage?.total_tokens ?? 0, manual: !!ev.manual, history: ev.history,
   });
+  let completedOneShot = null;
   function applyEvent(ev) {
     const r = routines.find((x) => x.id === (ev.job?.id ?? ev.jobId));
+    if (ev.action !== "added" && (!r || r.gone)) return;
+    const removedAfterCompletion = ev.action === "removed" && completedOneShot === r.id;
+    completedOneShot = ev.action === "finished" && r?.schedule.kind === "at" &&
+      r.deleteAfterRun && ev.manual === false && ev.status === "ok" &&
+      ev.completionStatus === "succeeded" && ev.nextRunAtMs === null ? r.id : null;
     const onScreen = r && ((["routine", "run"].includes(S.view) && S.routine === r.id) || D?.id === r.id);
     const inDialog = () => {
       const a = document.activeElement;
@@ -958,9 +965,9 @@
     } else if (ev.action === "removed") {
       r.gone = true;
       // A one-shot removes itself after it succeeds (deleteAfterRun): finished, then removed.
-      if (["routine", "run"].includes(S.view) && S.routine === r.id) S.deleted = r.deleteAfterRun && lastRun(r)?.status === "ok" ? "once" : true;
+      if (["routine", "run"].includes(S.view) && S.routine === r.id) S.deleted = removedAfterCompletion ? "once" : true;
       if (D?.id === r.id) {
-        D.status = "deleted";
+        if (!["saving", "noanswer", "checking"].includes(D.status)) D.status = "deleted";
         renderEditor(inDialog());
       }
       if (onScreen) announce(`${r.name} was deleted elsewhere`);
@@ -1055,14 +1062,15 @@
     setTimeout(() => {
       S.starting = false;
       if (P.get("runfail") === "1") {
-        S.runError = "the gateway didn't answer.";
+        S.runError = { id, message: "the gateway didn't answer." };
         announce("Couldn't start a run");
         return repaint();
       }
       const runId = `manual:${id}:${NOW}:${++runSeq}`;
+      const instruction = r.payload.kind === "agentTurn" ? r.payload.message : null;
       applyEvent({ action: "started", jobId: id, runAtMs: NOW });
       setTimeout(() => {
-        applyEvent({ action: "finished", jobId: id, runId, runAtMs: NOW, status: "ok", completionStatus: "succeeded", durationMs: 2400, usage: { input_tokens: 124, output_tokens: 80, total_tokens: 204 }, summary: DIGEST_SUMMARY, manual: true, history: r.payload.kind === "agentTurn" ? recorded(r.payload.message, DIGEST_SUMMARY) : undefined });
+        applyEvent({ action: "finished", jobId: id, runId, runAtMs: NOW, status: "ok", completionStatus: "succeeded", durationMs: 2400, usage: { input_tokens: 124, output_tokens: 80, total_tokens: 204 }, summary: DIGEST_SUMMARY, manual: true, history: instruction === null ? undefined : recorded(instruction, DIGEST_SUMMARY) });
       }, 1800);
     }, 500);
   }
@@ -1223,7 +1231,7 @@
       notes += note(
         f.kind === "same" ? `<p><b>${esc(r.name)} now reads as you typed it.</b> That may be your save, or the same change made elsewhere.</p><div class="b-actions">${button("Close", 'data-size="sm" data-r="edit-close"')}</div>`
           : f.kind === "differs" ? `<p><b>${esc(r.name)} doesn't read as you typed it.</b> The gateway has: ${esc(f.has)}.</p><div class="b-actions">${button("Check again", 'data-size="sm" data-r="check-now"')}${again}</div>`
-          : f.kind === "match" ? `<p><b>The gateway has ${f.ids.length === 1 ? "a routine" : `${f.ids.length} routines`} for ${botName(d.submitted.params.agentId)} named ${esc(d.submitted.params.name)},</b> created ${esc(when(f.at))}. It may be the one you saved, or one made elsewhere.</p><div class="b-actions">${button("Open it", `data-size="sm" data-r="open-found" data-id="${f.ids[0]}"`)}${again}</div><p class="r-hint">Saving again makes another routine if that one is yours.</p>`
+          : f.kind === "match" ? `<p><b>The gateway has ${f.ids.length === 1 ? "a routine" : `${f.ids.length} routines`} for ${botName(d.submitted.params.agentId)} named ${esc(d.submitted.params.name)}${f.at == null ? ".</b>" : `,</b> created ${esc(when(f.at))}.`} It may be the one you saved, or one made elsewhere.</p><div class="b-actions">${button("Open it", `data-size="sm" data-r="open-found" data-id="${f.ids[0]}"`)}${again}</div><p class="r-hint">Saving again makes another routine if that one is yours.</p>`
           : `<p><b>The gateway has no routine for ${botName(d.submitted.params.agentId)} named ${esc(d.submitted.params.name)}.</b> The save may still arrive.</p><div class="b-actions">${button("Check again", 'data-size="sm" data-r="check-now"')}${again}</div>`,
         "warn",
       );
@@ -1315,7 +1323,13 @@
     // Save is disabled while saving, so focus waits on the heading rather than falling to the page.
     renderEditor("#edit-title");
     setTimeout(() => {
-      if (current?.gone) return;
+      if (current?.gone) {
+        if (D === d) {
+          d.status = "noanswer";
+          renderEditor('[data-r="check-now"]');
+        }
+        return;
+      }
       // An answer belongs to the draft that sent it, even if its dialog has closed since.
       if (D !== d) {
         if (!["adminlost", "refused", "conflict", "noanswer"].includes(outcomeOf)) {
@@ -1361,7 +1375,13 @@
     renderEditor("#edit-title");
     setTimeout(() => {
       if (D !== d || d.status !== "checking") return;
-      const r = d.id && routines.find((x) => x.id === d.id);
+      const r = d.id && routines.find((x) => x.id === d.id && !x.gone);
+      if (d.id && !r) {
+        d.status = "deleted";
+        renderEditor('[data-r="save-as-new"]');
+        announce("The routine was deleted");
+        return;
+      }
       if (r) {
         const patch = d.submitted.params.patch;
         const differs = Object.keys(patch).some((k) => !sameField(k, r[k], patch[k]));
@@ -1462,7 +1482,7 @@
     if (!isAdmin()) return;
     const c = checkins[bot];
     const choice = ciChoice(c);
-    C = { bot, choice, initial: choice, every: "2h", prompt: c?.prompt || "", status: "" };
+    C = { bot, choice, initial: choice, every: ({ [15 * MIN]: "15m", [HOUR]: "1h", [2 * HOUR]: "2h", [4 * HOUR]: "4h", [8 * HOUR]: "8h", [12 * HOUR]: "12h" })[c?.every] ?? "2h", prompt: c?.prompt || "", status: "" };
     renderCheckins();
   }
 
@@ -1630,7 +1650,7 @@
       case "bot-menu":
         return openMenu(t, [["All bots", "pick-bot", 'data-id=""'], ...bots.map((b) => [b.name, "pick-bot", `data-id="${b.id}"`])]);
       case "pick-bot":
-        return go("list", { bot: id, focus: '[data-r="bot-menu"]' });
+        return go(S.view, { bot: id, focus: '[data-r="bot-menu"]' });
       case "new":
         return openEditor(null);
       case "edit":

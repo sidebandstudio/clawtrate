@@ -3193,13 +3193,36 @@ export function settleVanishedRuns(
   inFlightRunId: string | null,
   ctx: EngineContext,
   busy = false,
+  /** Runs a terminal `sessions.changed` row named, by id, to the phase it reported. */
+  namedEnded?: ReadonlyMap<string, "end" | "error">,
+  /** Runs whose end history holds only in its rows' shape, never as a reply. */
+  historyInferred?: ReadonlySet<string>,
 ): Run[] {
   return runs.map((run) => {
-    if (!activeBefore.has(run.id) || isTerminal(run.state) || run.state === "queued") return run;
-    if (busy && run.id !== inFlightRunId && !historyRunIds.has(run.id)) return run;
-    if (historyRunIds.has(run.id) || run.id === inFlightRunId) return run;
-    const settled = finishRun(run, run.state === "stopping" ? "stopped" : "completed", ctx);
-    return { ...settled, outcomeKnown: false };
+    const named = namedEnded?.get(run.id);
+    if (run.state === "queued") return run;
+    // A terminal state history only inferred (its rows' shape, or the vanished
+    // rule) gives way to the phase a terminal row named; an established one is final.
+    if (isTerminal(run.state) && (!named || run.outcomeKnown)) return run;
+    if (!named && !activeBefore.has(run.id)) return run;
+    if (
+      run.id === inFlightRunId ||
+      (historyRunIds.has(run.id) && (!named || !historyInferred?.has(run.id)))
+    )
+      return run;
+    if (!named) {
+      if (busy && run.id !== inFlightRunId && !historyRunIds.has(run.id)) return run;
+      const settled = finishRun(run, run.state === "stopping" ? "stopped" : "completed", ctx);
+      return { ...settled, outcomeKnown: false };
+    }
+    // The row said this run ended and history could not say how: settle it as
+    // the row said, with the reply unknown rather than invented.
+    const to: "failed" | "completed" = named === "error" ? "failed" : "completed";
+    const settled = isTerminal(run.state) ? { ...run, state: to } : finishRun(run, to, ctx);
+    // The row said how it ended; whether it ended with a reply, only history could say.
+    return named === "error"
+      ? { ...settled, outcomeKnown: true }
+      : { ...settled, outcomeKnown: false };
   });
 }
 
