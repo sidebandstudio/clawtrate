@@ -595,34 +595,44 @@
 
   // The Instructions page (section 6).
   // Each changed file is written on its own, with the hash it was read with, and
-  // read back on its own: one row per file.
-  const I = { draft: null, status: null, rows: null, savedAt: null };
-  if (p("instr") === "conflict") I.draft = { agents: instr("juniper").agents.replace("Keep answers under 300 words.", "Keep answers under 200 words."), soul: "Curious, careful, brief.\n" };
+  // read back on its own: one row per file. Drafts, hashes and outcomes are kept
+  // per bot: switching bots never shows or saves another bot's draft.
+  const I = { by: {} };
+  const IS = (id) => (I.by[id] ??= { draft: null, status: null, rows: null, savedAt: null, theirs: {}, sent: {} });
+  if (p("instr") === "conflict" || p("instr") === "conflict2") IS("juniper").draft = { agents: instr("juniper").agents.replace("Keep answers under 300 words.", "Keep answers under 200 words."), soul: "Curious, careful, brief.\n" };
   const FILES = { agents: "AGENTS.md", soul: "SOUL.md" };
+  // What another writer puts in SOUL.md on the gateway, and, with instr=conflict2, a second change after that.
   const theirsSoul = "Curious, careful, plain-spoken. Never guess.\n";
+  const newerSoul = "Curious, careful, plain-spoken. Never guess. Cite sources.\n";
+  const hashOf = (t) => "sha256:" + [...t].reduce((a, c) => (Math.imul(a, 31) + c.charCodeAt(0)) >>> 0, 7).toString(16).padStart(8, "0");
+  // The gateway's copy of a file, as the fixture has it (another writer may have changed it).
+  const gatewayText = (id, k) => (I.by[id]?.gw?.[k] ?? instr(id)[k]);
   CT.botsPageViews = Object.assign(CT.botsPageViews || {}, {
     instructions: (id) => {
       const i = instr(id);
+      const st = IS(id);
       const name = esc(nameOf(id));
       const admin = isAdmin();
-      const draft = I.draft || i;
-      const changed = I.draft && (I.draft.agents !== i.agents || I.draft.soul !== i.soul);
+      const draft = st.draft || i;
+      const changed = st.draft && (st.draft.agents !== i.agents || st.draft.soul !== i.soul);
       const field = (key, title, file, help) => {
-        const word = I.rows?.[key];
+        const word = st.rows?.[key];
         return (
           `<h4 class="b-group"><label for="lc-${key}">${title}</label> <span class="b-faint">· ${file}</span></h4>` +
           (admin
             ? `<textarea class="input lc-text" id="lc-${key}" data-lc-instr="${key}" rows="${key === "agents" ? 9 : 3}" spellcheck="true">${esc(draft[key])}</textarea>`
             : `<pre class="lc-text lc-text-read" id="lc-${key}" tabindex="0">${esc(i[key])}</pre>`) +
-          (word ? `<p class="lc-file-row" data-state="${word === "Written" ? "done" : "failed"}" data-lc-file-row="${key}" role="status">${glyph(word === "Written" ? "done" : "failed")}${file}: ${word}${word === "Written" ? `, read back at ${I.savedAt}` : ""}</p>` : "") +
+          (word ? `<p class="lc-file-row" data-state="${word === "Written" ? "done" : "failed"}" data-lc-file-row="${key}" role="status">${glyph(word === "Written" ? "done" : "failed")}${file}: ${word}${word === "Written" ? `, read back at ${st.savedAt}` : ""}</p>` : "") +
           (word === "Changed on the gateway"
             ? note(
-                `<p><b>${file} changed on the gateway while you were editing.</b> Your text is kept here. The gateway now has:</p><pre class="lc-theirs">${esc(theirsSoul)}</pre>` +
+                `<p><b>${file} changed on the gateway ${st.again?.[key] ? "again" : "while you were editing"}.</b> Your text is kept here. The gateway now has:</p><pre class="lc-theirs" data-lc-theirs="${key}" data-lc-hash="${hashOf(st.theirs[key])}">${esc(st.theirs[key])}</pre>` +
                   `<div class="b-actions">${button("Save mine over it", `data-lc="instr-mine" data-lc-file="${key}" data-size="sm"`)}${button("Use the gateway's", `data-lc="instr-theirs" data-lc-file="${key}" data-size="sm"`, "quiet")}</div>`,
                 "warn",
               )
             : "") +
-          (word === "Couldn't check" ? `<p class="b-hint">Clawtrate couldn't read ${file} back: the gateway didn't answer. Your text is kept here, and Save writes it again after reading what the gateway has.</p>` : "") +
+          (word === "Couldn't check"
+            ? `<p class="b-hint">Clawtrate couldn't read ${file} back: the gateway didn't answer. Your text is kept here. Check again only reads it.</p><div class="b-actions">${button("Check again", `data-lc="instr-check" data-lc-file="${key}" data-size="sm"`)}</div>`
+            : "") +
           `<p class="b-hint">${help}</p>`
         );
       };
@@ -634,7 +644,7 @@
         `<p class="b-hint">Memory is separate: what ${name} remembers is under Memory, and these files don't change it.</p>` +
         (admin
           ? `<div class="b-actions lc-instr-actions"><span class="spacer"></span>` +
-            button(I.status === "saving" ? "Saving…" : "Save", `data-lc="instr-save" data-size="sm"${changed && I.status !== "saving" ? "" : " disabled"}${I.status === "saving" ? ' aria-busy="true"' : ""}`, "primary") +
+            button(st.status === "saving" ? "Saving…" : "Save", `data-lc="instr-save" data-size="sm"${changed && st.status !== "saving" ? "" : " disabled"}${st.status === "saving" ? ' aria-busy="true"' : ""}`, "primary") +
             `</div>`
           : "")
       );
@@ -642,42 +652,90 @@
   });
   CT.botsPageNeeds = Object.assign(CT.botsPageNeeds || {}, { instructions: (name) => `Changing ${name}'s instructions needs admin access.` });
 
-  function saveInstructions(only) {
-    const id = app.model.selectedBot;
+  const fileWord = (word) => (word === "Couldn't check" ? "couldn't check" : "changed on the gateway");
+  // Save: each changed file of the bot it was pressed for, from a copy of that bot's draft.
+  function saveInstructions(id) {
+    const st = IS(id);
     const i = instr(id);
-    const keys = only ? [only] : Object.keys(FILES).filter((k) => I.draft && I.draft[k] !== i[k]);
-    I.status = "saving";
+    const draft = { ...st.draft };
+    const keys = Object.keys(FILES).filter((k) => draft[k] !== i[k]);
+    st.status = "saving";
     CT.botsRender();
     setTimeout(() => {
-      // agents.files.set per file with the hash it was read with, then agents.files.get per file.
-      I.rows = { ...(I.rows || {}) };
-      I.savedAt = "5:44 PM";
+      st.rows = { ...(st.rows || {}) };
+      st.savedAt = "5:44 PM";
       for (const k of keys) {
+        // agents.files.set with the hash the file was read with, then agents.files.get.
+        L.calls.push(["agents.files.set", id, k, hashOf(i[k])]);
         let word = "Written";
-        if (!only && p("instr") === "conflict" && k === "soul") word = "Changed on the gateway";
-        if (!only && p("instrfail") && k === "agents" && !I.retried) word = "Couldn't check";
-        I.rows[k] = word;
-        if (word === "Written") i[k] = I.draft[k];
+        if ((p("instr") === "conflict" || p("instr") === "conflict2") && id === "juniper" && k === "soul" && !st.theirs.soul) {
+          word = "Changed on the gateway";
+          st.gw = { ...(st.gw || {}), soul: theirsSoul };
+          st.theirs.soul = theirsSoul;
+        }
+        if (p("instrfail") && k === "agents" && !st.failedOnce) {
+          // The write landed; its read-back got no answer.
+          st.failedOnce = true;
+          word = "Couldn't check";
+          st.sent[k] = draft[k];
+        }
+        st.rows[k] = word;
+        if (word === "Written") i[k] = draft[k];
       }
-      if (p("instrfail")) I.retried = true;
       i.at = "Nov 19, 5:44 PM";
-      const open = Object.keys(FILES).some((k) => I.draft[k] !== i[k]);
-      if (!open) I.draft = null;
-      I.status = null;
+      if (Object.keys(FILES).every((k) => st.draft[k] === i[k])) st.draft = null;
+      st.status = null;
       CT.botsRender();
-      const bad = keys.filter((k) => I.rows[k] !== "Written");
-      announce(bad.length ? `${bad.map((k) => FILES[k]).join(" and ")}: not saved` : only ? `${FILES[only]} saved over the gateway's copy` : "Instructions saved");
+      const bad = keys.filter((k) => st.rows[k] !== "Written");
+      announce(bad.length ? bad.map((k) => `${FILES[k]}: ${fileWord(st.rows[k])}`).join(". ") : "Instructions saved");
     }, 450);
+  }
+  // Save mine over it: that one file, with the hash of the gateway text shown. A newer text is shown, and asked about again.
+  function saveMine(id, k) {
+    const st = IS(id);
+    const shown = st.theirs[k];
+    st.status = "saving";
+    CT.botsRender();
+    setTimeout(() => {
+      L.calls.push(["agents.files.set", id, k, hashOf(shown)]);
+      if (p("instr") === "conflict2" && !st.again?.[k]) {
+        st.gw[k] = newerSoul;
+        st.theirs[k] = newerSoul;
+        st.again = { ...(st.again || {}), [k]: true };
+        st.status = null;
+        CT.botsRender();
+        return announce(`${FILES[k]} changed on the gateway again`);
+      }
+      instr(id)[k] = st.draft[k];
+      st.rows[k] = "Written";
+      if (Object.keys(FILES).every((x) => st.draft[x] === instr(id)[x])) st.draft = null;
+      st.status = null;
+      CT.botsRender();
+      announce(`${FILES[k]} saved over the gateway's copy`);
+    }, 450);
+  }
+  // Check again: reads the file; writes nothing.
+  function checkInstruction(id, k) {
+    const st = IS(id);
+    setTimeout(() => {
+      const i = instr(id);
+      if (st.sent[k] !== undefined) i[k] = st.sent[k];
+      st.rows[k] = i[k] === st.sent[k] ? "Written" : st.rows[k];
+      if (st.draft && Object.keys(FILES).every((x) => st.draft[x] === i[x])) st.draft = null;
+      CT.botsRender();
+      announce(`${FILES[k]}: ${st.rows[k] === "Written" ? "read back" : "couldn't check"}`);
+    }, 300);
   }
   document.addEventListener("input", (e) => {
     const area = e.target.closest("[data-lc-instr]");
     if (area) {
       const id = app.model.selectedBot;
-      I.draft = I.draft || { ...instr(id) };
-      I.draft[area.dataset.lcInstr] = area.value;
+      const st = IS(id);
+      st.draft = st.draft || { ...instr(id) };
+      st.draft[area.dataset.lcInstr] = area.value;
       const save = $('[data-lc="instr-save"]');
       const i = instr(id);
-      if (save) save.disabled = I.draft.agents === i.agents && I.draft.soul === i.soul;
+      if (save) save.disabled = st.draft.agents === i.agents && st.draft.soul === i.soul;
     }
     if (e.target.id === "lc-search") {
       L.dialog.query = e.target.value;
@@ -726,50 +784,84 @@
   // The writes of a copy or an import, each with its own read-back row. Every row
   // says what the gateway returned when read: Written, Still has <value>,
   // Changed on the gateway, Couldn't check, or, for a file the source lacks,
-  // No source file.
+  // No source file. The new bot's own values (d.g) change only where a write
+  // landed, and the rows are worked out from them.
+  const NEW_BOT = { picture: "its drawn character", label: "", model: "openai/gpt-5.5", fallbacks: "inherited", effort: "Medium", tools: "the gateway's defaults", skills: "the gateway's defaults" };
+  const START_WORDS = { picture: "its drawn character", label: "no label", model: "the gateway's default, openai/gpt-5.5", fallbacks: "the gateway's list", effort: "the gateway's default, Medium", tools: "the gateway's defaults", skills: "the gateway's defaults", agents: "its starting file", soul: "its starting file" };
+  const OTHER_AGENTS = "# Wren\n\nAnother device's text.\n";
   function writeRows(d) {
     const b = D.binding[d.bot] || {};
-    const src = d.kind === "import" ? WREN() : null;
+    const a = D.acct(d.acct && d.acct !== D.GATEWAY ? d.acct : b.account);
+    const src = d.kind === "import" ? WREN() : { label: botOf(d.bot)?.label || "", model: d.acct === D.GATEWAY ? `${a?.provider || "openai"}/${b.model}` : `${a?.provider || "openai"}/${b.model}@${a ? D.acctName(a) : "gateway"}`, effort: b.effort, agents: instr(d.bot).agents, soul: p("dup") === "nosource" ? null : instr(d.bot).soul };
     const rows = [];
-    const add = (key, label, wanted) => rows.push({ key, label, wanted });
-    if (d.copy.look) add("picture", "Picture"), add("label", "Label");
+    const add = (key, label, want) => rows.push({ key, label, want });
+    if (d.copy.look) add("picture", "Picture", "the source picture"), add("label", "Label", src.label);
     if (d.copy.model) {
-      add("model", d.kind === "import" ? "Model" : "Model and account");
-      add("fallbacks", "Fallback list: none");
-      add("effort", "Effort");
+      add("model", d.kind === "import" ? "Model" : "Model and account", src.model);
+      add("fallbacks", "Fallback list: none", "none");
+      add("effort", "Effort", src.effort);
     }
-    if (d.copy.instr) add("agents", "AGENTS.md"), add("soul", "SOUL.md");
-    if (d.kind !== "import" && d.copy.tools) add("tools", "Tool permissions"), add("skills", "Skills");
-    void b, src;
+    if (d.copy.instr) add("agents", "AGENTS.md", src.agents), add("soul", "SOUL.md", src.soul);
+    if (d.kind !== "import" && d.copy.tools) add("tools", "Tool permissions", "the source's"), add("skills", "Skills", "the source's");
     return rows;
   }
-  // What each row read back, as the fixtures have it.
-  function outcome(d, key) {
-    const want = d.kind === "import" ? p("impresult") : p("dup");
-    if (d.done?.[key]) return "Written";
-    if (want === "nosource" && key === "soul") return "No source file. Left the new bot's starting file";
-    if (want === "partial" && !d.retried) {
-      if (key === "effort") return "Still has the gateway's default, Medium";
-      if (key === "soul") return "Couldn't check";
-      if (key === "agents" && d.kind === "import") return "Changed on the gateway";
-    }
-    return "Written";
+  const startOf = (key) => NEW_BOT[key] ?? START_WORDS[key];
+  // What each row reads back, from the new bot's values and whether its read answered.
+  function outcome(d, r) {
+    if (r.want === null) return "No source file. Left the new bot's starting file";
+    if (d.unread?.[r.key]) return "Couldn't check";
+    const v = d.g[r.key];
+    if (v === r.want) return "Written";
+    if (v === startOf(r.key)) return `Still has ${START_WORDS[r.key]}`;
+    return "Changed on the gateway";
   }
   const settled = (word) => word === "Written" || word.startsWith("No source file");
+  // Try again: identified rows whose current value is still the observed starting value.
+  const retryable = (d, rows) => rows.filter((r) => outcome(d, r).startsWith("Still has"));
+  // The new bot as the rows say: only what read back is the bot's.
+  function applyBacking(d) {
+    const nid = d.newId;
+    if (!nid || !botOf(nid)) return;
+    const src = D.binding[d.bot] || {};
+    const modelLanded = d.g.model && d.g.model !== NEW_BOT.model;
+    D.binding[nid] = modelLanded && d.kind !== "import"
+      ? { ...src, ...(d.acct && d.acct !== D.GATEWAY ? { account: d.acct } : d.acct === D.GATEWAY ? { account: null, mode: "gateway" } : {}), effort: d.g.effort, locked: false }
+      : { account: null, mode: "gateway", model: modelLanded ? d.g.model.split("/")[1] : "gpt-5.5", effort: d.g.effort, locked: false };
+    botOf(nid).label = d.g.label || "";
+    INSTR[nid] = { agents: d.g.agents ?? `# ${d.name.trim()}\n\nA new bot.\n`, soul: d.g.soul ?? "Calm and brief.\n", at: "Nov 19, 5:46 PM" };
+  }
   function stepsView(d) {
     const rows = writeRows(d);
     const at = d.at ?? 0;
     const made = `<li data-state="${at > 0 || d.status !== "working" ? "done" : "running"}">${glyph(at > 0 || d.status !== "working" ? "done" : "sending")}<span>Made ${esc(d.name)}</span><span class="lc-step-word">${at > 0 || d.status !== "working" ? "Listed" : "Writing"}</span></li>`;
+    const show = (v) => esc(v == null ? "nothing" : String(v).length > 60 ? String(v).replace(/\s+/g, " ").trim() : String(v));
     const row = (r, i) => {
+      // While it works, a row already sent has no read-back yet.
+      if (d.status === "working" && i + 1 < at) return `<li data-state="queued">${glyph("queued")}<span>${r.label}</span><span class="lc-step-word">Sent</span></li>`;
       if (d.status === "working" && i + 1 >= at) return `<li data-state="${i + 1 === at ? "running" : "queued"}">${glyph(i + 1 === at ? "sending" : "queued")}<span>${r.label}</span><span class="lc-step-word">${i + 1 === at ? "Writing" : "Waiting"}</span></li>`;
-      const word = outcome(d, r.key);
+      const word = outcome(d, r);
       const ok = settled(word);
-      return `<li data-state="${ok ? "done" : "failed"}" data-lc-row-key="${r.key}">${glyph(ok ? "done" : "failed")}<span>${r.label}</span><span class="lc-step-word">${esc(word)}</span></li>`;
+      return (
+        `<li data-state="${ok ? "done" : "failed"}" data-lc-row-key="${r.key}">${glyph(ok ? "done" : "failed")}<span>${r.label}</span><span class="lc-step-word">${esc(word)}</span></li>` +
+        (word === "Changed on the gateway"
+          ? `<li class="lc-step-detail"><details class="lc-review" data-lc-change="${r.key}"><summary>Review change</summary><p class="b-hint">The gateway has:</p><pre class="lc-theirs">${show(d.g[r.key])}</pre><p class="b-hint">You asked for:</p><pre class="lc-theirs">${show(r.want)}</pre></details></li>`
+          : "")
+      );
     };
+    if (d.status === "lostcreate")
+      return sheet(
+        d.kind === "import" ? `Adding ${esc(d.name)}` : `Duplicating ${esc(nameOf(d.bot))}`,
+        d.roster === "none"
+          ? note(`<p>Couldn't check whether ${esc(d.name)} was created.</p>`, "warn")
+          : note(`<p>Couldn't confirm creation. The gateway lists a bot called ${esc(d.name)}. Open it to review it.</p>`, "warn"),
+        d.roster === "none"
+          ? button("Check again", 'data-lc="dup-check-create" data-size="lg" data-lc-focus', "primary") + button("Close", 'data-lc="close" data-size="lg"', "quiet")
+          : button(`Open ${esc(d.name)}`, 'data-lc="dup-open" data-size="lg" data-lc-focus', "primary") + button("Close", 'data-lc="close" data-size="lg"', "quiet"),
+      );
     const list = `<p class="b-hint lc-first">Each row is what the gateway returned when Clawtrate read it back.</p><ol class="lc-steps" aria-label="What was written">${made}${rows.map(row).join("")}</ol>`;
     const from = d.kind === "import" ? null : esc(nameOf(d.bot));
     if (d.status === "working") return sheet(d.kind === "import" ? `Adding ${esc(d.name)}` : `Duplicating ${from}`, list, "");
-    const missing = rows.filter((r) => !settled(outcome(d, r.key)));
+    const missing = rows.filter((r) => !settled(outcome(d, r)));
     if (!missing.length)
       return sheet(
         "New bot with the selected settings",
@@ -778,12 +870,16 @@
           `<p class="b-hint">What its tools, skills and models do can still differ from ${d.kind === "import" ? "the bot the file came from" : from}: the gateway decides, with its own defaults.</p>`,
         button(`Open ${esc(d.name)}`, 'data-lc="dup-open" data-size="lg" data-lc-focus', "primary"),
       );
+    const canRetry = retryable(d, rows).length > 0;
+    const unread = rows.some((r) => outcome(d, r) === "Couldn't check");
     return sheet(
       "Some settings still need attention",
       `<p class="b-lead">${esc(d.name)} is listed. ${missing.length === 1 ? "One setting doesn't" : `${missing.length} settings don't`} read back as chosen.</p>` +
         list +
-        `<p class="b-hint">Try again writes only these again, each after reading what the gateway has now, so a newer change on the gateway isn't overwritten. Leave it as it is keeps ${esc(d.name)} as the rows say.</p>`,
-      button("Try again", 'data-lc="dup-retry" data-size="lg" data-lc-focus', "primary") + button("Leave it as it is", 'data-lc="dup-open" data-size="lg"', "quiet"),
+        `<p class="b-hint">${unread ? "Check again only reads the rows that couldn't be checked. " : ""}${canRetry ? "Try again writes only the rows that still have their starting value, after reading that they still do. " : ""}A row changed on the gateway keeps the other writer's value. Leave it as it is keeps ${esc(d.name)} as the rows say.</p>`,
+      (unread ? button("Check again", `data-lc="dup-check" data-size="lg"${canRetry ? "" : " data-lc-focus"}`, canRetry ? "" : "primary") : "") +
+        (canRetry ? button("Try again", 'data-lc="dup-retry" data-size="lg" data-lc-focus', "primary") : "") +
+        button("Leave it as it is", 'data-lc="dup-open" data-size="lg"', "quiet"),
     );
   }
 
@@ -794,7 +890,7 @@
     const own = p("dupacct") === "own";
     const b = D.binding[id] || {};
     const a = D.acct(own ? "anthropic:pip" : b.account);
-    if (d.status === "working" || d.status === "done") return stepsView(d);
+    if (d.status === "working" || d.status === "done" || d.status === "lostcreate") return stepsView(d);
     const item = (key, title, sub, disabled) =>
       `<label class="b-check lc-item"><input type="checkbox" data-lc-copy="${key}"${d.copy[key] ? " checked" : ""}${disabled ? " disabled" : ""} /><span class="lc-item-text"><span>${title}</span><span class="b-hint">${sub}</span></span></label>`;
     const shared = D.shared();
@@ -833,10 +929,11 @@
     );
   };
 
-  function runDuplicate(retry) {
+  function runDuplicate() {
     const d = L.dialog;
-    const refuse = d.kind === "import" ? p("impresult") === "taken" : p("dup") === "refused";
-    if (!retry && refuse && !d.refusedOnce) {
+    const want = d.kind === "import" ? p("impresult") : p("dup");
+    const refuse = want === "taken" || want === "refused";
+    if (refuse && !d.refusedOnce) {
       d.refusedOnce = true;
       d.refused = `${d.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
       paint();
@@ -848,42 +945,92 @@
     }
     d.refused = null;
     const rows = writeRows(d);
-    if (retry) {
-      // Only the writes still missing, each after a fresh read of what the gateway has.
-      d.done = Object.fromEntries(rows.map((r) => [r.key, true]));
-      d.retried = true;
-      d.status = "done";
-      paint(true);
-      announce(`${d.name.trim()}: every setting read back as chosen`);
-      return;
-    }
     d.status = "working";
     d.busy = true;
     d.at = 0;
     paint(true);
+    L.calls.push(["agents.create", d.name.trim()]);
+    // The create got no answer: the list is read, and nothing more is written.
+    if (want === "lostcreate" || want === "lostcreate-noroster") {
+      return setTimeout(() => {
+        d.busy = false;
+        d.status = "lostcreate";
+        d.roster = want === "lostcreate" ? "listed" : "none";
+        if (d.roster === "listed") listNewBot(d);
+        paint(true);
+        announce(d.roster === "listed" ? "Couldn't confirm creation" : `Couldn't check whether ${d.name.trim()} was created`);
+      }, 400);
+    }
     const tick = () => {
       d.at += 1;
       if (d.at > rows.length) {
         d.busy = false;
         d.status = "done";
-        let nid = d.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "copy";
-        while (botOf(nid)) nid += "-2";
-        d.newId = nid;
-        CT.botArt[nid] = d.kind === "import" ? CT.botArt.__wren : d.copy.look ? CT.botArt[d.bot] || { body: "drop", color: "#ff6f9c", tilt: 0, look: [0.6, 0] } : { body: "pebble", color: "#9aa0a6", tilt: 0, look: [0.6, 0] };
-        D.binding[nid] = d.kind === "import" || !d.copy.model ? { account: null, mode: "gateway", model: "gpt-5.5", effort: "Medium", locked: false } : { ...(D.binding[d.bot] || {}), ...(d.acct && d.acct !== D.GATEWAY ? { account: d.acct } : d.acct === D.GATEWAY ? { account: null, mode: "gateway" } : {}), locked: false };
-        FACTS[nid] = { folder: `workspace-${nid}`, files: 4, memory: "no memory yet", tasks: 0, routines: [], routes: 0, own: [] };
-        app.bots.push({ id: nid, name: d.name.trim(), label: d.kind === "import" ? WREN().label : d.copy.look ? botOf(d.bot).label : "", tasks: [{ id: `${nid}-1`, title: "Main", at: 3000, when: "now", preview: "No messages yet.", unread: false, status: "idle", html: "", fresh: true }] });
-        if (d.kind === "import") INSTR[nid] = { agents: WREN().agents, soul: WREN().soul, at: "Nov 19, 5:46 PM" };
+        listNewBot(d);
+        // What each write left on the new bot, as the fixture has it.
+        d.g = {};
+        d.unread = {};
+        for (const r of rows) {
+          if (r.want === null) continue;
+          L.calls.push([["agents", "soul"].includes(r.key) ? "agents.files.set" : "config.patch", r.key]);
+          d.g[r.key] = r.want;
+          if (want === "partial") {
+            if (r.key === "effort") d.g.effort = NEW_BOT.effort;
+            if (r.key === "soul") d.unread.soul = true;
+            if (r.key === "agents" && d.kind === "import") d.g.agents = OTHER_AGENTS;
+          }
+        }
+        for (const k of ["picture", "label", "model", "fallbacks", "effort", "agents", "soul"]) if (!(k in d.g)) d.g[k] = k === "agents" || k === "soul" ? null : NEW_BOT[k];
+        applyBacking(d);
         refreshRail();
         paint(true);
-        const missing = rows.filter((r) => !settled(outcome(d, r.key)));
-        announce(missing.length ? "Some settings still need attention" : "New bot with the selected settings");
+        const missing = rows.filter((r) => !settled(outcome(d, r)));
+        const unread = rows.filter((r) => outcome(d, r) === "Couldn't check").map((r) => `${r.label}: couldn't check`);
+        announce(missing.length ? ["Some settings still need attention", ...unread].join(". ") : "New bot with the selected settings");
         return;
       }
       paint();
       setTimeout(tick, 160);
     };
     setTimeout(tick, 160);
+  }
+  function listNewBot(d) {
+    let nid = d.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "copy";
+    while (botOf(nid)) nid += "-2";
+    d.newId = nid;
+    CT.botArt[nid] = d.kind === "import" ? CT.botArt.__wren : d.copy.look ? CT.botArt[d.bot] || { body: "drop", color: "#ff6f9c", tilt: 0, look: [0.6, 0] } : { body: "pebble", color: "#9aa0a6", tilt: 0, look: [0.6, 0] };
+    D.binding[nid] = { account: null, mode: "gateway", model: "gpt-5.5", effort: NEW_BOT.effort, locked: false };
+    FACTS[nid] = { folder: `workspace-${nid}`, files: 4, memory: "no memory yet", tasks: 0, routines: [], routes: 0, own: [] };
+    CREATED[nid] = Date.now();
+    app.bots.push({ id: nid, name: d.name.trim(), label: "", tasks: [{ id: `${nid}-1`, title: "Main", at: 3000, when: "now", preview: "No messages yet.", unread: false, status: "idle", html: "", fresh: true }] });
+    INSTR[nid] = { agents: `# ${d.name.trim()}\n\nA new bot.\n`, soul: "Calm and brief.\n", at: "Nov 19, 5:46 PM" };
+    refreshRail();
+  }
+  // Check again: reads only the rows that couldn't be checked. Here each read answers.
+  function checkRows(d) {
+    setTimeout(() => {
+      d.unread = {};
+      applyBacking(d);
+      paint(true);
+      const rows = writeRows(d);
+      announce(rows.every((r) => settled(outcome(d, r))) ? "New bot with the selected settings" : "Read again");
+    }, 300);
+  }
+  // Try again: config.get first; a row whose value is no longer its starting value is not written.
+  function retryRows(d) {
+    const rows = retryable(d, writeRows(d));
+    setTimeout(() => {
+      if (p("second")) d.g.effort = "High"; // another device set it meanwhile
+      for (const r of rows) {
+        if (d.g[r.key] !== startOf(r.key)) continue;
+        L.calls.push([["agents", "soul"].includes(r.key) ? "agents.files.set" : "config.patch", r.key, "baseHash"]);
+        d.g[r.key] = r.want;
+      }
+      applyBacking(d);
+      paint(true);
+      const all = writeRows(d);
+      announce(all.every((r) => settled(outcome(d, r))) ? "New bot with the selected settings" : "Some settings still need attention");
+    }, 300);
   }
 
   // Export and import: a Clawtrate file (section 9) -----------------------------------------------------
@@ -940,6 +1087,7 @@
   // For the checks: what was handed to the host, and an edit made on the gateway meanwhile.
   CT.lifecycleHandoff = () => L.handoff || null;
   CT.lifecycleEditSource = (id, file, text) => (instr(id)[file] = text);
+  CT.lifecycleInstr = (id) => ({ ...instr(id) });
   function readExport(d) {
     d.read = "loading";
     paint();
@@ -1020,12 +1168,12 @@
       label: "Garden",
       writtenBy: "Clawtrate 0.4.0",
       model: odd ? "globex/atlas-2" : "openai/gpt-5.5",
-      effort: "Medium",
+      effort: "High",
       agents: "# Wren\n\nYou keep the garden calendar.\nAsk before ordering seeds.\nNever water on a rain day.\n",
       soul: "Patient and practical.\n",
       settings: [
         ["Model", odd ? "globex/atlas-2" : "openai/gpt-5.5", !odd],
-        ["Effort", "Medium", odd ? "with-model" : true],
+        ["Effort", "High", odd ? "with-model" : true],
       ],
     };
   };
@@ -1040,7 +1188,7 @@
   };
 
   VIEWS.import = (d) => {
-    if (d.status === "working" || d.status === "done") return stepsView(d);
+    if (d.status === "working" || d.status === "done" || d.status === "lostcreate") return stepsView(d);
     if (d.stage === "reading") return sheet("Import a bot", `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Reading wren.clawtrate-bot.json…</p>`, "");
     if (d.stage === "refused")
       return sheet(
@@ -1370,15 +1518,19 @@
       case "rename-rail":
         return setTimeout(() => renameInRail(bot), 0);
       case "instr-save":
-        return saveInstructions(null);
+        return saveInstructions(app.model.selectedBot);
       case "instr-mine":
-        return saveInstructions(el.dataset.lcFile);
+        return saveMine(app.model.selectedBot, el.dataset.lcFile);
+      case "instr-check":
+        return checkInstruction(app.model.selectedBot, el.dataset.lcFile);
       case "instr-theirs": {
+        const id = app.model.selectedBot;
+        const st = IS(id);
         const k = el.dataset.lcFile;
-        instr(app.model.selectedBot)[k] = theirsSoul;
-        if (I.draft) I.draft[k] = theirsSoul;
-        delete I.rows[k];
-        if (I.draft && Object.keys(FILES).every((x) => I.draft[x] === instr(app.model.selectedBot)[x])) I.draft = null;
+        instr(id)[k] = st.theirs[k];
+        if (st.draft) st.draft[k] = st.theirs[k];
+        delete st.rows[k];
+        if (st.draft && Object.keys(FILES).every((x) => st.draft[x] === instr(id)[x])) st.draft = null;
         CT.botsRender();
         return announce("Showing the gateway's copy");
       }
@@ -1387,9 +1539,21 @@
       case "open-duplicate":
         return openDialog("duplicate", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot, name: `${nameOf(bot)} copy`, copy: { look: true, model: true, instr: true, tools: true }, acct: null });
       case "dup-go":
-        return runDuplicate(false);
+        return runDuplicate();
       case "dup-retry":
-        return runDuplicate(true);
+        return retryRows(L.dialog);
+      case "dup-check":
+        return checkRows(L.dialog);
+      case "dup-check-create": {
+        // Reads the bot list; writes nothing. Here it answers, listing a bot of that name.
+        const d = L.dialog;
+        return setTimeout(() => {
+          d.roster = "listed";
+          listNewBot(d);
+          paint(true);
+          announce("Couldn't confirm creation");
+        }, 300);
+      }
       case "dup-open": {
         const nid = L.dialog.newId;
         closeDialog();
@@ -1437,7 +1601,7 @@
       case "import-add":
         // A model this gateway doesn't offer is left out, and its effort and fallback list with it.
         L.dialog.copy.model = p("imp") !== "unavailable";
-        return runDuplicate(false);
+        return runDuplicate();
       case "del-reread":
         L.dialog.read = null;
         return paint(true);

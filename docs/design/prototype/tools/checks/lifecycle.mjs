@@ -397,13 +397,28 @@ await p.close();
 
 p = await open(`bot=juniper&${settings}&bview=instructions&instr=conflict`);
 await click(p, '[data-lc="instr-save"]');
-await waitText(p, "#b-announce", "SOUL.md: not saved");
+await waitText(p, "#b-announce", "SOUL.md: changed on the gateway");
 t = await panel(p);
-check("S6 two files, two outcomes: one written, one changed on the gateway", (await fileRow(p, "agents")).includes("AGENTS.md: Written") && (await fileRow(p, "soul")).includes("SOUL.md: Changed on the gateway") && (await announced(p)) === "SOUL.md: not saved");
+check("S6 two files, two outcomes: one written, one changed on the gateway", (await fileRow(p, "agents")).includes("AGENTS.md: Written") && (await fileRow(p, "soul")).includes("SOUL.md: Changed on the gateway") && (await announced(p)) === "SOUL.md: changed on the gateway");
 check("F-040 the changed file keeps the person's text and shows the gateway's", has(t, "SOUL.md changed on the gateway while you were editing. Your text is kept here. The gateway now has:", "Curious, careful, plain-spoken. Never guess.") && (await p.evaluate(() => document.querySelector("#lc-soul").value === "Curious, careful, brief.\n")));
+const shownHash = await p.evaluate(() => document.querySelector('[data-lc-theirs="soul"]').dataset.lcHash);
 await clickText(p, "#panel-settings", "Save mine over it");
 await waitText(p, "#b-announce", "saved over the gateway");
-check("S6 Save mine over it writes only that file, after a fresh read", (await announced(p)) === "SOUL.md saved over the gateway's copy" && (await fileRow(p, "soul")).includes("SOUL.md: Written"));
+const mine = await p.evaluate(() => CT.lifecycleCalls().filter((c) => c[0] === "agents.files.set" && c[2] === "soul").at(-1));
+check("S6 Save mine over it writes only that file, with the hash of the gateway text shown", (await announced(p)) === "SOUL.md saved over the gateway's copy" && (await fileRow(p, "soul")).includes("SOUL.md: Written") && mine[3] === shownHash);
+await p.close();
+
+p = await open(`bot=juniper&${settings}&bview=instructions&instr=conflict2`);
+await click(p, '[data-lc="instr-save"]');
+await waitText(p, "#panel-settings", "SOUL.md: Changed on the gateway");
+await clickText(p, "#panel-settings", "Save mine over it");
+await waitText(p, "#b-announce", "SOUL.md changed on the gateway again");
+t = await panel(p);
+check("F-040 a second writer: Save mine over it writes nothing over the newer text, shows it and asks again", has(t, "SOUL.md changed on the gateway again.", "Curious, careful, plain-spoken. Never guess. Cite sources.", "Save mine over it") && (await fileRow(p, "soul")).includes("SOUL.md: Changed on the gateway") && (await p.evaluate(() => CT.lifecycleCalls().filter((c) => c[2] === "soul").length)) === 2);
+const newerHash = await p.evaluate(() => document.querySelector('[data-lc-theirs="soul"]').dataset.lcHash);
+await clickText(p, "#panel-settings", "Save mine over it");
+await waitText(p, "#b-announce", "saved over the gateway");
+check("F-040 ... and asked again, it writes with the newer text's hash", (await p.evaluate(() => CT.lifecycleCalls().filter((c) => c[2] === "soul").at(-1)[3])) === newerHash && (await fileRow(p, "soul")).includes("SOUL.md: Written"));
 await p.close();
 p = await open(`bot=juniper&${settings}&bview=instructions&instr=conflict`);
 await click(p, '[data-lc="instr-save"]');
@@ -415,7 +430,25 @@ p = await open(`bot=juniper&${settings}&bview=instructions&instrfail=1`);
 await p.fill("#lc-agents", "# Juniper\n\nBrisk.\n");
 await click(p, '[data-lc="instr-save"]');
 await waitText(p, "#panel-settings", "AGENTS.md: Couldn't check");
-check("S6 a file that couldn't be read back says so, and keeps the text", (await fileRow(p, "agents")).includes("AGENTS.md: Couldn't check") && (await panel(p)).includes("Clawtrate couldn't read AGENTS.md back: the gateway didn't answer. Your text is kept here") && (await p.evaluate(() => document.querySelector("#lc-agents").value === "# Juniper\n\nBrisk.\n")));
+check("S6 a file that couldn't be read back says so, and keeps the text", (await fileRow(p, "agents")).includes("AGENTS.md: Couldn't check") && (await panel(p)).includes("Clawtrate couldn't read AGENTS.md back: the gateway didn't answer. Your text is kept here. Check again only reads it.") && (await p.evaluate(() => document.querySelector("#lc-agents").value === "# Juniper\n\nBrisk.\n")) && (await waitAnnouncement(p, "AGENTS.md: couldn't check")) === "AGENTS.md: couldn't check");
+const setsBefore = await p.evaluate(() => CT.lifecycleCalls().filter((c) => c[0] === "agents.files.set").length);
+await clickText(p, "#panel-settings", "Check again");
+await waitText(p, "#panel-settings", "AGENTS.md: Written");
+check("S6 Check again reads only: the row settles without a write", (await p.evaluate(() => CT.lifecycleCalls().filter((c) => c[0] === "agents.files.set").length)) === setsBefore && (await fileRow(p, "agents")).includes("AGENTS.md: Written"));
+await p.close();
+
+// A draft belongs to its bot: switching bots never shows or saves another bot's draft.
+p = await open(`bot=juniper&${settings}&bview=instructions`);
+await p.fill("#lc-agents", "# Juniper\n\nAn unsent draft.\n");
+await p.evaluate(() => CT.botsOpenSettings("marlow", "instructions"));
+await waitText(p, "#panel-settings", "Marlow's instructions and personality");
+check("S6 another bot's page shows its own text, with Save waiting", (await p.evaluate(() => !document.querySelector("#lc-agents").value.includes("An unsent draft") && document.querySelector('[data-lc="instr-save"]').disabled)));
+await p.evaluate(() => CT.botsOpenSettings("juniper", "instructions"));
+await waitText(p, "#panel-settings", "Juniper's instructions and personality");
+check("S6 ... and the first bot keeps its draft", await p.evaluate(() => document.querySelector("#lc-agents").value.includes("An unsent draft") && !document.querySelector('[data-lc="instr-save"]').disabled));
+await click(p, '[data-lc="instr-save"]');
+await waitText(p, "#b-announce", "Instructions saved");
+check("S6 ... and Save writes it to that bot only", (await p.evaluate(() => CT.lifecycleCalls().filter((c) => c[0] === "agents.files.set").map((c) => c[1]).join(","))) === "juniper");
 await p.close();
 p = await open(`bot=juniper&${settings}&bview=instructions&access=read`);
 t = await panel(p);
@@ -464,10 +497,48 @@ await click(p, '[data-lc="dup-go"]');
 await waitText(p, "#lc-dialog", "Some settings still need attention");
 t = await dlg(p);
 check("S8 a partial copy names each write that didn't read back as chosen", has(t, "Some settings still need attention", "Pip copy is listed. 2 settings don't read back as chosen.") && (await rowWord(p, "effort")) === "Still has the gateway's default, Medium" && (await rowWord(p, "soul")) === "Couldn't check" && (await rowWord(p, "agents")) === "Written");
-check("S8 Try again writes only what is missing, after a fresh read", t.includes("Try again writes only these again, each after reading what the gateway has now, so a newer change on the gateway isn't overwritten."));
+check("S8 the unknown read-back is announced as such", (await waitAnnouncement(p, "SOUL.md: couldn't check")).includes("SOUL.md: couldn't check"));
+check("S8 the opened bot agrees with the rows: its effort is still the default", await p.evaluate(() => CT.botsData.binding["pip-copy"].effort === "Medium"));
+const writes = () => p.evaluate(() => CT.lifecycleCalls().length);
+let before = await writes();
+await clickText(p, "#lc-dialog", "Check again");
+await waitText(p, "#lc-dialog", "One setting doesn't read back as chosen.");
+check("S8 Check again only reads: SOUL.md settles without a write, AGENTS.md never changes", (await rowWord(p, "soul")) === "Written" && (await rowWord(p, "agents")) === "Written" && (await writes()) === before);
+before = await writes();
 await clickText(p, "#lc-dialog", "Try again");
 await waitText(p, "#lc-dialog", "New bot with the selected settings");
-check("S8 ... then every row reads Written", (await dlg(p)).includes("New bot with the selected settings") && (await rowWord(p, "soul")) === "Written");
+check("S8 Try again writes only the row that still had its starting value, with the config.get baseHash", (await rowWord(p, "effort")) === "Written" && (await p.evaluate(() => CT.lifecycleCalls().slice(-1)[0].join(","))) === "config.patch,effort,baseHash" && (await writes()) === before + 1);
+await clickText(p, "#lc-dialog", "Open Pip copy");
+check("S8 the opened bot agrees with the rows", await p.evaluate(() => CT.botsData.binding["pip-copy"].effort === "Low" && app.bots.find((b) => b.id === "pip-copy").label === "Planning"));
+await p.close();
+
+p = await open("lc=duplicate&delbot=pip&dup=partial&second=1");
+await click(p, '[data-lc="dup-go"]');
+await waitText(p, "#lc-dialog", "Some settings still need attention");
+before = await p.evaluate(() => CT.lifecycleCalls().length);
+await clickText(p, "#lc-dialog", "Try again");
+await waitText(p, "#lc-dialog", "Review change");
+check("S8 a second writer changed the row before Try again: nothing is written over it", (await rowWord(p, "effort")) === "Changed on the gateway" && (await p.evaluate(() => CT.lifecycleCalls().length)) === before && !(await dlg(p)).includes("Try again"));
+await click(p, '[data-lc-change="effort"] summary');
+check("S8 Review change shows the value the gateway has and the one asked for", has(await text(p, '[data-lc-change="effort"]'), "The gateway has:", "High", "You asked for:", "Low") && (await p.evaluate(() => CT.botsData.binding["pip-copy"].effort === "High")));
+await p.close();
+
+for (const [fixture, words, buttons] of [
+  ["lostcreate", "Couldn't confirm creation. The gateway lists a bot called Pip copy. Open it to review it.", ["Open Pip copy", "Close"]],
+  ["lostcreate-noroster", "Couldn't check whether Pip copy was created.", ["Check again", "Close"]],
+]) {
+  p = await open(`lc=duplicate&delbot=pip&dup=${fixture}`);
+  await click(p, '[data-lc="dup-go"]');
+  await waitText(p, "#lc-dialog", words);
+  check(`S8 a create with no answer (${fixture}): it says what the list shows and writes nothing more`, has(await dlg(p), words, ...buttons) && (await p.evaluate(() => CT.lifecycleCalls().map((c) => c[0]).join(","))) === "agents.create");
+  await p.close();
+}
+p = await open("lc=duplicate&delbot=pip&dup=lostcreate-noroster");
+await click(p, '[data-lc="dup-go"]');
+await waitText(p, "#lc-dialog", "Couldn't check whether");
+await clickText(p, "#lc-dialog", "Check again");
+await waitText(p, "#lc-dialog", "Couldn't confirm creation.");
+check("S8 ... Check again reads the list, and still writes nothing", (await p.evaluate(() => CT.lifecycleCalls().map((c) => c[0]).join(","))) === "agents.create");
 await p.close();
 
 p = await open("lc=duplicate&delbot=pip&dup=nosource");
@@ -583,7 +654,7 @@ await click(p, '[data-lc-row="agents"] summary');
 check("F-265 the instructions row shows AGENTS.md in full", (await text(p, '[data-lc-row="agents"]')).includes("You keep the garden calendar. Ask before ordering seeds. Never water on a rain day."));
 await click(p, '[data-lc-row="settings"] summary');
 t = await text(p, '[data-lc-row="settings"]');
-check("F-265 the settings row lists each setting that will be written, and no tool settings", t.includes("3 to write") && has(t, "Model: openai/gpt-5.5Will be written", "Effort: MediumWill be written", "Fallback list: noneWill be written") && !t.includes("Tools"));
+check("F-265 the settings row lists each setting that will be written, and no tool settings", t.includes("3 to write") && has(t, "Model: openai/gpt-5.5Will be written", "Effort: HighWill be written", "Fallback list: noneWill be written") && !t.includes("Tools"));
 await click(p, '[data-lc-row="never"] summary');
 check("F-265 the review lists what will not be created", has(await text(p, '[data-lc-row="never"]'), "a Clawtrate file never carries these", "Tool permissions and skills", "Routines", "Channel routes", "Nor any account binding or sign-in store"));
 await observeText(p, "#lc-dialog", "Adding Wren");
@@ -600,7 +671,7 @@ p = await open("lc=import&imp=unavailable");
 await click(p, '[data-lc-row="settings"] summary');
 t = await text(p, '[data-lc-row="settings"]');
 check("F-265 with its model left out, no fallback list is written either", !t.includes("Fallback list"));
-check("F-265 a model this gateway doesn't offer is left out, not guessed", has(t, "nothing to write, 1 not available here", "Model: globex/atlas-2Not available here, left out", "Effort: MediumLeft out with the model", "With its model left out, Wren uses the gateway's default model, openai/gpt-5.5, until you choose one"));
+check("F-265 a model this gateway doesn't offer is left out, not guessed", has(t, "nothing to write, 1 not available here", "Model: globex/atlas-2Not available here, left out", "Effort: HighLeft out with the model", "With its model left out, Wren uses the gateway's default model, openai/gpt-5.5, until you choose one"));
 await p.close();
 
 for (const [imp, words] of [
@@ -639,9 +710,13 @@ await clickText(p, "#lc-dialog", "Add Bot");
 await waitText(p, "#lc-dialog", "Some settings still need attention");
 t = await dlg(p);
 check("F-265 a partial import names each write that didn't land", has(t, "Some settings still need attention") && (await rowWord(p, "agents")) === "Changed on the gateway" && (await rowWord(p, "soul")) === "Couldn't check" && (await rowWord(p, "effort")) === "Still has the gateway's default, Medium");
+await clickText(p, "#lc-dialog", "Check again");
+await waitText(p, "#lc-dialog", "2 settings don't read back as chosen.");
+before = await p.evaluate(() => CT.lifecycleCalls().length);
 await clickText(p, "#lc-dialog", "Try again");
-await waitText(p, "#lc-dialog", "New bot with the selected settings");
-check("F-265 Try again writes only what is missing", (await dlg(p)).includes("New bot with the selected settings"));
+await waitText(p, "#lc-dialog", "One setting doesn't read back as chosen.");
+check("F-265 Try again writes only the row that still had its starting value; the conflict keeps the other writer's value", (await rowWord(p, "effort")) === "Written" && (await rowWord(p, "soul")) === "Written" && (await rowWord(p, "agents")) === "Changed on the gateway" && (await p.evaluate(() => CT.lifecycleCalls().length)) === before + 1 && (await p.evaluate(() => CT.lifecycleInstr("wren").agents.includes("Another device's text"))));
+check("F-265 ... with nothing left to retry, Try again is gone", !(await dlg(p)).includes("Try again"));
 await p.close();
 
 // Delete (section 10) --------------------------------------------------------------------------------------
