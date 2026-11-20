@@ -197,6 +197,27 @@ await p.clock.runFor(700);
 check("R2 the latest reply is drawn", (await groupText(p, "messages")).includes("Week 1: backup done"));
 await p.close();
 
+// A is in flight, B has passed the pause and waits for the lane, and C is typed just before A answers.
+p = await open("palette=open&delay=600", undefined, { clock: true });
+await p.clock.pauseAt(new Date("2026-11-18T22:00:05Z")); // a paused clock: only runFor moves it
+await p.fill("#s-field", "transcode"); // A
+await p.clock.runFor(260); // A is sent; its reply is due at 850
+await p.fill("#s-field", "backup"); // B
+await p.clock.runFor(300); // B's pause has passed: it waits for the lane
+const waiting = await requests(p, "messages");
+await p.clock.runFor(270);
+await p.fill("#s-field", "heat"); // C, just before A answers
+await p.evaluate(() => {
+  window.__staleB = false;
+  const seen = () => (window.__staleB ||= document.querySelector("#s-body").innerText.includes("backup done"));
+  new MutationObserver(seen).observe(document.querySelector("#s-body"), { childList: true, characterData: true, subtree: true });
+});
+await p.clock.runFor(100); // A answers: dropped
+await p.clock.runFor(2000); // C is sent after its pause, and answers
+check("R2 a query waiting for its lane is dropped when newer text arrives: only A and C are sent", waiting.length === 1 && (await requests(p, "messages")).map((r) => r.query).join() === "transcode,heat", (await requests(p, "messages")).map((r) => r.query).join());
+check("R2 B's hits never appear while C is in the field, and C's are drawn", !(await p.evaluate(() => window.__staleB)) && (await groupText(p, "messages")).includes("A heat pump is sized"));
+await p.close();
+
 p = await open("palette=open&delay=600&platform=mac", undefined, { clock: true });
 await p.fill("#s-field", "transcode");
 await p.clock.runFor(300);

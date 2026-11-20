@@ -319,11 +319,12 @@
     setTimeout(() => finish({ error: "timeout" }), TIMEOUT);
   }
 
-  // A source's lane: one request in flight; while it is out, only the latest query waits.
+  // A source's lane: one request in flight; while it is out, only the latest query waits, with the
+  // generation that queued it, and it is sent only while that generation is still current.
   function lane(source, run) {
     const l = (S.lanes[source] ||= { busy: false, waiting: null });
     if (l.busy) {
-      l.waiting = run;
+      l.waiting = { run, gen: S.gen };
       return;
     }
     l.busy = true;
@@ -331,7 +332,7 @@
       l.busy = false;
       const next = l.waiting;
       l.waiting = null;
-      if (next) lane(source, next);
+      if (next?.gen === S.gen) lane(source, next.run);
     });
   }
 
@@ -1169,6 +1170,8 @@
     S.tried = null;
     clearTimeout(S.timer);
     clearTimeout(S.announceTimer);
+    // A request still waiting for its lane belongs to the text before this change.
+    for (const l of Object.values(S.lanes)) l.waiting = null;
     const q = value.trim();
     S.groups = {};
     if (q) {
@@ -1341,6 +1344,7 @@
       // A change of connection starts a new generation; the latest query is asked once on return.
       S.gen++;
       S.opening = null;
+      clearTimeout(S.timer);
       clearTimeout(S.announceTimer);
       S.groups = {};
       S.lanes = {};
