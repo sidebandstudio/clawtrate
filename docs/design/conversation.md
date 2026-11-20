@@ -928,7 +928,7 @@ Approvals appear only on the interactive tier (section 3).
 | A helper the bot started        | "A helper of Otto wants to run a command" | "Asked by a helper Otto started for this task." | Otto's task                                                                                           |
 | A bot that another bot messaged | "Marlow wants to run a command"           | "Marlow is working on a message from Otto."     | Marlow's task. In Otto's task the Messaged card reads Recipient waiting and leads there (section 10). |
 
-Stopping the parent run cancels the approvals its helpers and recipients raised, and they close as "Cancelled".
+Stopping the parent run asks the gateway to cancel the approvals its helpers and recipients raised; each closes as "Cancelled" only when the gateway establishes its cancellation.
 
 **Pending.** A card with a 1.5 px `--warn-line` outline, the one loud thing in a quiet transcript.
 
