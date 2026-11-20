@@ -137,7 +137,7 @@ const states = [
   ["view=vault&v=removeunknown", ["Couldn't confirm the removal. The Vault couldn't be read.", "Check"]],
   ["view=vault&access=interactive", ["Seeing the Vault needs admin access. The gateway shows its secret store to admin connections only.", "Request admin access"]],
   ["view=vault&access=read&req=denied", ["The request was denied."]],
-  ["view=drafts", [PROPOSED, "Drafts plugin answered at 5:46 PM.", "the gateway's automatic reviewer covers commands, not sends.", "Sending tools", "mail_send", "slack_post", "Destination as given, from target, targets, accountId, replyTo and threadId; Clawtrate can't name it."]],
+  ["view=drafts", [PROPOSED, "Drafts plugin answered at 5:46 PM.", "the gateway's automatic reviewer covers commands, not sends.", "Sending tools", "mail_send", "slack_post", "Raw call only until a connector establishes which action and resolved destination the call uses."]],
   ["view=drafts&p=unchecked", ["Clawtrate couldn't check the drafts plugin. Drafts may be unavailable.", "Unknown"]],
   ["view=drafts&p=absent", ["Drafts methods unavailable on this gateway."]],
   ["view=drafts&p=old", ["Clawtrate's drafts plugin is version 0.9; drafts need 1.0 or newer."]],

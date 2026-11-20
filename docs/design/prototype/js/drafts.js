@@ -650,7 +650,7 @@
     if (running) html += `<h4 class="d-group">Sending tools</h4>`;
     if (running) html += `<div class="d-toolrow"><code>${TOOL.email}</code><br />To from <code>to</code>, Cc from <code>cc</code>, Subject from <code>subject</code>, Body from <code>body</code>, files from <code>attachments</code>, From from <code>from</code>.</div>`;
     if (running) html += `<div class="d-toolrow"><code>${TOOL.slack}</code><br />Workspace from <code>workspace</code>, To from <code>to</code>, Thread from <code>thread</code>, Body from <code>text</code>.</div>`;
-    if (running) html += `<div class="d-toolrow"><code>message</code><br />Destination as given, from <code>target</code>, <code>targets</code>, <code>accountId</code>, <code>replyTo</code> and <code>threadId</code>; Clawtrate can't name it. Body from <code>message</code>.</div>`;
+    if (running) html += `<div class="d-toolrow"><code>message</code><br />Raw call only until a connector establishes which action and resolved destination the call uses.</div>`;
     if (running) html += `<p class="d-hint">A tool not on this list never makes a draft; its calls follow the bot's rules.</p>`;
     return settings(html, "Drafts");
   }
