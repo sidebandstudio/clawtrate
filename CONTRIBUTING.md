@@ -55,6 +55,17 @@ pnpm visual      # screenshots and behavior of the fixture mode; the baselines a
 
 Run `pnpm scenarios` too when you change the development gateway or its scenarios. The visual baselines are only valid on macOS. If you are on another system, say so in the pull request, and CI's macOS job is the check. [Testing](docs/development/testing.md) explains what each check covers and what CI runs.
 
+## Signing and releases
+
+CI packages macOS builds with an ad hoc signature and Windows builds without a signature. The owner runs the packaging scripts with signing credentials for a release. Enabled macOS notarization submits the build to Apple. The owner publishes releases separately. These are the variables, all read at build time only; never commit their values:
+
+- macOS signing: `CSC_LINK` and `CSC_KEY_PASSWORD` (set empty for a certificate without a password), or `CSC_NAME`.
+- macOS notarizing, with signing on, one complete set: `APPLE_API_KEY`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`; or `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`; or `APPLE_KEYCHAIN_PROFILE`, optionally with `APPLE_KEYCHAIN`.
+- Windows signing: `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD` (or `CSC_LINK` and `CSC_KEY_PASSWORD` on Windows).
+- The update feed: `CLAWTRATE_UPDATE_FEED_URL`, an `https` address such as `https://updates.example/clawtrate/feed.json`, and `SOURCE_DATE_EPOCH`, the build's release date in seconds.
+
+[Packaging](docs/development/packaging.md#signing-and-notarizing) says what each does, and [docs/decisions.md](docs/decisions.md#updates-and-release-signing) what an update verifies.
+
 ## Pull requests
 
 One issue, one pull request. Start the body with `Closes #123`, or `Part of #123` when the issue needs more than one pull request. Smaller pull requests merge sooner. Every pull request gets a `size:` label, from XS to XXL, so you can see how big yours is.

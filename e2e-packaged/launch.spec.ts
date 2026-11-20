@@ -1,6 +1,7 @@
 // The packaged app launches, shows its window and connect screen, and pairs
 // with a development gateway instance of this run's own. On Windows, where no
 // development gateway runs, the tests that need one are skipped.
+import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -131,6 +132,7 @@ test("opens its window from the packaged app on the connect screen", async () =>
   // number of unread tasks for the dock badge; anything else here is a regression.
   expect(page_.host).toEqual([
     "attach",
+    "desktopUpdates",
     "hello",
     "onState",
     "platform",
@@ -140,6 +142,42 @@ test("opens its window from the packaged app on the connect screen", async () =>
   ]);
   expect(page_.csp).toContain("default-src 'self'");
   expect(page_.csp).toContain("script-src 'self'");
+});
+
+test("starts with the update tracks compiled into the packaged app", async () => {
+  const updates = await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+    ).clawtrateHost.desktopUpdates.get(),
+  );
+  expect(updates).toMatchObject({
+    revision: 0,
+    preferenceIssue: null,
+    lastCheck: null,
+    pendingTrack: null,
+  });
+  const tracks = updates.tracks.map(({ track }) => track);
+  const supported = ["stable", "nightly"] as const;
+  expect(tracks).toEqual(supported.filter((track) => tracks.includes(track)));
+  if (tracks.length) {
+    for (const { source } of updates.tracks)
+      expect(new URL(`https://${source}`).hostname).toBe(source);
+    expect(updates.selectedTrack).toBe(
+      tracks.find((track) => track === updates.runningTrack) ?? tracks[0],
+    );
+    expect(updates.state).toEqual({ kind: "not-checked" });
+    return;
+  }
+  expect(updates).toMatchObject({
+    state: { kind: "failed", stage: "check", reason: "not-configured" },
+    selectedTrack: null,
+  });
+  const reply = await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+    ).clawtrateHost.desktopUpdates.check("stable"),
+  );
+  expect(reply).toEqual({ outcome: "invalid", snapshot: updates });
 });
 
 test("names its window Clawtrate, as Windows sees it", async () => {
