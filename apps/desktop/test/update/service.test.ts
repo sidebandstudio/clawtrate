@@ -338,6 +338,10 @@ it("reports check eligibility at launch and stops unsupported checks before tran
     expect(service.get().state).toMatchObject({ reason: "unsupported-system" });
   }
   const empty = await start({ feeds: { stable: null, nightly: null } });
+  for (const track of ["stable", "nightly", undefined])
+    expect(await empty.check(track)).toEqual({ outcome: "invalid", snapshot: empty.get() });
+  const single = await start({ feeds: { stable: server.origin + "/stable", nightly: null } });
+  expect((await single.check("nightly")).outcome).toBe("stale");
   expect(empty.get()).toMatchObject({ selectedTrack: null, state: { reason: "not-configured" } });
   expect((await start({ version: "invalid" })).get().state).toMatchObject({
     reason: "invalid-version",

@@ -206,12 +206,9 @@ export class DesktopUpdateService {
     if (this.switching || this.work) return this.reply("busy");
     if (expectedTrack !== "stable" && expectedTrack !== "nightly") return this.reply("invalid");
     const { runningVersion, selectedTrack } = this.snapshot;
+    if (!selectedTrack) return this.reply("invalid");
     if (expectedTrack !== selectedTrack) return this.reply("stale");
-    if (
-      !runningVersion ||
-      !selectedTrack ||
-      unavailable(this.options, runningVersion, selectedTrack)
-    )
+    if (!runningVersion || unavailable(this.options, runningVersion, selectedTrack))
       return this.reply("invalid");
     this.engine?.cancel();
     const offerId = selectedTrack + "-" + randomUUID();
