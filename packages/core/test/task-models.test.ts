@@ -648,6 +648,33 @@ describe("the client around a task's model", () => {
     return gateway;
   }
 
+  it("F-043: an effort another client takes away is taken away here, as the gateway's event says", async () => {
+    const gateway = gatewayWithTask();
+    const own = { ...row, thinkingLevel: "high" };
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: [own], hasMore: false },
+    });
+    gateway.handlers["sessions.list"] = () => ({ sessions: [own], hasMore: false });
+    const { client } = await openTask({ gateway });
+    await until(() => client.state.tasksByBot.otto?.[0]?.effort === "high");
+    // As 2026.10.6 sends it: the row under `session` without the effort, and beside it the
+    // row's fields with the effort null.
+    const after: Record<string, unknown> = { ...row };
+    delete after.thinkingLevel;
+    gateway.emit("sessions.changed", {
+      sessionKey: KEY,
+      reason: "patch",
+      agentId: "otto",
+      session: after,
+      ...after,
+      thinkingLevel: null,
+    });
+    await until(() => client.state.tasksByBot.otto?.[0]?.effort === undefined);
+    expect(client.state.tasksByBot.otto?.[0]?.effortDefault).toBe("low");
+    client.stop();
+  });
+
   it("F-044: a turn this app starts sends no effort of its own and keeps no record of one", async () => {
     const { client, gateway } = await openTask({ gateway: gatewayWithTask() });
     await until(() => client.state.taskModels[KEY]?.catalog === "ready");

@@ -99,6 +99,25 @@ describe("sessions.changed deltas", () => {
     expect(mapSessionRow(row!)?.title).toBe("Renamed");
   });
 
+  it("clears a field the nested row leaves out and the flat payload sets to null", () => {
+    // As 2026.10.6 sends a task's effort taken away.
+    const row = sessionChangeRow({
+      sessionKey: "agent:otto:x",
+      reason: "patch",
+      thinkingLevel: null,
+      label: "Kept",
+      session: { key: "agent:otto:x", label: "Kept", thinkingDefault: "low" },
+    });
+    expect(row).toEqual({
+      key: "agent:otto:x",
+      label: "Kept",
+      thinkingDefault: "low",
+      thinkingLevel: null,
+    });
+    const base = { key: "agent:otto:x", thinkingLevel: "high", thinkingDefault: "low" };
+    expect(mergeSessionRow(base, row!).thinkingLevel).toBeNull();
+  });
+
   it("falls back to the flat payload on older gateways", () => {
     const row = sessionChangeRow({ sessionKey: "agent:otto:x", status: "done" });
     expect(row).toMatchObject({ key: "agent:otto:x", status: "done" });
