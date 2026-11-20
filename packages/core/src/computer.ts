@@ -478,6 +478,8 @@ type Live = {
   renewTimer: Timer | null;
   /** The tab list read this pane asked for last; an older answer changes nothing. */
   tabsAsked: number;
+  /** The Computer tab is in front of the person: false from `leave` until the next `show`. */
+  shown: boolean;
 };
 
 export type ComputerFrame = {
@@ -623,6 +625,8 @@ export class ComputerViews {
     if (!botId) throw new Error("This task's bot is not known.");
     const current = this.pane(viewer);
     if (current && current.key === key) {
+      const again = this.lives.get(viewer);
+      if (again) again.shown = true;
       void this.readTabs(viewer);
       return;
     }
@@ -636,7 +640,9 @@ export class ComputerViews {
       take: null,
       renewTimer: null,
       tabsAsked: 0,
+      shown: true,
     };
+    live.shown = true;
     this.lives.set(viewer, live);
     const kept = current?.control.outOfSight ? current.control : noControl;
     this.write((state) => ({
@@ -672,6 +678,8 @@ export class ComputerViews {
   leave(viewer: string): void {
     const live = this.lives.get(viewer);
     if (!live) return;
+    // Nothing starts a view or a take again until the tab is shown again.
+    live.shown = false;
     this.abandonTake(live);
     const pane = this.pane(viewer);
     if (live.lease && (pane?.control.status === "granted" || pane?.control.status === "unverified"))
@@ -824,7 +832,7 @@ export class ComputerViews {
   async watch(viewer: string): Promise<void> {
     const live = this.lives.get(viewer);
     const pane = this.pane(viewer);
-    if (!live || !pane || pane.availability !== "ready" || !pane.shown) return;
+    if (!live || !live.shown || !pane || pane.availability !== "ready" || !pane.shown) return;
     if (!this.ctx.canWrite()) return;
     if (live.view && !live.view.ended && live.view.targetId === pane.shown) return;
     this.endView(live, "stopped", null);
@@ -1165,7 +1173,7 @@ export class ComputerViews {
   async take(viewer: string): Promise<void> {
     const live = this.lives.get(viewer);
     const pane = this.pane(viewer);
-    if (!live || !pane || !pane.shown || !this.ctx.canWrite()) return;
+    if (!live || !live.shown || !pane || !pane.shown || !this.ctx.canWrite()) return;
     if (live.lease || live.take) return;
     if (!live.view || live.view.ended) void this.watch(viewer);
     const n = ++this.nextTake;

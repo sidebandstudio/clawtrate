@@ -269,6 +269,24 @@ test.describe("the full view on the desktop", () => {
     await expect(computerPanel(page).locator(".screen[data-state=live]")).toBeVisible();
   });
 
+  test("with Show live on, leaving the Computer tab leaves the view closed: nothing asks to watch until it is shown again", async ({
+    page,
+  }) => {
+    await openFixture(page, `${COMPUTER}&computer=watching`, "light");
+    await tileReady(page);
+    await computerPanel(page).getByLabel("Show live when I open Computer").check();
+    await expect(computerPanel(page).locator(".screen[data-state=live]")).toBeVisible();
+    const watches = (await sentOf(page, "computerWatch")).length;
+    await page.getByRole("tab", { name: "Files" }).click();
+    await expect.poll(async () => (await pane(page))?.view ?? null).toBeNull();
+    await page.waitForTimeout(800);
+    expect(await sentOf(page, "computerWatch")).toHaveLength(watches);
+    expect((await pane(page))?.view ?? null).toBeNull();
+    await page.getByRole("tab", { name: "Computer" }).click();
+    await expect(computerPanel(page).locator(".screen[data-state=live]")).toBeVisible();
+    expect(await sentOf(page, "computerWatch")).toHaveLength(watches + 1);
+  });
+
   test("the one-time note before the first watch goes for good", async ({ page }) => {
     await openFixture(page, `${COMPUTER}&computer=watching&firstwatch=1`, "light");
     await expect(computerPanel(page).getByTestId("computer-first-watch")).toContainText(

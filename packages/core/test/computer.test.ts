@@ -1108,3 +1108,21 @@ describe("control only while renewals confirm it (F-142, section 18)", () => {
     expect(h.pane().control.status).toBe("ended");
   });
 });
+
+describe("leaving Computer leaves the view closed (section 17)", () => {
+  it("after leave, neither Watch nor Take control asks the gateway for anything until the tab is shown again", async () => {
+    const h = harness();
+    await ready(h);
+    h.views.leave(h.viewer);
+    const before = h.requests.length;
+    await h.views.watch(h.viewer);
+    await h.views.take(h.viewer);
+    await flush();
+    expect(h.requests.slice(before).map((r) => r.method)).toEqual([]);
+    expect(h.pane().view).toBeNull();
+    h.views.show(h.viewer, KEY);
+    await flush();
+    await h.views.watch(h.viewer);
+    expect(h.calls("clawtrate-computer.view.open")).toHaveLength(1);
+  });
+});

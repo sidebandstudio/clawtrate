@@ -138,11 +138,13 @@ export function ComputerTab(props: ComputerTabProps) {
     autoStarted.current = false;
   }, [viewer, taskKey, shown]);
   useEffect(() => {
-    if (!pane || !showLive || autoStarted.current) return;
+    // Only while the tab is in front of the person and its pane is about this task: leaving
+    // clears the pane's view, and that never starts watching again.
+    if (!pane || !shown || pane.key !== taskKey || !showLive || autoStarted.current) return;
     if (pane.availability !== "ready" || !pane.shown || pane.view || !use.used) return;
     autoStarted.current = true;
     send({ type: "computerWatch" });
-  }, [pane, showLive, send, use.used]);
+  }, [pane, shown, taskKey, showLive, send, use.used]);
 
   const [fullFor, setFullFor] = useState<number | null>(null);
   const full = shown && fullFor === showing;
