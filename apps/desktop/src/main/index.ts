@@ -25,6 +25,13 @@ import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
+import { DesktopUpdateService } from "./update/service.ts";
+import {
+  BUILD_FEED_ADDRESS,
+  BUILD_NIGHTLY_FEED_ADDRESS,
+  BUILD_RELEASE_DATE,
+} from "./update/build-info.ts";
+import { createFileStore } from "@clawtrate/core/node";
 import { windowsAppUserModelId } from "./identity.ts";
 import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
 import {
@@ -236,6 +243,25 @@ async function main(): Promise<void> {
     autoConnectDev: process.env.CLAWTRATE_AUTOCONNECT_DEV === "1",
   });
   const { client, info, policy } = runtime;
+  const userDir = app.getPath("userData");
+  const updates = await DesktopUpdateService.start({
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+    feeds: { stable: BUILD_FEED_ADDRESS, nightly: BUILD_NIGHTLY_FEED_ADDRESS },
+    releaseDate: BUILD_RELEASE_DATE,
+    downloadDir: join(userDir, "updates"),
+    store: createFileStore(join(userDir, "update-preferences.json")),
+    changed(snapshot) {
+      if (window && !window.isDestroyed())
+        window.webContents.send("clawtrate:update:changed", snapshot);
+    },
+  });
+  ipcMain.handle("clawtrate:update:get", () => updates.get());
+  ipcMain.handle("clawtrate:update:check", () => updates.check());
+  ipcMain.handle("clawtrate:update:track", (_event, track: unknown) => updates.chooseTrack(track));
+  ipcMain.handle("clawtrate:update:download", (_event, id: unknown) => updates.download(id));
 
   ipcMain.handle("clawtrate:hello", (): { info: HostInfo; state: ClawtrateState } => ({
     info,

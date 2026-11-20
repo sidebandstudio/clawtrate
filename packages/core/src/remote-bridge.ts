@@ -1,3 +1,4 @@
+import { noDesktopUpdates } from "./no-desktop-updates.ts";
 // The renderer's side of a bridge that runs over a socket to a host process:
 // the web preview host. It is transport-agnostic (any WebSocket-like object),
 // so the same code runs in a browser and in tests. It keeps the last state on
@@ -168,6 +169,7 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
       });
 
     const bridge = (hostInfo: HostInfo): ClawtrateBridge => ({
+      desktopUpdates: noDesktopUpdates,
       info: hostInfo,
       getState: () => state!,
       subscribe(listener) {

@@ -1,7 +1,4 @@
-// The update engine's rules that need no server: it is not wired into the app,
-// its feed address is the build's alone, F-010 uses the build's own release
-// date, versions compare strictly, and the module runs and shows nothing.
-
+// The engine stays in main. Its address, release date and bounds come from the build.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -38,19 +35,18 @@ function reached(entry: string): Set<string> {
   return seen;
 }
 
-describe("the update engine is not wired in", () => {
+describe("only the desktop main process can reach the engine", () => {
   // The workspace packages the entries import cannot import the app: they do
   // not depend on it. So the relative imports from each entry are the whole
   // question.
   const entries = [
-    "src/main/index.ts",
     "src/preload/index.ts",
     "src/renderer/main.tsx",
     "src/web-host/main.ts",
     "src/fixture/main.tsx",
   ].map((path) => join(APP, path));
 
-  it("no entry point of the app imports the update module", () => {
+  it("no renderer, preload or web host entry imports the update module", () => {
     for (const entry of entries) {
       expect(existsSync(entry), entry).toBe(true);
       const into = [...reached(entry)].filter((file) => file.startsWith(`${UPDATE}/`));
@@ -63,7 +59,7 @@ describe("the update engine is not wired in", () => {
 
   it("follows the entries' imports, so it would see one", () => {
     const main = reached(join(APP, "src/main/index.ts"));
-    expect(main.has(join(APP, "src/main/badge.ts"))).toBe(true);
+    expect(main.has(join(UPDATE, "service.ts"))).toBe(true);
     expect(main.has(join(APP, "src/host/runtime.ts"))).toBe(true);
   });
 });
