@@ -225,6 +225,8 @@ export function Composer({
     rows: MenuRow[] | null;
     error: string | null;
   } | null>(null);
+  /** The latest menu read; an earlier one's answer is not shown. */
+  const menuRead = useRef(0);
   const [active, setActive] = useState(0);
   /** Where the caret goes once the field shows the text just set, if somewhere. */
   const caretAt = useRef<number | null>(null);
@@ -490,18 +492,26 @@ export function Composer({
       return;
     }
     const start = before.length - found[3]!.length - 1;
+    const opening = !picker || picker.trigger !== trigger;
     if (!picker || picker.trigger !== trigger || picker.start !== start) setActive(0);
     setPicker({ trigger, query: found[3]!, start });
-    if (menuRows?.trigger !== trigger) {
+    // Read when the trigger changes, and again when a menu opens over a list that failed. Only
+    // the latest read's answer is shown.
+    if (menuRows?.trigger !== trigger || (opening && menuRows.error !== null)) {
+      const asked = ++menuRead.current;
       setMenuRows({ trigger, rows: null, error: null });
       void bridge.invoke({ type: "readComposerMenu", key: taskKey, trigger }).then(
-        (rows) => setMenuRows({ trigger, rows, error: null }),
-        (error: unknown) =>
-          setMenuRows({
-            trigger,
-            rows: [],
-            error: error instanceof Error ? error.message : String(error),
-          }),
+        (rows) => {
+          if (asked === menuRead.current) setMenuRows({ trigger, rows, error: null });
+        },
+        (error: unknown) => {
+          if (asked === menuRead.current)
+            setMenuRows({
+              trigger,
+              rows: [],
+              error: error instanceof Error ? error.message : String(error),
+            });
+        },
       );
     }
   };

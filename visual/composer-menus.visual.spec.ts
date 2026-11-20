@@ -95,6 +95,55 @@ test.describe("the composer's menus", () => {
     expect(await sends(page)).toMatchObject([{ text: "/weather in Lisbon" }]);
   });
 
+  test("F-071: a list that could not be read is read again when the menu opens again, and a slower earlier read does not replace a later one", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+        reads: number;
+        releaseSlash?: () => void;
+      };
+      const fixture = w.clawtrateFixture;
+      const invoke = fixture.invoke.bind(fixture);
+      w.reads = 0;
+      fixture.invoke = (command: unknown) => {
+        const each = command as { type: string; trigger?: string };
+        if (each.type !== "readComposerMenu") return invoke(command);
+        if (each.trigger !== "/") return invoke(command);
+        w.reads += 1;
+        // The first "/" read fails; the third answers only when the check says so.
+        if (w.reads === 1) return Promise.reject(new Error("Not connected to the gateway."));
+        if (w.reads === 3)
+          return new Promise<void>((resolve) => (w.releaseSlash = resolve)).then(() =>
+            invoke(command),
+          );
+        return invoke(command);
+      };
+    });
+    await field(page).click();
+    await page.keyboard.type("/");
+    await expect(page.getByRole("alert")).toContainText("Couldn't load the list");
+    await page.keyboard.press("Escape");
+    await field(page).fill("");
+    await page.keyboard.type("/");
+    await expect(page.getByRole("option", { name: /\/status/ })).toBeVisible();
+    // A read of "/" still out when "@" is opened does not replace the "@" list.
+    await page.keyboard.press("Escape");
+    await field(page).fill("");
+    await page.keyboard.type("@");
+    await expect(page.getByRole("option").first()).toBeVisible();
+    await field(page).fill("");
+    await page.keyboard.type("/");
+    await field(page).fill("");
+    await page.keyboard.type("@");
+    await page.evaluate(() => (window as unknown as { releaseSlash: () => void }).releaseSlash());
+    await page.waitForTimeout(200);
+    await expect(page.getByRole("option", { name: /\/status/ })).toHaveCount(0);
+    await expect(page.getByRole("option").first()).toBeVisible();
+  });
+
   test("F-071: Escape closes the menu and keeps the words; a chip is removed with its button or Backspace", async ({
     page,
   }) => {
