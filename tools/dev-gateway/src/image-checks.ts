@@ -4,8 +4,12 @@
 // with `--with-images` as well. docs/research/image-generation.md says what
 // they establish.
 //
-// Clients: one paired operator with read and write, and one read-only.
+// Clients: one paired operator with read and write, and one read-only. The
+// checks run one after the other, so the stand-in's requests since a check
+// began are that check's own.
 
+import { readFileSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import type { OperatorSession } from "./operator.ts";
 import { IMAGE_MODEL_ID, scriptedPicture, type ImageRequestRecord } from "./scripted-images.ts";
 import { IMAGE_PROMPT } from "./scenarios.ts";
@@ -37,10 +41,19 @@ export type ImageContext = {
   gatewayOrigin: string;
   /** The stand-in image provider's origin. */
   imagesOrigin: string;
+  /** The instance's state folder, where the gateway keeps its files. */
+  stateDir: string;
+  /** The gateway's own bearer token (`gateway.auth.token`), for its HTTP routes. */
+  gatewayToken: string;
+  /** The scripted model's log, where its egress proxy records what it refused. */
+  providerLog: string;
   stamp: string;
 };
 
 type ImageCheck = { name: string; covers: string[]; run: (ctx: ImageContext) => Promise<void> };
+
+/** The call's `timeoutMs` in `#image-hang` (scenarios.ts). */
+const HANG_TIMEOUT_MS = 5000;
 
 /** The id of the run the gateway starts in the task once the image task has ended. */
 const completionRun = (taskId: string, outcome: "ok" | "error") =>
@@ -49,6 +62,21 @@ const completionRun = (taskId: string, outcome: "ok" | "error") =>
 async function standInRequests(ctx: ImageContext): Promise<ImageRequestRecord[]> {
   const answer = await fetch(`${ctx.imagesOrigin}/scripted/images/requests`);
   return ((await answer.json()) as { requests: ImageRequestRecord[] }).requests;
+}
+
+/** The one request the stand-in received since `since` requests, with the prompt it was sent. */
+async function onlyRequestSince(
+  ctx: ImageContext,
+  since: number,
+  prompt: string,
+): Promise<ImageRequestRecord> {
+  const requests = (await standInRequests(ctx)).slice(since);
+  same(
+    requests.map((r) => r.prompt),
+    [prompt],
+    "the stand-in's requests since the check began",
+  );
+  return requests[0]!;
 }
 
 /** Send a directive to a new task of Juniper's and follow it to the completion turn. */
@@ -62,6 +90,7 @@ async function imageRun(
   const key = `agent:main:image-${tag}-${ctx.stamp}`;
   await op.request("sessions.messages.subscribe", { key });
   const from = op.lastSeq;
+  const since = (await standInRequests(ctx)).length;
   const sent = rec(await op.send(key, directive));
   const runId = String(sent.runId);
   const end = await op.terminal(runId, 120_000);
@@ -81,21 +110,23 @@ async function imageRun(
     op.events.some((event) => event.seq > from && rec(event.payload).runId === completion.runId),
     "the completion run's events",
   );
-  return { key, taskId, completion };
+  return { key, taskId, completion, since };
 }
 
 /** The task's history, read again until `found` finds what it waits for (at most 30 s). */
 async function historyUntil<T>(
   ctx: ImageContext,
   key: string,
+  what: string,
   found: (messages: JsonRecord[]) => T | undefined,
-): Promise<{ value: T | undefined; messages: JsonRecord[] }> {
+): Promise<{ value: T; messages: JsonRecord[] }> {
   const deadline = Date.now() + 30_000;
   for (;;) {
     const history = rec(await ctx.writer.request("chat.history", { sessionKey: key, limit: 50 }));
     const messages = (history.messages as JsonRecord[]) ?? [];
     const value = found(messages);
-    if (value !== undefined || Date.now() > deadline) return { value, messages };
+    if (value !== undefined) return { value, messages };
+    expect(Date.now() < deadline, `${what} is not in the task's history after 30 s`);
     await sleep(500);
   }
 }
@@ -106,6 +137,12 @@ const imageBlocks = (messages: JsonRecord[]) =>
       ? (m.content as JsonRecord[]).filter((part) => part.type === "image")
       : [],
   );
+const replyText = (message: JsonRecord) =>
+  (message.content as JsonRecord[] | undefined)?.find((part) => part.type === "text")?.text;
+
+/** Whether any of a run's live events carries an `image` content part. */
+const liveImageParts = (op: OperatorSession, runId: string) =>
+  op.runEvents(runId).filter((event) => JSON.stringify(event.payload).includes('"type":"image"'));
 
 /** A finished image task the provider failed: the bot's words, and no picture. */
 function failureCheck(
@@ -117,20 +154,31 @@ function failureCheck(
     name,
     covers: [`#image-${kind}`],
     async run(ctx) {
-      const { key, completion } = await imageRun(ctx, kind, `#image-${kind}`, "error");
-      const text = (rec(completion.message).content as JsonRecord[] | undefined)?.[0]?.text;
-      same(text, IMAGE_FAILED_REPLY, "the completion turn's reply");
-      const { messages } = await historyUntil(ctx, key, (m) =>
-        m.some((x) => (x.content as JsonRecord[])?.[0]?.text === IMAGE_FAILED_REPLY)
+      const { key, completion, since } = await imageRun(ctx, kind, `#image-${kind}`, "error");
+      const completed = Date.now();
+      same(replyText(rec(completion.message)), IMAGE_FAILED_REPLY, "the completion turn's reply");
+      const { messages } = await historyUntil(ctx, key, "the failure's reply", (m) =>
+        m.some((x) => x.role === "assistant" && replyText(x) === IMAGE_FAILED_REPLY)
           ? true
           : undefined,
       );
       same(imageBlocks(messages), [], "pictures in the task");
-      const asked = (await standInRequests(ctx)).filter((r) =>
-        r.prompt?.includes(`[scripted: ${kind}]`),
-      );
-      expect(asked.length > 0, `the stand-in received no ${kind} request`);
-      same(asked.at(-1)!.outcome, outcome, "the stand-in's outcome");
+      const request = await onlyRequestSince(ctx, since, `${IMAGE_PROMPT} [scripted: ${kind}]`);
+      same(request.outcome, outcome, "the stand-in's outcome");
+      if (kind === "hang") {
+        // The gateway gave up on the request after the call's own timeout, measured
+        // by the stand-in from the request's arrival to its close.
+        expect(request.closedAt, "the gateway never closed the request it was not answered");
+        const waited = Date.parse(request.closedAt) - Date.parse(request.at);
+        expect(
+          waited >= HANG_TIMEOUT_MS - 250 && waited < HANG_TIMEOUT_MS + 4000,
+          `the gateway closed the unanswered request after ${waited} ms, not after about ${HANG_TIMEOUT_MS}`,
+        );
+        expect(
+          Date.parse(request.closedAt) <= completed,
+          "the completion ended before the gateway gave up on the request",
+        );
+      }
     },
   };
 }
@@ -140,12 +188,24 @@ export const IMAGE_CHECKS: ImageCheck[] = [
     name: "a bot's picture arrives in a later turn of the task, as an artifact",
     covers: ["#image"],
     async run(ctx) {
-      const { key, completion } = await imageRun(ctx, "picture", "#image", "ok");
-      const text = (rec(completion.message).content as JsonRecord[] | undefined)?.[0]?.text;
-      same(text, IMAGE_READY_REPLY, "the completion turn's text, its MEDIA line taken out");
+      const { key, completion, since } = await imageRun(ctx, "picture", "#image", "ok");
+      same(
+        replyText(rec(completion.message)),
+        IMAGE_READY_REPLY,
+        "the completion turn's text, its MEDIA line taken out",
+      );
+      same(
+        liveImageParts(ctx.writer, String(completion.runId)).length,
+        0,
+        "live events of the completion run carrying an image part",
+      );
       const picture = scriptedPicture();
-      const { value: block } = await historyUntil(ctx, key, (m) => imageBlocks(m)[0]);
-      expect(block, "no image block in the task's history");
+      const { value: blocks } = await historyUntil(ctx, key, "the image block", (m) => {
+        const found = imageBlocks(m);
+        return found.length > 0 ? found : undefined;
+      });
+      same(blocks.length, 1, "image blocks in the task");
+      const block = blocks[0]!;
       same(
         [block.mimeType, block.width, block.height, block.sizeBytes],
         ["image/png", 1024, 1024, picture.length],
@@ -167,6 +227,7 @@ export const IMAGE_CHECKS: ImageCheck[] = [
         ["image", "image/png", picture.length, "url"],
         "the artifact record",
       );
+      same(record.runId, completion.runId, "the artifact's run, the gateway's completion turn");
       const download = rec(
         await ctx.writer.request("artifacts.download", { sessionKey: key, artifactId: record.id }),
       );
@@ -176,11 +237,10 @@ export const IMAGE_CHECKS: ImageCheck[] = [
         await (await fetch(`${ctx.gatewayOrigin}${address}`)).arrayBuffer(),
       );
       expect(fetched.equals(picture), "the downloaded bytes are not the stand-in's picture");
-      const [request] = (await standInRequests(ctx)).filter((r) => r.prompt === IMAGE_PROMPT);
-      expect(request, "the stand-in received no request for the picture");
+      const request = await onlyRequestSince(ctx, since, IMAGE_PROMPT);
       same(
-        [request.authorized, request.model, request.n, request.size],
-        [true, IMAGE_MODEL_ID, 1, "1024x1024"],
+        [request.authorized, request.model, request.n, request.size, request.outcome],
+        [true, IMAGE_MODEL_ID, 1, "1024x1024", "picture"],
         "what the gateway asked the stand-in",
       );
     },
@@ -197,23 +257,46 @@ export const IMAGE_CHECKS: ImageCheck[] = [
     "hang",
   ),
   {
-    name: "tools.invoke makes a picture at once and names a path on the gateway's machine",
+    name: "tools.invoke on a task never created makes a picture at once, a file on the gateway's machine read over its HTTP route",
     covers: [],
     async run(ctx) {
       const key = `agent:main:image-invoke-${ctx.stamp}`;
+      const since = (await standInRequests(ctx)).length;
       const params = { name: "image_generate", args: { prompt: IMAGE_PROMPT }, sessionKey: key };
       const answer = rec(await ctx.writer.request("tools.invoke", params, 60_000));
       same([answer.ok, answer.toolName], [true, "image_generate"], "the invoke answer");
       const details = rec(rec(answer.output).details);
       const [attachment] = (details.attachments as JsonRecord[]) ?? [];
+      const picture = scriptedPicture();
       same(
         [details.count, attachment?.type, attachment?.mimeType, attachment?.sizeBytes],
-        [1, "image", "image/png", scriptedPicture().length],
+        [1, "image", "image/png", picture.length],
         "the invoke's attachment",
       );
+      same(details.async, undefined, "a background task on a task never created");
       const path = String(attachment?.path ?? "");
-      expect(path.includes("/media/tool-image-generation/"), `the attachment's path ${path}`);
-      same(details.async, undefined, "a background task on a task with no history");
+      const folder = `${ctx.stateDir}/media/tool-image-generation/`;
+      expect(
+        isAbsolute(path) && path.startsWith(folder) && !path.slice(folder.length).includes("/"),
+        `the attachment's path ${path} is not a file of the gateway's in ${folder}`,
+      );
+      expect(readFileSync(path).equals(picture), "the file the path names is not the picture");
+      await onlyRequestSince(ctx, since, IMAGE_PROMPT);
+      // The gateway's assistant media route serves the file by its path, with its bearer token.
+      const route = `${ctx.gatewayOrigin}/__openclaw__/assistant-media?source=${encodeURIComponent(path)}`;
+      const authorized = await fetch(route, {
+        headers: { authorization: `Bearer ${ctx.gatewayToken}` },
+      });
+      same(
+        [authorized.status, authorized.headers.get("content-type")],
+        [200, "image/png"],
+        "the assistant media route with the gateway's token",
+      );
+      expect(
+        Buffer.from(await authorized.arrayBuffer()).equals(picture),
+        "the assistant media route's bytes are not the picture",
+      );
+      same((await fetch(route)).status, 401, "the assistant media route without a token");
       const history = rec(await ctx.writer.request("chat.history", { sessionKey: key, limit: 5 }));
       same(history.messages, [], "the invoked task's history");
       const refused = await ctx.reader.request("tools.invoke", params).then(
@@ -221,6 +304,39 @@ export const IMAGE_CHECKS: ImageCheck[] = [
         (error: unknown) => String(error),
       );
       expect(/missing scope: operator\.write/.test(refused), `a read-only invoke: ${refused}`);
+    },
+  },
+  {
+    name: "a reference picture at an outside address goes to the instance's egress proxy, which refuses it",
+    covers: [],
+    async run(ctx) {
+      // A name in a reserved domain: the gateway hands it to its egress proxy
+      // (the scripted model) without looking it up, and the proxy refuses the tunnel.
+      const host = `pictures-${ctx.stamp}.example`;
+      const reference = `http://${host}/hill.png`;
+      const since = (await standInRequests(ctx)).length;
+      const logged = readFileSync(ctx.providerLog, "utf8").length;
+      const answer = rec(
+        await ctx.writer.request(
+          "tools.invoke",
+          {
+            name: "image_generate",
+            args: { prompt: IMAGE_PROMPT, image: reference },
+            sessionKey: `agent:main:image-reference-${ctx.stamp}`,
+          },
+          60_000,
+        ),
+      );
+      same(answer.ok, false, "the invoke with an outside reference");
+      // The gateway asks its proxy for a tunnel to the reference's host.
+      const refusal = `refused a request beyond loopback: CONNECT ${host}:80`;
+      const lines = readFileSync(ctx.providerLog, "utf8").slice(logged);
+      expect(lines.includes(refusal), `the egress proxy did not record "${refusal}"`);
+      same(
+        (await standInRequests(ctx)).slice(since),
+        [],
+        "the stand-in's requests for the refused reference",
+      );
     },
   },
 ];

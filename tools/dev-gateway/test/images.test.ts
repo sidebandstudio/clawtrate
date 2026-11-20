@@ -179,6 +179,35 @@ describe("the stand-in image provider", () => {
     ).toBe("ended");
   });
 
+  it("records when the caller gives up on a request it never answers", async () => {
+    const { base } = await open();
+    const caller = new AbortController();
+    const hanging = fetch(`${base}/v1/images/generations`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${IMAGE_API_KEY}` },
+      body: JSON.stringify({ prompt: `${IMAGE_PROMPT} ${outcomeMarker("hang")}` }),
+      signal: caller.signal,
+    }).catch(() => "ended");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    caller.abort();
+    expect(await hanging).toBe("ended");
+    const list = async () =>
+      (
+        (await (await fetch(`${base}/scripted/images/requests`)).json()) as {
+          requests: { at: string; outcome: string; closedAt?: string }[];
+        }
+      ).requests;
+    let [record] = await list();
+    for (let i = 0; i < 20 && record?.closedAt === undefined; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      [record] = await list();
+    }
+    expect(record?.outcome).toBe("hang");
+    const waited = Date.parse(record!.closedAt!) - Date.parse(record!.at);
+    expect(waited).toBeGreaterThanOrEqual(100);
+    expect(waited).toBeLessThan(5000);
+  });
+
   it("answers nothing without its key, and records every request", async () => {
     const { base } = await open();
     expect((await generate(base, { prompt: IMAGE_PROMPT }, null)).status).toBe(401);

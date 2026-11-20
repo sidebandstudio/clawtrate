@@ -98,6 +98,8 @@ export type ImageRequestRecord = {
   n: number | null;
   size: string | null;
   outcome: ImageOutcome | "unauthorized" | "malformed";
+  /** For a request left without an answer: when the gateway closed it. */
+  closedAt?: string;
 };
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -203,7 +205,10 @@ export function startScriptedImages(options: {
           return;
         case "hang":
           hanging.add(res);
-          res.on("close", () => hanging.delete(res));
+          res.on("close", () => {
+            hanging.delete(res);
+            record.closedAt = new Date().toISOString();
+          });
           return;
         default: {
           const count = Math.min(Math.max(Math.trunc(record.n ?? 1), 1), 4);

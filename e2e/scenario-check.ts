@@ -27,6 +27,7 @@ import {
   lockOrder,
   openInstance,
   openOperator,
+  readDevConnection,
 } from "../tools/dev-gateway/src/cli.ts";
 import { ACCOUNT_CLIENTS, runAccountChecks } from "../tools/dev-gateway/src/account-checks.ts";
 import {
@@ -238,6 +239,9 @@ async function computerChecks(
       reader: clients.reader!,
       gatewayOrigin: `http://127.0.0.1:${ports.gatewayPort}`,
       imagesOrigin: `http://127.0.0.1:${standIn}`,
+      stateDir: inst.stateDir,
+      gatewayToken: readDevConnection(inst.connectionFile)!.token,
+      providerLog: join(inst.runDir, "provider.log"),
       stamp: Date.now().toString(36),
     });
     console.log(`${images.passed} of ${images.passed + images.failed} image checks passed`);
