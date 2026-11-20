@@ -321,6 +321,27 @@ describe("a decision record that cannot be read at all", () => {
     expect(log.problem).toMatch(/cannot be read \(EIO\)/);
     expect(actual.readFileSync(file, "utf8")).toBe(original);
   });
+
+  it("tries the read once per decision past the cap, keeping what memory holds as it is", () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    const file = join(dir, "decisions.jsonl");
+    const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+    new DecisionLog(dir, { now: () => 1 }).add(fields);
+    io.path = file;
+    io.failures = Number.POSITIVE_INFINITY;
+    let now = 1;
+    const log = new DecisionLog(dir, { now: () => ++now, max: 3 });
+    const ids = Array.from({ length: 4 }, () => log.add(fields));
+    const index = log.byId;
+    io.reads = 0;
+    ids.push(log.add(fields));
+    expect(io.reads).toBe(1);
+    // Trimmed in place, not rebuilt from a read that failed.
+    expect(log.byId).toBe(index);
+    expect(log.list({ limit: 50 }).records.map((r) => r.id)).toEqual(ids.slice(2).reverse());
+  });
 });
 
 describe("a record the cap evicted, when its expiry cannot be rewritten", () => {

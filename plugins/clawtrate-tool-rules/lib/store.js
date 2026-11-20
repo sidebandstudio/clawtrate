@@ -436,21 +436,6 @@ export class DecisionLog {
    * memory meanwhile are kept after the file's, and written with them.
    */
   #load() {
-    const held = this.records;
-    this.records = [];
-    this.byId = new Map();
-    const keep = () => {
-      for (const record of held) {
-        const disk = this.byId.get(record.id);
-        // The same decision on disk: this writer's metadata, and the later of the two answers.
-        if (disk && (disk.answeredAt ?? -Infinity) > (record.answeredAt ?? -Infinity)) {
-          Object.assign(record, { answer: disk.answer, answeredAt: disk.answeredAt });
-        }
-        this.byId.set(record.id, record);
-      }
-      // In time order, the order within a millisecond kept.
-      this.records = [...this.byId.values()].sort((a, b) => a.at - b.at);
-    };
     let text = "";
     let aside = null;
     let fingerprint = "none";
@@ -471,19 +456,32 @@ export class DecisionLog {
       // A file past the cap is not read into memory: it is set aside.
       if (oversized) {
         aside = this.#setAside();
-        if (aside === null) {
-          keep();
-          return;
-        }
+        // Not moved: what memory holds stays as it is, nothing is written.
+        if (aside === null) return;
       }
     } catch (error) {
       if (error?.code !== "ENOENT") {
-        keep();
+        // Unread: what memory holds stays as it is, not rebuilt for each attempt.
         this.loaded = false;
         this.problem = `the decision record cannot be read (${error.code ?? "error"})`;
         return;
       }
     }
+    const held = this.records;
+    this.records = [];
+    this.byId = new Map();
+    const keep = () => {
+      for (const record of held) {
+        const disk = this.byId.get(record.id);
+        // The same decision on disk: this writer's metadata, and the later of the two answers.
+        if (disk && (disk.answeredAt ?? -Infinity) > (record.answeredAt ?? -Infinity)) {
+          Object.assign(record, { answer: disk.answer, answeredAt: disk.answeredAt });
+        }
+        this.byId.set(record.id, record);
+      }
+      // In time order, the order within a millisecond kept.
+      this.records = [...this.byId.values()].sort((a, b) => a.at - b.at);
+    };
     // One way on for a record read, a missing one and one just set aside; a
     // stale read error goes with the read that succeeded.
     this.problem = aside;
@@ -779,7 +777,9 @@ export class DecisionLog {
     this.byId.set(record.id, record);
     this.#append(record);
     if (this.records.length > this.max || this.records[0].at < this.now() - this.retentionMs) {
-      this.#maintain();
+      // A read that just failed for this record is not tried again: memory is trimmed alone.
+      if (this.loaded) this.#maintain();
+      else this.#trim();
     }
     return record.id;
   }
