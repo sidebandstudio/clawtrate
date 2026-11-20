@@ -139,9 +139,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: 3 * ID + MAX_RUN_TEXT_CHARS,
     row: "streamBaselines",
   },
-  // Raw payloads: their content is the table's budget; these are their keys.
+  // Raw payloads: their content is the table's budget; these are their keys. Each retained step
+  // and each retained run's failure has one, and one incoming entry before the table prunes.
   "raw.entries": {
-    max: T * MAX_STEPS_PER_TASK,
+    max: T * (MAX_STEPS_PER_TASK + MAX_RUN_LIST) + 1,
     each: 3 * ID + 1 + N,
     row: "rawPayloads",
     opaque: "the raw table's budget, `MAX_RAW_BYTES`",
@@ -383,6 +384,16 @@ export function ownerClassFields(): Record<string, string[]> {
   return Object.fromEntries(Object.entries(fields).map(([name, set]) => [name, [...set].sort()]));
 }
 
+/** The two strings in the desktop updater's private preference store. */
+export const UPDATE_PREFERENCE_OWNERS: Record<string, Owner> = {
+  selectedTrack: { max: 1, each: JSON.stringify("nightly").length, row: "updatePreferences" },
+  lastCheck: {
+    max: 1,
+    each: JSON.stringify({ track: "nightly", readAt: "2000-01-01T00:00:00.000Z" }).length,
+    row: "updatePreferences",
+  },
+};
+
 /** JSON characters each registry row adds to the host's worst case, with `viewers` bridge sessions. */
 export function ownerRows(viewers: number): Record<string, number> {
   const rows: Record<string, number> = {};
@@ -396,5 +407,6 @@ export function ownerRows(viewers: number): Record<string, number> {
   add(VIEWER_OWNERS, viewers);
   add(ATTACHMENT_OWNERS, 1);
   add(SAVE_OWNERS, 1);
+  add(UPDATE_PREFERENCE_OWNERS, 1);
   return rows;
 }

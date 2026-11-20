@@ -1102,7 +1102,10 @@ describe("structured endings and best-effort reasoning segments", () => {
     const chatTimeout = play([
       C("run-2", 1, "error", { errorMessage: "Timed out", errorKind: "timeout" }),
     ]).activity;
-    expect(only(chatTimeout, "run-2").error).toEqual({ message: "Timed out", kind: "timeout" });
+    expect(only(chatTimeout, "run-2").error).toMatchObject({
+      message: "Timed out",
+      kind: "timeout",
+    });
   });
 
   it("a wrong live split never duplicates reasoning once history has the run", () => {

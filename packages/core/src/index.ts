@@ -36,6 +36,9 @@ export * from "./sidebar.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
 export * from "./file-paths.ts";
+export { isStopNow } from "./stop-words.ts";
+export * from "./send-size.ts";
+export * from "./composer-menus.ts";
 export { fromBase64, sha256Hex, toBase64, utf8Bytes } from "./bytes.ts";
 export { worstCase, type Bound, type Digest } from "./bounds.ts";
 export * from "./state-bounds.ts";
@@ -57,6 +60,8 @@ export {
   ClawtrateClient,
   DEFAULT_MAX_PAYLOAD_BYTES,
   DEFAULT_TURN_LIMIT_MS,
+  MAX_TURN_LIMIT_MINUTES,
+  MIN_TURN_LIMIT_MINUTES,
   defaultApprovalInstructions,
   GATEWAY_REQUEST_ID,
   NO_APPROVE_COMMAND,
@@ -76,3 +81,5 @@ export {
   type SendMode,
   type SendOptions,
 } from "./client.ts";
+export type * from "./desktop-updates.ts";
+export { noDesktopUpdates } from "./no-desktop-updates.ts";

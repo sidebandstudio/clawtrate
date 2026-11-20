@@ -2,6 +2,7 @@
 // the renderer. The host owns the gateway connection; the renderer receives state
 // snapshots and sends commands. Transport is IPC in Electron and a WebSocket on the web.
 
+import type { DesktopUpdates } from "./desktop-updates.ts";
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   type AttachmentInfo,
@@ -9,7 +10,7 @@ import {
 } from "./attachments.ts";
 import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts";
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
-import type { QuestionAnswer, StepRead } from "./runs.ts";
+import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
 import {
   MAX_SIDEBAR_BOTS,
   parseSidebar,
@@ -20,6 +21,7 @@ import {
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import type { ClawtrateState, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
+import type { MenuRow } from "./composer-menus.ts";
 import type { UsageBusy, UsageReport } from "./usage-engine.ts";
 import {
   MAX_ROUTINE_NAME_CHARS,
@@ -62,7 +64,15 @@ export type BridgeCommand =
       text: string;
       mode: "auto" | "queue";
       attachmentIds: string[];
+      /** The gateway's id of the message this one replies to (F-067). */
+      replyToId?: string;
     }
+  /** Add, or with `remove` take back, this person's reaction on a message the task shows (F-283). */
+  | { type: "setReaction"; key: string; messageId: string; emoji: string; remove: boolean }
+  /** The "Turn time limit", in minutes, for every run this client starts (F-100). */
+  | { type: "setTurnLimit"; minutes: number }
+  /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
+  | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
   | { type: "retryMessage"; key: string; messageId: string }
   | { type: "deleteMessage"; key: string; messageId: string }
   | { type: "cancelQueued"; key: string; messageId: string }
@@ -107,6 +117,9 @@ export type BridgeCommand =
    * hold it yet.
    */
   | { type: "readStepRaw"; key: string; stepId: string }
+  | { type: "readRunRaw"; key: string; runId: string }
+  /** Files the viewer attached and then removed from its draft: the host lets them go. */
+  | { type: "releaseAttachments"; attachmentIds: string[] }
   /** Ask again, with its own key, for a task creation the gateway refused, or whose outcome is unknown (it may create a second task). */
   | { type: "retryCreation"; creationId: string }
   /** Forget a task creation that failed, settled or cannot be established. */
@@ -245,51 +258,58 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
         ? { key: string }
         : C extends { type: "readStepRaw" }
           ? StepRead | null
-          : C extends { type: "readApprovalText" }
-            ? { text: Record<string, string | string[] | null>; digest: string }
-            : C extends { type: "readHistoryItem" }
-              ? TranscriptItem | null
-              : C extends { type: "retryCreation" }
-                ? { key: string }
-                : C extends { type: "listTaskFiles" }
-                  ? TaskFileList
-                  : C extends { type: "readTaskFile" | "readWorkspaceFile" }
-                    ? FileRead
-                    : C extends { type: "listWorkspace" }
-                      ? WorkspacePage
-                      : C extends { type: "readCheckoutDiff" }
-                        ? CheckoutDiff
-                        : C extends { type: "readFileChunk" }
-                          ? { data: string }
-                          : C extends { type: "cancelSignIn" }
-                            ? { cancelled: boolean }
-                            : C extends { type: "dismissSignIn" }
-                              ? { dismissed: boolean }
-                              : C extends { type: "saveApiKey" }
-                                ? { profileId: string | null }
-                                : C extends { type: "createBot" | "finishBot" }
-                                  ? { botId: string; missing: MissingStep[] }
-                                  : C extends { type: "newTask" | "newMainTask" }
-                                    ? { key: string }
-                                    : C extends { type: "archiveTask" }
-                                      ? ArchiveResult
-                                      : C extends { type: "listArchived" }
-                                        ? ArchivedList
-                                        : C extends { type: "readUsage" }
-                                          ? UsageReport | UsageBusy
-                                          : C extends { type: "listRoutines" }
-                                            ? Routine[]
-                                            : C extends { type: "readPlacement" }
-                                              ? BotPlacement
-                                              : C extends { type: "readMachines" }
-                                                ? MachinesView
-                                                : C extends { type: "setCommandMachine" }
-                                                  ? ConfigSave
-                                                  : C extends { type: "setBotWorkspace" }
-                                                    ? { workspace: string | null; asTyped: boolean }
-                                                    : C extends { type: "setMachineDefaults" }
-                                                      ? ApprovalsFile
-                                                      : void;
+          : C extends { type: "readRunRaw" }
+            ? RunRawRead | null
+            : C extends { type: "readApprovalText" }
+              ? { text: Record<string, string | string[] | null>; digest: string }
+              : C extends { type: "readHistoryItem" }
+                ? TranscriptItem | null
+                : C extends { type: "retryCreation" }
+                  ? { key: string }
+                  : C extends { type: "listTaskFiles" }
+                    ? TaskFileList
+                    : C extends { type: "readTaskFile" | "readWorkspaceFile" }
+                      ? FileRead
+                      : C extends { type: "listWorkspace" }
+                        ? WorkspacePage
+                        : C extends { type: "readCheckoutDiff" }
+                          ? CheckoutDiff
+                          : C extends { type: "readFileChunk" }
+                            ? { data: string }
+                            : C extends { type: "cancelSignIn" }
+                              ? { cancelled: boolean }
+                              : C extends { type: "dismissSignIn" }
+                                ? { dismissed: boolean }
+                                : C extends { type: "saveApiKey" }
+                                  ? { profileId: string | null }
+                                  : C extends { type: "createBot" | "finishBot" }
+                                    ? { botId: string; missing: MissingStep[] }
+                                    : C extends { type: "newTask" | "newMainTask" }
+                                      ? { key: string }
+                                      : C extends { type: "archiveTask" }
+                                        ? ArchiveResult
+                                        : C extends { type: "listArchived" }
+                                          ? ArchivedList
+                                          : C extends { type: "readComposerMenu" }
+                                            ? MenuRow[]
+                                            : C extends { type: "readUsage" }
+                                              ? UsageReport | UsageBusy
+                                              : C extends { type: "listRoutines" }
+                                                ? Routine[]
+                                                : C extends { type: "readPlacement" }
+                                                  ? BotPlacement
+                                                  : C extends { type: "readMachines" }
+                                                    ? MachinesView
+                                                    : C extends { type: "setCommandMachine" }
+                                                      ? ConfigSave
+                                                      : C extends { type: "setBotWorkspace" }
+                                                        ? {
+                                                            workspace: string | null;
+                                                            asTyped: boolean;
+                                                          }
+                                                        : C extends { type: "setMachineDefaults" }
+                                                          ? ApprovalsFile
+                                                          : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -311,6 +331,7 @@ export type HostInfo = {
 
 /** Renderer-side view of the bridge, implemented over IPC or a WebSocket. */
 export type ClawtrateBridge = {
+  readonly desktopUpdates: DesktopUpdates;
   info: HostInfo;
   getState(): ClawtrateState;
   subscribe(listener: (state: ClawtrateState) => void): () => void;
@@ -704,6 +725,28 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         text: messageText(command.text),
         mode: command.mode === "queue" ? "queue" : "auto",
         attachmentIds: ids as string[],
+        ...(command.replyToId !== undefined
+          ? { replyToId: id(command.replyToId, "message id") }
+          : {}),
+      };
+    }
+    case "setTurnLimit":
+      if (typeof command.minutes !== "number" || !Number.isInteger(command.minutes))
+        throw new Error("invalid turn limit");
+      return { type: "setTurnLimit", minutes: command.minutes };
+    case "readComposerMenu":
+      if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
+      return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
+    case "setReaction": {
+      const emoji = command.emoji;
+      if (typeof emoji !== "string" || emoji.length === 0 || emoji.length > 64)
+        throw new Error("invalid emoji");
+      return {
+        type: "setReaction",
+        key: sessionKey(command.key),
+        messageId: id(command.messageId, "message id"),
+        emoji,
+        remove: command.remove === undefined ? false : flag(command.remove),
       };
     }
     case "retryMessage":
@@ -807,6 +850,21 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "readStepRaw",
         key: sessionKey(command.key),
         stepId: id(command.stepId, "step id"),
+      };
+    case "releaseAttachments": {
+      const ids = command.attachmentIds;
+      if (!Array.isArray(ids) || ids.length > MAX_ATTACHMENTS_PER_MESSAGE)
+        throw new Error("invalid attachments");
+      return {
+        type: "releaseAttachments",
+        attachmentIds: ids.map((each) => id(each, "attachment id")),
+      };
+    }
+    case "readRunRaw":
+      return {
+        type: "readRunRaw",
+        key: sessionKey(command.key),
+        runId: id(command.runId, "run id"),
       };
     case "openSession":
     case "closeSession":
@@ -1144,6 +1202,7 @@ class ViewerSession implements BridgeSession {
           const messageId = client.sendMessage(key, command.text, {
             mode: command.mode,
             attachments: taken.attachments,
+            ...(command.replyToId ? { replyToId: command.replyToId } : {}),
           });
           return { messageId };
         } catch (error) {
@@ -1185,6 +1244,18 @@ class ViewerSession implements BridgeSession {
         );
       case "stopRun":
         return client.stopRun(this.mine(command.key), command.runId, { owner });
+      case "setTurnLimit":
+        return client.setTurnLimit(command.minutes);
+      case "readComposerMenu":
+        return client.readComposerMenu(this.mine(command.key), command.trigger);
+      case "setReaction":
+        return client.setReaction(
+          this.mine(command.key),
+          command.messageId,
+          command.emoji,
+          command.remove,
+          { owner },
+        );
       case "answerQuestion":
         return client.answerQuestion(this.mine(command.key), command.questionId, command.answers, {
           owner,
@@ -1217,6 +1288,12 @@ class ViewerSession implements BridgeSession {
         return client.dismissCreation(command.creationId);
       case "readStepRaw":
         return client.readStepRaw(this.mine(command.key), command.stepId);
+      case "readRunRaw":
+        return client.readRunRaw(this.mine(command.key), command.runId);
+      case "releaseAttachments":
+        // What a removed chip reserved is free again at once, not when it would expire.
+        this.policy.attachments?.release(command.attachmentIds);
+        return;
       case "listTaskFiles":
         return client.listTaskFiles(this.mine(command.key), this.fileOptions());
       case "readTaskFile":
