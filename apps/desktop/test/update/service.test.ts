@@ -1,5 +1,6 @@
 import type { DesktopUpdateSnapshot } from "@clawtrate/core";
 import { createFileStore } from "@clawtrate/core/node";
+import { symlinkSync, statSync, readFileSync } from "node:fs";
 import { existsSync, mkdirSync, writeFileSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -113,7 +114,9 @@ it.each(["check", "download"] as const)(
     const id = stage === "download" ? await offer(service) : "old";
     const pending = stage === "check" ? service.check() : service.download(id);
     await entered.promise;
-    await Promise.all([service.check(), service.download(id)]);
+    const replies = await Promise.all([service.check(), service.download(id)]);
+    expect(replies.map((r) => r.commandRefusal)).toEqual(["busy", "busy"]);
+    expect(service.get().commandRefusal).toBeUndefined();
     await service.chooseTrack("nightly");
     resume.resolve();
     await pending;
@@ -227,4 +230,63 @@ it("a failed file-store write cannot slip into a later successful save", async (
   renameSync(path + ".saved", path);
   await service.check();
   expect((await start()).get().selectedTrack).toBe("nightly");
+});
+
+it("checks ancestry before cleanup and refuses a linked destination before opening a file", async () => {
+  const outside = join(dir.path, "other");
+  mkdirSync(outside);
+  writeFileSync(join(outside, "keep"), "keep");
+  const service = await start();
+  const id = await offer(service);
+  symlinkSync(outside, updates, "junction");
+  expect(await service.download(id)).toMatchObject({
+    state: {
+      kind: "failed",
+      reason: "write-failed",
+      retry: "check",
+      lastOffer: { version: "1.1.0" },
+    },
+  });
+  expect(readdirSync(outside)).toEqual(["keep"]);
+  const nested = await start({ downloadDir: join(updates, "keep") });
+  expect(nested.get().state.kind).toBe("failed");
+  expect(readFileSync(join(outside, "keep"), "utf8")).toBe("keep");
+  expect(server.requests).toEqual(["/stable"]);
+});
+
+it("gives same-version offers separate private destinations and removes the older bytes", async () => {
+  const service = await start();
+  const first = await offer(service);
+  await service.download(first);
+  const old = join(updates, first);
+  expect(readdirSync(old)).toHaveLength(1);
+  if (process.platform !== "win32") expect(statSync(old).mode & 0o777).toBe(0o700);
+  const other = payload(6500);
+  server.route(
+    "/stable",
+    json(feedFor(server.origin, "1.1.0", { size: other.body.length, sha512: other.sha512 })),
+  );
+  server.route("/files/app.zip", bytes(other.body));
+  const second = await offer(service);
+  expect(second).not.toBe(first);
+  expect(existsSync(old)).toBe(false);
+  await service.download(second);
+  const fresh = join(updates, second);
+  expect(readFileSync(join(fresh, readdirSync(fresh)[0]!))).toEqual(other.body);
+});
+
+it("marks the command busy before notifying a throwing observer", async () => {
+  const replies: Promise<DesktopUpdateSnapshot>[] = [];
+  const service = await start({
+    changed: (s) => {
+      if (s.state.kind === "checking") replies.push(service.download("stale"));
+      if (s.state.kind === "downloading") replies.push(service.check());
+      throw Error("renderer gone");
+    },
+  });
+  const id = await offer(service);
+  expect(await service.download(id)).toMatchObject({ state: { kind: "verified" } });
+  expect(replies.length).toBeGreaterThan(1);
+  for (const reply of await Promise.all(replies)) expect(reply.commandRefusal).toBe("busy");
+  expect(server.requests).toEqual(["/stable", "/files/app.zip"]);
 });

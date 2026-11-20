@@ -3,6 +3,8 @@
 // with the build's value; here the same value is a global set before the module
 // is loaded, which is what the replaced text evaluates to.
 
+import { join } from "node:path";
+import { tempDir } from "./harness.ts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { updateDefines } from "../../packaging/update-defines.ts";
 
@@ -18,17 +20,37 @@ describe("the build's release date", () => {
     vi.resetModules();
     const info = await import("../../src/main/update/build-info.ts");
     expect(info.BUILD_RELEASE_DATE).toBe("2023-11-14T22:13:20.000Z");
-    const engine = info.productionUpdateEngine({
-      currentVersion: "0.1.0",
-      downloadDir: "unused",
-      platform: "darwin",
-      arch: "arm64",
-    });
-    vi.spyOn(engine, "newer", "get").mockReturnValue({
+    const { UpdateEngine } = await import("../../src/main/update/engine.ts");
+    vi.spyOn(UpdateEngine.prototype, "newer", "get").mockReturnValue({
       version: "0.2.0",
       releaseDate: "2023-11-29T00:00:00.000Z",
     });
-    expect(engine.updateRequired(new Date("2023-11-28T22:13:20.000Z"))).toBe(false);
-    expect(engine.updateRequired(new Date("2023-11-28T22:13:20.001Z"))).toBe(true);
+    const ages: boolean[] = [];
+    vi.spyOn(UpdateEngine.prototype, "check").mockImplementationOnce(async function (
+      this: InstanceType<typeof UpdateEngine>,
+    ) {
+      ages.push(
+        this.updateRequired(new Date("2023-11-28T22:13:20.000Z")),
+        this.updateRequired(new Date("2023-11-28T22:13:20.001Z")),
+      );
+      return { kind: "not-configured" };
+    });
+    const dir = tempDir();
+    try {
+      const service = await info.startDesktopUpdates({
+        version: "0.1.0",
+        packaged: true,
+        platform: "darwin",
+        arch: "arm64",
+        downloadDir: join(dir.path, "updates"),
+        changed: () => {},
+        store: { get: async () => null, set: async () => {}, delete: async () => {} },
+      });
+      await service.check();
+      expect(ages).toEqual([false, true]);
+    } finally {
+      dir.remove();
+      vi.restoreAllMocks();
+    }
   });
 });

@@ -15,6 +15,6 @@ export {
   type UpdateFailureCause,
   type UpdateState,
 } from "./engine.ts";
-export { BUILD_FEED_ADDRESS, BUILD_RELEASE_DATE, productionUpdateEngine } from "./build-info.ts";
+export { BUILD_FEED_ADDRESS, BUILD_RELEASE_DATE, startDesktopUpdates } from "./build-info.ts";
 export { FEED_FORMAT, FILE_KEYS, fileKeyFor, type FileKey } from "./feed.ts";
 export { type LoopbackHttpForTests } from "./address.ts";

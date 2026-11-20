@@ -27,7 +27,14 @@ export type DesktopUpdateState =
   | { kind: "downloading"; version: string; received: number; expected: number }
   /** The byte count and SHA-512 matched the feed. */
   | { kind: "verified"; version: string; size: number }
-  | { kind: "failed"; reason: DesktopUpdateFailure; stage: "check" | "download" | "preferences" };
+  | {
+      kind: "failed";
+      reason: DesktopUpdateFailure;
+      stage: "check" | "download" | "preferences";
+      /** A download failed for this checked release. Retry requires a fresh check. */
+      lastOffer?: { version: string; releaseDate: string };
+      retry?: "check";
+    };
 
 export interface DesktopUpdateSnapshot {
   /** Null when the host has no desktop release version or its version failed validation. */
@@ -39,6 +46,8 @@ export interface DesktopUpdateSnapshot {
   /** UTC ISO timestamp of the last completed feed read. */
   lastCheckedAt: string | null;
   state: DesktopUpdateState;
+  /** Only on a command reply refused because another action is in progress. */
+  commandRefusal?: "busy";
   install: { kind: "unavailable-in-this-build" };
 }
 

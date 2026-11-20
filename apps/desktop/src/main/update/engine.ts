@@ -169,6 +169,10 @@ export class UpdateEngine {
       : null;
   }
 
+  get offeredBytes(): number | null {
+    return this.found?.file.size ?? null;
+  }
+
   /** F-010 now: the last check found a newer version and this build is more than 14 days old. */
   updateRequired(now: Date): boolean {
     return isUpdateRequired(this.newer, this.options.buildReleaseDate ?? null, now);

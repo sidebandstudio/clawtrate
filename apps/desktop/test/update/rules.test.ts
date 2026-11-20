@@ -8,7 +8,7 @@ import {
   DEFAULT_LIMITS,
   isUpdateRequired,
   MAX_FEED_BYTES,
-  productionUpdateEngine,
+  startDesktopUpdates,
 } from "../../src/main/update/index.ts";
 import { buildAddressProblem, checkFeedAddress } from "../../src/main/update/address.ts";
 import { parseReleaseDate } from "../../src/main/update/feed.ts";
@@ -76,19 +76,23 @@ describe("the feed's address is the build's", () => {
     const dir = tempDir();
     try {
       process.env.CLAWTRATE_UPDATE_FEED_URL = `${server.origin}/feed.json`;
-      const engine = productionUpdateEngine({
-        currentVersion: "0.1.0",
-        downloadDir: dir.path,
+      const service = await startDesktopUpdates({
+        version: "0.1.0",
+        packaged: true,
+        changed: () => {},
+        store: { get: async () => null, set: async () => {}, delete: async () => {} },
+        downloadDir: join(dir.path, "updates"),
         platform: "darwin",
         arch: "arm64",
         // What a caller holding a gateway's, a link's or a file's address might try.
         ...({
+          feeds: { stable: server.origin + "/feed.json", nightly: null },
           feedAddress: `${server.origin}/feed.json`,
           loopbackHttpForTests: { port: server.port },
         } as object),
       });
       expect(BUILD_FEED_ADDRESS).toBeNull();
-      expect(await engine.check()).toEqual({ kind: "not-configured" });
+      expect((await service.check()).state).toMatchObject({ reason: "not-configured" });
       expect(server.requests).toEqual([]);
     } finally {
       await server.close();
@@ -207,7 +211,7 @@ describe("versions", () => {
   it.each([
     ["1.10.0", "1.9.0", true],
     ["1.0.0-nightly.20261102.1", "1.0.0-nightly.20261101.11", true],
-    ["1.0.0-nightly.20261101.10", "1.0.0-nightly.20261101.9", true],
+    ["1.0.0-nightly.20261101.10", "1.0.0-nightly.20261101.2", true],
     ["1.0.0", "1.0.0-nightly.20261101.1", true],
     ["1.0.1-nightly.20261101.1", "1.0.0", true],
     ["1.0.0-nightly.20261101.1", "1.0.0", false],

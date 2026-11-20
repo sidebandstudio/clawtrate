@@ -14,7 +14,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildAddressProblem } from "../src/main/update/address.ts";
 import { FEED_FORMAT, FILE_EXTENSION, FILE_KEYS, type FileKey } from "../src/main/update/feed.ts";
-import { parseVersion, versionTrack } from "../src/main/update/version.ts";
+import { formatVersion, parseVersion, versionTrack } from "../src/main/update/version.ts";
 import type { UpdateTrack } from "@clawtrate/core";
 import { PRODUCT_NAME } from "./config.ts";
 import { releaseDate, type Env } from "./update-defines.ts";
@@ -29,7 +29,9 @@ export interface FeedDocument {
 
 /** The artifact's file name, as `artifactName` in config.ts makes it. */
 export function artifactName(version: string, key: FileKey): string {
-  return `${PRODUCT_NAME}-${version}-${key}.${FILE_EXTENSION[key]}`;
+  const release = parseVersion(version);
+  if (!release) throw new Error("Invalid artifact version");
+  return `${PRODUCT_NAME}-${formatVersion(release)}-${key}.${FILE_EXTENSION[key]}`;
 }
 
 export function sha512Base64(path: string): string {
@@ -60,7 +62,7 @@ export function makeFeed(options: {
   return {
     format: FEED_FORMAT,
     track: versionTrack(version),
-    version: options.version,
+    version: formatVersion(version),
     releaseDate: options.releaseDate,
     files,
   };
