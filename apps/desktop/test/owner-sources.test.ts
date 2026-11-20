@@ -139,6 +139,8 @@ const ALLOWED: Record<string, string> = {
     "one list read; the task's pending questions, at most `MAX_PENDING_QUESTIONS_PER_TASK`",
   "packages/core/src/client.ts:readRecipientRuns>historyIds":
     "one history read; the run ids that read established, at most 40 messages' runs, dropped when it returns",
+  "packages/core/src/client.ts:readRecipientRuns>activeBefore":
+    "one history read; the run ids active before it was asked, at most the named ids', dropped when it returns",
   // The renderer's side of the web bridge, in a browser tab, not the host.
   "packages/core/src/remote-bridge.ts:createRemoteBridge>listeners":
     "renderer; one per subscription, removed by its unsubscribe",

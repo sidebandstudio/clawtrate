@@ -29,6 +29,7 @@ import {
   FOREIGN_RUNS_PER_SESSION,
   FOREIGN_SESSIONS,
   MAX_ACCESS_WAITERS,
+  MAX_FOREIGN_EPOCHS,
   MAX_OPENED_READS,
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
@@ -167,6 +168,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: ID + jsonLength(emptyActivity) + FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
     row: "foreignRuns",
   },
+  foreignEpochs: { max: MAX_FOREIGN_EPOCHS, each: ID + N, row: "bookkeeping" },
   "foreign.*.runs": {
     max: FOREIGN_RUNS_PER_SESSION,
     each: runWithoutSteps,
