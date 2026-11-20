@@ -254,7 +254,9 @@ async function main(): Promise<void> {
   app.on("quit", () => updates.shutdown());
   ipcMain.handle("clawtrate:update:restart", (_event, id: unknown) => updates.restart(id));
   ipcMain.handle("clawtrate:update:get", () => updates.get());
-  ipcMain.handle("clawtrate:update:check", (_event, track: unknown) => updates.check(track));
+  ipcMain.handle("clawtrate:update:check", (_event, track: unknown, revision: unknown) =>
+    updates.check(track, revision),
+  );
   ipcMain.handle("clawtrate:update:track", (_event, track: unknown) => updates.chooseTrack(track));
   ipcMain.handle("clawtrate:update:download", (_event, id: unknown) => updates.download(id));
 

@@ -80,7 +80,7 @@ const start = (overrides: Partial<Parameters<typeof DesktopUpdateService.start>[
 async function offer(service: DesktopUpdateService) {
   const {
     snapshot: { state },
-  } = await service.check(service.get().selectedTrack);
+  } = await service.check(service.get().selectedTrack, service.get().revision);
   if (state.kind !== "offered") throw Error(JSON.stringify(state));
   return state.offerId;
 }
@@ -142,10 +142,12 @@ it.each(["check", "download"] as const)(
     });
     const id = stage === "download" ? await offer(service) : "old";
     const pending =
-      stage === "check" ? service.check(service.get().selectedTrack) : service.download(id);
+      stage === "check"
+        ? service.check(service.get().selectedTrack, service.get().revision)
+        : service.download(id);
     await entered.promise;
     const replies = await Promise.all([
-      service.check(service.get().selectedTrack),
+      service.check(service.get().selectedTrack, service.get().revision),
       service.download(id),
     ]);
     expect(replies.map((r) => r.outcome)).toEqual(["busy", "busy"]);
@@ -166,13 +168,17 @@ it.each(["check", "download"] as const)(
 it("refuses a feed for another track and records only completed reads", async () => {
   const service = await start();
   server.route("/stable", (_req, res) => res.destroy());
-  expect((await service.check(service.get().selectedTrack)).snapshot.lastCheck).toBeNull();
+  expect(
+    (await service.check(service.get().selectedTrack, service.get().revision)).snapshot.lastCheck,
+  ).toBeNull();
   for (const [version, track] of [
     [nightly, "nightly"],
     [nightly, "stable"],
   ] as const) {
     server.route("/stable", json(document(version, track)));
-    expect((await service.check(service.get().selectedTrack)).snapshot).toMatchObject({
+    expect(
+      (await service.check(service.get().selectedTrack, service.get().revision)).snapshot,
+    ).toMatchObject({
       lastCheck: { track: "stable", readAt: expect.stringMatching(/Z$/) },
       state: { kind: "failed", reason: "wrong-track" },
     });
@@ -195,7 +201,9 @@ it("reports the running version when the selected track offers an older build", 
   const service = await start({ version: "2.0.0-nightly.20261102.1" });
   expect(service.get().selectedTrack).toBe("nightly");
   await service.chooseTrack("stable");
-  expect((await service.check(service.get().selectedTrack)).snapshot).toMatchObject({
+  expect(
+    (await service.check(service.get().selectedTrack, service.get().revision)).snapshot,
+  ).toMatchObject({
     runningVersion: "2.0.0-nightly.20261102.1",
     state: { kind: "nothing-newer" },
   });
@@ -204,10 +212,16 @@ it("describes a single source, development copies and invalid running versions",
   const single = await start({ feeds: { stable: server.origin + "/stable", nightly: null } });
   expect(single.get().tracks).toHaveLength(1);
   expect((await single.chooseTrack("nightly")).snapshot.selectedTrack).toBe("stable");
-  expect((await (await start({ packaged: false })).check("stable")).snapshot.state).toMatchObject({
+  const development = await start({ packaged: false });
+  expect(
+    (await development.check("stable", development.get().revision)).snapshot.state,
+  ).toMatchObject({
     reason: "development-build",
   });
-  expect((await (await start({ version: "bad" })).check("stable")).snapshot).toMatchObject({
+  const invalidVersion = await start({ version: "bad" });
+  expect(
+    (await invalidVersion.check("stable", invalidVersion.get().revision)).snapshot,
+  ).toMatchObject({
     runningTrack: null,
     runningVersion: null,
     state: { reason: "invalid-version" },
@@ -232,7 +246,9 @@ it.each(["check", "download"] as const)(
         return result;
       });
     try {
-      const pending = id ? service.download(id) : service.check(service.get().selectedTrack);
+      const pending = id
+        ? service.download(id)
+        : service.check(service.get().selectedTrack, service.get().revision);
       await completed.promise;
       if (id) expect(readdirSync(updates)).toHaveLength(1);
       const change = service.chooseTrack("nightly");
@@ -291,7 +307,7 @@ it("a failed file-store write cannot slip into a later successful save", async (
   await expect(prefs.get("selectedTrack")).rejects.toThrow();
   rmSync(path, { recursive: true });
   renameSync(path + ".saved", path);
-  await service.check(service.get().selectedTrack);
+  await service.check(service.get().selectedTrack, service.get().revision);
   expect((await start()).get().selectedTrack).toBe("nightly");
 });
 
@@ -358,7 +374,7 @@ it("accepts a download as soon as an observer sees the offer", async () => {
       if (state.kind === "offered") download = service.download(state.offerId);
     },
   });
-  const check = service.check("stable");
+  const check = service.check("stable", service.get().revision);
   await saving.promise;
   const stateWhileSaving = service.get().state.kind;
   finish.resolve();
@@ -375,7 +391,8 @@ it("marks the command busy before notifying a throwing observer", async () => {
   const service = await start({
     changed: (s) => {
       if (s.state.kind === "checking") replies.push(service.download("stale"));
-      if (s.state.kind === "downloading") replies.push(service.check(service.get().selectedTrack));
+      if (s.state.kind === "downloading")
+        replies.push(service.check(service.get().selectedTrack, service.get().revision));
       throw Error("renderer gone");
     },
   });
@@ -402,10 +419,10 @@ it("neither startup nor track selection schedules a later check", async () => {
 it("refuses a check for a selection another caller has changed", async () => {
   const service = await start();
   await service.chooseTrack("nightly");
-  expect((await service.check("stable")).outcome).toBe("stale");
-  expect((await service.check({})).outcome).toBe("invalid");
+  expect((await service.check("stable", service.get().revision)).outcome).toBe("stale");
+  expect((await service.check({}, service.get().revision)).outcome).toBe("invalid");
   expect(server.requests).toEqual([]);
-  expect((await service.check("nightly")).outcome).toBe("accepted");
+  expect((await service.check("nightly", service.get().revision)).outcome).toBe("accepted");
   expect(server.requests).toEqual(["/nightly"]);
 });
 
@@ -413,15 +430,20 @@ it("reports check eligibility at launch and stops unsupported checks before tran
   for (const version of ["0.1.0", "1.1.0"]) {
     const service = await start({ version, platform: "linux" });
     expect(service.get().state).toMatchObject({ reason: "unsupported-system" });
-    expect((await service.check(service.get().selectedTrack)).outcome).toBe("invalid");
+    expect((await service.check(service.get().selectedTrack, service.get().revision)).outcome).toBe(
+      "invalid",
+    );
     await service.chooseTrack("nightly");
     expect(service.get().state).toMatchObject({ reason: "unsupported-system" });
   }
   const empty = await start({ feeds: { stable: null, nightly: null } });
   for (const track of ["stable", "nightly", undefined])
-    expect(await empty.check(track)).toEqual({ outcome: "invalid", snapshot: empty.get() });
+    expect(await empty.check(track, empty.get().revision)).toEqual({
+      outcome: "invalid",
+      snapshot: empty.get(),
+    });
   const single = await start({ feeds: { stable: server.origin + "/stable", nightly: null } });
-  expect((await single.check("nightly")).outcome).toBe("stale");
+  expect((await single.check("nightly", single.get().revision)).outcome).toBe("stale");
   expect(empty.get()).toMatchObject({ selectedTrack: null, state: { reason: "not-configured" } });
   expect((await start({ version: "invalid" })).get().state).toMatchObject({
     reason: "invalid-version",
@@ -432,7 +454,7 @@ it("keeps the accepted comparison and its time when history cannot be saved", as
   const prefs = store();
   vi.spyOn(prefs, "set").mockRejectedValueOnce(Error("unwritable"));
   const service = await start({ store: prefs });
-  const reply = await service.check("stable");
+  const reply = await service.check("stable", service.get().revision);
   expect(reply).toMatchObject({
     outcome: "accepted",
     snapshot: {
@@ -444,7 +466,7 @@ it("keeps the accepted comparison and its time when history cannot be saved", as
 });
 it("reads saved preferences even when the download folder cannot be cleaned", async () => {
   const service = await start();
-  await service.check("stable");
+  await service.check("stable", service.get().revision);
   await service.chooseTrack("nightly");
   const broken = await start({ downloadDir: join(dir.path, "missing", "updates") });
   expect(broken.get()).toMatchObject({
@@ -479,7 +501,10 @@ it.each(["check", "download"] as const)(
       writing.resolve();
       await saved.promise;
     });
-    const old = operation === "check" ? service.check("stable") : service.download(id);
+    const old =
+      operation === "check"
+        ? service.check("stable", service.get().revision)
+        : service.download(id);
     await reached.promise;
     const boundary = snapshots.length;
     const choice = service.chooseTrack("nightly");
@@ -539,7 +564,7 @@ it.each(["before save", "during successful save", "during failed save"])(
     expect(spy).toHaveBeenCalledTimes(phase === "before save" ? 0 : 1);
     for (const reply of await Promise.all([
       service.chooseTrack("nightly"),
-      service.check("stable"),
+      service.check("stable", service.get().revision),
       service.download("id"),
     ]))
       expect(reply).toEqual({ outcome: "invalid", snapshot: closed });
@@ -578,7 +603,7 @@ it("attributes a completed read across a switch while its history write drains",
     await finish.promise;
     await write(key, value);
   });
-  const check = service.check("stable");
+  const check = service.check("stable", service.get().revision);
   await saving.promise;
   const lastCheck = service.get().lastCheck;
   expect(lastCheck?.track).toBe("stable");
@@ -625,7 +650,7 @@ it.each(["missing", "changed", "replaced", "check", "choice", "quit"])(
       renameSync(path, path + ".old");
       writeFileSync(path, fixture.body);
     }
-    if (event === "check") await service.check("stable");
+    if (event === "check") await service.check("stable", service.get().revision);
     if (event === "choice") await service.chooseTrack("nightly");
     if (event === "quit") {
       service.shutdown();
@@ -649,7 +674,9 @@ it("reads the last JSON value for a repeated track", async () => {
     server.route("/stable", (_req, res) =>
       res.end(feed.replace('"track":"stable"', `"track":"${first}","track":"${last}"`)),
     );
-    expect((await service.check("stable")).snapshot.state).toMatchObject(expected);
+    expect((await service.check("stable", service.get().revision)).snapshot.state).toMatchObject(
+      expected,
+    );
   }
 });
 
@@ -706,7 +733,7 @@ it("a nightly-only build stays idle and checks only its one configured source", 
   });
   expect((await service.chooseTrack("stable")).outcome).toBe("invalid");
   expect(server.requests).toEqual([]);
-  const checked = await service.check("nightly");
+  const checked = await service.check("nightly", service.get().revision);
   expect(checked).toMatchObject({
     outcome: "accepted",
     snapshot: {
@@ -731,7 +758,7 @@ it("keeps a history save error visible when a track choice is draining it", asyn
     throw Error("disk write failed");
   });
   const service = await start({ store: prefs });
-  const check = service.check("stable");
+  const check = service.check("stable", service.get().revision);
   await saving.promise;
   const choice = service.chooseTrack("nightly");
   resume.resolve();
@@ -768,7 +795,7 @@ it("returns invalid for missing idle arguments and busy during a choice", async 
   const service = await start();
   const malformed = () =>
     Promise.all([
-      service.check(undefined),
+      service.check(undefined, service.get().revision),
       service.chooseTrack(undefined),
       service.download(undefined),
     ]);
@@ -776,7 +803,7 @@ it("returns invalid for missing idle arguments and busy during a choice", async 
   const choice = service.chooseTrack("nightly");
   expect((await malformed()).map((r) => r.outcome)).toEqual(["busy", "busy", "busy"]);
   await choice;
-  expect((await service.check("stable")).outcome).toBe("stale");
+  expect((await service.check("stable", service.get().revision)).outcome).toBe("stale");
   expect(server.requests).toEqual([]);
 });
 
@@ -913,7 +940,7 @@ it("pins Restart to the displayed verified offer across a new check of the same 
   const service = await start({ installer });
   const old = await offer(service);
   await service.download(old);
-  const checking = service.check("stable");
+  const checking = service.check("stable", service.get().revision);
   expect((await service.restart(old)).outcome).toBe("busy");
   await checking;
   const state = service.get().state;
@@ -958,7 +985,7 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
   await entered.promise;
   expect(service.get().state.kind).toBe("handing-off");
   for (const command of [
-    service.check("stable"),
+    service.check("stable", service.get().revision),
     service.chooseTrack("nightly"),
     service.download(id),
     service.restart(id),
@@ -1225,7 +1252,7 @@ it.skipIf(process.platform === "win32")(
             version: "1.1.0",
           });
           expect((await service.restart(id)).outcome).toBe("busy");
-          expect((await service.check("stable")).outcome).toBe("busy");
+          expect((await service.check("stable", service.get().revision)).outcome).toBe("busy");
           expect((await service.chooseTrack("nightly")).outcome).toBe("busy");
           expect((await service.download(id)).outcome).toBe("busy");
         }
@@ -1348,3 +1375,45 @@ it.skipIf(process.platform === "win32")(
     }
   },
 );
+it("refuses an old same-track revision or a malformed revision without replacing the result", async () => {
+  const service = await start();
+  const old = service.get();
+  await service.chooseTrack("nightly");
+  await service.chooseTrack("stable");
+  const current = service.get();
+  expect(await service.check("stable", old.revision)).toEqual({
+    outcome: "stale",
+    snapshot: current,
+  });
+  for (const revision of [undefined, "1", -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+    expect(await service.check("stable", revision)).toEqual({
+      outcome: "invalid",
+      snapshot: current,
+    });
+  }
+  expect(service.get()).toEqual(current);
+  expect(server.requests).toEqual([]);
+});
+
+it("records a storage-blocked check separately from a startup storage notice", async () => {
+  const parent = join(dir.path, "profile");
+  const downloadDir = join(parent, "updates");
+  const startup = await start({ downloadDir });
+  expect(startup.get()).toMatchObject({
+    state: { kind: "not-checked" },
+    preferenceIssue: "update-folder-unavailable",
+  });
+  mkdirSync(parent, { mode: 0o700 });
+  const service = await start({ downloadDir });
+  await offer(service);
+  const before = service.get();
+  expect(before.lastCheck?.track).toBe("stable");
+  rmSync(parent, { recursive: true });
+  const reply = await service.check("stable", before.revision);
+  expect(reply.snapshot).toMatchObject({
+    state: { kind: "failed", stage: "check", reason: "write-failed" },
+    preferenceIssue: "update-folder-unavailable",
+    lastCheck: before.lastCheck,
+  });
+  expect(server.requests).toEqual(["/stable"]);
+});

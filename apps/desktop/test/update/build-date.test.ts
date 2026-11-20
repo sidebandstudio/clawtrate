@@ -47,7 +47,7 @@ describe("the build's release date", () => {
         changed: () => {},
         store: { get: async () => null, set: async () => {} },
       });
-      await service.check("stable");
+      await service.check("stable", service.get().revision);
       expect(ages).toEqual([false, true]);
     } finally {
       dir.remove();
