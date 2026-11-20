@@ -141,21 +141,32 @@ export function lockText(claim: { asOf: number | null }, inSentence = false): st
   return claim.asOf === null ? word : `${word}${inSentence ? "" : ","} as of ${clock(claim.asOf)}`;
 }
 
-/** The bots bound to an account in their settings: "Used by" (section 7), each with its lock claim. */
+/**
+ * The bots whose settings name an account, as the views show them: "Used by"
+ * (section 7). Bound to it, each with its lock claim, or `byOrder`: no account
+ * of its own in its model, and a stored order of its provider that names this
+ * one. Nothing beyond that is established of which bots it serves.
+ */
 export function usedBy(
   accountId: string,
   bindings: readonly BotBinding[],
   bots: readonly Bot[],
   age: EvidenceAge,
-): Array<{ bot: Bot; lock: { asOf: number | null } | null }> {
+): Array<{ bot: Bot; lock: { asOf: number | null } | null; byOrder: boolean }> {
   return bindings
-    .filter((binding) => binding.mode === "account" && binding.account === accountId)
+    .filter(
+      (binding) =>
+        (binding.mode === "account" && binding.account === accountId) ||
+        (binding.account === null && (binding.order?.ids.includes(accountId) ?? false)),
+    )
     .map((binding) => ({
       bot: bots.find((bot) => bot.id === binding.botId),
-      lock: lockClaim(binding, age),
+      lock: binding.account === accountId ? lockClaim(binding, age) : null,
+      byOrder: binding.account !== accountId,
     }))
     .filter(
-      (each): each is { bot: Bot; lock: { asOf: number | null } | null } => each.bot !== undefined,
+      (each): each is { bot: Bot; lock: { asOf: number | null } | null; byOrder: boolean } =>
+        each.bot !== undefined,
     );
 }
 
@@ -168,9 +179,11 @@ export function accountLine(
 ): { kind: string; state: { tone: "warn" | "danger"; word: string } | null; users: string } {
   const { tone, word } = stateWord(account, now);
   const keeper = account.keptBy ? bots.find((bot) => bot.id === account.keptBy) : null;
-  const users = accounts.bindings
-    .filter((binding) => binding.mode === "account" && binding.account === account.id)
-    .flatMap((binding) => bots.filter((bot) => bot.id === binding.botId).map((bot) => bot.name));
+  const users = usedBy(account.id, accounts.bindings, bots, {
+    now,
+    connected: true,
+    connectedAt: null,
+  }).map((each) => each.bot.name);
   return {
     kind: kindWord(account),
     state: tone ? { tone, word } : null,
@@ -180,7 +193,7 @@ export function accountLine(
         ? "Which bots can use it isn't clear"
         : users.length > 0
           ? users.join(", ")
-          : "Not used yet",
+          : "No bot's settings name it",
   };
 }
 

@@ -17,10 +17,11 @@ import { BackIcon, CheckIcon, LockIcon, WarnIcon } from "../icons.tsx";
 import { AccountRow } from "./AccountChoices.tsx";
 import { Connect, keptLabel } from "./Connect.tsx";
 import { Confirm } from "./Dialog.tsx";
-import { AdminBar, GrantedBar, useGranted } from "./parts.tsx";
+import { AdminBar, GrantedBar, Note, useGranted } from "./parts.tsx";
 import {
   accountGroups,
   accountName,
+  clock,
   howMade,
   kindWord,
   lockText,
@@ -280,12 +281,14 @@ export function useAccountsSection({
                   : users.length > 0
                     ? users
                         .map((each) =>
-                          each.lock
-                            ? `${each.bot.name} (${lockText(each.lock, true)})`
-                            : each.bot.name,
+                          each.byOrder
+                            ? `${each.bot.name} (by its order)`
+                            : each.lock
+                              ? `${each.bot.name} (${lockText(each.lock, true)})`
+                              : each.bot.name,
                         )
                         .join(", ")
-                    : "No bots"}
+                    : "No bot's settings name it"}
             </dd>
           </div>
           <div>
@@ -347,10 +350,11 @@ export function useAccountsSection({
           <Confirm
             title={`Disconnect ${accountName(confirm, accounts)}?`}
             text={(() => {
+              // Only what the views establish: the bots whose settings name it.
               const names = users.map((each) => each.bot.name);
               return names.length > 0
-                ? `${names.join(" and ")} ${names.length === 1 ? "uses" : "use"} it. ${names.length === 1 ? "It shows" : "They show"} No account until you choose another, and Clawtrate doesn't start ${names.length === 1 ? "it" : "them"} until then. Your gateway removes the sign-in.`
-                : "No bot uses it. Your gateway removes the sign-in.";
+                ? `${names.join(" and ")} ${names.length === 1 ? "names" : "name"} it in ${names.length === 1 ? "its" : "their"} settings. Your gateway removes the sign-in, and decides what ${names.length === 1 ? "that bot runs" : "those bots run"} on after it.`
+                : "No bot's settings name it. Your gateway removes the sign-in.";
             })()}
             action="Disconnect"
             busy={busy}
@@ -392,8 +396,7 @@ export function useAccountsSection({
     <>
       <div className="b-headrow">
         <p className="b-lead" style={{ margin: 0 }}>
-          Your bots run on these. Your gateway signs in and keeps each sign-in; Clawtrate never sees
-          a password or keeps a sign-in.
+          The accounts your gateway keeps. Clawtrate never sees a password or keeps a sign-in.
         </p>
         {admin && accounts.accounts.length > 0 && (
           <button
@@ -406,6 +409,25 @@ export function useAccountsSection({
           </button>
         )}
       </div>
+      {accounts.status === "error" && accounts.accounts.length > 0 && (
+        // The rows below are the last read's: the failure is said, with its time and Try again.
+        <Note tone="warn" testId="accounts-stale">
+          <p>
+            <b>Couldn't read the gateway's accounts again.</b> {accounts.error} These are from the
+            last read{accounts.readAt !== null ? `, at ${clock(accounts.readAt)}` : ""}.
+          </p>
+          <div className="b-actions">
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              onClick={() => void bridge.send({ type: "refreshAccounts" })}
+            >
+              Try again
+            </button>
+          </div>
+        </Note>
+      )}
       {loading && accounts.accounts.length === 0 ? (
         <div aria-busy="true" aria-label="Loading accounts" style={{ marginTop: 16 }}>
           <div className="skeleton" style={{ height: 58, width: "100%" }} />
@@ -463,8 +485,11 @@ export function useAccountsSection({
           <span className="empty-mark">
             <LockIcon />
           </span>
-          <h4>No accounts yet</h4>
-          <p>Connect a subscription you already have, and choose it when you create a bot.</p>
+          <h4>No accounts listed</h4>
+          <p>
+            The gateway lists no sign-ins or saved keys for its bots. A key set only in its settings
+            or environment is not listed as an account.
+          </p>
           {admin && (
             <div style={{ marginTop: 12 }}>
               <button

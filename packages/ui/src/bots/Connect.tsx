@@ -342,8 +342,7 @@ export function useConnect({
             </summary>
             <div className="b-disclosure-body">
               <p className="b-hint" style={{ marginTop: 4 }}>
-                With an API key, the provider bills each request by the tokens it uses, apart from
-                any subscription you have. Most people don't need one.
+                Billed per token by the provider, apart from any subscription.
               </p>
               <label className="b-field">
                 <span>Provider</span>

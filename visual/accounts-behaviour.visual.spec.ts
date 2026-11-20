@@ -428,6 +428,36 @@ test("F-476: below admin there are no labels: accounts are told apart by their i
   await expect(settings.getByRole("heading", { name: "Accounts", level: 3 })).toBeVisible();
 });
 
+test("F-477: a read that fails after one that listed the accounts is said beside the last rows, with their time and Try again", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=admin&accounts=stale`, "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  const stale = settings.getByTestId("accounts-stale");
+  await expect(stale).toContainText(
+    /^Couldn't read the gateway's accounts again\. models\.authStatus timed out after 60 seconds\. These are from the last read, at \d{1,2}:\d{2}/,
+  );
+  // The last read's rows stay, under the note.
+  await expect(settings.getByRole("button", { name: /^OpenAI · Work/ })).toBeVisible();
+  await stale.getByRole("button", { name: "Try again" }).click();
+  expect((await sent(page)).some((each) => each.type === "refreshAccounts")).toBe(true);
+});
+
+test("F-477: an empty list says what was read", async ({ page }) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=admin&accounts=none`, "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await expect(settings.getByRole("heading", { name: "No accounts listed" })).toBeVisible();
+  await expect(
+    settings.getByText(
+      "The gateway lists no sign-ins or saved keys for its bots. A key set only in its settings or environment is not listed as an account.",
+    ),
+  ).toBeVisible();
+});
+
 test("F-490: a read-only connection shows a bot's settings with every value, and changes nothing", async ({
   page,
 }) => {
@@ -459,7 +489,7 @@ test("F-476: Disconnect asks first, with focus on Cancel; Escape closes the conf
   await settings.getByRole("button", { name: "Disconnect…" }).click();
   const confirm = page.getByRole("alertdialog", { name: "Disconnect OpenAI · Work?" });
   await expect(confirm).toHaveAccessibleDescription(
-    "Marlow and Otto use it. They show No account until you choose another, and Clawtrate doesn't start them until then. Your gateway removes the sign-in.",
+    "Marlow and Otto name it in their settings. Your gateway removes the sign-in, and decides what those bots run on after it.",
   );
   await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
   await page.keyboard.press("Escape");

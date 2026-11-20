@@ -5,7 +5,8 @@
 //
 // Address parameters:
 //   access=read|write|admin   what the connection may do (default: the scene's)
-//   accounts=none|loading|error   no account yet, still loading, or a failed read
+//   accounts=none|loading|error|stale   no account yet, still loading, a failed read, or a
+//                             failed read after one that listed the accounts
 //   lock=locked|bound|stale|gone|failed|multi|old|gateway|retained|none|watching|differs|lost|unwritten
 //        |configured|unavailable|elsewhere
 //                             the open bot's binding and evidence
@@ -40,7 +41,7 @@ import {
 
 export type AccountParams = {
   access: "read" | "write" | "admin" | null;
-  accounts: "ready" | "none" | "loading" | "error";
+  accounts: "ready" | "none" | "loading" | "error" | "stale";
   lock: string | null;
   signin: string | null;
   saved: boolean;
@@ -65,7 +66,9 @@ export function accountParams(params: URLSearchParams): AccountParams {
   return {
     access: access === "read" || access === "write" || access === "admin" ? access : null,
     accounts:
-      accounts === "none" || accounts === "loading" || accounts === "error" ? accounts : "ready",
+      accounts === "none" || accounts === "loading" || accounts === "error" || accounts === "stale"
+        ? accounts
+        : "ready",
     lock: params.get("lock"),
     signin: params.get("signin"),
     saved: params.get("saved") === "1",
@@ -226,9 +229,12 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         bound("pip", "openai/gpt-5.5-mini@openai:home", "low", now),
         binding("quartermaster", {}),
       ];
+  const stale = params.accounts === "stale";
   const state: AccountsState = {
     ...initialAccountsState,
-    status: "ready",
+    // A read that failed after one that listed them: its rows stay, as the engine keeps them.
+    status: stale ? "error" : "ready",
+    error: stale ? "models.authStatus timed out after 60 seconds." : null,
     readAt: now - READ_AGO,
     labels: params.access === "admin",
     defaultModel: params.defacct ? "openai/gpt-5.5@openai:work" : "openai/gpt-5.5",
