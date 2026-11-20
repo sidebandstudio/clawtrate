@@ -636,6 +636,61 @@ test.describe("nothing remote loads by itself", () => {
     expect(away).toEqual([]);
   });
 
+  test("F-307: a failed recording offers Try again and Download, and Pause cancels pending playback", async ({
+    page,
+  }) => {
+    // Every start of a media element, counted in the page.
+    await page.addInitScript(() => {
+      const counted = window as unknown as { plays: number };
+      counted.plays = 0;
+      const play = HTMLMediaElement.prototype.play;
+      HTMLMediaElement.prototype.play = function (this: HTMLMediaElement) {
+        counted.plays += 1;
+        return play.call(this);
+      };
+    });
+    const plays = () => page.evaluate(() => (window as unknown as { plays: number }).plays);
+    await openFixture(page, `${ARTIFACTS}&audio=slow`, "light");
+    await cardsDrawn(page);
+    const note = card(page, "voice-note.wav");
+    await note.scrollIntoViewIfNeeded();
+    await note.getByRole("button", { name: "Play voice-note.wav" }).click();
+    await note.getByRole("button", { name: "Pause voice-note.wav" }).click();
+    // The read answers after Pause: nothing starts.
+    await page.waitForTimeout(1_200);
+    expect(await plays()).toBe(0);
+    await expect(note.getByRole("button", { name: "Play voice-note.wav" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    await openFixture(page, `${ARTIFACTS}&audio=broken`, "light");
+    await cardsDrawn(page);
+    const broken = card(page, "voice-note.wav");
+    await broken.scrollIntoViewIfNeeded();
+    await broken.getByRole("button", { name: "Play voice-note.wav" }).click();
+    const failed = broken.getByTestId("recording-unplayable");
+    await expect(failed).toHaveText("This device couldn't play this recording.Try againDownload");
+    await expect(broken.getByRole("button", { name: "Play voice-note.wav" })).toBeVisible();
+    const [saved] = await Promise.all([
+      page.waitForEvent("download"),
+      failed.getByRole("button", { name: "Download" }).click(),
+    ]);
+    expect(readFileSync((await saved.path())!, "utf8")).toBe("These bytes are not a recording.");
+    // Try again plays it again, and says so again.
+    const before = await plays();
+    await failed.getByRole("button", { name: "Try again" }).click();
+    await expect.poll(plays).toBeGreaterThan(before);
+    await expect(broken.getByTestId("recording-unplayable")).toBeVisible();
+    // Where the pane offers playback, it says the same.
+    await openCard(page, "voice-note.wav");
+    const reader = page.getByTestId("artifact-reader");
+    await reader.getByRole("button", { name: "Play voice-note.wav" }).click();
+    await expect(reader.getByTestId("recording-unplayable")).toContainText(
+      "This device couldn't play this recording.",
+    );
+  });
+
   test("F-117: a recording plays only when asked, one at a time", async ({ page }) => {
     await openFixture(page, ARTIFACTS, "light");
     await cardsDrawn(page);

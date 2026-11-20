@@ -20,7 +20,7 @@ import {
 import { Markdown } from "../Markdown.tsx";
 import { formatSize } from "../work/files-format.ts";
 import { CodeView } from "../work/Reader.tsx";
-import { kindIcon, MiddleName, openInBrowser, openItem } from "./cards.tsx";
+import { kindIcon, MiddleName, openInBrowser, openItem, Unplayable } from "./cards.tsx";
 import { useArtifacts, type Content } from "./context.tsx";
 import {
   cardSub,
@@ -339,6 +339,7 @@ export function ArtifactReader({
             </span>
           </span>
         </div>
+        <Unplayable api={api} artifact={artifact} />
       </div>
     );
   } else if (ready && ready.kind === "video") {

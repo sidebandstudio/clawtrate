@@ -95,6 +95,8 @@ export type ArtifactsApi = {
   announce: (text: string) => void;
   playing: Playing | null;
   togglePlay: (artifact: Artifact) => void;
+  /** The recording whose bytes this device couldn't play, by its key, until it is tried again. */
+  unplayable: string | null;
   viewer: { entries: ViewerEntry[]; index: number } | null;
   closeViewer: () => void;
   setViewerIndex: (index: number) => void;
@@ -510,27 +512,47 @@ export function ArtifactsProvider({
     [announce, content],
   );
 
-  // One recording plays at a time.
+  // One recording plays at a time. Each start is an attempt: Pause, another recording, another
+  // task, a dialog opening and leaving all end it, and what a load answers after that is dropped.
   const audio = useRef<HTMLAudioElement | null>(null);
+  const attempt = useRef(0);
   const [playing, setPlaying] = useState<Playing | null>(null);
+  const [unplayable, setUnplayable] = useState<string | null>(null);
+  const stopAudio = useCallback(() => {
+    attempt.current += 1;
+    audio.current?.pause();
+    setPlaying(null);
+  }, []);
   const togglePlay = useCallback(
     (artifact: Artifact) => {
-      const element = (audio.current ??= new Audio());
       if (playing?.key === artifact.key) {
-        element.pause();
-        setPlaying(null);
+        stopAudio();
         return;
       }
-      element.pause();
+      stopAudio();
+      const id = attempt.current;
+      const element = (audio.current ??= new Audio());
+      const current = () => attempt.current === id;
+      const unable = () => {
+        if (!current()) return;
+        attempt.current += 1;
+        element.pause();
+        setPlaying(null);
+        setUnplayable(artifact.key);
+      };
+      setUnplayable((now) => (now === artifact.key ? null : now));
       setPlaying({ key: artifact.key, task: taskKey, time: 0, duration: null });
       void content(artifact).then((got) => {
-        if (got.status !== "ready" || got.kind !== "audio") {
+        if (!current()) return;
+        if (got.status !== "ready") {
           setPlaying(null);
           announce(`Couldn't play ${artifact.title}.`);
           return;
         }
+        if (got.kind !== "audio") return unable();
         element.src = got.url;
-        element.ontimeupdate = () =>
+        element.ontimeupdate = () => {
+          if (!current()) return;
           setPlaying((now) =>
             now?.key === artifact.key
               ? {
@@ -540,19 +562,30 @@ export function ArtifactsProvider({
                 }
               : now,
           );
-        element.onended = () => setPlaying(null);
-        void element.play().catch(() => setPlaying(null));
+        };
+        element.onended = () => {
+          if (current()) setPlaying(null);
+        };
+        element.onerror = unable;
+        element.play().catch((error: unknown) => {
+          // A play that a later pause or source interrupted is not a failure to play.
+          if ((error as { name?: string } | null)?.name !== "AbortError") unable();
+        });
       });
     },
-    [announce, content, playing, taskKey],
+    [announce, content, playing, stopAudio, taskKey],
   );
+  // Leaving, or another task, ends the attempt; the state of another task's recording is not
+  // shown here (`playingHere`), so nothing else needs setting.
   useEffect(
     () => () => {
+      attempt.current += 1;
       audio.current?.pause();
     },
     [],
   );
   useEffect(() => {
+    attempt.current += 1;
     audio.current?.pause();
   }, [taskKey]);
   // A recording of another task is not shown as playing here.
@@ -564,12 +597,11 @@ export function ArtifactsProvider({
   const openViewer = useCallback(
     (entries: ViewerEntry[], index: number, from: HTMLElement | null) => {
       opener.current = from;
-      audio.current?.pause();
-      setPlaying(null);
+      stopAudio();
       setViewer({ entries, index });
       onModal(true);
     },
-    [onModal],
+    [onModal, stopAudio],
   );
   const closeViewer = useCallback(() => {
     setViewer(null);
@@ -589,12 +621,11 @@ export function ArtifactsProvider({
   const openPage = useCallback(
     (mention: PageMention, from: HTMLElement | null) => {
       opener.current = from;
-      audio.current?.pause();
-      setPlaying(null);
+      stopAudio();
       setPage({ taskKey, sessionId, ...mention, bot, task: taskTitle });
       onModal(true);
     },
-    [bot, onModal, sessionId, taskKey, taskTitle],
+    [bot, onModal, sessionId, stopAudio, taskKey, taskTitle],
   );
   const closePage = useCallback(() => {
     setPage(null);
@@ -654,6 +685,7 @@ export function ArtifactsProvider({
       announce,
       playing: playingHere,
       togglePlay,
+      unplayable,
       viewer,
       closeViewer,
       setViewerIndex,
@@ -685,6 +717,7 @@ export function ArtifactsProvider({
       announce,
       playingHere,
       togglePlay,
+      unplayable,
       viewer,
       closeViewer,
       setViewerIndex,

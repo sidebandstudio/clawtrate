@@ -37,6 +37,10 @@ export type ArtifactParams = {
   unknownSizes: boolean;
   /** The report names a link by its words alone, and a relative one (`reportlinks=on`). */
   reportLinks: boolean;
+  /** The recording's bytes are not audio this device can play (`audio=broken`). */
+  brokenAudio: boolean;
+  /** The recording's whole read answers after 800 ms (`audio=slow`). */
+  slowAudio: boolean;
 };
 
 export function artifactParams(params: URLSearchParams): ArtifactParams {
@@ -49,6 +53,8 @@ export function artifactParams(params: URLSearchParams): ArtifactParams {
     brokenPictures: params.get("artifactbytes") === "broken",
     unknownSizes: params.get("sizes") === "unknown",
     reportLinks: params.get("reportlinks") === "on",
+    brokenAudio: params.get("audio") === "broken",
+    slowAudio: params.get("audio") === "slow",
   };
 }
 
@@ -350,6 +356,8 @@ export function artifactAnswers(params: ArtifactParams) {
       );
       return { ...item, bytes, artifact: { ...item.artifact, size: bytes.length } };
     }
+    if (params.brokenAudio && item.artifact.kind === "audio")
+      return { ...item, bytes: utf8Bytes("These bytes are not a recording.") };
     if (params.unknownSizes && item.artifact.title === "app-screens.zip")
       return { ...item, artifact: { ...item.artifact, size: null } };
     return item;
@@ -404,6 +412,8 @@ export function artifactAnswers(params: ArtifactParams) {
             status: "failed",
             message: "The gateway's download link expired before it was used.",
           };
+        if (params.slowAudio && artifact.kind === "audio")
+          await new Promise((resolve) => setTimeout(resolve, 800));
         const mimeType = artifact.mimeType ?? "application/octet-stream";
         return content(found.bytes ?? new Uint8Array(0), mimeType, kindOf(mimeType));
       }

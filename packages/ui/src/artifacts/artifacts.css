@@ -790,3 +790,19 @@ button.artifact-main:hover {
   color: var(--text-muted);
   overflow-wrap: anywhere;
 }
+
+/* A recording this device couldn't play: the sentence, Try again and Download under the card. */
+.artifact[data-unplayable] {
+  flex-wrap: wrap;
+}
+
+.artifact-unplayable {
+  display: flex;
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 10px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}

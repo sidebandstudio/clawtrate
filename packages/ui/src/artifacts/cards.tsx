@@ -223,6 +223,35 @@ function MoreButton({
   );
 }
 
+/** A recording this device couldn't play: said, with Try again and Download, wherever it plays. */
+export function Unplayable({ api, artifact }: { api: ArtifactsApi; artifact: Artifact }) {
+  if (api.unplayable !== artifact.key) return null;
+  return (
+    <div className="artifact-unplayable" role="alert" data-testid="recording-unplayable">
+      <span>This device couldn't play this recording.</span>
+      <button
+        type="button"
+        className="button"
+        data-size="sm"
+        onClick={() => {
+          api.forget(artifact);
+          api.togglePlay(artifact);
+        }}
+      >
+        Try again
+      </button>
+      <button
+        type="button"
+        className="button"
+        data-size="sm"
+        onClick={() => void api.download(artifact)}
+      >
+        Download
+      </button>
+    </div>
+  );
+}
+
 /** A file or a recording: one button that opens it in the pane, and More. */
 function FileCard({
   api,
@@ -250,6 +279,7 @@ function FileCard({
       data-kind={artifact.kind}
       data-artifact={artifact.key}
       data-testid="artifact-card"
+      data-unplayable={api.unplayable === artifact.key || undefined}
       {...menu.handlers(artifact)}
     >
       {audio && fetchable(artifact) && (
@@ -301,6 +331,7 @@ function FileCard({
           menu.open(artifact, place.x, place.y, button);
         }}
       />
+      {audio && <Unplayable api={api} artifact={artifact} />}
     </div>
   );
 }
