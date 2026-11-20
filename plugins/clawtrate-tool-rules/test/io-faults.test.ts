@@ -587,6 +587,26 @@ describe("a decision record changed from outside", () => {
     });
   }
 
+  it("keeps memory within its cap when the file is replaced before its torn line is cut", () => {
+    const { dir: state, done } = tempState();
+    cleanups.push(done);
+    const dir = join(state, "decisions");
+    const file = join(dir, "decisions.jsonl");
+    const writer = new DecisionLog(dir, { now: () => 100 });
+    const seeded = Array.from({ length: 11 }, () => writer.add(fields));
+    actual.appendFileSync(file, '{"id":"torn');
+    io.path = file;
+    io.beforeWriteOpen = () => {
+      actual.writeFileSync(`${file}.new`, outsider);
+      actual.renameSync(`${file}.new`, file);
+    };
+    const log = new DecisionLog(dir, { now: () => 110, max: 10 });
+    expect(log.problem).toBe("the decision record changed on disk; waiting to read it again");
+    expect(log.list({ limit: 50 }).records.map((r) => r.id)).toEqual(seeded.slice(1).reverse());
+    expect(log.byId.size).toBe(10);
+    expect(actual.readFileSync(file, "utf8")).toBe(outsider);
+  });
+
   it("never cuts a file put in place of one with a torn last line", () => {
     const { dir, file, seeded } = seed();
     actual.appendFileSync(file, '{"id":"torn');

@@ -520,7 +520,11 @@ export class DecisionLog {
       }
     }
     keep();
-    if (replaced) return;
+    if (replaced) {
+      // Memory keeps its bounds; nothing is written until the file is read again.
+      this.#trim();
+      return;
+    }
     // What this process held before the file could be read (or before it
     // changed on disk) may not be on disk: it is written now, with the file's.
     if (held.length > 0) {
