@@ -10,6 +10,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
 import { checkIns } from "./check-ins-helpers.ts";
+import type {
+  BridgeCommand,
+  BridgeResultFor,
+  ClawtrateBridge,
+} from "../packages/core/src/bridge.ts";
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const ADMIN = `scene=main&${OTTO_DISK}&access=admin`;
@@ -191,12 +196,6 @@ test("F-201: a save that could not be confirmed says so in its own dialog only, 
   const marlow = dialog(page, "Marlow");
   await marlow.getByRole("radio", { name: /^Daily/ }).click();
   await marlow.getByRole("button", { name: "Save", exact: true }).click();
-  // While it saves, Escape waits for the answer.
-  const saving = marlow.getByRole("button", { name: "Saving…" });
-  await expect(saving).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(saving).toBeVisible();
-  await expect(marlow).toBeVisible();
   await expect(marlow.getByTestId("save-unknown")).toContainText("Not confirmed.");
   await expect(marlow.getByTestId("save-unknown")).toContainText("Check reads what it has now");
   await expect(page.getByTestId("b-announcer")).not.toHaveText("Check-ins saved");
@@ -216,6 +215,81 @@ test("F-201: a save that could not be confirmed says so in its own dialog only, 
   await marlow.getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();
   await expect(dialog(page, "Marlow").getByTestId("save-unknown")).toHaveCount(0);
+});
+
+test("F-201: a failed Check stays retryable and does not rebase onto an older ready snapshot", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&cisave=unknown`, "light");
+  await checkIns(page);
+  await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();
+  const marlow = dialog(page, "Marlow");
+  await marlow.getByRole("radio", { name: /^Daily/ }).click();
+  await marlow.getByRole("button", { name: "Save", exact: true }).click();
+  const check = marlow.getByRole("button", { name: "Check", exact: true });
+  await expect(check).toBeEnabled();
+  await change(
+    page,
+    "return { ...state, checkIns: { ...state.checkIns, settings: [...state.checkIns.settings, { botId: 'marlow', every: '30m', prompt: 'Old snapshot', promptCut: false }] } };",
+  );
+  await page.evaluate(() => {
+    const bridge = (window as unknown as { clawtrateFixture: ClawtrateBridge }).clawtrateFixture;
+    const { invoke, send } = bridge;
+    let failed = false;
+    bridge.invoke = async <C extends BridgeCommand>(command: C): Promise<BridgeResultFor<C>> => {
+      if (command.type !== "refreshCheckIns") return invoke(command);
+      if (!failed) {
+        failed = true;
+        throw new Error("The read could not be sent.");
+      }
+      const { gatewayId, jobs, defaults } = bridge.getState().checkIns!;
+      return {
+        gatewayId,
+        jobs,
+        defaults,
+        settings: [
+          { botId: "marlow", every: "30m", prompt: "Read from gateway", promptCut: false },
+        ],
+      } as BridgeResultFor<C>;
+    };
+    bridge.send = (command) =>
+      command.type === "refreshCheckIns"
+        ? Promise.reject(new Error("The read could not be sent."))
+        : send(command);
+  });
+  await check.click();
+  await expect(check).toBeEnabled();
+  await expect(marlow.getByTestId("save-unknown")).toBeVisible();
+  await marlow.getByText("What to check").click();
+  const prompt = marlow.getByRole("textbox", { name: "Prompt" });
+  await expect(prompt).toHaveValue("");
+  // The command can answer before the host publishes the corresponding snapshot.
+  await check.click();
+  await expect(marlow.getByTestId("save-checked")).toBeVisible();
+  await expect(prompt).toHaveValue("Read from gateway");
+});
+
+test("F-201: sending a save locks draft controls before the host publishes saving", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await checkIns(page);
+  await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();
+  const marlow = dialog(page, "Marlow");
+  await marlow.getByRole("radio", { name: /^Every…/ }).click();
+  await marlow.getByText("What to check").click();
+  await page.evaluate(() => {
+    const bridge = (window as unknown as { clawtrateFixture: ClawtrateBridge }).clawtrateFixture;
+    const send = bridge.send;
+    bridge.send = (command) =>
+      command.type === "saveCheckIn" ? new Promise<void>(() => {}) : send(command);
+  });
+  await marlow.getByRole("button", { name: "Save", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(marlow.getByRole("button", { name: "Saving…" })).toBeVisible();
+  await expect(marlow.getByRole("radio", { name: /^Off/ })).toBeDisabled();
+  await expect(marlow.getByTestId("ci-every")).toBeDisabled();
+  await expect(marlow.getByRole("textbox", { name: "Prompt" })).not.toBeEditable();
 });
 
 test("F-201: As needed sends every 30m, and the bot is then shown checking in every 30 minutes", async ({

@@ -17,7 +17,7 @@ const state = (main: { every: string; prompt: string | null }, kept = false): Ch
     {
       botId: "main",
       enabled: true,
-      everyMs: main.every === "24h" ? 86_400_000 : 1_800_000,
+      everyMs: Number.parseInt(main.every) * (main.every.endsWith("h") ? 3_600_000 : 60_000),
       nextRunAtMs: null,
     },
   ],
@@ -91,7 +91,12 @@ describe("F-201 a check-ins draft", () => {
       { ...draft, touched: { every: true, prompt: true } },
       state({ every: "2h", prompt: "B" }),
     );
-    expect(after).toMatchObject({ prompt: "B", touched: { every: false, prompt: false } });
+    expect(after).toMatchObject({
+      choice: "every",
+      every: "2h",
+      prompt: "B",
+      touched: { every: false, prompt: false },
+    });
     expect(draftToSave(after)).toMatchObject({
       every: null,
       prompt: null,

@@ -16,6 +16,7 @@ import {
   MAX_CHECKIN_PROMPT_CHARS,
   type Bot,
   type CheckInsState,
+  type CheckInRead,
   type ConnectionState,
   type HostInfo,
 } from "@clawtrate/core";
@@ -186,8 +187,12 @@ export function useCheckInsSection({
             bots={bots}
             checkIns={checkIns}
             draft={draft}
-            change={(next) => setDraft((each) => (each ? { ...each, ...next } : each))}
-            refresh={() => bridge.send({ type: "refreshCheckIns" })}
+            change={(next) =>
+              setDraft((each) =>
+                each ? { ...each, ...(typeof next === "function" ? next(each) : next) } : each,
+              )
+            }
+            refresh={() => bridge.invoke({ type: "refreshCheckIns", botId: editingBot.id })}
             announce={announce}
             onClose={() => setDraft(null)}
           />
@@ -216,8 +221,8 @@ function CheckInsDialog({
   bots: readonly Bot[];
   checkIns: CheckInsState;
   draft: Draft;
-  change: (next: Partial<Draft>) => void;
-  refresh: () => Promise<unknown>;
+  change: (next: Partial<Draft> | ((draft: Draft) => Partial<Draft>)) => void;
+  refresh: () => Promise<CheckInRead | null>;
   announce: (text: string) => void;
   onClose: () => void;
 }) {
@@ -225,22 +230,19 @@ function CheckInsDialog({
   const setting = checkIns.settings?.find((each) => each.botId === bot.id);
   const { choice, every, prompt, saveId, refused, base, touched } = draft;
   const submitting = useRef(false);
+  const [pending, setPending] = useState(false);
   const groupRef = useRef<HTMLUListElement>(null);
   const save = checkIns.save?.id === saveId ? checkIns.save : null;
-  const saving = save?.status === "saving";
+  const saving = pending || save?.status === "saving";
   const waitingForBase = save?.status === "conflict" && draft.rebased !== save.id;
   const deleted = save?.status === "conflict" && save.error === CHECKIN_BOT_DELETED;
   const [checking, setChecking] = useState(false);
   const setChoice = (next: Choice) =>
     change({ choice: next, touched: { ...touched, every: true } });
 
-  // The base moves only once the gateway was seen to differ: after a conflict,
-  // or an unknown outcome the person checked, and only on a read that finished.
+  // After a conflict, wait for the snapshot that shows what changed.
   const rebaseOn =
-    save &&
-    draft.rebased !== save.id &&
-    checkIns.status === "ready" &&
-    (save.status === "conflict" || (save.status === "unknown" && draft.checked === save.id))
+    save && draft.rebased !== save.id && checkIns.status === "ready" && save.status === "conflict"
       ? save.id
       : null;
   useEffect(() => {
@@ -273,6 +275,7 @@ function CheckInsDialog({
   const submit = () => {
     if (saving || submitting.current || waitingForBase) return;
     submitting.current = true;
+    setPending(true);
     const id = crypto.randomUUID();
     change({ saveId: id, refused: null });
     bridge
@@ -282,6 +285,7 @@ function CheckInsDialog({
       )
       .finally(() => {
         submitting.current = false;
+        setPending(false);
       });
   };
   // Reads only: whether the change landed is the gateway's to say, and saving again is the person's.
@@ -289,11 +293,14 @@ function CheckInsDialog({
     if (!save) return;
     setChecking(true);
     void refresh()
+      .then((fresh) => {
+        if (fresh?.gatewayId === draft.gatewayId)
+          change((current) =>
+            current.saveId === save.id ? { ...rebase(current, fresh), rebased: save.id } : current,
+          );
+      })
       .catch(() => {})
-      .then(() => {
-        setChecking(false);
-        change({ checked: save.id });
-      });
+      .finally(() => setChecking(false));
   };
 
   const onKey = (event: KeyboardEvent<HTMLUListElement>) => {

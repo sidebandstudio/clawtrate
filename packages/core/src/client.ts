@@ -28,6 +28,7 @@ import {
   saveCheckIn,
   type CheckInDraft,
   type CheckInsContext,
+  type CheckInRead,
 } from "./check-ins.ts";
 import {
   MachinesEngine,
@@ -3983,7 +3984,7 @@ export class ClawtrateClient {
 
   // Check-ins (`check-ins.ts`; automation.md section 13) ---------------------------------------
 
-  private checkInsContext(): CheckInsContext {
+  private checkInsContext(owner?: object | null): CheckInsContext {
     return {
       link: () => {
         const protocol = this.protocol;
@@ -4010,22 +4011,28 @@ export class ClawtrateClient {
       set: (checkIns) => this.store.update((state) => ({ ...state, checkIns })),
       botIds: () => this.state.bots.map((bot) => bot.id),
       admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
+      checkNotWithdrawn: () => this.checkNotWithdrawn(owner),
       now: () => this.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     };
   }
 
   /** Read the bots' check-ins: their heartbeat jobs, the scheduler and their own settings. */
-  refreshCheckIns(): Promise<void> {
-    if (this.state.connection.status !== "connected") return Promise.resolve();
-    return loadCheckIns(this.checkInsContext());
+  refreshCheckIns(botId?: string): Promise<CheckInRead | null> {
+    if (this.state.connection.status !== "connected") return Promise.resolve(null);
+    return loadCheckIns(this.checkInsContext(), botId);
   }
 
   /** Save one bot's check-ins; the outcome is `checkIns.save` with this `saveId`. */
-  saveCheckIn(saveId: string, botId: string, draft: CheckInDraft): Promise<void> {
+  saveCheckIn(
+    saveId: string,
+    botId: string,
+    draft: CheckInDraft,
+    owner?: object | null,
+  ): Promise<void> {
     if (!this.state.connection.canAdmin)
       return Promise.reject(new AdminNeededError("Changing check-ins"));
-    return saveCheckIn(this.checkInsContext(), saveId, botId, draft);
+    return saveCheckIn(this.checkInsContext(owner), saveId, botId, draft);
   }
 
   dismissCheckInSave(saveId: string): void {
@@ -4777,10 +4784,7 @@ export class ClawtrateClient {
         this.epoch += 1;
         this.streams.clear();
         this.accounts.onClose();
-        // Check-ins read now belong to no gateway until the next connection says which one answers.
-        const checkIns = this.state.checkIns;
-        if (checkIns?.gatewayId)
-          this.store.update((state) => ({ ...state, checkIns: { ...checkIns, gatewayId: null } }));
+        this.invalidateCheckIns();
         this.usage.onClose();
         const status = this.state.connection.status;
         if (status !== "pairing" && status !== "error") {
@@ -4871,8 +4875,15 @@ export class ClawtrateClient {
     this.attachmentContent.clear();
   }
 
+  private invalidateCheckIns(): void {
+    const checkIns = this.state.checkIns;
+    if (checkIns?.gatewayId)
+      this.store.update((state) => ({ ...state, checkIns: { ...checkIns, gatewayId: null } }));
+  }
+
   private close(): void {
     this.generation += 1;
+    this.invalidateCheckIns();
     this.accounts.onClose();
     this.usage.onClose();
     this.protocol?.stop();

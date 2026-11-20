@@ -9,6 +9,7 @@ import {
   keptByDefault,
   type CheckInDraft,
   type CheckInKept,
+  type CheckInRead,
   type CheckInsState,
 } from "@clawtrate/core";
 import { choiceOf, everyFor, type Choice } from "./words.ts";
@@ -34,11 +35,9 @@ export type Draft = {
   refused: string | null;
   /** The save whose outcome this draft was last rebased on. */
   rebased: string | null;
-  /** The save whose outcome the person asked to check. */
-  checked: string | null;
 };
 
-function baseOf(checkIns: CheckInsState, botId: string): Base {
+function baseOf(checkIns: CheckInRead, botId: string): Base {
   const setting = checkIns.settings?.find((each) => each.botId === botId);
   return {
     ...choiceOf(checkIns.jobs.find((job) => job.botId === botId)),
@@ -63,7 +62,6 @@ export function openDraft(checkIns: CheckInsState, botId: string): Draft | null 
     saveId: null,
     refused: null,
     rebased: null,
-    checked: null,
   };
 }
 
@@ -72,7 +70,7 @@ export function openDraft(checkIns: CheckInsState, botId: string): Draft | null 
  * and the person's edits stay, except a prompt that is now longer than
  * Clawtrate edits, which cannot be saved over.
  */
-export function rebase(draft: Draft, checkIns: CheckInsState): Draft {
+export function rebase(draft: Draft, checkIns: CheckInRead): Draft {
   const base = baseOf(checkIns, draft.botId);
   const edits = draftToSave(draft);
   const every = edits.every !== null;

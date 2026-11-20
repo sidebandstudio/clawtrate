@@ -99,6 +99,8 @@ export type CheckInsState = {
   save: CheckInSave | null;
 };
 
+export type CheckInRead = Pick<CheckInsState, "gatewayId" | "jobs" | "settings" | "defaults">;
+
 /** A bot another save also writes, at the cadence it inherits now. */
 export type CheckInKept = { botId: string; every: string };
 
@@ -133,6 +135,7 @@ export type CheckInsContext = {
   set(next: CheckInsState): void;
   botIds(): string[];
   admin(): boolean;
+  checkNotWithdrawn?(): void;
   now(): number;
   sleep(ms: number): Promise<void>;
 };
@@ -311,7 +314,7 @@ export function cannotKeep(
 /** The jobs show `every` for this bot: Off a disabled job, a cadence an enabled job at it. */
 function shows(jobs: readonly CheckInJob[], botId: string, every: string): boolean {
   const job = jobs.find((each) => each.botId === botId);
-  const ms = durationMs(every);
+  const ms = every === "" ? 0 : durationMs(every);
   if (!job || ms === null) return false;
   return ms === 0 ? !job.enabled : job.enabled && job.everyMs === ms;
 }
@@ -422,16 +425,19 @@ const shown = ({ jobs, scheduler, settings, defaults }: Snapshot) => ({
 });
 
 /** Read the bots' check-ins: their jobs, the scheduler, their own settings and the default. */
-export async function loadCheckIns(ctx: CheckInsContext): Promise<void> {
+export async function loadCheckIns(
+  ctx: CheckInsContext,
+  botId?: string,
+): Promise<CheckInRead | null> {
   const link = ctx.link();
-  if (!link.alive()) return;
+  if (!link.alive()) return null;
   if (!ctx.get()) ctx.set(emptyState());
   const latest = ctx.begin();
   // What is read is tied to the gateway that answered, so a draft is never carried to another.
-  const gatewayId = await ctx.gateway();
   try {
+    const gatewayId = await ctx.gateway();
     const next = await read(ctx, link);
-    if (!link.alive() || !latest()) return;
+    if (!link.alive() || !latest()) return null;
     ctx.set({
       ...(ctx.get() ?? emptyState()),
       ...shown(next),
@@ -439,9 +445,17 @@ export async function loadCheckIns(ctx: CheckInsContext): Promise<void> {
       status: "ready",
       error: null,
     });
+    if (!botId || gatewayId === null || next.settings === null) return null;
+    return {
+      gatewayId,
+      jobs: next.jobs.filter((job) => job.botId === botId),
+      settings: next.settings.filter((setting) => setting.botId === botId),
+      defaults: next.defaults,
+    };
   } catch (error) {
-    if (!link.alive() || !latest()) return;
-    ctx.set({ ...(ctx.get() ?? emptyState()), status: "error", error: message(error) });
+    if (link.alive() && latest())
+      ctx.set({ ...(ctx.get() ?? emptyState()), status: "error", error: message(error) });
+    return null;
   }
 }
 
@@ -495,6 +509,12 @@ export function planCheckIn(
   if (!Object.hasOwn(entries, botId) || !entry) return { conflict: CHECKIN_BOT_DELETED };
   const raw = asRecord(entry.heartbeat);
   const setting = readSettings(config, [botId])[0];
+  if (
+    draft.every !== null &&
+    typeof raw?.every === "string" &&
+    raw.every.length > MAX_CHECKIN_EVERY_CHARS
+  )
+    return { refused: "This cadence is longer than Clawtrate edits." };
   if (draft.every !== null && (setting?.every ?? null) !== draft.was.every)
     return { conflict: `${CHANGED} Its cadence was changed.` };
   if (draft.prompt !== null && setting?.promptCut)
@@ -611,7 +631,8 @@ export async function saveCheckIn(
   if ("conflict" in plan) {
     if (!latest()) {
       settle("conflict", plan.conflict, true);
-      return loadCheckIns(ctx);
+      await loadCheckIns(ctx);
+      return;
     }
     show(latest, fresh);
     return settle("conflict", plan.conflict);
@@ -623,12 +644,18 @@ export async function saveCheckIn(
     return settle("failed", "The gateway's config had no version to change it against.");
   if (!ctx.admin()) return settle("failed", "Admin access ended before the change was sent.");
   try {
+    ctx.checkNotWithdrawn?.();
+  } catch (error) {
+    return settle("failed", message(error));
+  }
+  try {
     await link.request("config.patch", { raw: JSON.stringify(plan.patch), baseHash: fresh.hash });
   } catch (error) {
     if (/changed since last load/i.test(message(error))) {
       // Said first, so the dialog never waits on the read that shows what changed.
       settle("conflict", CHANGED, true);
-      return loadCheckIns(ctx);
+      await loadCheckIns(ctx);
+      return;
     }
     return settle(certainlyNotApplied(error) ? "failed" : "unknown", message(error));
   }
@@ -638,7 +665,7 @@ export async function saveCheckIn(
     try {
       const next = await read(ctx, link, { required: true, deadline });
       if (!link.alive() || ctx.now() >= deadline) break;
-      if (took(next, botId, plan.own, plan.expect)) {
+      if (latest() && took(next, botId, plan.own, plan.expect)) {
         show(latest, next);
         return settle("saved", null);
       }

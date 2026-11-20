@@ -27,6 +27,7 @@ import {
   MAX_CHECKIN_KEPT,
   MAX_CHECKIN_PROMPT_CHARS,
   type CheckInDraft,
+  type CheckInRead,
 } from "./check-ins.ts";
 import type { MenuRow } from "./composer-menus.ts";
 import type { UsageBusy, UsageReport } from "./usage-engine.ts";
@@ -196,7 +197,7 @@ export type BridgeCommand =
   | { type: "setBotModel"; botId: string; model: string; effort: string | null }
   | { type: "removeBotFallbacks"; botId: string }
   // Check-ins (`check-ins.ts`). Saving needs admin.
-  | { type: "refreshCheckIns" }
+  | { type: "refreshCheckIns"; botId?: string }
   /** The draft as `CheckInDraft` says. The outcome is `checkIns.save`. */
   | ({ type: "saveCheckIn"; saveId: string; botId: string } & CheckInDraft)
   | { type: "dismissCheckInSave"; saveId: string }
@@ -321,7 +322,12 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                           }
                                                         : C extends { type: "setMachineDefaults" }
                                                           ? ApprovalsFile
-                                                          : void;
+                                                          : C extends {
+                                                                type: "refreshCheckIns";
+                                                                botId: string;
+                                                              }
+                                                            ? CheckInRead | null
+                                                            : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -632,7 +638,9 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         ? { type: "requestAccess", tier: command.tier }
         : { type: "requestAccess" };
     case "refreshCheckIns":
-      return { type: command.type };
+      return command.botId === undefined
+        ? { type: command.type }
+        : { type: command.type, botId: botId(command.botId) };
     case "saveCheckIn": {
       const every = (value: unknown) =>
         value === null ? null : shortText(value, MAX_CHECKIN_EVERY_CHARS, "cadence");
@@ -1229,15 +1237,20 @@ class ViewerSession implements BridgeSession {
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId);
       case "refreshCheckIns":
-        return client.refreshCheckIns();
+        return client.refreshCheckIns(command.botId);
       case "saveCheckIn":
-        return client.saveCheckIn(command.saveId, command.botId, {
-          gatewayId: command.gatewayId,
-          every: command.every,
-          prompt: command.prompt,
-          was: command.was,
-          kept: command.kept,
-        });
+        return client.saveCheckIn(
+          command.saveId,
+          command.botId,
+          {
+            gatewayId: command.gatewayId,
+            every: command.every,
+            prompt: command.prompt,
+            was: command.was,
+            kept: command.kept,
+          },
+          owner,
+        );
       case "dismissCheckInSave":
         return client.dismissCheckInSave(command.saveId);
       case "sendMessage": {

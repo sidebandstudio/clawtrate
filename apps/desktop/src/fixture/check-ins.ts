@@ -124,16 +124,28 @@ export function checkInCommands(params: CheckInParams) {
       if (checkIns) set({ ...get(), checkIns: change(checkIns) });
     };
     switch (command.type) {
-      case "refreshCheckIns":
+      case "refreshCheckIns": {
+        const snapshot = shown(config, Date.now());
+        const gatewayId = get().connection.gatewayId;
         set({
           ...get(),
           checkIns: {
             ...(get().checkIns ?? fixtureCheckIns(Date.now(), params, null)),
-            ...shown(config, Date.now()),
-            gatewayId: get().connection.gatewayId,
+            ...snapshot,
+            gatewayId,
           },
         });
-        return Promise.resolve();
+        return Promise.resolve(
+          command.botId
+            ? {
+                gatewayId,
+                jobs: snapshot.jobs.filter((job) => job.botId === command.botId),
+                settings: snapshot.settings.filter((setting) => setting.botId === command.botId),
+                defaults: snapshot.defaults,
+              }
+            : null,
+        );
+      }
       case "dismissCheckInSave":
         put((c) =>
           c.save?.id === command.saveId && c.save.status !== "saving" ? { ...c, save: null } : c,

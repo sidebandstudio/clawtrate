@@ -760,6 +760,72 @@ describe("F-201 F-366 saving", () => {
     expect(state().save?.status).toBe("unknown");
   });
 
+  it("F-201: a prompt-only save confirms an empty cadence with its disabled job", async () => {
+    const { gateway, ctx, state } = fakeGateway({
+      entries: { main: { heartbeat: { every: "" } }, marlow: {}, otto: {}, quill: {} },
+    });
+    gateway.jobs = [
+      {
+        agentId: "main",
+        payload: { kind: "heartbeat" },
+        enabled: false,
+        schedule: { kind: "every", everyMs: 1_800_000 },
+      },
+    ];
+    await loadCheckIns(ctx);
+    await saveCheckIn(ctx, "s1", "main", draft(state(), "main", { prompt: "P. NO_REPLY" }));
+    expect(gateway.config.agents.entries.main?.heartbeat).toEqual({
+      every: "",
+      prompt: "P. NO_REPLY",
+    });
+    expect(state().save?.status).toBe("saved");
+  });
+
+  it("F-201: a cadence edit cannot overwrite a value that shares the displayed prefix", async () => {
+    const prefix = "0s".repeat(32);
+    const { gateway, ctx, state, elsewhere } = fakeGateway({
+      entries: { main: { heartbeat: { every: prefix + "1h" } }, marlow: {}, otto: {}, quill: {} },
+    });
+    await loadCheckIns(ctx);
+    const cadence = draft(state(), "main", { every: "24h" });
+    const prompt = draft(state(), "main", { prompt: "P. NO_REPLY" });
+    elsewhere((config) => (config.agents.entries.main!.heartbeat!.every = prefix + "2h"));
+    await saveCheckIn(ctx, "s1", "main", cadence);
+    expect(gateway.attempts).toEqual([]);
+    expect(state().save?.status).toBe("failed");
+    await saveCheckIn(ctx, "s2", "main", prompt);
+    expect(state().save?.status).toBe("saved");
+    expect(gateway.config.agents.entries.main?.heartbeat?.every).toBe(prefix + "2h");
+  });
+
+  it("F-201: a refresh displacing the save read cannot leave the old schedule visible with success", async () => {
+    const { gateway, ctx, state } = fakeGateway();
+    await loadCheckIns(ctx);
+    let confirm: (() => void) | undefined;
+    let refresh: (() => void) | undefined;
+    gateway.gate = (method) => {
+      if (method !== "config.get" || gateway.patches.length === 0) return;
+      if (!confirm)
+        return new Promise<void>((resolve) => {
+          confirm = resolve;
+        });
+      if (!refresh)
+        return new Promise<void>((resolve) => {
+          refresh = resolve;
+        });
+    };
+    const saved = saveCheckIn(ctx, "s1", "marlow", draft(state(), "marlow", { every: "24h" }));
+    await until(() => confirm !== undefined);
+    const refreshing = loadCheckIns(ctx);
+    await until(() => refresh !== undefined);
+    confirm!();
+    await saved;
+    expect(state().save?.status).toBe("saved");
+    expect(state().jobs.find((job) => job.botId === "marlow")?.everyMs).toBe(86_400_000);
+    refresh!();
+    await refreshing;
+  });
+
   it("F-201: an invalid config does not establish that the bot is gone, and the draft can be retried after repair", async () => {
     const { gateway, ctx, state } = fakeGateway();
     await loadCheckIns(ctx);
@@ -999,6 +1065,23 @@ describe("F-201 a save across a real connection change", () => {
     was: { every: null, prompt: null },
     kept: [{ botId: "main", every: "30m" }],
   };
+
+  it("F-201: suspending invalidates a snapshot before reconnect reads it again", async () => {
+    const { client } = await adminClient();
+    try {
+      expect(client.state.checkIns?.gatewayId).toBe("gw-1");
+      await client.suspend();
+      expect(client.state.checkIns?.gatewayId).toBeNull();
+      expect(await client.refreshCheckIns("marlow")).toBeNull();
+      await client.retryNow();
+      await until(() => client.state.connection.status === "connected");
+      expect(client.state.checkIns?.gatewayId).toBeNull();
+      expect(await client.refreshCheckIns("marlow")).not.toBeNull();
+      expect(client.state.checkIns?.gatewayId).toBe("gw-1");
+    } finally {
+      client.stop();
+    }
+  });
 
   it("F-201: a failed bootstrap identity read is retried on Refresh", async () => {
     const { client } = await adminClient(true);
