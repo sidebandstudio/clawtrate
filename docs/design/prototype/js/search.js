@@ -872,7 +872,7 @@
       `<div class="s-scrim" data-s="scrim"></div>` +
       `<div class="s-palette" role="dialog" aria-modal="true" aria-label="Search">` +
       `<div class="s-top"><span class="s-glass">${icon("search")}</span>` +
-      `<input id="s-field" class="s-field" type="search" role="combobox" aria-label="Search" aria-expanded="false" aria-controls="s-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" maxlength="4096" enterkeyhint="search" />` +
+      `<input id="s-field" class="s-field" type="text" role="combobox" aria-label="Search" aria-expanded="false" aria-controls="s-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" maxlength="4096" enterkeyhint="search" />` +
       `<button type="button" class="button s-cancel" data-variant="quiet" data-s="cancel">Cancel</button></div>` +
       `<div class="s-scopes" role="tablist" aria-label="Search in"></div>` +
       `<div class="s-body" id="s-body"></div>` +
