@@ -83,7 +83,13 @@ function updateRow(
     case "offered":
       return {
         line: `Clawtrate ${state.version} is offered by the update source.`,
-        action: "Download",
+        action:
+          s.install.kind === "unavailable-in-this-build" &&
+          ["build-not-signed", "windows-install-pending-trial", "no-installer-path"].includes(
+            s.install.reason,
+          )
+            ? undefined
+            : "Download",
       };
     case "downloading":
       if (state.received >= state.expected)
@@ -232,8 +238,12 @@ export function Updates({
   if (confirmId && !confirm) setConfirmId(null);
   const locked = handoffLocked(state);
   const attempt =
-    s.revision === 0 && !working && !pending && s.selectedTrack === s.lastAttempt?.track &&
-    (state.kind === "not-checked" || (state.kind === "failed" && state.reason === "invalid-version"))
+    s.revision === 0 &&
+    !working &&
+    !pending &&
+    s.selectedTrack === s.lastAttempt?.track &&
+    (state.kind === "not-checked" ||
+      (state.kind === "failed" && state.reason === "invalid-version"))
       ? attemptLine(s.lastAttempt)
       : null;
   const saving = s.pendingTrack
@@ -376,7 +386,9 @@ export function Updates({
       )}
       {source && <p className="b-hint">Automatic restart is unavailable in this build.</p>}
       <span className="visually-hidden" role="status">
-        {[saving ?? announcement, installNotice, !pending && notice, attempt, message].filter(Boolean).join(" ")}
+        {[saving ?? announcement, installNotice, !pending && notice, attempt, message]
+          .filter(Boolean)
+          .join(" ")}
       </span>
     </div>
   );

@@ -130,7 +130,11 @@ export function Confirm({
       <div className="b-confirm" data-details={details ? true : undefined}>
         <h2 id="b-confirm-title">{title}</h2>
         <p id="b-confirm-text">{text}</p>
-        {details && <p id="b-confirm-details" tabIndex={0}>{details}</p>}
+        {details && (
+          <p id="b-confirm-details" tabIndex={0}>
+            {details}
+          </p>
+        )}
         <div className="b-actions">
           <button
             type="button"

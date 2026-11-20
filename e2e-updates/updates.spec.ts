@@ -65,7 +65,7 @@ const test = base.extend<{
   desktopApp: TestApp;
   installer: "unsigned" | "mac" | "mac-unconfirmed" | "manual";
 }>({
-  installer: ["unsigned", { option: true }],
+  installer: ["manual", { option: true }],
   desktopApp: async ({ playwright, installer }, use) => {
     const desktop = join(import.meta.dirname, "../apps/desktop");
     const require = createRequire(join(desktop, "package.json"));
@@ -202,6 +202,8 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
     "Downloads Clawtrate 1.1.0 from 127.0.0.1, only when you choose to.",
   );
   const download = page.getByRole("button", { name: "Download", exact: true });
+  const hold = join(desktopApp.profile, "hold-inspect");
+  writeFileSync(hold, "");
   await download.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("group", { name: "Update status" })).toBeFocused();
@@ -218,10 +220,15 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   expect(server.requests).toEqual(["/stable", filePath]);
   await expect(line).not.toContainText("checksum");
   resume();
-  await expect(line).toHaveText(
-    "Clawtrate 1.1.0 is downloaded, and its size and checksum match the update source. Installation isn't available from this screen.",
-  );
+  const checking = "Checking the downloaded update for Clawtrate 1.1.0…";
+  await expect(line).toHaveText(checking);
+  await expect(page.locator(".updates-section").getByRole("status")).toHaveText(checking);
   await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
+  rmSync(hold);
+  await expect(line).toHaveText(
+    "Clawtrate 1.1.0 is downloaded, and its size and checksum match the update source. Ready to install.",
+  );
+  await expect(page.getByRole("button", { name: "Restart to Update" })).toBeVisible();
   const nightly = page.getByRole("radio", { name: "Nightly" });
   await nightly.click();
   await expect(nightly).toBeChecked();
@@ -472,14 +479,13 @@ test("F-231: an older Check on the same track preserves the verified download", 
   expect(server.requests).toEqual(["/stable", filePath]);
   await page.getByRole("button", { name: "Check for Updates" }).click();
   await expect(line).toContainText("its size and checksum match the update source.");
-  await expect(
-    page.getByRole("button", { name: /^(Check for Updates|Download|Restart to Update)$/ }),
-  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^(Check for Updates|Download)$/ })).toHaveCount(0);
   expect(
     await page.evaluate(() =>
       (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get(),
     ),
   ).toEqual(verified.snapshot);
+  await expect(page.getByRole("button", { name: "Restart to Update" })).toBeVisible();
   expect(readFileSync(artifact).equals(body)).toBe(true);
   expect(server.requests).toEqual(["/stable", filePath]);
 });
@@ -624,6 +630,24 @@ for (const mode of ["mac", "mac-unconfirmed", "manual"] as const) {
     });
   });
 }
+
+test.describe("unsigned build", () => {
+  test.use({ installer: "unsigned" });
+  test("F-231: an unsigned build shows the offer without offering or requesting its file", async ({
+    desktopApp,
+  }) => {
+    const { page, server } = desktopApp;
+    await openUpdates(page);
+    expect(server.requests).toEqual([]);
+    await page.getByRole("button", { name: "Check for Updates" }).click();
+    await expect(page.locator(".update-result dd")).toHaveText(
+      "Clawtrate 1.1.0 is offered by the update source.",
+    );
+    await expect(page.locator(".b-note")).toContainText("This build can't install updates itself.");
+    await expect(page.getByRole("button", { name: "Download", exact: true })).toHaveCount(0);
+    expect(server.requests).toEqual(["/stable"]);
+  });
+});
 
 test.describe("installer refusals", () => {
   test.use({ installer: "manual" });

@@ -4,7 +4,7 @@ type Reason = Extract<DesktopUpdateState, { kind: "handoff-failed" }>["reason"];
 const reasons: Record<Exclude<Reason, "no-verified-download">, string> = {
   "windows-install-pending-trial": "Restart to update on Windows is unavailable in this build.",
   "build-not-signed": "This build can't install updates itself.",
-  "no-installer-path": "This build has no installer for this system.",
+  "no-installer-path": "Clawtrate can't install updates on this system.",
   "artifact-changed": "Couldn't verify the saved update again.",
   "mac-designated-requirement": "The update doesn't meet this app's macOS signing requirement.",
   "inspection-failed": "Couldn't finish checking the downloaded update.",
@@ -68,24 +68,27 @@ export function restartWaitingMessages(
     if (recipient === undefined) recipient = bot?.name ?? null;
     else if (bot?.name !== recipient) recipient = null;
     for (const message of pending) {
-      if (["held", "queued", "not-sent", "awaiting-access"].includes(message.status) ||
-          (message.status === "sending" && message.leftAt === null)) unsent++;
+      if (
+        ["held", "queued", "not-sent", "awaiting-access"].includes(message.status) ||
+        (message.status === "sending" && message.leftAt === null)
+      )
+        unsent++;
       else sent++;
     }
   }
   const to = recipient ? " to " + recipient : "";
   const warnings: string[] = [];
-    if (unsent)
-      warnings.push(
-        unsent === 1
-          ? `1 message${to} hasn't been sent yet. Restarting discards it: it isn't kept as a draft. Runs on the gateway keep going.`
-          : `${unsent} messages${to} haven't been sent yet. Restarting discards them: they aren't kept as drafts. Runs on the gateway keep going.`,
-      );
-    if (sent)
-      warnings.push(
-        sent === 1
-          ? `1 message${to} was sent to the gateway and isn't confirmed yet. Restarting stops following it. The gateway may still have it.`
-          : `${sent} messages${to} were sent to the gateway and aren't confirmed yet. Restarting stops following them. The gateway may still have them.`,
-      );
+  if (unsent)
+    warnings.push(
+      unsent === 1
+        ? `1 message${to} hasn't been sent yet. Restarting discards it: it isn't kept as a draft. Runs on the gateway keep going.`
+        : `${unsent} messages${to} haven't been sent yet. Restarting discards them: they aren't kept as drafts. Runs on the gateway keep going.`,
+    );
+  if (sent)
+    warnings.push(
+      sent === 1
+        ? `1 message${to} was sent to the gateway and isn't confirmed yet. Restarting stops following it. The gateway may still have it.`
+        : `${sent} messages${to} were sent to the gateway and aren't confirmed yet. Restarting stops following them. The gateway may still have them.`,
+    );
   return warnings.join(" ");
 }

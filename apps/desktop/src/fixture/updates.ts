@@ -25,6 +25,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
   const version = versionFor(selectedTrack);
   const offer = { version, releaseDate: "2026-11-01T00:00:00Z", offerId: "fixture-offer" };
   const states = {
+    unsigned: { kind: "offered", ...offer },
     ready: { kind: "verified", version, size: 120000, offerId: offer.offerId },
     preparing: { kind: "preparing", ...offer },
     "handing-off": { kind: "handing-off", ...offer },
@@ -112,7 +113,12 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
     install:
       kind === "ready"
         ? { kind: "restart-available", offerId: offer.offerId, completesOnQuit: true }
-        : { kind: "unavailable-in-this-build", reason: "build-not-signed" },
+        : {
+            kind: "unavailable-in-this-build",
+            reason: ["offered", "inspecting"].includes(kind)
+              ? "no-verified-download"
+              : "build-not-signed",
+          },
   };
   const listeners = new Set<(s: DesktopUpdateSnapshot) => void>();
   function publish(patch: Partial<DesktopUpdateSnapshot>) {

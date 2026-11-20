@@ -23,7 +23,7 @@ const snapshot: DesktopUpdateSnapshot = {
   preferenceIssue: null,
   state: { kind: "not-checked" },
   lastAttempt: null,
-  install: { kind: "unavailable-in-this-build", reason: "build-not-signed" },
+  install: { kind: "unavailable-in-this-build", reason: "no-verified-download" },
 };
 function render(
   state: DesktopUpdateState,
@@ -187,7 +187,7 @@ it("F-231: announces download milestones while showing every reported byte count
   expect(download(110)).toContain('role="status">Downloading Clawtrate 2.0.0… 10%');
   expect(download(119)).toContain('role="status">Downloading Clawtrate 2.0.0… 10%');
   expect(download(119)).toContain("119 of 1,000 bytes");
-  for (const bytes of [1000,1001]) {
+  for (const bytes of [1000, 1001]) {
     const html = download(bytes);
     const checking = "Checking the downloaded update for Clawtrate 2.0.0…";
     expect(html).toContain('<dd class="b-wrap-value">' + checking);
@@ -212,7 +212,7 @@ it("F-231 F-030: a pending choice hides the retired offer, action and source", (
 const restartFailures = [
   ["windows-install-pending-trial", "Restart to update on Windows is unavailable in this build."],
   ["build-not-signed", "This build can't install updates itself."],
-  ["no-installer-path", "This build has no installer for this system."],
+  ["no-installer-path", "Clawtrate can't install updates on this system."],
   ["artifact-changed", "Couldn't verify the saved update again."],
   ["mac-designated-requirement", "The update doesn't meet this app's macOS signing requirement."],
   ["inspection-failed", "Couldn't finish checking the downloaded update."],
@@ -224,6 +224,22 @@ const restartFailures = [
   ["attempt-not-saved", "Couldn't save the restart attempt on this device."],
   ["installer-failed", "Couldn't hand the update to the installer."],
 ] as const;
+it.each(restartFailures.slice(0, 3))(
+  "F-231 F-030: an offer stays reachable but withholds Download for %s",
+  (reason, line) => {
+    const offer = render(
+      { kind: "offered", version: "1.1.0", offerId: "shown", releaseDate: "2026-11-01" },
+      {
+        install: { kind: "unavailable-in-this-build", reason },
+      },
+    );
+    expect(offer.actions).toEqual([]);
+    expect(offer.html).toContain("Clawtrate 1.1.0 is offered by the update source.");
+    expect(offer.html).toContain(line);
+    expect(offer.html).not.toContain("Downloads Clawtrate");
+    expect(offer.footer).toBe(true);
+  },
+);
 const verified = { kind: "verified", offerId: "shown", version: "1.1.0", size: 100 } as const;
 it.each(restartFailures)("F-231: explains the installer refusal %s", (reason, line) => {
   const failed = render({ kind: "handoff-failed", version: "1.1.0", reason });
@@ -282,7 +298,10 @@ it.each([
   expect(
     render(
       { kind: "not-checked" },
-      { revision: 0, lastAttempt: { kind, running, target: "2.0.0", from: "1.0.0", track: "stable" } },
+      {
+        revision: 0,
+        lastAttempt: { kind, running, target: "2.0.0", from: "1.0.0", track: "stable" },
+      },
     ).html,
   ).toContain(line);
   expect(render({ kind: "not-checked" }).html).not.toContain(line);
@@ -303,20 +322,33 @@ it("F-231: an unsupported desktop system explains the absent installer without a
     { kind: "failed", stage: "check", reason: "unsupported-system" },
     { install: { kind: "unavailable-in-this-build", reason: "no-installer-path" } },
   );
-  expect(row.html).toContain("This build has no installer for this system.");
+  expect(row.html).toContain("Clawtrate can't install updates on this system.");
   expect(row.actions).toEqual([]);
 });
 
 it("F-231: a previous attempt gives retry advice only on its idle startup track", () => {
-  const lastAttempt = { kind: "old-version-running", from: "1.0.0", running: "1.0.0", target: "1.1.0", track: "stable" } as const;
+  const lastAttempt = {
+    kind: "old-version-running",
+    from: "1.0.0",
+    running: "1.0.0",
+    target: "1.1.0",
+    track: "stable",
+  } as const;
   const startup = { revision: 0, lastAttempt };
-  const idle = {kind: "not-checked"} as const;
+  const idle = { kind: "not-checked" } as const;
   const advice = "Check for updates to try again.";
-  expect(render(idle,startup).html).toContain(advice);
-  for (const extra of [{revision: 1}, {selectedTrack: "nightly" as const}, {pendingTrack: "nightly" as const}])
-    expect(render(idle, {...startup,...extra}).html).not.toContain(advice);
+  expect(render(idle, startup).html).toContain(advice);
+  for (const extra of [
+    { revision: 1 },
+    { selectedTrack: "nightly" as const },
+    { pendingTrack: "nightly" as const },
+  ])
+    expect(render(idle, { ...startup, ...extra }).html).not.toContain(advice);
   for (const state of [
     ...cases.filter(([state]) => state.kind !== "not-checked").map(([state]) => state),
-    ...(["preparing","handing-off","handed-to-system","handoff-unconfirmed"] as const).map(kind => ({kind, version:"1.1.0",offerId:"shown"})),
-  ]) expect(render(state,startup).html).not.toContain(advice);
+    ...(["preparing", "handing-off", "handed-to-system", "handoff-unconfirmed"] as const).map(
+      (kind) => ({ kind, version: "1.1.0", offerId: "shown" }),
+    ),
+  ])
+    expect(render(state, startup).html).not.toContain(advice);
 });
