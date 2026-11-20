@@ -486,3 +486,17 @@ it.each(["missing", "changed", "replaced", "check", "choice", "quit"])(
       expect(service.get().state).toMatchObject({ reason: "artifact-changed" });
   },
 );
+
+it("reads the last JSON value for a repeated track", async () => {
+  const service = await start();
+  const feed = JSON.stringify(document("1.1.0", "stable"));
+  for (const [first, last, expected] of [
+    ["nightly", "stable", { kind: "offered" }],
+    ["stable", "nightly", { kind: "failed", reason: "wrong-track" }],
+  ] as const) {
+    server.route("/stable", (_req, res) =>
+      res.end(feed.replace('"track":"stable"', `"track":"${first}","track":"${last}"`)),
+    );
+    expect((await service.check("stable")).snapshot.state).toMatchObject(expected);
+  }
+});
