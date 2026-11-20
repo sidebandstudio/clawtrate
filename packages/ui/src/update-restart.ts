@@ -2,7 +2,7 @@ import type { ClawtrateState, DesktopUpdateSnapshot, DesktopUpdateState } from "
 
 type Reason = Extract<DesktopUpdateState, { kind: "handoff-failed" }>["reason"];
 const reasons: Record<Reason, string> = {
-  "no-verified-download": "There is no verified update ready to install.",
+  "no-verified-download": "No download is ready to install.",
   "build-not-signed": "This build can't install updates itself.",
   "no-installer-path": "This build has no installer for this system.",
   "artifact-changed": "Couldn't verify the saved update again.",

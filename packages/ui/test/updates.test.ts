@@ -203,7 +203,7 @@ it("F-231 F-030: a pending choice hides the retired offer, action and source", (
 });
 
 const restartFailures = [
-  ["no-verified-download", "There is no verified update ready to install."],
+  ["no-verified-download", "No download is ready to install."],
   ["build-not-signed", "This build can't install updates itself."],
   ["no-installer-path", "This build has no installer for this system."],
   ["artifact-changed", "Couldn't verify the saved update again."],
