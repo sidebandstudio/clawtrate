@@ -141,7 +141,6 @@ function useHoldPlace(
   scroller: RefObject<HTMLDivElement | null>,
   following: RefObject<boolean>,
   toEnd: () => void,
-  lastClamp: RefObject<number | null>,
 ) {
   useLayoutEffect(() => {
     const element = scroller.current;
@@ -184,12 +183,8 @@ function useHoldPlace(
     // Watching the content too covers late reflows, such as fonts arriving, and every
     // change of content: a step becoming a card, a card arriving or resolving above.
     const observer = new ResizeObserver(() => {
-      if (following.current) {
-        toEnd();
-        // A shrink under a followed end clamps the scroll to the smaller end;
-        // its scroll event reports after the content may have grown again.
-        lastClamp.current = element.scrollTop;
-      } else if (place) {
+      if (following.current) toEnd();
+      else if (place) {
         const now = drawnAt(place);
         if (now !== null) element.scrollTop += now - frame().top - place.top;
       }
@@ -203,7 +198,7 @@ function useHoldPlace(
       observer.disconnect();
       element.removeEventListener("scroll", record);
     };
-  }, [scroller, following, toEnd, lastClamp]);
+  }, [scroller, following, toEnd]);
 }
 
 /**
@@ -258,15 +253,24 @@ function TranscriptView({
   // following; only the reader moving up stops it.
   const following = useRef(true);
   const followTop = useRef<number | null>(null);
-  // Where the browser's own clamp under a followed end landed, for onScroll to
-  // tell that clamp from a scroll the reader made.
-  const lastClamp = useRef<number | null>(null);
+  // The transcript's floor (its ::after) keeps the scrollable area at least one
+  // view below where the end was put, so the browser never clamps the scroll
+  // under a followed end when the content shrinks or the view grows. A clamp
+  // that lands while the pin's own scroll event is queued is reported by that
+  // event in the next frame, before the resize observer has followed the change;
+  // if the content grew again in between, it read as the reader moving up and
+  // following stopped short of the end (#219).
+  const pinAt = useCallback((top: number | null) => {
+    followTop.current = top;
+    scroller.current?.style.setProperty("--follow-floor", `${top ?? 0}px`);
+  }, []);
   const toEnd = useCallback(() => {
     const element = scroller.current;
     if (!element) return;
+    element.style.setProperty("--follow-floor", "0px");
     element.scrollTop = element.scrollHeight;
-    followTop.current = element.scrollTop;
-  }, []);
+    pinAt(element.scrollTop);
+  }, [pinAt]);
 
   // What the reader has just opened stays in view (section 18): following the
   // end never pushes the line of a card, a fold or a row they opened above the
@@ -299,11 +303,10 @@ function TranscriptView({
     const over = lineTop() - line.getBoundingClientRect().top;
     if (over <= 0) return;
     element.scrollTop -= over;
-    followTop.current = null;
-    lastClamp.current = null;
+    pinAt(null);
     following.current = false;
     setAtEnd(false);
-  }, [toEnd]);
+  }, [toEnd, pinAt]);
 
   const onScroll = useCallback(() => {
     const element = scroller.current;
@@ -311,31 +314,13 @@ function TranscriptView({
     const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
     const kept =
       following.current && followTop.current !== null && element.scrollTop >= followTop.current - 1;
-    // A scroll the reader did not make keeps following. When the content shrank
-    // under a followed end, the browser clamped the scroll to the smaller end
-    // and reports the change after the fact; if the content has grown again by
-    // then, the clamp reads as a scroll up and away. The resize observer saw the
-    // shrink and recorded where its clamp landed: a scroll to that place is not
-    // the reader's, and following continues.
-    const clamped =
-      following.current &&
-      followTop.current !== null &&
-      element.scrollTop < followTop.current - 1 &&
-      lastClamp.current !== null &&
-      element.scrollTop >= lastClamp.current - 1;
-    const near = kept || clamped || distance < NEAR_BOTTOM_PX;
+    const near = kept || distance < NEAR_BOTTOM_PX;
     if (kept && distance > 1) toEnd();
-    else {
-      followTop.current = near ? element.scrollTop : null;
-      // The marker is only for an uninterrupted following interval: a later
-      // scroll-up is the reader's, wherever it lands.
-      if (!near) lastClamp.current = null;
-    }
+    else pinAt(near ? element.scrollTop : null);
     following.current = near;
     setAtEnd(near);
     if (near) setSeenSize(contentSize);
-    if (!kept && clamped) toEnd();
-  }, [contentSize, toEnd]);
+  }, [contentSize, toEnd, pinAt]);
 
   const jumpToLatest = useCallback(() => {
     following.current = true;
@@ -349,7 +334,7 @@ function TranscriptView({
     if (atEnd) follow();
   }, [contentSize, atEnd, follow]);
 
-  useHoldPlace(scroller, following, follow, lastClamp);
+  useHoldPlace(scroller, following, follow);
 
   // A centred stamp before the first message, and wherever more than ten
   // minutes pass or the day changes.
