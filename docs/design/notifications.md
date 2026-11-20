@@ -101,9 +101,9 @@ No new tokens.
 
 - **This computer's switches** are written by the host to its settings file, and the switch moves when the host answers with what the file holds after the write. A failed write leaves the switch as it was, with "Couldn't save. Try again."
 - **Your settings** are written with `users.prefs.set` and an `expectedEntries` holding the value last read, then read back with `users.prefs.get`; only what was read back is shown and announced. While the write is out, the control is disabled and its line reads "Saving…".
-  - `conflict`: the value is read again and shown, under a note: "Changed on another of your devices a moment ago. This is what's set now." Nothing is written again by itself.
+  - `conflict`: the value is read again and shown, under a note: "The gateway's setting changed before this save. This is what's set now." It is shown only after a successful read. Nothing is written again by itself.
   - **Refused, with the value confirmed**: the gateway refused the write and a read afterwards returned the value. The control shows that value, with "The gateway refused the change. Otto's notifications are On." and "Try again".
-  - **Unknown**: the write may have landed, and neither its answer nor a read afterwards came back. Nothing current is claimed: the line reads "Couldn't confirm the change. Otto's notifications were last read as On.", a note offers "Check again", your settings cannot be changed until a new read, and **every notification that depends on them stays off until a new read establishes the current switches and quiet hours** (section 3, step 2).
+  - **Unknown**: if no read after the write confirms the current value, use this state even if the write returned success, conflict or refusal. Nothing current is claimed: the line reads "Couldn't confirm the change. Otto's notifications were last read as On.", a note offers "Check again", your settings cannot be changed until a new read, and **every notification that depends on them stays off until a new read establishes the current switches and quiet hours** (section 3, step 2).
   - **Order.** Each read carries the sequence of the write or refresh it follows; an older read never overwrites a newer one.
   - `users.prefs.changed` naming either key, from another device, is read and shown without a word; the announcer says nothing for a change the person did not make here.
 
@@ -121,7 +121,7 @@ No new tokens.
 
 ### Announcements
 
-The Settings dialog's polite live region (`bots.md` §2), and the Work pane's in the tab, announce only what was read back: "Notifications on this computer are on" or "off", "Bot names are shown in notifications" or "Bot names are hidden in notifications", "Budget warnings are on" or "off", "Quiet hours are on, 22:00 to 07:00" or "Quiet hours are off", "Otto's notifications are on" or "off", "This task: Off" (and the other two), "The gateway refused the change", "Couldn't confirm the change", "Read from the gateway", "Access granted", "Changed on another of your devices". The status strip announces its own words (section 5).
+The Settings dialog's polite live region (`bots.md` §2), and the Work pane's in the tab, announce only what was read back: "Notifications on this computer are on" or "off", "Bot names are shown in notifications" or "Bot names are hidden in notifications", "Budget warnings are on" or "off", "Quiet hours are on, 22:00 to 07:00" or "Quiet hours are off", "Otto's notifications are on" or "off", "This task: Off" (and the other two), "The gateway refused the change", "Couldn't confirm the change", "Read from the gateway", "Access granted", "The gateway's setting changed before this save. This is what's set now.". The status strip announces its own words (section 5).
 
 ## 3. When a notification is shown
 

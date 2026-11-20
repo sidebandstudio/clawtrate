@@ -575,6 +575,24 @@ p = await open("open=settings&prefs=savefail");
 await click(p, '[data-n-bot="otto"]');
 await p.waitForTimeout(650);
 check("ruling 7: refused, with the value read back: it says so", (await p.getAttribute('[data-n-bot="otto"]', "aria-checked")) === "true" && (await text(p, '[data-row="bot-otto"]')).includes("The gateway refused the change. Otto's notifications are On."));
+await click(p, '#settings-dialog [data-n-retry="bot-otto"]');
+await p.waitForTimeout(650);
+check("fix 8: Try again in Settings repeats the change, which now lands", (await p.getAttribute('[data-n-bot="otto"]', "aria-checked")) === "false" && !(await p.$('[data-n-retry="bot-otto"]')));
+await p.close();
+p = await open("open=bot&prefs=savefail");
+await click(p, '#panel-settings [data-n-bot="otto"]');
+await p.waitForTimeout(650);
+check("fix 8: the bot's page shows the refusal with Try again", (await text(p, '#panel-settings [data-row="bot-otto"]')).includes("The gateway refused the change. Otto's notifications are On.") && Boolean(await p.$('#panel-settings [data-n-retry="bot-otto"]')));
+await click(p, '#panel-settings [data-n-retry="bot-otto"]');
+await p.waitForTimeout(650);
+check("fix 8: and Try again there lands", (await p.getAttribute('#panel-settings [data-n-bot="otto"]', "aria-checked")) === "false");
+await p.close();
+p = await open("open=settings&prefs=unknown-original");
+await click(p, '[data-n-bot="otto"]');
+await p.waitForTimeout(650);
+await click(p, '[data-n="check-again"]');
+await p.waitForTimeout(80);
+check("fix 8: Check again after an unknown save reads the original value, keeps it and restores notifications, without retrying the write", (await p.getAttribute('[data-n-bot="otto"]', "aria-checked")) === "true" && !(await p.isDisabled('[data-n-bot="pip"]')) && (await p.evaluate(() => window.notif.S.prefsFail === null && Boolean(window.notif.decide({ bot: "otto", task: "o3", kind: "finished", run: "y" }).show))));
 await p.close();
 p = await open("open=settings&prefs=unknown");
 await click(p, '[data-n-bot="otto"]');
@@ -589,7 +607,7 @@ await p.close();
 p = await open("open=settings&prefs=conflict");
 await click(p, '[data-n-bot="otto"]');
 await p.waitForTimeout(650);
-check("changed elsewhere: the note, and what was read again", (await text(p, "#settings-dialog")).includes("Changed on another of your devices a moment ago. This is what's set now.") && (await p.getAttribute('[data-n-bot="pip"]', "aria-checked")) === "false");
+check("changed elsewhere: the note, and what was read again", (await text(p, "#settings-dialog")).includes("The gateway's setting changed before this save. This is what's set now.") && (await p.getAttribute('[data-n-bot="pip"]', "aria-checked")) === "false");
 await p.close();
 
 // Part 4: the bot's row and page (bots.md §8) ---------------------------------------------------------------
@@ -668,7 +686,10 @@ p = await open("open=details&prefs=savefail");
 await click(p, '[data-n="task-menu"]');
 await click(p, '[data-n-task="on"]');
 await p.waitForTimeout(650);
-check("Details: refused keeps the value read back and says so", (await text(p, '[data-testid="task-error"]')).includes("The gateway refused the change.") && (await text(p, '[data-testid="task-setting"]')).includes("Same as Otto (on)"));
+check("fix 8: Details: a refusal names the confirmed choice", (await text(p, '[data-testid="task-error"]')).includes("The gateway refused the change. This task is set to Same as Otto (on).") && (await text(p, '[data-testid="task-setting"]')).includes("Same as Otto (on)"));
+await click(p, '[data-n-retry="task"]');
+await p.waitForTimeout(650);
+check("fix 8: Details: Try again repeats the change, which now lands", (await text(p, '[data-testid="task-setting"]')).includes("On") && !(await p.$('[data-testid="task-error"]')));
 await p.close();
 
 // Part 6: widths, themes, keyboard --------------------------------------------------------------------------

@@ -150,6 +150,7 @@
     why: "", // what the host decided when nothing was shown
     saving: null,
     error: {},
+    retry: {}, // what Try again repeats, by control
     conflictNote: false,
     timeError: false,
     taskRoom: false,
@@ -159,7 +160,8 @@
     sectionOpen: "notifications",
     settingsPane: "section",
   };
-  if (["conflict", "savefail", "unknown"].includes(S.prefs)) S.prefsFail = S.prefs; // the next write ends that way
+  if (["conflict", "savefail", "unknown", "unknown-original"].includes(S.prefs)) S.prefsFail = S.prefs === "unknown-original" ? "unknown" : S.prefs; // the next write ends that way
+  S.unknownLanded = S.prefs !== "unknown-original"; // what the read after an unknown save finds
   S.tasks = Object.assign({ [taskKey("o4")]: "off" }, p("task") ? { [taskKey("o3")]: p("task") } : {}, p("tasks") === "full" ? filler() : {});
   if (S.botsFull) S.extraOff = botsFiller();
   const ownOf = (id) => S.tasks[taskKey(id)];
@@ -825,7 +827,8 @@
   // A build that cannot show notifications; with only local settings, nothing "applies on your other devices".
   const NONE_HERE = (what) =>
     S.prefs === "device" ? "This copy of Clawtrate can't show notifications on this computer." : `This copy of Clawtrate can't show notifications. ${what} applies on your other devices.`;
-  const savingLine = (key, idle) => (S.saving === key ? "Saving…" : S.error[key] || idle);
+  const retryButton = (key) => (S.retry[key] ? ` <button type="button" class="link-button" data-n-retry="${key}">Try again</button>` : "");
+  const savingLine = (key, idle) => (S.saving === key ? "Saving…" : S.error[key] ? `${S.error[key]}${retryButton(key)}` : idle);
   const UNCONFIRMED_NOTE = `<p>Couldn't confirm your notification settings with the gateway. Until Clawtrate reads them again, it shows no notifications about your bots.</p><div class="b-actions"><button type="button" class="button" data-size="sm" data-n="check-again">Check again</button></div>`;
 
   function renderPanel() {
@@ -841,7 +844,7 @@
         `<div class="n-select-row" data-testid="task-setting"><span class="n-select-label" id="n-task-label">This task</span>` +
         `<button type="button" class="b-select n-select" data-n="task-menu" aria-haspopup="menu" aria-expanded="false" aria-labelledby="n-task-label n-task-value"${shared && S.saving !== "task" ? "" : " disabled"}>` +
         `<span id="n-task-value">${S.saving === "task" ? "Saving…" : esc(taskValue(t.id, b.id))}</span>${icon("chevron")}</button></div>` +
-        (S.error.task ? `<p class="b-field-error" data-testid="task-error">${S.error.task}</p>` : "") +
+        (S.error.task ? `<p class="b-field-error" data-testid="task-error">${S.error.task}${retryButton("task")}</p>` : "") +
         (S.taskRoom ? `<p class="b-field-error" data-testid="task-room">There's no room for another task setting. Set a task back to "Same as bot" first. <button type="button" class="link-button" data-n="bot-page">${b.name}'s notifications</button></p>` : "") +
         (S.unconfirmed ? note(UNCONFIRMED_NOTE, "warn") : "") +
         kept("task", keptShared()) +
@@ -888,7 +891,7 @@
     if (S.prefs === "reading") return html + `<div aria-busy="true" class="n-reading"><div class="skeleton" style="height:58px;width:100%"></div></div><p class="b-hint">Reading your settings from the gateway…</p>`;
     if (S.prefs === "readfail") return html + note(`<p>Couldn't read your notification settings from the gateway. Until Clawtrate can, it shows no notifications about your bots.</p><div class="b-actions"><button type="button" class="button" data-size="sm" data-n="retry-read">Try again</button></div>`, "danger");
     if (S.unconfirmed) html += note(UNCONFIRMED_NOTE, "warn");
-    if (S.conflictNote) html += note(`<p>Changed on another of your devices a moment ago. This is what's set now.</p>`, "warn");
+    if (S.conflictNote) html += note(`<p>The gateway's setting changed before this save. This is what's set now.</p>`, "warn");
     html +=
       `<dl class="facts">` +
       switchRow(`bot-${b.id}`, `Notify me about ${b.name}`, savingLine(`bot-${b.id}`, `When ${b.name} finishes or waits for you.`), S.bots[b.id], `data-n-bot="${b.id}"${shared && S.saving !== `bot-${b.id}` ? "" : " disabled"}`, `${b.name}'s notifications`) +
@@ -933,9 +936,12 @@
   // Saving your settings: written with a compare-and-set, then read back (section 2). Three outcomes
   // are told apart: confirmed, refused with the value read back, and unknown.
   let readSeq = 0;
-  function saveShared(key, apply, lastRead, doneWords, where) {
+  // confirmed: the value a read after a refusal returned; lastRead: the value last read, when nothing confirmed one;
+  // retry: repeats the change with the latest confirmed value as its compare-and-set.
+  function saveShared(key, apply, confirmed, lastRead, doneWords, where, retry) {
     S.saving = key;
     delete S.error[key];
+    delete S.retry[key];
     S.conflictNote = false;
     repaint(where);
     const seq = ++readSeq;
@@ -944,7 +950,8 @@
       S.saving = null;
       if (S.prefsFail === "savefail") {
         S.prefsFail = null;
-        S.error[key] = `The gateway refused the change. ${lastRead.replace("were last read as", "are")}`;
+        S.error[key] = `The gateway refused the change. ${confirmed}`;
+        S.retry[key] = retry;
         say(where, "The gateway refused the change");
       } else if (S.prefsFail === "unknown") {
         S.prefsFail = null;
@@ -957,7 +964,7 @@
         // Another device turned Pip off a moment before; that is what is read back.
         S.bots.pip = false;
         S.conflictNote = true;
-        say(where, "Changed on another of your devices");
+        say(where, "The gateway's setting changed before this save");
       } else {
         apply();
         repaint(where);
@@ -968,9 +975,10 @@
     }, 500);
   }
   function checkAgain() {
-    // A fresh read shows the change had landed.
+    // A fresh read: the change had landed (prefs=unknown), or the original value stands (prefs=unknown-original).
+    // Either way the write is not retried, and notifications return.
     S.unconfirmed = false;
-    S.pendingApply?.();
+    if (S.unknownLanded) S.pendingApply?.();
     S.pendingApply = null;
     S.error = {};
     renderAll();
@@ -1005,9 +1013,11 @@
         if (value === "same") delete S.tasks[taskKey(t.id)];
         else S.tasks[taskKey(t.id)] = value;
       },
+      `This task is set to ${before}.`,
       `This task was last read as ${before}.`,
       () => `This task: ${taskValue(t.id, b.id)}`,
       "pane",
+      () => chooseTask(value),
     );
     requestAnimationFrame(() => $('[data-n="task-menu"]')?.focus());
   }
@@ -1115,7 +1125,7 @@
         `<p class="b-hint" data-testid="system-note">${SYSTEM_NOTE[S.os]}</p>`;
     }
     if (S.unconfirmed) body += note(UNCONFIRMED_NOTE, "warn");
-    if (S.conflictNote) body += note(`<p>Changed on another of your devices a moment ago. This is what's set now.</p>`, "warn");
+    if (S.conflictNote) body += note(`<p>The gateway's setting changed before this save. This is what's set now.</p>`, "warn");
     body += `<h4 class="b-group">Quiet hours</h4>`;
     if (S.prefs === "reading") body += `<div aria-busy="true" class="n-reading"><div class="skeleton" style="height:58px;width:100%"></div><div class="skeleton" style="height:120px;width:100%"></div></div><p class="b-hint" data-testid="reading">Reading your settings from the gateway…</p>`;
     else if (S.prefs === "readfail")
@@ -1188,7 +1198,7 @@
   function toggleQuiet() {
     const next = !S.quiet.enabled;
     if (!roomFor("quiet", sharedValue(S.bots, { ...S.quiet, enabled: next, saved: true }), QUIET_ROOM, "settings")) return;
-    saveShared("quiet", () => Object.assign(S.quiet, { enabled: next, saved: true }), `Quiet hours were last read as ${lastReadOf(S.quiet.enabled)}.`, () => (S.quiet.enabled ? `Quiet hours are on, ${S.quiet.from} to ${S.quiet.to}` : "Quiet hours are off"), "settings");
+    saveShared("quiet", () => Object.assign(S.quiet, { enabled: next, saved: true }), `Quiet hours are ${lastReadOf(S.quiet.enabled)}.`, `Quiet hours were last read as ${lastReadOf(S.quiet.enabled)}.`, () => (S.quiet.enabled ? `Quiet hours are on, ${S.quiet.from} to ${S.quiet.to}` : "Quiet hours are off"), "settings", () => toggleQuiet());
   }
 
   function toggleBot(id, where) {
@@ -1196,7 +1206,7 @@
     const next = !S.bots[id];
     // Turning a bot off adds an entry; the exact proposed value is measured first. Turning one on removes it.
     if (!next && !roomFor(`bot-${id}`, sharedValue({ ...S.bots, [id]: false }, S.quiet), "There's no room to save this switch with your quiet hours. Turn another bot back on first.", where)) return;
-    saveShared(`bot-${id}`, () => (S.bots[id] = next), `${b.name}'s notifications were last read as ${lastReadOf(S.bots[id])}.`, () => `${b.name}'s notifications are ${S.bots[id] ? "on" : "off"}`, where);
+    saveShared(`bot-${id}`, () => (S.bots[id] = next), `${b.name}'s notifications are ${lastReadOf(S.bots[id])}.`, `${b.name}'s notifications were last read as ${lastReadOf(S.bots[id])}.`, () => `${b.name}'s notifications are ${S.bots[id] ? "on" : "off"}`, where, () => toggleBot(id, where));
   }
 
   function setTime(which, value) {
@@ -1208,7 +1218,7 @@
     }
     S.timeError = false;
     if (!roomFor("quiet", sharedValue(S.bots, { ...S.quiet, [which]: value, saved: true }), QUIET_ROOM, "settings")) return;
-    saveShared("quiet", () => Object.assign(S.quiet, { [which]: value, saved: true }), `Quiet hours were last read as ${S.quiet.from} to ${S.quiet.to}.`, () => `Quiet hours are on, ${S.quiet.from} to ${S.quiet.to}`, "settings");
+    saveShared("quiet", () => Object.assign(S.quiet, { [which]: value, saved: true }), `Quiet hours are ${S.quiet.from} to ${S.quiet.to}.`, `Quiet hours were last read as ${S.quiet.from} to ${S.quiet.to}.`, () => `Quiet hours are on, ${S.quiet.from} to ${S.quiet.to}`, "settings", () => setTime(which, value));
   }
 
   // The prototype's bar -----------------------------------------------------------------------------------
@@ -1301,6 +1311,8 @@
     if (setBtn && !setBtn.disabled) return setBtn.dataset.nSet === "quiet" ? toggleQuiet() : toggleDevice(setBtn.dataset.nSet);
     const botSw = t.closest("[data-n-bot]");
     if (botSw && !botSw.disabled) return toggleBot(botSw.dataset.nBot, botSw.closest("#settings-dialog") ? "settings" : "pane");
+    const retry = t.closest("[data-n-retry]");
+    if (retry) return S.retry[retry.dataset.nRetry]?.();
     const taskChoice = t.closest("[data-n-task]");
     if (taskChoice) return chooseTask(taskChoice.dataset.nTask);
     const n = t.closest("[data-n]")?.dataset.n;
