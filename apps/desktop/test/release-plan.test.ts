@@ -213,3 +213,14 @@ it("rechecks the saved candidate from the command line and preserves the feed on
   expect(check().status).toBe(1);
   expect(read("update-feed.json")).toEqual(feed);
 });
+
+it("reports absent evidence without claiming a different build was observed", () => {
+  rmSync(path(mac + ".json"));
+  const feed = read("update-feed.json");
+  delete feed.files[mac];
+  write("update-feed.json", feed);
+  expect(plan(c).issues).toEqual([
+    "mac-arm64: missing feed entry.",
+    "mac-arm64: missing or wrong build receipt.",
+  ]);
+});

@@ -88,18 +88,22 @@ export function plan(candidate: Candidate) {
     allowed.add(receiptName);
     const receipt = json(join(dir, receiptName));
     const signing = signingStates.find((state) => state === receipt.signing) ?? "unknown";
-    if (receipt.feedHash !== feedFingerprint(feedUrl))
+    const hasReceipt = Object.keys(receipt).length > 0;
+    if (hasReceipt && receipt.feedHash !== feedFingerprint(feedUrl))
       issues.push(key + ": build used a different feed address.");
-    if (receipt.commit !== commit) issues.push(key + ": missing or different source commit.");
-    if (receipt.buildDate !== buildDate) issues.push(key + ": missing or different build date.");
+    if (hasReceipt && receipt.commit !== commit)
+      issues.push(key + ": missing or different source commit.");
+    if (hasReceipt && receipt.buildDate !== buildDate)
+      issues.push(key + ": missing or different build date.");
     if (signing !== expectedSigning(key))
       holds.push(key + ": signing is " + signing + "; requires " + expectedSigning(key) + ".");
     if (!parsed) continue;
     const name = artifactName(version, key);
     allowed.add(name);
     const entry = object(entries[key]);
-    if (Object.keys(entry).length === 0) issues.push(key + ": missing feed entry.");
-    if (address && entry.url !== new URL(version + "/" + name, address).href)
+    const hasEntry = Object.keys(entry).length > 0;
+    if (!hasEntry) issues.push(key + ": missing feed entry.");
+    if (hasEntry && address && entry.url !== new URL(version + "/" + name, address).href)
       issues.push(key + ": address differs from the expected versioned file.");
     if (receipt.name !== name) issues.push(key + ": missing or wrong build receipt.");
     const path = join(dir, name);
@@ -112,9 +116,10 @@ export function plan(candidate: Candidate) {
     if (!size || size > MAX_DOWNLOAD_BYTES)
       issues.push(key + ": artifact is empty or exceeds the download limit.");
     const sha512 = size <= MAX_DOWNLOAD_BYTES ? sha512Base64(path) : null;
-    if (entry.size !== size) issues.push(key + ": feed size differs.");
-    if (entry.sha512 !== sha512) issues.push(key + ": feed digest differs.");
-    if (receipt.sha512 !== sha512) issues.push(key + ": bytes differ from signing readback.");
+    if (hasEntry && entry.size !== size) issues.push(key + ": feed size differs.");
+    if (hasEntry && entry.sha512 !== sha512) issues.push(key + ": feed digest differs.");
+    if (hasReceipt && receipt.sha512 !== sha512)
+      issues.push(key + ": bytes differ from signing readback.");
     files.push({ name, size, sha512, signing });
   }
   if (
