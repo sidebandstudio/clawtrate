@@ -265,7 +265,9 @@ test("F-472: a bot created with Let the gateway choose is stored with no account
   await page.keyboard.press("ControlOrMeta+\\");
   await page.getByRole("tab", { name: "Settings" }).click();
   await page.getByRole("button", { name: /^Account: .*Gateway chooses\. Open\.$/ }).click();
-  await expect(page.getByTestId("gateway-note")).toContainText("The gateway chooses.");
+  await expect(page.getByTestId("gateway-note")).toContainText(
+    "has no fixed account in the gateway's settings.",
+  );
   await expect(page.getByTestId("retained-order")).toHaveCount(0);
   await shots("account-page-gateway");
   await page.getByRole("button", { name: "Back to settings" }).click();
@@ -444,7 +446,7 @@ test("F-476 F-490: a bot locked with the tool's command shows as Locked, and one
   test.setTimeout(120_000);
   const settings = await accountPage();
   await expect(settings.getByTestId("bound-note")).toContainText(
-    "Bound. Second runs on Acme · Home.",
+    "Bound. Second is bound to Acme · Home in the gateway's settings.",
   );
   // The lock command, for the gateway's owner to run, in the instance's own form.
   const command = settings.getByTestId("command");
@@ -488,7 +490,7 @@ test("F-473: changing a locked bot to another account of its provider shows the 
   ).toBeVisible();
   await settings.getByRole("button", { name: "Save" }).click();
   await expect(settings.getByTestId("stale-note")).toContainText(
-    "The lock is out of date. Second runs on Acme · Work first, but the gateway's order for Second still lists only Acme · Home",
+    "The lock is out of date. Second is bound to Acme · Work. The gateway's stored order for Second still names only Acme · Home.",
     { timeout: 20_000 },
   );
   await expect(settings.getByTestId("command").first()).toContainText(
@@ -515,17 +517,23 @@ test("F-473: changing a bot's account draws a grey line in its open task naming 
   const settings = await accountPage();
   // The check before unlocked Second on the gateway: read its order again.
   await settings.getByRole("button", { name: "Check now" }).click();
-  await expect(settings.getByTestId("bound-note")).toContainText("Second runs on Acme · Work.", {
-    timeout: 20_000,
-  });
+  await expect(settings.getByTestId("bound-note")).toContainText(
+    "Second is bound to Acme · Work in the gateway's settings.",
+    {
+      timeout: 20_000,
+    },
+  );
   await settings.getByRole("button", { name: "Change account" }).click();
   await settings.getByRole("radio", { name: /^Acme · Home/ }).click();
   // Nothing predicts which account a run uses.
   await expect(settings.getByText(/finishes on|next run/)).toHaveCount(0);
   await settings.getByRole("button", { name: "Save" }).click();
-  await expect(settings.getByTestId("bound-note")).toContainText("Second runs on Acme · Home.", {
-    timeout: 20_000,
-  });
+  await expect(settings.getByTestId("bound-note")).toContainText(
+    "Second is bound to Acme · Home in the gateway's settings.",
+    {
+      timeout: 20_000,
+    },
+  );
   // The gateway records no line for it: Clawtrate draws one in the open task.
   // The check before changed Second's account too, from the same task: this line is the last.
   const line = page.getByTestId("client-event-line").last();
@@ -634,6 +642,32 @@ test("F-473: a task set to another account by another client keeps it after a ch
     primary: "acme/dev-1@acme:home",
     fallbacks: [],
   });
+});
+
+test("F-473: Bound and Lock out of date describe configuration even with a task override", async () => {
+  test.setTimeout(120_000);
+  // Second is bound to Home; one of its tasks is set to Work by another client.
+  const settings = await accountPage();
+  await settings.getByRole("button", { name: "Check now" }).click();
+  await expect(settings.getByTestId("bound-note")).toHaveText(
+    "Bound. Second is bound to Acme · Home in the gateway's settings.",
+    { timeout: 20_000 },
+  );
+  await expect(settings.getByText(/runs on|may use|tries|finishes on|next run/)).toHaveCount(0);
+  // A stored order naming only another account: the lock is out of date, in the same words.
+  devGateway(INSTANCE, "lock", "--agent", "second", "--provider", "acme", "acme:work");
+  try {
+    await settings.getByRole("button", { name: "Check now" }).click();
+    await expect(settings.getByTestId("stale-note")).toHaveText(
+      "The lock is out of date. Second is bound to Acme · Home. The gateway's stored order for Second still names only Acme · Work.",
+      { timeout: 20_000 },
+    );
+    await expect(settings.getByText(/runs on|may use|tries|finishes on|next run/)).toHaveCount(0);
+  } finally {
+    devGateway(INSTANCE, "unlock", "--agent", "second", "--provider", "acme");
+  }
+  await settings.getByRole("button", { name: "Check now" }).click();
+  await expect(settings.getByTestId("bound-note")).toBeVisible({ timeout: 20_000 });
 });
 
 test("F-473: a binding another client made while Change account was open is found before the write: no second change and no line", async () => {
@@ -946,9 +980,7 @@ test("F-490: a bot whose model on the gateway lists fallbacks, or lost its accou
   await patchConfig({ agents: { entries: { second: { model: { primary: "acme/dev-1" } } } } });
   await settings.getByRole("button", { name: "Check now" }).click();
   await expect(
-    settings.getByText(
-      "The gateway's model for Second has no account. It now uses the gateway's choice of Acme account.",
-    ),
+    settings.getByText("The model in the gateway's settings for Second has no account suffix."),
   ).toBeVisible({ timeout: 30_000 });
   await expect(settings.getByRole("button", { name: "Choose an account" })).toBeVisible();
   await patchConfig({

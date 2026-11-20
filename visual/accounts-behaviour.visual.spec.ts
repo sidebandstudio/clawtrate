@@ -277,7 +277,7 @@ test("F-490: the Account page: the lock command, Check now, and Back to the row 
   await row.click();
   await expect(page.getByRole("heading", { name: "Account", level: 3 })).toBeFocused();
   await expect(page.getByTestId("bound-note")).toContainText(
-    "Bound. Otto runs on OpenAI · Work. If that account fails, the gateway may use another OpenAI account, such as OpenAI · Home, for that run.",
+    "Bound. Otto is bound to OpenAI · Work in the gateway's settings.",
   );
   await expect(page.getByTestId("command")).toHaveText(
     "openclaw models auth order set --provider openai --agent otto openai:work",
@@ -333,7 +333,7 @@ test("F-473: changing a locked bot's account: the note before saving, then the l
   ).toBeVisible();
   await save.click();
   await expect(page.getByTestId("stale-note")).toContainText(
-    "The lock is out of date. Otto runs on OpenAI · Home first, but the gateway's order for Otto still lists only OpenAI · Work",
+    "The lock is out of date. Otto is bound to OpenAI · Home. The gateway's stored order for Otto still names only OpenAI · Work.",
   );
   await expect(page.getByTestId("command").first()).toHaveText(
     "openclaw models auth order set --provider openai --agent otto openai:home",
@@ -389,7 +389,9 @@ test("F-472: Let the gateway choose for an existing bot, and the one-account ord
     "light",
   );
   await page.getByRole("button", { name: /^Account: OpenAI, Gateway chooses\. Open\.$/ }).click();
-  await expect(page.getByTestId("gateway-note")).toContainText("The gateway chooses.");
+  await expect(page.getByTestId("gateway-note")).toHaveText(
+    "Otto has no fixed account in the gateway's settings.",
+  );
   await expect(page.getByTestId("retained-order")).toContainText(
     "The gateway still has an order for Otto that names only OpenAI · Work",
   );

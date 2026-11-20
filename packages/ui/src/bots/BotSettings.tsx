@@ -526,7 +526,7 @@ export function BotSettings({
       <div ref={rootRef} className="b-tab" data-testid="bot-settings">
         {sub("Change account", "account", "[data-bs='change']")}
         <p className="b-lead" style={{ textAlign: "left" }}>
-          Choose the account {name} runs on.
+          Choose the account to bind to {name}.
         </p>
         <AccountChoices
           label={`Accounts for ${name}`}
@@ -653,11 +653,7 @@ export function BotSettings({
   if (binding.mode === "default-model") {
     page.push(
       <Note key="s" icon={<ShieldIcon />}>
-        <p>
-          <b>The gateway's default model.</b> {name} has no model of its own. It uses the gateway's
-          default model and that model's fallbacks, and for each run the gateway picks one of that
-          provider's accounts that its account order allows.
-        </p>
+        <p>{name} has no model of its own. The gateway has a default model configured.</p>
       </Note>,
       changeButton("Choose an account", true),
     );
@@ -666,20 +662,13 @@ export function BotSettings({
     const keptAccount = kept ? accounts.accounts.find((a) => a.id === kept) : null;
     page.push(
       <Note key="s" icon={<ShieldIcon />} testId="gateway-note">
-        <p>
-          <b>The gateway chooses.</b> {name} has no fixed account: for each run the gateway picks
-          one of {who}'s accounts that its account order allows. {name} keeps its own model and no
-          fallbacks.
-        </p>
+        <p>{name} has no fixed account in the gateway's settings.</p>
       </Note>,
     );
     if (binding.suffixLost)
       page.push(
         <Note key="lost" tone="warn">
-          <p>
-            The gateway's model for {name} has no account. It now uses the gateway's choice of {who}{" "}
-            account.
-          </p>
+          <p>The model in the gateway's settings for {name} has no account suffix.</p>
         </Note>,
       );
     if (kept && provider)
@@ -687,9 +676,7 @@ export function BotSettings({
         <Note key="kept" tone="warn" testId="retained-order">
           <p>
             The gateway still has an order for {name} that names only{" "}
-            {keptAccount ? accountName(keptAccount, accounts) : kept}, so it keeps using that
-            account alone. To let the gateway choose among {who}'s accounts, the gateway's owner can
-            clear it on the gateway's machine:
+            {keptAccount ? accountName(keptAccount, accounts) : kept}.
           </p>
           <CommandBlock command={unlockCommand(cli, bot.id, provider)} label="Copy clear command" />
         </Note>,
@@ -736,12 +723,6 @@ export function BotSettings({
           </dd>
         </div>
       </dl>,
-    );
-    const others = accounts.accounts.filter(
-      (a) =>
-        a.provider === account.provider &&
-        a.id !== account.id &&
-        (a.keptBy === null || a.keptBy === bot.id),
     );
     const me = accountName(account, accounts);
     const e = binding.evidence;
@@ -921,8 +902,8 @@ export function BotSettings({
       page.push(
         <Note key="s" tone="warn" testId="stale-note">
           <p>
-            <b>The lock is out of date.</b> {name} runs on {me} first, but the gateway's order for{" "}
-            {name} still lists only {oldName}, so when {me} fails the gateway tries {oldName}.
+            <b>The lock is out of date.</b> {name} is bound to {me}. The gateway's stored order for{" "}
+            {name} still names only {oldName}.
           </p>
         </Note>,
         <h4 className="b-group" key="h">
@@ -944,11 +925,7 @@ export function BotSettings({
       page.push(
         <Note key="s" icon={<ShieldIcon />} testId="bound-note">
           <p>
-            <b>Bound.</b> {name} runs on {me}. If that account fails, the gateway may use{" "}
-            {others.length > 0
-              ? `another ${who} account, such as ${accountName(others[0]!, accounts)},`
-              : `another ${who} account, if one is added,`}{" "}
-            for that run.
+            <b>Bound.</b> {name} is bound to {me} in the gateway's settings.
           </p>
         </Note>,
         ...warnings,

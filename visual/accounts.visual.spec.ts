@@ -417,7 +417,9 @@ const SCENES: Scene[] = [
       await page.getByRole("button", { name: "Change account" }).click();
       await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
       await page.getByRole("button", { name: "Save" }).click();
-      await expect(page.getByTestId("bound-note")).toContainText("Otto runs on OpenAI · Home.");
+      await expect(page.getByTestId("bound-note")).toContainText(
+        "Otto is bound to OpenAI · Home in the gateway's settings.",
+      );
     },
   },
   {
@@ -428,7 +430,9 @@ const SCENES: Scene[] = [
       await page.getByRole("button", { name: "Change account" }).click();
       await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
       await page.getByRole("button", { name: "Save" }).click();
-      await expect(page.getByTestId("bound-note")).toContainText("Otto runs on OpenAI · Home.");
+      await expect(page.getByTestId("bound-note")).toContainText(
+        "Otto is bound to OpenAI · Home in the gateway's settings.",
+      );
       // The pane closed: the line where the conversation ends.
       await page.keyboard.press("ControlOrMeta+\\");
       const line = page.getByTestId("transcript").getByTestId("client-event-line");
