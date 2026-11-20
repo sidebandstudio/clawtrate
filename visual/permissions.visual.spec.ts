@@ -517,7 +517,9 @@ test.describe("behaviour", () => {
     await permissions("Activity", rows)(page);
     const blocked = page.getByTestId("activity-row").nth(1);
     await blocked.click();
-    await expect(page.getByText("This step isn't in a task this device has loaded.")).toBeVisible();
+    await expect(
+      page.getByText("Clawtrate couldn't match this call to a step in a loaded task."),
+    ).toBeVisible();
     await blocked.click();
     await page.getByTestId("activity-row").nth(5).click();
     await page.getByRole("button", { name: "Show in chat" }).click();

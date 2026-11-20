@@ -230,6 +230,11 @@ export type TranscriptBlock =
       /** The row carried no arguments at all (`argumentsText` is then empty). */
       argumentsAbsent?: boolean;
       result: ToolResult | null;
+      /**
+       * The run whose history row holds this call (`__openclaw.runId`), kept whole up to
+       * 256 JSON characters; absent when the row names none.
+       */
+      runId?: string;
     };
 
 export type TranscriptItem = {

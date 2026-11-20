@@ -5917,7 +5917,7 @@ export class ClawtrateClient {
   async readActivity(query: ActivityQuery): Promise<ActivityPage> {
     const ctx = this.permissionsContext();
     // The calls of every task this host follows, by the audit log's hash of their id, with
-    // their task and, for a live run's step, its run: a history item names no run.
+    // their task, where each is drawn, and the run that drawing names itself.
     const loaded = new Map<string, LoadedCall[]>();
     const add = (call: LoadedCall) => {
       const hash = auditCallId(call.callId);
@@ -5927,13 +5927,18 @@ export class ClawtrateClient {
       for (const item of transcript.items) {
         for (const block of item.blocks) {
           if (block.kind === "tool-call" && block.callId)
-            add({ key, callId: block.callId, runId: null });
+            add({ key, callId: block.callId, runId: block.runId ?? null, kind: "history" });
         }
       }
       for (const run of transcript.runs) {
         for (const step of run.steps) {
           if (step.toolCallId)
-            add({ key, callId: step.toolCallId, runId: run.bound ? run.id : null });
+            add({
+              key,
+              callId: step.toolCallId,
+              runId: run.bound ? run.id : null,
+              kind: "step",
+            });
         }
       }
     }

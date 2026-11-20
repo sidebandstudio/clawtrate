@@ -23,6 +23,7 @@ import {
   readSavedApprovals,
   removeAllowlistEntry,
   revokeGrant,
+  type LoadedCall,
   type PermissionsContext,
 } from "../src/permissions.ts";
 import { APPROVALS_TIER_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
@@ -944,13 +945,20 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
         loaded: new Map([
           [
             BLOCKED_CALL,
-            [{ key: "agent:otto:dashboard:3e1273ad", callId: "call_read_agents", runId: null }],
+            [
+              {
+                key: "agent:otto:dashboard:3e1273ad",
+                callId: "call_read_agents",
+                runId: "run-1",
+                kind: "history",
+              },
+            ],
           ],
         ]),
       },
     );
     expect(page.rows.map((row) => row.inChat)).toEqual([
-      { key: "agent:otto:dashboard:3e1273ad", callId: "call_read_agents" },
+      { key: "agent:otto:dashboard:3e1273ad", callId: "call_read_agents", runId: "run-1" },
       null,
     ]);
   });
@@ -958,9 +966,7 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
   it("Show in chat opens the row's own call: matched by its task and run, and withheld when that can't be told apart", async () => {
     const TASK_A = "agent:otto:task-a";
     const TASK_B = "agent:otto:task-b";
-    const read = (
-      loaded: Map<string, Array<{ key: string; callId: string; runId: string | null }>>,
-    ) =>
+    const read = (loaded: Map<string, LoadedCall[]>) =>
       readActivity(
         fake({
           "audit.activity.list": () => ({
@@ -971,35 +977,56 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
         { cursor: null, agentId: null, status: null },
         { rulesListed: false, loaded },
       ).then((page) => page.rows[0]!.inChat);
-    const call = (key: string, runId: string | null) => ({ key, callId: "call_1", runId });
-    // The same call id in another task is never this row's call.
-    expect(await read(new Map([[BLOCKED_CALL, [call(TASK_B, null)]]]))).toBeNull();
-    expect(await read(new Map([[BLOCKED_CALL, [call(TASK_B, null), call(TASK_A, null)]]]))).toEqual(
-      {
-        key: TASK_A,
-        callId: "call_1",
-      },
-    );
-    // In its own task, a step of another run is not it either.
-    expect(await read(new Map([[BLOCKED_CALL, [call(TASK_A, "run-b")]]]))).toBeNull();
-    expect(await read(new Map([[BLOCKED_CALL, [call(TASK_A, "run-a")]]]))).toEqual({
-      key: TASK_A,
+    const drawn = (key: string, runId: string | null, kind: LoadedCall["kind"]): LoadedCall => ({
+      key,
       callId: "call_1",
+      runId,
+      kind,
     });
-    // Its run's step and its history row are the one call (seen on a development gateway).
+    const at = (...calls: LoadedCall[]) => new Map([[BLOCKED_CALL, calls]]);
+    const target = { key: TASK_A, callId: "call_1", runId: "run-a" };
+    // The same call id in another task is never this row's call.
+    expect(await read(at(drawn(TASK_B, "run-a", "step")))).toBeNull();
+    // A history block that names no run is never enough, nor a step of another run.
+    expect(await read(at(drawn(TASK_A, null, "history")))).toBeNull();
+    expect(await read(at(drawn(TASK_A, "run-b", "step")))).toBeNull();
+    // Two drawings of one kind in the row's run can't be told apart.
     expect(
-      await read(new Map([[BLOCKED_CALL, [call(TASK_A, "run-a"), call(TASK_A, null)]]])),
-    ).toEqual({ key: TASK_A, callId: "call_1" });
-    // The task could hold another call with that id: two history rows, or another run's step.
+      await read(at(drawn(TASK_A, "run-a", "step"), drawn(TASK_A, "run-a", "step"))),
+    ).toBeNull();
+    // A known step beside a history block of another run, or of no recorded run.
     expect(
-      await read(new Map([[BLOCKED_CALL, [call(TASK_A, null), call(TASK_A, null)]]])),
+      await read(at(drawn(TASK_A, "run-a", "step"), drawn(TASK_A, "run-b", "history"))),
     ).toBeNull();
     expect(
-      await read(new Map([[BLOCKED_CALL, [call(TASK_A, "run-b"), call(TASK_A, null)]]])),
+      await read(at(drawn(TASK_A, "run-a", "step"), drawn(TASK_A, null, "history"))),
     ).toBeNull();
+    // One exact step; one history block the gateway tagged with the run; the two of them together.
+    expect(await read(at(drawn(TASK_A, "run-a", "step")))).toEqual(target);
+    expect(await read(at(drawn(TASK_A, "run-a", "history")))).toEqual(target);
     expect(
-      await read(new Map([[BLOCKED_CALL, [call(TASK_A, "run-a"), call(TASK_A, "run-b")]]])),
-    ).toBeNull();
+      await read(at(drawn(TASK_A, "run-a", "step"), drawn(TASK_A, "run-a", "history"))),
+    ).toEqual(target);
+  });
+
+  it("two audit records with the same run and call in two tasks are two rows", async () => {
+    const page = await readActivity(
+      fake({
+        "audit.activity.list": () => ({
+          events: [
+            event({ eventId: "e-a", toolCallId: BLOCKED_CALL, sessionKey: "agent:otto:task-a" }),
+            event({ eventId: "e-b", toolCallId: BLOCKED_CALL, sessionKey: "agent:otto:task-b" }),
+          ],
+        }),
+        "config.get": () => ({ config: {} }),
+      }).ctx,
+      { cursor: null, agentId: null, status: null },
+      { rulesListed: false, loaded: new Map() },
+    );
+    expect(page.rows.map((row) => row.sessionKey)).toEqual([
+      "agent:otto:task-a",
+      "agent:otto:task-b",
+    ]);
   });
 
   it("a page is bounded where it enters and fits one result frame", async () => {
@@ -1167,7 +1194,7 @@ describe("F-178 F-324: every answer fits its result frame once serialized", () =
         loaded: new Map(
           Array.from({ length: 500 }, (_, i) => [
             heavyId(i),
-            [{ key: heavyId(0), callId: heavyId(i), runId: heavyId(i) }],
+            [{ key: heavyId(0), callId: heavyId(i), runId: heavyId(i), kind: "step" as const }],
           ]),
         ),
       },

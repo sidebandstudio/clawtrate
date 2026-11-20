@@ -343,7 +343,7 @@ function rows(state: ClawtrateState, logs: Log[], agentId: string | null, status
       const callId = call ? auditCallId(call) : null;
       const inChat =
         call && each.sessionKey && loaded.has(`${each.sessionKey}\u0000${call}`)
-          ? { key: each.sessionKey, callId: call }
+          ? { key: each.sessionKey, callId: call, runId: each.runId }
           : null;
       return { ...each, id: `${each.runId}\u0000${callId ?? each.recordId}`, callId, inChat };
     });

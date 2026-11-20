@@ -67,6 +67,58 @@ export function stepElement(callId: string): HTMLElement | null {
   return document.querySelector<HTMLElement>(`.transcript [data-call="${CSS.escape(callId)}"]`);
 }
 
+/** The transcript drawn for this task, by its key. */
+function taskTranscript(taskKey: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`.transcript[data-task-key="${CSS.escape(taskKey)}"]`);
+}
+
+/**
+ * A call Activity names, in that task's own transcript only: opened like
+ * `revealStep`, and focused only when exactly one drawing of the call is there
+ * once its fold is open (`onUnmatched` otherwise). False until the task's
+ * transcript and the call (or its fold) are drawn.
+ */
+export function revealTaskCall(taskKey: string, callId: string, onUnmatched: () => void): boolean {
+  const transcript = taskTranscript(taskKey);
+  if (!transcript) return false;
+  const selector = `[data-call="${CSS.escape(callId)}"]`;
+  const fold = readView(taskKey, viewKeys.member(callId));
+  const shown =
+    transcript.querySelector(selector) !== null ||
+    (typeof fold === "string" &&
+      transcript.querySelector(`[data-first="${CSS.escape(fold)}"]`) !== null);
+  if (!shown) return false;
+  if (typeof fold === "string") writeView(taskKey, viewKeys.fold(fold), true);
+  writeView(taskKey, viewKeys.call(callId), true);
+  writeView(taskKey, viewKeys.view(callId), "readable");
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      const steps = taskTranscript(taskKey)?.querySelectorAll<HTMLElement>(selector) ?? [];
+      if (steps.length !== 1) {
+        onUnmatched();
+        return;
+      }
+      focusStep(steps[0]!);
+    }),
+  );
+  return true;
+}
+
+/** Scroll a step just under the protected band, fill it for 1.6 s and focus its summary. */
+function focusStep(step: HTMLElement): void {
+  const scroller = step.closest<HTMLElement>(".transcript");
+  if (scroller) {
+    const band = 100;
+    const top = step.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    scroller.scrollTop += top - band;
+  }
+  step.dataset.flash = "true";
+  const clear = () => delete step.dataset.flash;
+  step.addEventListener("animationend", clear, { once: true });
+  step.addEventListener("focusout", clear, { once: true });
+  (step.querySelector<HTMLElement>(":scope > summary") ?? step).focus({ preventScroll: true });
+}
+
 /**
  * Bring a call into view the way section 10 says: open its fold and the call
  * itself through the conversation's view state, on its Readable view so
@@ -88,18 +140,7 @@ export function revealStep(taskKey: string, callId: string): boolean {
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {
       const step = stepElement(callId);
-      if (!step) return;
-      const scroller = step.closest<HTMLElement>(".transcript");
-      if (scroller) {
-        const band = 100;
-        const top = step.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-        scroller.scrollTop += top - band;
-      }
-      step.dataset.flash = "true";
-      const clear = () => delete step.dataset.flash;
-      step.addEventListener("animationend", clear, { once: true });
-      step.addEventListener("focusout", clear, { once: true });
-      (step.querySelector<HTMLElement>(":scope > summary") ?? step).focus({ preventScroll: true });
+      if (step) focusStep(step);
     }),
   );
   return true;

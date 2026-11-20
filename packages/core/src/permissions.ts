@@ -680,7 +680,7 @@ export type ActivityCause =
     };
 
 export type ActivityRow = {
-  /** The call's run and hashed id, or the record's id when it names no call. */
+  /** The call's task, run and hashed id, or the record's id when it names no call. */
   id: string;
   /** The newest record of the call on this page: its end, or its start. */
   at: number;
@@ -696,8 +696,8 @@ export type ActivityRow = {
   /** The audit log's record id, of the newest record. */
   recordId: string;
   cause: ActivityCause;
-  /** A task this host has loaded holds the call: its key and the call's own id, for "Show in chat". */
-  inChat: { key: string; callId: string } | null;
+  /** A task this host has loaded holds the call: its task, the call's own id and its run. */
+  inChat: { key: string; callId: string; runId: string } | null;
 };
 
 export type ActivityPage = {
@@ -736,7 +736,9 @@ export function activityRows(events: unknown[]): Omit<ActivityRow, "cause" | "in
     if (!recordId || !agentId || !runId || at === null) continue;
     const callId = wholeId(event.toolCallId, MAX_ACTIVITY_ID);
     if (event.toolCallId !== undefined && callId === null) continue;
-    const id = callId ? `${runId}\u0000${callId}` : recordId;
+    const sessionKey = wholeId(event.sessionKey, MAX_ACTIVITY_ID);
+    // One row per call in its own task: the same run and call in two tasks are two rows.
+    const id = callId ? JSON.stringify([sessionKey, runId, callId]) : recordId;
     const known = rows.get(id);
     if (known) {
       // Newest first: a later record of the same call is its start.
@@ -748,7 +750,7 @@ export function activityRows(events: unknown[]): Omit<ActivityRow, "cause" | "in
       at,
       startedAt: event.action === "tool.action.started" ? at : null,
       agentId,
-      sessionKey: wholeId(event.sessionKey, MAX_ACTIVITY_ID),
+      sessionKey,
       runId,
       callId,
       toolName: cut(event.toolName, MAX_PERMISSION_NAME),
@@ -886,17 +888,21 @@ function causeOf(decision: Decision | undefined, rules: CurrentRules | null): Ac
 
 /**
  * A call as a task this host has loaded draws it: the task, the call's own id,
- * and its run where the transcript gives it (a live run's step does; a history
- * item does not).
+ * where it is drawn (a history row's block, or a followed run's step) and the
+ * run that drawing names itself, if any.
  */
-export type LoadedCall = { key: string; callId: string; runId: string | null };
+export type LoadedCall = {
+  key: string;
+  callId: string;
+  runId: string | null;
+  kind: "history" | "step";
+};
 
 /**
- * The call in a loaded task that is this row's: in the row's own task, and in
- * its run where the transcript gives it. A task draws a call in its history
- * (no run named) and, while its run is followed, as that run's step: one call.
- * The link is withheld whenever the task could hold another call with that id:
- * a step of another run, or more than one drawing in its history.
+ * The call in a loaded task that is this row's: in the row's own task, with the
+ * row's own call id, and every drawing of it naming the row's run itself. At most
+ * one history block and one step, which are then the one call. A drawing that
+ * names no run, or another run, gives no link.
  */
 function chatTarget(
   row: Omit<ActivityRow, "cause" | "inChat">,
@@ -904,14 +910,13 @@ function chatTarget(
 ): ActivityRow["inChat"] {
   if (!row.callId || !row.sessionKey) return null;
   const drawn = (loaded.get(row.callId) ?? []).filter((each) => each.key === row.sessionKey);
-  const inHistory = drawn.filter((each) => each.runId === null);
-  const steps = drawn.filter((each) => each.runId !== null);
-  const pick =
-    inHistory.length <= 1 && steps.every((each) => each.runId === row.runId)
-      ? (steps[0] ?? inHistory[0])
-      : undefined;
-  return pick && pick.key.length <= MAX_ACTIVITY_ID && pick.callId.length <= MAX_ACTIVITY_ID
-    ? { key: pick.key, callId: pick.callId }
+  if (drawn.length === 0 || !drawn.every((each) => each.runId === row.runId)) return null;
+  const steps = drawn.filter((each) => each.kind === "step");
+  const history = drawn.filter((each) => each.kind === "history");
+  if (steps.length > 1 || history.length > 1) return null;
+  const pick = steps[0] ?? history[0]!;
+  return pick.key.length <= MAX_ACTIVITY_ID && pick.callId.length <= MAX_ACTIVITY_ID
+    ? { key: pick.key, callId: pick.callId, runId: row.runId }
     : null;
 }
 
@@ -973,7 +978,7 @@ export async function readActivity(
       if (row.callId && decisions !== null) {
         if (typeof decisions === "string") cause = { kind: "not-read", reason: decisions };
         else {
-          const found = decisions.byCall.get(row.id);
+          const found = decisions.byCall.get(`${row.runId}\u0000${row.callId}`);
           cause = found
             ? causeOf(found, rules)
             : recordFailing

@@ -56,6 +56,7 @@ export function App({
     botId: string;
     key: string;
     callId: string;
+    runId: string;
     nonce: number;
   } | null>(null);
   const settingsOpener = useRef<HTMLElement | null>(null);

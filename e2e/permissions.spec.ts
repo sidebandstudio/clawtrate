@@ -15,6 +15,7 @@ import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { auditCallId } from "../packages/core/src/permissions.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { newRunId } from "../tools/dev-gateway/src/state-guard.ts";
@@ -255,6 +256,8 @@ test("F-324: at the read tier, a call Otto's rule blocked shows its recorded cau
   await expect(call).toHaveCount(1);
   await expect(call).toBeInViewport({ timeout: 10_000 });
   await expect(call.locator(":scope > summary")).toBeFocused();
+  // The card focused is the blocked call's own: its id hashes to the audit record's.
+  expect(auditCallId(String(await call.getAttribute("data-call")))).toBe(audited!.toolCallId);
   await admin.request("cron.remove", { id: job });
 });
 

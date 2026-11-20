@@ -20,7 +20,13 @@ import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
 import "./bots/bots.css";
-import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
+import {
+  revealStep,
+  revealTaskCall,
+  WorkLinksContext,
+  type FileRequest,
+  type WorkLinks,
+} from "./work/links.tsx";
 
 /** A control that can take focus now: in the page, shown, and not behind the drawer. */
 function canFocus(element: HTMLElement | null): element is HTMLElement {
@@ -62,7 +68,7 @@ export function Shell({
   /** Whether the open task has caught up since the latest connect: until then work is last seen. */
   onCaughtUp?: (caughtUp: boolean) => void;
   /** Settings → Permissions → Activity's "Show in chat": open that task with the call in view. */
-  reveal?: { botId: string; key: string; callId: string; nonce: number } | null;
+  reveal?: { botId: string; key: string; callId: string; runId: string; nonce: number } | null;
 }) {
   const send = useCommand();
   const interactive = canWrite(state.connection, info);
@@ -323,7 +329,12 @@ export function Shell({
       openDetail();
       const until = Date.now() + 5000;
       const attempt = () => {
-        if (revealStep(reveal.key, reveal.callId)) return;
+        if (
+          revealTaskCall(reveal.key, reveal.callId, () =>
+            setChatNote("Clawtrate couldn't match this call to a step in a loaded task."),
+          )
+        )
+          return;
         if (Date.now() < until) frame = requestAnimationFrame(attempt);
         else setChatNote("This step isn't in the chat: it is not loaded here, or not kept.");
       };

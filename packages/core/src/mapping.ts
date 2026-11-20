@@ -259,6 +259,9 @@ function prettyArguments(value: unknown): string {
   return JSON.stringify(value === undefined ? null : value, null, 2);
 }
 
+/** The run a history tool call's row names, kept whole up to this many JSON characters. */
+export const MAX_BLOCK_RUN_CHARS = 256;
+
 function assistantBlocks(content: unknown): TranscriptBlock[] {
   if (typeof content === "string") return content.trim() ? [{ kind: "text", text: content }] : [];
   const blocks: TranscriptBlock[] = [];
@@ -383,6 +386,10 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
           if (block.kind === "tool-call" && block.callId) pendingCalls.set(block.callId, block);
         }
         const runId = str(info.runId);
+        // Each call keeps the run its own row names, before rows are joined into one item:
+        // whole, or not at all.
+        if (runId !== null && JSON.stringify(runId).length - 2 <= MAX_BLOCK_RUN_CHARS)
+          for (const block of blocks) if (block.kind === "tool-call") block.runId = runId;
         const previous = items.at(-1);
         let item: TranscriptItem;
         if (previous?.role === "assistant" && runId !== null && runId === currentRun) {

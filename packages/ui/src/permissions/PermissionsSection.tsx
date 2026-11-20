@@ -53,7 +53,12 @@ const DAY = 86_400_000;
 /** The rules plugin's state is read again this often while the section is open. */
 const PLUGIN_REREAD_MS = 60_000;
 
-export type ShowInChat = (target: { botId: string; key: string; callId: string }) => void;
+export type ShowInChat = (target: {
+  botId: string;
+  key: string;
+  callId: string;
+  runId: string;
+}) => void;
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -1065,6 +1070,7 @@ function ActivityPart({
                             botId: row.agentId,
                             key: row.inChat.key,
                             callId: row.inChat.callId,
+                            runId: row.inChat.runId,
                           })
                         }
                       >
@@ -1072,7 +1078,9 @@ function ActivityPart({
                       </button>
                     </div>
                   ) : (
-                    <p className="b-hint">This step isn't in a task this device has loaded.</p>
+                    <p className="b-hint">
+                      Clawtrate couldn't match this call to a step in a loaded task.
+                    </p>
                   )}
                 </div>
               )}

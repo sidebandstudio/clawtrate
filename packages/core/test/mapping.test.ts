@@ -130,6 +130,28 @@ describe("mapHistory", () => {
     expect(items[1]!.blocks.map((block) => block.kind)).toEqual(["reasoning", "tool-call", "text"]);
   });
 
+  it("gives each history tool call the run its own row names, also when runs reuse a call id", () => {
+    const row = (runId: string | undefined, id: string) => ({
+      role: "assistant",
+      content: [{ type: "toolCall", id, name: "read", arguments: {} }],
+      __openclaw: { id: `${id}-${runId ?? "none"}`, ...(runId ? { runId } : {}) },
+    });
+    const items = mapHistory([
+      { role: "user", content: "first" },
+      row("run-a", "call_1"),
+      { role: "user", content: "second" },
+      row("run-b", "call_1"),
+      { role: "user", content: "third" },
+      row(undefined, "call_1"),
+      { role: "user", content: "fourth" },
+      row("r".repeat(257), "call_1"),
+    ]);
+    const calls = items
+      .flatMap((item) => item.blocks)
+      .filter((block) => block.kind === "tool-call");
+    expect(calls.map((block) => block.runId ?? null)).toEqual(["run-a", "run-b", null, null]);
+  });
+
   it("attaches each tool result to its call and pretty-prints arguments", () => {
     const call = items[1]!.blocks[1]!;
     expect(call).toEqual({
@@ -138,6 +160,7 @@ describe("mapHistory", () => {
       name: "ls",
       argumentsText: '{\n  "path": "."\n}',
       result: { isError: false, text: '"AGENTS.md"\n"notes/"' },
+      runId: "run-1",
     });
     const failed = items[4]!.blocks[0]!;
     expect(failed).toMatchObject({
