@@ -315,11 +315,48 @@ describe("a link's preview", () => {
       { status: "none", url: "https://a.example/" },
       { status: "none", url: "https://b.example/" },
     ]);
-    // Once they ended, the next is made.
-    void slow("https://d.example/");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(lookups).toEqual(["a.example", "b.example", "d.example"]);
     expect(asked).toEqual([]);
+  });
+
+  it("F-116: timed-out lookups retain their slots, and late answers do not start transport", async () => {
+    // Lookups that answer only when the test says so.
+    const pending: Array<() => void> = [];
+    const lookups: string[] = [];
+    const lookup = (host: string) => {
+      lookups.push(host);
+      return new Promise<{ address: string; family: number }[]>((resolve) =>
+        pending.push(() => resolve(PUBLIC)),
+      );
+    };
+    const { fetch, asked } = web({
+      "https://a.example/": html("<title>A</title>"),
+      "https://b.example/": html("<title>B</title>"),
+      "https://c.example/": html("<title>C</title>"),
+    });
+    const preview = createLinkPreviewer({ get: fetch, lookup, timeoutMs: 20 });
+    // Both callers are answered at the deadline while their lookups still run.
+    expect(
+      await Promise.all([preview("https://a.example/"), preview("https://b.example/")]),
+    ).toEqual([
+      { status: "none", url: "https://a.example/" },
+      { status: "none", url: "https://b.example/" },
+    ]);
+    // Their slots are still held: a third has none, and looks nothing up.
+    expect(await preview("https://c.example/")).toEqual({
+      status: "none",
+      url: "https://c.example/",
+    });
+    expect(lookups).toEqual(["a.example", "b.example"]);
+    // The late answers start no request.
+    for (const answer of pending.splice(0)) answer();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(asked).toEqual([]);
+    // With the work settled, the slots are free again.
+    const next = preview("https://c.example/");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(lookups).toEqual(["a.example", "b.example", "c.example"]);
+    pending.splice(0).forEach((answer) => answer());
+    expect(await next).toMatchObject({ url: "https://c.example/" });
   });
 
   it("F-116: the private ranges", () => {

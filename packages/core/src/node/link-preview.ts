@@ -296,7 +296,10 @@ async function getPublic(
   let url = new URL(start);
   for (;;) {
     if (url.origin !== origin) return null;
+    // A preview past its deadline starts nothing more: not a lookup, and not a request after one.
+    signal.throwIfAborted();
     const target = await checkedTarget(url, lookup);
+    signal.throwIfAborted();
     if (!target) return null;
     const response = await get(target, accept, signal);
     const location = response.header("location");
@@ -364,12 +367,16 @@ export function createLinkPreviewer(
         resolve(none);
       }, options.timeoutMs ?? PREVIEW_TIMEOUT_MS);
     });
+    // The slot is the work's, not the caller's: it is held until the work itself settles, a
+    // lookup still running after the deadline included.
+    const work = preview(link, none, controller.signal).finally(() => {
+      outstanding -= 1;
+    });
     try {
-      return await Promise.race([preview(link, none, controller.signal), deadline]);
+      return await Promise.race([work, deadline]);
     } finally {
       clearTimeout(timer);
       controller.abort();
-      outstanding -= 1;
     }
   };
 
