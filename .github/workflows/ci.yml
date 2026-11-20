@@ -142,6 +142,37 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Unsigned: no signing variables are set.
+      - name: Compare Windows folder preparation on the runner
+        shell: bash
+        run: |
+          git fetch --depth=1 origin 65b69667ead8d6fe3152e316b22b325340beb5ba
+          node --input-type=module <<'JS'
+          import { execFileSync } from "node:child_process";
+          import { mkdtempSync, rmSync } from "node:fs";
+          import { tmpdir } from "node:os";
+          import { join } from "node:path";
+          import { stripTypeScriptTypes } from "node:module";
+          const file = "apps/desktop/src/main/private-update-directory.ts";
+          async function run(label, source) {
+            const dir = mkdtempSync(join(tmpdir(), "update-folder-comparison-"));
+            const js = stripTypeScriptTypes(source, { mode:"transform" });
+            const api = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
+            try {
+              await api.prepareUpdateDirectory(join(dir, "updates"), "offer");
+              console.log(label, "created and checked both directories");
+            } catch(e) {
+              console.log(label, JSON.stringify({code:e.code,signal:e.signal,killed:e.killed,stdout:e.stdout,stderr:e.stderr,message:e.message.split("\n")[0]}));
+            } finally { rmSync(dir,{recursive:true,force:true}); }
+          }
+          const prior=execFileSync("git",["show","65b69667:"+file],{encoding:"utf8"});
+          await run("previous launch",prior);
+          const traced = prior.replace(`"$ErrorActionPreference='Stop'",`, `"$ErrorActionPreference='Stop'", "[Console]::WriteLine('started script')",`)
+            .replace(`"$dir=[IO.Directory]::CreateDirectory($p,$acl)",`, `"[Console]::WriteLine('creating folder')", "$dir=[IO.Directory]::CreateDirectory($p,$acl)", "[Console]::WriteLine('reading ACL')",`);
+          await run("previous launch checkpoints",traced);
+          await run("previous environment with inherited cwd",prior.replace("cwd: system,",""));
+          await run("previous launch with inherited environment",prior.replace("...updatePowerShellEnvironment(root, process.env)","...process.env"));
+          await run("restored launch",execFileSync("git",["show","HEAD:"+file],{encoding:"utf8"}));
+          JS
       - run: pnpm test:desktop-updates
       - run: pnpm package:win
       # For inspection only: unsigned, and never a release.
@@ -244,6 +275,14 @@ jobs:
             throw "the uninstaller left $($left.Count) of the installer's paths behind"
           }
           "removed: $($owned -join '; ')"
+      - name: Verify the restart screens against this Windows host
+        run: |
+          $screens = '67e6e2e811ffbd61f0d7b00f403a7ab3073a3812'
+          git fetch --depth=1 origin $screens
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          git restore --source=$screens --worktree -- packages/ui/src apps/desktop/test/update/screen-test-host.ts e2e-updates/updates.spec.ts
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          pnpm test:desktop-updates
       # What a failed check saw: Playwright's error context for each failed test.
       - if: failure()
         uses: actions/upload-artifact@v7
