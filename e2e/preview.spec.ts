@@ -101,7 +101,9 @@ async function openTask(page: Page, bot: string, task: string) {
       await showAll.click();
     await rows.filter({ hasText: task }).first().click({ timeout: 20_000 });
   }
-  await expect(page.getByRole("heading", { level: 1, name: task })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: task })).toBeVisible({
+    timeout: 20_000,
+  });
   // The heading shows while the history is still being read, and a count taken then misses
   // the task's earlier turns. The read takes seconds on a loaded machine.
   await expect(page.getByLabel("Loading conversation")).toHaveCount(0, { timeout: 20_000 });
