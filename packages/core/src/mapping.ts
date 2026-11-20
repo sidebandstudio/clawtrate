@@ -60,6 +60,7 @@ export function mapAgents(result: unknown): Bot[] {
       avatarUrl: safeAvatarUrl(identity.avatarUrl),
       theme: str(identity.theme),
       model: str(model?.primary) ?? (typeof agent.model === "string" ? agent.model : null),
+      ...(str(agent.thinkingDefault) ? { effort: str(agent.thinkingDefault)! } : {}),
       isDefault: id === defaultId,
     });
   }
@@ -84,6 +85,9 @@ export function mergeSessionRow(base: RawRecord | undefined, patch: RawRecord): 
 /**
  * The row carried by a `sessions.changed` event. Newer gateways nest the full
  * row under `session`; the flat payload carries the same fields for older readers.
+ * A field cleared on the task is left out of the nested row and `null` in the flat
+ * payload (2026.10.6, a `thinkingLevel` taken away): the `null` is kept, so the
+ * cleared field is cleared here too.
  */
 export function sessionChangeRow(payload: unknown): RawRecord | null {
   const record = asRecord(payload);
@@ -91,6 +95,11 @@ export function sessionChangeRow(payload: unknown): RawRecord | null {
   const nested = asRecord(record.session);
   const row = nested ? { ...nested } : { ...record };
   delete row.session;
+  if (nested) {
+    for (const [field, value] of Object.entries(record)) {
+      if (value === null && !(field in nested)) row[field] = null;
+    }
+  }
   // Normalize to `key`, the field `sessions.list` rows use.
   const key = str(row.key) ?? str(row.sessionKey) ?? str(record.sessionKey) ?? str(record.key);
   if (key) row.key = key;
@@ -194,6 +203,14 @@ export function mapSessionRow(row: RawRecord): Task | null {
     ...(row.markedUnreadAt !== undefined ? { unreadMarker: num(row.markedUnreadAt) } : {}),
     ...contextOf(row),
     ...(str(row.thinkingLevel) ? { effort: str(row.thinkingLevel)! } : {}),
+    ...(str(row.thinkingDefault) ? { effortDefault: str(row.thinkingDefault)! } : {}),
+    ...(str(row.model)
+      ? {
+          model: str(row.modelProvider)
+            ? `${str(row.modelProvider)}/${str(row.model)}`
+            : str(row.model)!,
+        }
+      : {}),
   };
 }
 

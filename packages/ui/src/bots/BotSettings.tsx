@@ -8,6 +8,7 @@ import {
   accountWord,
   lockCommand,
   retainedOrder,
+  UNCONFIRMED_BOT_WRITE,
   unlockCommand,
   type AccountsState,
   type Bot,
@@ -17,6 +18,24 @@ import {
   type Transcript,
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+
+/** A save the gateway took whose read back doesn't show it (section 9). */
+const UNSHOWN =
+  "The gateway took the change, and its settings read back don't show it yet. Shown is what was last read.";
+
+/**
+ * The words for a save that came back unconfirmed: the engine's own when the
+ * read after the write failed, else that the read back doesn't show it.
+ */
+function unconfirmedWords(accounts: AccountsState, botId: string, what: "model" | "account") {
+  const write = accounts.write;
+  return write?.what === what &&
+    write.target === botId &&
+    write.status === "unverified" &&
+    write.error === UNCONFIRMED_BOT_WRITE
+    ? UNCONFIRMED_BOT_WRITE
+    : UNSHOWN;
+}
 import { useBridge } from "../bridge.tsx";
 import {
   BackIcon,
@@ -94,6 +113,8 @@ export function BotSettings({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [effortNote, setEffortNote] = useState<string | null>(null);
+  // A change of the bot's model or effort on its way: the pair waits for its answer.
+  const [savingModel, setSavingModel] = useState(false);
   // The page's clock: evidence ages while the page stays open, and with every change of the connection.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -129,6 +150,17 @@ export function BotSettings({
     if (shown && (accounts.status === "idle" || unread))
       void bridge.send({ type: "refreshAccounts" }).catch(() => {});
   }, [shown, accounts.status, unread, bot.id, bridge]);
+
+  // The models listed for the bot's latest task, which the gateway projects through the account
+  // that task's conversation selected (section 9): read when the tab is shown for a bot.
+  const latestTask = tasks.reduce<Task | null>(
+    (latest, task) => ((task.updatedAt ?? 0) > (latest?.updatedAt ?? -1) ? task : latest),
+    null,
+  );
+  useEffect(() => {
+    if (shown && connection.status === "connected")
+      void bridge.send({ type: "readBotCatalog", botId: bot.id }).catch(() => {});
+  }, [shown, connection.status, bot.id, latestTask?.key, bridge]);
 
   // Another bot: back to the tab's first page.
   const [forBot, setForBot] = useState(bot.id);
@@ -327,20 +359,45 @@ export function BotSettings({
           : "";
     const wordText = bindingWord(binding, age);
     const model = binding.model ?? defaultRef(accounts)?.model ?? null;
-    const saveModel = async (nextModel: string, nextEffort: string | null) => {
+    // The latest task's catalogue, when that task's conversation carries the bot's own account.
+    const taskCatalog =
+      binding.mode === "account" &&
+      accounts.botCatalog?.botId === bot.id &&
+      accounts.botCatalog.account !== null &&
+      accounts.botCatalog.account === binding.account
+        ? accounts.botCatalog.models
+        : null;
+    const listed = taskCatalog ? { ...accounts, models: taskCatalog } : accounts;
+    const saveModel = async (nextModel: string, nextEffort: string | null, note?: string) => {
       setError(null);
+      setSavingModel(true);
       try {
-        await bridge.invoke({
+        const outcome = await bridge.invoke({
           type: "setBotModel",
           botId: bot.id,
           model: nextModel,
           effort: nextEffort,
         });
-        announce(nextModel !== model ? "Model saved" : "Effort saved");
+        // Saved only once the bot, read back, shows it; otherwise the page keeps what it last read.
+        if (outcome === "saved") {
+          announce(nextModel !== model ? "Model saved" : "Effort saved");
+          // The effort that followed the model is named only once the read back shows it.
+          if (note) {
+            setEffortNote(note);
+            setTimeout(() => setEffortNote(null), 4000);
+          }
+        } else {
+          setError(UNSHOWN);
+          announce("Couldn't confirm the change");
+        }
       } catch (failure) {
         setError(
           `Couldn't save the model: ${failure instanceof Error ? failure.message : String(failure)}`,
         );
+        // The select keeps what the gateway has; a save that crossed another change shows it.
+        void bridge.send({ type: "refreshAccounts" }).catch(() => {});
+      } finally {
+        setSavingModel(false);
       }
     };
     return (
@@ -380,36 +437,72 @@ export function BotSettings({
           <>
             <div style={{ marginTop: 8 }}>
               <ModelPair
-                accounts={accounts}
+                accounts={listed}
                 provider={provider}
                 model={model}
-                effort={binding.effort ?? firstEffort(accounts, provider, model)}
-                disabled={!admin}
+                effort={binding.effort ?? bot.effort ?? null}
+                disabled={!admin || connection.status !== "connected" || savingModel}
+                busy={savingModel}
                 onModel={(next) => {
                   const levels =
-                    modelsOf(accounts, provider).find((m) => m.id === next)?.levels ?? [];
+                    modelsOf(listed, provider).find((m) => m.id === next)?.levels ?? [];
                   const was = binding.effort;
-                  const effort = firstEffort(accounts, provider, next, was);
-                  if (was && levels.length > 0 && !levels.includes(was) && effort) {
-                    setEffortNote(
-                      `Effort is now ${levelWord(effort)}: ${next} doesn't offer ${levelWord(was)}.`,
-                    );
-                    setTimeout(() => setEffortNote(null), 4000);
-                  }
-                  void saveModel(next, effort);
+                  const effort = firstEffort(listed, provider, next, was);
+                  void saveModel(
+                    next,
+                    effort,
+                    was && levels.length > 0 && !levels.includes(was) && effort
+                      ? `Effort is now ${levelWord(effort)}: ${next} doesn't offer ${levelWord(was)}.`
+                      : undefined,
+                  );
                 }}
                 onEffort={(effort) => void saveModel(model, effort)}
               />
             </div>
             <p className="b-hint" id="b-model-line">
-              {error ??
+              {(error === UNSHOWN ? unconfirmedWords(accounts, bot.id, "model") : error) ??
                 effortNote ??
-                `${who}'s models, as the gateway lists them. Which ones ${binding.mode === "account" ? "this account" : "an account"} may use is ${who}'s decision.`}
+                (taskCatalog
+                  ? `The models ${label} offers, as the gateway lists them for ${name}'s latest task.`
+                  : `${who}'s models, as the gateway lists them. Which ones ${binding.mode === "account" ? "this account" : "an account"} may use is ${who}'s decision.`)}
             </p>
           </>
         )}
         {binding.mode === "default-model" && (
-          <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
+          <>
+            {provider && model && (
+              <div style={{ marginTop: 8 }}>
+                {/* The gateway's default model, read-only: the bot has none of its own to change. */}
+                <ModelPair
+                  accounts={accounts}
+                  provider={provider}
+                  model={model}
+                  effort={bot.effort ?? null}
+                  disabled
+                  onModel={() => {}}
+                  onEffort={() => {}}
+                />
+              </div>
+            )}
+            <p className="b-hint" data-testid="default-model-line">
+              The gateway's default model. Choose an account to pick another.
+              {admin && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="button"
+                    data-variant="quiet"
+                    data-size="sm"
+                    data-bs="choose"
+                    onClick={() => go("change")}
+                  >
+                    Choose an account
+                  </button>
+                </>
+              )}
+            </p>
+          </>
         )}
         <MemoryRow onOpen={() => go("memory")} />
         {extraGroups}
@@ -501,7 +594,7 @@ export function BotSettings({
       setSaving(true);
       setError(null);
       try {
-        await bridge.invoke({
+        const outcome = await bridge.invoke({
           type: "changeBotAccount",
           botId: bot.id,
           account: toGateway ? null : chosen,
@@ -509,6 +602,12 @@ export function BotSettings({
           model,
           effort,
         });
+        if (outcome !== "saved") {
+          // The gateway took it and the read after it doesn't show it: nothing is claimed.
+          setError(UNSHOWN);
+          announce("Couldn't confirm the change");
+          return;
+        }
         announce(
           toGateway
             ? `${name} now has no fixed account`
@@ -615,7 +714,7 @@ export function BotSettings({
         )}
         {error && (
           <p className="b-field-error" role="alert">
-            {error}
+            {error === UNSHOWN ? unconfirmedWords(accounts, bot.id, "account") : error}
           </p>
         )}
         <div className="b-actions" style={{ marginTop: 16 }}>

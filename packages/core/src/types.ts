@@ -1,6 +1,7 @@
 // View models the interface renders. Gateway payloads are mapped into these in
 // mapping.ts and runs.ts; nothing outside core needs to know the wire shapes.
 
+import type { TaskModelView } from "./task-models.ts";
 import { initialAccountsState, type AccountsState } from "./accounts.ts";
 import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
@@ -129,6 +130,11 @@ export type Bot = {
   avatarUrl: string | null;
   theme: string | null;
   model: string | null;
+  /**
+   * The effort the gateway reports the bot uses (`thinkingDefault` in
+   * `agents.list`), when it reports one.
+   */
+  effort?: string;
   isDefault: boolean;
   /** Paths of fields cut to their bound (an avatar too large to keep is dropped). */
   cut?: string[];
@@ -186,6 +192,16 @@ export type Task = {
    * row), as the gateway names it. Absent when the task records none.
    */
   effort?: string;
+  /**
+   * The level the gateway uses when the task asks for none (`thinkingDefault`
+   * on its row), for its present model.
+   */
+  effortDefault?: string;
+  /**
+   * The model the task uses, as its row names it: `<provider>/<model>`
+   * (`modelProvider` and `model`). Absent when the row names none.
+   */
+  model?: string;
   /** Paths of fields cut to their bound. */
   cut?: string[];
 };
@@ -362,6 +378,12 @@ export type ClawtrateState = {
    */
   accounts: AccountsState;
   /**
+   * Each followed task's model and effort as this app handles them
+   * (`task-models.ts`): the models the gateway lists for it, a change held or
+   * on its way, its last refusal and the lines its changes left.
+   */
+  taskModels: Record<string, TaskModelView>;
+  /**
    * The gateway's scheduled jobs, check-in jobs left out (`routines.ts`): read
    * on every connect from `cron.list` and kept current by the `cron` event.
    */
@@ -474,6 +496,7 @@ export const initialState: ClawtrateState = {
   unroutedApprovalsOmitted: 0,
   creations: [],
   accounts: initialAccountsState,
+  taskModels: {},
   routines: initialRoutinesState,
   retention: { estimated: 0, bound: 0, near: false },
   sidebar: { status: "unknown", prefs: null },

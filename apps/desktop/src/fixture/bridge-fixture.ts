@@ -54,12 +54,14 @@ import {
   fixtureAccounts,
   NO_ACCOUNT_PARAMS,
   withAccess,
+  withBotEffort,
   type AccountParams,
 } from "./accounts.ts";
 import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machines.ts";
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { isModelScene, MODEL_SCENES, modelCommand, modelScene } from "./models.ts";
 import { memoryCommands } from "./memory.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 
@@ -108,6 +110,7 @@ export const SCENES = [
   ...LIVE_SCENES,
   ...RAIL_SCENES,
   ...ACTION_SCENES,
+  ...MODEL_SCENES,
 ] as const;
 
 export type SceneName = (typeof SCENES)[number] | CardSceneName;
@@ -146,6 +149,7 @@ function loaded(now: number): ClawtrateState {
     unroutedApprovalsOmitted: 0,
     creations: [],
     accounts: initialState.accounts,
+    taskModels: {},
     routines: initialState.routines,
     retention: initialState.retention,
   };
@@ -251,6 +255,7 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
   const base = loaded(now);
   if (isCardScene(name)) return { initial: cardScene(name, now).change(base), steps: [] };
   if (isRailScene(name)) return { initial: railScene(name, base, now), steps: [] };
+  if (isModelScene(name)) return { initial: modelScene(name, base, now), steps: [] };
   switch (name) {
     case "main":
       return { initial: base, steps: [] };
@@ -512,12 +517,15 @@ export function createFixtureBridge(
       : { ...initial, transcripts: withFileRuns(initial.transcripts, now, fileParams) };
   // Every scene with bots has the gateway's accounts; the address can give it more access.
   if (state.bots.length > 0)
-    state = withAccess(
-      {
-        ...state,
-        accounts: fixtureAccounts(now, accountParams),
-        routines: fixtureRoutines(now, routineParams),
-      },
+    state = withBotEffort(
+      withAccess(
+        {
+          ...state,
+          accounts: fixtureAccounts(now, accountParams),
+          routines: fixtureRoutines(now, routineParams),
+        },
+        accountParams,
+      ),
       accountParams,
     );
   // And the usage the gateway reports, with this person's budgets.
@@ -600,6 +608,16 @@ export function createFixtureBridge(
     if (rail) {
       sent.push(command);
       return rail;
+    }
+    const model = modelCommand(
+      command,
+      () => state,
+      (next) => set(next),
+      () => Date.now(),
+    );
+    if (model) {
+      sent.push(command);
+      return model;
     }
     const live = liveCommand(
       command,

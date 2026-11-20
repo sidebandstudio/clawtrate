@@ -47,6 +47,7 @@ import {
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
 import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
+import { MAX_LOGGED_TASKS, MAX_TASK_MODEL_EVENTS } from "./task-models.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   MAX_WAITING_ID_CHARS,
@@ -72,6 +73,7 @@ import {
   MAX_TRACKED_TASKS,
   MAX_UNROUTED,
   RUN,
+  TASK_MODEL_EVENT,
   WORST_ROW_CHARS,
 } from "./state-bounds.ts";
 
@@ -256,6 +258,21 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // What the person typed into the one sign-in under way, in the forms it may come back in, while
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },
+  // A task's model and effort (`task-models.ts`): the save on its way for each followed task, which
+  // a message to that task waits for. Its view and lines are the state's `taskModels`.
+  "taskModels.saves": { max: T, each: ID, row: "bookkeeping" },
+  // Reads of this device's record still to make: one per followed task (letting a task go removes
+  // its read), only for the present gateway, each its gateway's key, the task's and its opening.
+  "taskModels.storeLoads": { max: T, each: 3 * ID + N, row: "bookkeeping" },
+  // Writes still to make, each with the lines it was asked with: the `MAX_LOGGED_TASKS` most
+  // recently changed pairs of gateway and task, each its two keys and up to 16 lines.
+  "taskModels.storeWrites": {
+    max: MAX_LOGGED_TASKS,
+    each: 3 * ID + MAX_TASK_MODEL_EVENTS * worstCase(TASK_MODEL_EVENT),
+    row: "bookkeeping",
+  },
+  // Which opening of each followed task the jobs belong to.
+  "taskModels.openings": { max: T, each: ID + N, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.
   "fileTransfers.held": {
@@ -277,6 +294,7 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "store.value": "the state, bounded by its schema (`state-bounds.ts`) and counted in `state`",
   "accounts.ctx": "the client's own functions, handed to the accounts engine",
   "accounts.signInAbort": "a handle that ends the one sign-in request that waits",
+  "taskModels.ctx": "the client's own functions, handed to the task models engine",
   "routines.ctx": "the client's own functions, handed to the routines engine",
   "usage.ctx": "the client's own functions, handed to the usage engine",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
@@ -290,6 +308,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   store: "ObservableStore",
   fileTransfers: "FileTransfers",
   accounts: "AccountsEngine",
+  taskModels: "TaskModelsEngine",
   routines: "RoutinesEngine",
   usage: "UsageEngine",
   machines: "MachinesEngine",

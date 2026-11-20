@@ -180,6 +180,8 @@ export type BridgeCommand =
   // Provider accounts (bots.md sections 3 to 11). Writes need admin.
   /** Read the accounts, sign-ins, bindings and catalogue again. */
   | { type: "refreshAccounts" }
+  /** The models the gateway lists for a bot's latest task (bots.md section 9). */
+  | { type: "readBotCatalog"; botId: string }
   /** Read one bot's stored order again: the lock's evidence. */
   | { type: "checkLock"; botId: string }
   /** Start one of the gateway's sign-ins, for the bot the person works on (or null). */
@@ -217,6 +219,15 @@ export type BridgeCommand =
       effort: string | null;
     }
   | { type: "setBotModel"; botId: string; model: string; effort: string | null }
+  /**
+   * A task's model (`<provider>/<model>`), effort or both, for that task alone
+   * (conversation.md section 25); `operator.write`. Answers `saved`, `held` or `unchanged`.
+   */
+  | { type: "setTaskModel"; key: string; model: string | null; effort: string | null }
+  /** Let go of a held change of a task's model or effort. */
+  | { type: "keepTaskModel"; key: string }
+  /** Read the models the gateway lists for a task again. */
+  | { type: "readTaskModels"; key: string }
   | { type: "removeBotFallbacks"; botId: string }
   /**
    * The rail's task actions (`task-actions.ts`). They act on any task the rail
@@ -359,7 +370,20 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                                                           type: "readMemory";
                                                                         }
                                                                       ? MemoryDocument
-                                                                      : void;
+                                                                      : C extends {
+                                                                            type:
+                                                                              | "setBotModel"
+                                                                              | "changeBotAccount";
+                                                                          }
+                                                                        ? "saved" | "unverified"
+                                                                        : C extends {
+                                                                              type: "setTaskModel";
+                                                                            }
+                                                                          ? | "saved"
+                                                                            | "held"
+                                                                            | "unchanged"
+                                                                            | "unconfirmed"
+                                                                          : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";
@@ -771,6 +795,21 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             ? null
             : id(command.effort, "effort"),
       };
+    case "readBotCatalog":
+      return { type: "readBotCatalog", botId: botId(command.botId) };
+    case "setTaskModel": {
+      const model =
+        command.model === null || command.model === undefined ? null : id(command.model, "model");
+      const effort =
+        command.effort === null || command.effort === undefined
+          ? null
+          : id(command.effort, "effort");
+      if (model === null && effort === null) throw new Error("invalid change: nothing chosen");
+      return { type: "setTaskModel", key: sessionKey(command.key), model, effort };
+    }
+    case "keepTaskModel":
+    case "readTaskModels":
+      return { type: command.type, key: sessionKey(command.key) };
     case "connectDevGateway":
     case "disconnect":
     case "suspend":
@@ -1270,6 +1309,8 @@ class ViewerSession implements BridgeSession {
         );
       case "refreshAccounts":
         return client.refreshAccounts();
+      case "readBotCatalog":
+        return client.readBotCatalog(command.botId);
       case "checkLock":
         return client.checkLock(command.botId);
       case "startSignIn":
@@ -1313,6 +1354,12 @@ class ViewerSession implements BridgeSession {
         );
       case "setBotModel":
         return client.setBotModel(command.botId, command.model, command.effort);
+      case "setTaskModel":
+        return client.setTaskModel(this.mine(command.key), command.model, command.effort);
+      case "keepTaskModel":
+        return client.keepTaskModel(this.mine(command.key));
+      case "readTaskModels":
+        return client.readTaskModels(this.mine(command.key));
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId);
       case "sendMessage": {

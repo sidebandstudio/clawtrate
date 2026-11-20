@@ -35,6 +35,7 @@ import { ArrowDownIcon, BackIcon, PanelIcon } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
+import { ModelChip, TaskModelLine } from "./TaskModel.tsx";
 
 /**
  * One transcript item. Your message is a bubble; the bot's item is its
@@ -329,6 +330,11 @@ function TranscriptView({
   const rows: ReactNode[] = [];
   let previous: number | null = null;
   const endingsBefore = live.endingsBefore;
+  // A change of the task's model or effort, where it was saved: before the first message after it.
+  // Only the present conversation's: a task started afresh under the same key keeps none of them.
+  const modelLines = (useClawtrateState().taskModels[task.key]?.events ?? []).filter(
+    (event) => event.sessionId === null || event.sessionId === task.sessionId,
+  );
   for (const item of transcript.items) {
     const at = item.timestamp;
     if (
@@ -347,6 +353,10 @@ function TranscriptView({
       const before = endingsBefore.get(item.id);
       if (before) rows.push(...before);
     }
+    while (modelLines.length > 0 && at !== null && modelLines[0]!.after < at) {
+      const event = modelLines.shift()!;
+      rows.push(<TaskModelLine key={`model-${event.id}`} event={event} />);
+    }
     rows.push(
       <CardSlot key={item.id} item={item}>
         {item.role === "system" ? (
@@ -361,6 +371,8 @@ function TranscriptView({
   }
   const trailing = endingsBefore.get(null);
   if (trailing) rows.push(...trailing);
+  for (const event of modelLines)
+    rows.push(<TaskModelLine key={`model-${event.id}`} event={event} />);
 
   return (
     <div className="transcript-wrap">
@@ -381,7 +393,6 @@ function TranscriptView({
               engineRuns={live.engineRuns}
               lost={!liveOptions.connected}
               readOnly={!liveOptions.interactive}
-              effort={task.effort ?? null}
               ctx={reading}
             >
               <MessageProvider env={messageEnv}>
@@ -1069,6 +1080,15 @@ export function Conversation({
           >
             <BackIcon />
           </button>
+          {task?.model && bot && (
+            <ModelChip
+              task={task}
+              bot={bot}
+              interactive={interactive}
+              connected={online}
+              onAnnounce={onAnnounce}
+            />
+          )}
         </div>
         {finding && canFind ? (
           <FindBar scope={sectionRef} onClose={closeFind} />

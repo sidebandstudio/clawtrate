@@ -758,7 +758,10 @@ test("the drawer is modal, and focus follows it across the docking width", async
   await expect(page.locator(".rail")).toHaveAttribute("inert", "");
   // Tab from the pane's last control returns to its first.
   const close = page.getByRole("button", { name: "Close work panel" }).last();
-  await page.getByRole("tabpanel").focus();
+  // The pane's last control: the task's effort, enabled once the task's models are read.
+  const effort = page.getByTestId("task-effort-select");
+  await expect(effort).toBeEnabled();
+  await effort.focus();
   await page.keyboard.press("Tab");
   await expect(close).toBeFocused();
   await page.keyboard.press("Escape");

@@ -17,6 +17,7 @@ import {
   type AccountsState,
   type AccountWrite,
   type BotBinding,
+  type BotCatalog,
   type BotCreationState,
   type CatalogModel,
   type GatewayAccount,
@@ -29,6 +30,15 @@ import {
   type SignInStep,
   type StoredOrder,
 } from "./accounts.ts";
+import {
+  MAX_TASK_MODEL_ERROR_CHARS,
+  MAX_TASK_MODEL_EVENTS,
+  MAX_TASK_MODEL_ID_CHARS,
+  MAX_TASK_MODELS,
+  type TaskModelChoice,
+  type TaskModelEvent,
+  type TaskModelView,
+} from "./task-models.ts";
 import {
   MAX_ROUTINE_TEXT_CHARS,
   MAX_ROUTINES,
@@ -664,6 +674,7 @@ const bot = flagged<Bot>()({
   avatarUrl: json(MAX_AVATAR_CHARS),
   theme: NAME,
   model: NAME,
+  effort: ENUM,
   isDefault: FLAG,
 });
 const task = flagged<Task>()({
@@ -682,6 +693,8 @@ const task = flagged<Task>()({
   unreadMarker: NUMBER,
   context: object<TaskContext>()({ used: NUMBER, window: NUMBER, fresh: FLAG }),
   effort: NAME,
+  effortDefault: NAME,
+  model: NAME,
 });
 /** The rail's arrangement as the gateway keeps it (`sidebar.ts`). */
 const sidebarId = id(MAX_SIDEBAR_ID_CHARS);
@@ -820,11 +833,15 @@ const SESSION_ROW_FIELDS = [
   "lastMessagePreview",
   "lastRunError",
   "markedUnreadAt",
+  "model",
+  "modelProvider",
   "pinned",
   "sessionId",
   "sessionKey",
   "spawnedBy",
   "status",
+  "thinkingDefault",
+  "thinkingLevel",
   "totalTokens",
   "totalTokensFresh",
   "unread",
@@ -888,6 +905,7 @@ const catalogModel = object<CatalogModel>()({
   name: NAME,
   available: FLAG,
   levels: list(MAX_EFFORT_LEVELS, ENUM),
+  levelsReported: FLAG,
   defaultLevel: ENUM,
 });
 const storedOrder = object<StoredOrder>()({
@@ -982,12 +1000,52 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   methods: list(MAX_SIGNIN_METHODS, signInMethod),
   keyProviders: list(MAX_KEY_PROVIDERS, keyProvider),
   models: list(MAX_CATALOG_MODELS, catalogModel),
+  botCatalog: object<BotCatalog>()({
+    botId: ID,
+    sessionKey: ID,
+    account: ID,
+    models: list(MAX_CATALOG_MODELS, catalogModel),
+  }),
   bindings: list(MAX_BOTS, binding),
   signIn,
   creation: botCreation,
   write: accountWrite,
 });
 
+// A task's model and effort (task-models.ts).
+const taskModelId = id(MAX_TASK_MODEL_ID_CHARS);
+/** One line a change of a task's model or effort left, as kept and as written to the device. */
+export const TASK_MODEL_EVENT: Bound = object<TaskModelEvent>()({
+  id: taskModelId,
+  outcome: ENUM,
+  at: NUMBER,
+  after: NUMBER,
+  model: taskModelId,
+  effort: taskModelId,
+  wasModel: taskModelId,
+  wasEffort: taskModelId,
+  followed: FLAG,
+  error: text(MAX_TASK_MODEL_ERROR_CHARS),
+  sessionId: ID,
+});
+export const TASK_MODEL: Bound = object<TaskModelView>()({
+  catalog: ENUM,
+  catalogError: text(MAX_TASK_MODEL_ERROR_CHARS),
+  models: list(MAX_TASK_MODELS, catalogModel),
+  held: object<NonNullable<TaskModelView["held"]>>()({
+    model: taskModelId,
+    effort: taskModelId,
+    at: NUMBER,
+    sessionId: ID,
+  }),
+  saving: FLAG,
+  pending: object<TaskModelChoice>()({ model: taskModelId, effort: taskModelId }),
+  refused: object<NonNullable<TaskModelView["refused"]>>()({
+    error: text(MAX_TASK_MODEL_ERROR_CHARS),
+    at: NUMBER,
+  }),
+  events: list(MAX_TASK_MODEL_EVENTS, TASK_MODEL_EVENT),
+});
 // Routines (routines.ts): the list only; runs and their conversations are never kept.
 const routineSchedule = object<RoutineSchedule>()({
   kind: ENUM,
@@ -1044,6 +1102,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   unroutedApprovalsOmitted: NUMBER,
   creations: list(MAX_CREATIONS, CREATION),
   accounts: ACCOUNTS,
+  taskModels: map(MAX_TRACKED_TASKS, MAX_ID_CHARS, TASK_MODEL),
   routines: ROUTINES,
   retention: retentionAlarm,
   sidebar,

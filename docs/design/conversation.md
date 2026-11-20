@@ -36,6 +36,7 @@ The prototype shows all of it: `prototype/gallery.html` has every component in e
 22. Building on the shell as built
 23. Where this goes beyond the proposals, and the parity rows to reword
 24. Not covered here
+25. A task's model and effort
 
 ## 1. How the pieces fit
 
@@ -453,7 +454,7 @@ When a run with at least one action ends, one quiet line follows everything the 
 
 - It counts actions, not cards: a fold of six counts six, and a Messaged card counts one. An approval that belongs to no tool call is not an action.
 - Durations read `48s`, `1m 12s`, `1h 04m`, from the run's start and end as the gateway reported them. A duration the gateway did not report is left out ("14 actions"), never shown as zero.
-- **Opened** (level 1), it shows the run's record on one line of 12 px text: the model, the effort requested for the task or turn ("low effort requested"; the gateway does not dependably report the effort a turn used, so the line never says "used"), "effort not reported" when there is none, and the run id with a copy button named "Copy run id". The model and effort are also the line's tooltip.
+- **Opened** (level 1), it shows the run's id on one line of 12 px text, with a copy button named "Copy run id". It states no model and no effort for the turn: section 25.5 says why.
 - A run with no action has no line. A run whose only steps were reasoning has its "Thought for 8s" line over the reply instead (7.5), and nothing more.
 - While the run is active there is no run line: the status line carries the phrase and the elapsed time (section 5). A run that was mid-way when the connection dropped gets its line when the gateway reports its end.
 - It is a `summary` whose name is its text.
@@ -1517,7 +1518,122 @@ F-488 is met as written; its check names the labels this list gives. Not every c
 - The Permissions page, where standing grants are listed and revoked, a host's allowlist is shown to an admin, and the audit log and limits live. (F-178, F-324)
 - Clawtrate's rules plugin and its rule form: rules the user shapes by hand, with a scope and a lifetime of their choosing, deny and ask rules for a bot, and saving a rule after a request expired. Sections 12 and 23 mark what depends on it.
 - Question records that are forms, carry a resource or a link, or ask for a secret. Section 13 shows them readable and not answerable until they have a design.
-- Changing the model or the effort. Both belong to the task and the turn; a bot's own default needs the admin tier.
+- Changing the model or the effort is section 25: the task's own in the conversation, the bot's in its settings (`bots.md` section 9).
 - The Work pane's Coding section, beyond the card form its rows use. (F-136)
 - A conversation shared by several bots.
 - The gateway's record of tool actions, which Raw links to.
+
+## 25. A task's model and effort
+
+A person chooses which model a task uses and how hard it thinks, for that task alone, from the conversation; sees on every turn which model ran and which effort was asked for; and sees a line in the conversation when either changes. A bot's own model and effort, which every new task starts from, are in its settings (`bots.md` section 9) and need the admin tier; a task's need only the interactive tier. (F-042, F-043, F-044, F-045)
+
+The gateway's facts this rests on, observed on the development gateway (OpenClaw 2026.10.6):
+
+- A task's model and effort are `sessions.patch {key, model, thinkingLevel}`, `operator.write` while the patch holds only fields of the write set (`model`, `thinkingLevel`, and the guard `expectedSessionId`). The session row then reads `modelProvider`, `model` and `thinkingLevel`; a row with no effort of its own carries `thinkingDefault`, the level the gateway would use.
+- `models.list {sessionKey}` (`operator.read`) lists the models for the task, each with its `thinkingLevels` and `thinkingDefault`, and `accountSelection`, which names the account the task's conversation selected, if it selected one.
+- A model change made during a run marks a pending live switch (`liveModelSwitchPending`): the running turn may adopt it, otherwise the next turn starts from it. When an effort change applies is not documented. Nothing in the task's history records either change.
+- A model written as `<provider>/<model>@<account>` keeps the task on that account (`authProfileOverride`); written without it, a model other than the bot's own is served by an account the gateway chooses (`bots.md` section 20, row 2).
+- A level the model does not offer is refused with the gateway's message (`thinkingLevel "high" is not supported for acme/dev-lite (use off|ultra)`). A patch naming a session that no longer exists makes a new one, unless it carries `expectedSessionId`, which makes the gateway refuse it ("Session … changed before patch. Retry.").
+- A turn's model is reported twice: `lifecycle` `phase:"model"` `{provider, model}` while it runs, and the history row's `provider` and `model` after it. No public field reports the effort a turn used (F-044); the app knows only what the task asked for when it sent the message that started the turn. A `chat.send` that carries its own `thinking` and is stopped at once stays listed by the gateway as a cancelled pending input, so the app does not add one.
+
+### 25.1 Where it is
+
+| Width                                  | Where                                                                                                                                                                                                    |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 688 px and wider (1440, 1100, 800)     | **The model chip** at the top left of the conversation's header band, in the side that holds Back only in the one-pane layout. It is the header's first control in reading order, before the title pill. |
+| Below 688 px (390, and the iPhone app) | No chip: the header's left side is Back. The task's **Details** tab in the Work pane has a **Model** group, and that is where it is changed.                                                             |
+| Every width                            | The Details tab's Model group, so the task's model is always beside its other facts.                                                                                                                     |
+
+**The chip.** A pill like the title pill: 36 px tall, radius `--radius-pill`, `--bg-raised` with `--shadow-raised`, padding 0 10 px 0 12 px, 13 px text. It reads the model's id (`--text`), a middle dot (`--text-faint`), the effort's word (`--text-muted`), and a 12 px chevron. Its width is at most its side of the header band; the model's id truncates first, with an ellipsis, and the effort's word never shortens. Its tooltip and its accessible name are complete: "Model for this task: acme/dev-2, High effort. Change." It is a button with `aria-haspopup="menu"`.
+
+**The menu** is the shell's `.menu`, opening under the chip, aligned to its left edge, 280 px wide, at most the screen less 24 px:
+
+```
+MODEL                                    group word, 12, faint
+  dev-1                          ✓       menuitemradio, the model's id; the provider's other models
+  dev-2
+  dev-lite
+  dev-old          Not available         disabled, as bots.md section 9
+───────────────
+EFFORT
+  Off · Minimal · Low ✓ · Medium · High · Ultra     one menuitemradio each, the levels of the model checked above
+───────────────
+For this task. Otto's own model is in its settings.          13, faint, not focusable
+```
+
+The models are those `models.list {sessionKey}` gives for this task, from the provider of the task's model, as `bots.md` section 9 lists a bot's. The levels are the checked model's `thinkingLevels`, words as section 9 gives them; a model with none shows "Not offered" in place of the group, disabled. Choosing a model or a level saves it (or holds it, 25.3), closes the menu and returns focus to the chip. When a model is chosen, the effort follows it as in section 9 of `bots.md`: kept when the new model offers it, otherwise the new model's default; the event line says so (25.4).
+
+**Keyboard.** Enter, Space or Down on the chip opens the menu with focus on the checked model. Up and Down move through both groups, skipping disabled items; Home and End go to the ends; Enter or Space chooses; Escape closes the menu alone and returns focus to the chip; Tab closes it and moves on. The menu is a `menu` named "Model and effort for this task"; each group is a `group` named by its word.
+
+**The Details group** (every width): the group word "Model", then section 9's two selects, Model and Effort, side by side, stacking on the phone with Model first, the same choices as the menu, and under them one line (13, faint), the same line the chip's state gives below, or "For this task. Otto's own model is in Settings." The selects follow `bots.md` section 9's keyboard rules.
+
+### 25.2 States
+
+| State                    | The chip                                                                                                              | The Details line                                                                                                    | Announced                                                     |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Set                      | "dev-2 · High"                                                                                                        | "For this task. Otto's own model is in Settings."                                                                   |                                                               |
+| The task's default       | The model the row reports and the default level the row reports, as above                                             | the same                                                                                                            |                                                               |
+| Saving                   | The new values, `aria-busy`, disabled until the answer: one change at a time                                          | "Saving…", both selects disabled                                                                                    |                                                               |
+| Saved                    | The new values                                                                                                        | the first line again; the event line is in the transcript (25.4)                                                    | "Model changed for this task", "Effort changed for this task" |
+| Held (a turn is running) | The new values, with the 12 px clock before the id; tooltip and name add "Held until this turn ends"                  | "Held until Otto's turn ends. Clawtrate will then try to save it." with "Keep dev-1" (quiet, small)                 | "Held until this turn ends"                                   |
+| Refused                  | Back to what the gateway has                                                                                          | "Couldn't change the model: <the gateway's reason>." in `--danger`, until the next change; and an event line (25.4) | "Couldn't change the model"                                   |
+| Loading the list         | The task's values from its row; the menu shows "Loading models…", `aria-busy`, and no items                           | "Loading the models…"; Effort shows the row's level, disabled                                                       |                                                               |
+| The list failed          | The task's values; the menu shows "Couldn't load the models." with "Try again"                                        | "Couldn't load the models: <the reason>." with "Try again"; Effort shows the row's level, disabled                  |                                                               |
+| Not in the list          | The task's values; the menu's Effort group is replaced by "Effort: acme/dev-gone isn't in the gateway's list…"        | "acme/dev-gone isn't in the gateway's list of models, so its effort levels aren't known."; Effort as above          |                                                               |
+| Listed with no levels    | The model and "Not offered"                                                                                           | the first line; Effort "Not offered", disabled                                                                      |                                                               |
+| Not reported             | No chip: the row names no model, so there is nothing to show or to change from                                        | The Model group is absent; the Details keep the bot's model as a fact row                                           |                                                               |
+| Read-only                | The values in the same pill with no chevron; not a control (`role="note"`, the same accessible name without "Change") | Plain fact rows, Model and Effort, no selects                                                                       |                                                               |
+| Offline                  | The values; the chip is disabled while the connection is down                                                         | the first line; selects disabled                                                                                    |                                                               |
+
+"Not offered" is said only when the gateway lists the model with an empty set of levels. A list not yet read, a failed read and a model the list does not contain each say so, and the effort the row last reported stays shown; a row that reports none reads "Not reported".
+
+Words: an effort is "Off", "Minimal", "Low", "Medium", "High", "Ultra" or the gateway's own label capitalised; a model is its id as the gateway lists it, with its provider (`acme/dev-2`) wherever two providers could be confused: the tooltip, the accessible name, the event line and the turn's record.
+
+### 25.3 A change during a run, and what is saved
+
+**Held.** A change made while a turn of this task is active (running, waiting for you, or stopping) is held by the app, not sent. When the task's last active turn settles (completes, fails or is stopped), the app saves it, and only then starts any message queued behind that turn; a message the person sends while the save is on its way waits for it. A steer goes into the running turn as it is and does not carry the held change. Choosing again replaces the held change; "Keep dev-1", or choosing the task's present values, cancels it. Why: the gateway may switch a running turn to a new model, and does not say when an effort change applies, so holding the change is the only way "from the next turn" is true.
+
+**What is written.** One `sessions.patch` with `key`, `model` and `thinkingLevel` (only those that change) and `expectedSessionId`, the task's session as it was when the person chose, so that a task replaced or removed meanwhile is refused instead of made again. The model is written alone, as `<provider>/<model>`, never with an account: the gateway keeps the account the task has when it can serve the new model (`applyModelOverrideWithAuthProfileCompatibility`), and an account the app read, least of all one the gateway chose by itself, is never sent back as the person's choice (`bots.md` section 21, F-490). Nothing else is written; nothing here needs admin.
+
+**Retried when the gateway says so.** A patch sent as a turn ends can meet the gateway still settling that turn; it answers `UNAVAILABLE`, marked retryable ("Session patch failed unexpectedly. Retry the request."). Such an answer is sent again, up to five times with a growing pause, while the connection holds; any other answer is final.
+
+**After it.** Accepted: the event line is posted for the fields the answer's `entry` and `resolved` show changed, and the task's row and its list are read again; a field the answer does not show is said as not confirmed, and only a field the patch sent: an effort the app only expected is never said as unconfirmed. A model written alone can bring the task another level it inherits: when the answer's full `entry` has no level of its own, the row takes none and takes `resolved.thinkingLevel` as the level it inherits, so the chip shows it at once, and the line names it ("effort to Off") only when the answer gives it and it differs from what was read before. Refused: the chip and the selects show what the gateway has, the Details line gives the gateway's reason, and an event line says it was refused. Lost connection: a held change stays held and is saved once the connection is back and nothing runs; a save whose answer never came is not confirmed: the not-confirmed line, "Couldn't confirm the change", and the task's row is read again so the chip shows what the gateway has.
+
+### 25.4 The event line
+
+A centred event line (`visual-language.md` §8) where the change was saved: after the turn that was running when it was made, or after the last turn, before the next message.
+
+| What                          | Line                                                                                                                  |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| The model                     | "Model changed to acme/dev-2 · from the next turn"                                                                    |
+| The effort                    | "Effort changed to High · from the next turn"                                                                         |
+| Both                          | "Model changed to acme/dev-2, effort to Low · from the next turn"                                                     |
+| The effort followed the model | "Model changed to acme/dev-lite, effort to Off · from the next turn", tooltip adds "acme/dev-lite doesn't offer High" |
+| Refused                       | A 14 px warning mark, then "Couldn't change the model to acme/dev-2: <the gateway's reason>"                          |
+| Not confirmed                 | A 14 px warning mark, then "Couldn't confirm the change of the model to acme/dev-2."                                  |
+
+Its tooltip, and the line's accessible name, add what was last read and when: "Last read acme/dev-1 · Low. Changed at 5:42 PM on this device."; a line not confirmed ends "Change unconfirmed at 5:42 PM on this device."
+
+- The gateway records no change, so the line is the app's record of its own change. The app keeps it on the device that made it, and shows it there live and after a reload or a restart. A change made on another device or by another client shows in the chip, the Details and the next turn's record, and has no line here.
+- The line is placed by the gateway's own times: after the end of the turn it followed, before the first message after it.
+- A line belongs to the conversation it was made in: a task the gateway starts afresh under the same key (a reset) shows none of the earlier lines.
+
+### 25.5 The turn's record
+
+A turn states no model and no effort of its own. What the gateway reports for one run is its model, on some turns only: the run's `lifecycle` `phase:"model"` `{provider, model}`, or the history row's `provider` and `model`, and the run's end receipt names the requested and effective model refs (`terminalReceipt {requested, effective}`). It reports no effort for a run: the effort a run used is in the gateway's debug log only (`embedded run start: … thinking=…`), which is not part of its protocol. The task's effort when a message was sent is not the turn's either: a message can carry its own (`/think:off`), and the gateway applies a change of model when a run settles. And a record placed on the run line would exist only for turns with actions (section 7.7), where a turn with none has no line. So the run line, opened, gives the run's id and nothing more, and the task's current model and effort are the chip's and the Details' (25.1). Each turn's model and effort (F-044) waits for a place every turn has, and for a gateway that reports a run's effort.
+
+### 25.6 Access
+
+| Tier        | The task's model and effort                                              | The bot's model and effort (`bots.md` section 9)   |
+| ----------- | ------------------------------------------------------------------------ | -------------------------------------------------- |
+| Read        | Values only: the chip as a note, Details as fact rows; the turn's record | Values, selects disabled, the access bar for admin |
+| Interactive | Change them (`sessions.patch` and `chat.send`, `operator.write`)         | Values, selects disabled, the access bar for admin |
+| Admin       | The same                                                                 | Change them (`config.patch`, `operator.admin`)     |
+
+Nothing here asks for access by itself. On the read tier the composer's access bar (section 3) is the way to the interactive tier; the bot's settings ask for admin with their own bar.
+
+### 25.7 Phone, themes and motion
+
+- Below 688 px the chip is not drawn; Details' Model group is the control, with 56 px selects and 44 px menu items.
+- Every colour is a token; the clock and the warning mark are `--text-muted` and `--warn`. Both themes are in the screenshots.
+- Nothing moves but the menu's appearance, which is instant under reduced motion.

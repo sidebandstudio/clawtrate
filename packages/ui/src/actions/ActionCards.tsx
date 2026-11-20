@@ -67,8 +67,6 @@ export type ActionEnv = {
   lost: boolean;
   /** Approvals are not sent on this connection. */
   readOnly: boolean;
-  /** The reasoning effort the task asks for, when its row records one. */
-  effort: string | null;
   /** The feed has been drawn once: a card or row drawn now arrived live, and rises in (7.4). */
   arriving: () => boolean;
 };
@@ -861,18 +859,12 @@ export function ThoughtLine({
 // The run line -------------------------------------------------------------------------
 
 /** "Worked for 1m 12s · 14 actions", after everything the run put in the transcript (7.7). */
-export function RunLineView({
-  runId,
-  line,
-  model,
-}: {
-  runId: string;
-  line: RunLine;
-  model: string | null;
-}) {
+export function RunLineView({ runId, line }: { runId: string; line: RunLine }) {
   const env = useActionEnv();
   const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.run(runId), false);
-  const record = `${model ?? actionWords.RUN_LINE.modelNotReported} · ${actionWords.RUN_LINE.effort(env.effort)}`;
+  // No model or effort is stated here: the gateway's record of a run carries its model on some
+  // turns and no effort on any, and a record shown for some turns only would say more than it
+  // knows about the others (conversation.md 25.5).
   return (
     <details
       className="run-line"
@@ -881,7 +873,7 @@ export function RunLineView({
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary className="event-line" title={record} aria-label={line.text}>
+      <summary className="event-line" aria-label={line.text}>
         <span className="run-label">{line.label}</span>
         <span aria-hidden="true">·</span>
         <span className="run-count">
@@ -908,8 +900,7 @@ export function RunLineView({
         <ChevronIcon className="chevron" />
       </summary>
       <p className="run-record">
-        <span>{record}</span>
-        <span aria-hidden="true">·</span>
+        <span>Run</span>
         <span className="mono">{runId}</span>
         <CopyButton what="run id" text={runId} />
       </p>

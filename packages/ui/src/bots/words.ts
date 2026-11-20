@@ -306,6 +306,23 @@ export function firstEffort(
   return levels[Math.floor((levels.length - 1) / 2)]!;
 }
 
+/**
+ * The Effort select's word for a model with no levels to choose (section 9):
+ * "Choose a model" before one is chosen; the effort last read when there is
+ * one; else "Not offered" only when the gateway's entry for the model gives an
+ * empty list of levels, and "Not reported" when the list lacks the model or
+ * its entry leaves the levels out.
+ */
+export function noLevelsWord(
+  models: ReadonlyArray<{ id: string; levelsReported: boolean }>,
+  model: string | null,
+  effort: string | null,
+): string {
+  if (model === null) return "Choose a model";
+  if (effort) return levelWord(effort);
+  return models.find((each) => each.id === model)?.levelsReported ? "Not offered" : "Not reported";
+}
+
 /** A level as shown: "Low". */
 export function levelWord(level: string | null): string {
   if (!level) return "Not offered";

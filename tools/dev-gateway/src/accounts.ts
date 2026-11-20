@@ -20,11 +20,19 @@ import { matching, optional, type Contract } from "./contract.ts";
 export const ACCOUNT_PROVIDERS = ["acme", "globex"] as const;
 export type AccountProvider = (typeof ACCOUNT_PROVIDERS)[number];
 
-/** Each provider's models; `acme` has two so a run can ask for another model of the same provider. */
+/**
+ * Each provider's models. `acme` has two that reason, so a run can ask for
+ * another model of the same provider, and `dev-lite`, which does not: the
+ * gateway offers it fewer effort levels (`off` and the harness's `ultra`), so
+ * a change of model can take the effort with it, and a level it lacks is refused.
+ */
 export const ACCOUNT_MODELS: Record<AccountProvider, readonly string[]> = {
-  acme: ["dev-1", "dev-2"],
+  acme: ["dev-1", "dev-2", "dev-lite"],
   globex: ["dev-1"],
 };
+
+/** The scripted models declared without reasoning. */
+export const PLAIN_MODELS: ReadonlySet<string> = new Set(["acme/dev-lite"]);
 
 /** How a credential is stored: the gateway's storage types. */
 export type CredentialKind = "api_key" | "token" | "oauth";
@@ -112,10 +120,10 @@ export function profileHash(profileId: string): string {
 /** The gateway's own log file on an instance with accounts, read by `logs.tail`. */
 export const accountsLogFile = (stateDir: string) => join(stateDir, "logs", "gateway.jsonl");
 
-const scriptedModel = (id: string) => ({
+const scriptedModel = (provider: AccountProvider) => (id: string) => ({
   id,
   name: `Scripted ${id}`,
-  reasoning: true,
+  reasoning: !PLAIN_MODELS.has(`${provider}/${id}`),
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128000,
@@ -133,7 +141,7 @@ export function accountProviders(providerPort: number) {
       {
         baseUrl: `http://127.0.0.1:${providerPort}/v1`,
         api: "openai-completions",
-        models: ACCOUNT_MODELS[provider].map(scriptedModel),
+        models: ACCOUNT_MODELS[provider].map(scriptedModel(provider)),
       },
     ]),
   );

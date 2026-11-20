@@ -427,23 +427,22 @@ test.describe("action cards", () => {
     await expect(page.getByTestId("run-line").locator(".run-failed")).toHaveText("2 failed");
     await open(page, "actions-thought");
     await expect(page.getByTestId("run-line")).toHaveCount(0);
-    // Opened, the run line is the run's record, with its id to copy.
+    // Opened, the run line gives the run's id to copy, and states no model and no effort: the
+    // gateway's record of a run carries no effort, and a model on some turns only (25.5).
     await open(page, "actions-short");
-    await page.getByTestId("run-line").locator("summary").click();
-    await expect(page.getByTestId("run-line")).toContainText(
-      "scripted/dev-1 · effort not reported",
-    );
+    const opened = page.getByTestId("run-line");
+    await expect(opened.locator("summary")).not.toHaveAttribute("title");
+    await opened.locator("summary").click();
     await expect(page.getByRole("button", { name: "Copy run id" })).toBeVisible();
-    // The effort the task asks for, when its row records one.
+    // The task's effort, whatever it is, is not said of a turn.
     await setState(
       page,
       `const tasks = Object.fromEntries(Object.entries(state.tasksByBot).map(([bot, list]) =>
          [bot, list.map((t) => t.key === "agent:otto:disk-space" ? { ...t, effort: "high" } : t)]));
        return { ...state, tasksByBot: tasks };`,
     );
-    await expect(page.getByTestId("run-line")).toContainText(
-      "scripted/dev-1 · requested effort high",
-    );
+    await expect(opened.locator(".run-record")).toHaveText(/^Run\s*run-1/);
+    await expect(opened).not.toContainText(/effort|dev-1/);
   });
 
   test("F-090: a stopped run's line reads Stopped after, under the stop note", async ({ page }) => {
