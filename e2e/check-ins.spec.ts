@@ -226,7 +226,7 @@ test("F-366: Off for Juniper is one config.patch of every 0m; its job stays, dis
   await expect(block("marlow")).toContainText("Checks in every 30 minutes");
 });
 
-test("F-201: closing one viewer withdraws an unsent save and preserves a sent save across reconnect", async () => {
+test("F-201: closing the viewer or reconnecting before the patch sends nothing, and after it neither turns the outcome into a refusal", async () => {
   test.setTimeout(120_000);
   const instance = openInstance(INSTANCE);
   const connection = readDevConnection(instance.connectionFile)!;
@@ -269,20 +269,21 @@ test("F-201: closing one viewer withdraws an unsent save and preserves a sent sa
     await expect.poll(() => client.state.discovery.status).toBe("ready");
     expect(await observer.apply({ type: "refreshCheckIns", botId: "marlow" })).not.toBeNull();
     const gatewayId = client.state.checkIns!.gatewayId!;
+    const draft = (saveId: string, every = "24h", was = "30m") => ({
+      type: "saveCheckIn" as const,
+      saveId,
+      botId: "marlow",
+      gatewayId,
+      every,
+      prompt: null,
+      was: { every: was, prompt: null },
+      kept: [],
+    });
     const before = patches();
 
     const first = createBridgeSession(client);
     readsToHold = 1;
-    const unsent = first.apply({
-      type: "saveCheckIn",
-      saveId: "unsent",
-      botId: "marlow",
-      gatewayId,
-      every: "24h",
-      prompt: null,
-      was: { every: "30m", prompt: null },
-      kept: [],
-    });
+    const unsent = first.apply(draft("unsent"));
     await expect.poll(() => release !== undefined).toBe(true);
     first.dispose();
     release!();
@@ -298,16 +299,7 @@ test("F-201: closing one viewer withdraws an unsent save and preserves a sent sa
     const second = createBridgeSession(client);
     release = undefined;
     readsToHold = 2;
-    const sent = second.apply({
-      type: "saveCheckIn",
-      saveId: "sent",
-      botId: "marlow",
-      gatewayId,
-      every: "24h",
-      prompt: null,
-      was: { every: "30m", prompt: null },
-      kept: [],
-    });
+    const sent = second.apply(draft("sent"));
     await expect.poll(() => release !== undefined).toBe(true);
     await expect.poll(patches).toBe(before + 1);
     second.dispose();
@@ -316,16 +308,40 @@ test("F-201: closing one viewer withdraws an unsent save and preserves a sent sa
     await sent;
     expect(client.state.checkIns?.save).toMatchObject({ id: "sent", status: "saved" });
 
+    // The same two moments, ended by a reconnect instead of a closed viewer.
+    const reconnect = async () => {
+      expect(client.state.checkIns?.gatewayId).toBeNull();
+      await observer.apply({ type: "retry" });
+      await expect
+        .poll(() => client.state.connection.status, { timeout: 30_000 })
+        .toBe("connected");
+      expect(await observer.apply({ type: "refreshCheckIns", botId: "marlow" })).not.toBeNull();
+    };
+    const third = createBridgeSession(client);
+    release = undefined;
+    readsToHold = 1;
+    const cut = third.apply(draft("cut-unsent", "30m", "24h"));
+    await expect.poll(() => release !== undefined).toBe(true);
     await observer.apply({ type: "suspend" });
-    expect(client.state.checkIns?.gatewayId).toBeNull();
-    await observer.apply({ type: "retry" });
-    await expect.poll(() => client.state.connection.status, { timeout: 30_000 }).toBe("connected");
-    expect(await observer.apply({ type: "refreshCheckIns", botId: "marlow" })).not.toBeNull();
-    expect(client.state.checkIns?.save).toMatchObject({ id: "sent", status: "saved" });
-    expect(client.state.checkIns?.jobs.find((job) => job.botId === "marlow")?.everyMs).toBe(
-      86_400_000,
-    );
+    await cut;
+    expect(client.state.checkIns?.save).toMatchObject({ id: "cut-unsent", status: "failed" });
+    await reconnect();
     expect(patches()).toBe(before + 1);
+
+    release = undefined;
+    readsToHold = 2;
+    const cutSent = third.apply(draft("cut-sent", "30m", "24h"));
+    await expect.poll(() => release !== undefined).toBe(true);
+    await expect.poll(patches).toBe(before + 2);
+    await observer.apply({ type: "suspend" });
+    await cutSent;
+    expect(client.state.checkIns?.save).toMatchObject({ id: "cut-sent", status: "unknown" });
+    await reconnect();
+    expect(client.state.checkIns?.jobs.find((job) => job.botId === "marlow")?.everyMs).toBe(
+      1_800_000,
+    );
+    expect(patches()).toBe(before + 2);
+    third.dispose();
   } finally {
     observer.dispose();
     client.stop();
