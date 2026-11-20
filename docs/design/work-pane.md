@@ -486,7 +486,7 @@ Cards sit in the transcript where the message put them, left-aligned with the bo
 
 ### A page
 
-A bot can make a page, an interactive document, on the gateway's canvas. The card is a file card with the page icon, the page's title, and "Page" as its type; its button is "Open". How a page opens, full window beside its chat, is `library.md`, section 6, which replaces the two points below.
+A bot can make a page, an interactive document, on the gateway's canvas. The card is a file card with the page icon, the page's title, and "Page" as its type; its button is "Open". How a page opens, full window beside its chat, is `library.md`, section 6, which replaces the two points below. Every route to a page, this card and any page entry in Files or the media viewer included, passes that section's gate: on each platform a page is drawn only once its rendering path passes the zero-request check, and until then the page view shows its unavailable state.
 
 - It opens in the media viewer's frame (section 14), which shows the canvas document in a web view, full window, with the conversation one Close away.
 - **Not established.** The gateway serves canvas documents (`canvas.document.view`, and a hosted address for the canvas), but neither has been exercised (section 20). Until it is, a builder ships the card and checks the view against a development gateway first. When the page cannot be loaded, the viewer says "This page can't be shown here." with the gateway's reason and "Try again".
