@@ -1615,6 +1615,11 @@ this contract; it does not show that a real T3 Code accepts them.
 - **Stopping**: `t3_thread_interrupt {threadId, runId?, stop?}` →
   `interrupt_requested` for a running run, `no_active_run` when idle; `stop:
   true` ignores `runId`, interrupts whatever runs and drops queued messages.
+  Without `stop: true`, a `runId` acts on that run alone: `interrupt_requested`
+  while it runs, its own final status once it has ended (no other run is
+  touched), and `run_not_found` when the thread has no such run. The recorded
+  contract does not say what a mismatched `runId` returns; this is the
+  stand-in's choice.
 - **Unsupported inputs are refused, not ignored.** `attachments`,
   `interactionMode: "plan"` and `environmentId` return `invalid_request` with
   a message saying the stand-in does not support them, so a parity check

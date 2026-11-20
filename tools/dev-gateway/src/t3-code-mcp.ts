@@ -670,6 +670,13 @@ export function createT3Code(clock: () => number = Date.now) {
       case "t3_thread_interrupt": {
         const thread = threadOf(args);
         if (!("threadId" in thread)) return thread;
+        // Without `stop: true`, a runId names the one run to act on: no other run is touched.
+        if (args.stop !== true && typeof args.runId === "string") {
+          const named = thread.runs.find((each) => each.runId === args.runId);
+          if (!named) return failure("run_not_found", `No run ${args.runId}.`);
+          if (FINAL.has(named.status))
+            return ok({ threadId: thread.threadId, runId: named.runId, status: named.status });
+        }
         const run = active(thread);
         if (args.stop === true) thread.queued.length = 0;
         if (!run)

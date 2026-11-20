@@ -153,4 +153,31 @@ describe("the scripted T3 Code stand-in", () => {
     expect(byId(SEEDED_THREAD)).toBe("codex");
     t3.close();
   });
+
+  it("interrupts only the run its runId names; stop: true interrupts whatever runs", async () => {
+    const t3 = createT3Code(() => 0);
+    const { threadId, runId: first } = structured(
+      await t3.callTool("t3_thread_launch", {
+        projectId: "proj-backup-scripts",
+        title: "x",
+        message: "Go.",
+      }),
+    );
+    // The first run ends; a second runs.
+    await t3.callTool("t3_thread_wait", { threadId, timeoutMs: 30_000 });
+    const sent = structured(await t3.callTool("t3_thread_send", { threadId, message: "Again." }));
+    const old = structured(await t3.callTool("t3_thread_interrupt", { threadId, runId: first }));
+    expect([old.runId, old.status]).toEqual([first, "completed"]);
+    const missing = await t3.callTool("t3_thread_interrupt", { threadId, runId: "run-none" });
+    expect(structured(missing).code).toBe("run_not_found");
+    const named = structured(
+      await t3.callTool("t3_thread_interrupt", { threadId, runId: sent.runId }),
+    );
+    expect([named.runId, named.status]).toEqual([sent.runId, "interrupt_requested"]);
+    const stopped = structured(
+      await t3.callTool("t3_thread_interrupt", { threadId, runId: first, stop: true }),
+    );
+    expect(stopped.status).toBe("no_active_run");
+    t3.close();
+  });
 });
