@@ -211,6 +211,30 @@ test.describe("the full view on the desktop", () => {
     expect(await sentOf(page, "computerCancelTake")).toHaveLength(1);
   });
 
+  test("F-142: Live only while a usable picture arrived within 10 s; on a quiet page the tile and the full view say the last picture's age by themselves", async ({
+    page,
+  }) => {
+    // The page's own clock, moved on by the check: the fixture's stream sends one frame and,
+    // with nothing typed, no other, while its renewals go on answering.
+    await page.clock.install();
+    await openFixture(page, `${COMPUTER}&computer=watching`, "light");
+    await watch(page);
+    const badge = computerPanel(page).locator(".screen-live");
+    await expect(badge).toHaveText("Live");
+    await page.clock.fastForward(11_000);
+    await expect(badge).toHaveText(/^Last picture, 1\d s ago$/);
+    await expect(computerPanel(page).getByTestId("computer-tile")).toHaveAccessibleName(
+      /^Juniper's browser, last picture, 1\d s ago: /,
+    );
+    expect((await pane(page))?.view?.status).toBe("live");
+    await computerPanel(page)
+      .getByRole("button", { name: "Open Juniper's browser full window" })
+      .click();
+    await expect(fullView(page).locator(".screen-age")).toHaveText(/^Last picture, 1\d s ago$/);
+    await page.clock.fastForward(60_000);
+    await expect(fullView(page).locator(".screen-age")).toHaveText("Last picture, 1 min ago");
+  });
+
   test("leaving the Computer tab while in control gives control back first, then ends the view", async ({
     page,
   }) => {

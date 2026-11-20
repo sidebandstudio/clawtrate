@@ -113,6 +113,13 @@ export type ComputerView = {
   height: number | null;
   /** Frames dropped for being larger than `MAX_FRAME_BYTES`. */
   framesTooLarge: number;
+  /**
+   * When the browser captured the newest usable frame, as the plugin sends it (the
+   * screencast's own time), in ms; null when it sent none.
+   */
+  capturedAt: number | null;
+  /** When this host received that frame, on this host's clock; null before the first. */
+  frameAt: number | null;
 };
 
 export type BusyReason =
@@ -294,7 +301,7 @@ export function parseControlEvent(payload: unknown, at: number): ControlRecord |
 
 /** A stream frame: the 4-byte length, the JSON header, the JPEG. */
 export function parseFrame(data: Uint8Array): {
-  header: { url: string | null; cssWidth: number; cssHeight: number };
+  header: { url: string | null; cssWidth: number; cssHeight: number; capturedAt: number | null };
   jpeg: Uint8Array;
 } | null {
   if (data.byteLength < 6) return null;
@@ -312,7 +319,16 @@ export function parseFrame(data: Uint8Array): {
     return null;
   const jpeg = data.subarray(4 + length);
   if (jpeg[0] !== 0xff || jpeg[1] !== 0xd8) return null;
-  return { header: { url: str(header?.url), cssWidth: width, cssHeight: height }, jpeg };
+  // The screencast's time is seconds since the epoch; anything else is no capture time.
+  const ts = header?.ts;
+  const capturedAt =
+    typeof ts === "number" && Number.isFinite(ts) && ts > 1e9 && ts < 1e11
+      ? Math.round(ts * 1000)
+      : null;
+  return {
+    header: { url: str(header?.url), cssWidth: width, cssHeight: height, capturedAt },
+    jpeg,
+  };
 }
 
 function utf8Decode(bytes: Uint8Array): string {
@@ -404,7 +420,13 @@ type LiveView = {
   /** The bearer ticket, from `view.open` until the stream opens with it; never in the state. */
   ticket: string | null;
   socket: WebSocketLike | null;
-  latest: { seq: number; width: number; height: number; jpeg: Uint8Array } | null;
+  latest: {
+    seq: number;
+    width: number;
+    height: number;
+    capturedAt: number | null;
+    jpeg: Uint8Array;
+  } | null;
   waiter: { after: number; resolve: (frame: ComputerFrame | null) => void; timer: Timer } | null;
   ended: boolean;
   /** The view's own deadline, from `view.open` and every renewal's answer. */
@@ -445,7 +467,37 @@ type Live = {
   tabsAsked: number;
 };
 
-export type ComputerFrame = { n: number; seq: number; width: number; height: number; jpeg: string };
+export type ComputerFrame = {
+  n: number;
+  seq: number;
+  width: number;
+  height: number;
+  /** When the browser captured it (ms), or null when the plugin sent no time. */
+  capturedAt: number | null;
+  jpeg: string;
+};
+
+/**
+ * How long a picture is "Live" after the newest usable frame was drawn (and, when the plugin
+ * sent one, after it was captured). The screencast sends a frame only when the page changes, so
+ * a quiet page also becomes "Last picture" after this: Live is never said of a picture older.
+ */
+export const LIVE_FOR_MS = 10_000;
+
+/**
+ * What the shown picture is: Live while a usable frame was drawn within `LIVE_FOR_MS`, else the
+ * last picture and its age, from the older of when it was captured and when it was drawn.
+ * Frames too large or that could not be decoded are never drawn, so they count as none.
+ */
+export function pictureAge(
+  drawn: { at: number; capturedAt: number | null } | null,
+  now: number,
+): { kind: "none" } | { kind: "live" } | { kind: "last"; ageMs: number } {
+  if (!drawn) return { kind: "none" };
+  const since = drawn.capturedAt === null ? drawn.at : Math.min(drawn.at, drawn.capturedAt);
+  const ageMs = Math.max(0, now - since);
+  return ageMs <= LIVE_FOR_MS ? { kind: "live" } : { kind: "last", ageMs };
+}
 
 /** The engine of every viewer's Computer tab. One per client. */
 export class ComputerViews {
@@ -790,6 +842,8 @@ export class ComputerViews {
         width: null,
         height: null,
         framesTooLarge: 0,
+        capturedAt: null,
+        frameAt: null,
       },
     }));
     let answer: RawRecord | null;
@@ -878,6 +932,7 @@ export class ComputerViews {
         seq,
         width: frame.header.cssWidth,
         height: frame.header.cssHeight,
+        capturedAt: frame.header.capturedAt,
         jpeg: frame.jpeg.slice(),
       };
       this.patchView(live.viewer, view.n, {
@@ -885,6 +940,8 @@ export class ComputerViews {
         frame: seq,
         width: frame.header.cssWidth,
         height: frame.header.cssHeight,
+        capturedAt: frame.header.capturedAt,
+        frameAt: this.ctx.now(),
         ...(frame.header.url ? { url: cut(frame.header.url) } : {}),
       });
       this.giveFrame(view);
@@ -972,6 +1029,7 @@ export class ComputerViews {
       seq: latest.seq,
       width: latest.width,
       height: latest.height,
+      capturedAt: latest.capturedAt,
       jpeg: toBase64(latest.jpeg),
     };
   }

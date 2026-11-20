@@ -17,7 +17,7 @@ import { createPortal } from "react-dom";
 import { Avatar } from "../Avatar.tsx";
 import { CollapseIcon, HandIcon, KeyboardIcon, MinusIcon, PlusIcon } from "../icons.tsx";
 import { ONE_PANE_BELOW, useElementWidth } from "../layout.ts";
-import type { FrameCanvases } from "./frames.ts";
+import { pictureWords, type FrameCanvases, type Picture } from "./frames.ts";
 
 const glyph = (state: string) => <span className="glyph" data-state={state} aria-hidden="true" />;
 const domainOf = (url: string) => {
@@ -34,6 +34,8 @@ export type ScreenViewProps = {
   question: QuestionCard | null;
   canAnswer: boolean;
   frames: FrameCanvases;
+  /** What the shown picture is: live, or the last one and its age. */
+  age: Picture;
   onClose: () => void;
   onTake: () => void;
   onWatch: () => void;
@@ -259,7 +261,7 @@ export function ScreenView(props: ScreenViewProps) {
   };
 
   const bar = <ControlBar {...props} phone={phone} />;
-  const frameName = `${name}'s browser, live${granted ? ", you have control" : ""}`;
+  const frameName = `${name}'s browser, ${pictureWords(props.age).toLowerCase()}${granted ? ", you have control" : ""}`;
   const picture = (
     <div
       ref={frameRef}
@@ -276,7 +278,15 @@ export function ScreenView(props: ScreenViewProps) {
       onPaste={onPaste}
     >
       {live ? (
-        <canvas ref={showOn} className="screen-canvas" data-frame={view?.frame ?? 0} />
+        <>
+          <canvas ref={showOn} className="screen-canvas" data-frame={view?.frame ?? 0} />
+          {/* Live goes unsaid here ("Watching" is in the bar); a picture that isn't says so. */}
+          {props.age.kind !== "live" && (
+            <span className="screen-live screen-age" data-picture={props.age.kind} role="status">
+              {pictureWords(props.age)}
+            </span>
+          )}
+        </>
       ) : (
         <div className="screen-blank">
           {view?.status === "ended" ? (

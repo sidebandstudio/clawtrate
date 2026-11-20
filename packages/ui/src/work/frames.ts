@@ -4,13 +4,21 @@
 // and when the view ends the canvases are cleared and the decoded picture is
 // closed. A frame for a view that has ended is dropped before it is decoded.
 
-import type { ClawtrateBridge, ComputerView } from "@clawtrate/core";
-import { useEffect, useMemo, useRef } from "react";
+import {
+  computerWords as words,
+  type ClawtrateBridge,
+  type ComputerView,
+  type pictureAge,
+} from "@clawtrate/core";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export type FrameCanvases = {
   /** Show the view on this canvas; the returned function stops it. */
   attach(canvas: HTMLCanvasElement): () => void;
 };
+
+/** The newest frame drawn for view `n`: when, on this device's clock, and when it was captured. */
+export type Drawn = { n: number; at: number; capturedAt: number | null };
 
 function decode(base64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(base64);
@@ -34,8 +42,13 @@ function draw(canvas: HTMLCanvasElement, picture: ImageBitmap | null): void {
 }
 
 /** Pull and draw one view's frames while it is connecting or live. */
-export function useFrames(bridge: ClawtrateBridge, view: ComputerView | null): FrameCanvases {
+export function useFrames(
+  bridge: ClawtrateBridge,
+  view: ComputerView | null,
+): { canvases: FrameCanvases; drawn: Drawn | null } {
   const canvases = useRef(new Set<HTMLCanvasElement>());
+  // Only a frame that was decoded and drawn counts: one too large or undecodable is none.
+  const [drawn, setDrawn] = useState<Drawn | null>(null);
   const picture = useRef<ImageBitmap | null>(null);
   const n = view && view.status !== "ended" ? view.n : null;
 
@@ -70,6 +83,7 @@ export function useFrames(bridge: ClawtrateBridge, view: ComputerView | null): F
         picture.current?.close();
         picture.current = decoded;
         for (const canvas of shown) draw(canvas, decoded);
+        setDrawn({ n, at: Date.now(), capturedAt: frame.capturedAt });
       }
     })();
     return () => {
@@ -81,7 +95,7 @@ export function useFrames(bridge: ClawtrateBridge, view: ComputerView | null): F
     };
   }, [bridge, n]);
 
-  return useMemo<FrameCanvases>(
+  const attach = useMemo<FrameCanvases>(
     () => ({
       attach(canvas) {
         canvases.current.add(canvas);
@@ -93,4 +107,26 @@ export function useFrames(bridge: ClawtrateBridge, view: ComputerView | null): F
     }),
     [],
   );
+  return { canvases: attach, drawn: drawn && drawn.n === n ? drawn : null };
 }
+
+/** This device's clock, read again every second while `active`, so an age changes by itself. */
+export function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
+export type Picture = ReturnType<typeof pictureAge>;
+
+/** What the badge on a live view says of its picture. */
+export const pictureWords = (picture: Picture) =>
+  picture.kind === "live"
+    ? "Live"
+    : picture.kind === "last"
+      ? words.lastPictureLine(picture.ageMs)
+      : words.noPictureLine;

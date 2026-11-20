@@ -892,6 +892,8 @@ const computerView = object<ComputerView>()({
   width: NUMBER,
   height: NUMBER,
   framesTooLarge: NUMBER,
+  capturedAt: NUMBER,
+  frameAt: NUMBER,
 });
 const computerControl = object<ComputerControl>()({
   status: ENUM,

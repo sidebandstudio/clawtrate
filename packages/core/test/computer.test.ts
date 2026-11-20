@@ -7,8 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ComputerViews,
   initialComputerState,
+  LIVE_FOR_MS,
+  MAX_FRAME_BYTES,
   MAX_QUEUED_INPUTS,
   parseFrame,
+  pictureAge,
   streamUrl,
   type ComputerContext,
   type ComputerState,
@@ -59,8 +62,8 @@ class Stream implements WebSocketLike {
   text(message: unknown) {
     this.onmessage?.({ data: JSON.stringify(message) });
   }
-  frame(width = 1280, height = 720, size = 64) {
-    this.onmessage?.({ data: frameBytes(width, height, size).buffer });
+  frame(width = 1280, height = 720, size = 64, ts = 1) {
+    this.onmessage?.({ data: frameBytes(width, height, size, ts).buffer });
   }
   end(code: number) {
     this.readyState = 3;
@@ -68,7 +71,7 @@ class Stream implements WebSocketLike {
   }
 }
 
-function frameBytes(width: number, height: number, size: number): Uint8Array {
+function frameBytes(width: number, height: number, size: number, ts = 1): Uint8Array {
   const header = utf8Bytes(
     JSON.stringify({
       url: "http://127.0.0.1:1/p",
@@ -76,7 +79,7 @@ function frameBytes(width: number, height: number, size: number): Uint8Array {
       cssHeight: height,
       scrollX: 0,
       scrollY: 0,
-      ts: 1,
+      ts,
     }),
   );
   const jpeg = new Uint8Array(size).fill(7);
@@ -931,7 +934,11 @@ describe("frames", () => {
       url: "http://127.0.0.1:1/p",
       cssWidth: 756,
       cssHeight: 413,
+      capturedAt: null,
     });
+    expect(parseFrame(frameBytes(756, 413, 10, 1_800_000_000.25))?.header.capturedAt).toBe(
+      1_800_000_000_250,
+    );
     expect(parseFrame(new Uint8Array([0, 0, 0, 2, 123, 125, 1, 2]))).toBeNull();
     const notJpeg = frameBytes(10, 10, 10);
     notJpeg[notJpeg.length - 10] = 0;
@@ -968,5 +975,51 @@ describe("renewing within the plugin's own deadline", () => {
     const gaps = sent.slice(1).map((at, i) => at - sent[i]!);
     expect(Math.max(...gaps)).toBeLessThanOrEqual(1_500);
     expect(h.pane().view?.status).toBe("live");
+  });
+});
+
+describe("Live only while a usable picture is recent (F-142, section 17)", () => {
+  it("F-142: Live while a usable frame was drawn within the stated interval; after it the last picture and its age", () => {
+    expect(LIVE_FOR_MS).toBe(10_000);
+    expect(pictureAge(null, 50_000)).toEqual({ kind: "none" });
+    expect(pictureAge({ at: 40_000, capturedAt: null }, 50_000)).toEqual({ kind: "live" });
+    expect(pictureAge({ at: 40_000, capturedAt: null }, 50_001)).toEqual({
+      kind: "last",
+      ageMs: 10_001,
+    });
+    // A frame captured long before it was drawn is as old as its capture.
+    expect(pictureAge({ at: 49_000, capturedAt: 30_000 }, 50_000)).toEqual({
+      kind: "last",
+      ageMs: 20_000,
+    });
+  });
+
+  it("F-142: the pane keeps the newest usable frame's capture time; a frame too large, or renewals, change nothing", async () => {
+    vi.useFakeTimers({ now: 1_800_000_000_000 });
+    const h = harness();
+    await ready(h);
+    await h.views.watch(h.viewer);
+    const stream = h.streams.at(-1)!;
+    stream.frame(1280, 720, 64, 1_799_999_999.5);
+    expect(h.pane().view).toMatchObject({
+      status: "live",
+      capturedAt: 1_799_999_999_500,
+      frameAt: 1_800_000_000_000,
+    });
+    const frame = await h.views.frame(h.viewer, h.pane().view!.n, 0);
+    expect(frame).toMatchObject({ seq: 1, capturedAt: 1_799_999_999_500 });
+    // 30 s on: renewals confirm the stream, a frame too large arrives, nothing usable does.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.calls("clawtrate-computer.view.renew").length).toBeGreaterThan(0);
+    stream.frame(1280, 720, MAX_FRAME_BYTES + 1, 1_800_000_029.9);
+    expect(h.pane().view).toMatchObject({
+      frame: 1,
+      framesTooLarge: 1,
+      capturedAt: 1_799_999_999_500,
+      frameAt: 1_800_000_000_000,
+    });
+    // A header without the screencast's time gives none, never this host's clock.
+    stream.frame(1280, 720, 64, 0);
+    expect(h.pane().view).toMatchObject({ frame: 2, capturedAt: null });
   });
 });

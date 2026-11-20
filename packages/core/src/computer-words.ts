@@ -152,3 +152,13 @@ export function outcomeLine(bot: string, outcome: ComputerOutcome): string {
 
 export const waitingBanner = (bot: string, again: boolean) =>
   again ? `${bot} is still waiting for you` : `${bot} is waiting for you`;
+
+/** The picture shown is no longer live: its age, rounded down (`pictureAge`). */
+export function lastPictureLine(ageMs: number): string {
+  const s = Math.floor(ageMs / 1000);
+  if (s < 60) return `Last picture, ${s} s ago`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `Last picture, ${m} min ago` : "Last picture, over an hour ago";
+}
+/** A view is open but no usable frame has been drawn yet. */
+export const noPictureLine = "No picture yet";

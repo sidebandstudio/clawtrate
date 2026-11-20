@@ -321,7 +321,7 @@ async function drawPage(tab: number, typed: string): Promise<Uint8Array> {
       cssHeight: PAGE.height,
       scrollX: 0,
       scrollY: 0,
-      ts: 0,
+      ts: Date.now() / 1000,
     }),
   );
   const out = new Uint8Array(4 + header.length + jpeg.length);

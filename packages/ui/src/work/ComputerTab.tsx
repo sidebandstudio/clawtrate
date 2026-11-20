@@ -12,6 +12,7 @@ import {
   commandsRanOn,
   computerWords as words,
   lineOf,
+  pictureAge,
   recentActions,
   type Bot,
   type ClawtrateBridge,
@@ -37,7 +38,7 @@ import {
   ScreenIcon,
 } from "../icons.tsx";
 import { readPreference, writePreference } from "../preferences.ts";
-import { useFrames, type FrameCanvases } from "./frames.ts";
+import { pictureWords, useFrames, useNow, type FrameCanvases, type Picture } from "./frames.ts";
 import { ScreenView } from "./ScreenView.tsx";
 import "./computer.css";
 
@@ -153,7 +154,10 @@ export function ComputerTab(props: ComputerTabProps) {
 
   const question: QuestionCard | null =
     transcript?.questions.find((each) => each.status === "pending") ?? null;
-  const frames = useFrames(bridge, pane?.view ?? null);
+  const { canvases: frames, drawn } = useFrames(bridge, pane?.view ?? null);
+  // "Live" only while a usable frame was drawn recently; the words change by themselves.
+  const now = useNow(pane?.view?.status === "live");
+  const picture = pictureAge(drawn, now);
 
   // After a release that was to answer in the chat: the full view closes and focus goes to the card.
   const answerInChat = useRef(false);
@@ -250,6 +254,7 @@ export function ComputerTab(props: ComputerTabProps) {
           interactive={interactive}
           online={online}
           frames={frames}
+          picture={picture}
           noteSeen={noteSeen}
           showLive={showLive}
           full={fullShown}
@@ -298,6 +303,7 @@ export function ComputerTab(props: ComputerTabProps) {
           question={question}
           canAnswer={connection.canAnswer}
           frames={frames}
+          age={picture}
           onClose={() => {
             setFull(false);
             requestAnimationFrame(() => openRef.current?.focus());
@@ -458,6 +464,7 @@ type ScreenProps = {
   interactive: boolean;
   online: boolean;
   frames: FrameCanvases;
+  picture: Picture;
   noteSeen: boolean;
   showLive: boolean;
   full: boolean;
@@ -626,6 +633,7 @@ function Tile({
   name,
   pane,
   frames,
+  picture,
   computer,
   full,
   noteSeen,
@@ -656,12 +664,15 @@ function Tile({
       <div
         className="screen computer-dark"
         data-state="live"
+        data-picture={picture.kind}
         role="img"
-        aria-label={`${name}'s browser, live: ${title}`}
+        aria-label={`${name}'s browser, ${pictureWords(picture).toLowerCase()}: ${title}`}
         data-testid="computer-tile"
       >
         <canvas ref={showOn} className="screen-canvas" data-frame={view.frame} />
-        <span className="screen-live">Live</span>
+        <span className="screen-live" data-picture={picture.kind}>
+          {pictureWords(picture)}
+        </span>
         {!full && (
           <span className="screen-actions">
             <button
