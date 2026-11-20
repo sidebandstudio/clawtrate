@@ -152,6 +152,52 @@ test.describe("sending", () => {
     await expect(field(page)).toHaveValue("");
   });
 
+  test("F-074: Enter while a file is still being added leaves the draft with an explicit notice", async ({
+    page,
+  }) => {
+    await open(page, "composer");
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: {
+          attach: (file: unknown) => Promise<unknown>;
+          invoke: (c: unknown) => Promise<unknown>;
+        };
+        sentTexts: string[];
+        releaseFile?: () => void;
+      };
+      const fixture = w.clawtrateFixture;
+      const attach = fixture.attach.bind(fixture);
+      const invoke = fixture.invoke.bind(fixture);
+      w.sentTexts = [];
+      // The host takes the file when the check says so.
+      fixture.attach = (file: unknown) =>
+        new Promise<void>((resolve) => (w.releaseFile = resolve)).then(() => attach(file));
+      fixture.invoke = (command: unknown) => {
+        const each = command as { type: string; text?: string };
+        if (each.type === "sendMessage") w.sentTexts.push(each.text ?? "");
+        return invoke(command);
+      };
+    });
+    const sent = () =>
+      page.evaluate(() => (window as unknown as { sentTexts: string[] }).sentTexts);
+    await page
+      .locator('.composer input[type="file"]')
+      .setInputFiles([{ name: "notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") }]);
+    await expect(page.locator(".attachments .chip")).toHaveCount(1);
+    await field(page).fill("With the notes");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".composer-shelf [role=alert]")).toContainText(
+      "This message is still in the composer.",
+    );
+    await expect(field(page)).toHaveValue("With the notes");
+    expect(await sent()).toEqual([]);
+    await page.evaluate(() => (window as unknown as { releaseFile: () => void }).releaseFile());
+    await expect(page.locator(".attachments .chip[aria-busy=true]")).toHaveCount(0);
+    await field(page).focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(sent).toEqual(["With the notes"]);
+  });
+
   test("F-073: a refused send gives its words and files back, ahead of anything typed since", async ({
     page,
   }) => {

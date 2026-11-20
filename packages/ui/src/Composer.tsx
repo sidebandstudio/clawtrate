@@ -309,7 +309,15 @@ export function Composer({
    */
   const sendAs = useCallback(
     async (how: SendMode | "new-task") => {
-      if (!canSend) return;
+      if (!canSend) {
+        // A refused file already says why beside it; a file on its way says nothing else.
+        if (hasContent && uploading && !refused)
+          onNotice({
+            title: "This message is still in the composer.",
+            reason: "Its files are still being added. Send it again when they finish.",
+          });
+        return;
+      }
       if (submitting.current) {
         onNotice({
           title: "This message is still in the composer.",
@@ -392,6 +400,9 @@ export function Composer({
     },
     [
       canSend,
+      hasContent,
+      uploading,
+      refused,
       text,
       files,
       tokens,
