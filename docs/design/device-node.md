@@ -48,11 +48,11 @@ The desktop and the iPhone have the same page with the same parts; only the name
 
 ### What holds what
 
-| Held by          | What                                                                                                                                                  | How it shows                                                                                    |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| **The gateway**  | Whether this device is paired as a node; which of its commands it accepted; the owner's allowlist; which bots are offered the tool that reaches nodes | Read back: `node.describe`, `node.pair.list`, `config.get`, a bot's tools (`controls.md` §2)    |
-| **This device**  | Whether each app is allowed for bots on this device; the permission card; whether the app is open; what it answers                                    | Clawtrate's own store on this device, and the operating system's own permission for Clawtrate |
-| **Neither**      | Running a request again after a late Allow; how often a bot asks; what the bot says afterwards                                                         | Not offered (section 7)                                                                         |
+| Held by         | What                                                                                                                                                  | How it shows                                                                                  |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **The gateway** | Whether this device is paired as a node; which of its commands it accepted; the owner's allowlist; which bots are offered the tool that reaches nodes | Read back: `node.describe`, `node.pair.list`, `config.get`, a bot's tools (`controls.md` §2)  |
+| **This device** | Whether each app is allowed for bots on this device; the permission card; whether the app is open; what it answers                                    | Clawtrate's own store on this device, and the operating system's own permission for Clawtrate |
+| **Neither**     | Running a request again after a late Allow; how often a bot asks; what the bot says afterwards                                                        | Not offered (section 7)                                                                       |
 
 Every line says which of the two holds it. The gateway mark of `controls.md` §2, "The gateway enforces this", goes only on what the gateway itself refuses: a command it did not accept, or an allowlist entry removed. An app allowed or not on this device carries a new mark, **"This device enforces this"**, with the device icon: it holds while Clawtrate runs on this device and answers as section 8 says, and nowhere else.
 
@@ -79,17 +79,17 @@ Whether `device.scopes.requestUpgrade` would also merge into a waiting node requ
 
 A connection is judged by the scopes the gateway granted it, as in `controls.md` §2. The node connection itself holds no operator scope.
 
-| What                                                     | Needs                                                                                        | Below it                                                                                                   |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| See this page, what this device offers, its state        | Read (`node.describe`, `config.get`)                                                         | —                                                                                                          |
-| Turn the node on or off on this device                   | Nothing from the operator tier; the host's confirmation                                      | —                                                                                                          |
-| Approve this device as a node                            | Admin, or the gateway's computer                                                             | The command to run there (section 4)                                                                       |
-| Approve this device's own commands                       | Device access and write (`operator.pairing`, `operator.write`)                               | "Approving this Mac's commands needs device access." with "Request access" for `operator.pairing` only    |
-| Allow a Mac app outside the defaults                     | Admin (`config.patch`)                                                                        | "Messages needs the gateway's owner. Adding it to the gateway's allowlist needs admin access."            |
-| Remove this device or another from the gateway           | Admin (`node.pair.remove`)                                                                    | "Removing it from the gateway needs admin access."                                                         |
-| See and approve other devices that ask to be used by bots | Admin                                                                                       | "Approving other devices for bots needs admin access."                                                     |
-| Share into Clawtrate, Send Message                       | Write (`sessions.create`)                                                                     | The share sheet's and the action's own failure (sections 11, 12)                                          |
-| List Bots                                                | Read (`agents.list`)                                                                          | —                                                                                                          |
+| What                                                      | Needs                                                          | Below it                                                                                               |
+| --------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| See this page, what this device offers, its state         | Read (`node.describe`, `config.get`)                           | —                                                                                                      |
+| Turn the node on or off on this device                    | Nothing from the operator tier; the host's confirmation        | —                                                                                                      |
+| Approve this device as a node                             | Admin, or the gateway's computer                               | The command to run there (section 4)                                                                   |
+| Approve this device's own commands                        | Device access and write (`operator.pairing`, `operator.write`) | "Approving this Mac's commands needs device access." with "Request access" for `operator.pairing` only |
+| Allow a Mac app outside the defaults                      | Admin (`config.patch`)                                         | "Messages needs the gateway's owner. Adding it to the gateway's allowlist needs admin access."         |
+| Remove this device or another from the gateway            | Admin (`node.pair.remove`)                                     | "Removing it from the gateway needs admin access."                                                     |
+| See and approve other devices that ask to be used by bots | Admin                                                          | "Approving other devices for bots needs admin access."                                                 |
+| Share into Clawtrate, Send Message                        | Write (`sessions.create`)                                      | The share sheet's and the action's own failure (sections 11, 12)                                       |
+| List Bots                                                 | Read (`agents.list`)                                           | —                                                                                                      |
 
 Device access is requested on its own, never with another scope, by the access bar of `bots.md` §2 with `controls.md`'s words, and the page stays as it was if it is denied. Admin is the explicit request of `bots.md` §2.
 
@@ -101,30 +101,30 @@ Device access is requested on its own, never with another scope, by the access b
 
 ### Components used
 
-| Component                                                        | From                                | Used for                                             |
-| ---------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------- |
-| Settings frame, its sections, Back                              | `bots.md` §7                        | This Mac, This iPhone; Machines' block              |
-| Fact block (`.facts`), group word, note (`.b-note`), switch (`.b-switch`) | `visual-language.md` §9, `bots.md` §2 | Every page                                |
-| The access bar and its request                                  | `bots.md` §2, `conversation.md` §3  | Device access, admin                                 |
-| The command block and its copy button                           | `visual-language.md` §10            | The approve command for the gateway's computer      |
-| The host's confirmation                                         | `setup.md` §2                       | Turning the node on                                  |
-| Step list (`.s-steps`)                                          | `setup.md` §2                       | Turning on; allowing a Mac app                       |
-| Confirmation (`role="alertdialog"`)                             | `bots.md` §2                        | Allowing and taking back a Mac app; stopping; approving another device |
-| The approval card's frame                                       | `conversation.md` §12               | The permission card's frame only (section 7)         |
-| The mark (`.c-mark`)                                            | `controls.md` §2                    | "The gateway enforces this", "This device enforces this" |
-| The composer and its attachments                               | `conversation.md` §15, F-284        | What the share sheet and Send Message hand over      |
+| Component                                                                 | From                                  | Used for                                                               |
+| ------------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------- |
+| Settings frame, its sections, Back                                        | `bots.md` §7                          | This Mac, This iPhone; Machines' block                                 |
+| Fact block (`.facts`), group word, note (`.b-note`), switch (`.b-switch`) | `visual-language.md` §9, `bots.md` §2 | Every page                                                             |
+| The access bar and its request                                            | `bots.md` §2, `conversation.md` §3    | Device access, admin                                                   |
+| The command block and its copy button                                     | `visual-language.md` §10              | The approve command for the gateway's computer                         |
+| The host's confirmation                                                   | `setup.md` §2                         | Turning the node on                                                    |
+| Step list (`.s-steps`)                                                    | `setup.md` §2                         | Turning on; allowing a Mac app                                         |
+| Confirmation (`role="alertdialog"`)                                       | `bots.md` §2                          | Allowing and taking back a Mac app; stopping; approving another device |
+| The approval card's frame                                                 | `conversation.md` §12                 | The permission card's frame only (section 7)                           |
+| The mark (`.c-mark`)                                                      | `controls.md` §2                      | "The gateway enforces this", "This device enforces this"               |
+| The composer and its attachments                                          | `conversation.md` §15, F-284          | What the share sheet and Send Message hand over                        |
 
 ### New components
 
 Each is defined once, in `prototype/css/device.css`, from existing tokens. No colour token is added.
 
-| Component                 | What it is                                                                                                                                                                                                                                  | Tokens                            |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
-| App row (`.d-app`)        | One app this device can offer: its 32 px glyph, its name (15/500), and two fact lines under it (13), "On this Mac: …" and "On the gateway: …", each with its mark; at the right its value word or its action. 64 px or taller, 72 on touch | `--bg-bubble`, `--text-faint`     |
-| State line (`.d-state`)   | The node's state in one line with a dot: connected (`--accent-line`), waiting (`--warn`), not connected (`--text-faint`), removed (`--danger`), and its time                                                                                | `--accent-line`, `--warn`        |
-| Permission card (`.d-ask`) | The approval card's frame (`--warn-line` outline while it waits, a 17 px title, a tag, buttons along the foot) with the tag "Needs permission" and a countdown line                                                                         | `--warn-line`, `--warn-soft`      |
-| Share sheet (`.d-share`)  | The iPhone share sheet's Clawtrate view: a To row, the items as chips, the note field, Send; drawn as a sheet over a stand-in of the sharing app                                                                                           | `--bg-raised`, `--shadow-pop`     |
-| System panel (`.d-sys`, prototype only) | The prototype's picture of Siri's or Shortcuts' result and confirmation. It is a stand-in; the phone draws its own                                                                                                       | `--bg-raised`                     |
+| Component                               | What it is                                                                                                                                                                                                                                 | Tokens                        |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
+| App row (`.d-app`)                      | One app this device can offer: its 32 px glyph, its name (15/500), and two fact lines under it (13), "On this Mac: …" and "On the gateway: …", each with its mark; at the right its value word or its action. 64 px or taller, 72 on touch | `--bg-bubble`, `--text-faint` |
+| State line (`.d-state`)                 | The node's state in one line with a dot: connected (`--accent-line`), waiting (`--warn`), not connected (`--text-faint`), removed (`--danger`), and its time                                                                               | `--accent-line`, `--warn`     |
+| Permission card (`.d-ask`)              | The approval card's frame (`--warn-line` outline while it waits, a 17 px title, a tag, buttons along the foot) with the tag "Needs permission" and a countdown line                                                                        | `--warn-line`, `--warn-soft`  |
+| Share sheet (`.d-share`)                | The iPhone share sheet's Clawtrate view: a To row, the items as chips, the note field, Send; drawn as a sheet over a stand-in of the sharing app                                                                                           | `--bg-raised`, `--shadow-pop` |
+| System panel (`.d-sys`, prototype only) | The prototype's picture of Siri's or Shortcuts' result and confirmation. It is a stand-in; the phone draws its own                                                                                                                         | `--bg-raised`                 |
 
 ### Input
 
@@ -166,11 +166,11 @@ Then a step list (`setup.md`'s `.s-steps`), each step from what the gateway answ
 
 The page once the node is on. At the top, the state line, from `node.describe`:
 
-| State                         | From                                                       | The line                                                                           |
-| ----------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Connected                     | `connected: true`, `approvalState: "approved"`              | "Connected. Bots can send requests to this Mac. Approved Nov 19, 5:31 PM."        |
-| Commands waiting for approval | A pending `node.pair.list` entry for this device             | "A change waits for approval: Messages." with section 4's step 3                  |
-| Not connected                 | `connected: false`                                         | "Not connected. Bots that ask this Mac are told it isn't connected. Last seen 5:02 PM." with "Connect again" |
+| State                         | From                                                                | The line                                                                                                        |
+| ----------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Connected                     | `connected: true`, `approvalState: "approved"`                      | "Connected. Bots can send requests to this Mac. Approved Nov 19, 5:31 PM."                                      |
+| Commands waiting for approval | A pending `node.pair.list` entry for this device                    | "A change waits for approval: Messages." with section 4's step 3                                                |
+| Not connected                 | `connected: false`                                                  | "Not connected. Bots that ask this Mac are told it isn't connected. Last seen 5:02 PM." with "Connect again"    |
 | Removed                       | `node.pair.resolved` with `removed`, or the device no longer listed | "The gateway's owner removed this Mac as a device for bots. Turn it on again to ask anew." The switch reads off |
 
 Then **the apps**, one app row each, in this order. On the desktop: Location, Contacts, Calendar, Reminders, then Messages, Mail and Notes (F-385). On the iPhone: Calendar, Contacts, Location, Reminders, then Alarms and Home (F-223). Each row has two lines:
@@ -226,7 +226,9 @@ A failure says what the gateway holds then: after step 1 fails, "Nothing changed
 
 When a request arrives for an app that is not yet decided (Allow), this device asks its person before answering. This is not one of the gateway's approvals: the gateway keeps no record of it, it reaches no other device, and an answer means only what this device then does (research §8). The card uses the approval card's frame from `conversation.md` §12 (outline, title, tag, buttons along the foot, Deny last) and none of its states or words.
 
-**Where it shows.** On this device only. When the request carries the task's key (`sessionKey`, research §3.1), the card is placed in that task, after the bot's latest step, and the bot is named. When it carries none, the card goes to "Requests for this device" at the top of This Mac's page, and a one-line banner at the top of the window, "A request for Calendar on this Mac", opens it. The device that sent the message that started the run may be another one: it never sees this card, only the bot's call and its outcome (section 8).
+**Where it shows.** On this device only. When the request carries the task's key (`sessionKey`, research §3.1), the card is placed in that task, after the bot's latest step, and the bot is named. On the Mac, a request that carries none goes to "Requests for this device" at the top of This Mac's page, and a one-line banner at the top of the window, "A request for Calendar on this Mac", opens it. The device that sent the message that started the run may be another one: it never sees this card, only the bot's call and its outcome (section 8).
+
+**The iPhone answers only the person's own chats** (F-384). A request reaches the iPhone's card only when its task key names a task that `sessions.list`, read on this iPhone's own connection, lists with `kind: "direct"` (research §7.1). A request with no task key, or whose task the gateway lists as a group, as global or not at all, is refused at once with `NOT_FROM_YOUR_CHAT`, and no card is shown. The bot's tool sends the task key only with its raw `invoke` action (research §3.1), so on the iPhone a bot that asks with a named action, such as `location_get`, is refused and told why. Nothing in the gateway enforces this; this iPhone does.
 
 **Pending**, while the call is open (the request's `timeoutMs`, 30 seconds unless the caller set another):
 
@@ -241,15 +243,15 @@ This device answers the call itself just before its limit runs out, so the bot i
 
 **The outcomes**, each from what this device did and what the gateway answered it (`node.invoke.result` returns `{ok}` or `{ok, ignored: true}`, research §3.1):
 
-| What happened                                       | The card's tag     | Its words                                                                                                                                    | What the bot got                |
-| --------------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| Allow, while the call was open; the gateway took the answer | Allowed    | "Allowed. This Mac sent Otto's request its answer at 5:44 PM. Calendar is allowed for bots from now on."                                    | The events                      |
-| Allow, but the gateway had stopped waiting          | Allowed            | "Allowed. The request had ended when this Mac answered, so nothing reached Otto. Calendar is allowed for next time."                        | Its call's end, `TIMEOUT`       |
-| Don't allow                                         | Not allowed        | "Not allowed. Otto was told you chose Don't allow. Calendar stays Denied until you change it in This Mac."                                   | "NOT_ALLOWED_ON_DEVICE: …"      |
-| No answer before the call's limit                   | Needs permission   | "Otto's request ended at 5:44 PM and nothing was sent. You can still allow Calendar for next time." with "Allow for next time" and "Don't allow" | "NO_ANSWER_ON_DEVICE: …"   |
-| Allow for next time, any time later                 | Allowed for next time | "Allowed for next time. Otto's request ended at 5:44 PM and wasn't run. Otto will be answered the next time it asks." (F-452)             | Nothing more                    |
-| Five minutes after the request, still no answer     | Timed out          | "Timed out. Nothing was sent, and Calendar is still not allowed. Change it in This Mac." (F-348)                                             | Nothing more                    |
-| The operating system refuses Clawtrate              | Turned off         | "Calendar is turned off for Clawtrate in System Settings." with "Open Settings" (F-347); no Allow                                             | "TURNED_OFF_IN_SETTINGS: …"     |
+| What happened                                               | The card's tag        | Its words                                                                                                                                        | What the bot got            |
+| ----------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------- |
+| Allow, while the call was open; the gateway took the answer | Allowed               | "Allowed. This Mac sent Otto's request its answer at 5:44 PM. Calendar is allowed for bots from now on."                                         | The events                  |
+| Allow, but the gateway had stopped waiting                  | Allowed               | "Allowed. The request had ended when this Mac answered, so nothing reached Otto. Calendar is allowed for next time."                             | Its call's end, `TIMEOUT`   |
+| Don't allow                                                 | Not allowed           | "Not allowed. Otto was told you chose Don't allow. Calendar stays Denied until you change it in This Mac."                                       | "NOT_ALLOWED_ON_DEVICE: …"  |
+| No answer before the call's limit                           | Needs permission      | "Otto's request ended at 5:44 PM and nothing was sent. You can still allow Calendar for next time." with "Allow for next time" and "Don't allow" | "NO_ANSWER_ON_DEVICE: …"    |
+| Allow for next time, any time later                         | Allowed for next time | "Allowed for next time. Otto's request ended at 5:44 PM and wasn't run. Otto will be answered the next time it asks." (F-452)                    | Nothing more                |
+| Five minutes after the request, still no answer             | Timed out             | "Timed out. Nothing was sent, and Calendar is still not allowed. Change it in This Mac." (F-348)                                                 | Nothing more                |
+| The operating system refuses Clawtrate                      | Turned off            | "Calendar is turned off for Clawtrate in System Settings." with "Open Settings" (F-347); no Allow                                                | "TURNED_OFF_IN_SETTINGS: …" |
 
 - The card stays answerable for **five minutes** from the request, then reads Timed out. This is this device's rule; the gateway knows nothing of it (research §4.3).
 - **No request runs again.** Allowing after the call ended saves the permission and runs nothing; the card says so. A bot that asks again later is answered, and its new call passes the gateway's checks as they are then: if the owner removed the command meanwhile, the gateway refuses the new call itself (research §6). Clawtrate never sends a message for the person, and never asks the bot to try again.
@@ -260,15 +262,16 @@ This device answers the call itself just before its limit runs out, so the bot i
 
 Every refusal this device writes is a fixed code and a sentence, and the bot reads them as `"<code>: <sentence>"`, after its tool's own prefix (research §3.2). The words never include anything the request carried.
 
-| Code                     | Sentence                                                                                      | When                                                                 |
-| ------------------------ | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `NOT_ALLOWED_ON_DEVICE`  | "The person chose Don't allow for Calendar on Studio Mac."                                    | The app is Denied, or the person pressed Don't allow                 |
-| `NO_ANSWER_ON_DEVICE`    | "No one answered on Studio Mac in time. Calendar is not allowed yet."                          | The card was pending when the call's limit came                      |
-| `TURNED_OFF_IN_SETTINGS` | "Calendar is turned off for Clawtrate in Studio Mac's System Settings."                        | The operating system refuses Clawtrate                               |
-| `TURNED_OFF_ON_DEVICE`   | "Calendar was turned off on Studio Mac while this request was answered."                      | Turned off, or the node stopped, during a request                    |
-| `NOT_OPEN_ON_DEVICE`     | "Clawtrate isn't open on iPhone, so no one could be asked. Ask again when it is open."         | The iPhone app is in the background (section 9)                      |
-| `NOT_SERVED`             | "Studio Mac doesn't answer this request."                                                     | A command Clawtrate doesn't serve, or parameters it doesn't accept   |
-| `UNAVAILABLE_ON_DEVICE`  | "Calendar couldn't answer on Studio Mac."                                                     | The app itself failed                                                |
+| Code                     | Sentence                                                                                                         | When                                                                                 |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `NOT_ALLOWED_ON_DEVICE`  | "The person chose Don't allow for Calendar on Studio Mac."                                                       | The app is Denied, or the person pressed Don't allow                                 |
+| `NO_ANSWER_ON_DEVICE`    | "No one answered on Studio Mac in time. Calendar is not allowed yet."                                            | The card was pending when the call's limit came                                      |
+| `TURNED_OFF_IN_SETTINGS` | "Calendar is turned off for Clawtrate in Studio Mac's System Settings."                                          | The operating system refuses Clawtrate                                               |
+| `TURNED_OFF_ON_DEVICE`   | "Calendar was turned off on Studio Mac while this request was answered."                                         | Turned off, or the node stopped, during a request                                    |
+| `NOT_OPEN_ON_DEVICE`     | "Clawtrate isn't open on iPhone, so no one could be asked. Ask again when it is open."                           | The iPhone app is in the background (section 9)                                      |
+| `NOT_FROM_YOUR_CHAT`     | "iPhone answers only requests from the person's own chat with a bot. Ask with the invoke action from that chat." | On the iPhone: no task key, or a task the gateway doesn't list as direct (section 7) |
+| `NOT_SERVED`             | "Studio Mac doesn't answer this request."                                                                        | A command Clawtrate doesn't serve, or parameters it doesn't accept                   |
+| `UNAVAILABLE_ON_DEVICE`  | "Calendar couldn't answer on Studio Mac."                                                                        | The app itself failed                                                                |
 
 The gateway's own words reach the bot in the same way when the gateway refuses before this device is asked: "node command not allowed: … is not in the allowlist", "node not connected", "TIMEOUT: node invoke timed out", "POLICY_CHANGED: node command is no longer allowed" (research §3.1, §6). On the person's other devices, the bot's call is an ordinary action card (`conversation.md` §8.3) whose failed state shows that message as given; this design doesn't change it.
 
@@ -296,12 +299,12 @@ The block is fed by `device.pair.requested` and `node.pair.requested`, which eve
 
 On the iPhone, "Clawtrate" in the share sheet opens Clawtrate's own sheet over the sharing app (F-245):
 
-- **To**: the primary bot, its picture and name, from the person's `clawtrate.primary` preference, or the gateway's default bot when there is none or the bot is gone (the design on `d6-bots-lifecycle-design`, section 3). Tapping it lists the bots this device last read, as a radio list.
+- **To**: the primary bot, its picture and name: the gateway's default bot, `agents.list` `defaultId` (`docs/decisions.md`, "The primary bot"). Tapping it lists the bots this device last read, as a radio list.
 - **The items**, as chips: a link as its full address in text (never fetched, no preview), a file with its name and size, a picture as a thumbnail drawn on the phone from the shared bytes. An item over the composer's limits (F-074) is marked "Too large to send" and can't be sent.
 - **"Add a note"**, the message field.
 - **Send** (primary) and Cancel.
 
-**What Send does, exactly**: one new task with the To bot, `sessions.create {agentId, message}` with the note as its message, and the items through the composer's attachment path (F-284), from this iPhone's paired connection, at the moment Send is pressed. Nothing is sent before. "Sent to Juniper" shows only after the gateway answers with the task; the sheet then closes, and the task is in Juniper's list.
+**What Send does, exactly**: one new task with the To bot, `sessions.create {agentId, message, attachments, idempotencyKey}` with the note as its message and the items as attachments in the composer's form (F-284; live with a file, research §7), from this iPhone's paired connection, at the moment Send is pressed. A link is text in the message, never an attachment. Nothing is sent before. "Sent to Juniper" shows only after the gateway answers with the task; the sheet then closes, and the task is in Juniper's list.
 
 **When the sheet can't finish** (F-406): no gateway saved, the connection is read-only, the gateway doesn't answer within 10 seconds, or an item is too large. The sheet says which, in one line ("Clawtrate can't reach the gateway from here." / "This iPhone's connection is read-only. Sending needs the interactive tier."), with **"Open in Clawtrate"**: Clawtrate opens on a new task with the To bot and the note and items in its composer, unsent, where the person sends it or not. What is in the composer is a draft on this device until then.
 
@@ -310,72 +313,77 @@ On the iPhone, "Clawtrate" in the share sheet opens Clawtrate's own sheet over t
 Two actions (F-246):
 
 - **List Bots** reads `agents.list` and returns the bots' names in the gateway's order, the primary bot first. Siri says "You have four bots: Juniper, Marlow, Otto and Pip." When the gateway can't be reached: "Clawtrate couldn't reach the gateway." with no list: a list from memory would pass for current.
-- **Send Message** takes a bot (the primary bot by default) and the message. Before anything is sent, it always shows the bot and the whole text and asks "Send to Juniper?" with Send and Cancel. On Send: one new task, `sessions.create {agentId, message}`, as the share sheet. "Sent to Juniper." only once the gateway answered. When it can't (read-only, not reachable, no gateway saved): "Clawtrate couldn't send this: <reason>." with "Open in Clawtrate", which puts the message in a new task's composer, unsent.
+- **Send Message** takes a bot (the primary bot by default) and the message. Before anything is sent, it always shows the bot and the whole text and asks "Send to Juniper?" with Send and Cancel. On Send: one new task, `sessions.create {agentId, message, idempotencyKey}`, as the share sheet. "Sent to Juniper." only once the gateway answered. When it can't (read-only, not reachable, no gateway saved): "Clawtrate couldn't send this: <reason>." with "Open in Clawtrate", which puts the message in a new task's composer, unsent.
 
 Neither action works on a bot's or the gateway's say-so: they run only when the person runs them, and the gateway's answers are shown as data.
 
 ## 13. What the gateway's facts drive
 
-| Fact                                                                                                                                     | Source (research) | Shown                                                                                 |
-| ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------- |
-| A node's first connect is a device request, `requestedRole: "node"`; only admin or the gateway's computer approves it                     | §1.1, §1.2        | Section 4, step 2: the command, or "Approve this Mac" for admin; "Cancel request"     |
-| `device.pair.reject` of one's own request works without admin                                                                             | §1.2              | "Cancel request"                                                                      |
-| The command surface: `node.pair.requested`, `requiredApproveScopes`; own device at pairing and write approves                             | §1.1, §1.2        | Section 4, step 3; "Approving this Mac's commands needs device access"                |
-| One device: a waiting node request merges with a new operator request                                                                     | §1.3              | The two rules of section 2; "Request access" unavailable while it waits               |
-| Loopback with the default: device and first surface approved silently                                                                     | §1.4              | "The gateway approved this Mac by itself…"                                            |
-| A declared command outside the lists is dropped silently; `node.describe` reads back what was kept                                        | §2.2              | "On the gateway" from the read-back; "Not offered: the gateway's allowlist doesn't include it" |
-| Platform defaults; nothing for Messages, Mail or Notes                                                                                    | §2.1              | Which rows need the owner                                                             |
-| `gateway.nodes.commands.allow`: admin to write, read to read; `replacePaths` to remove                                                     | §2.3              | Section 6's steps and removal                                                         |
-| `node.invoke.request` with `timeoutMs` (30 000 by default) and, sometimes, `sessionKey`                                                    | §3.1              | The card's deadline; the bot named or not; where the card goes                       |
-| A refusal reaches the caller as `"<code>: <message>"`; a late answer is `ignored`; a node gone is `NOT_CONNECTED`                          | §3.1              | Section 8's words; the card's "nothing reached Otto"                                  |
-| `permissions` don't admit a call; a newly granted one asks for approval again                                                              | §4.1, §4.2        | "This device enforces this"; "A change waits for approval"                            |
-| No five minutes, no hour, no re-run in the gateway                                                                                        | §4.3              | The card's five minutes are this device's; nothing runs again                         |
-| The background queue excludes a bot's calls; 10 minutes, 64                                                                               | §5                | Section 9: refuse at once, list on return                                             |
-| Removing an allowlist entry ends a waiting call `POLICY_CHANGED`; removing a node needs admin                                              | §6                | Section 6's taking back; section 5's Stop                                             |
-| Pairing-scope devices hear every device's requests, list only their own                                                                    | §1.6              | Section 10: admin only, one line below                                                |
-| `agents.list` `defaultId` and `users.prefs` at read; `sessions.create` at write                                                            | §7                | Sections 11 and 12                                                                    |
+| Fact                                                                                                                                | Source (research) | Shown                                                                                          |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------- |
+| A node's first connect is a device request, `requestedRole: "node"`; only admin or the gateway's computer approves it               | §1.1, §1.2        | Section 4, step 2: the command, or "Approve this Mac" for admin; "Cancel request"              |
+| `device.pair.reject` of one's own request works without admin                                                                       | §1.2              | "Cancel request"                                                                               |
+| The command surface: `node.pair.requested`, `requiredApproveScopes`; own device at pairing and write approves                       | §1.1, §1.2        | Section 4, step 3; "Approving this Mac's commands needs device access"                         |
+| One device: a waiting node request merges with a new operator request                                                               | §1.3              | The two rules of section 2; "Request access" unavailable while it waits                        |
+| Loopback with the default: device and first surface approved silently                                                               | §1.4              | "The gateway approved this Mac by itself…"                                                     |
+| A declared command outside the lists is dropped silently; `node.describe` reads back what was kept                                  | §2.2              | "On the gateway" from the read-back; "Not offered: the gateway's allowlist doesn't include it" |
+| Platform defaults; nothing for Messages, Mail or Notes                                                                              | §2.1              | Which rows need the owner                                                                      |
+| `gateway.nodes.commands.allow`: admin to write, read to read; `replacePaths` to remove                                              | §2.3              | Section 6's steps and removal                                                                  |
+| `node.invoke.request` with `timeoutMs` (30 000 by default) and, sometimes, `sessionKey`                                             | §3.1              | The card's deadline; the bot named or not; where the card goes                                 |
+| A refusal reaches the caller as `"<code>: <message>"`; a late answer is `ignored`; a node gone is `NOT_CONNECTED`                   | §3.1              | Section 8's words; the card's "nothing reached Otto"                                           |
+| `permissions` don't admit a call; a newly granted one asks for approval again                                                       | §4.1, §4.2        | "This device enforces this"; "A change waits for approval"                                     |
+| No five minutes, no hour, no re-run in the gateway                                                                                  | §4.3              | The card's five minutes are this device's; nothing runs again                                  |
+| The background queue excludes a bot's calls; 10 minutes, 64                                                                         | §5                | Section 9: refuse at once, list on return                                                      |
+| Removing an allowlist entry ends a waiting call `POLICY_CHANGED`; removing a node needs admin                                       | §6                | Section 6's taking back; section 5's Stop                                                      |
+| Pairing-scope devices hear every device's requests, list only their own                                                             | §1.6              | Section 10: admin only, one line below                                                         |
+| `agents.list` `defaultId` at read; `sessions.create` with a message and attachments at write                                        | §7                | Sections 11 and 12                                                                             |
+| `sessions.list` rows carry `kind` (`direct`, `group`, `global`, `unknown`); the nodes tool sends `sessionKey` only for raw `invoke` | §3.1, §7.1        | Section 7: the iPhone answers only its person's direct chats                                   |
 
 ## 14. Parity rows
 
-Every target in `docs/parity.md` stands as written. This design rewords dependency cells only, with statuses unchanged:
+No target is changed here. Rows met as written: F-185, F-223, F-245, F-246, F-347, F-385, F-406 and F-452. F-384 is met by the iPhone's own rule of section 7 (only the person's direct chats), which nothing in the gateway enforces.
 
-- **F-185, F-223, F-347, F-348, F-384, F-385, F-451 and F-452**: the shared sentence about pairing becomes the two approvals, with the device request needing admin or the gateway's computer and the silent loopback pairing including the first command surface (research §1).
-- **F-245**: the primary bot is the preference of the bots-lifecycle design, falling back to `defaultId`, and a new task is `sessions.create` (live, research §7).
-- **F-246**: Send Message is `sessions.create` (live).
-- **F-452**: what remains is this device's own permission store; nothing in the gateway runs a call again (research §4.3).
+**Dependency cells** gain the facts this design established, with statuses unchanged (applied in `docs/parity.md`):
 
-**Rows that need a decision** (left as they are; the report proposes wording):
+- **F-185, F-223, F-347, F-348, F-384, F-385, F-451 and F-452**: pairing a node is two requests, a device request for the node role that only admin or `openclaw devices approve` approves, then the command surface that the node's own device approves at pairing and write (research §1).
+- **F-384**: the iPhone checks a request's task key against `sessions.list` `kind`; the nodes tool sends the key only with raw `invoke` (research §3.1, §7.1).
+- **F-245, F-246**: `sessions.create {agentId, message, attachments}` starts a task with a file at write (live, research §7).
 
-- **F-451**: its target asks that allowing within an hour re-evaluates and runs the original device operation once, and the card reads "Resumed". Nothing can: the gateway doesn't re-deliver a call or queue a bot's, and a node can't start a bot's turn (research §4.3, §5). This design saves the permission and runs nothing; a later request passes the gateway's checks then, which covers the row's "Blocked by policy" variant for the new call.
-- **F-348**: its target says the bot "continues without the phone app and says so". The card reads Timed out after five minutes and the bot is told at once why it got nothing (section 8); what the bot then says is the bot's.
+**Proposed wordings, for a ruling** (not applied). Each says only what the gateway established; where a claim can't be made true, it is taken away.
+
+| Row   | Target now                                                                                                                                                                                                                       | Proposed target                                                                                                                                                                                                                                                                                                                         | The fact behind it                                                                                                                                                                                                                                                                                                                               |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| F-348 | better: after 5 minutes with no answer the card reads "Timed out", and the Bot continues without the phone app and says so (§8.8).                                                                                               | better: after 5 minutes with no answer the card reads "Timed out". The Bot is told when its call ends, at the call's own limit (30 seconds unless the Bot sets another), in the device's words: no one answered (`NO_ANSWER_ON_DEVICE`) (§8.8).                                                                                         | The call ends at its `timeoutMs`, 30 000 ms by default, live; an answer after it is ignored, live (research §3.1). Nothing in the gateway holds a call for five minutes (research §4.3). What the Bot then writes is the model's, which no screen can promise.                                                                                   |
+| F-384 | same; note: with the app in the background, the Bot reports the device app as unavailable.                                                                                                                                       | same; note: with the app in the background, the Bot is told the device app is unavailable (`NOT_OPEN_ON_DEVICE`, or "node not connected" once the phone has suspended the app), and the phone answers only requests whose task the gateway lists as a direct chat.                                                                      | The phone's refusal reaches the Bot as `"<code>: <message>"`, live; a node gone is `NOT_CONNECTED`, live (research §3.1). The background queue never holds a Bot's call (research §5). Whether the Bot then reports it is the model's. The task's `kind` is the gateway's (research §7.1).                                                       |
+| F-451 | better: fixture … allowing within 1 hour of the request re-evaluates the order and runs the original device operation once, and the card reads "Resumed". Variant: a gateway denial … the card reads "Blocked by policy" (§8.8). | better: allowing within 1 hour of the request keeps the app allowed for later requests and says that the original request was not run; the Bot's next request is answered, unless a gateway denial for the command was added during the wait, which the gateway itself refuses ("node command not allowed" or "POLICY_CHANGED") (§8.8). | The gateway never re-delivers a call, never queues a Bot's call, and a node cannot start a Bot's turn (research §4.3, §5); a late answer is ignored, live (§3.1). Removing a command ends a waiting call `POLICY_CHANGED` and refuses later ones, live (§6). So "Resumed" and running the original once cannot be made true, and are taken away. |
 
 Each row's check, in the prototype check and later in the app:
 
-| Row   | Check                                                                                                                      |
-| ----- | -------------------------------------------------------------------------------------------------------------------------- |
-| F-185 | A request for an undecided app shows the card with Allow; Allow while the call is open answers it                          |
-| F-223 | This iPhone lists Calendar, Contacts, Location, Reminders, Alarms and Home, each with Allow, Allowed or Denied            |
-| F-347 | An app turned off by the operating system: the card and the row offer Open Settings and no Allow                           |
-| F-348 | Five minutes with no answer: the card reads Timed out; the bot was told `NO_ANSWER_ON_DEVICE`                            |
-| F-384 | In the background the iPhone refuses with `NOT_OPEN_ON_DEVICE`; on return the list says what was refused                  |
-| F-385 | This Mac lists Messages, Mail, Notes, Reminders, Calendar, Location and Contacts, each with its own Allow                  |
-| F-451 | (unmet as written) Allowing after the call ended runs nothing and says so                                                 |
-| F-452 | Allowing more than an hour later saves the permission; the next request is answered; nothing else is sent                 |
-| F-245 | The share sheet shows the primary bot in To, Add a note and Send; Send makes one task                                      |
-| F-406 | When it can't send, "Open in Clawtrate" opens the composer with the items, unsent                                         |
-| F-246 | List Bots returns the names; Send Message asks first, then makes one task                                                  |
+| Row   | Check                                                                                                                                                                                  |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-185 | A request for an undecided app shows the card with Allow; Allow while the call is open answers it                                                                                      |
+| F-223 | This iPhone lists Calendar, Contacts, Location, Reminders, Alarms and Home, each with Allow, Allowed or Denied                                                                         |
+| F-347 | An app turned off by the operating system: the card and the row offer Open Settings and no Allow                                                                                       |
+| F-348 | Five minutes with no answer: the card reads Timed out; the bot was told `NO_ANSWER_ON_DEVICE`                                                                                          |
+| F-384 | In the background the iPhone refuses with `NOT_OPEN_ON_DEVICE`; a request with no task key, or from a group, is refused `NOT_FROM_YOUR_CHAT`; on return the list says what was refused |
+| F-385 | This Mac lists Messages, Mail, Notes, Reminders, Calendar, Location and Contacts, each with its own Allow                                                                              |
+| F-451 | (unmet as written; the proposed wording) Allowing after the call ended runs nothing and says so                                                                                        |
+| F-452 | Allowing more than an hour later saves the permission; the next request is answered; nothing else is sent                                                                              |
+| F-245 | The share sheet shows the primary bot in To, Add a note and Send; Send makes one task                                                                                                  |
+| F-406 | When it can't send, "Open in Clawtrate" opens the composer with the items, unsent                                                                                                      |
+| F-246 | List Bots returns the names; Send Message asks first, then makes one task                                                                                                              |
 
 ## 15. For builders
 
 ### What each part uses
 
-| Part                         | Existing components                                                             | New                          |
-| ---------------------------- | ------------------------------------------------------------------------------- | ---------------------------- |
-| This Mac, This iPhone        | Settings frame, switch, fact block, note, access bar, command block, step list | `.d-app`, `.d-state`         |
-| The owner's choice           | Confirmation, step list, access bar                                            |                              |
-| The permission card          | The approval card's frame, Raw, event line                                     | `.d-ask`                     |
-| Machines' block              | Fact block, confirmation                                                       | `.d-app` (as a request row)  |
-| The share sheet, Siri        | The composer's attachments                                                     | `.d-share`, `.d-sys` (stand-in) |
+| Part                  | Existing components                                                            | New                             |
+| --------------------- | ------------------------------------------------------------------------------ | ------------------------------- |
+| This Mac, This iPhone | Settings frame, switch, fact block, note, access bar, command block, step list | `.d-app`, `.d-state`            |
+| The owner's choice    | Confirmation, step list, access bar                                            |                                 |
+| The permission card   | The approval card's frame, Raw, event line                                     | `.d-ask`                        |
+| Machines' block       | Fact block, confirmation                                                       | `.d-app` (as a request row)     |
+| The share sheet, Siri | The composer's attachments                                                     | `.d-share`, `.d-sys` (stand-in) |
 
 ### What the host does
 
@@ -389,7 +397,8 @@ Each row's check, in the prototype check and later in the app:
 - This device's node state from `node.describe` and `node.pair.list`, re-read on `node.pair.requested`, `node.pair.resolved` and `device.pair.resolved`, and every 60 seconds while the page is open.
 - For each app: what this device declared, what the gateway read back, and the local permission, kept apart.
 - Which bots are offered the tool for other devices, from `controls.md`'s "Offered" fact with its date.
-- The primary bot from `users.prefs` and `agents.list`, as the bots-lifecycle design supplies it.
+- The primary bot from `agents.list` `defaultId`.
+- For the iPhone, each task's `kind` from `sessions.list`, re-read when a request names a task this device hasn't listed.
 
 ### Order
 
@@ -398,36 +407,36 @@ Each row's check, in the prototype check and later in the app:
 3. This Mac and This iPhone, read back. Check F-223, F-385.
 4. The permission card and its clocks, on fake time. Check F-185, F-347, F-348, F-452, and F-451's part.
 5. The owner's choice with admin. Check F-385's Messages, Mail and Notes.
-6. Machines' block. 
+6. Machines' block.
 7. The iPhone: background refusals and the return list; then the share sheet and the two actions, each first proved on a device: that a share extension can use the paired credential through a shared keychain, that it can open the app, and that the App Intent's confirmation shows before sending. Check F-245, F-406, F-246.
 
 ### Prototype states
 
-`prototype/device.html?screen=<id>`, with the shared `theme`, `width`, `motion` and `chrome` parameters, and `access` (`read`, `write` for the interactive tier, `pairing` for the interactive tier with device access, `admin`, the default). `width=phone` shows the iPhone's screens.
+`prototype/device.html?screen=<id>`, with the shared `theme`, `width`, `motion` and `chrome` parameters, and `access` (`read`, `write` for the interactive tier, `pairing` for the interactive tier with device access, `admin`, the default). The iPhone's screens (`phone-`, `card-`, `share`, `siri-`) open at phone width unless `width` says otherwise. `app=mail` or `app=notes` gives the owner's choice for that app, `own=offered` or `own=denied` its state once allowed, `to=<bot>` the share sheet's bot, and `link=down` a gateway that can't be reached.
 
-| Screen                      | What it shows                                                                                         |
-| --------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `mac-off`                   | This Mac, off; with `via=silent` the walk passes the approvals by itself                              |
-| `mac-confirm`               | The host's confirmation for turning it on                                                             |
-| `mac-waiting-device`        | Waiting for the owner: the command (below admin) or "Approve this Mac" (admin)                        |
-| `mac-waiting-surface`       | Approving its commands: by itself (`access=pairing` or `admin`), or the device access bar             |
-| `mac-on`                    | The apps, both facts each; `via=silent` adds the silent-pairing line                                  |
-| `mac-messages-confirm`      | The owner's choice, admin                                                                             |
-| `mac-messages-steps`        | Its steps; `fail=2` stops at step 2                                                                   |
-| `mac-messages-needadmin`    | Below admin                                                                                           |
-| `mac-messages-on`           | Messages offered and allowed, with its menu                                                           |
-| `mac-messages-remove`       | Removing it from the allowlist                                                                        |
-| `mac-stop`                  | Stopping, with "Also remove it from the gateway" for admin                                            |
-| `mac-offline`, `mac-removed` | Not connected; removed by the owner                                                                   |
-| `mac-request`               | A request that named no task, in "Requests for this device", with the banner                          |
-| `machines`                  | Devices asking to be used by bots, admin; `access=write` shows the one line                           |
-| `phone-on`                  | This iPhone                                                                                           |
-| `card-pending`, `card-sent`, `card-ignored`, `card-dontallow`, `card-ended`, `card-later`, `card-timedout`, `card-settings` | The permission card's states |
-| `phone-back`                | Back from the background                                                                              |
-| `share`, `share-to`, `share-sent`, `share-cant`, `share-draft` | The share sheet, choosing the bot, sent, can't finish, the composer it opens |
-| `siri-list`, `siri-list-fail`, `siri-confirm`, `siri-sent`, `siri-fail` | The two actions                                             |
+| Screen                                                                                                                      | What it shows                                                                             |
+| --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `mac-off`                                                                                                                   | This Mac, off; with `via=silent` the walk passes the approvals by itself                  |
+| `mac-confirm`                                                                                                               | The host's confirmation for turning it on                                                 |
+| `mac-waiting-device`                                                                                                        | Waiting for the owner: the command (below admin) or "Approve this Mac" (admin)            |
+| `mac-waiting-surface`                                                                                                       | Approving its commands: by itself (`access=pairing` or `admin`), or the device access bar |
+| `mac-on`                                                                                                                    | The apps, both facts each; `via=silent` adds the silent-pairing line                      |
+| `mac-messages-confirm`                                                                                                      | The owner's choice, admin (Messages; `app=mail`, `app=notes`)                             |
+| `mac-messages-steps`                                                                                                        | Its steps; `fail=2` stops at step 2                                                       |
+| `mac-messages-needadmin`                                                                                                    | Below admin                                                                               |
+| `mac-messages-on`                                                                                                           | Messages offered and allowed, with its menu                                               |
+| `mac-messages-remove`                                                                                                       | Removing it from the allowlist                                                            |
+| `mac-stop`                                                                                                                  | Stopping, with "Also remove it from the gateway" for admin                                |
+| `mac-offline`, `mac-removed`                                                                                                | Not connected; removed by the owner                                                       |
+| `mac-request`                                                                                                               | A request that named no task, in "Requests for this device", with the banner              |
+| `machines`                                                                                                                  | Devices asking to be used by bots, admin; `access=write` shows the one line               |
+| `phone-on`                                                                                                                  | This iPhone                                                                               |
+| `card-pending`, `card-sent`, `card-ignored`, `card-dontallow`, `card-ended`, `card-later`, `card-timedout`, `card-settings` | The permission card's states                                                              |
+| `phone-back`                                                                                                                | Back from the background                                                                  |
+| `share`, `share-to`, `share-sent`, `share-cant`, `share-draft`                                                              | The share sheet, choosing the bot, sent, can't finish, the composer it opens              |
+| `siri-list`, `siri-list-fail`, `siri-confirm`, `siri-sent`, `siri-fail`                                                     | The two actions                                                                           |
 
-The check walks: turning on to `mac-on` below admin and with admin, and silently; cancelling the request; the owner's choice to `mac-messages-on`, and its failure at step 2; below admin; turning Messages off and removing it; stopping; approving and rejecting another device; the card from pending to each outcome; the share sheet to sent, to another bot, and to "Open in Clawtrate" and the draft; Send Message to sent and to its failure.
+`prototype/tools/checks/device.mjs` walks: turning on to `mac-on` below admin, with admin and with device access, and silently; cancelling the request; the owner's choice to `mac-messages-on`, and its failure at step 2; below admin; turning Messages off and removing it; stopping; approving and rejecting another device; the card from pending to each outcome; the share sheet to sent, to another bot, and to "Open in Clawtrate" and the draft; Send Message to sent and to its failure.
 
 ## 16. Not covered here
 

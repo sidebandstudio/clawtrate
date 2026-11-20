@@ -620,6 +620,51 @@ async function share() {
   const made = await create(writer);
   const result = made.result as Record<string, unknown> | undefined;
   say("sessions.create with a message at write:", made.ok ? { ok: true, keys: Object.keys(result ?? {}), key: result?.key, runId: Boolean(result?.runId) } : made);
+  // A shared item: a small text file with fixed content, as the composer sends files.
+  // Another bot than the one above, so this run is not queued behind the first.
+  const withFile = await tryCall(writer, "sessions.create", {
+    agentId: agents?.agents?.find((a) => a.id !== agents?.defaultId)?.id ?? agents?.defaultId,
+    message: "Shared from the probe, with a file.",
+    idempotencyKey: crypto.randomUUID(),
+    attachments: [
+      { type: "file", mimeType: "text/plain", fileName: "shared-note.txt", content: Buffer.from("A fixed line of shared text.\n").toString("base64") },
+      // A 1x1 picture, drawn here; a picture is kept in the transcript as an image block.
+      { type: "image", mimeType: "image/png", fileName: "shared-dot.png", content: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==" },
+    ],
+  });
+  const fileResult = withFile.result as Record<string, unknown> | undefined;
+  say("sessions.create with a message and a file at write:", withFile.ok ? { ok: true, key: fileResult?.key, runId: Boolean(fileResult?.runId) } : withFile);
+  if (withFile.ok && typeof fileResult?.key === "string") {
+    // The run may still hold the message as a pending input, or have taken it into the transcript.
+    const strip = (m: Record<string, unknown>) => {
+      const { __openclaw: _meta, ...rest } = m; // the sender's identity is not printed
+      return JSON.stringify(rest).replace(/"(data|content)":"[A-Za-z0-9+/=]{40,}"/g, '"$1":"<base64>"').slice(0, 700);
+    };
+    let seen: string[] = [];
+    for (let i = 0; i < 40 && !seen.some((line) => line.startsWith("transcript")); i += 1) {
+      await sleep(500);
+      const history = await tryCall(reader, "chat.history", { sessionKey: fileResult.key, limit: 10 });
+      const r = (history.result ?? {}) as { messages?: Record<string, unknown>[]; pendingInputs?: { items?: { message?: Record<string, unknown> }[] } };
+      seen = [
+        ...(r.messages ?? []).filter((m) => m.role === "user").map((m) => `transcript: ${strip(m)}`),
+        ...(r.pendingInputs?.items ?? []).map((item) => `pending input: ${strip(item.message ?? {})}`),
+      ];
+    }
+    say("the shared task's first message, as the gateway holds it:", seen);
+    say(
+      "the task's messages, read back:",
+      history.ok
+        ? messages.map((m) => ({ role: m.role, content: JSON.stringify(m.content ?? m.text ?? null).slice(0, 400), keys: Object.keys(m) }))
+        : history,
+    );
+  }
+  // What the gateway says about a task's kind: a request's task key is checked against this.
+  const listedSessions = await tryCall(reader, "sessions.list", {});
+  const rows = (listedSessions.result as { sessions?: Record<string, unknown>[] })?.sessions ?? [];
+  say(
+    "sessions.list kinds at read:",
+    listedSessions.ok ? rows.slice(0, 6).map((r) => ({ key: String(r.key).replace(/[0-9a-f-]{36}/, "<uuid>"), kind: r.kind, chatType: r.chatType, channel: r.channel })) : listedSessions,
+  );
   for (const c of [reader, writer]) await c.close();
 }
 

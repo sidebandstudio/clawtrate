@@ -183,6 +183,7 @@
     ["TURNED_OFF_IN_SETTINGS", "Calendar is turned off for Clawtrate in Studio Mac's System Settings."],
     ["TURNED_OFF_ON_DEVICE", "Calendar was turned off on Studio Mac while this request was answered."],
     ["NOT_OPEN_ON_DEVICE", "Clawtrate isn't open on iPhone, so no one could be asked. Ask again when it is open."],
+    ["NOT_FROM_YOUR_CHAT", "iPhone answers only requests from the person's own chat with a bot. Ask with the invoke action from that chat."],
     ["NOT_SERVED", "Studio Mac doesn't answer this request."],
     ["UNAVAILABLE_ON_DEVICE", "Calendar couldn't answer on Studio Mac."],
   ];
