@@ -426,24 +426,35 @@ test("a tool the gateway's settings deny for every bot stays Never and locked wh
   }
 });
 
-test("F-222: a bot's settings choose whether it may use a tool server: Never writes the server's tools to its own deny list and its calls are refused; Allow takes them off and they run", async () => {
+test("F-222: a bot's settings choose whether it may use a tool server: Never writes the prefix the gateway gave the server's tools to its own deny list and its calls are refused; Allow on that entry takes it off and they run", async () => {
   test.setTimeout(240_000);
   await permissions("Marlow");
   await expect(lineRow("server:coder")).toContainText("Allowed");
-  await openLine("server:coder");
-  await choose(
-    "Never",
-    /^Marlow can't use the tool server coder\. The gateway removes these tools from Marlow\. If Marlow tries one, the attempt fails as a tool that was not found\.$/,
-  );
+  const line = await openLine("server:coder");
+  // The line names the server's tools as the gateway lists them.
+  await expect(line.locator(".c-tools code")).toHaveText(["coder__*"]);
+  await line.getByRole("radio", { name: "Never", exact: true }).click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "Saved. Tool server coder: never" }),
+  ).toHaveCount(1, { timeout: 30_000 });
   expect(botTools(await config(), "marlow").deny).toEqual(["coder__*"]);
   await shots("permissions-connector");
   const refused = await hostTask("marlow", "Marlow", "Connector off", "#mcp");
   const [call] = await waitResult(refused.key, "coder__send_message");
   expect(call!.text).toBe("Tool coder__send_message not found");
-  // Allowed again from the same page: the gateway's list no longer names it, and the call runs.
+  // Denied, the server's tools aren't in the latest task's listing: the server claims nothing,
+  // and the deny is its own line, where Allow takes it off.
   await permissions("Marlow");
-  await openLine("server:coder");
-  await choose("Allow", /^Marlow's own setting is Allow/);
+  await expect(lineRow("deny:coder__*")).toContainText("Never");
+  await expect(lineRow("server:coder")).toContainText("Not offered");
+  await openLine("deny:coder__*");
+  await page
+    .getByTestId("permission-line")
+    .getByRole("radio", { name: "Allow", exact: true })
+    .click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "Saved. coder__*: allowed" }),
+  ).toHaveCount(1, { timeout: 30_000 });
   expect(botTools(await config(), "marlow").deny).toBeUndefined();
   const allowed = await hostTask("marlow", "Marlow", "Connector on", "#mcp");
   const [ran] = await waitResult(allowed.key, "coder__send_message");
@@ -479,6 +490,9 @@ test("F-177: a rule for every bot applies to each bot on top of its own: Juniper
 
 test("F-414: Otto's command policy is Ask, read from its settings; a command the person asked for earlier in the task still shows the gateway's card, because earlier words never pass a call", async () => {
   test.setTimeout(240_000);
+  // The fixture: no rule of the rules plugin for Otto or for every bot, so the card is the gateway's.
+  expect(await scopeRules("otto")).toEqual([]);
+  expect(await scopeRules("*")).toEqual([]);
   await permissions("Otto");
   await expect(lineRow("exec")).toContainText("Asks first");
   await expect(lineRow("exec")).toContainText("Otto's setting: Ask");
