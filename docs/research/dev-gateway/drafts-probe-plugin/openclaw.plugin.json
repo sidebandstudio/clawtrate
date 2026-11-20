@@ -1,0 +1,12 @@
+{
+  "id": "clawtrate-drafts-probe",
+  "name": "Clawtrate drafts probe",
+  "description": "Research only: stand-in send tools and a before_tool_call hook for the drafts design. Development instances only.",
+  "categories": ["developer-tools"],
+  "activation": { "onStartup": true },
+  "contracts": {
+    "tools": ["probe_send_email", "probe_send_slack_message"],
+    "trustedToolPolicies": ["hold-recheck"]
+  },
+  "configSchema": { "type": "object", "additionalProperties": false }
+}
