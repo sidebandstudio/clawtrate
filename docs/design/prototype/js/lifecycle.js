@@ -61,6 +61,8 @@
   if (p("outside") === "1") OUTSIDE.marlow = "https://pictures.example/marlow.png";
   if (p("outside") === "http") OUTSIDE.marlow = "http://pictures.example/marlow.png";
   L.outsidePicture = (id) => OUTSIDE[id] || null;
+  // Only the desktop can hold the choice (decisions.md): the web preview and the iPhone never load one.
+  const loadsOutside = () => !(p("host") === "web" || p("width") === "phone" || matchMedia("(max-width: 687px)").matches);
   L.allowed = {}; // bot id -> the exact address allowed on this device
   const pictureShown = (id) => (OUTSIDE[id] ? L.allowed[id] === OUTSIDE[id] : false);
   // Draw an allowed outside picture wherever the bot's avatar appears; the rest stay the character.
@@ -401,7 +403,9 @@
             : "") +
       (OUTSIDE[id] && !pictureShown(id)
         ? OUTSIDE[id].startsWith("https://")
-          ? `<div class="lc-outside" data-lc-outside><p>${esc(b.name)}'s picture is at <span class="mono lc-address">${esc(OUTSIDE[id])}</span>. Loading it lets that host see this device's network address, each time it loads.</p>${button("Load picture", 'data-lc="allow-picture" data-size="sm"')}</div>`
+          ? loadsOutside()
+            ? `<div class="lc-outside" data-lc-outside><p>${esc(b.name)}'s picture is at <span class="mono lc-address">${esc(OUTSIDE[id])}</span>. Loading it lets whoever runs that address see this device's network address and the time of each request.</p>${button("Load picture", 'data-lc="allow-picture" data-size="sm"')}</div>`
+            : `<div class="lc-outside" data-lc-outside><p>${esc(b.name)}'s picture is at <span class="mono lc-address">${esc(OUTSIDE[id])}</span>. This app doesn't load pictures from other addresses.</p></div>`
           : `<div class="lc-outside" data-lc-outside><p>${esc(b.name)}'s picture is at <span class="mono lc-address">${esc(OUTSIDE[id])}</span>, an http address, which Clawtrate doesn't load.</p></div>`
         : "") +
       (E.status === "saving" ? `<p class="b-hint lc-hero-line" role="status">Saving…</p>` : "") +
@@ -1238,7 +1242,7 @@
       case "set-picture":
         return setPicture();
       case "allow-picture": {
-        // Kept on this device, per bot and per exact address; nothing is written to the gateway.
+        // Kept on this device, per gateway, bot and exact address; nothing is written to the gateway.
         const id = app.model.selectedBot;
         L.allowed[id] = OUTSIDE[id];
         hero.dataset.lc = "";

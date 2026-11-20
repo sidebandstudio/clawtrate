@@ -254,7 +254,7 @@ await p.close();
 const photoOn = (p, sel) => p.evaluate((x) => [...document.querySelectorAll(x)].map((el) => el.dataset.photo === "true"), sel);
 p = await open(`bot=marlow&${settings}&outside=1`);
 t = await hero(p);
-check("S4 an https picture: the character is drawn, with the full address and the choice", t.includes("Marlow's picture is at https://pictures.example/marlow.png. Loading it lets that host see this device's network address, each time it loads.") && t.includes("Load picture"));
+check("S4 an https picture: the character is drawn, with the full address and the choice", t.includes("Marlow's picture is at https://pictures.example/marlow.png. Loading it lets whoever runs that address see this device's network address and the time of each request.") && t.includes("Load picture"));
 check("S4 ... nothing outside is loaded before the choice: hero and rail draw the character", (await photoOn(p, '#work-hero .avatar[data-bot="marlow"]')).every((x) => !x) && (await photoOn(p, '#bot-list .avatar[data-bot="marlow"]')).every((x) => !x));
 await clickText(p, "#work-hero", "Load picture");
 await p.waitForTimeout(80);
@@ -263,6 +263,12 @@ await p.close();
 p = await open(`bot=marlow&${settings}&outside=1&lc=choose`);
 check("S4 the chooser draws the character for an outside picture", (await photoOn(p, '#lc-dialog .avatar[data-bot="marlow"]')).every((x) => !x));
 await p.close();
+for (const [where, q, vp] of [["the web preview", "host=web", undefined], ["the phone", "width=phone", { width: 390, height: 844 }]]) {
+  p = await open(`bot=marlow&${settings}&outside=1&${q}`, vp);
+  t = await hero(p);
+  check(`S4 ${where} never loads an outside picture, and says so without a choice`, t.includes("Marlow's picture is at https://pictures.example/marlow.png. This app doesn't load pictures from other addresses.") && !t.includes("Load picture") && (await photoOn(p, '#work-hero .avatar[data-bot="marlow"]')).every((x) => !x));
+  await p.close();
+}
 p = await open(`bot=marlow&${settings}&outside=http`);
 t = await hero(p);
 check("S4 an http picture is never loaded, and says so", t.includes("Marlow's picture is at http://pictures.example/marlow.png, an http address, which Clawtrate doesn't load.") && !t.includes("Load picture"));

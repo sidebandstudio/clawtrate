@@ -74,6 +74,7 @@
     ["bot=juniper&" + st + "&lc=picture&ptab=generate&imagetool=unreadable", "Generate: the tools couldn't be read"],
     ["bot=marlow&" + st + "&outside=1", "A picture at an https address: the character, and the choice"],
     ["bot=marlow&" + st + "&outside=http", "A picture at an http address: never loaded"],
+    ["bot=marlow&" + st + "&outside=1&host=web", "A picture at an https address in the web preview: never loaded, no choice"],
     ["bot=juniper&" + st + "&lc=picture&ptab=upload", "Upload"],
     ["bot=juniper&" + st + "&lc=picture&ptab=upload&upload=crop", "Upload: cropping"],
     ["bot=juniper&" + st + "&lc=picture&ptab=upload&upload=toolarge", "Upload: too large"],

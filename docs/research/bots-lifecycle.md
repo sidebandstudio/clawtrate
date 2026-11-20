@@ -111,7 +111,7 @@ avatar that is not an image, data:text/plain: {"ok":true}
 
 ### For the design
 
-A picture is saved only when `agents.list` returns it: an `ok` from `agents.update` is not enough, because saving and showing have different limits. Clawtrate's own state keeps a picture of at most 32,768 characters (`packages/core/src/state-bounds.ts`, `MAX_AVATAR_CHARS`; `MAX_CREATE_AVATAR_CHARS` in `accounts-engine.ts`), so an uploaded photo is cropped, encoded and measured against that before it is sent; the 25 MB limit of F-270 applies to the file chosen, before cropping. The gateway keeps the picture, not the shape and colour a character was drawn from, so an editor cannot say which were chosen. A picture at an outside address is drawn as the bot's character until the person allows it, under the remote-content rule on `origin/e3-remote-content-rule` (pull request #151, not merged).
+A picture is saved only when `agents.list` returns it: an `ok` from `agents.update` is not enough, because saving and showing have different limits. Clawtrate's own state keeps a picture of at most 32,768 characters (`packages/core/src/state-bounds.ts`, `MAX_AVATAR_CHARS`; `MAX_CREATE_AVATAR_CHARS` in `accounts-engine.ts`), so an uploaded photo is cropped, encoded and measured against that before it is sent; the 25 MB limit of F-270 applies to the file chosen, before cropping. The gateway keeps the picture, not the shape and colour a character was drawn from, so an editor cannot say which were chosen. A picture at an outside address is drawn as the bot's character until the person allows it, under the rule in `decisions.md`, "Addresses a gateway hands the client", whose evidence is [Addresses a gateway hands the client](remote-content.md).
 
 ## 4. An image tool
 
