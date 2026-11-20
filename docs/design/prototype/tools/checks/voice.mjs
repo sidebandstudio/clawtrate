@@ -317,6 +317,14 @@ await p.close();
 
 // 3. The voice handshake before any word that it changed --------------------------------------------------
 
+// The gateway's side of one change, each step its own event, matched by its returned identity.
+const step = {
+  requested: (p, voice) => ev(p, "voiceRequested", { changeId: "chg1", voiceSessionId: "vs1", voice, gen: 1 }),
+  created: (p) => ev(p, "replacementCreate", { id: "vs1r", changeId: "chg1" }),
+  ready: (p) => ev(p, "replacementReady", { id: "vs1r" }),
+  closed: (p, ok = true) => ev(p, "originalClosed", { id: "vs1", ok }),
+  applied: (p) => ev(p, "setApplied", { voiceSessionId: "vs1r", gen: 1 }),
+};
 p = await open("auto=0&state=settings");
 await wait(p);
 check("3 the voices offered are the call's, with no Default sentinel", await q(p, () => [...document.querySelectorAll('[data-v="voice"] option')].map((o) => o.value).join() === "Alloy,Cedar,Marin,Sage"));
@@ -326,28 +334,48 @@ await p.selectOption('[data-v="voice"]', "Cedar");
 await wait(p, 40);
 c = await call(p);
 check("3 set: pending, said, the active voice and the saved choice unchanged", (await io(p)).sets[0].voice === "Cedar" && c.voice === "Alloy" && (await q(p, () => window.voice.S.prefs.saved.otto.voice)) === null && (await text(p, '[data-testid="voice-note"]')) === "Changing to Cedar… The current reply may stop.");
-await ev(p, "voiceRequested");
+await ev(p, "voiceRequested", { changeId: "chg1", voiceSessionId: "vs9", voice: "Cedar", gen: 1 });
+check("3 a request for another session is not this setter's", (await io(p)).creates.length === 0);
+await step.requested(p, "Cedar");
 s = await io(p);
-check("3 requested: one replacement, with its change id, the task and the language", s.creates.length === 1 && s.creates[0].voiceChangeId && s.creates[0].sessionKey === "o1" && s.creates[0].capabilities.join() === "voice-selection" && (await call(p)).voice === "Alloy");
-await ev(p, "replacementReady");
+check("3 requested: one replacement, with its change id, the task and the language", s.creates.length === 1 && s.creates[0].voiceChangeId === "chg1" && s.creates[0].sessionKey === "o1" && s.creates[0].capabilities.join() === "voice-selection" && (await call(p)).voice === "Alloy");
+await step.ready(p);
+check("3 a ready before the create's reply is buffered, not acted on", (await io(p)).closes.length === 0);
+await step.created(p);
 s = await io(p);
-check("3 replacement ready: the original closed, then complete with the replacement's id", s.closes.at(-1).why === "voice change" && s.completes.at(-1).outcome === "ready" && s.completes.at(-1).voiceSessionId === "vs1r" && (await call(p)).voice === "Alloy");
-check("3 …complete alone changes nothing on screen", (await live(p)) !== "Voice: Cedar, from Otto's next reply.");
-await ev(p, "setApplied");
-check("3 applied: the voice changes, said once", (await call(p)).voice === "Cedar" && (await live(p)) === "Voice: Cedar, from Otto's next reply.");
+check("3 …and taken once the replacement is admitted: the original's close requested", await q(p, () => window.voice.S.relays.some((r) => r.id === "vs1r" && r.state === "open")) && s.closes.at(-1).why === "voice change");
+before = (await io(p)).appends;
+await wait(p, 1200);
+s = await io(p);
+check("3 replacement ready without original close issues no complete or new output", s.completes.length === 0 && s.appends === before && !(await call(p)).playing);
+await step.closed(p);
+s = await io(p);
+check("3 the original closed: complete with the replacement's id", s.completes.at(-1).outcome === "ready" && s.completes.at(-1).voiceSessionId === "vs1r" && (await call(p)).voice === "Alloy");
+check("3 …complete alone changes nothing on screen", (await live(p)) !== "Voice changed to Cedar for this session.");
+await ev(p, "setApplied", { voiceSessionId: "vs9", gen: 1 });
+await ev(p, "setApplied", { voiceSessionId: "vs1r", gen: 2 });
+check("3 foreign applied result cannot change voice or save", (await call(p)).voice === "Alloy" && (await io(p)).prefWrites.length === 0);
+check("3 foreign applied is ignored", (await call(p)).voice === "Alloy" && (await io(p)).prefWrites.length === 0);
+await step.applied(p);
+check("3 applied: the voice changes, said once", (await call(p)).voice === "Cedar" && (await live(p)) === "Voice changed to Cedar for this session.");
 check("3 …then saved: Saving… until confirmed", (await text(p, '[data-testid="kept-note"]')) === "Saving…" && (await q(p, () => window.voice.S.prefs.saved.otto.voice)) === null);
 await ev(p, "prefOk");
 check("3 …confirmed", (await text(p, '[data-testid="kept-note"]')) === "Saved for Otto on Home gateway, so your other devices use it too." && (await q(p, () => window.voice.S.prefs.saved.otto.voice)) === "Cedar");
 await click(p, '[data-v="voice-default"]');
-check("3 Default for future calls: clears the saved voice, keeps this call's", (await call(p)).voice === "Cedar" && (await text(p, '[data-testid="voice-note"]')) === "Otto's next calls use the provider's default voice. This call keeps Cedar." && (await io(p)).prefWrites.at(-1).value === null);
+check("3 Default for future calls: clears the saved voice, keeps this call's", (await call(p)).voice === "Cedar" && (await io(p)).prefWrites.at(-1).value === null);
 await p.close();
 
 p = await open("auto=0&state=voicechange");
 await wait(p, 100);
+await step.requested(p, "Cedar");
 await ev(p, "drop");
-await ev(p, "voiceRequested");
-await ev(p, "setApplied");
-check("3 a drop during a change: no replacement, no changed voice, no announcement of it", (await io(p)).creates.length === 0 && !(await live(p)).includes("Cedar") && (await q(p, () => window.voice.S.prefs.saved.otto.voice)) === null);
+await ev(p, "hello");
+await step.created(p);
+await step.ready(p);
+await step.applied(p);
+check("3 drop before replacement ready keeps both admitted or unresolved relays blocked", await q(p, () =>
+  window.voice.S.relays.filter((r) => r.state === "unconfirmed").length === 2 && document.querySelector('[data-v="call"]').getAttribute("aria-disabled") === "true" && !document.querySelector('[data-v="start-new"]')));
+check("3 …no changed voice, no announcement of it, nothing saved", !(await live(p)).includes("Cedar") && (await q(p, () => window.voice.S.prefs.saved.otto.voice)) === null);
 await p.close();
 p = await open("auto=0&state=settings");
 await wait(p);
@@ -355,24 +383,43 @@ await p.selectOption('[data-v="voice"]', "Marin");
 await ev(p, "setRefused", { message: "A voice change is already in progress for this call" });
 check("3 a refused set: the gateway's words, still the old voice", (await text(p, '[data-testid="voice-note"]')) === "Voice didn't change: A voice change is already in progress for this call. Still using Alloy." && (await call(p)).voice === "Alloy");
 await p.selectOption('[data-v="voice"]', "Sage");
-await ev(p, "voiceRequested");
+await step.requested(p, "Sage");
 await ev(p, "replacementFailed", {});
 s = await io(p);
-check("3 a replacement that fails: complete failed, still the old voice", s.completes.at(-1).outcome === "failed" && (await call(p)).voice === "Alloy");
+check("3 a replacement that fails while the original works: complete failed, still the old voice", s.completes.at(-1).outcome === "failed" && (await call(p)).voice === "Alloy");
 await ev(p, "botVoiceRequested");
 s = await io(p);
-check("3 a change the device didn't ask for: declined before any replacement", s.completes.at(-1).changeId === "bot-change" && s.completes.at(-1).outcome === "failed" && s.creates.length === 1 && (await has(p, '[data-testid="voice-note-band"]', "Otto asked for a different voice. Clawtrate kept Alloy for this call.")));
-await p.close();
-p = await open("auto=0&state=novoices");
-await wait(p);
-check("3 no voices to choose: said, no list", (await text(p, '[data-testid="voice-note"]')) === "OpenAI Realtime Voice offers no voices to choose from for this call." && !(await q(p, () => document.querySelector('[data-v="voice"]'))));
+check("3 a change the device didn't ask for: declined before any replacement", s.completes.at(-1).changeId === "bot-change" && s.completes.at(-1).outcome === "failed" && s.creates.length === 1 && (await has(p, '[data-testid="voice-note-band"]', "A voice change was requested. Clawtrate did not switch voices.")));
 await p.close();
 p = await open("auto=0&state=settings");
 await wait(p);
 await p.selectOption('[data-v="voice"]', "Cedar");
-await ev(p, "voiceRequested");
-await ev(p, "replacementReady");
-await ev(p, "setApplied");
+await step.requested(p, "Cedar");
+await step.created(p);
+await step.ready(p);
+await step.closed(p, false);
+check("3 the original's close unconfirmed: the call is interrupted, never 'Still using'", await q(p, () =>
+  window.voice.S.call.state === "failed" && !document.body.textContent.includes("Still using") && window.voice.S.relays.filter((r) => r.state !== "closed").length === 2));
+await p.close();
+p = await open("auto=0&state=novoices");
+await wait(p);
+check("3 no voice changes on this call: said, no list", (await text(p, '[data-testid="voice-note"]')) === "Voice changes are unavailable for this call" && !(await q(p, () => document.querySelector('[data-v="voice"]'))));
+await p.close();
+p = await open("auto=0&state=voicesfail");
+await wait(p);
+check("3 the voices couldn't be read: said", (await text(p, '[data-testid="voice-note"]')) === "Couldn't read the voices for this call.");
+await p.close();
+p = await open("auto=0&state=voicegone");
+check("3 a saved voice the call didn't get: Clawtrate did not request it", (await text(p, '[data-testid="voice-gone"]')) === "Clawtrate did not request Ember for this call");
+await p.close();
+p = await open("auto=0&state=settings");
+await wait(p);
+await p.selectOption('[data-v="voice"]', "Cedar");
+await step.requested(p, "Cedar");
+await step.created(p);
+await step.ready(p);
+await step.closed(p);
+await step.applied(p);
 await ev(p, "prefRefused", { message: "conflict" });
 check("3 applied but not saved: both said, separately", (await call(p)).voice === "Cedar" && (await text(p, '[data-testid="kept-note"]')) === "Couldn't save: conflict. Otto's saved voice is still the provider's default voice. This call may differ.");
 await p.close();

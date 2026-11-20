@@ -508,7 +508,7 @@
           `<p class="call-note" data-testid="mic-stopped"><b>Microphone stopped. No new audio is being sent.</b>${c.micStopped === "unplugged" ? ` ${esc(`${S.tempMic || S.storedMic} was disconnected.`)}` : c.micStopped === "revoked" ? " Microphone access was turned off." : ""}</p>` +
           `<div class="call-actions">${button("Turn microphone back on", 'data-v="mic-back" data-k="mic-back"')}</div>`;
       if (c.ready && c.expiresAt - c.clockAt <= 120) notes += `<p class="call-note" data-testid="call-limit">${esc(`This session is scheduled to end at ${clock(c.expiresAt)}.`)}</p>`;
-      if (c.voiceGone) notes += `<p class="call-note" data-testid="voice-gone">${esc(`${c.voiceGone} isn't offered by ${GATEWAY} any more, so this call uses the provider's default voice.`)}</p>`;
+      if (c.voiceGone) notes += `<p class="call-note" data-testid="voice-gone">${esc(`Clawtrate did not request ${c.voiceGone} for this call`)}</p>`;
       if (c.voiceNote) notes += `<p class="call-note" data-testid="voice-note-band">${esc(c.voiceNote)}</p>`;
       if (c.change) notes += `<p class="call-note" data-testid="switching">${esc(`Changing to ${c.change.voice}… The current reply may stop.`)}</p>`;
       if (c.transcriptOpen)
@@ -553,7 +553,7 @@
       : "";
     const voiceNote = c.change
       ? `Changing to ${c.change.voice}… The current reply may stop.`
-      : c.voiceMsg || (voices ? `This call: ${c.voice}.` : `${PROVIDERS[c.provider]} offers no voices to choose from for this call.`);
+      : c.voiceMsg || (c.voicesReadFailed ? "Couldn't read the voices for this call." : !voices ? "Voice changes are unavailable for this call" : c.voice ? `This call: ${c.voice}.` : "Current voice unknown");
     d.innerHTML =
       `<div class="b-confirm v-call-settings" data-testid="call-settings"><h2 id="call-settings-title">${esc(`Voice chat settings for ${b.name}`)}</h2>` +
       `<div class="v-group"><h4>Voice</h4>${voiceRow}<p class="v-row-note" id="voice-note" data-testid="voice-note">${esc(voiceNote)}</p>` +
@@ -649,7 +649,8 @@
     if (c && c.state === "live" && c.ready) {
       c.secs += 1;
       c.clockAt += 1;
-      if (c.capture && !c.muted && S.connected && callAudioOk(c)) S.io.appends += 1;
+      const handover = c.change && ["closingOriginal", "completing"].includes(c.change.phase);
+      if (c.capture && !c.muted && S.connected && callAudioOk(c) && !handover) S.io.appends += 1;
       const el = $('[data-testid="call-time"]');
       if (el) el.textContent = `${mmss(c.secs)} on this device`;
     }
@@ -981,6 +982,9 @@
       return focusKey("call");
     }
     c.state = "ending";
+    if (c.change && c.change.replacement && !c.relayIds.includes(c.change.replacement)) c.relayIds.push(c.change.replacement);
+    for (const r of S.relays) if (c.change && r.changeId === c.change.id && r.state === "creating") r.cancelled = true;
+    c.change = null;
     for (const r of S.relays) if (c.relayIds.includes(r.id) && r.state === "open") r.state = "closing";
     for (const id of c.relayIds) if (S.relays.find((r) => r.id === id && r.state === "closing")) S.io.closes.push({ kind: "realtime", id });
     render();
@@ -1039,12 +1043,21 @@
     const c = S.call;
     if (!c || c.state !== "live" || !c.ready || c.change) return;
     if (v === c.voice) return; // the gateway answers "applied" with no replacement: nothing to do
-    S.io.sets.push({ voice: v, voiceSessionId: c.relayIds.at(-1) });
-    c.change = { voice: v, phase: "set", from: c.voice, id: null, replacement: null };
+    const original = c.relayIds.at(-1);
+    S.io.sets.push({ voice: v, voiceSessionId: original });
+    c.change = { voice: v, phase: "set", from: c.voice, original, gen: S.gen, id: null, replacement: null, earlyReady: null };
     c.voiceMsg = "";
     render();
     if (S.flags.voiceFail) later(() => ev("setRefused", { message: "Voice is not in this call's catalog; list the available voices first" }), 150);
-    else later(() => ev("voiceRequested"), 150);
+    else {
+      const chg = `chg${c.attempt}`;
+      const repl = `vs${c.attempt}r`;
+      later(() => ev("voiceRequested", { changeId: chg, voiceSessionId: original, voice: v, gen: S.gen }), 150);
+      later(() => ev("replacementCreate", { id: repl, changeId: chg }), 250);
+      later(() => ev("replacementReady", { id: repl }), 350);
+      later(() => ev("originalClosed", { id: original, ok: true }), 450);
+      later(() => ev("setApplied", { voiceSessionId: repl, gen: S.gen }), 550);
+    }
   }
 
   // Events: what the gateway and the device report, one at a time ------------------------------------------
@@ -1062,7 +1075,7 @@
         break;
       }
       case "create": {
-        const relay = S.relays.find((r) => r.state === "creating");
+        const relay = S.relays.find((r) => r.state === "creating" && !r.changeId);
         if (!relay) return;
         if (!data.ok) {
           relay.state = "closed";
@@ -1099,7 +1112,8 @@
         c.state = "live";
         c.voices = S.noVoices ? [] : VOICES.slice();
         c.canChange = !S.noVoices;
-        c.voice = c.requestedVoice && c.voices.includes(c.requestedVoice) ? c.requestedVoice : c.voices[0] || null;
+        // The current voice is the create's or get's readback; a catalog cannot identify it.
+        c.voice = data.voice === undefined ? (c.requestedVoice && c.voices.includes(c.requestedVoice) ? c.requestedVoice : "Alloy") : data.voice;
         if (c.requestedVoice && !c.voices.includes(c.requestedVoice)) c.voiceGone = c.requestedVoice;
         later(() => ev("ready", { id: relay.id }), 120);
         break;
@@ -1226,56 +1240,103 @@
         break;
       }
       case "voiceRequested": {
-        if (!c || !c.change || c.change.phase !== "set" || !S.connected) return;
-        c.change.phase = "replacing";
-        c.change.id = `chg${c.attempt}`;
-        // One replacement, with the change's id, the original task and language, and voice selection.
-        S.io.creates.push({ kind: "realtime", voiceChangeId: c.change.id, sessionKey: c.task, language: c.lang || undefined, capabilities: ["voice-selection"] });
-        later(() => ev("replacementReady"), 150);
+        // The gateway's request for this setter's change: original session, voice and connection must match.
+        const ch = c && c.change;
+        if (!ch || ch.phase !== "set" || !S.connected || data.voiceSessionId !== ch.original || data.voice !== ch.voice || data.gen !== ch.gen) return;
+        ch.phase = "replacing";
+        ch.id = data.changeId;
+        // One replacement, with the change's id, the original task and language, and voice selection; tracked from now on.
+        S.relays.push({ id: null, attempt: c.attempt, gen: S.gen, state: "creating", expiresAt: NOW + 1800, task: c.task, changeId: ch.id });
+        S.io.creates.push({ kind: "realtime", voiceChangeId: ch.id, sessionKey: c.task, language: c.lang || undefined, capabilities: ["voice-selection"] });
+        break;
+      }
+      case "replacementCreate": {
+        const ch = c && c.change;
+        if (!ch || ch.phase !== "replacing" || data.changeId !== ch.id) return;
+        // The admitted replacement is recorded as soon as its create replies.
+        const r = S.relays.find((x) => x.changeId === ch.id && x.state === "creating");
+        if (r) Object.assign(r, { id: data.id, state: "open" });
+        ch.replacement = data.id;
+        ch.phase = "admitted";
+        if (ch.earlyReady === data.id) return ev("replacementReady", { id: data.id });
+        break;
+      }
+      case "replacementReady": {
+        const ch = c && c.change;
+        if (!ch || !S.connected) return;
+        if (!ch.replacement) {
+          // Early: buffered until its relay is known.
+          ch.earlyReady = data.id;
+          return;
+        }
+        if (ch.phase !== "admitted" || data.id !== ch.replacement) return;
+        // Capture routing and playback on the original stop; its queued output is dropped; then its close is awaited.
+        c.playing = false;
+        c.thinking = false;
+        const old = S.relays.find((r) => r.id === ch.original);
+        if (old && old.state === "open") old.state = "closing";
+        S.io.closes.push({ kind: "realtime", id: ch.original, why: "voice change" });
+        ch.phase = "closingOriginal";
+        break;
+      }
+      case "originalClosed": {
+        const ch = c && c.change;
+        if (!ch || ch.phase !== "closingOriginal" || data.id !== ch.original) return;
+        const old = S.relays.find((r) => r.id === ch.original);
+        if (!data.ok) {
+          // The original's close is unconfirmed: the call is interrupted; every admitted relay keeps its gate.
+          if (old) old.state = "unconfirmed";
+          stopMedia(c);
+          leaveLine(c, false);
+          S.call = { ...c, change: null, state: "failed", reason: "The call ended unexpectedly", second: `The voice change didn't finish, so the call was interrupted. ${GATEWAY} did not confirm the previous session ended.` };
+          say("Voice chat failed: The call ended unexpectedly");
+          break;
+        }
+        if (old) old.state = "closed";
+        S.io.completes.push({ changeId: ch.id, voiceSessionId: ch.replacement, outcome: "ready" });
+        ch.phase = "completing";
         break;
       }
       case "botVoiceRequested": {
         // A change this device did not ask for: declined, before any replacement opens.
         if (!c || c.change || !c.ready) return;
         S.io.completes.push({ changeId: "bot-change", outcome: "failed" });
-        c.voiceNote = `${nameOf(c.bot)} asked for a different voice. Clawtrate kept ${c.voice} for this call.`;
-        break;
-      }
-      case "replacementReady": {
-        if (!c || !c.change || c.change.phase !== "replacing" || !S.connected) return;
-        const id = `vs${c.attempt}r`;
-        c.change.replacement = id;
-        S.relays.push({ id, attempt: c.attempt, state: "open", expiresAt: NOW + 1800 + c.secs, task: c.task });
-        // Old audio stops being routed and its queue is dropped; the original is closed; then complete.
-        c.playing = false;
-        const old = S.relays.find((r) => r.id === c.relayIds.at(-1));
-        S.io.closes.push({ kind: "realtime", id: c.relayIds.at(-1), why: "voice change" });
-        if (old) old.state = "closed";
-        c.relayIds.push(id);
-        c.change.phase = "completing";
-        S.io.completes.push({ changeId: c.change.id, voiceSessionId: id, outcome: "ready" });
-        later(() => ev("setApplied"), 100);
+        c.voiceNote = "A voice change was requested. Clawtrate did not switch voices.";
         break;
       }
       case "setApplied": {
-        // talk.voice.set answered "applied" for this replacement on this connection: only now.
-        if (!c || !c.change || c.change.phase !== "completing" || !S.connected) return;
-        const v = c.change.voice;
-        c.voice = v;
+        // This setter's applied result, for this replacement, on this connection: only then.
+        const ch = c && c.change;
+        if (!ch || ch.phase !== "completing" || !S.connected || data.voiceSessionId !== ch.replacement || data.gen !== ch.gen) return;
+        c.relayIds.push(ch.replacement);
+        c.voice = ch.voice;
         c.change = null;
-        c.voiceMsg = `Voice: ${v}, from ${nameOf(c.bot)}'s next reply.`;
+        c.voiceMsg = `Voice changed to ${ch.voice} for this session.`;
         say(c.voiceMsg);
-        savePref(c.bot, "voice", v);
+        savePref(c.bot, "voice", ch.voice);
         break;
       }
       case "setRefused":
       case "replacementFailed": {
-        if (!c || !c.change) return;
-        if (c.change.phase !== "set") {
-          S.io.completes.push({ changeId: c.change.id, outcome: "failed" });
-          if (c.change.replacement) S.io.closes.push({ kind: "realtime", id: c.change.replacement, why: "replacement failed" });
+        const ch = c && c.change;
+        if (!ch) return;
+        if (["closingOriginal", "completing"].includes(ch.phase)) {
+          // The original is closing or closed: not "still using" it. The call is interrupted; gates stay.
+          stopMedia(c);
+          leaveLine(c, false);
+          S.call = { ...c, change: null, state: "failed", reason: "The call ended unexpectedly", second: "The voice change didn't finish, so the call was interrupted." };
+          say("Voice chat failed: The call ended unexpectedly");
+          break;
         }
-        c.voiceMsg = `Voice didn't change${data.message ? `: ${data.message}` : ""}. Still using ${c.change.from}.`;
+        if (ch.phase !== "set") {
+          S.io.completes.push({ changeId: ch.id, outcome: "failed" });
+          const r = S.relays.find((x) => x.changeId === ch.id);
+          if (r && r.id) {
+            r.state = "closing";
+            S.io.closes.push({ kind: "realtime", id: r.id, why: "replacement failed" });
+          } else if (r) r.cancelled = true;
+        }
+        c.voiceMsg = `Voice didn't change${data.message ? `: ${data.message}` : ""}. Still using ${ch.from}.`;
         c.change = null;
         say("Voice didn't change");
         break;
@@ -1618,10 +1679,11 @@
       S.relays[0].task = other;
       setTimeout(() => askSecond(t), 0);
     }
-    if (["settings", "voicechange", "voicefail", "novoices", "langsaved"].includes(st)) setTimeout(openCallSettings, 0);
+    if (["settings", "voicechange", "voicefail", "novoices", "voicesfail", "langsaved"].includes(st)) setTimeout(openCallSettings, 0);
     if (st === "voicechange") setTimeout(() => ((S.auto = false), setVoice("Cedar")), 10);
     if (st === "voicefail") (S.flags.voiceFail = true), (c.voiceMsg = "Voice didn't change: Voice is not in this call's catalog; list the available voices first. Still using Alloy.");
     if (st === "novoices") (S.noVoices = true), (c.canChange = false), (c.voices = []);
+    if (st === "voicesfail") (c.voicesReadFailed = true), (c.canChange = false), (c.voices = []);
     if (st === "langsaved") (S.prefs.saved.otto.lang = "es"), (S.prefs.notes.otto = `Saved for Otto on ${GATEWAY}, so your other devices use it too.`);
     if (st === "voicegone") c.voiceGone = "Ember";
   }
