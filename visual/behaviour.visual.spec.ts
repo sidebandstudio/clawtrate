@@ -771,6 +771,73 @@ test.describe("the end and the reader's own input", () => {
     await settle(page);
     await expect(item).toBeInViewport();
   });
+
+  // On a slower machine the jump's frame can come before following has caught up with the card it
+  // opened, so the jump goes down to the item. Held here: the resize observations, and in the
+  // second order the scroll events too, so following meets the jump before its scroll is reported.
+  for (const order of ["its scroll reported first", "the card's growth seen first"] as const) {
+    test(`Show this thread's card, from the end, its jump made before following caught up with the opened card (${order}), keeps the item in view`, async ({
+      page,
+    }) => {
+      await page.addInitScript(() => {
+        const w = window as unknown as { holdResize: boolean; releaseResize(): void };
+        const queued: (() => void)[] = [];
+        const Real = window.ResizeObserver;
+        window.ResizeObserver = class extends Real {
+          constructor(callback: ResizeObserverCallback) {
+            super((entries, observer) => {
+              if (w.holdResize) queued.push(() => callback(entries, observer));
+              else callback(entries, observer);
+            });
+          }
+        };
+        w.releaseResize = () => {
+          w.holdResize = false;
+          for (const run of queued.splice(0)) run();
+        };
+      });
+      await page.setViewportSize({ width: 390, height: 600 });
+      await openFixture(page, "scene=t3-thread", "light");
+      await paintedFinal(page);
+      const own = page.locator('.card.action[data-call="call_t3r"]');
+      await own.locator(":scope > summary").click();
+      await settle(page);
+      await settle(page);
+      expect(await fromEnd(page)).toBeLessThanOrEqual(1);
+      const jump = await own
+        .getByRole("button", { name: "Show this thread's card" })
+        .evaluate(async (button, holdScroll) => {
+          const w = window as unknown as { holdResize: boolean; releaseResize(): void };
+          const transcript = document.querySelector('[data-testid="transcript"]')!;
+          const frame = () => new Promise<void>((done) => requestAnimationFrame(() => done()));
+          const hold = (event: Event) => {
+            if (event.target === transcript) event.stopImmediatePropagation();
+          };
+          w.holdResize = true;
+          if (holdScroll) window.addEventListener("scroll", hold, true);
+          const before = transcript.scrollTop;
+          (button as HTMLElement).click();
+          // Asked for after the jump's own frame, so it runs just after the jump.
+          await frame();
+          const after = transcript.scrollTop;
+          if (!holdScroll) {
+            await frame();
+            await frame();
+          }
+          w.releaseResize();
+          await frame();
+          window.removeEventListener("scroll", hold, true);
+          return { before, after };
+        }, order === "the card's growth seen first");
+      // The case itself: the jump went down, to an item below the view.
+      expect(jump.after).toBeGreaterThan(jump.before + 1);
+      const item = page.getByTestId("t3-card").locator('[data-item-call="call_t3r"] > summary');
+      await expect(item).toBeFocused();
+      await settle(page);
+      await settle(page);
+      await expect(item).toBeInViewport();
+    });
+  }
 });
 
 test.describe("the reading line on a phone", () => {

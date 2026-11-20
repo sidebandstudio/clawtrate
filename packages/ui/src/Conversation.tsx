@@ -278,12 +278,27 @@ function TranscriptView({
   const markScrollIntent = useCallback(() => {
     scrollIntentUntil.current = performance.now() + 750;
   }, []);
+  // A jump the page makes for the reader goes where its target is, down as well as up: content
+  // that grew below a followed end before following caught up can put the target below the view.
+  const jumpUntil = useRef(0);
   useEffect(() => {
     const element = scroller.current;
     if (!element) return;
-    element.addEventListener("clawtrate:transcript-navigation", markScrollIntent);
-    return () => element.removeEventListener("clawtrate:transcript-navigation", markScrollIntent);
+    const onJump = () => {
+      markScrollIntent();
+      jumpUntil.current = scrollIntentUntil.current;
+    };
+    element.addEventListener("clawtrate:transcript-navigation", onJump);
+    return () => element.removeEventListener("clawtrate:transcript-navigation", onJump);
   }, [markScrollIntent]);
+  /** A fresh jump has moved the view from where following last put it, either way. */
+  const jumpedAway = useCallback(
+    (element: HTMLElement) =>
+      performance.now() <= jumpUntil.current &&
+      followTop.current !== null &&
+      Math.abs(element.scrollTop - followTop.current) > 1,
+    [],
+  );
 
   // What the reader has just opened stays in view (section 18): following the
   // end never pushes the line of a card, a fold or a row they opened above the
@@ -303,12 +318,13 @@ function TranscriptView({
   const follow = useCallback(() => {
     const element = scroller.current;
     if (!element) return;
-    // The reader moved the view up, or a jump did for them, and its scroll is not reported yet:
-    // that is where they are now, and the end does not take it back.
+    // The reader moved the view up, or a jump moved it either way for them, and its scroll is not
+    // reported yet: that is where they are now, and the end does not take it back.
     if (
-      performance.now() <= scrollIntentUntil.current &&
-      followTop.current !== null &&
-      element.scrollTop < followTop.current - 1
+      (performance.now() <= scrollIntentUntil.current &&
+        followTop.current !== null &&
+        element.scrollTop < followTop.current - 1) ||
+      jumpedAway(element)
     ) {
       followTop.current = null;
       following.current = false;
@@ -331,7 +347,7 @@ function TranscriptView({
     followTop.current = null;
     following.current = false;
     setAtEnd(false);
-  }, [toEnd]);
+  }, [toEnd, jumpedAway]);
 
   const onScroll = useCallback(
     (event: UIEvent<HTMLDivElement>) => {
@@ -349,7 +365,7 @@ function TranscriptView({
       const kept =
         following.current &&
         followTop.current !== null &&
-        (!readerMoved || element.scrollTop >= followTop.current - 1);
+        (!readerMoved || (element.scrollTop >= followTop.current - 1 && !jumpedAway(element)));
       const near = kept || distance < NEAR_BOTTOM_PX;
       if (kept && distance > 1) toEnd();
       else followTop.current = near ? element.scrollTop : null;
@@ -357,7 +373,7 @@ function TranscriptView({
       setAtEnd(near);
       if (near) setSeenSize(contentSize);
     },
-    [contentSize, toEnd],
+    [contentSize, toEnd, jumpedAway],
   );
 
   const jumpToLatest = useCallback(() => {
