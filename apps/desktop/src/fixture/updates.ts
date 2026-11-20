@@ -29,8 +29,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
     preparing: { kind: "preparing", ...offer },
     "handing-off": { kind: "handing-off", ...offer },
     "handed-to-system": { kind: "handed-to-system", ...offer },
-    "quit-blocked": { kind: "handoff-failed", version, reason: "quit-blocked" },
-    "handoff-unconfirmed": { kind: "handoff-failed", version, reason: "handoff-unconfirmed" },
+    "handoff-unconfirmed": { kind: "handoff-unconfirmed", version, offerId: offer.offerId },
     "installer-failed": { kind: "handoff-failed", version, reason: "installer-failed" },
     "not-checked": { kind: "not-checked" },
     checking: { kind: "checking" },
@@ -62,9 +61,15 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
           : ["stable", "nightly"];
   const after = params.get("after");
   const observed =
-    after === "target-running" ? version : after === "unconfirmed" ? "0.3.0" : runningVersion;
+    after === "unreadable"
+      ? null
+      : after === "target-running"
+        ? version
+        : after === "unconfirmed"
+          ? "0.3.0"
+          : runningVersion;
   let snapshot: DesktopUpdateSnapshot = {
-    state: states[kind],
+    state: after === "unreadable" ? states.invalid : states[kind],
     revision: 0,
     preferenceIssue:
       kind === "preferences"
@@ -76,7 +81,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
             : null,
     pendingTrack: kind === "pending" ? "nightly" : null,
     runningVersion: kind === "invalid" ? null : observed,
-    runningTrack: kind === "invalid" ? null : runningTrack,
+    runningTrack: kind === "invalid" || after === "unreadable" ? null : runningTrack,
     selectedTrack: tracks.length ? selectedTrack : null,
     tracks: tracks.map((track) => ({
       track,
@@ -91,9 +96,12 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
         }
       : null,
     lastAttempt:
-      after === "target-running" || after === "old-version-running" || after === "unconfirmed"
+      after === "target-running" ||
+      after === "old-version-running" ||
+      after === "unconfirmed" ||
+      after === "unreadable"
         ? {
-            kind: after,
+            kind: after === "unreadable" ? "unconfirmed" : after,
             from: runningVersion,
             target: version,
             track: selectedTrack,

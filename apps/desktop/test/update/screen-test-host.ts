@@ -24,7 +24,6 @@ export async function startDesktopUpdates(
     },
     async launch(_file, _signal, handed) {
       while (existsSync(join(profile, "hold-launch"))) await pause(20);
-      if (existsSync(join(profile, "block-quit"))) return "quit-blocked";
       if (existsSync(join(profile, "lose-acknowledgement"))) return "handoff-unconfirmed";
       handed();
       return null;

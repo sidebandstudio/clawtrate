@@ -203,27 +203,17 @@ it("F-231 F-030: a pending choice hides the retired offer, action and source", (
 });
 
 const restartFailures = [
-  ["no-verified-download", "No download is ready to install."],
+  ["windows-install-pending-trial", "Restart to update on Windows is unavailable in this build."],
   ["build-not-signed", "This build can't install updates itself."],
   ["no-installer-path", "This build has no installer for this system."],
   ["artifact-changed", "Couldn't verify the saved update again."],
   ["mac-designated-requirement", "The update doesn't meet this app's macOS signing requirement."],
-  ["authenticode-trust", "Windows couldn't verify the update's signature."],
-  ["publisher-mismatch", "The update was signed by a different publisher."],
-  ["installation-context", "Couldn't confirm where this copy of Clawtrate is installed."],
   ["inspection-failed", "Couldn't finish checking the downloaded update."],
   ["running-signature-untrusted", "Couldn't verify the signature of the running app."],
-  ["running-publisher-mismatch", "The running app was signed by a different publisher."],
-  ["installer-product", "The installer is for a different app."],
-  ["installer-version", "The installer's version doesn't match the offered version."],
+  ["installer-version", "The downloaded app's version doesn't match the offered version."],
   ["mac-archive", "The downloaded archive can't be used for this update."],
   ["mac-bundle-identifier", "The downloaded Mac app has a different app identifier."],
   ["mac-architecture", "The downloaded Mac app is for a different processor."],
-  [
-    "quit-blocked",
-    "Clawtrate stayed open. Close whatever is blocking quit, then check and download the update again before choosing Restart to Update.",
-  ],
-  ["handoff-unconfirmed", "Couldn't confirm the handoff to the system updater."],
   ["attempt-not-saved", "Couldn't save the restart attempt on this device."],
   ["installer-failed", "Couldn't hand the update to the installer."],
 ] as const;
@@ -231,11 +221,11 @@ const verified = { kind: "verified", offerId: "shown", version: "1.1.0", size: 1
 it.each(restartFailures)("F-231: explains the installer refusal %s", (reason, line) => {
   const failed = render({ kind: "handoff-failed", version: "1.1.0", reason });
   expect(failed.html).toContain(line);
-  expect(failed.actions).toEqual(reason === "handoff-unconfirmed" ? [] : ["Check for Updates"]);
+  expect(failed.actions).toEqual(["Check for Updates"]);
   expect(failed.footer).toBe(true);
   if (reason === "attempt-not-saved" || reason === "installer-failed") return;
   const unavailable = render(verified, { install: { kind: "unavailable-in-this-build", reason } });
-  expect(unavailable.actions).toEqual([]);
+  expect(unavailable.actions).toEqual(reason === "artifact-changed" ? ["Check for Updates"] : []);
   expect(unavailable.html).toContain(line);
 });
 it("F-231: only the matching verified offer can open Restart", () => {
@@ -249,6 +239,10 @@ it("F-231: only the matching verified offer can open Restart", () => {
   ).toContain("This update can't be installed from here.");
 });
 it.each([
+  [
+    "handoff-unconfirmed",
+    "Clawtrate couldn't confirm that the macOS updater accepted the update. macOS may still install it when Clawtrate quits. After reopening, Clawtrate reports the version that is running.",
+  ],
   ["preparing", "Preparing Clawtrate 1.1.0 for restart…"],
   ["handing-off", "Handing Clawtrate 1.1.0 to the system updater…"],
   [
@@ -264,9 +258,17 @@ it.each([
 });
 it.each([
   ["target-running", "2.0.0", "Clawtrate 2.0.0 is running."],
-  ["old-version-running", "1.0.0", "Clawtrate is still running 1.0.0."],
-  ["unconfirmed", "1.5.0", "Clawtrate 1.5.0 is running. Couldn't confirm the update attempt."],
-  ["unconfirmed", null, "Couldn't confirm the update attempt."],
+  [
+    "old-version-running",
+    "1.0.0",
+    "Clawtrate 1.0.0 is running, not 2.0.0. Check for updates to try again.",
+  ],
+  [
+    "unconfirmed",
+    "1.5.0",
+    "Clawtrate 1.5.0 is running. Clawtrate couldn't confirm that it restarted into 2.0.0.",
+  ],
+  ["unconfirmed", null, "Clawtrate couldn't read the running version."],
 ] as const)("F-231: reports the observed %s version %s", (kind, running, line) => {
   expect(
     render(
@@ -275,4 +277,14 @@ it.each([
     ).html,
   ).toContain(line);
   expect(render({ kind: "not-checked" }).html).not.toContain(line);
+});
+
+it("F-231: the idle install capability adds no warning or restart", () => {
+  for (const state of [{ kind: "not-checked" } as const, verified]) {
+    const result = render(state, {
+      install: { kind: "unavailable-in-this-build", reason: "no-verified-download" },
+    });
+    expect(result.html).not.toContain("b-note");
+    expect(result.actions).not.toContain("Restart to Update");
+  }
 });

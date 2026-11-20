@@ -574,7 +574,7 @@ for (const mode of ["mac", "manual"] as const) {
       expect(typeof id).toBe("string");
       writeFileSync(join(profile, "hold-inspect"), "");
       writeFileSync(join(profile, "hold-launch"), "");
-      if (mode === "manual") writeFileSync(join(profile, "block-quit"), "");
+      if (mode === "manual") writeFileSync(join(profile, "lose-acknowledgement"), "");
       await restart.click();
       await confirm.click();
       async function locked(text: string) {
@@ -597,8 +597,12 @@ for (const mode of ["mac", "manual"] as const) {
         await locked("Clawtrate handed the update to the macOS updater.");
         for (const [version, line] of [
           ["1.1.0", "Clawtrate 1.1.0 is running."],
-          ["0.1.0", "Clawtrate is still running 0.1.0."],
-          ["1.2.0", "Clawtrate 1.2.0 is running. Couldn't confirm the update attempt."],
+          ["0.1.0", "Clawtrate 0.1.0 is running, not 1.1.0. Check for updates to try again."],
+          ["unreadable", "Clawtrate couldn't read the running version."],
+          [
+            "1.2.0",
+            "Clawtrate 1.2.0 is running. Clawtrate couldn't confirm that it restarted into 1.1.0.",
+          ],
         ] as const) {
           const next = await relaunch(version);
           await openUpdates(next);
@@ -606,21 +610,10 @@ for (const mode of ["mac", "manual"] as const) {
         }
         expect(server.requests).toEqual(["/stable", filePath]);
       } else {
-        await expect(result).toContainText("Clawtrate stayed open.");
-        await expect(restart).toHaveCount(0);
-        rmSync(join(profile, "block-quit"));
-        writeFileSync(join(profile, "lose-acknowledgement"), "");
-        await requestFile(page);
-        await restart.click();
-        await confirm.click();
-        await locked("Couldn't confirm the handoff to the system updater.");
-        const ids = readFileSync(join(profile, "restart-calls"), "utf8")
-          .trim()
-          .split("\n")
-          .map((s) => JSON.parse(s));
-        expect(ids).toHaveLength(2);
-        expect(ids[1]).not.toBe(id);
-        expect(server.requests).toEqual(["/stable", filePath, "/stable", filePath]);
+        await locked(
+          "Clawtrate couldn't confirm that the macOS updater accepted the update. macOS may still install it when Clawtrate quits. After reopening, Clawtrate reports the version that is running.",
+        );
+        expect(server.requests).toEqual(["/stable", filePath]);
       }
       expect(rendererRequests).toEqual([]);
     });
@@ -639,22 +632,16 @@ test.describe("installer refusals", () => {
     const reasons = [
       "no-verified-download",
       "build-not-signed",
+      "windows-install-pending-trial",
       "no-installer-path",
       "artifact-changed",
       "mac-designated-requirement",
-      "authenticode-trust",
-      "publisher-mismatch",
-      "installation-context",
       "inspection-failed",
       "running-signature-untrusted",
-      "running-publisher-mismatch",
-      "installer-product",
       "installer-version",
       "mac-archive",
       "mac-bundle-identifier",
       "mac-architecture",
-      "quit-blocked",
-      "handoff-unconfirmed",
     ] as const;
     const requests: string[] = [];
     for (const reason of reasons) {

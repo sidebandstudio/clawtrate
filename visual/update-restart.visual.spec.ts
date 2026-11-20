@@ -10,15 +10,20 @@ for (const size of SIZES.filter((s) => s.name === "1440" || s.phone)) {
       "preparing",
       "handing-off",
       "handed-to-system",
-      "quit-blocked",
       "handoff-unconfirmed",
       "installer-failed",
       "target-running",
+      "unreadable",
       "old-version-running",
       "unconfirmed",
     ]) {
       test(`F-231 F-030: Restart ${state} fits ${size.name}`, async ({ page }) => {
-        const after = ["target-running", "old-version-running", "unconfirmed"].includes(state);
+        const after = [
+          "target-running",
+          "old-version-running",
+          "unconfirmed",
+          "unreadable",
+        ].includes(state);
         await openFixture(
           page,
           `scene=main&updates=${after ? "not-checked&after=" + state : state === "confirmation" ? "ready" : state}`,

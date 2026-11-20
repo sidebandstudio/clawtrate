@@ -1,31 +1,24 @@
 import type { ClawtrateState, DesktopUpdateSnapshot, DesktopUpdateState } from "@clawtrate/core";
 
 type Reason = Extract<DesktopUpdateState, { kind: "handoff-failed" }>["reason"];
-const reasons: Record<Reason, string> = {
-  "no-verified-download": "No download is ready to install.",
+const reasons: Record<Exclude<Reason, "no-verified-download">, string> = {
+  "windows-install-pending-trial": "Restart to update on Windows is unavailable in this build.",
   "build-not-signed": "This build can't install updates itself.",
   "no-installer-path": "This build has no installer for this system.",
   "artifact-changed": "Couldn't verify the saved update again.",
   "mac-designated-requirement": "The update doesn't meet this app's macOS signing requirement.",
-  "authenticode-trust": "Windows couldn't verify the update's signature.",
-  "publisher-mismatch": "The update was signed by a different publisher.",
-  "installation-context": "Couldn't confirm where this copy of Clawtrate is installed.",
   "inspection-failed": "Couldn't finish checking the downloaded update.",
   "running-signature-untrusted": "Couldn't verify the signature of the running app.",
-  "running-publisher-mismatch": "The running app was signed by a different publisher.",
-  "installer-product": "The installer is for a different app.",
-  "installer-version": "The installer's version doesn't match the offered version.",
+  "installer-version": "The downloaded app's version doesn't match the offered version.",
   "mac-archive": "The downloaded archive can't be used for this update.",
   "mac-bundle-identifier": "The downloaded Mac app has a different app identifier.",
   "mac-architecture": "The downloaded Mac app is for a different processor.",
-  "quit-blocked":
-    "Clawtrate stayed open. Close whatever is blocking quit, then check and download the update again before choosing Restart to Update.",
-  "handoff-unconfirmed": "Couldn't confirm the handoff to the system updater.",
   "attempt-not-saved": "Couldn't save the restart attempt on this device.",
   "installer-failed": "Couldn't hand the update to the installer.",
 };
 
 export function refusalLine(reason: Reason) {
+  if (reason === "no-verified-download") return "";
   return Object.hasOwn(reasons, reason)
     ? reasons[reason]
     : "This update can't be installed from here.";
@@ -44,7 +37,7 @@ export function handoffLocked(state: DesktopUpdateState) {
     state.kind === "preparing" ||
     state.kind === "handing-off" ||
     state.kind === "handed-to-system" ||
-    (state.kind === "handoff-failed" && state.reason === "handoff-unconfirmed")
+    state.kind === "handoff-unconfirmed"
   );
 }
 
@@ -53,10 +46,10 @@ export function attemptLine(attempt: DesktopUpdateSnapshot["lastAttempt"]) {
   if (attempt.running) {
     if (attempt.kind === "target-running") return `Clawtrate ${attempt.running} is running.`;
     if (attempt.kind === "old-version-running")
-      return `Clawtrate is still running ${attempt.running}.`;
-    return `Clawtrate ${attempt.running} is running. Couldn't confirm the update attempt.`;
+      return `Clawtrate ${attempt.running} is running, not ${attempt.target}. Check for updates to try again.`;
+    return `Clawtrate ${attempt.running} is running. Clawtrate couldn't confirm that it restarted into ${attempt.target}.`;
   }
-  return "Couldn't confirm the update attempt.";
+  return "Clawtrate couldn't read the running version.";
 }
 
 /** Use the frame handoff recorded in each outbox, including tasks outside the current view. */

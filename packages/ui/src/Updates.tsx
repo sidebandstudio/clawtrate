@@ -34,6 +34,7 @@ export function showUpdateFooter(s: DesktopUpdateSnapshot | null, pending = s?.p
     case "preparing":
     case "handing-off":
     case "handed-to-system":
+    case "handoff-unconfirmed":
     case "handoff-failed":
       return true;
     case "failed":
@@ -96,12 +97,18 @@ function updateRow(
       return {
         line: "Clawtrate handed the update to the macOS updater. After restart, Clawtrate reports the version that is running.",
       };
+    case "handoff-unconfirmed":
+      return {
+        line: "Clawtrate couldn't confirm that the macOS updater accepted the update. macOS may still install it when Clawtrate quits. After reopening, Clawtrate reports the version that is running.",
+      };
     case "handoff-failed":
       return {
         line: refusalLine(state.reason),
-        action: handoffLocked(state) ? undefined : "Check for Updates",
+        action: "Check for Updates",
       };
     case "verified":
+      if (s.install.kind === "unavailable-in-this-build" && s.install.reason === "artifact-changed")
+        return { line: refusalLine(s.install.reason), action: "Check for Updates" };
       if (restartCapability(s))
         return {
           line: `Clawtrate ${state.version} is downloaded, and its size and checksum match the update source. Ready to install.`,
@@ -216,7 +223,12 @@ export function Updates({
         s.install.kind === "unavailable-in-this-build" &&
         state.kind !== "handoff-failed" &&
         !locked &&
-        (s.install.reason !== "no-verified-download" || state.kind === "verified") && (
+        s.install.reason !== "no-verified-download" &&
+        !(
+          s.install.reason === "artifact-changed" &&
+          (state.kind === "verified" ||
+            (state.kind === "failed" && state.reason === "artifact-changed"))
+        ) && (
           <div className="b-note" data-tone="warn">
             <WarnIcon />
             <p>{refusalLine(s.install.reason)}</p>
