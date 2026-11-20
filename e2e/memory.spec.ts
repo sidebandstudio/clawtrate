@@ -174,6 +174,8 @@ test("F-216: a bot replies to the ordinary memory question with the memory it re
   await plus.click();
   await page.getByRole("menuitem", { name: "New task for Otto" }).click();
   const composer = page.getByTestId("composer-input");
+  await expect(composer).toBeFocused({ timeout: 20_000 });
+  await expect(page.locator(".title-pill-task")).toHaveText("New task");
   await composer.fill("What do you remember about me?");
   await composer.press("Enter");
   await expect(page.getByTestId("memory-page")).toBeHidden();
