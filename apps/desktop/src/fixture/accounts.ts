@@ -1041,7 +1041,26 @@ export function accountCommand(
                 isDefault: false,
               },
             ],
-            tasksByBot: { ...state.tasksByBot, [id]: [] },
+            // Its first task, as the engine makes it; create=partial: not made.
+            tasksByBot: {
+              ...state.tasksByBot,
+              [id]:
+                params.create === "partial"
+                  ? []
+                  : [
+                      {
+                        key: `agent:${id}:main`,
+                        botId: id,
+                        sessionId: null,
+                        title: "Main",
+                        preview: null,
+                        updatedAt: Date.now(),
+                        status: "idle",
+                        unread: false,
+                        isMain: true,
+                      },
+                    ],
+            },
             accounts: {
               ...state.accounts,
               creation: {
