@@ -725,7 +725,8 @@ describe("the iOS app", () => {
     // so; the driver is not asked about a screen while Safari starts.
     expect(running(SAFARI)).toBe(false);
     await steps("open-link", [tap(lit(browserUrl))]);
-    await until("Safari's loopback GET", async () => browserGet || null, 30_000);
+    // A cold Safari takes about 18 s to ask on an idle Simulator; a busy machine is slower.
+    await until("Safari's loopback GET", async () => browserGet || null, 120_000);
     await until("the browser to open the link", async () => running(SAFARI) || null, 30_000);
     // Back from the browser, the app is where it was.
     activate();
