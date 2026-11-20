@@ -107,7 +107,9 @@ describe("scope step-up (B1, F-002)", () => {
   it("connects with exactly read, asks once for the interactive set, then connects with exactly that", async () => {
     const gateway = grantingGateway();
     const wait = deferred<unknown>();
-    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({
+      requestId: "8c1f0b2e-4d3a-4b6c-9e7f-0a1b2c3d4e5f",
+    });
     gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
     const storage = memoryStorage();
     const client = new ClawtrateClient(testHost(gateway, storage), FAST);
@@ -125,15 +127,15 @@ describe("scope step-up (B1, F-002)", () => {
       { scopes: [...INTERACTIVE_SCOPES] },
     ]);
     expect(client.state.connection.upgrade).toMatchObject({
-      requestId: "up-1",
+      requestId: "8c1f0b2e-4d3a-4b6c-9e7f-0a1b2c3d4e5f",
       scopes: [...INTERACTIVE_SCOPES],
-      approveCommand: "openclaw devices approve up-1",
+      approveCommand: "openclaw devices approve 8c1f0b2e-4d3a-4b6c-9e7f-0a1b2c3d4e5f",
     });
     expect(client.state.connection.upgrade.approveNote).toMatch(/gateway's owner/);
 
     wait.resolve({
       status: "approved",
-      requestId: "up-1",
+      requestId: "8c1f0b2e-4d3a-4b6c-9e7f-0a1b2c3d4e5f",
       deviceToken: "rotated-token",
       scopes: [...INTERACTIVE_SCOPES],
     });

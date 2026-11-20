@@ -92,7 +92,13 @@ export type StatusLineView = {
 export function statusLineFor(
   run: Run,
   transcript: Transcript,
-  options: { connected: boolean; interactive: boolean; reading?: ReadingContext | undefined },
+  options: {
+    connected: boolean;
+    interactive: boolean;
+    reading?: ReadingContext | undefined;
+    /** The person closed the connection (Disconnect): it is not reconnecting. */
+    closed?: boolean | undefined;
+  },
 ): StatusLineView {
   let view: StatusLineView;
   // Read as the cards read it: with what the gateway said of the task's tools and workspace.
@@ -161,11 +167,14 @@ export function statusLineFor(
   // A clock only for a start the gateway reported, never this client's own send time.
   view.startedAt = run.reportedStartAt;
   if (!options.connected) {
-    const last = view.phrase.replace(/…$/, "");
+    const raw = view.phrase.replace(/…$/, "");
+    const last = `${raw.charAt(0).toLowerCase()}${raw.slice(1)}`;
     return {
       state: "blocked",
       badge: "blocked",
-      phrase: `Reconnecting. Last seen ${last.charAt(0).toLowerCase()}${last.slice(1)}`,
+      phrase: options.closed
+        ? actionWords.PHRASES.disconnected(last)
+        : actionWords.PHRASES.reconnecting(last),
       tone: "muted",
       startedAt: null,
       callId: view.callId,

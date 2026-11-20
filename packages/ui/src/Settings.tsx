@@ -25,49 +25,22 @@ import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
 import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
-import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
+import { CommandLine } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
+import {
+  addressWords,
+  gatewayActions,
+  gatewayDot,
+  gatewayProblem,
+  gatewayState,
+  grantedWords,
+  pairingNote,
+  serverWords,
+  SETTINGS_WORDS as W,
+} from "./gateway-state.ts";
 import { BackIcon, ChevronIcon, CloseIcon } from "./icons.tsx";
 
-/** The connection's state, as the Gateway pane names it. */
-export function gatewayState(connection: ConnectionState): string {
-  switch (connection.status) {
-    case "connected":
-      // Re-pairing: the gateway holds this device's new authorization until its owner decides.
-      return connection.upgrade.status === "requesting" || connection.upgrade.status === "pending"
-        ? "Pairing pending"
-        : "Connected";
-    case "pairing":
-      return "Pairing pending";
-    case "disconnected":
-      return "Disconnected";
-    case "idle":
-      return "Not connected";
-    case "error":
-      return "Offline";
-    case "connecting":
-    case "reconnecting":
-      // An attempt under way is connecting; waiting for the next one is offline.
-      return connection.retryAt === null ? "Connecting" : "Offline";
-  }
-}
-
-/** The pane's error line: pairing rejected or expired, unreachable, protocol incompatible. */
-function gatewayProblem(connection: ConnectionState): { title: string; message: string } | null {
-  const error = connection.error;
-  if (!error) return null;
-  if (error.code === "PROTOCOL_MISMATCH") {
-    return { title: "This gateway speaks another protocol", message: error.message };
-  }
-  if (error.code === "PAIRING_ENDED") {
-    return { title: failureTitle(error.code), message: error.message };
-  }
-  if (connection.status === "connected") return null;
-  return {
-    title: "Can't reach the gateway",
-    message: [error.message, error.hint].filter(Boolean).join(" "),
-  };
-}
+export { gatewayProblem, gatewayState } from "./gateway-state.ts";
 
 type Section = "gateway" | "accounts" | "conversation" | "usage" | "machines" | "updates";
 const SECTIONS: Array<[Section, string]> = [
@@ -177,11 +150,8 @@ export function Settings({
   };
   const state = gatewayState(connection);
   const problem = gatewayProblem(connection);
-  const canReconnect = state === "Offline" || state === "Disconnected";
-  const canDisconnect =
-    connection.status === "connected" ||
-    connection.status === "connecting" ||
-    connection.status === "reconnecting";
+  const actions = gatewayActions(connection);
+  const server = serverWords(connection);
   const deviceName =
     info.deviceName ?? (info.kind === "desktop" ? "Clawtrate Desktop" : "Clawtrate Web");
   // Re-pair (F-456): ask the gateway's owner for this device's interactive access. The old
@@ -221,14 +191,7 @@ export function Settings({
     )?.focus();
   });
 
-  const dot =
-    state === "Connected"
-      ? "connected"
-      : state === "Connecting" || state === "Pairing pending"
-        ? "connecting"
-        : state === "Offline"
-          ? "error"
-          : "disconnected";
+  const dot = gatewayDot(state);
 
   const toNav = (
     <button
@@ -253,7 +216,7 @@ export function Settings({
     <button
       type="button"
       className="icon-button b-close settings-close"
-      aria-label="Close settings"
+      aria-label={W.close}
       title="Close (Esc)"
       onClick={onClose}
     >
@@ -284,38 +247,33 @@ export function Settings({
     <>
       <dl className="facts" data-testid="gateway-facts">
         <div>
-          <dt>Address</dt>
-          <dd title={connection.gatewayUrl ?? undefined}>{connection.gatewayUrl ?? "None yet"}</dd>
+          <dt>{W.address}</dt>
+          <dd title={addressWords(connection.gatewayUrl)}>{addressWords(connection.gatewayUrl)}</dd>
         </div>
         <div>
-          <dt>State</dt>
+          <dt>{W.state}</dt>
           <dd className="settings-state" data-testid="gateway-state">
             <span className="status-dot" data-status={dot} aria-hidden="true" />
             {state}
           </dd>
         </div>
         <div>
-          <dt>This device</dt>
+          <dt>{W.device}</dt>
           <dd>
             {deviceName}
             {connection.deviceId ? ` · ${connection.deviceId.slice(0, 8)}` : ""}
           </dd>
         </div>
         <div>
-          <dt>Granted scopes</dt>
+          <dt>{W.scopes}</dt>
           <dd data-testid="granted-scopes" className="b-wrap-value">
-            {connection.status === "connected" && connection.scopes.length > 0
-              ? connection.scopes.join(", ")
-              : "None while not connected"}
+            {grantedWords(connection)}
           </dd>
         </div>
-        {connection.serverVersion && (
+        {server && (
           <div>
-            <dt>Gateway</dt>
-            <dd>
-              OpenClaw {connection.serverVersion}
-              {connection.protocol !== null ? ` · protocol ${connection.protocol}` : ""}
-            </dd>
+            <dt>{W.server}</dt>
+            <dd>{server}</dd>
           </div>
         )}
       </dl>
@@ -348,22 +306,22 @@ export function Settings({
         </div>
       )}
       <div className="settings-actions">
-        {canReconnect && (
+        {actions.reconnect && (
           <button
             type="button"
             className="button"
             data-variant="primary"
             onClick={() => void send({ type: "retry" })}
           >
-            Reconnect
+            {W.reconnect}
           </button>
         )}
-        {canDisconnect && (
+        {actions.disconnect && (
           <button type="button" className="button" onClick={() => void send({ type: "suspend" })}>
-            Disconnect
+            {W.disconnect}
           </button>
         )}
-        {connection.gatewayUrl && (
+        {actions.forget && (
           <button
             type="button"
             className="button"
@@ -373,7 +331,7 @@ export function Settings({
               void send({ type: "disconnect" });
             }}
           >
-            Use another gateway
+            {W.useAnother}
           </button>
         )}
       </div>
@@ -391,15 +349,11 @@ export function Settings({
       )}
       {connection.gatewayUrl && (
         <p className="settings-note">
-          {gatewayLabel(connection.gatewayUrl)} keeps this device's pairing while it is
-          disconnected.{" "}
-          {connection.canAdmin
-            ? "This device holds admin access, which it asked for to change bots and accounts."
-            : holdsAll
-              ? "This device can send, stop and answer."
-              : info.readOnly
-                ? "This device asks for read access only."
-                : "This device reads. Re-pair to ask for sending, stopping and answering."}
+          {pairingNote(gatewayLabel(connection.gatewayUrl), {
+            admin: connection.canAdmin,
+            holdsAll,
+            readOnly: info.readOnly,
+          })}
         </p>
       )}
     </>

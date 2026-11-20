@@ -63,6 +63,8 @@ export {
   MAX_TURN_LIMIT_MINUTES,
   MIN_TURN_LIMIT_MINUTES,
   defaultApprovalInstructions,
+  GATEWAY_REQUEST_ID,
+  NO_APPROVE_COMMAND,
   GatewayNotAllowedError,
   MAX_FILE_READS,
   MAX_MESSAGE_CHARS,

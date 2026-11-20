@@ -14,6 +14,7 @@ import {
   type SVGProps,
 } from "react";
 import { copyText, selectContents } from "../clipboard.ts";
+import { CONVERSATION_WORDS } from "../conversation-words.ts";
 import type { Row } from "./model.ts";
 import type { RawContent } from "./raw.ts";
 
@@ -242,7 +243,7 @@ export function CodeBlock({
           <WarningIcon />
           {truncated === "text"
             ? `Truncated by the gateway. ${text.length.toLocaleString("en-US")} characters were received; the rest was not sent.`
-            : "Truncated by the gateway. The rest was not sent."}
+            : CONVERSATION_WORDS.truncated}
         </p>
       )}
       {lines > CLIP_LINES && (
