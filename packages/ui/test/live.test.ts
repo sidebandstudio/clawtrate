@@ -17,9 +17,11 @@ import {
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 import { canWrite } from "../src/access.ts";
-import { refusalFor, size } from "../src/Composer.tsx";
+import { messageRefusal, refusalFor, size } from "../src/Composer.tsx";
+import { stoppedWithLines } from "../src/LiveTurn.tsx";
 import {
   composerFor,
+  currentRun,
   duration,
   elapsed,
   endingOf,
@@ -253,9 +255,9 @@ describe("the composer during a run", () => {
   it("F-097 F-096: while a run is running, Stop is offered beside Send and plain Enter steers", () => {
     const active = run();
     const view = composerFor(transcript([active]), otto);
-    expect(view).toMatchObject({ placeholder: "Steer Otto", mode: "steer", modeWord: "Steer" });
+    expect(view).toMatchObject({ placeholder: "Message Otto", mode: "steer", modeWord: "Steer" });
     expect(view.stoppable?.id).toBe("run-1");
-    expect(sendName(view.mode)).toBe("Steer this turn");
+    expect(sendName(view.mode)).toBe("Request a steer");
   });
 
   it("F-061: Queue after this turn, once chosen, is what plain Enter does for the rest of the run", () => {
@@ -319,9 +321,10 @@ describe("how a run ends", () => {
   it("F-299: a confirmed stop says how long the run took and that completed steps are not undone", () => {
     expect(
       endingOf(run({ state: "stopped", stopRequestedAt: NOW - 1, endedAt: NOW - 2_000 })),
-    ).toEqual({ kind: "stopped", after: "40s", elsewhere: false });
+    ).toEqual({ kind: "stopped", after: "40s", elsewhere: false, timeouts: null });
     expect(endingOf(run({ state: "stopped", endedAt: NOW }))).toMatchObject({ elsewhere: true });
-    // A stop command this device sent while the run went is not "from elsewhere".
+    // Only this client's own Stop of the run, which a typed /stop marks on the runs its answer
+    // names, makes it local; a handled /stop near the run's time no longer does by itself.
     const stopped = run({ state: "stopped", endedAt: NOW });
     expect(
       endingOf(
@@ -330,6 +333,9 @@ describe("how a run ends", () => {
           outbox: [message({ status: "handled", text: "/stop", createdAt: NOW - 1_000 })],
         }),
       ),
+    ).toMatchObject({ elsewhere: true });
+    expect(
+      endingOf(run({ state: "stopped", endedAt: NOW, stopRequestedAt: NOW - 1_000 })),
     ).toMatchObject({ elsewhere: false });
     // A run rebuilt from history whose ending is not known is not called stopped.
     expect(endingOf(run({ state: "stopped", outcomeKnown: false }))).toBeNull();
@@ -342,15 +348,23 @@ describe("how a run ends", () => {
     expect(endingOf(run({ state: "completed" }))).toBeNull();
   });
 
-  it("F-100: a run that reached its turn limit ends as failed with a note naming the limit", () => {
+  it("F-100: a run this client stopped at its turn limit, once stopped, names the limit; one the gateway timed out is worded as the gateway's", () => {
+    expect(endingOf(run({ state: "stopped", stopRequestedAt: 1, turnLimit: 50 }))).toEqual({
+      kind: "turn-limit",
+      minutes: 50,
+    });
+    // Still stopping, or put back after a refused abort: no ending at all yet.
+    expect(endingOf(run({ state: "stopping", stopRequestedAt: 1, turnLimit: 50 }))).toBeNull();
+    expect(endingOf(run({ state: "running", turnLimit: 50 }))).toBeNull();
     expect(
       endingOf(
         run({
           state: "failed",
-          error: { message: "Stopped at the 50-minute turn limit.", kind: "turn-limit" },
+          error: { message: "The run timed out.", kind: null },
+          ending: { timeoutPhase: "run" } as Run["ending"],
         }),
       ),
-    ).toMatchObject({ kind: "turn-limit", minutes: 50 });
+    ).toEqual({ kind: "gateway-timeout", reason: "The run timed out." });
   });
 
   it("F-102: a failed run carries the gateway's reason", () => {
@@ -410,5 +424,192 @@ describe("attachments", () => {
     );
     expect(refusalFor({ size: 1024 * 1024, type: "application/pdf" })).toBeNull();
     expect(size(640 * 1024)).toBe("640 KB");
+  });
+
+  it("F-074 F-285: the ceilings are the smaller of Clawtrate's and the gateway's, and the whole request is counted as sent, base64 and all", () => {
+    const gateway = {
+      imageBytes: 4 * 1024 * 1024,
+      fileBytes: 19_464_192,
+      payloadBytes: 25 * 1024 * 1024,
+      files: 20,
+    };
+    expect(refusalFor({ size: 5 * 1024 * 1024, type: "image/jpeg" }, gateway)).toBe(
+      "5.0 MB. Images can be up to 4 MB.",
+    );
+    expect(refusalFor({ size: 19 * 1024 * 1024, type: "application/pdf" }, gateway)).toBe(
+      "19.0 MB. Files can be up to 18.6 MB.",
+    );
+    expect(refusalFor({ size: 18 * 1024 * 1024, type: "application/pdf" }, gateway)).toBeNull();
+    const draft = (files: Array<{ fileName: string; bytes: number }>) => ({
+      sessionKey: "agent:otto:disk-space",
+      text: "",
+      idempotencyKey: "x".repeat(36),
+      queueMode: "followup" as const,
+      files: files.map((file) => ({ ...file, mimeType: "application/pdf" })),
+    });
+    // Four files of 5 MiB are 20 MiB as files but 26.7 MiB as the frame carries them.
+    const four = [1, 2, 3, 4].map((n) => ({ fileName: `part-${n}.pdf`, bytes: 5 * 1024 * 1024 }));
+    expect(messageRefusal(draft(four), gateway)).toBe(
+      "26.7 MB to send with its files. A message can carry up to 25 MB.",
+    );
+    expect(messageRefusal(draft(four.slice(0, 3)), gateway)).toBeNull();
+    const many = Array.from({ length: 21 }, (_, n) => ({ fileName: `${n}.txt`, bytes: 10 }));
+    expect(messageRefusal(draft(many), gateway)).toBe(
+      "21 files attached. A message can carry up to 20 files.",
+    );
+    // One byte over a ceiling does not read as the ceiling itself.
+    expect(refusalFor({ size: 6_291_457, type: "image/png" })).toBe(
+      "6,291,457 bytes. Images can be up to 6,291,456 bytes.",
+    );
+  });
+});
+
+describe("F-468: what the transition tables leave on screen", () => {
+  const otto = { bot: "Otto", connected: true, chosen: null };
+  const held = (text: string, id: string) =>
+    message({ id, text, mode: "steer", status: "held", runId: "run-1" });
+  const cases: Array<[string, Transcript, (t: Transcript) => void]> = [
+    [
+      "a completed run leaves no status line, and the composer is back to Message Otto",
+      transcript([run({ state: "completed", endedAt: NOW })]),
+      (t) => {
+        expect(currentRun(t)).toBeUndefined();
+        expect(composerFor(t, otto)).toMatchObject({ placeholder: "Message Otto", mode: "send" });
+      },
+    ],
+    [
+      "with only an approval pending, plain Enter steers and the status line waits for you",
+      transcript([
+        run({ state: "waiting", pendingCards: [{ id: "a-1", kind: "approval", since: NOW }] }),
+      ]),
+      (t) => {
+        expect(composerFor(t, otto)).toMatchObject({ mode: "steer", modeWord: "Steer" });
+        expect(statusLineFor(currentRun(t)!, t, live)).toMatchObject({
+          phrase: "Waiting for you",
+        });
+      },
+    ],
+    [
+      "with a question pending, typed messages are held on the shelf, never your bubbles, and plain Enter holds",
+      transcript(
+        [run({ state: "waiting", pendingCards: [{ id: "q-1", kind: "question", since: NOW }] })],
+        {
+          questions: [question()],
+          outbox: [held("first", "m-1"), held("second", "m-2")],
+        },
+      ),
+      (t) => {
+        expect(composerFor(t, otto)).toMatchObject({ mode: "hold", modeWord: "Hold" });
+        expect(shelfMessages(t).map((m) => [m.text, m.status])).toEqual([
+          ["first", "held"],
+          ["second", "held"],
+        ]);
+        expect(outgoingBubbles(t)).toEqual([]);
+      },
+    ],
+    [
+      "after a confirmed Stop the messages are Not sent on the shelf, no run is current, and the composer starts a new run",
+      transcript([run({ state: "stopped", endedAt: NOW })], {
+        outbox: [message({ id: "m-1", text: "left", mode: "queue", status: "not-sent" })],
+      }),
+      (t) => {
+        expect(currentRun(t)).toBeUndefined();
+        expect(shelfMessages(t).map((m) => m.status)).toEqual(["not-sent"]);
+        expect(composerFor(t, otto).mode).toBe("send");
+      },
+    ],
+  ];
+  it.each(cases)("F-468: %s", (_name, t, check) => check(t));
+});
+
+describe("what a stop also ended (F-298)", () => {
+  const names = (key: string) => (key.includes("marlow") ? "Marlow" : "Pip");
+  const record = (change: Partial<NonNullable<Run["stoppedWith"]>>) => ({
+    helpers: 0,
+    bots: [],
+    uncertain: [],
+    refused: [],
+    unanswered: [],
+    omitted: 0,
+    recipientsAsked: true,
+    ...change,
+  });
+  it("F-298 F-296: the note lists each helper run and bot run the gateway stopped, each recipient it refused or did not answer, and a message whose delivery is unknown", () => {
+    const stopped = run({
+      state: "stopped",
+      stoppedWith: record({
+        helpers: 2,
+        bots: ["agent:marlow:main"],
+        uncertain: ["agent:pip:main"],
+        refused: ["agent:pip:other"],
+        unanswered: ["agent:marlow:notes"],
+        omitted: 2,
+      }),
+    });
+    expect(stoppedWithLines(stopped, names)).toEqual([
+      "Stopped with it: 2 helper runs and Marlow's run for this message.",
+      "The gateway refused to stop Pip's run for this message.",
+      "Marlow's run for this message may still be going: its stop got no answer.",
+      "The message to Pip may or may not have been delivered.",
+      "2 more runs were asked to stop, not listed here.",
+    ]);
+  });
+
+  it("F-298: nothing the gateway did not report is claimed", () => {
+    expect(stoppedWithLines(run({ state: "stopped" }), names)).toEqual([]);
+    expect(stoppedWithLines(run({ state: "stopped", stoppedWith: record({}) }), names)).toEqual([]);
+  });
+});
+
+describe("a run stopped for timeouts (F-101)", () => {
+  it("F-101: the ending says how many calls in a row timed out", () => {
+    expect(
+      endingOf(run({ state: "stopped", stopRequestedAt: NOW - 1, stoppedForTimeouts: 3 })),
+    ).toMatchObject({ kind: "stopped", timeouts: 3 });
+  });
+});
+
+describe("the status line while the gateway retries (F-082)", () => {
+  it("F-082: a retry says the attempt, ahead of Thinking, and a pending card still comes first", () => {
+    const retrying = run({ retry: { attempt: 2, of: 5, reason: "rate_limit" } });
+    expect(statusLineFor(retrying, transcript([retrying]), live).phrase).toBe(
+      "Rate limited. Retrying, attempt 2 of 5",
+    );
+    const waiting = run({
+      state: "waiting",
+      retry: { attempt: 2, of: 5, reason: "rate_limit" },
+      pendingCards: [{ id: "a-1", kind: "approval", since: NOW }],
+    });
+    expect(statusLineFor(waiting, transcript([waiting]), live).phrase).toBe("Waiting for you");
+  });
+
+  it("F-082: only a rate limit is called one; a retry for any other reason the gateway names is said plainly", () => {
+    for (const reason of ["output_limit", "overloaded", "timeout", "unknown"]) {
+      const retrying = run({ retry: { attempt: 3, of: 10, reason } });
+      const phrase = statusLineFor(retrying, transcript([retrying]), live).phrase;
+      expect(phrase).toBe("Retrying, attempt 3 of 10");
+      expect(phrase).not.toMatch(/unavailable|rate limit/i);
+    }
+  });
+});
+
+describe("a stop whose outcome is not known (F-468)", () => {
+  it("F-468: a run Stop was asked of whose end nothing established says only that the stop was asked for", () => {
+    expect(endingOf(run({ state: "stopped", stopRequestedAt: 1, outcomeKnown: false }))).toEqual({
+      kind: "stop-unknown",
+    });
+    // Nothing asked of it here, nothing established: no ending is claimed.
+    expect(endingOf(run({ state: "stopped", outcomeKnown: false }))).toBeNull();
+  });
+});
+
+describe("a stop after timeouts (F-101)", () => {
+  it("F-101: when the automatic stop was refused, a later Stop's ending is a plain stop's", () => {
+    expect(
+      endingOf(run({ state: "stopped", stopRequestedAt: 1, stoppedForTimeouts: 0 })),
+    ).toMatchObject({ kind: "stopped", timeouts: null });
+    expect(
+      endingOf(run({ state: "stopped", stopRequestedAt: 1, stoppedForTimeouts: 3 })),
+    ).toMatchObject({ kind: "stopped", timeouts: 3 });
   });
 });

@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
+import { MAX_RAW_ENTRY_CHARS, RawTable, runErrorRawId, runsFromHistory } from "../src/runs.ts";
 
 const runIds = (runs: { id: string; state: string }[]) => runs.map((run) => [run.id, run.state]);
 
@@ -664,6 +665,112 @@ describe("a recipient's run settled from history while its sender's task is open
     gateway.emit("sessions.changed", { sessionKey: PEER, runId: "peer-r", phase: "end" });
     await until(() => client.state.transcripts[PEER]?.runs[0]?.state === "completed");
     expect(transcript().linkedRuns["peer-r"]?.state).toBe("completed");
+    client.stop();
+  });
+});
+
+describe("a failed turn's request and Raw (F-301)", () => {
+  it("F-301: keeps the id of the chat.send frame that started the run; the error event is read only when Raw is opened, as the gateway sent it, and is in no snapshot", async () => {
+    const { client, gateway, transcript } = await openTask();
+    const frames = () =>
+      gateway.requests.filter((each) => each.method === "chat.send").map((each) => each.id);
+    const id = client.sendMessage(KEY, "check the disk");
+    await until(() => frames().length === 1);
+    await until(() => transcript().runs[0]?.bound === true);
+    const event = {
+      runId: transcript().runs[0]!.id,
+      sessionKey: KEY,
+      seq: 3,
+      state: "error",
+      errorMessage: "The model provider is overloaded.",
+      errorKind: "provider",
+      // Diagnostics the gateway may attach: never part of a snapshot.
+      errorDetail: { marker: "diagnostic-7f3a" },
+    };
+    gateway.emit("chat", event);
+    await until(() => transcript().runs[0]?.state === "failed");
+    const run = transcript().runs[0]!;
+    expect(run.requestId).toBe(frames()[0]);
+    expect(run.requestId).not.toBe(id);
+    expect(run.error).toEqual({
+      message: "The model provider is overloaded.",
+      kind: "provider",
+      raw: { holds: "chat-event", chars: JSON.stringify(event).length },
+    });
+    expect(JSON.stringify(client.state)).not.toContain("diagnostic-7f3a");
+    expect(client.readRunRaw(KEY, run.id)).toEqual({
+      status: "available",
+      holds: "chat-event",
+      payload: event,
+    });
+    client.stop();
+  });
+
+  it("F-301: a steer names no request of the run it joined; an error event too large to keep says so, and a failure nothing was kept for says only that", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.emit("agent", agentEvent("run-x", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs[0]?.state === "running");
+    client.sendMessage(KEY, "and this");
+    await until(() => gateway.calls("chat.send").length === 1);
+    await sleep(20);
+    expect(transcript().runs[0]!.requestId).toBeUndefined();
+    const huge = "x".repeat(MAX_RAW_ENTRY_CHARS);
+    gateway.emit("chat", {
+      runId: "run-x",
+      sessionKey: KEY,
+      seq: 3,
+      state: "error",
+      errorMessage: huge,
+    });
+    await until(() => transcript().runs[0]?.state === "failed");
+    const read = client.readRunRaw(KEY, "run-x");
+    expect(read).toMatchObject({ status: "too-large", holds: "chat-event" });
+    expect(JSON.stringify(client.state)).not.toContain(huge);
+    // A run with no failing event kept: nothing is claimed about what the gateway sent.
+    expect(client.readRunRaw(KEY, "no-such-run")).toBeNull();
+    client.stop();
+  });
+
+  it("F-301: a failure read from history takes the gateway's error row as its reason, with no Raw kept", () => {
+    const activity = runsFromHistory(
+      [
+        { role: "user", content: "Fail.", __openclaw: { id: "u", idempotencyKey: "r1" } },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "LLM request rejected: no." }],
+          stopReason: "error",
+          __openclaw: { id: "a", runId: "r1" },
+        },
+      ],
+      null,
+      { sessionKey: KEY, now: 5_000, raw: new RawTable() },
+    );
+    const run = activity.find((each) => each.id === "r1")!;
+    expect(run.state).toBe("failed");
+    expect(run.error).toEqual({ message: "LLM request rejected: no.", kind: null });
+  });
+
+  it("F-301: eviction of the failed run evicts its Raw payload", async () => {
+    const { client, gateway, transcript } = await openTask();
+    const raw = (client as unknown as { raw: RawTable }).raw;
+    for (let n = 0; n < 20; n += 1) {
+      const runId = `fail-${n}`;
+      gateway.emit("agent", agentEvent(runId, 1, "lifecycle", { phase: "start" }));
+      gateway.emit("chat", {
+        runId,
+        sessionKey: KEY,
+        seq: 2,
+        state: "error",
+        errorMessage: `Failure ${n}`,
+      });
+      await until(() =>
+        transcript().runs.some((run) => run.id === runId && run.state === "failed"),
+      );
+    }
+    // The first runs have left the task's window; their Raw left with them.
+    expect(transcript().runs.some((run) => run.id === "fail-0")).toBe(false);
+    expect(raw.get(KEY, runErrorRawId("fail-0"))).toBeNull();
+    expect(client.readRunRaw(KEY, "fail-19")).toMatchObject({ status: "available" });
     client.stop();
   });
 });
