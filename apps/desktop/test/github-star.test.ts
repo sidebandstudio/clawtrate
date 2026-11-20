@@ -12,10 +12,14 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
+import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { findGitHubCli, installLocations, starRepository } from "../src/main/github-star.ts";
+import type * as GitHubStar from "../src/main/github-star.ts";
 import { createDesktopBridge } from "../src/renderer/bridge-desktop.ts";
 import type { DesktopHostApi } from "../src/preload/index.ts";
 
@@ -220,4 +224,92 @@ it("F-521: a listed link with a regular-file parent is unavailable and cannot la
   symlinkSync(program, link);
   expect(await starRepository(findGitHubCli([link]))).toBe(true);
   expect(readFileSync(log, "utf8")).toBe("ran");
+});
+
+// Exercise the host's lookup on a synthetic filesystem. No path passed by the
+// lookup or the child's environment can reach the machine running the test.
+async function withInstallation(
+  platform: "darwin" | "win32",
+  entries: Record<string, "directory" | "file" | { link: string }>,
+  check: (host: typeof GitHubStar, trace: string[], launches: NodeJS.ProcessEnv[]) => Promise<void>,
+) {
+  const trace: string[] = [];
+  const launches: NodeJS.ProcessEnv[] = [];
+  const file = statSync(gh, { bigint: true });
+  const directory = statSync(dir);
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  vi.resetModules();
+  vi.doMock("node:path", () => ({ ...(platform === "darwin" ? posix : win32), win32 }));
+  vi.doMock("node:fs", () => ({
+    constants: fs.constants,
+    lstatSync(path: string) {
+      trace.push("lstat " + path);
+      const entry = entries[path];
+      if (!entry) throw new Error("missing");
+      if (entry === "directory") return directory;
+      if (entry === "file") return file;
+      return { isSymbolicLink: () => true };
+    },
+    readlinkSync(path: string) {
+      trace.push("readlink " + path);
+      const entry = entries[path];
+      if (typeof entry !== "object") throw new Error("missing link");
+      return entry.link;
+    },
+    statSync(path: string) {
+      trace.push("stat " + path);
+      if (entries[path] !== "file") throw new Error("missing executable");
+      return file;
+    },
+    accessSync(path: string, mode: number) {
+      trace.push("access " + path);
+      if (entries[path] !== "file" || mode !== fs.constants.X_OK) throw new Error("denied");
+    },
+  }));
+  vi.doMock("node:child_process", () => ({
+    spawn(path: string, _args: string[], options: { env: NodeJS.ProcessEnv }) {
+      if (entries[path] !== "file") throw new Error("missing executable");
+      launches.push(options.env);
+      const stdout = new PassThrough();
+      const child = Object.assign(new EventEmitter(), { stdout });
+      stdout.on("end", () => child.emit("close", 0));
+      setImmediate(() => stdout.end("HTTP/2.0 204 No Content\r\n"));
+      return child;
+    },
+  }));
+  try {
+    const host = await import("../src/main/github-star.ts");
+    Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+    await check(host, trace, launches);
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+    vi.doUnmock("node:path");
+    vi.doUnmock("node:fs");
+    vi.doUnmock("node:child_process");
+    vi.resetModules();
+  }
+}
+
+it("F-521: Windows config paths must name a drive or a complete UNC share", async () => {
+  writeFileSync(gh, "");
+  vi.stubEnv("SystemRoot", "C:\\Windows");
+  for (const name of ["HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME"])
+    vi.stubEnv(name, undefined);
+  const executable = "C:\\cli.exe";
+  await withInstallation("win32", { [executable]: "file" }, async (host, trace, launches) => {
+    const cli = host.findGitHubCli([executable]);
+    expect(cli).not.toBeNull();
+    for (const value of ["\\config", "/config", "C:config", "\\\\server"]) {
+      vi.stubEnv("GH_CONFIG_DIR", value);
+      expect(await host.starRepository(cli)).toBe(false);
+      expect(launches).toHaveLength(0);
+    }
+    const valid = ["C:\\config", "\\\\server\\share\\config"];
+    for (const value of valid) {
+      vi.stubEnv("GH_CONFIG_DIR", value);
+      expect(await host.starRepository(cli)).toBe(true);
+    }
+    expect(launches.map((env) => env.GH_CONFIG_DIR)).toEqual(valid);
+    expect(trace.every((entry) => entry.endsWith(" " + executable))).toBe(true);
+  });
 });

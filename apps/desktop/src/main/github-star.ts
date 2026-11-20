@@ -141,7 +141,11 @@ export async function starRepository(cli: Installation | null, timeout = 8000): 
   ]) {
     const value = process.env[name];
     if (!value) continue;
-    if (!isAbsolute(value)) return false;
+    if (
+      !isAbsolute(value) ||
+      (process.platform === "win32" && win32.parse(value).root.length === 1)
+    )
+      return false;
     env[name] = value;
   }
   running = true;
