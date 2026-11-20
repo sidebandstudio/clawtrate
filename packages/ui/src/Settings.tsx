@@ -14,8 +14,9 @@ import {
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Updates, type useDesktopUpdateSnapshot } from "./Updates.tsx";
-import { useBridge, useCommand } from "./bridge.tsx";
+import type {useDesktopUpdateSnapshot} from "./update-reading.ts";
+import { Updates } from "./Updates.tsx";
+import { useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
 import { useMachinesSection } from "./machines/Machines.tsx";
@@ -96,7 +97,6 @@ export function Settings({
   updateReading: ReturnType<typeof useDesktopUpdateSnapshot>;
   onClose: () => void;
 }) {
-  const { desktopUpdates } = useBridge();
   const send = useCommand();
   const dialogRef = useRef<HTMLDivElement>(null);
   const [section, setSectionState] = useState<Section>(() =>
@@ -351,13 +351,7 @@ export function Settings({
                   back: toNav,
                   foot: null,
                   body: (
-                    <Updates
-                      snapshot={updateReading.snapshot}
-                      savingTrack={updateReading.savingTrack}
-                      updates={desktopUpdates}
-                      refused={updateReading.refused}
-                      onChoice={updateReading.chooseTrack}
-                    />
+                    <Updates {...updateReading} />
                   ),
                 }
               : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
@@ -400,7 +394,7 @@ export function Settings({
           {closeButton}
           {content}
         </section>
-        {announcer}
+        {section !== "updates" && announcer}
       </div>
     </Dialog>
   );

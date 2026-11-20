@@ -36,3 +36,13 @@ it("F-231: rejected reads and commands release the action without replay",async(
  h.event(base);h.host.check.mockRejectedValueOnce(Error());await h.reader.check("stable");
  expect(h.reader.get().message).toBe("Couldn't start the update check.");h.reply.resolve({outcome:"busy",snapshot:base});await h.reader.check("stable");expect(h.host.check).toHaveBeenCalledTimes(2);
 });
+
+it("F-231: a track choice masks the old offer immediately and rejects overlapping local commands",async()=>{
+ const h=harness();h.event(base);const saving=h.reader.chooseTrack("nightly");
+ expect(h.reader.get().localChoice).toBe("nightly");
+ await h.reader.check("stable");await h.reader.download("retired");await h.reader.chooseTrack("nightly");
+ expect(h.host.check).not.toHaveBeenCalled();expect(h.host.download).not.toHaveBeenCalled();expect(h.host.chooseTrack).toHaveBeenCalledOnce();
+ h.event({...base,revision:4,pendingTrack:"nightly"});
+ h.reply.resolve({outcome:"accepted",snapshot:{...base,revision:5,preferenceIssue:"track-not-saved"}});
+ await saving;expect(h.reader.get()).toMatchObject({localChoice:null,snapshot:{selectedTrack:"stable",state:{kind:"not-checked"},preferenceIssue:"track-not-saved"}});
+});

@@ -1,66 +1,27 @@
-import type { DesktopUpdateSnapshot, DesktopUpdates, UpdateTrack } from "@clawtrate/core";
-import { useEffect, useRef, useState } from "react";
+import type { DesktopUpdateSnapshot,UpdateTrack } from "@clawtrate/core";
+import type {useDesktopUpdateSnapshot} from "./update-reading.ts";
+import {WarnIcon} from "./icons.tsx";
 import "./styles/updates.css";
 
-const names = { stable: "Stable", nightly: "Nightly" };
-
-export function useDesktopUpdateSnapshot(updates: DesktopUpdates) {
-  const [snapshot, setSnapshot] = useState<DesktopUpdateSnapshot | null>(null);
-  const choosing = useRef<UpdateTrack | null>(null);
-  const [savingTrack, setSavingTrack] = useState(false);
-  const [refused, setRefused] = useState<UpdateTrack | null>(null);
-  const [checkPreferenceFailure, setCheckPreferenceFailure] = useState(false);
-  useEffect(() => {
-    let acceptInitial = true;
-    let checking = false;
-    const stop = updates.subscribe((next) => {
-      acceptInitial = false;
-      const preferences = next.state.kind === "failed" && next.state.stage === "preferences";
-      setRefused(
-        preferences && choosing.current !== null && next.selectedTrack !== choosing.current
-          ? next.selectedTrack
-          : null,
-      );
-      setCheckPreferenceFailure(preferences && checking && choosing.current === null);
-      checking = next.state.kind === "checking";
-      setSnapshot(next);
-    });
-    void updates
-      .get()
-      .then((first) => {
-        if (acceptInitial) setSnapshot(first);
-      })
-      .catch(() => {});
-    return () => {
-      acceptInitial = false;
-      stop();
-    };
-  }, [updates]);
-  async function chooseTrack(track: UpdateTrack) {
-    if (choosing.current) return;
-    choosing.current = track;
-    setSavingTrack(true);
-    try {
-      await updates.chooseTrack(track);
-    } finally {
-      choosing.current = null;
-      setSavingTrack(false);
-    }
-  }
-  return { snapshot, chooseTrack, refused, checkPreferenceFailure, savingTrack };
+const names = {stable:"Stable",nightly:"Nightly"};
+const capabilities = {
+ "development-build":"A development build. It doesn't update itself.",
+ "not-configured":"This copy can't check for updates: no update source is set up for it.",
+ "no-updater":"This copy can't check for updates: no update source is set up for it.",
+ "invalid-version":"This build's version couldn't be read. It can't check for updates.",
+ "unsupported-system":"This build can't check for updates on this system.",
+};
+function capabilityLine(s:DesktopUpdateSnapshot){
+ const {state}=s;
+ return state.kind==="failed" && Object.hasOwn(capabilities,state.reason) ? capabilities[state.reason as keyof typeof capabilities] : null;
 }
-
 function sourceFor(s: DesktopUpdateSnapshot) {
-  if (
-    s.state.kind === "failed" &&
-    ["development-build", "not-configured", "no-updater"].includes(s.state.reason)
-  )
-    return;
+  if (capabilityLine(s)) return;
   return s.tracks.find((t) => t.track === s.selectedTrack)?.source;
 }
 
-export function showUpdateFooter(s: DesktopUpdateSnapshot | null) {
-  if (!s || !sourceFor(s)) return false;
+export function showUpdateFooter(s: DesktopUpdateSnapshot | null,pending=s?.pendingTrack) {
+  if (!s || pending || !sourceFor(s)) return false;
   switch (s.state.kind) {
     case "offered":
     case "downloading":
@@ -75,26 +36,21 @@ export function showUpdateFooter(s: DesktopUpdateSnapshot | null) {
 
 function updateRow(
   s: DesktopUpdateSnapshot,
-  refused: UpdateTrack | null,
+  pending: UpdateTrack | null,
 ): { line: string; action?: "Check for Updates" | "Try again" | "Download" } {
   const { state } = s;
   const source = sourceFor(s);
-  if (state.kind === "failed" && state.reason === "development-build")
-    return { line: "A development build. It doesn't update itself." };
-  if (!source)
-    return { line: "This copy can't check for updates: no update source is set up for it." };
+  const unavailable=capabilityLine(s);
+  if(unavailable || !source) return {line:unavailable ?? capabilities["not-configured"]};
+  if(pending) return {line:"Not checked yet."};
   switch (state.kind) {
     case "not-checked":
       return { line: "Not checked yet.", action: "Check for Updates" };
     case "checking":
       return { line: `Checking ${source}…` };
     case "nothing-newer": {
-      const time =
-        s.lastCheckedAt &&
-        new Date(s.lastCheckedAt).toLocaleTimeString(undefined, {
-          hour: "numeric",
-          minute: "2-digit",
-        });
+      const date=s.lastCheck && s.lastCheck.track===s.selectedTrack ? new Date(s.lastCheck.readAt) : null;
+      const time=date && Number.isFinite(date.getTime()) ? date.toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}) : null;
       return {
         line:
           s.selectedTrack &&
@@ -121,13 +77,7 @@ function updateRow(
         line: `Clawtrate ${state.version} is downloaded, and its size and checksum match the update source. Installation isn't available from this screen.`,
       };
     case "failed":
-      if (state.stage === "preferences" && refused && s.selectedTrack === refused)
-        return {
-          line: `Couldn't save the track. ${names[refused]} is still selected.`,
-          action: "Check for Updates",
-        };
-      if (state.stage === "preferences")
-        return { line: "Update settings are unavailable.", action: "Check for Updates" };
+      if(state.stage==="preferences")return {line:"Couldn't read or save the update settings.",action:"Check for Updates"};
       if (state.stage === "download")
         return { line: "Couldn't download the update. Try again.", action: "Try again" };
       if (state.reason === "no-file-for-this-system")
@@ -139,98 +89,50 @@ function updateRow(
   }
 }
 
-export function Updates({
-  snapshot: s,
-  updates,
-  savingTrack,
-  refused,
-  onChoice,
-}: {
-  snapshot: DesktopUpdateSnapshot | null;
-  updates: DesktopUpdates;
-  savingTrack: boolean;
-  refused: UpdateTrack | null;
-  onChoice: (track: UpdateTrack) => void;
-}) {
-  if (!s) return null;
-  const { line, action } = updateRow(s, refused);
-  const source = sourceFor(s);
-  const state = s.state;
-  const downloading = state.kind === "downloading";
-  const announcement = downloading
-    ? `Downloading Clawtrate ${state.version}… ${Math.floor((10 * state.received) / state.expected) * 10}%`
-    : line;
-  return (
-    <div className="updates-section">
-      <p className="b-hint">Applies on this device.</p>
-      {source && <p>This build can't install updates itself.</p>}
-      <dl className="facts">
-        {s.runningVersion && (
-          <div>
-            <dt>Version</dt>
-            <dd className="b-wrap-value">
-              Clawtrate {s.runningVersion}
-              {s.runningTrack && (
-                <p className="b-hint">This copy is a {names[s.runningTrack]} build.</p>
-              )}
-            </dd>
-          </div>
-        )}
-        <div>
-          <dt>Updates</dt>
-          <dd className="b-wrap-value">{line}</dd>
-        </div>
-      </dl>
-      {downloading && (
-        <progress
-          aria-label={`Downloading Clawtrate ${state.version}`}
-          value={state.received}
-          max={state.expected}
-        />
-      )}
-      {source && s.tracks.length === 2 && (
-        <fieldset role="radiogroup" aria-label="Update track">
-          <legend>Update track</legend>
-          {s.tracks.map(({ track }) => (
-            <label key={track}>
-              <input
-                type="radio"
-                name="update-track"
-                aria-disabled={savingTrack || undefined}
-                checked={track === s.selectedTrack}
-                onChange={() => onChoice(track)}
-              />
-              {names[track]}
-            </label>
-          ))}
-          {s.selectedTrack && s.runningTrack && s.runningTrack !== s.selectedTrack && (
-            <p className="b-hint">The next check asks the {names[s.selectedTrack]} source.</p>
-          )}
-        </fieldset>
-      )}
-      {action && (
-        <>
-          <button
-            className="button"
-            disabled={savingTrack}
-            type="button"
-            onClick={() => {
-              void (state.kind === "offered" ? updates.download(state.offerId) : updates.check());
-            }}
-          >
-            {action}
-          </button>
-          <p className="b-hint">
-            {state.kind === "offered"
-              ? `Downloads Clawtrate ${state.version} from ${source}, only when you choose to.`
-              : `Checks ${source} for a newer build, only when you choose to.`}
-          </p>
-        </>
-      )}
-      {source && <p className="b-hint">Automatic restart is unavailable in this build.</p>}
-      <span className="visually-hidden" role="status">
-        {announcement}
-      </span>
-    </div>
-  );
+
+function preferenceLine(s:DesktopUpdateSnapshot){
+ switch(s.preferenceIssue){
+ case "preferences-not-read":return "Couldn't read the saved update settings.";
+ case "track-not-saved":return s.selectedTrack && `Couldn't save the track. ${names[s.selectedTrack]} is still selected.`;
+ case "last-check-not-saved":return "Couldn't save the time of the last check.";
+ case "update-folder-unavailable":return "Couldn't prepare update storage on this device.";
+ case null:return null;
+ }
+}
+
+// React detaches this ref before removing the focused button. Progress updates
+// never move focus, and the result stays in the dialog's normal reading order.
+function focusResultOnRemoval(button:HTMLButtonElement|null){
+ if(button) return ()=>{if(document.activeElement===button)button.closest<HTMLElement>(".update-result")?.focus();};
+}
+
+export function Updates({snapshot:s,pending,message,working,chooseTrack,check,download}:ReturnType<typeof useDesktopUpdateSnapshot>) {
+ if(!s)return <div className="updates-section"><span role="status">{message}</span></div>;
+ const {line,action}=updateRow(s,pending);
+ const source=sourceFor(s);
+ const state=s.state;
+ const downloading=!pending && state.kind==="downloading";
+ const notice=preferenceLine(s);
+ const saving=pending && `Saving ${names[pending]} as the update track…`;
+ const announcement=downloading ? `Downloading Clawtrate ${state.version}… ${Math.floor(10*state.received/state.expected)*10}%` : line;
+ return <div className="updates-section">
+ <p className="b-hint">Applies on this device.</p>
+ {source && s.install.kind==="unavailable-in-this-build" && <div className="b-note" data-tone="warn"><WarnIcon/><p>This build can't install updates itself.</p></div>}
+ {s.runningVersion && <dl className="facts"><div><dt>Version</dt><dd className="b-wrap-value">Clawtrate {s.runningVersion}{s.runningTrack && <p className="b-hint">This copy is a {names[s.runningTrack]} build.</p>}</dd></div></dl>}
+ {source && s.tracks.length===2 && <fieldset role="radiogroup" aria-label="Update track"><legend>Update track</legend>{s.tracks.map(({track})=><label key={track}><input type="radio" name="update-track" aria-disabled={pending ? true : undefined} checked={s.selectedTrack===track}
+ onKeyDown={e=>{if(pending && [" ","ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(e.key))e.preventDefault();}}
+ onClick={e=>{if(pending)e.preventDefault();}}
+ onChange={()=>{if(!pending) void chooseTrack(track);}}/>{names[track]}</label>)}</fieldset>}
+ {saving && <p className="b-hint">{saving}</p>}
+ {!pending && source && s.selectedTrack && s.runningTrack && s.selectedTrack!==s.runningTrack && <p className="b-hint">The next check asks the {names[s.selectedTrack]} source.</p>}
+ <div className="update-result" tabIndex={-1} role="group" aria-label="Update status">
+ <dl className="facts"><div><dt>Updates</dt><dd className="b-wrap-value">{line}{downloading && <progress aria-label={`Downloading Clawtrate ${state.version}`} value={state.received} max={state.expected}/>}</dd></div></dl>
+ {notice && !pending && <p>{notice}</p>}
+ {message && <p>{message}</p>}
+ {action && s.selectedTrack && <><div className="b-actions"><button ref={focusResultOnRemoval} key={action} type="button" className="button" aria-disabled={working || undefined} aria-describedby="update-source" onClick={()=>{if(working)return;if(state.kind==="offered") void download(state.offerId);else if(s.selectedTrack)void check(s.selectedTrack);}}>{action}</button></div>
+ <p id="update-source" className="b-hint update-source">{state.kind==="offered" ? `Downloads Clawtrate ${state.version} from ${source}, only when you choose to.` : `Checks ${source} for a newer build, only when you choose to.`}</p></>}
+ </div>
+ {source && <p className="b-hint">Automatic restart is unavailable in this build.</p>}
+ <span className="visually-hidden" role="status">{[saving ?? announcement,!pending && notice,message].filter(Boolean).join(" ")}</span>
+ </div>;
 }
