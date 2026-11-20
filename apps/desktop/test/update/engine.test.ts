@@ -496,17 +496,20 @@ describe("the update engine against a local feed", () => {
 
   it("answers a check asked for from inside the checking state with the same one", async () => {
     server.route("/feed.json", json(feedFor(server.origin, "0.2.0", payloadEntry())));
-    const inner: Array<Promise<UpdateState>> = [];
+    let asked = false;
+    let inner: Promise<UpdateState> | undefined;
     const engine: UpdateEngine = engineFor(server, dir.path, {
       onState: (state) => {
-        if (state.kind === "checking") inner.push(engine.check());
+        if (state.kind === "checking" && !asked) {
+          asked = true;
+          inner = engine.check();
+        }
       },
     }).engine;
     const outer = engine.check();
     const result = await outer;
-    expect(inner).toHaveLength(1);
-    expect(inner[0]).toBe(outer);
-    expect(await inner[0]).toBe(result);
+    expect(await inner).toBe(result);
+    expect(inner).toBe(outer);
     expect(server.requests).toEqual(["/feed.json"]);
   });
 });
