@@ -44,6 +44,7 @@ const WALKED = new Set([
   "FileTransfers",
   "PendingSaves",
   "AccountsEngine",
+  "RoutinesEngine",
   "UsageEngine",
   "MachinesEngine",
   "WaitingIndex",
