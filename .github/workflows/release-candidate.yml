@@ -41,11 +41,11 @@ jobs:
         env:
           REQUESTED: ${{ inputs.version }}
         run: |
-          export SOURCE_DATE_EPOCH=$(date -u +%s)
+          SOURCE_DATE_EPOCH=$(date -u +%s)
+          export SOURCE_DATE_EPOCH
           version=$(node apps/desktop/packaging/candidate-version.ts)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "epoch=$SOURCE_DATE_EPOCH" >> "$GITHUB_OUTPUT"
-          echo "date=$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%S.000Z)" >> "$GITHUB_OUTPUT"
+          build_date=$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%S.000Z)
+          printf 'version=%s\nepoch=%s\ndate=%s\n' "$version" "$SOURCE_DATE_EPOCH" "$build_date" >> "$GITHUB_OUTPUT"
 
   build:
     needs: select
