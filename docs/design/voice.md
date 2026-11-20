@@ -82,10 +82,10 @@ The composer is built on `main` (`packages/ui/src/Composer.tsx`, `conversation.m
 | Where the audio goes, before the first use    | `.voice-consent`       | 2, 4, 5 |
 | The call band                                 | `.call-band`           | 6       |
 | The microphone mark                           | `.mic-mark`            | 2       |
-| The call's settings                           | `.call-settings`       | 7       |
+| The call's settings, a dialog | `.v-call-settings` | 7 |
 | The live transcript                           | `.call-transcript`     | 6       |
 | The "Voice chat" line                         | `.call-line`           | 10      |
-| The memo's text and speed                     | `.memo-text`, `.speed` | 11      |
+| The memo's speed | `.speed` | 11 |
 
 ### Tokens
 
@@ -428,27 +428,28 @@ On a read-only connection the section also says "Dictation and voice chat need m
 
 ## 13. What each fact drives
 
-| Shown                                                 | Driven by                                                                                                            | Tier                                | Evidence                                                                                        |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Voice chat set up, its provider's name                | `talk.catalog` `realtime.ready`, `activeProvider`, the provider's `label` and `transports`                           | read                                | research §1, live                                                                               |
-| Dictation through the gateway set up                  | `talk.catalog` `transcription.ready`, `activeProvider`                                                               | read                                | research §1, live                                                                               |
-| Starting a call                                       | `talk.session.create {sessionKey, voice?, language?, capabilities}` (realtime, `gateway-relay`, `agent-consult`)     | `operator.talk` (write)             | research §1 live refusals; §2 source                                                            |
-| Sending audio                                         | `talk.session.appendAudio` (PCM16 24 kHz)                                                                            | `operator.talk`                     | research §2, source                                                                             |
-| Phase, live transcript, a failure                     | `talk.event` frames to this connection                                                                               | read                                | research §2, source                                                                             |
-| Hang up                                               | `talk.session.close`                                                                                                 | `operator.talk`                     | research §2, live (unknown id)                                                                  |
-| A session ends with its connection, and at 30 minutes | Connection cleanup; `RELAY_SESSION_TTL_MS`                                                                           |                                     | research §5, source                                                                             |
-| Reconnecting a call after a drop                      | A new `talk.session.create` on the same task after the reconnect, within 30 s                                        | `operator.talk`                     | research §5; not exercised                                                                      |
-| One call at a time                                    | This client                                                                                                          |                                     | research §5                                                                                     |
-| Voice                                                 | `talk.voice.set`, `talk.voice.change`, a replacement create, `talk.voice.complete`                                   | `operator.talk`                     | research §7, live (no call)                                                                     |
-| Speed                                                 | This device's playback                                                                                               |                                     | research §7                                                                                     |
-| Language                                              | `language` on `talk.session.create`; during a call, a second session, then `close` of the first                      | `operator.talk`                     | research §5 (two per connection), §7 live validation; the switch not exercised                  |
-| Where each bot's voice, speed and language are kept   | `users.prefs.get` and `set` (`clawtrate.voice`, compare-and-set), `users.prefs.changed`                              | read to read it, write to change it | `docs/research/gateway-capabilities.md` (`users.prefs`, live); as `clawtrate.sidebar` on `main` |
-| The "Voice chat" line and its transcript              | History rows with `provenance.kind: "realtime_voice"`; this device's count                                           | read                                | research §6, source                                                                             |
-| Dictation through the gateway                         | `talk.session.create {mode: "transcription"}`, `appendAudio` (µ-law 8 kHz), `talk.event`, `close`                    | `operator.talk`                     | research §3                                                                                     |
-| Dictation on the device                               | Apple's Speech framework with on-device required                                                                     |                                     | research §3, documented                                                                         |
-| A memo and its text                                   | `artifacts.list`, `artifacts.download` (bytes or a grant, under `docs/decisions.md`); the run's `tts` call arguments | read                                | research §8, source                                                                             |
-| No word highlighting                                  | No word timings exist                                                                                                |                                     | research §8                                                                                     |
-| The microphone                                        | `getUserMedia`, `enumerateDevices`, `devicechange`, the track's `ended`; macOS's `askForMediaAccess`                 |                                     | research §4, documented                                                                         |
+| Shown | Driven by | Tier | Evidence |
+|---|---|---|---|
+| Voice chat set up, its provider's id and name | `talk.catalog` `realtime.ready`, `activeProvider`, the provider's `label` and `transports` | read | research §1, live |
+| Dictation through the gateway set up | `talk.catalog` `transcription.ready`, `activeProvider` | read | research §1, live |
+| Starting a call, its provider checked | `talk.session.create {sessionKey, provider, voice?, language?, capabilities}` (realtime, `gateway-relay`, `agent-consult`); its answer's `provider`, `relaySessionId`, `voiceSessionId`, `expiresAt` | `operator.talk` (write) | research §1 live refusals; §2 source |
+| Listening | The relay's `ready`, matched by id, and a live capture track | read | research §2, source |
+| Sending audio | `talk.session.appendAudio` (PCM16 24 kHz), to a ready relay only | `operator.talk` | research §2, source |
+| Thinking, speaking, captions, a failure | `talk.event` frames to this connection, by relay id; local playback | read | research §2, source |
+| Hang up, confirmed | `talk.session.close`'s answer, or that relay's `close` event | `operator.talk` | research §2, §5, source |
+| A drop ends the call; nothing resumes | Asynchronous connection cleanup; ownership by connection; "Unknown Talk session" once forgotten | | research §5, source |
+| The next start's wait | The relay's `expiresAt`, its scheduled end | | research §5, source |
+| One call at a time | This client's host | | research §5 |
+| Voice | `talk.voice.get` (`canChange`, voices), `talk.voice.set`, `talk.voice.change` `requested`, one replacement create with `voiceChangeId`, `talk.voice.complete`, `applied` | `operator.talk` | research §7, source and live (no call) |
+| Speed | This device's playback | | research §7 |
+| Language for new calls | `language` on `talk.session.create` | `operator.talk` | research §7, live validation |
+| Where each bot's settings are kept | `users.prefs.get` and `set` (`clawtrate.voice`, `expectedEntries`), `users.prefs.changed`, 4,096 bytes per value | read to read it, write to change it | `docs/research/gateway-capabilities.md` (`users.prefs`, live); as `clawtrate.sidebar` on `main` |
+| The "Voice chat" line and its turns | History rows with `provenance.kind: "realtime_voice"` and ids `voice:<voiceSessionId>:<n>`; this device's count | read | research §6, source |
+| Dictation through the gateway | `talk.session.create {mode: "transcription"}`, its `ready`, `appendAudio` (µ-law 8 kHz), `transcript.done`, `close` and its drain | `operator.talk` | research §3 |
+| Dictation on the device | Apple's Speech framework with on-device required | | research §3, documented |
+| A memo | `artifacts.list`, then on Play `artifacts.download` (bytes or a grant, under `docs/decisions.md`) | read | research §8, source |
+| No text and no word highlighting | No verified link from a recording to a `tts` call; no word timings | | research §8 |
+| The microphone | `getUserMedia`, `enumerateDevices`, `devicechange`, the track's `ended`, the permission's state; macOS's `askForMediaAccess` | | research §4, documented |
 
 ## 14. Parity rows
 
@@ -483,9 +484,9 @@ Rows met as written, their cells unchanged: F-407, F-408 and F-460 (entry points
 | The consent sheet                      | The small dialog; choice rows (`bots.md`)                                    | `.voice-consent`                                 |
 | The call band                          | `--bg-bubble`, buttons, the avatar                                           | `.call-band`, `.mic-mark`                        |
 | The live transcript                    | Message text styles                                                          | `.call-transcript` (`role="log"`)                |
-| The call's settings                    | `.menu`'s surface, radio rows                                                | `.call-settings`                                 |
+| The call's settings | The small dialog; native selects | `.v-call-settings` |
 | The line                               | Event line, expander                                                         | `.call-line`                                     |
-| Memos                                  | The audio card (`work-pane.md` §12)                                          | `.memo-text`, `.speed`                           |
+| Memos | The audio card (`work-pane.md` §12) | `.speed` |
 | Settings › Voice                       | Settings sections and rows (`bots.md` §7)                                    |                                                  |
 
 ### What the host does
@@ -499,55 +500,64 @@ Rows met as written, their cells unchanged: F-407, F-408 and F-460 (entry points
 
 ### What the engine supplies
 
-- From `talk.catalog`, after every hello: whether voice chat and gateway dictation are ready, the active providers' labels, `transports`, voices by model.
-- A call: its state (asking for the microphone, connecting, listening, thinking, speaking, muted, reconnecting, ending, ended, failed with its reason), its phase from frames, its live transcript, its time from the first `ready`, its current session and when that session started, its voice-change and language-change states.
-- From history: runs of rows with `provenance.kind: "realtime_voice"`, folded per call, with count and first and last time; the device's own count joined by the task and the first row's time.
-- For a memo: the matching `tts` call's `text`, when the item came from one in the same run.
-- The settings kept per bot in `clawtrate.voice`, or on the device with no durable user, and the device's own (section 2).
+- From `talk.catalog`, after every hello: whether voice chat and gateway dictation are ready, the active providers' ids and labels, `transports`, voices by model.
+- A call: its attempt, connection generation and task; its state (asking for the microphone, connecting, listening, thinking, speaking, muted, microphone stopped, ending, ended, ended unconfirmed, refused, failed with its reason); each relay it holds, by id, with its provider and scheduled end, and whether that relay is open, closing, closed or may be open; capture and playback as the device reports them; its captions by id, final and saved from their own events; its time from `ready`; a pending voice change through each of its steps.
+- From history: rows with `provenance.kind: "realtime_voice"` grouped by the voice session in their ids; spoken rows without one, singly; the device's own count joined by the exact voice session ids it held.
+- For a memo: its metadata, and on Play the answer for that item, classified by the core's rule.
+- The settings in `clawtrate.voice` per bot, each field's last confirmed value and any write in progress, or the device's own with a confirmed `no_durable_identity`, or unknown.
 
 ### What the gateway must supply
 
-Nothing new for what is designed here. A relayed session that survived its connection would let a reconnect keep what the provider heard (F-463), and a method that changed a session's language would avoid the second session (F-462); word timings would let a memo highlight its words (F-413). None is asked of a plugin: the design does without them, and says what each costs.
+Nothing new for what is designed here. Three targets wait on it: a relayed session that survives its connection, or a release a new connection can see (F-463); a way to change a session's language with an acknowledgement (F-462); word timings (F-413). A provider-backed check of the voice change is still needed for F-410. None is asked of a plugin: the design does without them, and says what each costs.
 
 ### Order to build
 
-1. The microphone: permissions, the device list, Settings › Voice's Microphone group, the states of section 2. Check F-392.
-2. The catalog read and the buttons' states, the access bar.
+1. The microphone: permissions per platform, the device list, Settings › Voice's Microphone group, the states of section 2. Check F-392.
+2. The catalog read, consent per destination and the buttons' states.
 3. Dictation through the gateway, with its consent and states. Check F-253 (gateway route) and F-409's gateway route.
 4. Dictation on the device, once the native recognizer is in place. Check F-253 and F-409.
-5. A relayed call: start, band, mute, hang up, reconnecting, failures, 30 minutes. Check F-254, F-411, F-463.
-6. One call at a time. Check F-412.
-7. Voice, speed, language, with the `clawtrate.voice` preference. Check F-410, F-461, F-462.
+5. A relayed call: the gate, start, band, mute, hang up with its confirmation, a drop, failures, the scheduled end. Check F-254, F-411.
+6. One call at a time, with the host's serialization. Check F-412.
+7. Voice through the gateway's change, speed, language for new calls, with the `clawtrate.voice` preference. Check F-410, F-461.
 8. The "Voice chat" line. Check F-111.
-9. Memos, their text and speed. Check F-255, F-413.
+9. Memos and their speed. Check F-255, F-413.
 10. The iPhone entry points with the iOS app. Check F-407, F-408, F-460.
 
 ### Prototype states
 
-`prototype/voice.html` takes the prototype's own `theme`, `width`, `motion` and `chrome`, and these. The bar fires what the gateway and the device do.
+`prototype/voice.html` takes the prototype's own `theme`, `width`, `motion` and `chrome`, and these. Nothing records, plays, fetches or opens: the microphone, the gateway and the player are counters (`window.voice.S.io`), and the gateway's and the device's events are fired one at a time by the bar or by `window.voice.ev(name, data)`. With `auto=0` nothing answers by itself.
 
-| Parameter     | Values                                                                                                                                                                                                                                                                                                                                  |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bot`, `task` | `otto` (`o1`), `juniper` (`j1`), `pip` (`p1`)                                                                                                                                                                                                                                                                                           |
-| `access`      | `read`, `write` (default)                                                                                                                                                                                                                                                                                                               |
-| `run`         | `running`: the bot is working, so the composer shows Stop                                                                                                                                                                                                                                                                               |
-| `prefs`       | `none`: the connection has no durable user, so settings are kept on this device                                                                                                                                                                                                                                                         |
-| `voice`       | `ready` (default), `none` (not set up), `direct` (no relay), `unknown` (couldn't be read)                                                                                                                                                                                                                                               |
-| `dict`        | `ready` (default), `none`                                                                                                                                                                                                                                                                                                               |
-| `os`          | `mac` (default), `windows`, `web` (the browser preview on this computer), `remote` (the browser preview from another computer over plain http), `iphone`                                                                                                                                                                                |
-| `ondevice`    | `0`: this Mac can't recognize the language on its own                                                                                                                                                                                                                                                                                   |
-| `mic`         | `granted` (default), `prompt`, `denied`, `none`, `missing` (the chosen one isn't connected)                                                                                                                                                                                                                                             |
-| `seen`        | `1`: where the audio goes was already shown                                                                                                                                                                                                                                                                                             |
-| `state`       | `consent`, `dictconsent`, `dictating`, `dictfail`, `connecting`, `live`, `muted`, `speaking`, `transcript`, `settings`, `micgone`, `limit`, `second`, `ending`, `endfail`, `reconnecting`, `reconnected`, `failed` with `reason=drop`, `none` or `error`, `voicechange`, `voicefail`, `novoices`, `voicegone`, `langchange`, `langfail` |
-| `line`        | `here` (this device's line), `elsewhere`, `empty`                                                                                                                                                                                                                                                                                       |
-| `memo`        | `ready`, `text`, `notext`, `big`, `fail`, `address` (an address the item carries), `nohttp` (a grant, on the iPhone)                                                                                                                                                                                                                    |
-| `page`        | `settings`: Settings › Voice                                                                                                                                                                                                                                                                                                            |
+| Parameter | Values |
+|---|---|
+| `bot`, `task` | `otto` (`o1`), `juniper` (`j1`), `pip` (`p1`) |
+| `access` | `read`, `write` (default) |
+| `run` | `running`: the bot is working, so the composer shows Stop |
+| `prefs` | `none`: no durable user, so settings are kept on this device; `unknown`: the saved settings couldn't be read |
+| `voice` | `ready` (default), `none` (not set up), `direct` (no relay), `unknown` (couldn't be read) |
+| `provider` | `openai-eu`: the same label as before under another id, so consent is asked again |
+| `drift` | `1`: the gateway answers the create with another provider |
+| `dict` | `ready` (default), `none` |
+| `route` | `device` or `gateway`: the dictation route already chosen |
+| `os` | `mac` (default), `windows`, `web` (the browser preview on this computer), `remote` (the browser preview from another computer over plain http), `iphone` |
+| `ondevice` | `0`: this Mac can't recognize the language on its own |
+| `mic` | `granted` (default), `prompt`, `denied`, `none`, `missing` (the chosen one isn't connected) |
+| `speech` | `prompt`, `denied`: Apple speech recognition |
+| `seen` | `1`: these destinations were accepted before |
+| `long` | `1`: long gateway and provider names |
+| `inject` | `1`: markup-shaped names, voice, refusal and caption, which must show as text |
+| `files`, `token`, `picker`, `draft` | `pending` or `refused`; `slash` or `mention`; `1`: the "/" menu open; a draft's text |
+| `state` | `consent`, `dictconsent`, `dictating`, `dictfail`, `connecting`, `live`, `muted`, `speaking`, `thinking`, `transcript`, `settings`, `micgone`, `revoked`, `background`, `limit`, `second`, `ending`, `unconfirmed`, `lost`, `reconnected`, `refused`, `failed` with `reason=none` or `error`, `voicechange`, `voicefail`, `novoices`, `langsaved`, `voicegone` |
+| `line` | `here` (this device's line), `elsewhere`, `interleave` (two calls and a typed message), `noid`, `empty` |
+| `memo` | `inline` (default), `grant`, `expired`, `wrongroute`, `redirect`, `big`, `fail`, `address`, `scheme`, `nohttp` (a grant, on the iPhone), `two` (two clips and an attachment) |
+| `shortcut` | `dict`, `call` (with `shortcutbot`), `action` |
+| `page` | `settings`: Settings › Voice |
 
 ## 16. Not covered here
 
 - **The composer itself**, as built: its layout, keys, menus, drafts and sending. This design adds what section 3 lists and nothing more.
 - **Siri, Shortcuts and the Action Button's system screens**, and the iPhone app's own call screen beyond the band at 390 px: the iOS app is not on `main` yet.
 - **A client-owned call** (`talk.client.create`), and with it the gateway's own resume by `voiceSessionId`: its media goes to the provider's address, which `docs/decisions.md` never opens (section 2).
+- **A language change during a call**, and resuming a call after a drop: the gateway establishes neither (sections 7 and 8).
 - **Setting up a voice provider on the gateway**: OpenClaw's own Talk settings, which need admin.
 - **Video in a call**, steering a bot's work by voice (`talk.session.steer`), and the gateway's spoken confirmations for high-impact actions: the bot asks for those in the call, and they are not drawn here.
 - **Meeting transcripts** (`transcripts.*`) and the gateway's "Voice call changes" digest, which goes to a messaging channel, not to Clawtrate.
