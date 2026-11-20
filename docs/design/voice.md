@@ -281,18 +281,20 @@ call-band   [Otto]  Voice chat with Otto · Listening              2:14 on this 
             ● Microphone on       Mute   Transcript   Settings          Hang up
 ```
 
-- **Phase** from the relay's `talk.event` frames (research §2): "Listening" after `ready` and between replies; "Thinking" from `responseStarted` until audio; "Otto is speaking" while reply audio plays here. Nothing else is claimed.
-- **Time** is counted on this device from `ready`, and labelled "on this device".
-- **The microphone mark**: "Microphone on", or "Microphone off" while muted.
-- **Mute** (`aria-pressed`): the device stops capturing and sends nothing, and the microphone is released. The band says "Muted. This device's microphone is off." and the button reads "Unmute". Unmuting opens the microphone again (the chosen one; section 2 if it is gone). The gateway is not told: muting is this device's.
-- **Transcript** opens the live transcript under the band, a `log`: "You" and "Otto" lines from the frames' transcript events, words not yet final in `--text-faint`. Under it: "Saved in this task as it's said." The saved messages appear in the conversation as history brings them (section 10).
-- **Settings** opens the call's settings (section 7).
-- **Hang up** (`--danger`) ends the call (section 8).
-- **Thirty minutes.** A relayed session lasts 30 minutes, counted from the start of the call's current session (a change of voice or language, or a reconnect, starts a new one). At its 28th minute the band adds "Home gateway ends calls after 30 minutes. This one ends at 5:59 PM." At 30 the gateway closes it (research §5): the band goes, the line is left (section 10), and the region says "Voice chat ended: Home gateway ends calls after 30 minutes."
-- **The microphone goes away** during a call (its track ends; research §4): "The microphone stopped: USB Microphone was disconnected. Nothing is being sent." with "Use System Default" and "Hang up". The call stays open on the gateway until it ends by itself; nothing is sent meanwhile.
-- **Typing during a call** is allowed: a message sent goes into the same task as usual.
+Everything the band says comes from an event it can match to this call's own relay, by id, on the current connection:
 
-Widths: at 1440, 1100 and 800 the band spans the conversation column above the composer. At 390 the actions wrap to a second row and Hang up keeps its place at the end; the time stays on the first row. Docked or not, the Work pane never covers it.
+- **Phase.** "Connecting to Otto…" until a successful create and that relay's `ready`. "Listening" needs both a live capture track and the ready relay; with a ready relay but no track yet, "Opening the microphone…". "Thinking" from `responseStarted` until playback starts or the response ends. "Otto is speaking" from the moment this device starts playing reply audio until it has drained or been cleared; a caption or a received frame alone never makes it "speaking". "Muted" and "Microphone stopped" as in section 2. A receipt for `appendAudio` means only that the gateway accepted the audio.
+- **Time** is counted on this device from `ready`, and labelled "on this device".
+- **The microphone mark**: "Microphone on" only while a capture track is live.
+- **Mute** (`aria-pressed`): capture stops and nothing is sent; the band says "Muted. This device's microphone is off." and the button reads "Unmute". Unmuting reopens capture (section 2). The gateway is not told: muting is this device's.
+- **Transcript** (visible "Transcript", named "Show transcript" or "Hide transcript", `aria-expanded`) opens the live captions under the band: a `log` with `aria-live="off"`, so nothing in it is announced. "You" and "Otto" lines from this relay's `transcript` events only; words not yet final in `--text-faint`, final when the matching provider event says so, and marked "Saved" only when the history row with the same id arrives (section 10). Under them: "Live captions. Saved turns appear in this task." Captions of any other voice session, from this device or another, never change this band.
+- **Settings** opens the call's settings (section 7).
+- **Hang up** (`--danger`) ends the call (section 8). Before the relay is ready the same place says "Cancel".
+- **The scheduled end.** The create answers `expiresAt` (epoch seconds), the relay's scheduled end. Two minutes before it the band adds "This session is scheduled to end at 5:59 PM." A `close` event ends the call whenever it comes ("Voice chat ended"); an ordinary `completed` close is not said to be the schedule's.
+- **A stream error** (an `error` frame for this relay): local media stops, and the call has failed (section 8).
+- **Typing during a call** is allowed: a message sent goes into the same task as usual. Stop and ⌘. are the composer's (section 3).
+
+Widths: at 1440, 1100 and 800 the band spans the conversation column above the composer, on two rows: the title and time, then the microphone mark and the actions. At 390 it has three: the title and time; the microphone mark; then Mute, Transcript, Settings and Hang up together on one row, Hang up at its end. Docked or not, the Work pane never covers it.
 
 ## 7. Voice, speed and language
 
@@ -369,15 +371,16 @@ A refusal at the start is not a failed call: it is "Couldn't start voice chat" (
 
 ## 10. After a call: the "Voice chat" line
 
-Consecutive saved messages whose `provenance.kind` is `realtime_voice` (research §6) are folded under one line, `.call-line`, a button in the transcript where they begin:
+Saved history rows with `provenance.kind: "realtime_voice"` carry an id of the form `voice:<voiceSessionId>:<n>` (the relay's caption id, which the gateway also uses for the stored message, and history shows in `__openclaw.id`; research §6). The transcript groups them by that voice session, never by their order or their times, so two calls with the same times, or a typed message between two turns, are never mixed. One `.call-line` button stands where a session's first saved row is:
 
-| Where                                           | The line                                                                                                              | Rests on                                             |
-| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| The device that held the call                   | "Voice chat · 2:14", the duration it counted                                                                          | Its own count, kept with the task (section 2)        |
-| Any other device, or this one without the count | "Voice chat · 6 turns · 5:31–5:36 PM"                                                                                 | The rows' count and their first and last `timestamp` |
-| A call that saved nothing                       | On the device that held it: "Voice chat · 0:40 · nothing was saved". Elsewhere: nothing, since nothing is in the task |                                                      |
+| Where | The line | Rests on |
+|---|---|---|
+| The device that held the call | "Voice chat · 2:14", the time it counted for that voice session | Its own count, kept with the exact voice session ids it held (section 2) |
+| Any other device | "Voice chat · 6 turns · 5:31–5:36 PM" | The saved rows of that session, their count and their first and last time |
+| A call this device held with no saved row found in the history it read | "Voice chat · 0:07 · No saved turns found" | Its own count, and the history it actually checked |
+| A spoken row with no voice session id | Shown on its own, marked "Spoken · 5:31 PM" | No reliable id to group it by |
 
-Pressing the line opens the transcript in place (F-111): the folded turns as the conversation's own messages, "You" and "Otto", each with its time. `aria-expanded` follows. Turns typed during the call stay between the spoken ones where they fall. The line is a heading-level landmark for moving by call.
+A call is never given turns it didn't save: a silent or refused call has no sample transcript, and a short call keeps the time it measured. Pressing the line opens its turns in place (F-111): the saved messages, "You" and "Otto", each with its time; `aria-expanded` follows. Turns typed during the call stay where they fall. The line is a heading-level landmark for moving by call.
 
 ## 11. Voice memos
 
