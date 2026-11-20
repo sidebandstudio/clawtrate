@@ -79,7 +79,8 @@ test.describe("cards and the pane", () => {
     await expect(sentIn.getByRole("heading", { name: "Sent in chat" })).toBeVisible();
     // Newest first, from the same list as the cards.
     await expect(sentIn.locator(".file-row").first()).toContainText("voice-note.wav");
-    await expect(sentIn.locator(".file-row").last()).toContainText("borrowing-report.md");
+    await expect(sentIn.locator(".file-row").last()).toContainText("E-book apps compared");
+    await expect(sentIn.locator(".file-row").nth(-2)).toContainText("borrowing-report.md");
     await expect(sentIn.locator('[data-row^="artifact:3:0:"]')).toBeFocused();
   });
 
@@ -134,13 +135,19 @@ test.describe("cards and the pane", () => {
     );
     await expect(page.getByRole("button", { name: /^Download/ })).toHaveCount(0);
     await page.getByRole("button", { name: "Back to this task's files" }).click();
+    // A PDF: its details and Download, said on its card and in the pane; its pages aren't drawn.
     await page
       .getByTestId("sent-in-chat")
       .getByRole("button", { name: /^lending-terms\.pdf/ })
       .click();
     await expect(page.getByTestId("artifact-why")).toHaveText(
-      "There's no preview for this kind of file.",
+      "Clawtrate shows a PDF's details, not its pages. Download it to read it.",
     );
+    await expect(
+      card(page, "lending-terms.pdf").getByRole("button", {
+        name: "lending-terms.pdf, PDF, 44 B. Open its details and Download in the Work pane.",
+      }),
+    ).toHaveCount(1);
     const [download] = await Promise.all([
       page.waitForEvent("download"),
       page.getByRole("button", { name: "Download", exact: true }).click(),
@@ -290,14 +297,14 @@ test.describe("the card's menu", () => {
     }
   });
 
-  test("F-305 F-306: a picture's menu copies the image to the clipboard and saves it; a video's saves it", async ({
+  test("F-305: a picture's menu copies that picture: the clipboard holds an image with its pixels", async ({
     page,
   }) => {
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     await openFixture(page, ARTIFACTS, "light");
     await cardsDrawn(page);
     await cell(page, "apps-compared.png").click({ button: "right" });
-    let menu = page.getByRole("menu", { name: "apps-compared.png" });
+    const menu = page.getByRole("menu", { name: "apps-compared.png" });
     await expect(menu.getByRole("menuitem")).toHaveText([
       "Open",
       "Download",
@@ -308,21 +315,47 @@ test.describe("the card's menu", () => {
     ]);
     await menu.getByRole("menuitem", { name: "Copy image" }).click();
     await expect(announcer(page)).toHaveText("Copied the image");
-    const types = await page.evaluate(async () =>
-      (await navigator.clipboard.read()).flatMap((item) => item.types),
-    );
-    expect(types).toContain("image/png");
+    // The browser may encode the PNG again on the clipboard: what must match is the picture.
+    const same = await page.evaluate(async (expected: string) => {
+      const pixels = async (blob: Blob) => {
+        const bitmap = await createImageBitmap(blob);
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const context = canvas.getContext("2d")!;
+        context.drawImage(bitmap, 0, 0);
+        return {
+          size: [bitmap.width, bitmap.height],
+          data: context.getImageData(0, 0, bitmap.width, bitmap.height).data,
+        };
+      };
+      const [item] = await navigator.clipboard.read();
+      if (!item?.types.includes("image/png")) return "no image/png on the clipboard";
+      const held = await pixels(await item.getType("image/png"));
+      const want = await pixels(
+        new Blob([Uint8Array.from(atob(expected), (c) => c.charCodeAt(0))], { type: "image/png" }),
+      );
+      if (held.size.join("x") !== want.size.join("x")) return `size ${held.size.join("x")}`;
+      return held.data.every((value, i) => value === want.data[i]) ? "same" : "other pixels";
+    }, Buffer.from(BYTES["apps-compared.png"]!).toString("base64"));
+    expect(same).toBe("same");
+  });
 
+  test("F-306: Save image… and Save video… save exactly the chosen picture's and video's bytes", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
     await cell(page, "apps-compared.png").click({ button: "right" });
-    menu = page.getByRole("menu", { name: "apps-compared.png" });
     const [picture] = await Promise.all([
       page.waitForEvent("download"),
-      menu.getByRole("menuitem", { name: "Save image…" }).click(),
+      page
+        .getByRole("menu", { name: "apps-compared.png" })
+        .getByRole("menuitem", { name: "Save image…" })
+        .click(),
     ]);
     expect(picture.suggestedFilename()).toBe("apps-compared.png");
-    const pictureBytes = readFileSync((await picture.path())!);
-    expect([...pictureBytes.subarray(0, 4)]).toEqual([137, 80, 78, 71]);
-
+    expect(
+      readFileSync((await picture.path())!).equals(Buffer.from(BYTES["apps-compared.png"]!)),
+    ).toBe(true);
     // The video sits under "+2"; the viewer's right-click offers Save video….
     await cell(page, "usage.png").click();
     await page.keyboard.press("ArrowRight");
@@ -333,10 +366,9 @@ test.describe("the card's menu", () => {
       page.getByRole("menuitem", { name: "Save video…" }).click(),
     ]);
     expect(video.suggestedFilename()).toBe("borrowing-walkthrough.webm");
-    const shown = await page
-      .getByTestId("viewer-video")
-      .evaluate((v: HTMLVideoElement) => v.src.split(",")[1]!);
-    expect(readFileSync((await video.path())!).equals(Buffer.from(shown, "base64"))).toBe(true);
+    expect(
+      readFileSync((await video.path())!).equals(Buffer.from(BYTES["borrowing-walkthrough.webm"]!)),
+    ).toBe(true);
   });
 });
 

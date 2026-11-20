@@ -175,3 +175,8 @@ export function tooLargeWords(title: string, size: number | null, limit: number)
 /** Bytes that came, but don't draw or play as the type they are labelled. */
 export const undecodable = (title: string, kind: "image" | "video") =>
   `${title} didn't ${kind === "image" ? "draw" : "play"}: its bytes aren't a ${kind === "image" ? "picture" : "video"} this device can ${kind === "image" ? "show" : "play"}.`;
+
+/** A PDF: Clawtrate shows its details and Download, not its pages (docs/decisions.md). */
+export const isPdf = (artifact: Artifact) =>
+  (artifact.mimeType ?? "").split(";")[0]!.trim().toLowerCase() === "application/pdf" ||
+  /\.pdf$/i.test(artifact.title);

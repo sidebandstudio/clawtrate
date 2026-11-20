@@ -191,7 +191,7 @@ test("F-115 F-118: a file Marlow hands over is a card that opens in the pane, on
   await expect(card("trail-report.md")).toBeVisible({ timeout: 30_000 });
 });
 
-test("F-117 F-305 F-306: a picture and a recording, live and after a reload; the viewer opens the picture and saves its bytes", async () => {
+test("F-117 F-306: a picture and a recording, live and after a reload; the viewer opens the picture, and its menu's Save image… saves its bytes", async () => {
   await handOver("Ridge profile", "#hand-picture");
   await handOver("Trailhead chime", "#hand-audio");
   await openTask("Ridge profile");
@@ -203,15 +203,19 @@ test("F-117 F-305 F-306: a picture and a recording, live and after a reload; the
   await expect(viewer).toHaveAccessibleName("ridge-profile.png");
   await expect(page.getByTestId("viewer-image")).toBeVisible();
   await shoot("viewer-picture");
-  const [saved] = await Promise.all([
-    page.waitForEvent("download"),
-    page.keyboard.press("ControlOrMeta+s"),
-  ]);
-  expect(saved.suggestedFilename()).toBe("ridge-profile.png");
-  expect(readFileSync((await saved.path())!).equals(files[HANDOVER.picture]!)).toBe(true);
   await page.keyboard.press("Escape");
   await expect(viewer).toHaveCount(0);
   await expect(picture).toBeFocused();
+  await picture.click({ button: "right" });
+  const [saved] = await Promise.all([
+    page.waitForEvent("download"),
+    page
+      .getByRole("menu", { name: "ridge-profile.png" })
+      .getByRole("menuitem", { name: "Save image…" })
+      .click(),
+  ]);
+  expect(saved.suggestedFilename()).toBe("ridge-profile.png");
+  expect(readFileSync((await saved.path())!).equals(files[HANDOVER.picture]!)).toBe(true);
 
   await openTask("Trailhead chime");
   const chime = card("trail-chime.wav");

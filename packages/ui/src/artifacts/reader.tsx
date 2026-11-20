@@ -27,6 +27,7 @@ import {
   clock,
   downloadName,
   fetchable,
+  isPdf,
   overLimit,
   tooLargeWords,
   typeWords,
@@ -362,7 +363,9 @@ export function ArtifactReader({
       <>
         <Facts artifact={artifact} sentAt={sentAt} />
         <p className="reader-why" data-testid="artifact-why">
-          There's no preview for this kind of file.
+          {isPdf(artifact)
+            ? "Clawtrate shows a PDF's details, not its pages. Download it to read it."
+            : "There's no preview for this kind of file."}
         </p>
         <p>
           <button
@@ -487,34 +490,42 @@ export function SentInChat({ onOpen }: { onOpen: (artifact: Artifact) => void })
   // Pages are not artifacts: the transcript names them, and each row opens the same Page view.
   const pages = [...api.pages].reverse();
   if (items.length === 0 && pages.length === 0) return null;
+  // Newest first, by the time of the message that carried each; an item whose message isn't
+  // read yet first. Within one message, its items before its Pages, as the reverse of its cards.
+  const rows = [
+    ...items.map((artifact) => ({ artifact, page: null, at: api.sentAt(artifact) ?? Infinity })),
+    ...pages.map((page) => ({ artifact: null, page, at: page.sentAt ?? -Infinity })),
+  ].sort((a, b) => b.at - a.at);
   return (
     <section className="files-group" data-testid="sent-in-chat">
       <h3>Sent in chat</h3>
       <ul className="file-list">
-        {pages.map((page) => (
-          <li key={`page:${page.itemId}:${page.docId}`}>
-            <button
-              type="button"
-              className="file-row"
-              data-row={`page:${page.itemId}:${page.docId}`}
-              data-testid="sent-page"
-              aria-label={`${page.title}, page${page.sentAt !== null ? `, sent ${clockTime(page.sentAt)}` : ""}`}
-              onClick={(event) => api.openPage(page, event.currentTarget)}
-            >
-              <span className="file-icon" aria-hidden="true">
-                <DocumentIcon />
-              </span>
-              <span className="file-name">{page.title}</span>
-              <span className="file-time">
-                {page.sentAt !== null ? clockTime(page.sentAt) : ""}
-              </span>
-              <span className="file-sub">
-                {page.sentAt !== null ? `Sent ${clockTime(page.sentAt)} · Page` : "Page"}
-              </span>
-            </button>
-          </li>
-        ))}
-        {items.map((artifact) => {
+        {rows.map(({ artifact, page }) => {
+          if (page)
+            return (
+              <li key={`page:${page.itemId}:${page.docId}`}>
+                <button
+                  type="button"
+                  className="file-row"
+                  data-row={`page:${page.itemId}:${page.docId}`}
+                  data-testid="sent-page"
+                  aria-label={`${page.title}, page${page.sentAt !== null ? `, sent ${clockTime(page.sentAt)}` : ""}`}
+                  onClick={(event) => api.openPage(page, event.currentTarget)}
+                >
+                  <span className="file-icon" aria-hidden="true">
+                    <DocumentIcon />
+                  </span>
+                  <span className="file-name">{page.title}</span>
+                  <span className="file-time">
+                    {page.sentAt !== null ? clockTime(page.sentAt) : ""}
+                  </span>
+                  <span className="file-sub">
+                    {page.sentAt !== null ? `Sent ${clockTime(page.sentAt)} · Page` : "Page"}
+                  </span>
+                </button>
+              </li>
+            );
+          if (!artifact) return null;
           const sent = api.sentAt(artifact);
           const preview = artifact.kind === "image" ? api.preview(artifact) : undefined;
           const sub = [

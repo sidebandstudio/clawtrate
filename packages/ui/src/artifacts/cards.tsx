@@ -36,6 +36,7 @@ import {
   clock,
   downloadable,
   fetchable,
+  isPdf,
   trailingLink,
   typeWords,
   type LinkTarget,
@@ -237,7 +238,11 @@ function FileCard({
   const spoken =
     artifact.place.kind === "elsewhere"
       ? `${artifact.title}, ${typeWords(artifact)}, from ${artifact.place.host}. Open in the Work pane.`
-      : `${[artifact.title, sub.replace(" · ", ", ")].join(", ")}. Open in the Work pane.`;
+      : `${[artifact.title, sub.replace(" · ", ", ")].join(", ")}. ${
+          isPdf(artifact) && downloadable(artifact)
+            ? "Open its details and Download in the Work pane."
+            : "Open in the Work pane."
+        }`;
   return (
     <div
       className="artifact"
