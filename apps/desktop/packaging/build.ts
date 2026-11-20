@@ -5,10 +5,9 @@
 //   node packaging/build.ts win   # an NSIS installer for x64; run it on Windows
 //
 // Output goes to apps/desktop/dist, which git ignores. Nothing is published.
-// It prints the signing it plans before building, and after a macOS build what
-// each app's signature turned out to be. Those lines are this project's own and
-// name no value. electron-builder's output is passed through as it is, and it
-// can name the signing identity, the keychain's identities or a certificate file.
+// Clawtrate's signing plan, preflight and signature-kind lines omit input values.
+// electron-builder's output passes through and can include those values.
+// Keep signed-build logs private.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";

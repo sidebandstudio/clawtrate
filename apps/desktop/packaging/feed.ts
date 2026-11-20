@@ -47,15 +47,22 @@ export function makeFeed(options: {
 }): FeedDocument {
   const version = parseVersion(options.version);
   if (!version) throw new Error("Invalid release version");
-  const base = options.folder.endsWith("/") ? options.folder : `${options.folder}/`;
+  const base = new URL(options.folder);
+  base.search = "";
+  base.hash = "";
+  if (!base.pathname.endsWith("/")) base.pathname += "/";
   const files: FeedDocument["files"] = {};
   for (const key of FILE_KEYS) {
     const name = artifactName(options.version, key);
     const path = join(options.dir, name);
     if (!existsSync(path)) continue;
+    const artifact = statSync(path);
+    if (!artifact.isFile() || artifact.size === 0) {
+      throw new Error(`${key} must be a non-empty artifact.`);
+    }
     files[key] = {
       url: new URL(encodeURIComponent(name), base).href,
-      size: statSync(path).size,
+      size: artifact.size,
       sha512: sha512Base64(path),
     };
   }

@@ -3,7 +3,7 @@
 // and the feed it writes for its artifacts. Every value here is made up.
 
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -63,6 +63,24 @@ describe("signing", () => {
         "win",
       ),
     ).not.toMatch(/secret/);
+    const inputs = {
+      CSC_LINK: "data:application/x-pkcs12;base64,Rml4dHVyZQ==",
+      CSC_KEY_PASSWORD: "FixturePassWord",
+      APPLE_API_KEY: "FixtureNotaryKey",
+    };
+    for (const target of ["mac", "win"] as const) {
+      const planLine = signingSummary(signingPlan(inputs), target);
+      const partialErrors = signingProblems(inputs, target);
+      if (target === "mac") {
+        expect(partialErrors).toEqual([
+          "APPLE_API_KEY set without APPLE_API_KEY_ID, APPLE_API_ISSUER",
+        ]);
+      }
+      for (const value of Object.values(inputs)) {
+        expect(planLine).not.toContain(value);
+        expect(partialErrors.join("\n")).not.toContain(value);
+      }
+    }
   });
 
   it("takes a certificate and its password together, read as electron-builder reads them, on each system", () => {
@@ -248,6 +266,49 @@ describe("the feed the release writes", () => {
     expect(makeFeed({ ...options, version: "1.0.0-nightly.20261101.1" }).track).toBe("nightly");
     expect(() => makeFeed({ ...options, version: "1.0.0-alpha.1" })).toThrow(/version/);
   });
+
+  it.each(["/releases", "/releases/", "/releases?dummy=1", "/releases#fixture"])(
+    "keeps the installer in the supplied folder %s",
+    (folder) => {
+      dir = mkdtempSync(join(tmpdir(), "clawtrate-feed-"));
+      writeFileSync(join(dir, artifactName("0.2.0", "win-x64")), "a Windows installer");
+      const feed = makeFeed({
+        version: "0.2.0",
+        releaseDate: "2026-11-01T00:00:00.000Z",
+        folder: `https://updates.example${folder}`,
+        dir,
+      });
+      expect(feed.files["win-x64"]?.url).toBe(
+        "https://updates.example/releases/Clawtrate-0.2.0-win-x64.exe",
+      );
+      expect(
+        parseFeed(
+          JSON.stringify(feed),
+          new URL("https://updates.example/releases/feed.json"),
+          "win-x64",
+        ),
+      ).toMatchObject({ ok: true, feed: { file: { size: 19 } } });
+    },
+  );
+
+  it.each(["empty file", "directory"])(
+    "refuses a Windows installer at an invalid path (%s)",
+    (kind) => {
+      dir = mkdtempSync(join(tmpdir(), "clawtrate-feed-"));
+      writeFileSync(join(dir, artifactName("0.2.0", "mac-arm64")), "a macOS zip");
+      const path = join(dir, artifactName("0.2.0", "win-x64"));
+      if (kind === "directory") mkdirSync(path);
+      else writeFileSync(path, "");
+      const options = {
+        version: "0.2.0",
+        releaseDate: "2026-11-01T00:00:00.000Z",
+        folder: "https://updates.example/releases",
+        dir,
+      };
+      expect(() => makeFeed(options)).toThrow(new Error("win-x64 must be a non-empty artifact."));
+    },
+  );
+
   it("names each artifact with its size and SHA-512, and the engine reads it back", () => {
     dir = mkdtempSync(join(tmpdir(), "clawtrate-feed-"));
     const zip = Buffer.from("a macOS zip");
