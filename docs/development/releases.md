@@ -1,6 +1,6 @@
 # Desktop release candidates
 
-**Updating in place is not built yet.** The desktop host can verify a download. Installation is a later app change. Keep both tracks closed until installation exists and the signed upgrade trial below passes on all three systems.
+**In-place installation is not on `main` yet.** The desktop host can verify a download. Installation is a later app change. Keep both tracks closed until installation exists and the signed upgrade trial below passes on all three systems.
 
 ## Make a candidate
 
@@ -42,13 +42,13 @@ On Apple silicon and Intel Mac, extract each final ZIP, verify its bundle ID, in
 
 ### Trial on an isolated feed
 
-Use an isolated HTTPS feed separate from both public tracks, accessible only to the trial machines. Install a signed predecessor compiled with that trial address. Place the exact prospective signed successor files on the trial origin. Generate a trial feed with the same track, version, date, sizes and hashes but with the trial file URLs. Fetch all three files from that origin, verify them, then move the trial feed to the successor. Keep the production candidate and its feed intact.
+Use a separate HTTPS endpoint to exercise the chosen track on the trial machines. Restrict network access to those machines and serve the feed and files directly, without HTTP credentials. Compile the signed predecessor's chosen track to use this trial address and leave its other track unset. Place the exact prospective signed successor files on the trial origin. Generate a trial feed with the chosen track, successor version and date, and the trial file URLs, sizes and hashes. Fetch all three files from that origin and verify them before pointing the trial feed at the successor. The successor retains its compiled production addresses when it relaunches. Keep both production feeds closed and leave the production candidate files and feed intact.
 
 On Apple silicon, Intel Mac and Windows x64, start on the predecessor, check the trial feed in the app, download, install in place and relaunch. Verify the new version, signer continuity, installation location and preserved data. Record both versions, commits, file digests and results. Open a track only after two consecutive signed builds pass this trial on each system.
 
 ### Offer a version
 
-Immediately before uploading, save the live feeds again and repeat the command above with `check` in place of `assemble`. Archive the verified prior feed. Upload the three immutable binaries first. GET each file through the normal CDN route without following redirects. Require HTTP 200 and compare byte length and base64 SHA-512 with the local plan. Only then atomically replace the chosen track's feed. GET it from its fixed URL and verify HTTP 200 and the exact local bytes. Put release notes on the project's release page.
+Immediately before uploading, save the live feeds again and repeat the command above with `check` in place of `assemble`. Archive the verified prior feed if there was one. Upload the three immutable binaries first. GET each file through the normal CDN route without following redirects. Require HTTP 200 and compare byte length and base64 SHA-512 with the local plan. Only then atomically replace the chosen track's feed. GET it from its fixed URL and verify HTTP 200 and the exact local bytes. Put release notes on the project's release page.
 
 Retain each track's active and last good feeds and files while they serve those roles. Retain files named by other supported manifests throughout their support period. Set and record a retention window for old cached offers before opening the track. Keep superseded files through that window unless withdrawing them.
 
