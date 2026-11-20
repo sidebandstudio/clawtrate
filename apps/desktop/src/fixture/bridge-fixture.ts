@@ -593,6 +593,7 @@ export function createFixtureBridge(
         set,
         () => loaded(Date.now()),
         (ms, run) => deferred(run, ms),
+        setupName === "found-protocol" ? "protocol" : "connected",
       )
     )
       return;

@@ -219,7 +219,7 @@ const minted = (requests: ProgramRequest[]) =>
   requests.filter((request) => request.args.includes("qr"));
 
 describe("Connect on this computer", () => {
-  it("F-492 F-494: Connect asks the host's dialog first, then redeems a voice-node code for read alone, and the code reaches no state, snapshot, log, argument, environment, storage or dialog", async () => {
+  it("F-494 F-492: Connect asks the host's dialog first, then redeems a voice-node code for read alone, and the code reaches no state, snapshot, log, argument, environment, storage or dialog", async () => {
     const started = Date.now();
     const h = harness();
     await h.client.start();
@@ -339,7 +339,7 @@ describe("Connect on this computer", () => {
     h.client.stop();
   });
 
-  it("F-492 F-494: a code for another address is refused before it is sent", async () => {
+  it("F-494 F-492: a code for another address is refused before it is sent", async () => {
     const h = harness({
       replies: {
         [`qr --json --voice-node --url ${URL}`]: {
@@ -418,19 +418,28 @@ describe("Connect on this computer", () => {
     h.client.stop();
   });
 
-  it("F-515: Connect is refused for anything but a found gateway of the tested version, without a dialog", async () => {
-    const h = harness({
-      replies: {
-        "gateway status --json": { stdout: statusJson({ port: PORT, answered: "2026.9.37" }) },
-      },
-    });
-    await h.client.start();
-    await h.setup.look();
-    expect(h.setup.current.look?.outcome).toBe("untested");
-    await expect(h.setup.connect()).rejects.toThrow(/nothing to connect to/);
-    expect(h.dialogs).toEqual([]);
-    expect(minted(h.requests)).toEqual([]);
-    h.client.stop();
+  it("F-515: an untested or a below-floor reported version can't mint or open a socket, and asks nothing", async () => {
+    for (const [version, outcome] of [
+      ["2026.9.37", "untested"],
+      ["2026.6.2", "too-old"],
+    ] as const) {
+      const h = harness({
+        replies: {
+          "gateway status --json": { stdout: statusJson({ port: PORT, answered: version }) },
+        },
+      });
+      await h.client.start();
+      await h.setup.look();
+      expect(h.setup.current.look?.outcome, version).toBe(outcome);
+      await expect(h.setup.connect()).rejects.toThrow(/nothing to connect to/);
+      expect(h.dialogs).toEqual([]);
+      expect(minted(h.requests)).toEqual([]);
+      expect(h.gateway.sockets).toHaveLength(0);
+      expect([...h.storage.data.keys()].filter((key) => key.startsWith("deviceToken:"))).toEqual(
+        [],
+      );
+      h.client.stop();
+    }
   });
 
   it("Back during the look ends its programs and returns to the first screen", async () => {
@@ -479,7 +488,7 @@ describe("Connect on this computer", () => {
     const secret = "fixture-secret-0123456789abcdef";
     const setup = new SetupController({
       client: h.client,
-      open: () => Promise.reject(new Error(`boom ${secret} /Users/someone`)),
+      open: () => Promise.reject(new Error(`boom ${secret} /accounts/someone`)),
       stopPrograms: () => {},
       confirm: null,
       log: (line) => h.logs.push(line),
@@ -487,7 +496,7 @@ describe("Connect on this computer", () => {
     await setup.look();
     expect(setup.current.failure).toMatchObject({ kind: "refused", reason: "file" });
     expect(h.logs.join("\n")).not.toContain(secret);
-    expect(h.logs.join("\n")).not.toContain("/Users/");
+    expect(h.logs.join("\n")).not.toContain("/accounts/");
     h.client.stop();
   });
 
@@ -761,7 +770,7 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     });
   }
 
-  it("F-492 F-516: the listener replaced by another process, or restarted under its PID, between the dialog and its answer mints nothing and saves no route", async () => {
+  it("F-516 F-492: the listener replaced by another process, or restarted under its PID, between the dialog and its answer mints nothing and saves no route", async () => {
     for (const replace of [
       (h: ReturnType<typeof harness>) => h.listeners.delete(4242),
       (h: ReturnType<typeof harness>) => h.listeners.set(4242, "Tue Nov 17 08:00:00 2026"),
@@ -783,7 +792,7 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     }
   });
 
-  it("F-492 F-516: a listener replaced while the code is made sends no code: nothing connects and no route is saved", async () => {
+  it("F-516 F-492: a listener replaced while the code is made sends no code: nothing connects and no route is saved", async () => {
     const h: ReturnType<typeof harness> = harness({
       replies: {
         [`qr --json --voice-node --url ${URL}`]: () => {
@@ -803,7 +812,7 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     h.client.stop();
   });
 
-  it("F-492 F-516: a service replaced while the code is made sends no code", async () => {
+  it("F-516 F-492: a service replaced while the code is made sends no code", async () => {
     let made = false;
     const h = harness({
       replies: {
@@ -829,7 +838,7 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     h.client.stop();
   });
 
-  it("F-492 F-494: a code that claims to live longer than ten minutes is not one made here, and nothing connects", async () => {
+  it("F-494 F-492: a code that claims to live longer than ten minutes is not one made here, and nothing connects", async () => {
     const h = harness({
       replies: {
         [`qr --json --voice-node --url ${URL}`]: {
@@ -845,7 +854,7 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     h.client.stop();
   });
 
-  it("F-492 F-494: a code that timed out or went over its limit is not read, even well shaped, and nothing connects", async () => {
+  it("F-494 F-492: a code that timed out or went over its limit is not read, even well shaped, and nothing connects", async () => {
     for (const late of [{ timedOut: true }, { tooLarge: true }, { failed: true }]) {
       const h = harness({
         replies: {

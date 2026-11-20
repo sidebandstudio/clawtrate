@@ -176,6 +176,17 @@ test("F-516: other services and profiles are named, and Advanced is offered for 
   await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
 });
 
+test("F-515: a Connect the gateway refuses for its protocol ends on the protocol notice, with no bots", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=found-protocol", "light");
+  await page.getByRole("button", { name: "Connect read-only" }).click();
+  const notice = page.getByTestId("protocol-notice");
+  await expect(notice.getByRole("heading")).toHaveText("This gateway speaks another protocol");
+  await expect(notice).toContainText("Update the one that is older, then retry.");
+  await expect(page.getByTestId("bot-list")).toHaveCount(0);
+});
+
 test("F-515: a gateway that refuses the handshake for its protocol is not connected to, and says what to do", async ({
   page,
 }) => {
@@ -256,7 +267,7 @@ test("a program that couldn't be started has its own card", async ({ page }) => 
   await expect(page.getByText(/answered in a way/)).toHaveCount(0);
 });
 
-test("F-492 F-516: a gateway whose answer Clawtrate couldn't place is not offered, and leads to Advanced", async ({
+test("F-516 F-492: a gateway whose answer Clawtrate couldn't place is not offered, and leads to Advanced", async ({
   page,
 }) => {
   await openFixture(page, "setup=endpoint", "light");

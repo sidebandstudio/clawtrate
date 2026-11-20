@@ -154,7 +154,7 @@ describe("the look on this computer", () => {
     }
   });
 
-  it("F-492 F-516: a service is named only when the status associates it with this gateway, and a configured bind only for loopback or LAN", async () => {
+  it("F-516: a service is named only when the status associates it with this gateway, and a configured bind only for loopback or LAN", async () => {
     const associated = { targetRole: "gateway" };
     const running = await look(
       homeWorld(),
@@ -207,7 +207,7 @@ describe("the look on this computer", () => {
     expect(newer?.look.outcome).toBe("untested");
   });
 
-  it("F-515: a version below the protocol this client speaks is too old", async () => {
+  it("F-515: a reported version below the automatic setup floor is too old", async () => {
     const report = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, answered: "2026.6.2" }))).run,
@@ -420,7 +420,7 @@ describe("the look on this computer", () => {
     ]);
   });
 
-  it("F-492 F-516: a gateway that answered somewhere other than its own loopback port isn't offered", async () => {
+  it("F-516: a gateway that answered somewhere other than its own loopback port isn't offered", async () => {
     for (const status of [
       statusJson({ port: 18789, rpcUrl: "ws://127.0.0.1:18790" }),
       statusJson({ port: 18789, probeUrl: "ws://127.0.0.1:18790" }),
@@ -433,7 +433,7 @@ describe("the look on this computer", () => {
     }
   });
 
-  it("F-492 F-516: only the exact endpoint is a gateway Connect may use: IPv6, localhost, TLS, a path, a query, a user or another port is not", async () => {
+  it("F-516: only the exact endpoint is a gateway Connect may use: IPv6, localhost, TLS, a path, a query, a user or another port is not", async () => {
     const at = (probe: string, rpc = probe) =>
       statusJson({ port: 19940, probeUrl: probe, rpcUrl: rpc });
     for (const status of [
@@ -465,7 +465,7 @@ describe("the look on this computer", () => {
     expect(slash?.found?.url).toBe("ws://127.0.0.1:19940");
   });
 
-  it("F-492 F-516: a gateway with no identifiable listener, two listeners, a listener that isn't running, or another config file for its service is not offered", async () => {
+  it("F-516: a gateway with no identifiable listener, two listeners, a listener that isn't running, or another config file for its service is not offered", async () => {
     const cases = [
       withStatus(statusJson({ port: 19940 }), (value) => {
         value.port.listeners = [];
@@ -839,7 +839,7 @@ describe("the sandbox: a run's description, its folder and its proven instance",
 
   it("refuses when the account can't be read, instead of trusting HOME", async () => {
     const s = setting();
-    expect(accountHome(() => ({ homedir: "/Users/someone" }))).toBe("/Users/someone");
+    expect(accountHome(() => ({ homedir: "/accounts/someone" }))).toBe("/accounts/someone");
     expect(
       accountHome(() => {
         throw new Error("no account");

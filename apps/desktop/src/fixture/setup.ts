@@ -88,6 +88,8 @@ export const SETUP_STATES: Record<string, SetupState> = {
   endpoint: looked({ outcome: "cant-tell", reason: "endpoint" }),
   bots: failed("bots", { port: 18789 }),
   "found-profile-only": looked({ others: ["profile work"] }),
+  /** A found gateway whose Connect ends in the handshake's protocol mismatch. */
+  "found-protocol": looked({}),
   "cant-tell-not-set-up": looked({ outcome: "cant-tell", reason: "not-set-up" }),
   "cant-tell-no-answer": looked({ outcome: "cant-tell", reason: "no-answer" }),
   "code-failed-shape": failed("code-failed", { exitCode: 0 }),
@@ -118,6 +120,8 @@ export function setupCommand(
   set: (state: ClawtrateState) => void,
   connected: () => ClawtrateState,
   later: (ms: number, run: () => void) => void,
+  /** How Connect ends: the app opens, or the gateway refuses its protocol. */
+  ending: "connected" | "protocol" = "connected",
 ): boolean {
   const setup = (next: SetupState) => set({ ...get(), setup: next });
   const current = () => get().setup ?? initialSetupState;
@@ -134,8 +138,35 @@ export function setupCommand(
       later(300, () => current().phase === "connecting" && setup({ ...current(), step: 1 }));
       later(600, () => current().phase === "connecting" && setup({ ...current(), step: 2 }));
       later(900, () => {
-        if (current().phase === "connecting")
-          set({ ...connected(), setup: { ...current(), phase: "done" } });
+        if (current().phase !== "connecting") return;
+        if (ending === "protocol") {
+          // As the client publishes a handshake refused for its protocol.
+          const state = get();
+          set({
+            ...state,
+            connection: {
+              ...state.connection,
+              status: "error",
+              gatewayUrl: "ws://127.0.0.1:18789",
+              retryAt: null,
+              protocol: 5,
+              error: {
+                code: "PROTOCOL_MISMATCH",
+                message:
+                  "This gateway speaks protocol 5. This version of Clawtrate speaks protocol 4.",
+                hint: null,
+                protocol: { gateway: 5, client: 4 },
+              },
+            },
+            setup: {
+              ...current(),
+              phase: "failed",
+              failure: { kind: "other", exitCode: null, port: null, reason: null },
+            },
+          });
+          return;
+        }
+        set({ ...connected(), setup: { ...current(), phase: "done" } });
       });
       return true;
     }

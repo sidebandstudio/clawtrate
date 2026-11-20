@@ -52,7 +52,7 @@ function everywhere(client: ClawtrateClient, storage: { data: Map<string, string
 }
 
 describe("the setup connection's token gate", () => {
-  it("F-492 F-494: the host's code is sent once asking for read alone, the read token is written, and the code is in no storage or state", async () => {
+  it("F-494 F-492: the host's code is sent once asking for read alone, the read token is written, and the code is in no storage or state", async () => {
     const gateway = gatewayGranting({
       role: "operator",
       scopes: ["operator.read"],
@@ -141,7 +141,7 @@ describe("the setup connection's token gate", () => {
     client.stop();
   });
 
-  it("F-492 F-494: a refused code ends in its own error, is forgotten and is not sent again", async () => {
+  it("F-494 F-492: a refused code ends in its own error, is forgotten and is not sent again", async () => {
     const gateway = new FakeGateway();
     gateway.connectReply = () => ({
       ok: false,
