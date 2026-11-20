@@ -134,6 +134,7 @@ export function Updates({
   pending,
   message,
   working,
+  retryRead,
   chooseTrack,
   check,
   download,
@@ -142,6 +143,18 @@ export function Updates({
     return (
       <div className="updates-section">
         <span role="status">{message}</span>
+        {message && (
+          <div className="b-actions">
+            <button
+              type="button"
+              className="button"
+              aria-disabled={working || undefined}
+              onClick={retryRead}
+            >
+              Retry reading settings
+            </button>
+          </div>
+        )}
       </div>
     );
   const { line, action } = updateRow(s, pending);

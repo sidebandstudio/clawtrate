@@ -36,6 +36,7 @@ export class UpdateReading {
   private listeners = new Set<() => void>();
   private choice: Extract<Command, { kind: "choose" }> | null = null;
   private work: Command | null = null;
+  private readRequest: symbol | null = null;
   private readonly host: DesktopUpdates;
   constructor(host: DesktopUpdates) {
     this.host = host;
@@ -67,19 +68,30 @@ export class UpdateReading {
       working: this.work !== null,
     });
   };
+  private async read() {
+    const request = Symbol();
+    this.readRequest = request;
+    try {
+      const snapshot = await this.host.get();
+      if (this.readRequest === request) this.accept(snapshot);
+    } catch {
+      if (this.readRequest === request && !this.value.snapshot)
+        this.set({ message: "Couldn't read update settings.", working: false });
+    } finally {
+      if (this.readRequest === request) this.readRequest = null;
+    }
+  }
+  retryRead = () => {
+    if (this.readRequest || this.value.working || this.value.snapshot || !this.value.message)
+      return;
+    this.set({ working: true });
+    return this.read();
+  };
   connect = () => {
-    let live = true;
     const stop = this.host.subscribe(this.accept);
-    void this.host
-      .get()
-      .then((s) => {
-        if (live) this.accept(s);
-      })
-      .catch(() => {
-        if (live && !this.value.snapshot) this.set({ message: "Couldn't read update settings." });
-      });
+    void this.read();
     return () => {
-      live = false;
+      this.readRequest = null;
       stop();
     };
   };
@@ -159,6 +171,7 @@ export function useDesktopUpdateSnapshot(host: DesktopUpdates) {
   return {
     ...reading,
     pending: reading.snapshot?.pendingTrack ?? reading.localChoice,
+    retryRead: store.retryRead,
     check: store.check,
     download: store.download,
     chooseTrack: store.chooseTrack,

@@ -37,6 +37,7 @@ function render(
       localChoice: null,
       working: false,
       message: null,
+      retryRead: async () => {},
       chooseTrack: async () => {},
       check: async () => {},
       download: async () => {},

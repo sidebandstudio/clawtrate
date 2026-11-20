@@ -31,7 +31,7 @@ function harness() {
   const stop = vi.fn();
   const host = {
     ...noDesktopUpdates,
-    get: () => first.promise,
+    get: vi.fn(() => first.promise),
     subscribe: vi.fn((fn) => {
       event = fn;
       return stop;
@@ -121,6 +121,23 @@ it("F-231: rejected reads and commands release the action without replay", async
   h.reply.resolve({ outcome: "busy", snapshot: base });
   await h.reader.check("stable", base.revision);
   expect(h.host.check).toHaveBeenCalledTimes(2);
+});
+
+it("F-231: retrying an unreadable Settings page reads once without contacting the update source", async () => {
+  const h = harness();
+  h.first.reject(Error());
+  await vi.waitFor(() => expect(h.reader.get().message).toBe("Couldn't read update settings."));
+  const retry = Promise.withResolvers<DesktopUpdateSnapshot>();
+  h.host.get.mockReturnValueOnce(retry.promise);
+  const done = h.reader.retryRead();
+  void h.reader.retryRead();
+  expect(h.reader.get().working).toBe(true);
+  expect(h.host.get).toHaveBeenCalledTimes(2);
+  retry.resolve(base);
+  await done;
+  expect(h.reader.get()).toMatchObject({ snapshot: base, message: null, working: false });
+  expect(h.host.check).not.toHaveBeenCalled();
+  expect(h.host.download).not.toHaveBeenCalled();
 });
 
 it("F-231: a track choice masks the old offer immediately and rejects overlapping local commands", async () => {
