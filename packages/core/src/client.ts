@@ -283,6 +283,8 @@ import {
 
 /** A read-only connection's scopes. Every connect asks for these until write access is approved. */
 export const REQUESTED_SCOPES = ["operator.read"] as const;
+/** Why forgetting a gateway was refused: another viewer chose a different one meanwhile. */
+export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose again.";
 /**
  * Client capabilities advertised in `connect`. `tool-events` is the only one
  * the live run view needs: without it the gateway sends no tool lifecycle
@@ -1031,9 +1033,17 @@ export class ClawtrateClient {
     });
   }
 
-  /** Close the connection and forget the gateway. The device key and any device token remain. */
-  async disconnect(): Promise<void> {
+  /**
+   * Close the connection and forget the gateway. The device key and any device
+   * token remain. With `gatewayUrl`, only that gateway is forgotten: the address
+   * the person saw, which another viewer may have changed since.
+   */
+  async disconnect(gatewayUrl?: string): Promise<void> {
     return this.changeConnection(async () => {
+      if (!this.settings) return;
+      if (gatewayUrl !== undefined && this.settings.url !== gatewayUrl) {
+        throw new Error(GATEWAY_CHANGED_MESSAGE);
+      }
       // Forgotten first: a gateway the host could not forget stays connected, as it stays saved.
       await this.host.storage.delete(SETTINGS_KEY);
       this.abandonAccessRequest("Disconnected from the gateway.");

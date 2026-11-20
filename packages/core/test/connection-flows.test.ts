@@ -356,9 +356,9 @@ describe("connecting", () => {
     const remove = storage.delete.bind(storage);
     storage.delete = () => Promise.reject(new Error("The disk is full."));
     const session = createBridgeSession(client);
-    await expect(session.apply(parseBridgeCommand({ type: "disconnect" }))).rejects.toThrow(
-      "The disk is full.",
-    );
+    await expect(
+      session.apply(parseBridgeCommand({ type: "disconnect", gatewayUrl: URL })),
+    ).rejects.toThrow("The disk is full.");
     expect(client.state.connection).toMatchObject({ status: "connected", gatewayUrl: URL });
     expect(client.state.bots).toHaveLength(1);
     expect(storage.data.has("connection"), "the gateway is still saved").toBe(true);
@@ -367,7 +367,7 @@ describe("connecting", () => {
     const open = gateway.sockets.filter((socket) => socket.readyState === 1);
     expect(open, "the connection stays open").toHaveLength(1);
     storage.delete = remove;
-    await session.apply(parseBridgeCommand({ type: "disconnect" }));
+    await session.apply(parseBridgeCommand({ type: "disconnect", gatewayUrl: URL }));
     expect(client.state.connection).toMatchObject({ status: "idle", gatewayUrl: null });
     expect(storage.data.has("connection")).toBe(false);
     client.stop();
@@ -455,5 +455,63 @@ describe("connecting", () => {
     expect(client.state.connection.status).toBe("disconnected");
     expect(savedSettings(storage)).toMatchObject({ url: URL, suspended: true });
     client.stop();
+  });
+
+  it("a view that still shows one gateway cannot forget the gateway another view chose since", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "bootstrap" });
+    await until(() => client.state.connection.status === "connected");
+    const stale = createBridgeSession(client);
+    const current = createBridgeSession(client);
+    await current.apply(parseBridgeCommand({ type: "connect", url: OTHER_URL, token: "other" }));
+    await until(() => client.state.connection.status === "connected");
+    await expect(
+      stale.apply(parseBridgeCommand({ type: "disconnect", gatewayUrl: URL })),
+    ).rejects.toThrow("The selected gateway changed. Choose again.");
+    expect(client.state.connection).toMatchObject({ status: "connected", gatewayUrl: OTHER_URL });
+    expect(savedSettings(storage)?.url, "the other gateway stays saved").toBe(OTHER_URL);
+    client.stop();
+  });
+
+  it("two views forgetting the same gateway both finish, and it is forgotten once", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const storage = memoryStorage();
+    const remove = storage.delete.bind(storage);
+    let removals = 0;
+    storage.delete = (key) => {
+      if (key === "connection") removals += 1;
+      return remove(key);
+    };
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "bootstrap" });
+    await until(() => client.state.connection.status === "connected");
+    const forget = { type: "disconnect", gatewayUrl: URL };
+    await Promise.all([
+      createBridgeSession(client).apply(parseBridgeCommand(forget)),
+      createBridgeSession(client).apply(parseBridgeCommand(forget)),
+    ]);
+    expect(removals, "the second finds nothing left to forget").toBe(1);
+    expect(client.state.connection).toMatchObject({ status: "idle", gatewayUrl: null });
+    expect(storage.data.has("connection")).toBe(false);
+    client.stop();
+  });
+
+  it("a forget names the gateway it means", () => {
+    expect(() => parseBridgeCommand({ type: "disconnect" })).toThrow("invalid url");
+    expect(() =>
+      parseBridgeCommand({ type: "disconnect", gatewayUrl: `ws://${"a".repeat(2048)}` }),
+    ).toThrow("invalid url");
   });
 });

@@ -28,6 +28,7 @@ import "./bots/bots.css";
 import { CopyValue } from "./AccessBar.tsx";
 import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayLabel } from "./format.ts";
+import { useForget } from "./forget.ts";
 import { BackIcon, ChevronIcon, CloseIcon } from "./icons.tsx";
 
 /** The connection's state, as the Gateway pane names it. */
@@ -177,6 +178,8 @@ export function Settings({
     });
     dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus();
   };
+  const { forget, failure: forgetProblem } = useForget();
+  const gatewayUrl = connection.gatewayUrl;
   const state = gatewayState(connection);
   const problem = gatewayProblem(connection);
   const canReconnect = state === "Offline" || state === "Disconnected";
@@ -365,20 +368,27 @@ export function Settings({
             Disconnect
           </button>
         )}
-        {connection.gatewayUrl && (
+        {gatewayUrl && (
           <button
             type="button"
             className="button"
             data-variant="quiet"
             onClick={() => {
-              onClose();
-              void send({ type: "disconnect" });
+              // Settings stays open until the gateway is forgotten, to say if it was not.
+              void forget(gatewayUrl).then((forgotten) => {
+                if (forgotten) onClose();
+              });
             }}
           >
             Use another gateway
           </button>
         )}
       </div>
+      {forgetProblem && (
+        <div className="form-error" role="alert" data-testid="forget-problem">
+          {forgetProblem}
+        </div>
+      )}
       {canRePair && (
         <div className="settings-repair-actions">
           <button

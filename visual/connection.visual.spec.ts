@@ -228,6 +228,30 @@ test("F-457 F-387: Disconnect keeps the pairing and what is on screen until Reco
   await expect(dialog.getByRole("button", { name: "Disconnect" })).toBeVisible();
 });
 
+test("a gateway that could not be forgotten keeps Settings open and says so", async ({ page }) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+  await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateFixture: { refuse(type: string): void } }
+    ).clawtrateFixture.refuse("disconnect"),
+  );
+  await page.keyboard.press("ControlOrMeta+,");
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("button", { name: "Use another gateway" }).click();
+  await expect(dialog.getByTestId("forget-problem")).toHaveText("Could not forget this gateway.");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("gateway-state")).toHaveText("Connected");
+  // The command names the gateway Settings showed.
+  const forgets = await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } }
+    ).clawtrateFixture.sent.filter((command) => command.type === "disconnect"),
+  );
+  expect(forgets).toEqual([
+    { type: "disconnect", gatewayUrl: expect.stringMatching(/^wss?:\/\//) },
+  ]);
+});
+
 test("F-227 F-387 F-457: focus stays in Settings when Disconnect and Reconnect replace each other, and goes back to the gateway button", async ({
   page,
 }) => {

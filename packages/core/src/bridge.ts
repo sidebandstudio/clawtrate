@@ -48,7 +48,8 @@ export type BridgeCommand =
   | { type: "connect"; url: string; token?: string | null }
   /** Connect to the local development gateway. The host supplies its token. */
   | { type: "connectDevGateway" }
-  | { type: "disconnect" }
+  /** Forget the gateway at this address, the one the viewer shows; refused if another is selected. */
+  | { type: "disconnect"; gatewayUrl: string }
   /** Close the connection and keep the gateway and the pairing, until `retry` reconnects. */
   | { type: "suspend" }
   | { type: "retry" }
@@ -771,8 +772,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             ? null
             : id(command.effort, "effort"),
       };
-    case "connectDevGateway":
     case "disconnect":
+      if (typeof command.gatewayUrl !== "string" || command.gatewayUrl.length > 2048)
+        throw new Error("invalid url");
+      return { type: "disconnect", gatewayUrl: command.gatewayUrl };
+    case "connectDevGateway":
     case "suspend":
     case "retry":
       return { type: command.type };
@@ -1235,7 +1239,7 @@ class ViewerSession implements BridgeSession {
         }
         return client.connect(policy.devGateway);
       case "disconnect":
-        return client.disconnect();
+        return client.disconnect(command.gatewayUrl);
       case "suspend":
         return client.suspend();
       case "retry":
