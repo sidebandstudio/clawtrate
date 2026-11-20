@@ -13,6 +13,7 @@ import type {
 } from "@clawtrate/core";
 import { useContext, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { Avatar } from "../Avatar.tsx";
+import { pressMark } from "../focus.ts";
 import { CardThoughtContext, controlName, useCardEnv, useStepHandover } from "./context.tsx";
 import {
   botMessageKey,
@@ -821,21 +822,29 @@ let returnPoint: {
   domId: string;
   /** The transcript's scroll position when the reader left. */
   scrollTop: number | null;
+  /** The person's presses when they chose the way back (`pressMark`): focus is theirs after. */
+  mark?: number;
 } | null = null;
 
-/** Where "Open in <bot>" goes: the receiving card of the run the send's result named. */
-let arrival: { taskKey: string; runId: string | null } | null = null;
+/**
+ * Where "Open in <bot>" goes: the receiving card of the run the send's result named, with the
+ * person's presses as they chose it.
+ */
+let arrival: { taskKey: string; runId: string | null; mark: number } | null = null;
 
 function arriveAt(taskKey: string, runId: string | null): void {
-  arrival = { taskKey, runId };
+  arrival = { taskKey, runId, mark: pressMark() };
 }
 
-/** The receiving card to open and focus when a task opens from "Open in <bot>", once. */
-export function takeArrival(taskKey: string): string | null {
+/**
+ * The receiving card to open and focus when a task opens from "Open in <bot>", once, with the
+ * mark it takes focus by: none if the person pressed a key or a pointer since choosing it.
+ */
+export function takeArrival(taskKey: string): { runId: string; mark: number } | null {
   if (arrival?.taskKey !== taskKey) return null;
-  const { runId } = arrival;
+  const { runId, mark } = arrival;
   arrival = null;
-  return runId;
+  return runId === null ? null : { runId, mark };
 }
 
 function rememberReturn(taskKey: string, botId: string | null, domId: string, from: Element): void {
@@ -846,16 +855,20 @@ function rememberReturn(taskKey: string, botId: string | null, domId: string, fr
 /** ⌘[ and "Open in <sender>": back to where "Open in <bot>" was chosen, when that was elsewhere. */
 export function goBack(fromTask: string, openTask: (botId: string, key: string) => void): boolean {
   if (!returnPoint?.botId || returnPoint.taskKey === fromTask) return false;
+  returnPoint.mark = pressMark();
   openTask(returnPoint.botId, returnPoint.taskKey);
   return true;
 }
 
-/** The card to restore when a task opens again, once. */
+/**
+ * The card to restore when a task opens again, once, with the mark of the way back when one
+ * was chosen (⌘[ or "Open in <sender>").
+ */
 export function takeReturnPoint(
   taskKey: string,
-): { domId: string; scrollTop: number | null } | null {
+): { domId: string; scrollTop: number | null; mark: number | null } | null {
   if (returnPoint?.taskKey !== taskKey) return null;
-  const { domId, scrollTop } = returnPoint;
+  const { domId, scrollTop, mark = null } = returnPoint;
   returnPoint = null;
-  return { domId, scrollTop };
+  return { domId, scrollTop, mark };
 }
