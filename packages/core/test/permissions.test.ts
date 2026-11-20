@@ -75,7 +75,7 @@ class Gateway {
   };
   hash = 1;
   scopes: Record<string, { version: number; fallback: boolean; rules: Json[] }> = {};
-  plugin: "running" | "stopped" | "unavailable" | "lost" | "old" = "running";
+  plugin: "running" | "stopped" | "unavailable" | "lost" | "kept" | "old" = "running";
   sent: Array<{ method: string; params: Json }> = [];
   ids = 0;
 
@@ -146,10 +146,19 @@ class Gateway {
           plugin: "clawtrate-tool-rules",
           version: this.plugin === "old" ? "0.9.0" : "1.0.0",
           rules:
-            this.plugin === "lost"
-              ? { state: "lost", reason: "not JSON", keptCopyReadAt: null }
+            this.plugin === "lost" || this.plugin === "kept"
+              ? {
+                  state: "lost",
+                  reason: "not JSON",
+                  keptCopyReadAt: this.plugin === "kept" ? 1_794_999_500_000 : null,
+                }
               : { state: "read", readAt: 1 },
-          enforcing: this.plugin === "lost" ? "ask-every-call" : "rules",
+          enforcing:
+            this.plugin === "lost"
+              ? "ask-every-call"
+              : this.plugin === "kept"
+                ? "kept-copy"
+                : "rules",
           hook: { registered: true, lastCallAt: 1_794_999_000_000 },
         };
       case "clawtrate-tool-rules.get": {
@@ -825,12 +834,13 @@ describe("the rules plugin's state", () => {
       lastCallAt: 1_794_999_000_000,
     });
     expect(running.rules.from).toBe("now");
-    // Stopped: the copy this client read stands in, and the line is Unknown, not Asks first.
+    // Its status unanswered: the copy this client read stands in, and the line is Unknown.
     gw.plugin = "stopped";
     const stopped = await engine.read("otto");
-    expect(stopped.plugin).toMatchObject({ kind: "stopped" });
+    expect(stopped.plugin).toMatchObject({ kind: "stopped", answered: false });
     expect(stopped.rules.from).toBe("kept");
-    expect(line(stopped, "files")).toMatchObject({ value: "unknown", mark: "not-now" });
+    expect(stopped.enforcement).toBe("unread");
+    expect(line(stopped, "files")).toMatchObject({ value: "unknown", mark: "unread" });
     expect(choiceRefusal(stopped, line(stopped, "files"), "ask", true)).toMatch(
       /needs Clawtrate's rules plugin/,
     );
@@ -853,6 +863,44 @@ describe("the rules plugin's state", () => {
     });
     expect(view.rules).toEqual({ from: null, readAt: null });
     expect(gw.sent.some((each) => each.method === "clawtrate-tool-rules.get")).toBe(false);
-    expect(line(view, "files").exceptions).toEqual([]);
+    // It asks before every call but a question: every line it covers is Asks first.
+    expect(view.enforcement).toBe("ask-every-call");
+    expect(line(view, "files")).toMatchObject({
+      value: "asks",
+      mark: "plugin",
+      exceptions: [{ kind: "ask-every-call" }],
+    });
+    expect(line(view, "ask")).toMatchObject({ value: "allowed" });
+    expect(permissionGroups(view.lines).without).toEqual(["ask"]);
+  });
+
+  it("rules the plugin enforces and this client didn't read now are Unknown, never Without asking, whether or not this client kept a copy", async () => {
+    // A fresh client: the plugin enforces its kept copy and refuses reads.
+    const gw = new Gateway();
+    gw.plugin = "kept";
+    const fresh = await new PermissionsEngine(gw.ctx()).read("otto");
+    expect(fresh.enforcement).toBe("unread");
+    expect(fresh.rules.from).toBeNull();
+    expect(line(fresh, "read")).toMatchObject({ value: "unknown", mark: "unread" });
+    expect(permissionGroups(fresh.lines).without).toEqual(["ask"]);
+    // A gateway-enforced Never stays Never.
+    expect(line(fresh, "browser")).toMatchObject({ value: "never", mark: "set" });
+    // A client that read the rules earlier: its copy is shown as last read, the lines still Unknown.
+    const kept = new Gateway();
+    kept.scopes.otto = {
+      version: 1,
+      fallback: false,
+      rules: [{ id: "o1", version: 1, action: "ask", tools: ["read", "ls"] }],
+    };
+    const engine = new PermissionsEngine(kept.ctx());
+    await engine.read("otto");
+    kept.plugin = "kept";
+    const later = await engine.read("otto");
+    expect(later.rules.from).toBe("kept");
+    expect(line(later, "read")).toMatchObject({ value: "unknown", mark: "unread" });
+    expect(line(later, "files")).toMatchObject({ value: "unknown", mark: "unread" });
+    expect(line(later, "read").exceptions).toContainEqual(
+      expect.objectContaining({ kind: "rule", action: "ask", id: "o1" }),
+    );
   });
 });

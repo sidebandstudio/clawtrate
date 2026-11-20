@@ -10,7 +10,6 @@ import {
   choiceRefusal,
   EXEC_WORDS,
   permissionGroups,
-  pluginHolds,
   VALUE_WORDS,
   type Bot,
   type BotPermissions,
@@ -103,19 +102,24 @@ const MARK_WORDS: Record<Exclude<LineMark, null>, string> = {
   set: "Set on the gateway",
   gateway: "The gateway enforces this",
   plugin: "Only while Clawtrate's rules plugin runs",
-  "not-now": "Not enforced now: the rules plugin isn't running",
+  "not-now": "Not enforced now: the rules plugin isn't enforcing its rules",
+  unread: "Unknown: the rules plugin may enforce rules Clawtrate didn't read now",
 };
 const MARK_ICONS: Record<Exclude<LineMark, null>, ReactNode> = {
   set: <LockIcon />,
   gateway: <ShieldIcon />,
   plugin: <PlugIcon />,
   "not-now": <WarnIcon />,
+  unread: <WarnIcon />,
 };
 
 export function Mark({ mark }: { mark: LineMark }) {
   if (!mark) return null;
   return (
-    <span className="c-mark" data-tone={mark === "not-now" ? "danger" : undefined}>
+    <span
+      className="c-mark"
+      data-tone={mark === "not-now" || mark === "unread" ? "danger" : undefined}
+    >
       {MARK_ICONS[mark]}
       {MARK_WORDS[mark]}
     </span>
@@ -137,13 +141,12 @@ const list = (items: readonly string[]) =>
 function exceptionWords(
   e: LineException,
   name: string,
-  held: boolean,
+  pre: string,
   lineTools: readonly string[],
   listedAt: number,
 ): string {
   const owner = (scope: "bot" | "every") =>
     scope === "bot" ? `${name}'s rule` : "a rule for every bot";
-  const pre = held ? "" : "Not enforced now: ";
   switch (e.kind) {
     case "every-deny":
       return `Never: ${list(e.tools)} (set on the gateway)`;
@@ -157,6 +160,8 @@ function exceptionWords(
       return `Not in ${name}'s latest task's tools as the gateway listed them at ${clock(listedAt)}: ${list(e.tools)}`;
     case "unnamed":
       return `The gateway hasn't named this server's tools in ${name}'s latest task's listing`;
+    case "ask-every-call":
+      return "The rules plugin asks before every tool call but a question: its rules file can't be read";
     case "fallback":
       return `${pre}"Ask when nothing else decides" is on for ${e.scope === "bot" ? name : "every bot"}`;
     case "rule": {
@@ -191,10 +196,16 @@ function execSub(line: PermissionLine, name: string): string {
 }
 
 function subWords(line: PermissionLine, view: BotPermissions, name: string): string[] {
-  const held = pluginHolds(view.plugin) && view.rules.from === "now";
+  // A rule shown is enforced now, not enforced now, or as this client last read it.
+  const pre =
+    view.enforcement === "read"
+      ? ""
+      : view.enforcement === "unread"
+        ? "As Clawtrate last read it: "
+        : "Not enforced now: ";
   const out: string[] = [];
   if (line.kind === "exec" && line.value !== "never") out.push(execSub(line, name));
-  for (const e of line.exceptions) out.push(exceptionWords(e, name, held, line.tools, view.readAt));
+  for (const e of line.exceptions) out.push(exceptionWords(e, name, pre, line.tools, view.readAt));
   return out;
 }
 
@@ -276,29 +287,48 @@ function pluginWords(view: BotPermissions, name: string): { text: string; tone?:
   }
 }
 
-/** The not-enforced note (section 2): what isn't held while the plugin does not answer. */
-function NotEnforced({ view }: { view: BotPermissions }) {
+/** The not-enforced note (section 2): what isn't held, or can't be known, about the plugin's rules. */
+function NotEnforced({ view, name }: { view: BotPermissions; name: string }) {
   const p = view.plugin;
-  if (p.kind === "running" || p.kind === "unchecked") return null;
-  if (view.rules.from === null) {
-    if (p.kind === "unavailable") return null;
+  if (view.enforcement === "unread") {
+    if (p.kind === "unchecked") return null;
+    const why =
+      p.kind === "running"
+        ? p.enforcing === "kept-copy"
+          ? `enforces a copy of its rules${p.keptCopyReadAt ? ` it read at ${clock(p.keptCopyReadAt)}` : ""} and won't show it`
+          : "didn't answer Clawtrate's read of its rules"
+        : p.kind === "old"
+          ? "is too old to read"
+          : "didn't answer";
     return (
       <Note tone="danger" testId="not-enforced">
         <p>
-          <b>Enforcement not confirmed.</b> Clawtrate's rules plugin{" "}
-          {p.kind === "stopped" && p.answered
-            ? "reports it isn't enforcing its rules"
-            : p.kind === "old"
-              ? "is too old to read"
-              : "isn't answering"}
-          , and Clawtrate hasn't read its rules since it last started, so it can't tell which aren't
-          being enforced. The gateway's own restrictions still apply.
+          <b>Enforcement not confirmed.</b> Clawtrate's rules plugin {why}, so Clawtrate can't tell
+          which of {name}'s tools its rules ask about or refuse: those lines are Unknown. The
+          gateway's own restrictions still apply.{" "}
+          <span className="b-faint">
+            {view.rules.from === null
+              ? "Clawtrate hasn't read its rules since it last started."
+              : `Rules shown as Clawtrate last read them, ${clock(view.rules.readAt)}.`}
+          </span>
         </p>
         <p className="b-hint">To deny a tool, open its line below and choose Never.</p>
       </Note>
     );
   }
-  const lines = view.lines.filter((line) => line.value === "unknown");
+  if (view.enforcement !== "none" || p.kind === "unavailable") return null;
+  if (view.rules.from === null)
+    return (
+      <Note tone="danger" testId="not-enforced">
+        <p>
+          <b>Enforcement not confirmed.</b> Clawtrate's rules plugin reports it isn't enforcing its
+          rules, and Clawtrate hasn't read them since it last started, so it can't tell which aren't
+          being enforced. The gateway's own restrictions still apply.
+        </p>
+        <p className="b-hint">To deny a tool, open its line below and choose Never.</p>
+      </Note>
+    );
+  const lines = view.lines.filter((line) => line.mark === "not-now");
   if (lines.length === 0) return null;
   return (
     <Note tone="danger" testId="not-enforced">
@@ -524,9 +554,13 @@ function Overview({
           { title: "Asks first", kind: "ask", lines: of(groups.asks) },
           { title: "Without asking", kind: "allow", lines: of(groups.without) },
         ]),
-    ...(groups.unknown.length > 0
-      ? [{ title: "Not enforced now", kind: "unknown", lines: of(groups.unknown) }]
-      : []),
+    // Unknown lines: rules the plugin answered it isn't enforcing, apart from rules not read now.
+    ...[
+      { title: "Not enforced now", lines: of(groups.unknown).filter((l) => l.mark === "not-now") },
+      { title: "Unknown", lines: of(groups.unknown).filter((l) => l.mark !== "not-now") },
+    ]
+      .filter((block) => block.lines.length > 0)
+      .map((block) => ({ ...block, kind: "unknown" })),
   ];
   const offeredLine =
     view.offered.status === "no-task"
@@ -544,7 +578,7 @@ function Overview({
   return (
     <>
       <PluginLine view={view} name={name} />
-      <NotEnforced view={view} />
+      <NotEnforced view={view} name={name} />
       {view.unread.length > 0 && (
         <Note tone="warn" testId="unread">
           <p>

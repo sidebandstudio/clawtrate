@@ -503,10 +503,11 @@ export type LineValue = "allowed" | "limited" | "asks" | "never" | "unknown" | "
 /**
  * Who holds the line's value (section 2's marks): the gateway's settings for
  * every bot (`set`, the padlock), the gateway through the bot's own settings
- * (`gateway`), the rules plugin while it runs (`plugin`), or a plugin rule
- * while it does not (`not-now`).
+ * (`gateway`), the rules plugin while it runs (`plugin`), a plugin rule
+ * while it does not (`not-now`), or rules the plugin may enforce that this
+ * client didn't read now (`unread`).
  */
-export type LineMark = "set" | "gateway" | "plugin" | "not-now" | null;
+export type LineMark = "set" | "gateway" | "plugin" | "not-now" | "unread" | null;
 
 /** A thing a line says beside its value. */
 export type LineException =
@@ -526,6 +527,8 @@ export type LineException =
       version: number;
     }
   | { kind: "fallback"; scope: "bot" | "every" }
+  /** The plugin's rules file is lost with no copy: it asks before every call but a question. */
+  | { kind: "ask-every-call" }
   /** A tool server whose tools the gateway hasn't named in the latest task's listing. */
   | { kind: "unnamed" };
 
@@ -579,6 +582,7 @@ export type BotPermissions = {
   readAt: number;
   plugin: RulesPluginStatus;
   rules: RulesSource;
+  enforcement: RulesEnforcement;
   /** "Ask when nothing else decides" is on, for the bot or every bot, in the rules shown. */
   fallback: { bot: boolean; every: boolean };
   /** The scopes' versions as read, for a write's compare-and-set; null when not read. */
@@ -637,6 +641,31 @@ export type PermissionFacts = {
   everyScope: RulesScope | null;
   now: number;
 };
+
+/**
+ * What the rules plugin's rules do now, as far as this client knows: `read`,
+ * enforced and read now; `ask-every-call`, its rules file lost with no copy,
+ * so it asks before every call but a question; `none`, it isn't on this
+ * gateway or says it isn't enforcing; `unread`, it may enforce rules this
+ * client didn't read now (a copy it keeps, a read that failed, a status that
+ * couldn't be read, a version too old to read).
+ */
+export type RulesEnforcement = "read" | "ask-every-call" | "none" | "unread";
+
+export function rulesEnforcement(plugin: RulesPluginStatus, rules: RulesSource): RulesEnforcement {
+  switch (plugin.kind) {
+    case "unavailable":
+      return "none";
+    case "stopped":
+      return plugin.answered ? "none" : "unread";
+    case "unchecked":
+    case "old":
+      return "unread";
+    case "running":
+      if (plugin.enforcing === "ask-every-call") return "ask-every-call";
+      return rules.from === "now" && plugin.enforcing !== "kept-copy" ? "read" : "unread";
+  }
+}
 
 /** Whether the plugin is enforcing rules this page can show as held. */
 export const pluginHolds = (plugin: RulesPluginStatus) =>
@@ -810,7 +839,8 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
 
   // 3 to 5: the rules plugin's rules for this bot and for every bot, as last read.
   const known = facts.rules.from !== null;
-  const holds = pluginHolds(facts.plugin) && facts.rules.from === "now";
+  const enforcement = rulesEnforcement(facts.plugin, facts.rules);
+  const holds = enforcement === "read";
   const rules: { rule: PluginRule; scope: "bot" | "every" }[] = [];
   if (known) {
     for (const [scope, set] of [
@@ -851,6 +881,21 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
     exceptions.push({ kind: "fallback", scope: facts.botScope?.fallback ? "bot" : "every" });
   const pluginPart = rules.length > 0 || fallbackOn;
   const pluginMark: LineMark = holds ? "plugin" : "not-now";
+  // Rules this client didn't read now may cover any line: Unknown, never Allowed. A plugin that
+  // asks before every call holds every line as Asks first.
+  const rulesOver = (line: PermissionLine): PermissionLine =>
+    line.value === "never" && (line.mark === "gateway" || line.mark === "set")
+      ? line
+      : enforcement === "unread"
+        ? { ...line, value: "unknown", mark: "unread" }
+        : enforcement === "ask-every-call"
+          ? {
+              ...line,
+              value: "asks",
+              mark: "plugin",
+              exceptions: [...line.exceptions, { kind: "ask-every-call" }],
+            }
+          : line;
   // What the latest task's listing shows over the settings: none of the line's open tools listed
   // is Not offered, held by nothing established here; some missing limits an Allowed line.
   const listed = (line: PermissionLine): PermissionLine =>
@@ -867,9 +912,13 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
     const policy = exec.applies;
     const choice = policy === "none" ? null : policy;
     if (pluginPart && !holds)
-      return listed({ ...base, value: "unknown", mark: "not-now", exceptions, choice, ownAsk });
+      return listed(
+        rulesOver({ ...base, value: "unknown", mark: "not-now", exceptions, choice, ownAsk }),
+      );
     if (wholeNever)
-      return listed({ ...base, value: "never", mark: "plugin", exceptions, choice, ownAsk });
+      return listed(
+        rulesOver({ ...base, value: "never", mark: "plugin", exceptions, choice, ownAsk }),
+      );
     const limited = asks.length > 0 || targetNevers.length > 0 || partial;
     const value: LineValue =
       policy === "deny"
@@ -887,7 +936,7 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
             : "asks";
     const mark: LineMark =
       asks.length > 0 || targetNevers.length > 0 ? pluginMark : exec.own ? "gateway" : "set";
-    return listed({ ...base, value, mark, exceptions, choice, ownAsk });
+    return listed(rulesOver({ ...base, value, mark, exceptions, choice, ownAsk }));
   }
   // The bot's own deny on some of the line's tools is no one choice: none is checked, and Never
   // denies the rest. Never is checked only when the gateway removes every tool of the line.
@@ -901,21 +950,31 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
       choice: "allow",
     });
   if (pluginPart && !holds)
-    return listed({ ...base, value: "unknown", mark: "not-now", exceptions, choice, ownAsk });
+    return listed(
+      rulesOver({ ...base, value: "unknown", mark: "not-now", exceptions, choice, ownAsk }),
+    );
   if (wholeNever)
-    return listed({ ...base, value: "never", mark: "plugin", exceptions, choice, ownAsk });
+    return listed(
+      rulesOver({ ...base, value: "never", mark: "plugin", exceptions, choice, ownAsk }),
+    );
   if (wholeAsk)
-    return listed({ ...base, value: "asks", mark: "plugin", exceptions, choice, ownAsk });
+    return listed(
+      rulesOver({ ...base, value: "asks", mark: "plugin", exceptions, choice, ownAsk }),
+    );
   if (asks.length > 0 || targetNevers.length > 0)
-    return listed({ ...base, value: "limited", mark: "plugin", exceptions, choice, ownAsk });
-  return listed({
-    ...base,
-    value: partial ? "limited" : "allowed",
-    mark: partial ? (botDenied.length > 0 ? "gateway" : "set") : fallbackOn ? pluginMark : null,
-    exceptions,
-    choice,
-    ownAsk,
-  });
+    return listed(
+      rulesOver({ ...base, value: "limited", mark: "plugin", exceptions, choice, ownAsk }),
+    );
+  return listed(
+    rulesOver({
+      ...base,
+      value: partial ? "limited" : "allowed",
+      mark: partial ? (botDenied.length > 0 ? "gateway" : "set") : fallbackOn ? pluginMark : null,
+      exceptions,
+      choice,
+      ownAsk,
+    }),
+  );
 }
 
 /** The page's view of a bot's facts. */
@@ -927,6 +986,7 @@ export function permissionsView(facts: PermissionFacts): BotPermissions {
     readAt: facts.now,
     plugin: facts.plugin,
     rules: facts.rules,
+    enforcement: rulesEnforcement(facts.plugin, facts.rules),
     fallback: {
       bot: facts.rules.from !== null && facts.botScope?.fallback === true,
       every: facts.rules.from !== null && facts.everyScope?.fallback === true,
