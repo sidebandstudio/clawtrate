@@ -191,6 +191,34 @@ test.describe("1440", () => {
     );
   });
 
+  test("F-189: while a save is out, Use my version can't swap the draft it sent", async ({
+    page,
+  }) => {
+    await openPage(page, "Morning digest", `${ADMIN}&save=conflict`);
+    await view(page).getByRole("button", { name: "Edit", exact: true }).click();
+    await editor(page).getByLabel("Name").fill("Morning digest, short");
+    await save(page).click();
+    await editor(page)
+      .getByTestId("editor-changed")
+      .getByRole("button", { name: "Show the new version" })
+      .click();
+    const mine = editor(page).getByTestId("your-version");
+    await mine.getByText("Your version").click();
+    const use = mine.getByRole("button", { name: "Use my version" });
+    await expect(use).toBeEnabled();
+    // The next save is held: it is out, and its answer hasn't come.
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (command: { type: string }) => Promise<unknown> };
+      };
+      const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = (command) =>
+        command.type === "updateRoutine" ? new Promise(() => {}) : invoke(command);
+    });
+    await save(page).click();
+    await expect(use).toBeDisabled();
+  });
+
   test("F-189: a change made elsewhere while the editor is open is shown, and the person's version kept", async ({
     page,
   }) => {
@@ -276,6 +304,9 @@ test.describe("1440", () => {
     // A replacement gateway connects: its hello, then its identity read.
     await setConnection(page, { connectedAt: Date.now() + 5_000 });
     await setConnection(page, { gatewayId: null });
+    // Bound to the first gateway, the draft waits while the newcomer's identity is unknown
+    // (an unbound one would have closed at the new hello).
+    await expect(editor(page)).toBeVisible();
     await setConnection(page, { gatewayId: "another gateway" });
     await expect(editor(page)).toHaveCount(0);
   });
