@@ -21,7 +21,7 @@ const open = async (query = "", viewport = { width: 1440, height: 900 }) => {
     out.push("PAGEERROR " + e);
   });
   await p.goto(base + (query ? "&" + query : ""));
-  await p.waitForTimeout(250);
+await p.locator("#lc-dialog, #work-hero").first().waitFor({ state: "attached" });
   return p;
 };
 const norm = (s) => (s || "").replace(/\s+/g, " ");
@@ -30,9 +30,33 @@ const dlg = (p) => p.evaluate(() => (document.querySelector("#lc-dialog").open ?
 const panel = (p) => text(p, "#panel-settings");
 const hero = (p) => text(p, "#work-hero");
 const has = (t, ...words) => words.every((w) => t.includes(w));
-const announced = async (p, ms = 80) => {
-  await p.waitForTimeout(ms);
-  return p.evaluate(() => document.querySelector("#b-announce").textContent);
+const waitText = (p, selector, words) =>
+  p.waitForFunction(
+    ([s, w]) => (document.querySelector(s)?.textContent || "").replace(/\s+/g, " ").includes(w),
+    [selector, words],
+    { timeout: 10000 },
+  );
+const waitFocus = (p, selector) =>
+  p.waitForFunction((s) => document.activeElement?.matches(s), selector, { timeout: 10000 });
+// Capture a transient at the DOM change so a slow test process can still assert it.
+const observeText = (p, selector, ...words) =>
+  p.evaluate(([selector, words]) => {
+    const node = document.querySelector(selector);
+    globalThis.lifecycleCheckSawText = false;
+    const observer = new MutationObserver(() => {
+      const observed = node.textContent.replace(/\s+/g, " ");
+      if (words.every((word) => observed.includes(word))) {
+        globalThis.lifecycleCheckSawText = true;
+        observer.disconnect();
+      }
+    });
+    observer.observe(node, { childList: true, subtree: true, characterData: true });
+  }, [selector, words]);
+const sawText = (p) => p.evaluate(() => globalThis.lifecycleCheckSawText);
+const announced = (p) => text(p, "#b-announce");
+const waitAnnouncement = async (p, words) => {
+  await waitText(p, "#b-announce", words);
+  return announced(p);
 };
 const click = (p, sel) => p.click(sel);
 const clickText = (p, root, words) =>
@@ -49,7 +73,7 @@ const railMenu = async (p, bot) => {
   // Close a menu still open from an earlier call: it can cover the row now under it.
   if (await p.evaluate(() => Boolean(document.querySelector("#rail-menu:not([hidden]) .menu-item")))) await p.keyboard.press("Escape");
   await p.click(`#bot-list .bot[data-bot="${bot}"]`, { button: "right" });
-  await p.waitForTimeout(60);
+await p.locator("#rail-menu:not([hidden]) .menu-item").first().waitFor();
   return p.evaluate(() => [...document.querySelectorAll("#rail-menu .menu-item")].map((x) => x.textContent.trim()));
 };
 const settings = "panel=open&tab=settings";
@@ -68,6 +92,7 @@ check("S3 it says the choice is a preference of the gateway profile, not who els
 check("F-007 it offers an existing bot, a new one, and Not now", has(t, "Use an existing bot", "Create primary bot", "Not now"));
 check("S3 before a choice the star is on the gateway's default bot", (await starOn(p)) === "juniper");
 await clickText(p, "#lc-dialog", "Not now");
+await waitText(p, "#b-announce", "Juniper keeps the star");
 check("S3 Not now keeps the default bot's star and says so", !(await dlg(p)) && (await announced(p)) === "Juniper keeps the star, as the gateway's default bot" && (await starOn(p)) === "juniper");
 await p.close();
 
@@ -79,9 +104,10 @@ check("F-259 Confirm waits for another bot", await p.evaluate(() => document.que
 await p.fill("#lc-search", "plan");
 check("F-007 search narrows the list by name or label", await p.evaluate(() => [...document.querySelectorAll("[data-lc-pick]")].map((x) => x.dataset.lcPick).join(",") === "pip"));
 await click(p, '[data-lc-pick="pip"]');
+await observeText(p, "#lc-dialog", "Saving…");
 await click(p, '[data-lc="confirm-primary"]');
-check("S3 Confirm shows Saving while it writes", (await dlg(p)).includes("Saving…"));
-await p.waitForTimeout(650);
+check("S3 Confirm shows Saving while it writes", (await sawText(p)));
+await waitText(p, "#b-announce", "Pip is your primary bot");
 check("F-259 the star moves only after the read-back, and it is announced", !(await dlg(p)) && (await starOn(p)) === "pip" && (await announced(p)) === "Pip is your primary bot");
 const railIds = (p, sel) => p.evaluate((sel) => [...document.querySelectorAll(sel)].map((x) => x.dataset.bot).join(","), sel);
 check("S3 the primary bot comes first among the bots not pinned, the others in their order", (await railIds(p, "#bot-list button.bot")) === "pip,juniper,marlow,otto");
@@ -90,51 +116,53 @@ check("S10 another bot's menu offers Make primary bot and Delete", has((await ra
 await p.close();
 
 p = await open("lc=choose&primfail=1");
-await click(p, '[data-lc-pick="marlow"]');
-await click(p, '[data-lc="confirm-primary"]');
-await p.waitForTimeout(600);
+await p.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+await p.clock.pauseAt(new Date("2026-01-01T00:00:10Z"));
+await p.locator('[data-lc-pick="marlow"]').evaluate((button) => button.click());
+await clickText(p, "#lc-dialog", "Confirm");
+await p.clock.runFor(550);
 t = await dlg(p);
 check("S3 a lost reply says Couldn't confirm while it reads the choice again", t.includes("Couldn't confirm your choice. Reading it again…") && (await announced(p)) === "Couldn't confirm your choice" && (await starOn(p)) === "juniper" && (await p.evaluate(() => document.querySelector('[data-lc="confirm-primary"]').disabled)));
-await p.waitForTimeout(550);
+await p.clock.runFor(500);
 t = await dlg(p);
 check("S3 when the fresh read still has the old choice it says so, and the star stays", t.includes("Your choice wasn't saved. Read again, the gateway still has Juniper.") && t.includes("Try again") && (await starOn(p)) === "juniper");
-await click(p, '[data-lc="confirm-primary"]');
-await p.waitForTimeout(650);
+await clickText(p, "#lc-dialog", "Try again");
+await p.clock.runFor(550);
 check("S3 Try again saves", (await starOn(p)) === "marlow");
 await p.close();
 
 p = await open("lc=choose&primfail=landed");
 await click(p, '[data-lc-pick="marlow"]');
 await click(p, '[data-lc="confirm-primary"]');
-await p.waitForTimeout(1150);
+await waitText(p, "#b-announce", "Marlow is your primary bot");
 check("S3 when the fresh read shows the choice landed, the star moves on that read", !(await dlg(p)) && (await starOn(p)) === "marlow");
 await p.close();
 
 p = await open("lc=choose&primfail=noread");
 await click(p, '[data-lc-pick="marlow"]');
 await click(p, '[data-lc="confirm-primary"]');
-await p.waitForTimeout(1150);
+await waitText(p, "#lc-dialog", "The gateway didn't answer when Clawtrate read it again.");
 t = await dlg(p);
 check("S3 when the fresh read gets no answer it still says Couldn't confirm, with Check again", t.includes("Couldn't confirm your choice. The gateway didn't answer when Clawtrate read it again. The star stays on Juniper, the last choice read.") && t.includes("Check again") && !t.includes("Try again") && (await starOn(p)) === "juniper");
 await click(p, '[data-lc="confirm-primary"]');
-await p.waitForTimeout(650);
+await waitText(p, "#b-announce", "Marlow is your primary bot");
 check("S3 Check again reads, and the star moves only on what it reads", (await starOn(p)) === "marlow");
 await p.close();
 
 p = await open("pin=otto,marlow&lc=choose");
 await click(p, '[data-lc-pick="marlow"]');
 await click(p, '[data-lc="confirm-primary"]');
-await p.waitForTimeout(650);
+await waitText(p, "#b-announce", "Marlow is your primary bot");
 check("S3 a pinned primary bot comes first among the pins, the others keep their order", (await railIds(p, "#bot-list .pin-grid .pin")) === "marlow,otto" && (await railIds(p, "#bot-list button.bot")) === "juniper,pip");
 await p.close();
 
 p = await open("lc=choose&primconflict=1");
 await click(p, '[data-lc-pick="otto"]');
 await click(p, '[data-lc="confirm-primary"]');
-await p.waitForTimeout(650);
+await waitText(p, "#lc-dialog", "a moment ago.");
 check("S3 a choice that crossed another device shows what the gateway has now", (await dlg(p)).includes("Another of your devices chose Marlow a moment ago. That's what the gateway has now. Confirm to choose Otto instead.") && (await starOn(p)) === "marlow");
 await click(p, '[data-lc="confirm-primary"]');
-await p.waitForTimeout(650);
+await waitText(p, "#b-announce", "Otto is your primary bot");
 check("S3 confirming again chooses Otto", (await starOn(p)) === "otto");
 await p.close();
 
@@ -142,7 +170,7 @@ p = await open("lc=choose&prefs=device");
 check("S3 without a profile on the gateway the choice is this device's only", (await dlg(p)).includes("This device only: this connection has no profile on the gateway to keep it in, so your other devices won't show it."));
 await click(p, '[data-lc-pick="pip"]');
 await click(p, '[data-lc="confirm-primary"]');
-check("S3 ... and the announcement says so", (await announced(p, 700)) === "Pip is your primary bot on this device");
+check("S3 ... and the announcement says so", (await waitAnnouncement(p, "Pip is your primary bot on this device")) === "Pip is your primary bot on this device");
 await p.close();
 
 p = await open("lc=choose&access=read");
@@ -167,7 +195,7 @@ p = await open(`bot=pip&${settings}`);
 const primaryWord = (p) => p.evaluate(() => document.querySelector("#panel-settings .lc-manage dd")?.textContent);
 check("S3 Manage says whether the bot is primary", (await primaryWord(p)) === "No");
 await clickText(p, "#panel-settings", "Make primary bot");
-await p.waitForTimeout(650);
+await waitText(p, "#b-announce", "Pip is your primary bot");
 check("S3 Make primary bot in Manage saves and moves the star", (await starOn(p)) === "pip" && (await primaryWord(p)) === "Yes");
 check("S3 S10 the primary bot's Delete is disabled with its reason", (await panel(p)).includes("Pip is your primary bot. Choose another primary bot before deleting it.") && (await p.evaluate(() => document.querySelector('#panel-settings [data-lc="open-delete"]').disabled)));
 await p.close();
@@ -177,11 +205,11 @@ await clickText(p, "#lc-dialog", "Create primary bot");
 check("F-007 Create primary bot opens New bot", await p.evaluate(() => document.querySelector("#create-dialog").open));
 await p.fill("#b-name", "Wren");
 await p.keyboard.press("Enter");
-await p.waitForTimeout(150);
+await p.locator("#create-dialog [data-b-choose]").first().waitFor();
 await p.evaluate(() => document.querySelector("[data-b-choose]")?.click());
-await p.waitForTimeout(80);
+await p.getByRole("button", { name: "Create", exact: true }).waitFor();
 await p.evaluate(() => [...document.querySelectorAll("#create-dialog button")].find((x) => x.textContent.trim() === "Create")?.click());
-await p.waitForTimeout(1600);
+await waitText(p, "#b-announce", "Wren is your primary bot");
 check("F-007 the bot it makes becomes the primary bot once listed", (await starOn(p)) === "wren", await starOn(p));
 await p.close();
 
@@ -194,9 +222,10 @@ check("S4 the Bot tab says the gateway doesn't keep the shape and colour, and no
 await click(p, '[data-lc-body="hex"]');
 await click(p, '[data-lc-color="#5b8dff"]');
 check("F-037 a shape and a colour enable Set picture", await p.evaluate(() => !document.querySelector('[data-lc="set-picture"]').disabled));
+await observeText(p, "#lc-dialog", "Saving…");
 await click(p, '[data-lc="set-picture"]');
-check("S4 saving shows Saving", (await dlg(p)).includes("Saving…"));
-check("F-037 the picture is saved on the read-back", (await announced(p, 650)) === "Picture saved" && !(await dlg(p)));
+check("S4 saving shows Saving", (await sawText(p)));
+check("F-037 the picture is saved on the read-back", (await waitAnnouncement(p, "Picture saved")) === "Picture saved" && !(await dlg(p)));
 check("S2 focus returns to the picture", await p.evaluate(() => document.activeElement?.dataset.lc === "open-picture"));
 await p.close();
 
@@ -204,17 +233,17 @@ p = await open(`bot=juniper&${settings}&lc=picture&picfail=1`);
 await click(p, '[data-lc-body="gem"]');
 await click(p, '[data-lc-color="#ff8552"]');
 await click(p, '[data-lc="set-picture"]');
-await p.waitForTimeout(650);
+await waitText(p, "#lc-dialog", "it refused the change");
 check("S4 a refused picture leaves it unchanged and says so", (await dlg(p)).includes("The gateway didn't save the picture: it refused the change. Juniper's picture is unchanged."));
 await click(p, '[data-lc="set-picture"]');
-check("S4 ... and saving again works", (await announced(p, 650)) === "Picture saved");
+check("S4 ... and saving again works", (await waitAnnouncement(p, "Picture saved")) === "Picture saved");
 await p.close();
 
 p = await open(`bot=juniper&${settings}&lc=picture&picfail=dropped`);
 await click(p, '[data-lc-body="gem"]');
 await click(p, '[data-lc-color="#ff8552"]');
 await click(p, '[data-lc="set-picture"]');
-await p.waitForTimeout(650);
+await waitText(p, "#lc-dialog", "returns no picture");
 check("S4 an ok the read-back contradicts is a failure", (await dlg(p)).includes("The gateway took the picture but doesn't show it. Its list of bots returns no picture for Juniper now, so no device will show this one."));
 await p.close();
 
@@ -235,7 +264,7 @@ check("F-270 Upload takes a dropped image or Browse files, under 25 MB", has(t, 
 await clickText(p, "#lc-dialog", "Browse files");
 check("F-270 a chosen image is cropped, and the saved size is said", (await dlg(p)).includes("trail-sunrise.jpg · 4.2 MB. Drag to move it in the circle. Clawtrate saves the circle's square at 128 by 128 pixels."));
 await click(p, '[data-lc="set-picture"]');
-check("F-270 Set picture saves it", (await announced(p, 650)) === "Picture saved" && (await p.evaluate(() => document.querySelector('#work-hero .avatar[data-photo="true"]') !== null)));
+check("F-270 Set picture saves it", (await waitAnnouncement(p, "Picture saved")) === "Picture saved" && (await p.evaluate(() => document.querySelector('#work-hero .avatar[data-photo="true"]') !== null)));
 await p.close();
 p = await open(`bot=juniper&${settings}&lc=picture&ptab=upload&upload=toolarge`);
 check("F-270 an image of 25 MB or more is rejected and the picture is unchanged", (await dlg(p)).includes("That image is 31.4 MB. Choose one under 25 MB. Juniper's picture is unchanged.") && (await p.evaluate(() => document.querySelector('[data-lc="set-picture"]').disabled)));
@@ -257,7 +286,7 @@ t = await hero(p);
 check("S4 an https picture: the character is drawn, with the full address and the choice", t.includes("Marlow's picture is at https://pictures.example/marlow.png. Loading it lets whoever runs that address see this device's network address and the time of each request.") && t.includes("Load picture"));
 check("S4 ... nothing outside is loaded before the choice: hero and rail draw the character", (await photoOn(p, '#work-hero .avatar[data-bot="marlow"]')).every((x) => !x) && (await photoOn(p, '#bot-list .avatar[data-bot="marlow"]')).every((x) => !x));
 await clickText(p, "#work-hero", "Load picture");
-await p.waitForTimeout(80);
+await waitText(p, "#b-announce", "Loading Marlow's picture");
 check("S4 after the choice the picture is drawn in the hero and the rail, and the line goes", (await photoOn(p, '#work-hero .avatar[data-bot="marlow"]')).every((x) => x) && (await photoOn(p, '#bot-list .avatar[data-bot="marlow"]')).every((x) => x) && !(await hero(p)).includes("Load picture") && (await announced(p)) === "Loading Marlow's picture");
 await p.close();
 p = await open(`bot=marlow&${settings}&outside=1&lc=choose`);
@@ -296,49 +325,51 @@ await p.close();
 // The name and the label (section 5) ------------------------------------------------------------------
 p = await open(`bot=juniper&${settings}`);
 await click(p, '[data-lc="edit-name"]');
-await p.waitForTimeout(60);
+await waitFocus(p, '[data-lc-inline="name"]');
 check("F-038 the name becomes a field in place", await p.evaluate(() => document.activeElement?.dataset.lcInline === "name"));
 await p.keyboard.type("Juniper Lee");
+await observeText(p, "#work-hero", "Saving…");
 await p.keyboard.press("Enter");
-check("F-038 saving shows Saving", (await hero(p)).includes("Saving…"));
-check("F-038 the name read back is shown and announced", (await announced(p, 600)) === "Renamed to Juniper Lee" && (await hero(p)).includes("Juniper Lee") && (await text(p, "#bot-list")).includes("Juniper Lee"));
+check("F-038 saving shows Saving", (await sawText(p)));
+check("F-038 the name read back is shown and announced", (await waitAnnouncement(p, "Renamed to Juniper Lee")) === "Renamed to Juniper Lee" && (await hero(p)).includes("Juniper Lee") && (await text(p, "#bot-list")).includes("Juniper Lee"));
 await click(p, '[data-lc="edit-name"]');
-await p.waitForTimeout(60);
+await waitFocus(p, '[data-lc-inline="name"]');
 await p.keyboard.press("Escape");
+await waitFocus(p, '[data-lc="edit-name"]');
 check("F-038 Escape puts the name back", (await hero(p)).includes("Juniper Lee") && (await p.evaluate(() => document.activeElement?.dataset.lc === "edit-name")));
 await click(p, '[data-lc="edit-name"]');
-await p.waitForTimeout(60);
+await waitFocus(p, '[data-lc-inline="name"]');
 await p.keyboard.press("Backspace");
 await p.keyboard.press("Enter");
 check("F-038 an empty name is not sent", (await hero(p)).includes("A bot needs a name."));
 await p.keyboard.press("Escape");
 await click(p, '[data-lc="edit-label"]');
-await p.waitForTimeout(60);
+await waitFocus(p, '[data-lc-inline="label"]');
 await p.fill('[data-lc-inline="label"]', "");
 await p.keyboard.press("Enter");
-check("F-039 an empty label removes it, and the empty state reads Add a label", (await announced(p, 600)) === "Label removed" && (await hero(p)).includes("Add a label"));
+check("F-039 an empty label removes it, and the empty state reads Add a label", (await waitAnnouncement(p, "Label removed")) === "Label removed" && (await hero(p)).includes("Add a label"));
 await click(p, '[data-lc="edit-label"]');
-await p.waitForTimeout(60);
+await waitFocus(p, '[data-lc-inline="label"]');
 await p.keyboard.type("Reading");
 await p.keyboard.press("Enter");
-check("F-039 a label is saved in place", (await announced(p, 600)) === "Label saved" && (await hero(p)).includes("Reading"));
+check("F-039 a label is saved in place", (await waitAnnouncement(p, "Label saved")) === "Label saved" && (await hero(p)).includes("Reading"));
 await p.close();
 
 p = await open(`bot=otto&${settings}&namefail=1&edit=name`);
-await p.waitForTimeout(60);
+await waitFocus(p, '[data-lc-inline="name"]');
 await p.keyboard.type("Otto Two");
 await p.keyboard.press("Enter");
-await p.waitForTimeout(600);
+await waitText(p, "#work-hero", "the gateway refused it");
 check("S5 a refused rename keeps the typed text and the old name", (await hero(p)).includes("Couldn't rename: the gateway refused it. The name is still Otto.") && (await p.evaluate(() => document.querySelector('[data-lc-inline="name"]').value === "Otto Two")));
 await p.close();
 
 p = await open("");
 await p.dblclick('#bot-list .bot[data-bot="marlow"] .bot-name');
-await p.waitForTimeout(120);
+await waitFocus(p, ".lc-rail-input");
 check("F-026 double-clicking a name in the rail renames it in place", await p.evaluate(() => document.activeElement?.classList.contains("lc-rail-input")));
 await p.keyboard.type("Marlowe");
 await p.keyboard.press("Enter");
-check("F-026 Enter saves it", (await announced(p, 550)) === "Renamed to Marlowe" && (await text(p, '#bot-list .bot[data-bot="marlow"]')).includes("Marlowe"));
+check("F-026 Enter saves it", (await waitAnnouncement(p, "Renamed to Marlowe")) === "Renamed to Marlowe" && (await text(p, '#bot-list .bot[data-bot="marlow"]')).includes("Marlowe"));
 await p.close();
 
 p = await open(`bot=pip&${settings}&width=phone&view=detail`, { width: 390, height: 844 });
@@ -356,30 +387,31 @@ check("F-040 the page names both files", has(t, "Instructions · AGENTS.md", "Pe
 check("F-040 it says memory is separate", t.includes("Memory is separate: what Juniper remembers is under Memory, and these files don't change it."));
 check("F-040 Save waits for a change", await p.evaluate(() => document.querySelector('[data-lc="instr-save"]').disabled));
 await p.fill("#lc-agents", "# Juniper\n\nCite every source.\n");
+await observeText(p, "#panel-settings", "Saving…");
 await click(p, '[data-lc="instr-save"]');
-check("F-040 Saving, then a row for the file written, from its own read-back", (await panel(p)).includes("Saving…") && (await announced(p, 550)) === "Instructions saved" && (await fileRow(p, "agents")).includes("AGENTS.md: Written, read back at 5:44 PM") && !(await p.$('[data-lc-file-row="soul"]')));
+check("F-040 Saving, then a row for the file written, from its own read-back", (await sawText(p)) && (await waitAnnouncement(p, "Instructions saved")) === "Instructions saved" && (await fileRow(p, "agents")).includes("AGENTS.md: Written, read back at 5:44 PM") && !(await p.$('[data-lc-file-row="soul"]')));
 await p.close();
 
 p = await open(`bot=juniper&${settings}&bview=instructions&instr=conflict`);
 await click(p, '[data-lc="instr-save"]');
-await p.waitForTimeout(550);
+await waitText(p, "#b-announce", "SOUL.md: not saved");
 t = await panel(p);
 check("S6 two files, two outcomes: one written, one changed on the gateway", (await fileRow(p, "agents")).includes("AGENTS.md: Written") && (await fileRow(p, "soul")).includes("SOUL.md: Changed on the gateway") && (await announced(p)) === "SOUL.md: not saved");
 check("F-040 the changed file keeps the person's text and shows the gateway's", has(t, "SOUL.md changed on the gateway while you were editing. Your text is kept here. The gateway now has:", "Curious, careful, plain-spoken. Never guess.") && (await p.evaluate(() => document.querySelector("#lc-soul").value === "Curious, careful, brief.\n")));
 await clickText(p, "#panel-settings", "Save mine over it");
-await p.waitForTimeout(550);
+await waitText(p, "#b-announce", "saved over the gateway");
 check("S6 Save mine over it writes only that file, after a fresh read", (await announced(p)) === "SOUL.md saved over the gateway's copy" && (await fileRow(p, "soul")).includes("SOUL.md: Written"));
 await p.close();
 p = await open(`bot=juniper&${settings}&bview=instructions&instr=conflict`);
 await click(p, '[data-lc="instr-save"]');
-await p.waitForTimeout(550);
+await waitText(p, "#panel-settings", "SOUL.md: Changed on the gateway");
 await clickText(p, "#panel-settings", "Use the gateway's");
 check("F-040 Use the gateway's shows the gateway's text for that file", (await p.evaluate(() => document.querySelector("#lc-soul").value.includes("Never guess"))) && !(await panel(p)).includes("changed on the gateway while"));
 await p.close();
 p = await open(`bot=juniper&${settings}&bview=instructions&instrfail=1`);
 await p.fill("#lc-agents", "# Juniper\n\nBrisk.\n");
 await click(p, '[data-lc="instr-save"]');
-await p.waitForTimeout(550);
+await waitText(p, "#panel-settings", "AGENTS.md: Couldn't check");
 check("S6 a file that couldn't be read back says so, and keeps the text", (await fileRow(p, "agents")).includes("AGENTS.md: Couldn't check") && (await panel(p)).includes("Clawtrate couldn't read AGENTS.md back: the gateway didn't answer. Your text is kept here") && (await p.evaluate(() => document.querySelector("#lc-agents").value === "# Juniper\n\nBrisk.\n")));
 await p.close();
 p = await open(`bot=juniper&${settings}&bview=instructions&access=read`);
@@ -396,7 +428,7 @@ t = await role(p);
 check("F-041 opened, it says what a read established and nothing more", has(t, "Juniper's write tool changed AGENTS.md in its workspace during this run: the gateway says the file was last changed at 5:41 PM, after the call started.", "Clawtrate can't show what changed or undo it here: the gateway keeps no earlier version of the file."));
 check("F-041 no difference, no Accept, no Undo in this unit", !(await p.$("#lc-role .lc-diff")) && (await p.evaluate(() => ![...document.querySelectorAll("#lc-role button")].some((x) => ["Accept", "Undo"].includes(x.textContent)))));
 await clickText(p, "#lc-role", "Open instructions");
-await p.waitForTimeout(100);
+await waitText(p, "#panel-settings", "Personality · SOUL.md");
 check("S7 Open instructions opens the page", (await panel(p)).includes("Personality · SOUL.md"));
 t = await panel(p);
 check("S6 the editor says the gateway controls loading, with no fixed figure", t.includes("The gateway controls when it loads these files and how much of them it includes.") && !t.includes("20,000") && !t.includes("keeps the copy it started with"));
@@ -413,9 +445,10 @@ await click(p, '[data-lc-copy="model"]');
 check("S8 without its model the copy says which default it takes", (await dlg(p)).includes("Without it the copy uses the gateway's default model, openai/gpt-5.5, and its default effort."));
 await click(p, '[data-lc-copy="model"]');
 await click(p, '[data-lc-copy="tools"]');
+await observeText(p, "#lc-dialog", "Duplicating Pip", "Writing");
 await click(p, '[data-lc="dup-go"]');
-check("S8 progress: each write in turn", (await dlg(p)).includes("Duplicating Pip") && (await dlg(p)).includes("Writing"));
-await p.waitForTimeout(1800);
+check("S8 progress: each write in turn", (await sawText(p)));
+await waitText(p, "#lc-dialog", "New bot with the selected settings");
 t = await dlg(p);
 check("S8 every selected write has its own read-back row", has(t, "New bot with the selected settings", "Each row is what the gateway returned when Clawtrate read it back.", "Made Pip copyListed", "PictureWritten", "LabelWritten", "Model and accountWritten", "Fallback list: noneWritten", "EffortWritten", "AGENTS.mdWritten", "SOUL.mdWritten") && !t.includes("Tool permissions"));
 check("S8 the result doesn't promise the same behaviour", t.includes("What its tools, skills and models do can still differ from Pip: the gateway decides, with its own defaults."));
@@ -425,24 +458,24 @@ await p.close();
 
 p = await open("lc=duplicate&delbot=pip&dup=partial");
 await click(p, '[data-lc="dup-go"]');
-await p.waitForTimeout(2200);
+await waitText(p, "#lc-dialog", "Some settings still need attention");
 t = await dlg(p);
 check("S8 a partial copy names each write that didn't read back as chosen", has(t, "Some settings still need attention", "Pip copy is listed. 2 settings don't read back as chosen.") && (await rowWord(p, "effort")) === "Still has the gateway's default, Medium" && (await rowWord(p, "soul")) === "Couldn't check" && (await rowWord(p, "agents")) === "Written");
 check("S8 Try again writes only what is missing, after a fresh read", t.includes("Try again writes only these again, each after reading what the gateway has now, so a newer change on the gateway isn't overwritten."));
 await clickText(p, "#lc-dialog", "Try again");
-await p.waitForTimeout(300);
+await waitText(p, "#lc-dialog", "New bot with the selected settings");
 check("S8 ... then every row reads Written", (await dlg(p)).includes("New bot with the selected settings") && (await rowWord(p, "soul")) === "Written");
 await p.close();
 
 p = await open("lc=duplicate&delbot=pip&dup=nosource");
 await click(p, '[data-lc="dup-go"]');
-await p.waitForTimeout(2200);
+await waitText(p, "#lc-dialog", "New bot with the selected settings");
 check("S8 a file the source doesn't have leaves the new bot's starting file", (await rowWord(p, "soul")) === "No source file. Left the new bot's starting file" && (await dlg(p)).includes("New bot with the selected settings"));
 await p.close();
 
 p = await open("lc=duplicate&delbot=pip&dup=refused");
 await click(p, '[data-lc="dup-go"]');
-await p.waitForTimeout(500);
+await waitText(p, "#lc-dialog", "already exists");
 check("S8 a refused create makes nothing and says so", (await dlg(p)).includes("The gateway didn't make the copy: “agent \"pip-copy\" already exists”. Nothing was made.") && (await p.evaluate(() => !app.bots.some((x) => x.id === "pip-copy"))));
 await p.close();
 
@@ -469,9 +502,10 @@ t = await dlg(p);
 check("F-049 it says what the file leaves out and what its fields can hold", t.includes("The file leaves out account bindings and sign-in stores. The fields you export can contain private text, credentials or paths. Review them before saving.") && !t.includes("secret"));
 check("F-049 it lists what is never in the file, tool settings first", has(t, "Never in a Clawtrate file", "Tool permissions and skills", "Memory and About you (MEMORY.md, notes, USER.md)", "Routines", "Channel routes"));
 check("S9 no gateway-package path is offered in the app", !t.includes("claws") && !(await p.$("[data-lc-way]")));
+await observeText(p, "#lc-dialog", "Reading Pip from the gateway…");
 await clickText(p, "#lc-dialog", "Export file…");
-check("S9 exporting reads the bot first", (await dlg(p)).includes("Reading Pip from the gateway…"));
-await p.waitForTimeout(800);
+check("S9 exporting reads the bot first", (await sawText(p)));
+await waitText(p, "#b-announce", "Saved Pip.clawtrate-bot.json, 4 KB");
 check("F-049 a save the host confirmed names the file and its size", (await dlg(p)).includes("Saved Pip.clawtrate-bot.json, 4 KB") && (await announced(p)) === "Saved Pip.clawtrate-bot.json, 4 KB");
 await p.close();
 for (const [exp, words] of [
@@ -485,28 +519,29 @@ for (const [exp, words] of [
 ]) {
   p = await open(`lc=export&delbot=pip&exp=${exp}`);
   await clickText(p, "#lc-dialog", "Export file…");
-  await p.waitForTimeout(800);
+  await waitText(p, "#lc-dialog", words[0]);
   check(`S9 the host's save ends ${exp}: said as the host reported it`, has(await dlg(p), ...words));
   await p.close();
 }
 p = await open("lc=export&delbot=pip&exp=absent");
 await clickText(p, "#lc-dialog", "Export file…");
-await p.waitForTimeout(800);
+await waitText(p, "#lc-dialog", "No file was written.");
 await clickText(p, "#lc-dialog", "Try again");
-await p.waitForTimeout(800);
+await waitText(p, "#lc-dialog", "Saved Pip.clawtrate-bot.json, 4 KB");
 check("S9 after a failed save, Try again saves", (await dlg(p)).includes("Saved Pip.clawtrate-bot.json, 4 KB"));
 await p.close();
 
 p = await open("");
 await click(p, "#new-button");
-await p.waitForTimeout(60);
+await p.locator("#rail-menu:not([hidden]) .menu-item").first().waitFor();
 check("F-265 the + menu has Import a bot…", (await text(p, "#rail-menu")).includes("Import a bot…"));
 await clickText(p, "#rail-menu", "Import a bot…");
 t = await dlg(p);
 check("F-265 Import asks for a Clawtrate file and says reading changes nothing", has(t, "Import a bot", "Choose a Clawtrate file. You'll see everything it would create before anything is.", "At most 5 MB. Reading it changes nothing on the gateway."));
+await observeText(p, "#lc-dialog", "Reading wren.clawtrate-bot.json…");
 await clickText(p, "#lc-dialog", "Choose file…");
-check("F-265 the file is read first", (await dlg(p)).includes("Reading wren.clawtrate-bot.json…"));
-await p.waitForTimeout(500);
+check("F-265 the file is read first", (await sawText(p)));
+await waitText(p, "#lc-dialog", "Add Wren?");
 t = await dlg(p);
 check("F-265 the review shows the picture, name and label, and what the file says of itself", has(t, "Add Wren?", "Label: Garden · wren.clawtrate-bot.json. The file says it was written by Clawtrate 0.4.0.") && (await p.evaluate(() => document.querySelector("#lc-imp-name").value === "Wren" && Boolean(document.querySelector("#lc-dialog .b-preview svg")))));
 check("F-265 it says the files will become instructions, and nothing is created until Add Bot", t.includes("These files will become instructions the new bot may follow when it runs. Read them first: Clawtrate shows them and doesn't run them, and nothing is created until Add Bot.") && (await p.evaluate(() => app.bots.length === 4)));
@@ -518,9 +553,10 @@ t = await text(p, '[data-lc-row="settings"]');
 check("F-265 the settings row lists each setting that will be written, and no tool settings", t.includes("3 to write") && has(t, "Model: openai/gpt-5.5Will be written", "Effort: MediumWill be written", "Fallback list: noneWill be written") && !t.includes("Tools"));
 await click(p, '[data-lc-row="never"] summary');
 check("F-265 the review lists what will not be created", has(await text(p, '[data-lc-row="never"]'), "a Clawtrate file never carries these", "Tool permissions and skills", "Routines", "Channel routes", "Nor any account binding or sign-in store"));
+await observeText(p, "#lc-dialog", "Adding Wren");
 await clickText(p, "#lc-dialog", "Add Bot");
-check("F-265 Add Bot runs Duplicate's writes", (await dlg(p)).includes("Adding Wren"));
-await p.waitForTimeout(1800);
+check("F-265 Add Bot runs Duplicate's writes", (await sawText(p)));
+await waitText(p, "#lc-dialog", "New bot with the selected settings");
 t = await dlg(p);
 check("F-265 each write has its own read-back row", has(t, "New bot with the selected settings", "Made WrenListed", "PictureWritten", "LabelWritten", "ModelWritten", "Fallback list: noneWritten", "EffortWritten", "AGENTS.mdWritten", "SOUL.mdWritten"));
 await clickText(p, "#lc-dialog", "Open Wren");
@@ -543,35 +579,35 @@ for (const [imp, words] of [
   ["picture", "Its picture isn't a PNG, JPEG, WebP or GIF image that decodes."],
 ]) {
   p = await open(`lc=import&imp=${imp}`);
-  await p.waitForTimeout(80);
+  await waitText(p, "#lc-dialog", "Clawtrate can't read this file.");
   check(`F-265 a file refused before anything of it is used: ${imp}`, (await dlg(p)).includes(`Clawtrate can't read this file. ${words} Nothing in it was used.`) && (await p.evaluate(() => !document.querySelector('[data-lc="import-add"]'))));
   await p.close();
 }
 p = await open("lc=import&imp=field");
-await p.waitForTimeout(80);
+await waitText(p, "#lc-dialog", "Choose another file…");
 await clickText(p, "#lc-dialog", "Choose another file…");
-await p.waitForTimeout(500);
+await waitText(p, "#lc-dialog", "Add Wren?");
 check("F-265 Choose another file reads the next one", (await dlg(p)).includes("Add Wren?"));
 await p.close();
 
 p = await open("lc=import&imp=review&impresult=taken");
-await p.waitForTimeout(80);
+await waitText(p, "#lc-dialog", "Add Wren?");
 await clickText(p, "#lc-dialog", "Add Bot");
-await p.waitForTimeout(500);
+await waitText(p, "#lc-dialog", "already exists");
 check("F-265 a name already taken is refused as in Duplicate, nothing made", (await dlg(p)).includes("The gateway didn't make the bot: “agent \"wren\" already exists”. Nothing was made.") && (await p.evaluate(() => !app.bots.some((x) => x.id === "wren"))));
 await p.fill("#lc-imp-name", "Wren 2");
 await clickText(p, "#lc-dialog", "Add Bot");
-await p.waitForTimeout(1800);
+await waitText(p, "#lc-dialog", "Wren 2 is listed");
 check("F-265 ... and another name goes through", (await dlg(p)).includes("Wren 2 is listed"));
 await p.close();
 p = await open("lc=import&imp=review&impresult=partial");
-await p.waitForTimeout(80);
+await waitText(p, "#lc-dialog", "Add Wren?");
 await clickText(p, "#lc-dialog", "Add Bot");
-await p.waitForTimeout(2000);
+await waitText(p, "#lc-dialog", "Some settings still need attention");
 t = await dlg(p);
 check("F-265 a partial import names each write that didn't land", has(t, "Some settings still need attention") && (await rowWord(p, "agents")) === "Changed on the gateway" && (await rowWord(p, "soul")) === "Couldn't check" && (await rowWord(p, "effort")) === "Still has the gateway's default, Medium");
 await clickText(p, "#lc-dialog", "Try again");
-await p.waitForTimeout(300);
+await waitText(p, "#lc-dialog", "New bot with the selected settings");
 check("F-265 Try again writes only what is missing", (await dlg(p)).includes("New bot with the selected settings"));
 await p.close();
 
@@ -586,6 +622,7 @@ check("S10 Try again reads and lists", (await dlg(p)).includes("Removed from the
 await p.close();
 
 p = await open("lc=delete&delbot=pip");
+await waitFocus(p, '#lc-dialog [data-lc="close"][data-lc-focus]');
 t = await dlg(p);
 check("S10 the confirmation is an alertdialog, named by its title, with focus on Cancel", (await p.evaluate(() => { const d = document.querySelector("#lc-dialog"); return d.getAttribute("role") === "alertdialog" && document.getElementById(d.getAttribute("aria-labelledby"))?.textContent === "Delete Pip?" && document.activeElement?.textContent === "Cancel"; })));
 check("F-050 the dialog lists what goes now, counts only from complete lists", has(t, "Delete Pip?", "Pip's settings", "Its 4 tasks, from every task list", "Its 2 routines: Weekly plan, Sunday reminder", "Approvals saved for its commands") && !t.includes("23 files"));
@@ -593,9 +630,10 @@ check("F-276 the folder option is unticked, and says what the gateway will try",
 check("F-050 the folder option says the Trash can give them back", t.includes("They can be restored from that Trash, on the gateway's machine, until it's emptied."));
 check("S10 it says the gateway checks ownership while deleting, and promises nothing about shared memory", t.includes("The gateway checks, while it deletes, which folders another bot still uses.") && !t.includes("shared memory") && !t.includes("All three folders"));
 check("S10 what stays, unticked", has(t, "Its folders: with the box unticked, none is asked for the Trash. The gateway may archive its tasks' transcripts.", "What Pip said in other bots' tasks", "Before deleting, Clawtrate reads all of this again."));
+await observeText(p, "#lc-dialog", "Deleting Pip…");
 await clickText(p, "#lc-dialog", "Delete Pip");
-check("S10 Deleting", (await dlg(p)).includes("Deleting Pip…"));
-await p.waitForTimeout(700);
+check("S10 Deleting", (await sawText(p)));
+await waitText(p, "#lc-dialog", "Pip was deleted");
 t = await dlg(p);
 check("F-050 afterwards each line is a read", has(t, "Pip was deleted", "Read back from the gateway just now:", "Not in the gateway's list of bots", "No settings or channel routes for Pip", "No routines of Pip's", "No tasks of Pip's listed") && !(await text(p, "#bot-list")).includes("Pip"));
 check("F-276 unticked, the box-off words", (await text(p, "[data-lc-nofolders]")) === "No folders requested for Trash. The gateway removed the bot's active task records and may archive the transcript files.");
@@ -609,7 +647,7 @@ p = await open("lc=delete&delbot=pip");
 await click(p, "[data-lc-files]");
 check("F-276 ticked, the folders leave the Stays list", !(await dlg(p)).includes("none is asked for the Trash"));
 await clickText(p, "#lc-dialog", "Delete Pip");
-await p.waitForTimeout(700);
+await waitText(p, "#lc-dialog", "Pip was deleted");
 t = await dlg(p);
 check("F-276 ticked, each path as the gateway's answer reported it", has(t, "Folders, as the gateway's answer reported them", "workspace-pip: Gateway reported moving this to Trash", "agents/pip/agent: Gateway reported moving this to Trash", "agents/pip/sessions: Gateway reported moving this to Trash", "agents/pip/agent/openclaw-agent.sqlite-journal: Gateway reported this path was already gone"));
 check("F-276 ... and the after state says they can be restored from there", t.includes("What was moved to the Trash on the gateway's machine can be restored from there until it's emptied."));
@@ -619,54 +657,54 @@ p = await open("lc=delete&delbot=pip&shared=1&files=1");
 t = await dlg(p);
 check("F-464 a confirmed shared workspace: the exact also-used-by line", t.includes("Its workspace folder, workspace-juniper, stays: also used by Juniper.") && (await p.evaluate(() => !document.querySelector("[data-lc-files]").disabled)));
 await clickText(p, "#lc-dialog", "Delete Pip");
-await p.waitForTimeout(700);
+await waitText(p, "#lc-dialog", "Pip was deleted");
 check("F-464 ... and after, no claim the reply doesn't make", (await text(p, '[data-lc-path="workspace-juniper"]')).includes("workspace-juniper: The gateway didn't confirm what happened to this path. Juniper still lists it as its workspace."));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&files=1&delresult=partial");
 await clickText(p, "#lc-dialog", "Delete Pip");
-await p.waitForTimeout(700);
+await waitText(p, "#lc-dialog", "permission denied");
 t = await dlg(p);
 check("S10 a path the gateway couldn't move is named with its reason, and Retry cleanup is offered", has(t, "Pip was deleted, but the gateway couldn't move one folder", "workspace-pip: Gateway couldn't move this: permission denied", "Retry cleanup", "Leave it") && !t.includes("still on the gateway"));
 await clickText(p, "#lc-dialog", "Retry cleanup");
-await p.waitForTimeout(700);
+await waitText(p, "#lc-dialog", "workspace-pip: Gateway reported moving this to Trash");
 check("S10 Retry cleanup reports again from the answer", (await text(p, '[data-lc-path="workspace-pip"]')).includes("Gateway reported moving this to Trash"));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&files=1&delresult=purge");
 await clickText(p, "#lc-dialog", "Delete Pip");
-await p.waitForTimeout(700);
+await waitText(p, "#lc-dialog", "its task records weren't");
 t = await dlg(p);
 check("S10 a session-store failure in its own words, and no folder claims", has(t, "Pip was deleted, but its task records weren't", "The gateway couldn't remove Pip's task records, so it moved no folders.", "Retry the same delete") && !t.includes("Gateway reported moving"));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&files=1&delresult=uncertain");
 await clickText(p, "#lc-dialog", "Delete Pip");
-await p.waitForTimeout(700);
+await waitText(p, "#lc-dialog", "Clawtrate didn't get the gateway's answer");
 t = await dlg(p);
 check("S10 a lost answer keeps the choice and promises nothing", has(t, "Clawtrate didn't get the gateway's answer", "You asked to move its folders to the Trash; a retry asks the same.", "workspace-pip: The gateway didn't confirm what happened to this path", "Check again", "Retry the same delete"));
 await clickText(p, "#lc-dialog", "Check again");
-await p.waitForTimeout(500);
+await waitText(p, "#lc-dialog", "Read again just now.");
 check("S10 Check again reads again", (await dlg(p)).includes("Read again just now.") && (await dlg(p)).includes("Not in the gateway's list of bots"));
 await clickText(p, "#lc-dialog", "Retry the same delete");
-await p.waitForTimeout(700);
+await waitText(p, "#lc-dialog", "Pip was deleted");
 check("S10 Retry the same delete reports what the answer says", (await dlg(p)).includes("Pip was deleted"));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&delresult=refused");
 await clickText(p, "#lc-dialog", "Delete Pip");
-await p.waitForTimeout(700);
+await waitText(p, "#lc-dialog", "The gateway didn't delete Pip");
 t = await dlg(p);
 check("S10 a refusal is quoted, and what is there is read, not promised", has(t, "The gateway didn't delete Pip", "cannot be deleted.", "Still in the gateway's list of bots", "Its settings are still there") && !t.includes("Nothing was removed") && (await text(p, "#bot-list")).includes("Pip"));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&delchanged=1");
 await clickText(p, "#lc-dialog", "Delete Pip");
-await p.waitForTimeout(600);
+await waitText(p, "#lc-dialog", "it now has 5 tasks");
 t = await dlg(p);
 check("S10 the preview is read again at Delete, and a change asks again", t.includes("What Pip has changed since this opened: it now has 5 tasks. Check what goes, then delete again.") && t.includes("Its 5 tasks, from every task list") && (await p.evaluate(() => app.bots.some((b) => b.id === "pip"))));
 await clickText(p, "#lc-dialog", "Delete Pip");
-await p.waitForTimeout(700);
+await waitText(p, "#lc-dialog", "Pip was deleted");
 check("S10 ... and deleting again goes through", (await dlg(p)).includes("Pip was deleted"));
 await p.close();
 
@@ -685,7 +723,7 @@ await p.close();
 p = await open("access=read");
 check("F-265 a read-only connection has no + menu", !(await p.evaluate(() => document.querySelector("#new-button")?.offsetParent)));
 await p.locator('[data-action="gateway-menu"]:visible').first().click();
-await p.waitForTimeout(60);
+await p.locator("#gateway-menu:not([hidden]) [data-lc=open-import]").waitFor();
 check("F-265 the gateway menu has Import a bot… at the read tier", (await text(p, "#gateway-menu")).includes("Import a bot…"));
 await clickText(p, "#gateway-menu", "Import a bot…");
 t = await dlg(p);
@@ -704,7 +742,7 @@ await p.close();
 // The gallery reaches every state, and each one opens --------------------------------------------------
 p = await b.newPage({ viewport: { width: 1440, height: 900 } });
 await p.goto(pageUrl("gallery.html") + "?chrome=0&section=lifecycle");
-await p.waitForTimeout(200);
+await p.locator('#lifecycle a[href^="lifecycle.html"]').first().waitFor();
 const links = await p.evaluate(() => [...document.querySelectorAll('#lifecycle a[href^="lifecycle.html"]')].map((a) => a.getAttribute("href")));
 check("S14 the gallery's Bot lifecycle section links every state", links.length >= 45, `(${links.length})`);
 check("S14 the gallery's header links the page", await p.evaluate(() => Boolean(document.querySelector('.gallery header a[href="lifecycle.html"]'))));
@@ -715,7 +753,7 @@ for (const href of links) {
   const errors = [];
   q.on("pageerror", (e) => errors.push(String(e)));
   await q.goto(pageUrl(href) + "&chrome=0");
-  await q.waitForTimeout(120);
+  await q.locator("#work-hero").waitFor({ state: "attached" });
   if (errors.length) broken.push(`${href}: ${errors[0]}`);
   await q.close();
 }
