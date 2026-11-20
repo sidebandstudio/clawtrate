@@ -5104,7 +5104,7 @@ export class ClawtrateClient {
         ),
         sessionKey: key,
         status: "ready",
-        items: mapHistory(messages),
+        items: mapHistory(messages, history?.messages),
         interSession: interSessionMessages(messages),
         error: null,
         hasMore: history?.hasMore === true,

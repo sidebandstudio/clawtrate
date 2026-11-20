@@ -316,10 +316,13 @@ function gatewayTurnText(message: RawRecord): string | null {
 /**
  * `chat.history` messages to display items. Consecutive assistant messages of
  * one run (tool rounds) become a single assistant turn, and each tool result is
- * attached to the call that produced it.
+ * attached to the call that produced it. `sent` is the page as the gateway sent
+ * it, when `messages` is that page read through the task's run aliases: a
+ * line's Raw keeps the gateway's row, run id included.
  */
-export function mapHistory(messages: unknown): TranscriptItem[] {
+export function mapHistory(messages: unknown, sent: unknown = messages): TranscriptItem[] {
   const items: TranscriptItem[] = [];
+  const asSent = (index: number, message: RawRecord) => asRecord(arr(sent)[index]) ?? message;
   let currentRun: string | null = null;
   const pendingCalls = new Map<string, Extract<TranscriptBlock, { kind: "tool-call" }>>();
   /** The item each pending call is in, so a cut result marks it. */
@@ -342,7 +345,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
         timestamp,
         blocks: [{ kind: "text", text: SYSTEM_ROW_TEXT[kind] }],
         model: null,
-        raw: message,
+        raw: asSent(index, message),
       });
       currentRun = null;
       return;
@@ -360,7 +363,7 @@ export function mapHistory(messages: unknown): TranscriptItem[] {
             timestamp,
             blocks: [{ kind: "text", text: gatewayTurn }],
             model: null,
-            raw: message,
+            raw: asSent(index, message),
           });
           return;
         }
