@@ -14,10 +14,11 @@ export function installLocations(platform = process.platform, env = process.env)
     return ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/opt/local/bin/gh"];
   if (platform !== "win32") return [];
   const systemDrive = win32.parse(env.SystemRoot ?? "").root.toLowerCase();
-  return [
+  const roots: [string | undefined, ...string[]][] = [
     [env.ProgramFiles, "GitHub CLI"],
     [env.LOCALAPPDATA, "Microsoft", "WinGet", "Links"],
-  ].flatMap(([root, ...parts]) =>
+  ];
+  return roots.flatMap(([root, ...parts]) =>
     root &&
     /^[a-z]:\\/i.test(root) &&
     win32.parse(root).root.toLowerCase() === systemDrive &&

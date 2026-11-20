@@ -1,3 +1,4 @@
+import { ChildProcess } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -143,12 +144,33 @@ ${success}`);
 });
 
 it("F-521: one CLI runs until close, including when the direct child times out", async () => {
-  // The sleeping descendant holds stdout open after the timed-out shell exits.
-  const cli = script(`printf 'start\\n' >> "${log}"\n/bin/sleep 0.3 &\nwait\n${success}`);
+  const cli = script(`printf 'start\\n' >> "${log}"\nexec /bin/sleep 30`);
+  let timeoutReached!: () => void;
+  const timedOut = new Promise<void>((resolve) => {
+    timeoutReached = resolve;
+  });
+  const kill = ChildProcess.prototype.kill;
+  let finish!: () => void;
+  const delayed = vi.spyOn(ChildProcess.prototype, "kill").mockImplementationOnce(function (
+    this: ChildProcess,
+    signal,
+  ) {
+    finish = () => {
+      kill.call(this, signal);
+    };
+    timeoutReached();
+    return true;
+  });
   const first = starRepository(cli, 100);
-  expect(await starRepository(cli)).toBe(false);
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  expect(await starRepository(cli)).toBe(false);
+  try {
+    expect(await starRepository(cli)).toBe(false);
+    await timedOut;
+    await vi.waitFor(() => expect(existsSync(log)).toBe(true));
+    expect(await starRepository(cli)).toBe(false);
+  } finally {
+    delayed.mockRestore();
+    finish?.();
+  }
   expect(await first).toBe(false);
   expect(readFileSync(log, "utf8")).toBe("start\n");
   expect(await starRepository(script(success))).toBe(true);
