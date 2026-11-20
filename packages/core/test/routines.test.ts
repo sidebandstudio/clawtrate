@@ -876,6 +876,35 @@ describe("F-189: creating a routine", () => {
     expect(requests).toEqual([]);
   });
 
+  it("sends nothing to a confirmed replacement gateway either: the write waits for its draft's own gateway", async () => {
+    const once = job();
+    const expected = parseRoutine(once)!;
+    const { routines, requests } = engine(
+      { "cron.add": () => job(), "cron.get": () => once, "cron.update": () => once },
+      initialRoutinesState,
+      ADMIN,
+    );
+    expect(
+      await routines.create(input, "draft-1", {}, "the gateway the draft was opened on"),
+    ).toMatchObject({ status: "not-sent", reason: "gateway" });
+    expect(
+      await routines.update(
+        JOB,
+        fieldsOf(expected),
+        { ...fieldsOf(expected), name: "x" },
+        expected,
+        {},
+        "another gateway",
+      ),
+    ).toMatchObject({ status: "not-sent", reason: "gateway" });
+    expect(requests).toEqual([]);
+    // Its own gateway, confirmed: the write goes out.
+    expect(await routines.create(input, "draft-2", {}, "gateway-1")).toMatchObject({
+      status: "saved",
+    });
+    expect(requests.map((r) => r.method)).toEqual(["cron.add"]);
+  });
+
   it("a recovery copy keeps the schedule's anchor and stagger (F-189)", async () => {
     const anchored = fieldsOf(
       parseRoutine(job({ schedule: { kind: "every", everyMs: 3_600_000, anchorMs: 60_000 } }))!,

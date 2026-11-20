@@ -181,7 +181,8 @@ export type BridgeCommand =
       sessionKey: string | null;
     }
   // Changing routines (automation.md sections 9 and 10). The engine refuses each below admin.
-  | { type: "createRoutine"; input: NewRoutine; key: string }
+  // `gateway` is the one a draft was opened on: a write waits for it to match.
+  | { type: "createRoutine"; input: NewRoutine; key: string; gateway: string | null }
   /** The routine a draft made, found by the draft's key: after a create whose answer never came. */
   | { type: "findCreatedRoutine"; key: string }
   /** One routine as the gateway has it now; reads only. */
@@ -193,6 +194,7 @@ export type BridgeCommand =
       original: RoutineFields;
       edit: RoutineFields;
       expected: RoutineRevision;
+      gateway: string | null;
     }
   | { type: "setRoutineEnabled"; id: string; enabled: boolean }
   | { type: "runRoutineNow"; id: string }
@@ -712,6 +714,11 @@ function oneOf<T extends string>(value: unknown, options: readonly T[], what: st
   return value as T;
 }
 
+/** The gateway a draft was opened on, or null when the editor did not know it. */
+function optionalGateway(value: unknown): string | null {
+  return value === null || value === undefined ? null : shortText(value, 256, "gateway");
+}
+
 function routineFields(value: Record<string, unknown>): RoutineFields {
   return {
     name: shortText(value.name, 256, "name"),
@@ -788,6 +795,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "createRoutine",
         input: { ...routineFields(input), botId: botId(input.botId) },
         key: shortText(command.key, MAX_DRAFT_KEY_CHARS, "draft key"),
+        gateway: optionalGateway(command.gateway),
       };
     }
     case "findCreatedRoutine":
@@ -806,6 +814,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         original: routineFields(record(command.original, "routine")),
         edit: routineFields(record(command.edit, "routine")),
         expected: { ...routineFields(expected), updatedAt },
+        gateway: optionalGateway(command.gateway),
       };
     }
     case "setRoutineEnabled":
@@ -1365,7 +1374,7 @@ class ViewerSession implements BridgeSession {
           }),
         );
       case "createRoutine":
-        return client.createRoutine(command.input, command.key, owner);
+        return client.createRoutine(command.input, command.key, owner, command.gateway);
       case "findCreatedRoutine":
         return client.findCreatedRoutine(command.key);
       case "readRoutine":
@@ -1377,6 +1386,7 @@ class ViewerSession implements BridgeSession {
           command.edit,
           command.expected,
           owner,
+          command.gateway,
         );
       case "setRoutineEnabled":
         return client.setRoutineEnabled(command.id, command.enabled, owner);

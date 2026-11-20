@@ -436,8 +436,10 @@ export type RoutinesContext = {
   /**
    * The connection's confirmed gateway identity, or null until it is read: a
    * write waits for it, so a draft never reaches a gateway it was not made on.
+   * `expected` names the gateway a draft was opened on, when the editor knows
+   * it: a write also waits for it to match.
    */
-  identity(): string | null;
+  identity(expected?: string | null): string | null;
   /** The viewer that asked has gone away (`client.withdraw`). */
   withdrawn(owner: object): boolean;
 };
@@ -825,9 +827,14 @@ export class RoutinesEngine {
    * A withdrawn viewer's write is refused as unsent, too: its reply has no
    * reader, and nothing of it may reach the gateway.
    */
-  private blocked(owner: object | null = null): "admin" | "offline" | "gateway" | null {
+  private blocked(
+    owner: object | null = null,
+    gateway: string | null | undefined = undefined,
+  ): "admin" | "offline" | "gateway" | null {
     if (!this.ctx.connected()) return "offline";
-    if (this.ctx.identity() === null) return "gateway";
+    const identity = this.ctx.identity();
+    if (identity === null) return "gateway";
+    if (gateway != null && identity !== gateway) return "gateway";
     if (owner !== null && this.ctx.withdrawn(owner)) return "offline";
     return this.ctx.admin() ? null : "admin";
   }
@@ -860,8 +867,13 @@ export class RoutinesEngine {
    * treats a second add with the same declaration key as the same routine, so
    * trying again after an answer that never came cannot make two.
    */
-  async create(input: NewRoutine, key: string, owner: object | null = null): Promise<RoutineWrite> {
-    const blocked = this.blocked(owner);
+  async create(
+    input: NewRoutine,
+    key: string,
+    owner: object | null = null,
+    gateway: string | null = null,
+  ): Promise<RoutineWrite> {
+    const blocked = this.blocked(owner, gateway);
     if (blocked) return { status: "not-sent", reason: blocked };
     if (input.target !== "isolated")
       return { status: "refused", error: "New routines run in an isolated conversation." };
@@ -935,8 +947,9 @@ export class RoutinesEngine {
     edit: RoutineFields,
     expected: RoutineRevision,
     owner: object | null = null,
+    gateway: string | null = null,
   ): Promise<RoutineWrite> {
-    let blocked = this.blocked(owner);
+    let blocked = this.blocked(owner, gateway);
     if (blocked) return { status: "not-sent", reason: blocked };
     if (this.updates.size >= MAX_ROUTINE_UPDATES)
       return { status: "refused", error: "Too many routine changes are in flight." };
@@ -966,7 +979,7 @@ export class RoutinesEngine {
       };
       const patch = patchOf(original, fields, current.payload);
       if (Object.keys(patch).length === 0) return { status: "saved", routine: current };
-      blocked = this.blocked(owner);
+      blocked = this.blocked(owner, gateway);
       if (blocked) return { status: "not-sent", reason: blocked };
       if (epoch !== this.epoch) return { status: "not-sent", reason: "offline" };
       try {

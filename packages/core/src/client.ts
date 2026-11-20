@@ -3937,8 +3937,9 @@ export class ClawtrateClient {
     input: NewRoutine,
     key: string,
     owner: object | null = null,
+    gateway: string | null = null,
   ): Promise<RoutineWrite> {
-    return this.routines.create(input, key, owner);
+    return this.routines.create(input, key, owner, gateway);
   }
 
   /** One routine as the gateway has it now: what a save in doubt is checked against. */
@@ -3957,10 +3958,11 @@ export class ClawtrateClient {
     edit: RoutineFields,
     expected: RoutineRevision,
     owner: object | null = null,
+    gateway: string | null = null,
   ): Promise<RoutineWrite> {
     if (jsonTextLength(id) > MAX_ID_CHARS)
       return Promise.resolve({ status: "refused", error: "That routine id is too long." });
-    return this.routines.update(id, original, edit, expected, owner);
+    return this.routines.update(id, original, edit, expected, owner, gateway);
   }
 
   setRoutineEnabled(

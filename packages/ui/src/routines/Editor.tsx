@@ -329,8 +329,14 @@ export function Editor({
             original,
             edit: fields,
             expected: { ...fieldsOf(against), updatedAt: against.updatedAt },
+            gateway,
           })
-        : bridge.invoke({ type: "createRoutine", input: { ...fields, botId: draft.botId }, key });
+        : bridge.invoke({
+            type: "createRoutine",
+            input: { ...fields, botId: draft.botId },
+            key,
+            gateway,
+          });
     void request
       .then(settle, (error: unknown) => settle({ status: "unknown", error: errorText(error) }))
       .finally(() => clearTimeout(timer));

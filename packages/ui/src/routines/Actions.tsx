@@ -541,6 +541,7 @@ function ZoneDialog({
           original,
           edit: { ...original, schedule },
           expected: { ...original, updatedAt: routine.updatedAt },
+          gateway: null,
         });
         if (answer.status === "saved") outcome.changed.push(routine.name);
         else if (answer.status === "unknown") outcome.pending.push({ routine, schedule });
