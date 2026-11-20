@@ -8,7 +8,7 @@ it("documents the install gate, isolated trial, feed comparison and withdrawal o
   );
   const steps = [
     "Updating in place is not built yet",
-    "the Windows job stops before upload",
+    "win-unpacked/Clawtrate.exe",
     '"$CURRENT_FEED" "$OTHER_FEED"',
     "### Trial on an isolated feed",
     "Install a signed predecessor compiled with that trial address",
