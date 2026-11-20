@@ -276,4 +276,35 @@ describe("connecting", () => {
     await until(() => third.state.connection.status === "connected");
     third.stop();
   });
+
+  it("a gateway this device could not forget stays connected and saved; forgetting it once it can be written ends as usual", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "bootstrap" });
+    await until(() => client.state.discovery.status === "ready");
+    const remove = storage.delete.bind(storage);
+    storage.delete = () => Promise.reject(new Error("The disk is full."));
+    const session = createBridgeSession(client);
+    await expect(session.apply(parseBridgeCommand({ type: "disconnect" }))).rejects.toThrow(
+      "The disk is full.",
+    );
+    expect(client.state.connection).toMatchObject({ status: "connected", gatewayUrl: URL });
+    expect(client.state.bots).toHaveLength(1);
+    expect(storage.data.has("connection"), "the gateway is still saved").toBe(true);
+    await sleep(100);
+    expect(client.state.connection.status).toBe("connected");
+    const open = gateway.sockets.filter((socket) => socket.readyState === 1);
+    expect(open, "the connection stays open").toHaveLength(1);
+    storage.delete = remove;
+    await session.apply(parseBridgeCommand({ type: "disconnect" }));
+    expect(client.state.connection).toMatchObject({ status: "idle", gatewayUrl: null });
+    expect(storage.data.has("connection")).toBe(false);
+    client.stop();
+  });
 });

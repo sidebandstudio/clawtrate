@@ -1015,6 +1015,8 @@ export class ClawtrateClient {
 
   /** Close the connection and forget the gateway. The device key and any device token remain. */
   async disconnect(): Promise<void> {
+    // Forgotten first: a gateway the host could not forget stays connected, as it stays saved.
+    await this.host.storage.delete(SETTINGS_KEY);
     this.abandonAccessRequest("Disconnected from the gateway.");
     this.close();
     this.settings = null;
@@ -1023,7 +1025,6 @@ export class ClawtrateClient {
     this.raw.clear();
     this.retained.clear();
     this.forgetGatewayState();
-    await this.host.storage.delete(SETTINGS_KEY);
     this.store.set({
       ...initialState,
       turnLimitMinutes: this.turnLimitMs / 60_000,
