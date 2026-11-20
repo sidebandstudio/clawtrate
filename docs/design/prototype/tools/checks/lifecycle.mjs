@@ -620,14 +620,14 @@ await p.close();
 p = await open("lc=delete&delbot=pip&delread=failed");
 check("S10 a failed read deletes nothing", (await dlg(p)).includes("Couldn't read what Pip has. The gateway didn't answer. Clawtrate doesn't delete a bot without saying what goes."));
 await clickText(p, "#lc-dialog", "Try again");
-check("S10 Try again reads and lists", (await dlg(p)).includes("Removed from the gateway"));
+check("S10 Try again reads and lists", (await dlg(p)).includes("The gateway will try to remove"));
 await p.close();
 
 p = await open("lc=delete&delbot=pip");
 await waitFocus(p, '#lc-dialog [data-lc="close"][data-lc-focus]');
 t = await dlg(p);
 check("S10 the confirmation is an alertdialog, named by its title, with focus on Cancel", (await p.evaluate(() => { const d = document.querySelector("#lc-dialog"); return d.getAttribute("role") === "alertdialog" && document.getElementById(d.getAttribute("aria-labelledby"))?.textContent === "Delete Pip?" && document.activeElement?.textContent === "Cancel"; })));
-check("F-050 the dialog lists what goes now, counts only from complete lists", has(t, "Delete Pip?", "Pip's settings", "Its 4 tasks, from every task list", "Its 2 routines: Weekly plan, Sunday reminder", "Approvals saved for its commands") && !t.includes("23 files"));
+check("F-050 the dialog says what the gateway will try to remove, counts only from complete lists", has(t, "Delete Pip?", "The gateway will try to remove", "Pip's settings", "4 tasks listed for Pip", "Its 2 routines: Weekly plan, Sunday reminder", "Approvals saved for its commands") && !t.includes("23 files") && !t.includes("from every task list") && !t.includes("Removed from the gateway"));
 check("F-276 the folder option is unticked, and says what the gateway will try", has(t, "Also move Pip's folders to the Trash on the gateway's machine", "The gateway will try to move this workspace, workspace-pip, including its files and memory. It keeps folders still used by another bot.", "Its own folder. May include local sign-ins and other bot data.", "Its tasks' transcripts") && (await p.evaluate(() => !document.querySelector("[data-lc-files]").checked)));
 check("F-050 the folder option says the Trash can give them back", t.includes("They can be restored from that Trash, on the gateway's machine, until it's emptied."));
 check("S10 it says the gateway checks ownership while deleting, and promises nothing about shared memory", t.includes("The gateway checks, while it deletes, which folders another bot still uses.") && !t.includes("shared memory") && !t.includes("All three folders"));
@@ -637,8 +637,11 @@ await clickText(p, "#lc-dialog", "Delete Pip");
 check("S10 Deleting", (await sawText(p)));
 await waitText(p, "#lc-dialog", "Pip was deleted");
 t = await dlg(p);
-check("F-050 afterwards each line is a read", has(t, "Pip was deleted", "Read back from the gateway just now:", "Not in the gateway's list of bots", "No settings or channel routes for Pip", "No routines of Pip's", "No tasks of Pip's listed") && !(await text(p, "#bot-list")).includes("Pip"));
-check("F-276 unticked, the box-off words", (await text(p, "[data-lc-nofolders]")) === "No folders requested for Trash. The gateway removed the bot's active task records and may archive the transcript files.");
+const readRows = (p) => p.evaluate(() => [...document.querySelectorAll("[data-lc-read]")].map((x) => x.textContent.replace(/\s+/g, " ").trim()));
+const roleNow = (p) => p.evaluate(() => document.querySelector("#lc-dialog").getAttribute("role"));
+check("F-050 afterwards each of the four rows is its own read", has(t, "Pip was deleted", "Read back from the gateway just now:") && (await readRows(p)).join("|") === "Bot list: No matching bots listed|Settings and channel routes: No matching settings listed|Routines: No matching routines listed|Tasks: No matching tasks listed" && !(await text(p, "#bot-list")).includes("Pip"));
+check("F-276 unticked, the box-off words, with the task list read to its end and empty", (await text(p, "[data-lc-nofolders]")) === "No folders requested for Trash. No active tasks are listed. The gateway may archive their transcripts.");
+check("S10 the result is a dialog with status text, not an alertdialog", (await roleNow(p)) === null && (await waitAnnouncement(p, "Pip was deleted")) === "Pip was deleted");
 await p.close();
 
 p = await open("lc=delete&delbot=otto");
@@ -667,33 +670,71 @@ p = await open("lc=delete&delbot=pip&files=1&delresult=partial");
 await clickText(p, "#lc-dialog", "Delete Pip");
 await waitText(p, "#lc-dialog", "permission denied");
 t = await dlg(p);
-check("S10 a path the gateway couldn't move is named with its reason, with Check again and Close", has(t, "Pip was deleted, but the gateway couldn't move one folder", "workspace-pip: Gateway couldn't move this: permission denied", "Check again", "Close") && !t.includes("still on the gateway"));
+check("S10 a path the gateway couldn't move is named with its reason, with Check again and Close", has(t, "Pip was deleted", "workspace-pip: Gateway couldn't move this: permission denied", "Check again", "Close") && !t.includes("one folder") && !t.includes("still on the gateway"));
 check("S10 ... and no control that deletes again", await noDestructive(p));
+await p.close();
+
+p = await open("lc=delete&delbot=pip&files=1&delresult=multi");
+await clickText(p, "#lc-dialog", "Delete Pip");
+await waitText(p, "#lc-dialog", "resource busy");
+t = await dlg(p);
+check("S10 several paths not moved: each with its own reason, no count in the title", has(t, "workspace-pip: Gateway couldn't move this: permission denied", "agents/pip/agent: Gateway couldn't move this: resource busy", "agents/pip/sessions: Gateway reported moving this to Trash") && !/one folder|two folders/.test(t) && (await noDestructive(p)));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&files=1&delresult=purge");
 await clickText(p, "#lc-dialog", "Delete Pip");
-await waitText(p, "#lc-dialog", "its task records weren't");
+await waitText(p, "#lc-dialog", "task-store cleanup failure");
 t = await dlg(p);
-check("S10 a session-store failure in its own words, and no folder claims", has(t, "Pip was deleted, but its task records weren't", "The gateway couldn't remove Pip's task records, so it moved no folders.", "Check again") && !t.includes("Gateway reported moving"));
-check("S10 ... and no control that deletes again", await noDestructive(p));
+check("S10 purgeFailed on its own line, the task row from its own read, and no folder moved", has(t, "Pip was deleted", "The gateway reported a task-store cleanup failure and skipped moving folders on this attempt.", "Tasks: Still listed", "workspace-pip: The gateway didn't confirm what happened to this path", "Check again") && !t.includes("Gateway reported moving") && (await noDestructive(p)));
+await p.close();
+
+p = await open("lc=delete&delbot=pip&delresult=purge");
+await clickText(p, "#lc-dialog", "Delete Pip");
+await waitText(p, "#lc-dialog", "task-store cleanup failure");
+t = await dlg(p);
+check("S10 purgeFailed with the box clear: no folders requested, and no claim about task records", has(t, "The gateway reported a task-store cleanup failure and skipped moving folders on this attempt.", "No folders requested for Trash.", "Tasks: Still listed") && !t.includes("No active tasks are listed") && !t.includes("removed the bot's active task records"));
+await p.close();
+
+p = await open("lc=delete&delbot=pip&delresult=readfail");
+await clickText(p, "#lc-dialog", "Delete Pip");
+await waitText(p, "#lc-dialog", "Couldn't check routines");
+check("S10 a read that fails says so on its own row, the others stand", (await readRows(p)).join("|") === "Bot list: No matching bots listed|Settings and channel routes: No matching settings listed|Routines: Couldn't check routines|Tasks: No matching tasks listed" && (await dlg(p)).includes("Check again"));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&files=1&delresult=uncertain");
 await clickText(p, "#lc-dialog", "Delete Pip");
-await waitText(p, "#lc-dialog", "Clawtrate didn't get the gateway's answer");
+await waitText(p, "#lc-dialog", "Clawtrate didn't get the delete result");
 t = await dlg(p);
-check("S10 a lost answer keeps the choice and promises nothing", has(t, "Clawtrate didn't get the gateway's answer", "Clawtrate didn't get the delete result. You asked to move the folders to the Trash. Check again reads the gateway.", "workspace-pip: The gateway didn't confirm what happened to this path", "Check again", "Close") && !t.includes("Retry"));
+check("S10 a lost answer keeps the choice and promises nothing", has(t, "Delete result for Pip", "Clawtrate didn't get the delete result. You asked to move the folders to the Trash. Check again reads the gateway.", "workspace-pip: The gateway didn't confirm what happened to this path", "Couldn't check bots", "Check again", "Close") && !t.includes("Retry") && (await waitAnnouncement(p, "Clawtrate didn't get the delete result")) === "Clawtrate didn't get the delete result");
 check("S10 ... and no control that deletes again", await noDestructive(p));
 await clickText(p, "#lc-dialog", "Check again");
 await waitText(p, "#lc-dialog", "Read again just now.");
-check("S10 Check again reads again, and sends nothing", (await dlg(p)).includes("Read again just now.") && (await dlg(p)).includes("Not in the gateway's list of bots") && (await p.evaluate(() => CT.lifecycleCalls().length)) === 1);
+t = await dlg(p);
+check("S10 Check again reads again, and sends nothing", has(t, "Read again just now.", "Bot list: No matching bots listed") && (await p.evaluate(() => CT.lifecycleCalls().length)) === 1);
+check("S10 ... the missing answer is kept: no path reported moved or already gone", t.includes("Clawtrate didn't get the delete result.") && (await p.evaluate(() => [...document.querySelectorAll("[data-lc-path]")].filter((x) => /reported moving|already gone/.test(x.textContent)).length)) === 0);
 await p.close();
 
 p = await open("lc=delete&delbot=pip&delresult=uncertain");
 await clickText(p, "#lc-dialog", "Delete Pip");
-await waitText(p, "#lc-dialog", "Clawtrate didn't get the gateway's answer");
+await waitText(p, "#lc-dialog", "Clawtrate didn't get the delete result");
 check("S10 a lost answer with the box clear says the folders were to stay", (await dlg(p)).includes("You asked to leave the folders in place. Check again reads the gateway."));
+await p.close();
+
+p = await open("lc=delete&delbot=pip&delresult=refused");
+await clickText(p, "#lc-dialog", "Delete Pip");
+await waitText(p, "#lc-dialog", "The gateway refused the request");
+t = await dlg(p);
+check("S10 a refusal is quoted, and what is there is read, not promised", has(t, "Delete result for Pip", "The gateway refused the request.", "cannot be deleted.", "Bot list: Still listed", "Settings and channel routes: Still listed") && !t.includes("Nothing was removed") && (await text(p, "#bot-list")).includes("Pip") && (await waitAnnouncement(p, "The gateway refused the request")) === "The gateway refused the request");
+await p.close();
+
+p = await open("lc=delete&delbot=pip&delchanged=1");
+await clickText(p, "#lc-dialog", "Delete Pip");
+await waitText(p, "#lc-dialog", "it now has 5 tasks");
+t = await dlg(p);
+check("S10 the preview is read again at Delete, and a change asks again", t.includes("What Pip has changed since this opened: it now has 5 tasks. Check what goes, then delete again.") && t.includes("5 tasks listed for Pip") && (await p.evaluate(() => app.bots.some((b) => b.id === "pip"))));
+await clickText(p, "#lc-dialog", "Delete Pip");
+await waitText(p, "#lc-dialog", "Pip was deleted");
+check("S10 ... and deleting again goes through", (await dlg(p)).includes("Pip was deleted"));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&delreplaced=1");
@@ -702,23 +743,6 @@ await waitText(p, "#lc-dialog", "The bot you reviewed has changed.");
 t = await dlg(p);
 check("F-050 a bot replaced before Delete: the confirmation closes with its reason", t.includes("The bot you reviewed has changed. Open Delete from its current bot page to review it again.") && (await noDestructive(p)));
 check("F-050 ... zero calls, and the replacement still listed", (await p.evaluate(() => CT.lifecycleCalls().length)) === 0 && (await p.evaluate(() => app.bots.some((b) => b.id === "pip"))));
-await p.close();
-
-p = await open("lc=delete&delbot=pip&delresult=refused");
-await clickText(p, "#lc-dialog", "Delete Pip");
-await waitText(p, "#lc-dialog", "The gateway didn't delete Pip");
-t = await dlg(p);
-check("S10 a refusal is quoted, and what is there is read, not promised", has(t, "The gateway didn't delete Pip", "cannot be deleted.", "Still in the gateway's list of bots", "Its settings are still there") && !t.includes("Nothing was removed") && (await text(p, "#bot-list")).includes("Pip"));
-await p.close();
-
-p = await open("lc=delete&delbot=pip&delchanged=1");
-await clickText(p, "#lc-dialog", "Delete Pip");
-await waitText(p, "#lc-dialog", "it now has 5 tasks");
-t = await dlg(p);
-check("S10 the preview is read again at Delete, and a change asks again", t.includes("What Pip has changed since this opened: it now has 5 tasks. Check what goes, then delete again.") && t.includes("Its 5 tasks, from every task list") && (await p.evaluate(() => app.bots.some((b) => b.id === "pip"))));
-await clickText(p, "#lc-dialog", "Delete Pip");
-await waitText(p, "#lc-dialog", "Pip was deleted");
-check("S10 ... and deleting again goes through", (await dlg(p)).includes("Pip was deleted"));
 await p.close();
 
 p = await open(`bot=otto&${settings}&onlybot=1`);
