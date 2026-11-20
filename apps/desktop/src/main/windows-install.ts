@@ -84,6 +84,61 @@ public static class VerifiedInstaller {
     }
   }
 
+  [DllImport("kernel32", CharSet=CharSet.Unicode)]
+  static extern IntPtr LoadLibraryExW(string path, IntPtr reserved, uint flags);
+  [DllImport("kernel32")] static extern bool FreeLibrary(IntPtr module);
+  [DllImport("kernel32")] static extern IntPtr FindResourceExW(IntPtr module, IntPtr type, IntPtr name, ushort language);
+  [DllImport("kernel32")] static extern IntPtr LoadResource(IntPtr module, IntPtr resource);
+  [DllImport("kernel32")] static extern IntPtr LockResource(IntPtr memory);
+  [DllImport("kernel32")] static extern uint SizeofResource(IntPtr module, IntPtr resource);
+  [StructLayout(LayoutKind.Sequential)] struct MemoryRegion {
+    public IntPtr address, allocation;
+    public uint protect;
+    public UIntPtr length;
+    public uint state, page, type;
+  }
+  [DllImport("kernel32")] static extern UIntPtr VirtualQuery(IntPtr address, out MemoryRegion region, UIntPtr length);
+  [DllImport("version", CharSet=CharSet.Unicode)] static extern bool VerQueryValueW(
+    IntPtr block, string key, out IntPtr value, out uint length);
+
+  static bool Within(IntPtr start, uint size, IntPtr value, long length) {
+    long offset = value.ToInt64() - start.ToInt64();
+    return length > 0 && offset >= 0 && offset <= size && length <= size - offset;
+  }
+
+  // Query the Unicode version resource mapped from the held setup itself. A
+  // translated string from an external MUI file is not signed by this image.
+  static string SetupMetadata(string imagePath, string expectedVersion) {
+    IntPtr module = LoadLibraryExW(imagePath, IntPtr.Zero, 0x60); // image resource + exclusive data file
+    if (module == IntPtr.Zero) return "installer-product";
+    try {
+      IntPtr resource = FindResourceExW(module, new IntPtr(16), new IntPtr(1), 1033);
+      uint size = SizeofResource(module, resource);
+      if (size < 6 || size > 65535) return "installer-product";
+      IntPtr block = LockResource(LoadResource(module, resource));
+      MemoryRegion region;
+      if (block == IntPtr.Zero || VirtualQuery(block, out region,
+          new UIntPtr((uint)Marshal.SizeOf(typeof(MemoryRegion)))) == UIntPtr.Zero ||
+          region.allocation.ToInt64() != (module.ToInt64() & ~3L) ||
+          block.ToInt64() - region.address.ToInt64() + size > (long)region.length.ToUInt64())
+        return "installer-product";
+      IntPtr text;
+      uint count;
+      if (!VerQueryValueW(block, @"\VarFileInfo\Translation", out text, out count) ||
+          count != 4 || !Within(block,size,text,4) || Marshal.ReadInt16(text) != 1033)
+        return "installer-product";
+      string table = @"\StringFileInfo\0409" + ((ushort)Marshal.ReadInt16(text,2)).ToString("x4") + @"\";
+      foreach (string key in new [] {"ProductName","OriginalFilename","ProductVersion"}) {
+        string wanted = key == "ProductName" ? "Clawtrate" : key == "OriginalFilename" ? "ClawtrateSetup.exe" : expectedVersion;
+        if (!VerQueryValueW(block, table + key, out text, out count) || count != wanted.Length + 1 ||
+            !Within(block,size,text,2L*count) || Marshal.PtrToStringUni(text, wanted.Length) != wanted ||
+            Marshal.ReadInt16(text,2*wanted.Length) != 0)
+          return key == "ProductVersion" ? "installer-version" : "installer-product";
+      }
+      return null;
+    } finally { FreeLibrary(module); }
+  }
+
   // The x64 installer's own key and uninstall entry are written in the 64-bit view.
   static string Scope(string dir) {
     const string key = @"Software\ccda9b3a-da36-5fc3-9c37-0011d2510f25";
@@ -181,10 +236,8 @@ public static class VerifiedInstaller {
           string publisher = TrustedPublisher(imagePath, image);
           if (publisher == null) return "authenticode-trust";
           // Read under the same namespace and image locks as WinVerifyTrust.
-          var metadata = System.Diagnostics.FileVersionInfo.GetVersionInfo(imagePath);
-          if (metadata.ProductName != "Clawtrate" || metadata.OriginalFilename != "ClawtrateSetup.exe")
-            return "installer-product";
-          if (metadata.ProductVersion != expectedVersion) return "installer-version";
+          string metadataFailure = SetupMetadata(imagePath, expectedVersion);
+          if (metadataFailure != null) return metadataFailure;
           string identity = info.volume + "." + info.indexHigh + "." + info.indexLow;
           using (var owner = System.Diagnostics.Process.GetProcessById(ownerPid)) {
           // Acquire the process handle before asking the app to quit, never reacquire it by PID.

@@ -106,8 +106,9 @@ it.each([
   const native = nativeStandIn();
   const pending = windowsInstall(file, pin, false);
   const [script, env] = vi.mocked(runUpdatePowerShell).mock.lastCall!;
-  expect(script).toContain('metadata.OriginalFilename != "ClawtrateSetup.exe"');
-  expect(script).toContain("metadata.ProductVersion != expectedVersion");
+  expect(script).toContain('key == "OriginalFilename" ? "ClawtrateSetup.exe"');
+  expect(script).toContain("SetupMetadata(imagePath, expectedVersion)");
+  expect(script).toContain("region.allocation.ToInt64() != (module.ToInt64() & ~3L)");
   expect(env.CLAWTRATE_UPDATE_VERSION).toBe(file.version);
   native.finish(
     actual === env.CLAWTRATE_UPDATE_VERSION ? "installer-product" : "installer-version",
