@@ -1,0 +1,117 @@
+name: Desktop release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      track:
+        type: choice
+        description: Update track
+        options: [stable, nightly]
+        required: true
+      version:
+        type: string
+        description: Stable version (leave blank to calculate a nightly)
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  TRACK: ${{ inputs.track }}
+  CLAWTRATE_UPDATE_FEED_URL: https://updates.example/stable/feed.json
+  CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: https://updates.example/nightly/feed.json
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.select.outputs.version }}
+      epoch: ${{ steps.select.outputs.epoch }}
+      date: ${{ steps.select.outputs.date }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          package-manager-cache: false
+      - id: select
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          export SOURCE_DATE_EPOCH=$(date -u +%s)
+          version=$(node apps/desktop/packaging/candidate-version.ts)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "epoch=$SOURCE_DATE_EPOCH" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%S.000Z)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: select
+    strategy:
+      matrix:
+        os: [macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      SOURCE_DATE_EPOCH: ${{ needs.select.outputs.epoch }}
+      VERSION: ${{ needs.select.outputs.version }}
+    steps:
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - shell: bash
+        run: node apps/desktop/packaging/candidate-build.ts staging "$VERSION"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: build-${{ matrix.os }}
+          path: staging/
+          if-no-files-found: error
+          retention-days: 3
+
+  assemble:
+    needs: [select, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      VERSION: ${{ needs.select.outputs.version }}
+      BUILD_DATE: ${{ needs.select.outputs.date }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: build-*
+          merge-multiple: true
+          path: candidate/
+      - name: Check the unsigned candidate
+        run: |
+          feed=$CLAWTRATE_UPDATE_FEED_URL
+          if [[ "$TRACK" == nightly ]]; then feed=$CLAWTRATE_NIGHTLY_UPDATE_FEED_URL; fi
+          result=0
+          node apps/desktop/packaging/release-plan.ts assemble candidate "$TRACK" "$VERSION" "$GITHUB_SHA" "$BUILD_DATE" "$feed" || result=$?
+          test "$result" = 2
+          jq -e '[.files[].signing] == ["ad hoc", "ad hoc", "unsigned"]' candidate/release-plan.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: candidate-${{ needs.select.outputs.version }}
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 3
