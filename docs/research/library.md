@@ -86,7 +86,16 @@ read: artifacts.download first image {"code":"INVALID_REQUEST","message":"artifa
 read: chat.history [{"role":"user","seq":1,"kinds":"string"}]
 ```
 
-So the untyped list can omit the person's uploads, the image listing returns their pictures as entries that the item reads then refuse, and the history row carries the text only. **Not established**: a listing of the person's attachments, and a way to open one. The Library on iPhone says "Some uploads may be missing." (design, section 8).
+A second run of the same steps recorded each entry's `source`, its download mode, and only the form of its `image.url`, never its contents:
+
+```
+read: artifacts.list image limit 4 {"next":true,"items":[{"type":"image","seq":1,"title":"map-5.png","source":"session-transcript-preview","download":"unsupported","image":"media: address"}, … map-4, map-3, map-2 the same]}
+read: artifacts.list image next {"next":false,"items":[{"type":"image","seq":1,"title":"map-1.png","source":"session-transcript-preview","download":"unsupported","image":"media: address"}]}
+```
+
+In the source, an entry of the image listing that isn't a transcript image is a preview: its id is prefixed `preview_`, its `source` is `"session-transcript-preview"`, its download mode `"unsupported"`, and its `image.url` is the attachment's address copied when no bytes are present (`<openclaw>/dist/session-artifact-read-CN5ihAvI.mjs` lines 142-163). Saved inbound pictures are referenced as `media://inbound/<id>` (`<openclaw>/dist/chat-attachments-Bmvu3oSJ.mjs` lines 99-118 and 166-170).
+
+So the untyped list can omit the person's uploads; the image listing returns five metadata entries, four plus one after the cursor, with unsupported download mode and no inline PNG preview, that the item reads then refuse; and the history row carries the text only. **Not established**: a listing of the person's attachments, and a way to open one. The Library on iPhone says "Some uploads may be missing." (design, section 8).
 
 ## 2. What a Page is
 

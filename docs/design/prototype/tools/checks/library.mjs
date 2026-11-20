@@ -563,11 +563,17 @@ check("R4 it says some uploads may be missing", (await text(p, "#lib-uploads")) 
 await p.click('[data-lib-more="today"]');
 await p.click('[data-lib-more="today"]');
 check("R8 at phone width too, the last Show more focuses the first row it revealed", await q(p, () => !document.querySelector('[data-lib-more="today"]') && document.activeElement === document.querySelectorAll('.lib-group[data-group="today"] [data-lib-open]')[10]));
-check("R4 five pictures the person sent, from two replies of the image listing, as Preview only", await q(p, () => ["u1", "u2", "u3", "u4", "u5"].every((id) => document.querySelector(`.lib-row[data-item="${id}"]`))));
-check("R4 Preview only, sent by you: only where the matching history row is the person's", (await subOf(p, "u1")) === "PNG image · Preview only · 5:29 PM · sent by you" && (await subOf(p, "k5")) === "maps.example · 5:30 PM · sent by you");
-check("R4 a preview that couldn't be read: the row says so and can't be opened", (await subOf(p, "u5")) === "PNG image · Preview couldn't be read · 5:29 PM · sent by you" && (await q(p, () => document.querySelector('[data-lib-open="u5"]').getAttribute("aria-disabled") === "true")));
-await q(p, () => document.querySelector('[data-lib-open="u5"]').click());
-check("R4 …choosing it says why, and opens nothing", (await text(p, ".lib-failed span")) === "Can't open map-5.png here: the gateway didn't return its picture." && (await q(p, () => !document.querySelector(".viewer"))));
+check("E4 five metadata rows the person sent, four from the image listing's first reply and one after its cursor, each Preview unavailable", await q(p, () => ["u1", "u2", "u3", "u4", "u5"].every((id) => document.querySelector(`.lib-row[data-item="${id}"] .file-sub`)?.textContent === "PNG image · Preview unavailable · 5:29 PM · sent by you" && document.querySelector(`[data-lib-open="${id}"]`).getAttribute("aria-disabled") === "true") && window.CT.library.ITEMS.filter((x) => x.src === "uploads").map((x) => x.cursor).join() === "1,1,1,1,2"));
+check("R4 sent by you only where the matching history row is the person's", (await subOf(p, "k5")) === "maps.example · 5:30 PM · sent by you");
+const uploadSeen = observe(p);
+for (const id of ["u1", "u5"]) {
+  await q(p, (i) => document.querySelector(`[data-lib-open="${i}"]`).click(), id);
+  check(`E4 choosing ${id === "u1" ? "the first" : "the fifth"} opens no viewer and offers no Download, Copy or Share, and says why`, (await text(p, ".lib-failed span")) === `Can't open map-${id.slice(1)}.png here: the gateway didn't return its picture.` && (await q(p, () => !document.querySelector(".viewer, [data-v=download], [data-v=copy], .export-dialog") && !window.CT.work.artifacts.u1)));
+}
+check("E4 …and no request was made", uploadSeen.requests.length === 0, uploadSeen.requests.join(" "));
+await p.focus('[data-lib-open="u1"]');
+await p.keyboard.press("Shift+F10");
+check("E4 Shift+F10 on an upload row: no menu, no error, focus stays on the row", await q(p, () => !document.querySelector(".lib-hold") && document.activeElement.dataset.libOpen === "u1" && document.querySelector('[data-lib-open="u1"]').getAttribute("aria-haspopup") === null));
 await p.click('[data-lib-filter="pinned"]');
 check("R6 the iPhone's Pinned lists this conversation's pins only", await q(p, () => [...document.querySelectorAll(".lib-row")].map((r) => r.dataset.item).join() === "p2"));
 await p.click('[data-lib-filter="links"]');

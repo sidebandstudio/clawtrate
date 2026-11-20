@@ -100,7 +100,7 @@
     { id: "ps", task: "m2", kind: "page", title: "Trail guide", doc: "trail-guide", time: "5:20 PM", day: 0, seq: 30, src: "history", stale: true },
     { id: "pm", task: "m2", kind: "page", title: "Route planner", doc: "ebook-apps", time: "5:21 PM", day: 0, seq: 31, src: "history", mcpApp: true },
     // The person's pictures in Saturday's trail plan, from the image listing: four in its first reply, one after its cursor.
-    // preview: the listing carried bytes the address decision allows ("ok"), or retrieving them failed ("failed").
+    // Metadata only: source "session-transcript-preview", download mode "unsupported", no inline bytes. Nothing to draw or open.
     ...[1, 2, 3, 4, 5].map((n) => ({
       id: `u${n}`,
       task: "m2",
@@ -113,7 +113,7 @@
       src: "uploads",
       cursor: n === 5 ? 2 : 1,
       by: "person",
-      preview: n === 5 ? "failed" : "ok",
+      preview: "unavailable",
     })),
   ];
   const item = (id) => ITEMS.find((x) => x.id === id);
@@ -378,7 +378,7 @@
 
   function sub(x) {
     const parts = x.kind === "page" ? ["Page"] : x.kind === "link" ? [host(x.href)] : [x.type, x.size].filter(Boolean);
-    if (x.src === "uploads") parts.push(x.preview === "ok" ? "Preview only" : "Preview couldn't be read");
+    if (x.src === "uploads") parts.push("Preview unavailable");
     if (x.time) parts.push(x.time);
     if (x.again) parts.push("Shown again below");
     if (x.by === "person") parts.push("sent by you");
@@ -391,12 +391,13 @@
   function row(x) {
     const pinned = isPinned(x.id);
     const busy = L.busy.has(x.id);
-    const unavailable = x.src === "uploads" && x.preview !== "ok";
+    const unavailable = x.src === "uploads"; // no inline bytes the address decision accepts: nothing to show
+    const actions = !unavailable; // an upload's row has no Open, Share or Pin, so no menu
     const what = x.kind === "page" ? "Page" : x.kind === "link" ? `link, ${host(x.href)}` : x.type;
     const spoken = `${x.title}, ${what}, ${x.by === "person" ? "sent by you" : `in ${taskTitle(x.task)}`}${x.time ? `, ${x.time}` : ""}${x.again ? ", shown again below" : ""}${pinned ? ", pinned" : ""}${unavailable ? ". Can't be opened here" : ". Open"}.`;
     const pinLabel = `${pinned ? "Unpin" : "Pin"} ${x.title}`;
     return (
-      `<li class="lib-row" data-item="${esc(x.id)}" data-kind="${x.kind}"><button type="button" class="file-row" data-lib-open="${esc(x.id)}" aria-label="${esc(spoken)}" title="${esc(x.title)}"${phone() ? ' aria-haspopup="menu"' : ""}${unavailable ? ' aria-disabled="true"' : ""}>` +
+      `<li class="lib-row" data-item="${esc(x.id)}" data-kind="${x.kind}"><button type="button" class="file-row" data-lib-open="${esc(x.id)}" aria-label="${esc(spoken)}" title="${esc(x.title)}"${phone() && actions ? ' aria-haspopup="menu"' : ""}${unavailable ? ' aria-disabled="true"' : ""}>` +
       `<span class="file-icon">${icon(kindIcon(x.kind))}</span><span class="file-name">${esc(x.title)}${pinned ? `<span class="lib-pinmark" aria-hidden="true">${pinIcon()}</span>` : ""}</span>` +
       `<span class="file-sub">${esc(sub(x))}</span></button>` +
       (x.src === "uploads"
@@ -1122,7 +1123,7 @@
     if (x.kind === "page") return openPage(x.id, from);
     // A Library row's title is cut to fit, so it never counts as showing the whole address.
     if (x.kind === "link") return openLink(x.href, from, false);
-    if (x.src === "uploads" && x.preview !== "ok") {
+    if (x.src === "uploads") {
       L.notice = `Can't open ${x.title} here: the gateway didn't return its picture.`;
       return rerender();
     }
@@ -1147,7 +1148,7 @@
   function openHold(id) {
     holdMenu?.remove();
     const x = item(id);
-    if (!x) return;
+    if (!x || x.src === "uploads") return; // no action: no menu, and focus stays on the row
     const rowEl = $(`.lib-row[data-item="${id}"]`);
     holdMenu = document.createElement("ul");
     holdMenu.className = "menu lib-hold";
@@ -1155,7 +1156,7 @@
     holdMenu.setAttribute("aria-label", x.title);
     holdMenu._opener = $(`[data-lib-open="${id}"]`);
     const entries = [];
-    if (!(x.src === "uploads" && x.preview !== "ok")) entries.push(["open", "Open"]);
+    entries.push(["open", "Open"]);
     if (x.kind === "page") entries.push(["share", "Share as file…"]);
     if (x.src !== "uploads") entries.push(["pin", isPinned(id) ? "Unpin" : "Pin"]);
     holdMenu.innerHTML = entries.map(([k, label]) => `<li role="none"><button type="button" class="menu-item" role="menuitem" data-hold="${k}" data-item="${esc(id)}">${label}</button></li>`).join("");
@@ -1552,7 +1553,7 @@
       const A = W.artifacts;
       const art = { i2: pic("#e9efe7", "#58c26f", "Ridge profile"), i3: pic("#dfe7f0", "#5b8dff", "Trail photo"), i8: pic("#f4ece4", "#ff8552", "Newsletter header"), i11: pic("#232428", "#a98bff", "Ridge at dawn"), i10: pic("#16181b", "#3ee6c1", "Ridge walk") };
       for (const x of ITEMS) {
-        if (x.kind === "page" || x.kind === "link" || (x.src === "uploads" && x.preview !== "ok")) continue;
+        if (x.kind === "page" || x.kind === "link" || x.src === "uploads") continue;
         A[x.id] = {
           task: x.task,
           msg: `msg-${x.task}-${x.seq}`,
@@ -1567,7 +1568,7 @@
           icon: "file",
           duration: x.kind === "video" ? "0:48" : x.kind === "audio" ? "0:02" : undefined,
           content: x.kind === "file" ? `# ${x.title}\n\nA file Marlow handed over.\n` : undefined,
-          art: art[x.id] || (x.src === "uploads" ? pic("#eceff1", "#9d9fa2", `Preview of ${x.title}`) : undefined),
+          art: art[x.id],
         };
       }
     },
