@@ -257,7 +257,7 @@ A plugin's page: the initial at 56 px, the name, "by <author>" or, only for `ori
 
 Editing a plugin's settings is not designed here (section 20); "Needs setup" says where to finish it, and names only fields the gateway reports missing.
 
-**Accounts.** One row per server the gateway reports in `inspect` `mcpAuth`, named by its `serverName` and "Shared by everyone on this gateway", since one sign-in per server is what the gateway keeps (R§8). A server the plugin declares with OAuth (its `declared.mcpServers`, with `auth: "oauth"` in the catalog's `mcpServerDetails`) that has no row gets one too, reading "Sign-in status not reported." No expiry is shown: the gateway does not report one.
+**Accounts.** For every `plugins.inspect.mcpAuth` row, show the reported `serverName`, "Shared by everyone on this gateway", and the reported state. A server independently known to be declared with OAuth but missing from this reply shows its name and "Sign-in status not reported." Show no shared-account claim or sign-in action on that fallback. A turned-off plugin can show the turn-on requirement if the gateway reported that state. Read again after the user returns, and date a status only when read.
 
 | `mcpAuth.state`                                    | The row says                                                                                                    |
 | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
@@ -267,7 +267,7 @@ Editing a plugin's settings is not designed here (section 20); "Needs setup" say
 | `authorized`                                       | "Signed in. The gateway reports saved sign-in tokens." and, under it, "Whether they still work isn't reported." |
 | No row for a server the plugin declares with OAuth | "Sign-in status not reported."                                                                                  |
 
-Under the rows: "Open Settings on your OpenClaw gateway to sign in to <server>." and "Check again" (section 10). The gateway's terminal command cannot find a plugin's own server, so it is not offered here (R§7). There is no "Connected": `authorized` means the gateway holds tokens, not that they work (R§8). A plugin with no sign-in has no Accounts group. When the plugin is turned off, `inspect` reports no sign-in, and the group says "The gateway reports sign-ins only while Quillnote is turned on."
+For an eligible reported row show "Open Settings on your OpenClaw gateway to sign in to <server>." Show "Check again" for the inspection (section 10). The gateway's terminal command cannot find a plugin's own server, so it is not offered here (R§7). There is no "Connected": `authorized` means the gateway holds tokens, not that they work (R§8). A plugin with no sign-in has no Accounts group. When the plugin is turned off, `inspect` reports no sign-in, and the group says "The gateway reports sign-ins only while Quillnote is turned on."
 
 "Add another account" is not offered for a plugin: the gateway keeps one sign-in per declared server, and no method adds a second (R§8). For a server added by address it is section 9's.
 
@@ -300,9 +300,9 @@ A server from `mcp.servers` has no catalog entry and no plugin state. Its page s
 
 Under it: "A listing shows what the gateway has discovered for this task. A bot's tool rules still decide what it is offered." The time is when Clawtrate read the listing, not when anything ran.
 
-**Sign-in: "Not reported."** Under it, always: "The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work." For a shared OAuth server the page offers "Sign in" (section 10). For an existing per-requester entry: "Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender." There's no sign-in action on this server page (section 11).
+**Sign-in: "Not reported."** Under it, always: "The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work." Offer "Sign in" only for an enabled shared HTTP OAuth entry without an auth-profile override (section 10). For an existing per-requester entry: "Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender." There's no sign-in action on this server page (section 11).
 
-**Accounts.** The gateway keeps one shared sign-in per server name and address (R§6). So a second account at the same address is a second server under another name. "Add another account" is offered only for a shared OAuth server ("Sign in with OAuth"); its line says "A second name for the same server, with its own sign-in. Bots tell them apart by name." It opens section 12 with the address and the header names filled in, the header values and the name left empty, and under the headers: "Enter any header values this server needs. Saved values are hidden." The label a person types is the name.
+**Accounts.** The gateway keeps one shared sign-in per server name and address (R§6). So a second account at the same address is a second server under another name. "Add another account" is offered only for a shared HTTP OAuth server whose credentials the gateway stores for that entry ("Sign in with OAuth"); with an external auth-profile override the page omits the second-account promise and the logout directions; its line says "A second name for the same server, with its own sign-in. Bots tell them apart by name." It opens section 12 with the address and the header names filled in, the header values and the name left empty, and under the headers: "Enter any header values this server needs. Saved values are hidden." The label a person types is the name.
 
 What the page can never say: that the server is signed in, for whom, until when, or that it works now.
 
@@ -314,20 +314,20 @@ What the page can never say: that the server is signed in, for whom, until when,
 
 **Which sign-in a page gives** depends on where the server is defined, because the gateway's terminal command reads only its own settings (R§7):
 
-| The server                                                                                                                                                              | The page gives                                                                                                                                                                         |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| An entry in the gateway's settings (`mcp.servers`) that is enabled, has an HTTP URL and `auth: "oauth"`, is shared (not per-requester) and has no `oauth.authProfileId` | The command-line sign-in, below, with the entry's exact configured name                                                                                                                |
-| A plugin's own server (an account row of section 8, named by the gateway's `mcpAuth[].serverName`)                                                                      | "Open Settings on your OpenClaw gateway to sign in to calendrop." and "Check again", which reads `plugins.inspect` again; it is read again too when the window comes back to the front |
-| Any other entry (per-requester, an auth-profile override, not OAuth, turned off)                                                                                        | No sign-in from Clawtrate                                                                                                                                                              |
+| The server                                                                                                                                                              | The page gives                                                                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| An entry in the gateway's settings (`mcp.servers`) that is enabled, has an HTTP URL and `auth: "oauth"`, is shared (not per-requester) and has no `oauth.authProfileId` | The command-line sign-in, below, with the entry's exact configured name                                                                   |
+| A plugin's own server (an account row of section 8, named by the gateway's `mcpAuth[].serverName`)                                                                      | For an eligible reported row show "Open Settings on your OpenClaw gateway to sign in to <server>." Show "Check again" for the inspection. |
+| Any other entry (per-requester, an auth-profile override, not OAuth, turned off)                                                                                        | No sign-in from Clawtrate                                                                                                                 |
 
 **The command-line sign-in:**
 
-1. "On the gateway's machine, run:" and `openclaw mcp login notes-work` in the command block, the entry's exact name, with the gateway's profile option when the host knows the gateway runs under a named profile.
+1. "On the gateway's machine, run:" and `openclaw mcp login notes-work` in the command block. The name is rendered from the reviewed entry, shell-quoted when necessary, with the gateway's profile option when the host knows the gateway runs under a named profile.
 2. "If it prints an address, open it in a browser and sign in."
 3. "If the terminal is listening for the callback, it waits up to five minutes. Follow the terminal's instructions to finish with a code if the callback cannot reach it."
 4. "It may also find a saved sign-in and say so without printing an address."
 
-Under the steps: "Or sign in from Settings on the gateway's own web page." The page the browser lands on is the gateway's own, not Clawtrate's ("Sign-in response received. Return to OpenClaw for the sign-in result.", R§7). Afterwards the server's page reads what it read before, "Not reported": the gateway reports no sign-in state for an entry of its settings, so Clawtrate cannot see whether the command signed in.
+Under the steps: "Or sign in from Settings on the gateway's own web page." For the gateway's Settings flow, the gateway's page says "Sign-in response received. Return to OpenClaw for the sign-in result." The terminal flow may use its own loopback callback or finish with a code. On return to Clawtrate, a raw entry still reads "Not reported."
 
 ## 11. A sign-in in the conversation
 
@@ -360,7 +360,7 @@ Under the steps: "Or sign in from Settings on the gateway's own web page." The p
 | Headers    | Optional, name and value rows, "Add a header". The value field is a password field. Under them: "Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved."                                               |
 | Sign-in    | A radio group: "None" and "Sign in with OAuth". There is no "Each person signs in" (section 11).                                                                                                                                                                  |
 
-There is no Client ID and no Client Secret: the gateway has no field for either and refuses them (R§5). OpenClaw registers itself with the server when it signs in.
+There is no Client ID and no Client Secret: the gateway has no field for either and refuses them (R§5). The gateway handles OAuth registration and credentials.
 
 **The write.** Every write to a server entry follows one contract (R§5):
 
@@ -435,11 +435,11 @@ The answer's `removed` lists the plugins the gateway removed. Then `plugins.list
 
 > **Remove notes-work from the gateway?**
 > Goes: the server's entry in the gateway's settings, with its headers; its tools.
-> Stays: "Removing this entry leaves any saved sign-ins in the gateway's state. The gateway keeps them unencrypted." The gateway finds them again if a server with the same name and URL is added.
+> Stays: "Removing this entry leaves any saved MCP sign-ins in the gateway's state. The gateway keeps them unencrypted." The gateway finds them again if a server with the same name and URL is added.
 > To clear them, run `openclaw mcp logout notes-work` on the gateway's machine before removing the entry, or remove it there with `openclaw mcp unset notes-work`, which clears them too.
 > [Cancel] [Remove]
 
-The sign-in lines are for an OAuth entry only, and the commands carry the gateway's profile option when the host knows it. For an existing per-requester entry `logout` refuses, so the line is: "To remove it and clear them, run `openclaw mcp unset team-notes` on the gateway's machine instead." (R§6). An entry without OAuth has no sign-in line. Then `config.get` is read. Write "Removed notes-work. The gateway's settings no longer have it." only when a fresh read finds absence. If it remains, say "notes-work is still in the gateway's settings." Append the gateway's reason only if one was received. When the settings changed since the confirmation opened: "The gateway's settings changed. Review the current entry before trying again."; the removal can be sent again only after reviewing the current entry and confirming again. When the read fails: "Couldn't confirm the change. The gateway's settings couldn't be read back." "Check again" repeats the read only and can still fail.
+The sign-in lines are for an OAuth entry only. The commands render the name from the reviewed entry, shell-quoted when necessary, and carry a known profile option on `login`, `logout` and `unset`. For an existing per-requester entry `logout` refuses, so the line is: "To remove it and clear them, run `openclaw mcp unset team-notes` on the gateway's machine instead." (R§6). For an entry without an OAuth mode, omit the Stays sign-in line. Then `config.get` is read. Write "Removed notes-work. The gateway's settings no longer have it." only when a fresh read finds absence. If it remains, say "notes-work is still in the gateway's settings." Append the gateway's reason only if one was received. When the settings changed since the confirmation opened: "The gateway's settings changed. Review the current entry before trying again."; the removal can be sent again only after reviewing the current entry and confirming again. When the read fails: "Couldn't confirm the change. The gateway's settings couldn't be read back." "Check again" repeats the read only and can still fail.
 
 ## 15. What do you use every day? (F-004)
 
@@ -529,7 +529,7 @@ F-220 stays `todo` with its gap named: Clawtrate chat has no per-person identity
 - Gateway strings are text in every position (section 6): text insertion or context-appropriate escaping for names, headings, labels, metadata, settings fields, tool results and notices; attribute and navigation values encoded for their context.
 - One write at a time per window: a second change waits for the read-back of the first.
 - A server write carries the `config.get` `hash` read when the person reviewed it, and the exact entry of section 12; its result comes only from the read-back's comparison.
-- The command and the profile option for `openclaw mcp login` and `logout` come from the host, as the approve command does (`bots.md` §2).
+- The command and the profile option for `openclaw mcp login`, `logout` and `unset` come from the host, as the approve command does (`bots.md` §2).
 
 ### Order
 

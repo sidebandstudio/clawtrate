@@ -111,13 +111,13 @@ const STATES = [
   ["screen=server&id=search-index", ["Runs a command", "Program", "/opt/example/bin/search-server", "Arguments", "--stdio", "./notes", "spawn /opt/example/bin/search-server ENOENT"]],
   ["screen=server&id=team-notes", ["Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender.", "Clawtrate offers no sign-in for it."]],
   ["screen=server&id=notes-work&device=iphone", ["Change it from Clawtrate on your computer."]],
-  ["screen=server-remove-confirm&id=notes-work", ["Remove notes-work from the gateway?", "the server's entry in the gateway's settings, with its headers", "its tools", "Removing this entry leaves any saved sign-ins in the gateway's state. The gateway keeps them unencrypted.", "To clear them, run this on the gateway's machine before removing the entry:", "openclaw mcp logout notes-work", "openclaw mcp unset notes-work"]],
-  ["screen=server-remove-confirm&id=team-notes", ["Removing this entry leaves any saved sign-ins in the gateway's state. The gateway keeps them unencrypted.", "To remove it and clear them, run this on the gateway's machine instead:", "openclaw mcp unset team-notes"]],
-  ["screen=server-remove-confirm&id=search-index", ["Remove search-index from the gateway?", "nothing else: an entry without OAuth has no sign-in the gateway keeps"]],
-  ["screen=add-server", ["Add a custom connector", "Type", "Remote HTTPS", "Command", "Name", "Server URL", "Headers", "Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved.", "Sign-in", "None", "Sign in with OAuth", "OpenClaw registers itself with the server when it signs in.", "Add to gateway"]],
+  ["screen=server-remove-confirm&id=notes-work", ["Remove notes-work from the gateway?", "the server's entry in the gateway's settings, with its headers", "its tools", "Removing this entry leaves any saved MCP sign-ins in the gateway's state. The gateway keeps them unencrypted.", "To clear them, run this on the gateway's machine before removing the entry:", "openclaw mcp logout notes-work", "openclaw mcp unset notes-work"]],
+  ["screen=server-remove-confirm&id=team-notes", ["Removing this entry leaves any saved MCP sign-ins in the gateway's state. The gateway keeps them unencrypted.", "To remove it and clear them, run this on the gateway's machine instead:", "openclaw mcp unset team-notes"]],
+  ["screen=server-remove-confirm&id=search-index", ["Remove search-index from the gateway?"]],
+  ["screen=add-server", ["Add a custom connector", "Type", "Remote HTTPS", "Command", "Name", "Server URL", "Headers", "Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved.", "Sign-in", "None", "Sign in with OAuth", "The gateway handles OAuth registration and credentials.", "Add to gateway"]],
   ["screen=add-server&type=command", ["Command", "Arguments", "One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay, and an empty line is dropped. Nothing goes through a shell.", "Working folder", "The gateway can start this program on its own machine, as the user it runs as, when it needs this server. The program has that user's access to files, programs and the network.", "The gateway can show saved commands and arguments to operators who can read its settings.", "Continue"]],
   ["screen=add-server&access=read", ["Read-only.", "Adding a custom connector needs admin access."]],
-  ["screen=signin-cli&id=notes-work&server=1", ["Sign in to notes-work", "On the gateway's machine, run:", "openclaw mcp login notes-work", "If it prints an address, open it in a browser and sign in.", "If the terminal is listening for the callback, it waits up to five minutes. Follow the terminal's instructions to finish with a code if the callback cannot reach it.", "It may also find a saved sign-in and say so without printing an address.", "Or sign in from Settings on the gateway's own web page.", "Afterwards this page still reads \"Not reported\"", "Back to notes-work"]],
+  ["screen=signin-cli&id=notes-work&server=1", ["Sign in to notes-work", "On the gateway's machine, run:", "openclaw mcp login notes-work", "If it prints an address, open it in a browser and sign in.", "If the terminal is listening for the callback, it waits up to five minutes. Follow the terminal's instructions to finish with a code if the callback cannot reach it.", "It may also find a saved sign-in and say so without printing an address.", "Or sign in from Settings on the gateway's own web page.", "On return to Clawtrate, a raw entry still reads \"Not reported.\"", "Back to notes-work"]],
   ["screen=connector&id=calendrop", ["Open Settings on your OpenClaw gateway to sign in to calendrop.", "Check again"]],
   ["screen=connector&id=calendrop&checked=1", ["Read again at 5:12 PM."]],
   ["screen=chat", ["Add today's standup to team-notes.", "Used team-notes connect", "team-notes__connect"]],
@@ -290,6 +290,42 @@ await walk("Connect apps, add a connector, sign in, signed in", "screen=home", [
   await at(s2, "signin-cli");
   check("neither app offers a browser sign-in (ruling 2)", !(await text(s2)).includes("Open in your browser") && !(await text(s2)).includes("Asking the gateway"));
   await s2.close();
+}
+// Change 6: account rows and sign-in instructions belong to the servers eligible for them.
+{
+  const p = await open("screen=connector&id=calendrop");
+  const rowText = (n) => text(p, `.c-account[data-server="${n}"]`);
+  const a = await rowText("calendrop");
+  const r = await rowText("calendrop-rooms");
+  const f = await rowText("calendrop-files");
+  check("two reported account rows, each with its own state and shared label", a.includes("calendrop · Shared by everyone on this gateway") && a.includes("Needs sign-in.") && !a.includes("Signed in.") && r.includes("calendrop-rooms · Shared by everyone on this gateway") && r.includes("Signed in. The gateway reports saved sign-in tokens.") && !r.includes("Needs sign-in"), `${a} | ${r}`);
+  check("each reported row names its own server in the Settings instruction", a.includes("Open Settings on your OpenClaw gateway to sign in to calendrop.") && r.includes("Open Settings on your OpenClaw gateway to sign in to calendrop-rooms."));
+  check("a declared server missing from the reply: its name and Sign-in status not reported, no ownership claim and no instruction", f.includes("calendrop-files") && f.includes("Sign-in status not reported.") && !/Shared|yours|your account|Open Settings|Sign in/.test(f), f);
+  check("no date on a status until it is read again", !(await text(p)).includes("Read again at"));
+  await p.close();
+  const n = await open("screen=connector&id=calendrop&auth=none");
+  check("with no reported row there is no Settings instruction and no Check again", !(await text(n)).includes("Open Settings on your OpenClaw gateway") && (await n.getByRole("link", { name: "Check again" }).count()) === 0);
+  await n.close();
+  const e = await open("screen=server&id=notes-work&gwprofile=work");
+  await link("Sign in")(e);
+  await at(e, "signin-cli");
+  check("the eligible raw entry's command names it and carries the known profile", (await text(e)).includes("openclaw --profile work mcp login notes-work"));
+  await e.close();
+  const x = await open("screen=server&id=notes-profile&gwprofile=work");
+  const xt = await text(x);
+  check("an auth-profile entry: no Sign in, no second account, no command", (await x.getByRole("link", { name: /^Sign in$|Add another account/ }).count()) === 0 && !xt.includes("openclaw") && !xt.includes("A second name for the same server") && xt.includes("Not reported."));
+  await x.close();
+  const xr = await open("screen=server-remove-confirm&id=notes-profile&gwprofile=work");
+  const xrt = await text(xr, ".c-confirm");
+  check("removing an auth-profile entry keeps the Stays sign-in line and gives no logout directions", xrt.includes("Removing this entry leaves any saved MCP sign-ins in the gateway's state. The gateway keeps them unencrypted.") && !xrt.includes("openclaw mcp") && !xrt.includes("logout"));
+  await xr.close();
+  const er = await open("screen=server-remove-confirm&id=notes-work&gwprofile=work");
+  const ert = await text(er, ".c-confirm");
+  check("removing the eligible entry gives profile-qualified logout and unset", ert.includes("openclaw --profile work mcp logout notes-work") && ert.includes("openclaw --profile work mcp unset notes-work"));
+  await er.close();
+  const s = await open("screen=server-remove-confirm&id=search-index");
+  check("an entry without an OAuth mode has no Stays sign-in line", !(await text(s, ".c-confirm")).includes("sign-in") && (await s.locator(".c-confirm h4", { hasText: "Stays" }).count()) === 0);
+  await s.close();
 }
 await walk("Add from a row, cancelled", "screen=browse", [[link("Add Quillnote"), "add-confirm"], [link("Cancel"), "app"]], ["What it adds"]);
 await walk("add: a capability review, then a failure after writing", "screen=add-confirm&id=quillnote", [

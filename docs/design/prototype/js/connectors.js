@@ -17,7 +17,7 @@
     String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
   // Every display setting and the access tier are kept when moving between screens.
-  const KEEP = ["theme", "width", "motion", "chrome", "access", "picked", "device", "readonly", "skills", "marked"];
+  const KEEP = ["theme", "width", "motion", "chrome", "access", "picked", "device", "readonly", "skills", "marked", "gwprofile"];
   // On the iPhone the window is "Plugins" (F-380), with its own words.
   const iphone = params.get("device") === "iphone";
   const go = (to, extra = {}) => {
@@ -47,7 +47,7 @@
   const APPS = [
     { id: "quillnote", name: "Quillnote", summary: "Notes and notebooks your bots can read and add to.", author: "quillnote-labs", cats: ["productivity"], featured: true, version: "2.4.1", local: "install", servers: [["quillnote", true]], skills: ["Daily notes"], host: "auth.quillnote.example", readme: "Quillnote keeps notes in notebooks. With this connector a bot can search your notes, read a page and add one.\nIt signs in to your Quillnote account with OAuth; the gateway keeps the sign-in." },
     { id: "tasktide", name: "Tasktide", summary: "Tasks, due dates and lists.", author: "tasktide", official: true, cats: ["productivity"], featured: true, version: "1.9.0", local: "enabled", servers: [["tasktide", true]], auth: "authorized", host: "auth.tasktide.example" },
-    { id: "calendrop", name: "Calendrop", summary: "Calendars and free time.", author: "calendrop", cats: ["productivity"], featured: true, version: "3.0.2", local: "enabled", servers: [["calendrop", true]], auth: "unauthenticated", host: "auth.calendrop.example" },
+    { id: "calendrop", name: "Calendrop", summary: "Calendars and free time.", author: "calendrop", cats: ["productivity"], featured: true, version: "3.0.2", local: "enabled", servers: [["calendrop", true], ["calendrop-rooms", true], ["calendrop-files", true]], mcpAuth: [{ serverName: "calendrop", state: "unauthenticated" }, { serverName: "calendrop-rooms", state: "authorized" }], host: "auth.calendrop.example" },
     { id: "chartwick", name: "Chartwick", summary: "Dashboards and charts from your sheets.", author: "chartwick", official: true, cats: ["productivity"], version: "0.8.0", local: "install", servers: [["chartwick", false]] },
     { id: "ledgerkin", name: "Ledgerkin", summary: "Invoices and expenses, read-only.", author: "ledgerkin", cats: ["finance"], version: "1.2.0", local: "disabled", servers: [["ledgerkin", true]] },
     { id: "boxwharf", name: "Boxwharf", summary: "Files and shared folders.", author: "boxwharf", cats: ["files"], featured: true, version: "2.1.0", local: "error", error: "boxwharf-sync: the token store couldn't be read" },
@@ -72,7 +72,15 @@
     "notes-work": { kind: "remote", url: "https://notes.example/mcp", headers: ["Authorization", "X-Workspace"], signin: "oauth", last: "tools" },
     "search-index": { kind: "command", command: "/opt/example/bin/search-server", args: ["--stdio", "--index", "./notes"], last: "unavailable" },
     "team-notes": { kind: "remote", url: "https://teamnotes.example/mcp", headers: [], signin: "each", last: "notyet" },
+    "notes-profile": { kind: "remote", url: "https://notes.example/mcp", headers: [], signin: "oauth", authProfile: true, last: "tools" },
   };
+  // The gateway's own sign-in commands: the reviewed entry's name, shell-quoted when necessary, and the
+  // gateway's profile option when the host knows it (?gwprofile=<name> in the prototype).
+  const shq = (n) => (/^[A-Za-z0-9._\/-]+$/.test(n) ? n : `'${n.replace(/'/g, "'\\''")}'`);
+  const gwProfile = params.get("gwprofile");
+  const mcpCmd = (verb, name) => `openclaw ${gwProfile ? `--profile ${shq(gwProfile)} ` : ""}mcp ${verb} ${shq(name)}`;
+  // A raw entry the gateway's command line can sign in: enabled, shared HTTP OAuth, no auth-profile override.
+  const cliEligible = (s) => s.kind === "remote" && s.signin === "oauth" && !s.authProfile && !s.disabled;
   // ?marked=1: gateway strings that carry inert markup, which must render as text (section 6).
   if (params.get("marked") === "1") {
     Object.assign(APPS[0], { name: "Quillnote <em>beta</em>", summary: "Notes <em>and</em> notebooks.", author: "quillnote-<em>labs</em>", refusal: "fetch failed <em>offline</em>" });
@@ -134,7 +142,8 @@
     `</ol>`;
   const goes = (gone, stays, read = null) =>
     `<div class="c-goes"><h4>Goes</h4><ul>${gone.map((t) => `<li data-mark="${read ? read : "goes"}">${icon(read ? "check" : "x")}<span>${esc(t)}</span></li>`).join("")}</ul>` +
-    `<h4>Stays</h4><ul>${stays.map((t) => `<li data-mark="stays">${icon("check")}<span>${esc(t)}</span></li>`).join("")}</ul></div>`;
+    (stays.length ? `<h4>Stays</h4><ul>${stays.map((t) => `<li data-mark="stays">${icon("check")}<span>${esc(t)}</span></li>`).join("")}</ul>` : "") +
+    `</div>`;
 
   // The access bar of bots.md §2, in an admin action's place.
   const accessBar = (what) => {
@@ -271,22 +280,25 @@
   };
   const accountRow = (a) => {
     const off = params.get("now") === "off" || (a.local === "disabled" && params.get("now") !== "on");
-    if (!a.servers || !a.servers.some(([, oauth]) => oauth)) return "";
+    const declared = (a.servers || []).filter(([, oauth]) => oauth).map(([n]) => n);
+    if (!declared.length) return "";
     if (off) return group("Accounts") + `<p class="c-line">The gateway reports sign-ins only while ${esc(a.name)} is turned on.</p>`;
-    const state = params.get("auth") || a.auth || "unauthenticated";
+    const q = params.get("auth");
+    const reported = q ? (q === "none" ? [] : [{ serverName: declared[0], state: q }]) : a.mcpAuth || [{ serverName: declared[0], state: a.auth || "unauthenticated" }];
     const words = {
       unauthenticated: pill("Needs sign-in.", "warn"),
       "requires-authorization": pill("Needs sign-in again.", "warn"),
       "pending-authorization": `<span>Sign-in pending.</span>`,
       authorized: `<span><b>Signed in.</b> The gateway reports saved sign-in tokens.</span><span class="c-faint">Whether they still work isn't reported.</span>`,
-      none: `<span>Sign-in status not reported.</span>`,
-    }[state];
+    };
+    const absent = declared.filter((n) => !reported.some((r) => r.serverName === n));
     return (
       group("Accounts") +
-      `<ul class="c-rows"><li class="c-account"><span class="c-row-text"><span class="c-row-name"><span class="mono">${esc(a.servers.find(([, o]) => o)[0])}</span> · Shared by everyone on this gateway</span><span class="c-row-sub c-account-state">${words}</span></span>` +
-      `<span class="c-row-end"></span></li></ul>` +
-      `<p class="c-line" data-c="settings">Open Settings on your OpenClaw gateway to sign in to ${esc(a.servers.find(([, o]) => o)[0])}.</p>` +
-      `<div class="c-actions">${link("Check again", "connector", { id: a.id, checked: "1", ...(params.get("auth") ? { auth: params.get("auth") } : {}) })}</div>` +
+      `<ul class="c-rows">` +
+      reported.map((r) => `<li class="c-account" data-server="${esc(r.serverName)}"><span class="c-row-text"><span class="c-row-name"><span class="mono">${esc(r.serverName)}</span> · Shared by everyone on this gateway</span><span class="c-row-sub c-account-state">${words[r.state] || ""}</span><span class="c-line" data-c="settings">Open Settings on your OpenClaw gateway to sign in to ${esc(r.serverName)}.</span></span><span class="c-row-end"></span></li>`).join("") +
+      absent.map((n) => `<li class="c-account" data-server="${esc(n)}"><span class="c-row-text"><span class="c-row-name"><span class="mono">${esc(n)}</span></span><span class="c-row-sub c-account-state"><span>Sign-in status not reported.</span></span></span><span class="c-row-end"></span></li>`).join("") +
+      `</ul>` +
+      (reported.length ? `<div class="c-actions">${link("Check again", "connector", { id: a.id, checked: "1", ...(q ? { auth: q } : {}) })}</div>` : "") +
       (params.get("checked") ? `<p class="c-line">Read again at 5:12 PM.</p>` : "")
     );
   };
@@ -334,7 +346,7 @@
         ? [
             ["Address", `<span class="mono">${esc(s.url)}</span>`],
             ["Headers", s.headers.length ? `${s.headers.map((h) => `<span class="mono">${esc(h)}</span>`).join(", ")}. Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.` : "None"],
-            ["Sign-in", s.signin === "oauth" ? "Signs in with OAuth" : s.signin === "each" ? "Uses the gateway\'s requester sign-in. Set up and use it in a channel where the gateway identifies each sender." : "None"],
+            ["Sign-in", s.signin === "oauth" && s.authProfile ? "Signs in with OAuth through an auth profile" : s.signin === "oauth" ? "Signs in with OAuth" : s.signin === "each" ? "Uses the gateway\'s requester sign-in. Set up and use it in a channel where the gateway identifies each sender." : "None"],
           ]
         : [
             ["Program", `<span class="mono" data-c="program">${esc(s.command)}</span>`],
@@ -355,8 +367,8 @@
         `<p class="c-state" data-c="signin">Not reported.</p>` +
         `<p class="c-line">The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.</p>` +
         (s.signin === "each" ? `<p class="c-line">Uses the gateway's requester sign-in. Set up and use it in a channel where the gateway identifies each sender. Clawtrate offers no sign-in for it.</p>` : "") +
-        (s.signin === "oauth" && admin ? `<div class="c-actions">${link("Sign in", "signin-cli", { id: name, server: "1" })}</div>` : "") +
-        (s.kind === "remote" && s.signin === "oauth"
+        (cliEligible(s) && admin ? `<div class="c-actions">${link("Sign in", "signin-cli", { id: name, server: "1" })}</div>` : "") +
+        (cliEligible(s)
           ? group("Accounts") +
             `<p class="c-line">A second name for the same server, with its own sign-in. Bots tell them apart by name.</p>` +
             (admin && !iphone ? `<div class="c-actions">${link("Add another account", "add-server", { type: "remote", from: name })}</div>` : "")
@@ -398,7 +410,7 @@
                 `<fieldset class="c-signin"><legend>Sign-in</legend>` +
                 radio("signin", "none", "None", base ? false : raw.signin !== "oauth") +
                 radio("signin", "oauth", "Sign in with OAuth", base ? true : raw.signin === "oauth") +
-                `<p class="c-line">OpenClaw registers itself with the server when it signs in.</p></fieldset>`
+                `<p class="c-line">The gateway handles OAuth registration and credentials.</p></fieldset>`
               : field("c-command", "Command", raw.command || "", "", "/path/to/server") +
                 `<label class="c-field"><span>Arguments</span><textarea class="input" id="c-args" rows="3" aria-describedby="c-args-hint" placeholder="One per line">${esc(raw.args || "")}</textarea><span class="c-line" id="c-args-hint">One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay, and an empty line is dropped. Nothing goes through a shell.</span></label>` +
                 field("c-cwd", "Working folder", raw.cwd || "", "Optional.", "") +
@@ -434,12 +446,12 @@
   };
   // The gateway's command-line sign-in, in full (section 10).
   const cliSteps = (t) =>
-    `<ol class="b-steps c-steps"><li><p>On the gateway's machine, run:</p>${command(`openclaw mcp login ${t.name}`, "sign-in command")}</li>` +
+    `<ol class="b-steps c-steps"><li><p>On the gateway's machine, run:</p>${command(mcpCmd("login", t.name), "sign-in command")}</li>` +
     `<li><p>If it prints an address, open it in a browser and sign in.</p></li>` +
     `<li><p>If the terminal is listening for the callback, it waits up to five minutes. Follow the terminal's instructions to finish with a code if the callback cannot reach it.</p></li>` +
     `<li><p>It may also find a saved sign-in and say so without printing an address.</p></li></ol>` +
     `<p class="c-line">Or sign in from Settings on the gateway's own web page.</p>` +
-    `<p class="c-line">Afterwards this page still reads "Not reported": the gateway reports no sign-in state for an entry of its settings.</p>`;
+    `<p class="c-line">For the gateway's Settings flow, the gateway's page says "Sign-in response received. Return to OpenClaw for the sign-in result." The terminal flow may use its own loopback callback or finish with a code. On return to Clawtrate, a raw entry still reads "Not reported."</p>`;
   // A sign-in address, shown in full before it is opened: its host first, then the whole address.
   const address = (host) => {
     const full = `https://${host}/authorize?response_type=code&client_id=example-registered-client&state=example-state-7f3a`;
@@ -639,9 +651,9 @@
         windowHtml(serverPage()) +
         confirm(
           `Remove ${name} from the gateway?`,
-          goes([`the server's entry in the gateway's settings${s.kind === "remote" ? ", with its headers" : ""}`, "its tools"], [s.signin ? "Removing this entry leaves any saved sign-ins in the gateway's state. The gateway keeps them unencrypted. The gateway finds them again if a server with the same name and URL is added." : "nothing else: an entry without OAuth has no sign-in the gateway keeps"]) +
-            (s.signin === "oauth" ? `<p>To clear them, run this on the gateway's machine before removing the entry:</p>${command(`openclaw mcp logout ${name}`, "sign-out command")}<p>or remove it there with this, which clears them too:</p>${command(`openclaw mcp unset ${name}`, "removal command")}` : "") +
-            (s.signin === "each" ? `<p>To remove it and clear them, run this on the gateway's machine instead:</p>${command(`openclaw mcp unset ${name}`, "removal command")}` : ""),
+          goes([`the server's entry in the gateway's settings${s.kind === "remote" ? ", with its headers" : ""}`, "its tools"], s.signin ? ["Removing this entry leaves any saved MCP sign-ins in the gateway's state. The gateway keeps them unencrypted. The gateway finds them again if a server with the same name and URL is added."] : []) +
+            (cliEligible(s) ? `<p>To clear them, run this on the gateway's machine before removing the entry:</p>${command(mcpCmd("logout", name), "sign-out command")}<p>or remove it there with this, which clears them too:</p>${command(mcpCmd("unset", name), "removal command")}` : "") +
+            (s.signin === "each" ? `<p>To remove it and clear them, run this on the gateway's machine instead:</p>${command(mcpCmd("unset", name), "removal command")}` : ""),
           [link("Cancel", "server", { id: name }, { variant: "quiet" }), `<a class="button" data-variant="primary" data-size="sm" href="${esc(go("write-sent", { op: "remove" }))}" data-remove="${esc(name)}">Remove</a>`],
         )
       );
