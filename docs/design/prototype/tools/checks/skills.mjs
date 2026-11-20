@@ -754,8 +754,11 @@ check("S10 R2 the Tools group has a Skill filter row with how it is set", (await
 await p.click('#panel-settings [data-bs="skills"]');
 await wait(p, 150);
 t = await tab(p);
-check("S10 R2 a filter narrows and never adds; the gateway's default chosen, and what it is", has(t, "A filter narrows the skills Juniper can be given in a task. It doesn't add any", "Use the gateway's default", "The gateway sets no default, so a bot without its own filter has none: nothing narrows its skills.") && (await p.evaluate(() => document.querySelector('[data-k-choice="default"]').getAttribute("aria-checked"))) === "true" && !t.includes("Every skill"));
-check("S10 R2 learned skills bypass the filter, other gates still apply; a task's overrides aren't shown", t.includes("Skills Juniper learned bypass this filter; the gateway can still leave one out when what it needs isn't there or it is switched off in the gateway's settings. A task can also carry skill overrides of its own on the gateway, which Clawtrate doesn't show."));
+check("S10 R2 the gateway's default chosen, and what it is, as configuration", has(t, "Use the gateway's default", "The gateway sets no default skill filter.", "None", "Juniper's configured filter is an empty list.") && (await p.evaluate(() => document.querySelector('[data-k-choice="default"]').getAttribute("aria-checked"))) === "true" && !/Every skill|nothing narrows|is given no skills|decides what/.test(t));
+check(
+  "S10 R2 a base filter only: a task's overrides, learned skills, eligibility, files",
+  (await text(p, "#k-filter-limits")) === "The gateway also applies a task's own skill overrides, which this page doesn't read. Learned skills bypass this filter. Gateway eligibility and skill settings still apply. This filter does not restrict which files the bot's commands can read.",
+);
 await p.focus('[data-k-choice="default"]');
 await p.keyboard.press("ArrowDown");
 await wait(p, 150);
@@ -763,16 +766,17 @@ check("S13 R8 an arrow moves the choice and keeps focus on it", (await p.evaluat
 await p.click('[data-k-choice="none"]');
 await p.click('[data-k="list-save"]');
 await wait(p, 100);
-check("S10 R4 pending: Saving…, no Saved yet", (await tab(p)).includes("Saving…") && !(await tab(p)).includes("Saved."));
+check("S10 R4 pending: Saving…, no Saved yet, and the choices wait", (await tab(p)).includes("Saving…") && !(await tab(p)).includes("Saved.") && (await p.evaluate(() => document.querySelector('[data-k-choice="default"]').getAttribute("aria-disabled"))) === "true");
+await p.click('[data-k-choice="default"]', { force: true });
 await wait(p);
-check("F-199 S10 saved: the filter as read again, from each task's next turn", (await tab(p)).includes("Saved. Reading again, the filter is none. It applies from each task's next turn; a turn running now keeps the skills it started with."));
+check("F-199 S10 saved: the configured filter as read again, from each task's next turn; a click while pending changed nothing", (await tab(p)).includes("Saved. Reading again, the configured filter is an empty list. It applies from each task's next turn; a turn running now keeps the skills it started with.") && (await p.evaluate(() => document.querySelector('[data-k-choice="none"]').getAttribute("aria-checked"))) === "true");
 await p.click('#panel-settings [data-bs="main"]');
 await wait(p, 150);
 check("S10 the row reads None after the read-back", (await text(p, '#panel-settings [data-bs="skills"]')).includes("None"));
 await p.close();
 
 p = await open(BOT + "&defaults=none");
-check("S10 R2 an inherited empty default is named, so Gateway default never reads as every skill", (await tab(p)).includes("The gateway's default is none: a bot without its own filter is given no skills from a library or the gateway."));
+check("S10 R2 an inherited empty default is named as configuration, with no claim of what the bot is given", (await tab(p)).includes("The gateway's default skill filter is an empty list.") && !(await tab(p)).includes("is given no skills"));
 await p.close();
 p = await open(BOT + "&list=only");
 t = await tab(p);
@@ -783,21 +787,28 @@ check("S10 nothing checked: says so, and Save is disabled", (await tab(p)).inclu
 await p.close();
 p = await open(BOT + "&list=unknown");
 t = await tab(p);
-check("S10 R2 a name the gateway doesn't list now: apart, and what it still matches", has(t, "Not in the gateway's lists now", "s_old_route_9b1c2d3e4f5a6b7c8d9e", "It matches no skill the gateway lists now. A task can still have a skill by this name, and the filter lets that one through."));
+check("S10 R2 a name the gateway doesn't list now: apart, and only what these reads show", has(t, "Not in the gateway's lists now", "s_old_route_9b1c2d3e4f5a6b7c8d9e", "No matching skill is listed in these reads. A task may still hold a pin with this command name.") && !t.includes("lets that one through"));
 await p.click('[data-k="list-drop"]');
 await wait(p, 120);
 check("S10 Remove from the filter", !(await tab(p)).includes("s_old_route_9b1c2d3e4f5a6b7c8d9e"));
 await p.close();
-for (const [mode, words] of [
-  ["conflict", "Someone else changed Juniper's settings. Nothing was written. This shows what the gateway has now: none."],
-  ["refused", "The gateway answered: invalid config: agents.entries.main.skills must be an array of strings Nothing was written; reading again, the filter is gateway default."],
-  ["lost", "Couldn't tell whether it was saved. Reading again, the filter is none."],
+for (const [mode, words, selected] of [
+  ["conflict", "The gateway refused this request. Its answer: config changed since last load; re-run config.get and retry Reading again, the configured filter is an empty list.", "none"],
+  ["refused", "The gateway refused this request. Its answer: invalid config: agents.entries.main.skills must be an array of strings Reading again, the configured filter is not set, so the gateway's default applies.", "default"],
+  ["lost", "Couldn't tell whether it was saved. Reading again, the configured filter is an empty list.", "none"],
+  ["differs", "The gateway answered the request. Reading again found only github.", "none"],
+  ["readfail", "The gateway answered the request. Couldn't read the settings again. The filter shown is from the earlier read; your choice is still selected.", "none"],
 ]) {
   p = await open(BOT + "&cfg=" + mode);
   await p.click('[data-k-choice="none"]');
   await p.click('[data-k="list-save"]');
   await wait(p);
-  check(`S10 R4 the filter's write ${mode}: what the read shows`, (await tab(p)).includes(words), (await tab(p)).slice(0, 300));
+  t = await tab(p);
+  check(
+    `S10 R4 the filter's write ${mode}: the receipt and the read apart, never a Saved it doesn't establish`,
+    t.includes(words) && !t.includes("Saved.") && !t.includes("Nothing was written") && (await p.evaluate(() => document.querySelector('[aria-checked="true"][data-k-choice]').dataset.kChoice)) === selected,
+    t.slice(0, 400),
+  );
   await p.close();
 }
 p = await open(BOT + "&access=write");

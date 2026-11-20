@@ -994,8 +994,8 @@
     `<div class="b-subhead"><button type="button" class="icon-button" data-variant="quiet" data-bs="${to}" aria-label="${label}">${icon("back")}</button><h3 tabindex="-1" data-bs-focus>${title}</h3></div>`;
 
   function defaultWords() {
-    if (G.defaults === undefined) return "The gateway sets no default, so a bot without its own filter has none: nothing narrows its skills.";
-    if (G.defaults.length === 0) return "The gateway's default is none: a bot without its own filter is given no skills from a library or the gateway.";
+    if (G.defaults === undefined) return "The gateway sets no default skill filter.";
+    if (G.defaults.length === 0) return "The gateway's default skill filter is an empty list.";
     return `The gateway's default is only ${G.defaults.map((n) => n).join(", ")}.`;
   }
 
@@ -1005,7 +1005,9 @@
     const savedChoice = saved === undefined ? "default" : saved.length ? "only" : "none";
     const d = K.listDraft && K.listDraft.bot === bot ? K.listDraft : { bot, choice: savedChoice, names: [...(saved || [])] };
     K.listDraft = d;
-    const dis = isAdmin() && online() ? "" : ' aria-disabled="true"';
+    // Filter edits wait while a save is pending.
+    const editable = isAdmin() && online() && !K.listPending;
+    const dis = editable ? "" : ' aria-disabled="true"';
     const radio = (value, label, line) =>
       `<li><button type="button" class="b-choice" role="radio" aria-checked="${d.choice === value}" data-k-choice="${value}"${dis}><span class="b-choice-text"><span class="b-choice-title">${label}</span><span class="b-choice-sub b-wrap">${line}</span></span>${icon("check", "icon b-tick")}</button></li>`;
     let html = sub(`${name}'s skills`, "main", "Back to settings");
@@ -1015,20 +1017,20 @@
       `<ul class="b-choices" role="radiogroup" aria-label="${name}'s skill filter">` +
       radio("default", "Use the gateway's default", esc(defaultWords())) +
       radio("only", "Only these", "The skills checked below, by the names the gateway gives them.") +
-      radio("none", "None", `${name} is given no skills from a library or the gateway. Skills ${name} learned bypass the filter.`) +
+      radio("none", "None", `${name}'s configured filter is an empty list.`) +
       `</ul>`;
     if (d.choice === "only") {
       const lib = G.skills.filter((s) => visible(s));
-      const box = (value, label) => `<div class="b-row"><label class="b-check"><input type="checkbox" data-k-name="${esc(value)}"${d.names.includes(value) ? " checked" : ""}${isAdmin() && online() ? "" : " disabled"} /> ${label}</label></div>`;
+      const box = (value, label) => `<div class="b-row"><label class="b-check"><input type="checkbox" data-k-name="${esc(value)}"${d.names.includes(value) ? " checked" : ""}${editable ? "" : " disabled"} /> ${label}</label></div>`;
       html += `<p class="k-subgroup">Your library</p><dl class="facts">${lib.map((s) => box(s.name, `<span class="k-box-text"><span>${esc(s.slug)}</span><small class="k-cmd mono">${esc(s.name)}</small></span>`)).join("")}</dl>`;
       html += `<p class="k-subgroup">On the gateway</p><dl class="facts">${GATEWAY_SKILLS.map((n) => box(n, `<span class="mono">${esc(n)}</span>`)).join("")}</dl>`;
       const unknown = d.names.filter((n) => !lib.some((s) => s.name === n) && !GATEWAY_SKILLS.includes(n));
       if (unknown.length)
         html +=
-          `<p class="k-subgroup">Not in the gateway's lists now</p><dl class="facts">${unknown.map((n) => `<div class="b-row"><span class="b-row-main"><span class="mono k-cmd-wrap">${esc(n)}</span></span>${isAdmin() && online() ? button("Remove from the filter", `data-k="list-drop" data-value="${esc(n)}" data-size="sm"`, "quiet") : ""}</div>`).join("")}</dl>` +
-          `<p class="b-hint">It matches no skill the gateway lists now. A task can still have a skill by this name, and the filter lets that one through.</p>`;
+          `<p class="k-subgroup">Not in the gateway's lists now</p><dl class="facts">${unknown.map((n) => `<div class="b-row"><span class="b-row-main"><span class="mono k-cmd-wrap">${esc(n)}</span></span>${editable ? button("Remove from the filter", `data-k="list-drop" data-value="${esc(n)}" data-size="sm"`, "quiet") : ""}</div>`).join("")}</dl>` +
+          `<p class="b-hint">No matching skill is listed in these reads. A task may still hold a pin with this command name.</p>`;
     }
-    html += `<p class="b-hint">Skills ${name} learned bypass this filter; the gateway can still leave one out when what it needs isn't there or it is switched off in the gateway's settings. A task can also carry skill overrides of its own on the gateway, which Clawtrate doesn't show. This filter decides what ${name} is given; it doesn't stop ${name}'s commands from reading files.</p>`;
+    html += `<p class="b-hint" id="k-filter-limits">The gateway also applies a task's own skill overrides, which this page doesn't read. Learned skills bypass this filter. Gateway eligibility and skill settings still apply. This filter does not restrict which files the bot's commands can read.</p>`;
     if (K.listPending) html += pendingLine("Saving…");
     if (K.listNote) html += K.listNote;
     if (isAdmin()) {
@@ -1091,10 +1093,13 @@
 
   const rerenderTab = () => BS.render();
 
+  // The configured value, in words, as config.get returns it.
+  const cfgWords = (list) => (list === undefined ? "not set, so the gateway's default applies" : list.length === 0 ? "an empty list" : `only ${list.join(", ")}`);
   function saveList(bot) {
     const d = K.listDraft;
-    const subm = { bot, value: d.choice === "default" ? undefined : d.choice === "none" ? [] : [...d.names] };
+    const subm = { bot, value: d.choice === "default" ? undefined : d.choice === "none" ? [] : [...d.names], draft: { ...d, names: [...d.names] } };
     const mode = takeMode("cfg");
+    sent.push({ method: "config.patch", path: `agents.entries.${bot}.skills`, value: subm.value === undefined ? null : subm.value, replacePaths: [`agents.entries.${bot}.skills`] });
     K.listPending = true;
     K.listNote = null;
     rerenderTab();
@@ -1107,21 +1112,26 @@
       else {
         if (subm.value === undefined) delete G.lists[bot];
         else G.lists[bot] = subm.value;
+        // differs: another admin's write lands just after this one.
+        if (mode === "differs") G.lists[bot] = ["github"];
         if (mode === "lost") answer = null;
       }
       later(READ, () => {
         K.listPending = false;
-        K.listDraft = null; // the page shows what config.get returns now
-        const now = rowWord(bot).toLowerCase();
-        K.listNote =
-          answer?.error && mode === "conflict"
-            ? `<div role="status">${note(`<p>Someone else changed ${esc(botName(bot))}'s settings. Nothing was written. This shows what the gateway has now: ${esc(now)}.</p>`, "warn")}</div>`
-            : answer?.error
-              ? `<div role="status">${note(`<p>The gateway answered: ${esc(answer.error)} Nothing was written; reading again, the filter is ${esc(now)}.</p>`, "danger")}</div>`
-              : answer
-                ? `<p class="b-hint" role="status">Saved. Reading again, the filter is ${esc(now)}. It applies from each task's next turn; a turn running now keeps the skills it started with.</p>`
-                : `<p class="b-hint" role="status">Couldn't tell whether it was saved. Reading again, the filter is ${esc(now)}.</p>`;
-        announce(answer?.error ? "Not saved" : answer ? "Saved" : "Couldn't tell whether it was saved");
+        const read = mode === "readfail" ? null : { value: G.lists[bot] };
+        const same = read && JSON.stringify(read.value) === JSON.stringify(subm.value);
+        const now = read ? esc(cfgWords(read.value)) : "";
+        // The page shows what config.get returns, except that the submitted choice stays
+        // selected when the read failed or doesn't establish it.
+        K.listDraft = !read || (!answer?.error && !same) ? subm.draft : null;
+        let html;
+        if (!read) html = `<div role="status">${note(`<p>${answer?.error ? `The gateway refused this request. Its answer: ${esc(answer.error)} ` : answer ? "The gateway answered the request. " : "Couldn't tell whether it was saved. "}Couldn't read the settings again. The filter shown is from the earlier read; your choice is still selected.</p>`, "warn")}</div>`;
+        else if (answer?.error) html = `<div role="status">${note(`<p>The gateway refused this request. Its answer: ${esc(answer.error)} Reading again, the configured filter is ${now}.</p>`, "danger")}</div>`;
+        else if (!answer) html = `<div role="status">${note(`<p>Couldn't tell whether it was saved. Reading again, the configured filter is ${now}.</p>`, "warn")}</div>`;
+        else if (!same) html = `<div role="status">${note(`<p>The gateway answered the request. Reading again found ${now}.</p>`, "warn")}</div>`;
+        else html = `<p class="b-hint" role="status">Saved. Reading again, the configured filter is ${now}. It applies from each task's next turn; a turn running now keeps the skills it started with.</p>`;
+        K.listNote = html;
+        announce(!read ? "Couldn't read the settings again." : answer?.error ? "Not saved" : !answer ? "Couldn't tell whether it was saved" : same ? "Saved" : "The read found another value");
         rerenderTab();
         paintTask();
       });
@@ -1154,7 +1164,7 @@
   });
   document.addEventListener("change", (event) => {
     const box = event.target.closest("[data-k-name]");
-    if (box && K.listDraft) {
+    if (box && K.listDraft && !K.listPending) {
       const n = box.dataset.kName;
       K.listDraft.names = box.checked ? [...new Set([...K.listDraft.names, n])] : K.listDraft.names.filter((x) => x !== n);
       rerenderTab();
@@ -1246,7 +1256,7 @@
       return paintTask("#k-held-title");
     }
     const choice = event.target.closest("[data-k-choice]");
-    if (choice && isAdmin() && online() && K.listDraft) {
+    if (choice && isAdmin() && online() && K.listDraft && !K.listPending) {
       K.listDraft.choice = choice.dataset.kChoice;
       rerenderTab();
       return $(`[data-k-choice="${choice.dataset.kChoice}"]`, $("#panel-settings"))?.focus();
