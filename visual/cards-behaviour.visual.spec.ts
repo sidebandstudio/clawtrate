@@ -3,7 +3,7 @@
 // the cards show only what the engine's state establishes.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { contextFor, openFixture, settle, SIZES } from "./fixture.ts";
-import { holdFrames, releaseFrames, tabThenRelease } from "./frames.ts";
+import { holdFrames, tabThenRelease } from "./frames.ts";
 
 /** The gateway's id for the fixture's question: run `run_7f3a91c2`, call `call_ask` (`askUserQuestionId`). */
 const QUESTION_ID = "ask_26e18573cf5e61d9e5d65618d22de594";
@@ -673,14 +673,14 @@ test.describe("approval cards", () => {
     await holdFrames(page);
     await page.keyboard.press("Enter");
     await expect(form).toBeVisible();
-    await tabThenRelease(page);
-    await expect(save).not.toBeFocused();
+    await expect(save).toBeFocused();
+    await tabThenRelease(page, form.getByRole("button", { name: "Back" }));
     await save.focus();
     await holdFrames(page);
     await page.keyboard.press("Escape");
     await expect(form).toBeHidden();
-    await tabThenRelease(page);
-    await expect(always).not.toBeFocused();
+    await expect(always).toBeFocused();
+    await tabThenRelease(page, card.getByRole("button", { name: "Deny" }));
   });
 
   test("F-163: ⌘J moves focus to the oldest pending card", async ({ page }) => {
@@ -983,6 +983,41 @@ test.describe("question cards", () => {
   });
 });
 
+type HeldHistory = {
+  clawtrateFixture: {
+    setState(
+      change: (s: { transcripts: Record<string, Record<string, unknown>> }) => unknown,
+    ): void;
+  };
+  heldHistory?: Record<string, Record<string, unknown>>;
+};
+/** A task's history as it is still loading: with its runs known, or with nothing yet. */
+const holdHistory = (page: Page, key: string, { runs }: { runs: boolean }) =>
+  page.evaluate(
+    ({ key, runs }) => {
+      const w = window as unknown as HeldHistory;
+      w.clawtrateFixture.setState((s) => {
+        const t = s.transcripts[key]!;
+        w.heldHistory = { ...w.heldHistory, [key]: t };
+        const loading = { ...t, status: "loading", items: [], interSession: [] };
+        return {
+          ...s,
+          transcripts: { ...s.transcripts, [key]: runs ? loading : { ...loading, runs: [] } },
+        };
+      });
+    },
+    { key, runs },
+  );
+/** The history `holdHistory` held arrives. */
+const publishHistory = (page: Page, key: string) =>
+  page.evaluate((key) => {
+    const w = window as unknown as HeldHistory;
+    w.clawtrateFixture.setState((s) => ({
+      ...s,
+      transcripts: { ...s.transcripts, [key]: w.heldHistory![key]! },
+    }));
+  }, key);
+
 test.describe("Messaged cards", () => {
   test.use(contextFor(WIDE, "light"));
 
@@ -1200,49 +1235,41 @@ test.describe("Messaged cards", () => {
     page,
   }) => {
     await openFixture(page, "scene=messaged-working", "light");
-    type Fixture = {
-      clawtrateFixture: {
-        setState(
-          change: (s: { transcripts: Record<string, Record<string, unknown>> }) => unknown,
-        ): void;
-      };
-      heldHistory?: Record<string, unknown>;
-    };
     // Marlow's task as it opens: its runs known, its history still loading.
-    await page.evaluate((key) => {
-      const w = window as unknown as Fixture;
-      w.clawtrateFixture.setState((s) => {
-        const t = s.transcripts[key]!;
-        w.heldHistory = t;
-        return {
-          ...s,
-          transcripts: {
-            ...s.transcripts,
-            [key]: { ...t, status: "loading", items: [], interSession: [] },
-          },
-        };
-      });
-    }, "agent:marlow:house-log");
+    await holdHistory(page, "agent:marlow:house-log", { runs: true });
     const card = page.getByTestId("messaged-card");
     await card.locator("summary").click();
     await card.getByRole("button", { name: "Open this message in Marlow's task" }).click();
     await expect(page.locator(".title-pill")).toContainText("House log");
     // The person moves on while the card is waited for; frames held, as on a slow machine.
     await holdFrames(page);
-    await page.keyboard.press("Tab");
-    const tabbedTo = await page.evaluateHandle(() => document.activeElement);
-    await page.evaluate((key) => {
-      const w = window as unknown as Fixture;
-      w.clawtrateFixture.setState((s) => ({
-        ...s,
-        transcripts: { ...s.transcripts, [key]: w.heldHistory! },
-      }));
-    }, "agent:marlow:house-log");
     const received = page.getByTestId("received-card");
-    await expect(received).toHaveAttribute("open", "");
-    await releaseFrames(page);
-    expect(await tabbedTo.evaluate((element) => element === document.activeElement)).toBe(true);
-    await expect(received.locator("summary")).not.toBeFocused();
+    await page.getByRole("button", { name: "Show work panel" }).focus();
+    await tabThenRelease(page, page.locator(".title-pill"), "Shift+Tab", () =>
+      publishHistory(page, "agent:marlow:house-log").then(() =>
+        expect(received).toHaveAttribute("open", ""),
+      ),
+    );
+  });
+
+  test("F-124: Open in Marlow onto a task with nothing loaded yet takes no focus once the person has moved on", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=messaged-working", "light");
+    // Marlow's task as it opens: nothing known yet, not even its runs.
+    await holdHistory(page, "agent:marlow:house-log", { runs: false });
+    const card = page.getByTestId("messaged-card");
+    await card.locator("summary").click();
+    await card.getByRole("button", { name: "Open this message in Marlow's task" }).click();
+    await expect(page.locator('[aria-label="Loading conversation"]')).toBeVisible();
+    const received = page.getByTestId("received-card");
+    await page.getByRole("button", { name: "Show work panel" }).focus();
+    await holdFrames(page);
+    await tabThenRelease(page, page.locator(".title-pill"), "Shift+Tab", () =>
+      publishHistory(page, "agent:marlow:house-log").then(() =>
+        expect(received).toHaveAttribute("open", ""),
+      ),
+    );
   });
 
   test("F-124: ⌘[ back from Marlow's task restores the open card, and a Shift+Tab straight after is not undone", async ({
@@ -1256,13 +1283,29 @@ test.describe("Messaged cards", () => {
     await holdFrames(page);
     await page.keyboard.press("ControlOrMeta+BracketLeft");
     await expect(page.locator(".title-pill")).toContainText("Tidy the transcode cache");
-    // Back on its composer: Shift+Tab, since Tab from there leaves the page.
-    await tabThenRelease(page, "Shift+Tab");
-    const returned = page.getByTestId("messaged-card");
-    await expect(returned).toHaveAttribute("open", "");
-    await expect(
-      returned.getByRole("button", { name: "Open this message in Marlow's task" }),
-    ).not.toBeFocused();
+    await page.getByRole("button", { name: "Show work panel" }).focus();
+    // The card opens once the transcript has settled, a frame or two on.
+    await tabThenRelease(page, page.locator(".title-pill"), "Shift+Tab");
+    await expect(card).toHaveAttribute("open", "");
+  });
+
+  test("F-124: ⌘[ back onto a task with nothing loaded yet restores the open card, and takes no focus once the person has moved on", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=messaged-return", "light");
+    const card = page.getByTestId("messaged-card");
+    await card.locator("summary").click();
+    await card.getByRole("button", { name: "Open this message in Marlow's task" }).click();
+    await expect(page.locator(".title-pill")).toContainText("House log");
+    await holdHistory(page, "agent:otto:transcode-cache", { runs: false });
+    await holdFrames(page);
+    await page.keyboard.press("ControlOrMeta+BracketLeft");
+    await expect(page.locator('[aria-label="Loading conversation"]')).toBeVisible();
+    await page.getByRole("button", { name: "Show work panel" }).focus();
+    await tabThenRelease(page, page.locator(".title-pill"), "Shift+Tab", () =>
+      publishHistory(page, "agent:otto:transcode-cache").then(() => expect(card).toBeVisible()),
+    );
+    await expect(card).toHaveAttribute("open", "");
   });
 
   test("with the task's whole history loaded, Show full exchange shows every message between the two bots in this task, read-only, and returns to the card", async ({
@@ -1638,10 +1681,10 @@ test.describe("Messaged T3 Code cards", () => {
     await holdFrames(page);
     await resultNaming(page, "t3_project_list_v2");
     await expect(card).toHaveCount(0);
-    await tabThenRelease(page);
     const step = page.getByTestId("tool-call");
-    await expect(step.getByRole("tab", { name: "Raw" })).toHaveAttribute("aria-selected", "true");
-    await expect(step.getByRole("button", { name: "Copy arguments" })).not.toBeFocused();
+    await tabThenRelease(page, step.getByRole("tab", { name: "Raw" }), "Tab", () =>
+      expect(step.getByRole("tab", { name: "Raw" })).toHaveAttribute("aria-selected", "true"),
+    );
   });
 
   test("a closed step or card that has focus hands focus over as it is replaced, and stays closed", async ({

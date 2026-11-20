@@ -310,8 +310,8 @@ test("F-227: Escape from Settings gives focus back to the gateway button as Sett
   await holdFrames(page);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
-  await tabThenRelease(page);
-  await expect(gatewayButton).not.toBeFocused();
+  await expect(gatewayButton).toBeFocused();
+  await tabThenRelease(page, page.locator(".title-pill"));
 });
 
 test.describe("phone", () => {
@@ -333,7 +333,7 @@ test.describe("phone", () => {
     await page.keyboard.press("Enter");
     const nav = settings.getByRole("navigation", { name: "Settings" });
     await expect(nav).toBeVisible();
-    await tabThenRelease(page);
-    await expect(nav.getByRole("button", { name: "Accounts", exact: true })).not.toBeFocused();
+    await expect(nav.getByRole("button", { name: "Accounts", exact: true })).toBeFocused();
+    await tabThenRelease(page, nav.getByRole("button", { name: "Conversation", exact: true }));
   });
 });

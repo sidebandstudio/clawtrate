@@ -609,9 +609,8 @@ test.describe("action cards", () => {
     await page.keyboard.press("ArrowRight");
     const raw = command.getByRole("tab", { name: "Raw" });
     await expect(raw).toHaveAttribute("aria-selected", "true");
-    await tabThenRelease(page);
-    await expect(raw).not.toBeFocused();
-    await expect(command.getByRole("tab", { name: "Readable" })).not.toBeFocused();
+    await expect(raw).toBeFocused();
+    await tabThenRelease(page, command.getByRole("button", { name: "Copy tool name" }));
   });
 
   test("F-423: reasoning before a reply is one folded line over it; opened it shows the text, with Raw; no card, no run line", async ({

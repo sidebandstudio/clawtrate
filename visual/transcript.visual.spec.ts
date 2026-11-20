@@ -375,8 +375,8 @@ test("F-076: Escape from find gives focus back as the bar closes: a Tab straight
   await holdFrames(page);
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("find-bar")).toHaveCount(0);
-  await tabThenRelease(page);
-  await expect(transcript).not.toBeFocused();
+  await expect(transcript).toBeFocused();
+  await tabThenRelease(page, transcript.locator("summary", { hasText: "Looked in ." }).first());
 });
 
 test("F-076: find reads text as it is rendered, across bold, emphasis, links and inline code, but not from one block into the next", async ({

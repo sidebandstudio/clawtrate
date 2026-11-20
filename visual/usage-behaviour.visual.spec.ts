@@ -742,8 +742,9 @@ test("F-232: an arrow in the Period choice moves focus with the choice: a Tab st
     "aria-checked",
     "true",
   );
-  await tabThenRelease(page);
-  for (const radio of await period.getByRole("radio").all()) await expect(radio).not.toBeFocused();
+  await expect(period.getByRole("radio", { name: "Today" })).toBeFocused();
+  // Shift+Tab: Tab from the last control of the pane leaves the page.
+  await tabThenRelease(page, usage(page).getByTestId("budget-edit"), "Shift+Tab");
 });
 
 test("F-234: an arrow in the budget's Period choice moves focus with the choice: a Tab straight after leaves the group", async ({
@@ -756,8 +757,8 @@ test("F-234: an arrow in the budget's Period choice moves focus with the choice:
   await holdFrames(page);
   await page.keyboard.press("ArrowLeft");
   await expect(form.getByRole("radio", { name: "Daily" })).toHaveAttribute("aria-checked", "true");
-  await tabThenRelease(page);
-  for (const radio of await form.getByRole("radio").all()) await expect(radio).not.toBeFocused();
+  await expect(form.getByRole("radio", { name: "Daily" })).toBeFocused();
+  await tabThenRelease(page, form.getByTestId("budget-tokens"));
 });
 
 test("F-232: the Usage page takes focus as it opens, and its row as it closes: a Tab straight after is not undone", async ({
@@ -769,14 +770,14 @@ test("F-232: the Usage page takes focus as it opens, and its row as it closes: a
   await holdFrames(page);
   await page.keyboard.press("Enter");
   await expect(usage(page)).toBeVisible();
-  await tabThenRelease(page);
-  await expect(usage(page).locator("[data-bs-focus]")).not.toBeFocused();
+  await expect(usage(page).locator("[data-bs-focus]")).toBeFocused();
+  await tabThenRelease(page, usage(page).getByTestId("budget-edit"));
   await usage(page).getByRole("button", { name: "Back to settings" }).focus();
   await holdFrames(page);
   await page.keyboard.press("Enter");
   await expect(usage(page)).toHaveCount(0);
-  await tabThenRelease(page);
-  await expect(row).not.toBeFocused();
+  await expect(row).toBeFocused();
+  await tabThenRelease(page, page.getByRole("button", { name: /^Where Otto runs: / }));
 });
 
 test("F-234: Escape from a budget's form in Settings gives focus back to its row, and from Add a budget to Add a budget: a Tab straight after is not undone", async ({
@@ -790,13 +791,13 @@ test("F-234: Escape from a budget's form in Settings gives focus back to its row
   await holdFrames(page);
   await page.keyboard.press("Escape");
   await expect(settings.getByTestId("budget-edit-form")).toHaveCount(0);
-  await tabThenRelease(page);
-  await expect(row).not.toBeFocused();
+  await expect(row).toBeFocused();
+  await tabThenRelease(page, settings.locator('[data-budget="routine:weekly-cleanup"] button'));
   await settings.getByTestId("budget-add").click();
   await settings.getByTestId("budget-target").focus();
   await holdFrames(page);
   await page.keyboard.press("Escape");
   await expect(settings.getByTestId("budget-add-form")).toHaveCount(0);
-  await tabThenRelease(page);
-  await expect(settings.getByTestId("budget-add")).not.toBeFocused();
+  await expect(settings.getByTestId("budget-add")).toBeFocused();
+  await tabThenRelease(page, settings.getByRole("radio", { name: "This week" }).first());
 });
