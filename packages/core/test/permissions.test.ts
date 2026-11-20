@@ -716,6 +716,40 @@ describe("F-324: Activity, from the audit log and what joins to it", () => {
     expect(failing.decisionsUnread).toBe("missing scope: operator.admin");
   });
 
+  it("while the plugin says its decision record is failing, a call with no record says its cause was not read", async () => {
+    const page = await readActivity(
+      fake({
+        "audit.activity.list": () => ({
+          events: [
+            event({ toolCallId: BLOCKED_CALL, status: "blocked" }),
+            event({ toolCallId: ROUTINE_CALL }),
+          ],
+        }),
+        "config.get": () => ({ config: {} }),
+        "clawtrate-tool-rules.decisions.list": () =>
+          decisions([
+            record({
+              decision: "block",
+              source: { kind: "rule", scope: "otto", ruleId: "r1", version: 1, action: "never" },
+            }),
+          ]),
+        "clawtrate-tool-rules.get": () => ({ scopes: {} }),
+        "clawtrate-tool-rules.status": () => ({
+          version: "1.0.0",
+          decisions: { state: "failing", reason: "the decision record cannot be read (EACCES)" },
+        }),
+      }).ctx,
+      { cursor: null, agentId: null, status: null },
+      { rulesListed: true, loaded: new Map() },
+    );
+    // A record that was read still counts; a missing one may be in the file it could not read.
+    expect(page.rows.map((row) => row.cause.kind)).toEqual(["recorded", "not-read"]);
+    expect(page.rows[1]!.cause).toEqual({
+      kind: "not-read",
+      reason: "Clawtrate's rules plugin says the decision record cannot be read (EACCES).",
+    });
+  });
+
   it("without the plugin's methods nothing is joined and the plugin is not asked", async () => {
     const gateway = fake({
       "audit.activity.list": () => ({ events: [event({ toolCallId: BLOCKED_CALL })] }),

@@ -792,9 +792,23 @@ export async function readActivity(
   let decisions: Awaited<ReturnType<typeof decisionsOf>> | null = null;
   let rules: CurrentRules | null = null;
   const withCalls = rows.filter((row) => row.callId !== null);
+  /**
+   * The plugin's own word that its decision record is failing: while it is, the records it
+   * lists can lack ones in a file it could not read, so no record is not "not recorded".
+   */
+  let recordFailing: string | null = null;
   if (options.rulesListed && withCalls.length > 0) {
     decisions = await decisionsOf(ctx, [...new Set(withCalls.map((row) => row.runId))]);
-    if (typeof decisions !== "string" && decisions.byCall.size > 0) rules = await currentRules(ctx);
+    if (typeof decisions !== "string") {
+      const [current, status] = await Promise.all([
+        decisions.byCall.size > 0 ? currentRules(ctx) : Promise.resolve(null),
+        ctx.request(RULES_STATUS_METHOD, {}).then(asRecord, () => null),
+      ]);
+      rules = current;
+      const kept = asRecord(status?.decisions);
+      if (kept?.state === "failing")
+        recordFailing = `Clawtrate's rules plugin says ${cut(kept.reason, 256) ?? "its decision record is failing"}.`;
+    }
   }
   const unread = typeof decisions === "string" ? decisions : null;
   return {
@@ -808,13 +822,16 @@ export async function readActivity(
         if (typeof decisions === "string") cause = { kind: "not-read", reason: decisions };
         else {
           const found = decisions.byCall.get(row.id);
-          cause =
-            found || decisions.full.has(row.runId)
-              ? causeOf(found, rules)
-              : {
-                  kind: "not-read",
-                  reason: `This run has more than ${DECISIONS_PER_RUN} decision records; only the newest were read.`,
-                };
+          cause = found
+            ? causeOf(found, rules)
+            : recordFailing
+              ? { kind: "not-read", reason: recordFailing }
+              : decisions.full.has(row.runId)
+                ? causeOf(found, rules)
+                : {
+                    kind: "not-read",
+                    reason: `This run has more than ${DECISIONS_PER_RUN} decision records; only the newest were read.`,
+                  };
         }
       }
       return { ...row, cause, inChat: chatTarget(row, options.loaded) };
