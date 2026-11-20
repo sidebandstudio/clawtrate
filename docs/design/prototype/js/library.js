@@ -127,8 +127,8 @@
         `<script src="https://cdn.example/chart.js"></script><link rel="prefetch" href="https://cdn.example/next.html"><link rel="stylesheet" href="https://cdn.example/site.css">` +
         `<style>body{font:15px/1.5 system-ui,sans-serif;margin:28px 32px;color:#111213;background:#fff}h1{font-size:24px;margin:0 0 4px}` +
         `table{border-collapse:collapse;width:100%;margin-top:14px}th,td{padding:9px 8px;border-bottom:1px solid #e2e2df;text-align:left}` +
-        `.chart{height:120px;border:1px dashed #c9c9c5;border-radius:10px;margin-top:14px;display:grid;place-items:center;color:#8a8b8e;background:url(https://cdn.example/bg.png)}` +
-        `a{color:#0a6e5c}label{margin-right:14px}</style></head><body>` +
+        `.chart{height:120px;border:1px dashed #c9c9c5;border-radius:10px;margin-top:14px;display:grid;place-items:center;color:#8a8b8e}` +
+        `a{color:#0a6e5c}label{margin-right:14px}</style><style>.chart{background:url(https://cdn.example/bg.png)}</style></head><body>` +
         `<h1>Trail guide</h1><p>Saturday's routes, with what to expect on each. See the <a href="https://trails.example/conditions">park's conditions page</a> before you leave.</p>` +
         `<form action="https://trails.example/track" method="post"><p><label><input type="checkbox" id="dry" name="dry"> Only dry routes</label><label>Sort by <select id="sort" name="sort"><option>Distance</option><option>Climb</option></select></label>` +
         `<input type="text" id="note" name="note" aria-label="Note"><button type="submit" id="go">Save my choice</button></p></form>` +
@@ -219,9 +219,10 @@
     const links = [...doc.querySelectorAll("a[href], area[href]")].map((a) => canonical(a.getAttribute("href"))).filter(Boolean);
     doc.querySelectorAll(REMOVE).forEach((el) => el.remove());
     // A style's outside references go too; the policy below is the second layer for what this misses.
-    const unload = (css) => css.replace(/@import[^;]*;?/gi, "").replace(/url\(\s*(['"]?)(?!data:)[^)]*?\1\s*\)/gi, "none");
-    for (const style of doc.querySelectorAll("style")) style.textContent = unload(style.textContent);
-    for (const el of doc.querySelectorAll("[style]")) el.setAttribute("style", unload(el.getAttribute("style")));
+    // A style block or style attribute stays only if it names nothing outside: no address, import or escape that could hide one.
+    const outside = (css) => /url\s*\(|@import|image-set|image\s*\(|cross-fade|element\s*\(|src\s*\(|:\/\/|\\/i.test(css.replace(/\/\*[\s\S]*?\*\//g, ""));
+    for (const style of doc.querySelectorAll("style")) if (outside(style.textContent)) style.remove();
+    for (const el of doc.querySelectorAll("[style]")) if (outside(el.getAttribute("style"))) el.removeAttribute("style");
     // A link keeps its words, as plain text in the surrounding style.
     for (const a of doc.querySelectorAll("a")) {
       const span = doc.createElement("span");
@@ -928,10 +929,16 @@
       .slice(0, 120);
     return `${base || "Page"}.html`;
   }
-  const exportReady = () => (view ? ["shown", "unavailable"].includes(view.dataset.state) : Boolean(sheet) && !unconfirmed(sheet._x));
+  // The desktop button and ⌘E share the Page view's state; the phone's sheet and its row menu name their own occurrence.
+  function exportReady(x, from) {
+    if (!x || x.kind !== "page" || unconfirmed(x)) return false;
+    if (view) return view._x === x && ["shown", "unavailable"].includes(view.dataset.state);
+    if (sheet) return sheet._x === x;
+    return phone() && x.task === app.model.selectedTask && from?.dataset?.libOpen === x.id;
+  }
 
   function openExport(x = view?._x, from = document.activeElement) {
-    if (!x || !exportReady()) return; // the button and ⌘E share this guard
+    if (!exportReady(x, from)) return;
     const drawn = Boolean(view && view._raw && view.dataset.state === "shown");
     const b = botOf(x.task);
     dialog?.remove();
@@ -951,18 +958,28 @@
       `<div class="export-actions"><button type="button" class="button" data-size="sm" data-ex="cancel">Cancel</button>` +
       `<button type="button" class="button" data-size="sm" data-variant="primary" data-ex="save" disabled>${phone() ? "Share…" : "Save…"}</button></div></div>`;
     (view || sheet || $(".app")).appendChild(dialog);
+    if (!view && !sheet) {
+      $(".shell").inert = true; // over the Library: the shell waits until the dialog closes
+      dialog._overShell = true;
+    }
     if (drawn) return choices(view._raw, view._framed, b);
     // Not drawn here: the entrypoint is read over the socket now that the person asked for the file.
     readForExport(x, b);
   }
+  // Each read belongs to the dialog that started it: a reply for a closed or later dialog is dropped.
   function readForExport(x, b) {
-    const body = $("#export-body", dialog);
-    body.innerHTML = `<p class="export-one" aria-busy="true">Reading ${esc(x.title)} from the gateway…</p>`;
-    $('[data-ex="cancel"]', dialog).focus();
+    const current = dialog;
+    const read = (current._read = Symbol("read"));
+    const live = () => dialog === current && current._x === x && current._read === read;
+    current._files = null;
+    $('[data-ex="save"]', current).disabled = true;
+    $("#export-body", current).innerHTML = `<p class="export-one" aria-busy="true">Reading ${esc(x.title)} from the gateway…</p>`;
+    $('[data-ex="cancel"]', current).focus();
     setTimeout(() => {
-      if (!dialog) return;
+      if (!live()) return;
       if (lost()) return exportProblem("Couldn't reach the gateway. Try again when it's back.");
       const got = readPage(x, { failed: params.get("exportread") === "failed" });
+      if (!live()) return;
       if (got.error) return exportProblem(`Couldn't read ${x.title} from the gateway. The gateway said: ${got.error}`);
       if (got.large) return exportProblem(`${x.title} is larger than Clawtrate exports (5 MiB).`);
       choices(got.html, framedPage(got.html), b);
@@ -975,7 +992,17 @@
   function choices(raw, framed, b) {
     const kb = (s) => `${(bytesOf(s) / 1024).toFixed(1)} KB`;
     dialog._files = { shown: framed.html, raw };
-    // The two files always differ: the Clawtrate version carries its policy and loses what loads or navigates.
+    const end =
+      (dialog._phone ? `Clawtrate hands the file to the system's share sheet; where it goes from there is your choice.` : `The file is saved on this device; Clawtrate uploads nothing.`) + `</p>`;
+    // Compare the UTF-8 bytes: both versions when they differ, one HTML file when they match.
+    if (same([...new TextEncoder().encode(raw)], [...new TextEncoder().encode(framed.html)])) {
+      $("#export-body", dialog).innerHTML =
+        `<div role="radiogroup" aria-label="Which file" class="export-choices"><label class="export-choice"><input type="radio" name="export" value="raw" checked><span><strong>HTML file</strong>` +
+        `<span>The page's HTML. ${kb(raw)}.</span></span></label></div><p class="export-foot">The file contains the page's HTML only: files kept beside it on the gateway aren't included. ` +
+        end;
+      $('[data-ex="save"]', dialog).disabled = false;
+      return $("input:checked", dialog).focus();
+    }
     $("#export-body", dialog).innerHTML =
       `<div role="radiogroup" aria-label="Which file" class="export-choices">` +
       `<label class="export-choice"><input type="radio" name="export" value="shown" checked><span><strong>${dialog._drawn ? "As shown here" : "Clawtrate version"}</strong>` +
@@ -983,20 +1010,21 @@
       `<label class="export-choice"><input type="radio" name="export" value="raw"><span><strong>As ${esc(b.name)} made it</strong>` +
       `<span>Saves the original HTML. When opened, it can run scripts or contact other sites. ${kb(raw)}.</span></span></label></div>` +
       `<p class="export-foot">Both files contain the page's HTML only: files kept beside it on the gateway aren't included. ` +
-      (dialog._phone ? `Clawtrate hands the file to the system's share sheet; where it goes from there is your choice.` : `The file is saved on this device; Clawtrate uploads nothing.`) +
-      `</p>`;
+      end;
     $('[data-ex="save"]', dialog).disabled = false;
     $("input:checked", dialog).focus();
   }
   function closeExport(refocus = true) {
     if (!dialog) return;
     const back = dialog._opener;
+    if (dialog._overShell) $(".shell").inert = false;
     dialog.remove();
     dialog = null;
     if (refocus) (back?.isConnected ? back : $('[data-pv="export"]') || $('[data-ps="share"]'))?.focus();
   }
   function saveExport() {
     const which = $("input:checked", dialog)?.value || "shown";
+    if (typeof dialog?._files?.[which] !== "string") return; // nothing to save until this dialog's own read has answered
     const name = dialog._name;
     const bytes = dialog._files[which];
     const err = $(".export-error", dialog);
@@ -1023,9 +1051,10 @@
     document.body.appendChild(a);
     a.click();
     a.remove();
-    handoffs.push({ name, type: "text/html", bytes, via: "save" });
+    // A browser download: the browser chooses where it goes, so only the start is reported. A native write reports "Exported".
+    handoffs.push({ name, type: "text/html", bytes, via: "download" });
     closeExport();
-    CT.announce(`Exported ${name}`);
+    CT.announce(`Download started: ${name}`);
   }
 
   // The link confirmation (the decision's link row) ---------------------------------------------------

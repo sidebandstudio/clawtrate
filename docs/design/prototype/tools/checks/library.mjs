@@ -504,7 +504,7 @@ check("F-210 nothing calls the file safe, private or shared", !/\b(safe|safely|p
 let [download] = await Promise.all([p.waitForEvent("download"), p.click('[data-ex="save"]')]);
 let saved = await readFile(await download.path(), "utf8");
 check("F-210 Save… writes Trail guide.html as shown: no script, no link address", download.suggestedFilename() === "Trail guide.html" && !/<script/i.test(saved) && !/href=/i.test(saved));
-check("…announced, and the dialog closes with focus on Export…", (await announced(p)).includes("Exported Trail guide.html") && (await q(p, () => !document.querySelector(".export-dialog") && document.activeElement.dataset.pv === "export")));
+check("E2 …a browser download: Download started is announced, never Exported, and the dialog closes with focus on Export…", (await announced(p)) === "Download started: Trail guide.html" && (await q(p, () => !document.querySelector(".export-dialog") && document.activeElement.dataset.pv === "export")));
 await p.close();
 
 p = await open("&page=packing-list");
@@ -518,6 +518,8 @@ await p.check('input[value="raw"]');
 [download] = await Promise.all([p.waitForEvent("download"), p.click('[data-ex="save"]')]);
 const rawBytes = await readFile(await download.path(), "utf8");
 check("R5 the two downloads are the bytes described: the Clawtrate version without the link's address, the original with it", !shownBytes.includes("hut.example") && rawBytes.includes('href="https://hut.example/rules"') && shownBytes !== rawBytes);
+check("E2 each whole file is exactly the version chosen: the framed form, and the gateway's HTML byte for byte", await q(p, ([shown, raw]) => shown === window.CT.library.framedPage(window.CT.library.PAGES["packing-list"].html).html && raw === window.CT.library.PAGES["packing-list"].html, [shownBytes, rawBytes]));
+check("E2 a style naming an outside address is not in the Clawtrate version, image-set included", await q(p, () => { const f = window.CT.library.framedPage('<style>p { background-image: image-set("https://styles.example/sample.png" 1x); }</style><p style="background:url(//styles.example/a.png)">A short page</p>').html; return !f.includes("styles.example") && f.includes("A short page"); }));
 await p.close();
 
 p = await open("");
@@ -604,6 +606,36 @@ check(
 );
 await p.click('[data-ps="message"]');
 check("F-373 Message about: the sheet closes, the composer holds the words, caret after them", await q(p, () => !document.querySelector(".page-sheet") && document.activeElement.classList.contains("composer-input") && document.activeElement.value === "About the page “Trail guide”: "));
+await p.close();
+p = await open("&width=phone&panel=open&tab=library", phoneSize);
+await p.focus('[data-lib-open="p2"]');
+await p.keyboard.press("Shift+F10");
+await p.click('.lib-hold [data-hold="share"]');
+check("E2 Share as file… from a Page row's menu opens Share for that Page over the Library, reading now and drawing nothing", (await text(p, "#export-title")) === "Share Trail guide" && (await q(p, () => document.querySelector(".shell").inert && document.querySelector('[data-ex="save"]').disabled)));
+await p.waitForTimeout(400);
+check("E2 …one read, no frame, and Save enabled by that read", JSON.stringify(await counters(p)) === '{"reads":1,"parses":1,"mounts":0}' && (await q(p, () => !document.querySelector('[data-ex="save"]').disabled)));
+await p.click('[data-ex="cancel"]');
+check("E2 …Cancel returns focus to the row, and the Library is usable again", await q(p, () => document.activeElement.dataset.libOpen === "p2" && !document.querySelector(".shell").inert));
+await p.focus('[data-lib-open="p2"]');
+await p.keyboard.press("Shift+F10");
+await p.click('.lib-hold [data-hold="share"]');
+await p.waitForTimeout(400);
+await p.click('[data-ex="save"]');
+check("E2 …Share… hands over that occurrence's chosen bytes", await q(p, () => { const h = window.CT.library.handoffs.at(-1); return h.name === "Trail guide.html" && h.bytes === window.CT.library.framedPage(window.CT.library.PAGES["trail-guide"].html).html; }));
+await p.close();
+p = await open("&width=phone&page=trail-guide", phoneSize);
+await p.waitForTimeout(200);
+await q(p, () => {
+  document.querySelector('[data-ps="share"]').click();
+  document.querySelector('[data-ex="cancel"]').click();
+  document.querySelector('[data-ps="close"]').click();
+  window.CT.openPage("p3");
+  document.querySelector('[data-ps="share"]').click();
+});
+await p.waitForTimeout(150);
+check("E2 a read cancelled with its dialog doesn't fill the next one: Packing list's Save stays disabled until its own reply", (await text(p, "#export-title")) === "Share Packing list" && (await q(p, () => document.querySelector('[data-ex="save"]').disabled && !document.querySelector(".export-dialog")._files)));
+await p.waitForTimeout(350);
+check("E2 …then the Packing list's own bytes, and none of Trail guide's", await q(p, () => { const f = document.querySelector(".export-dialog")._files; return !document.querySelector('[data-ex="save"]').disabled && f.raw.includes("Packing list") && !f.raw.includes("Trail guide"); }));
 await p.close();
 p = await open("&width=phone&page=trail-guide&sharefail=1", phoneSize);
 await p.waitForTimeout(200);

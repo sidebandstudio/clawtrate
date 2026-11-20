@@ -178,7 +178,7 @@ The Page's block sits in one task's transcript, and `chat.send {sessionKey, mess
 
 ## 7. Export
 
-`canvas.document.view` returns the entrypoint's HTML only (`documents-v0C8qpqy.mjs` line 34). A document folder may hold other files (`manifest.assets`), which the method does not return and which the client could fetch only through the hosted address it never uses. The HTML is the bot's, scripts included (section 2, "came back exactly as written"). A file of it opened in a browser runs those scripts with that browser's access and loads what they name; the gateway's own policy for it allows scripts from `'self'` and a list of public script hosts (section 3). Nothing about export needs the gateway beyond the read.
+`canvas.document.view` returns the entrypoint's HTML only (`documents-v0C8qpqy.mjs` line 34). A document folder may hold other files (`manifest.assets`), which the method does not return and which the client could fetch only through the hosted address it never uses. The HTML is the bot's, scripts included (section 2, "came back exactly as written"). When opened, the original HTML can run scripts or contact other sites under the opening application's rules; the gateway's own policy for it allows scripts from `'self'` and a list of public script hosts (section 3). Nothing about export needs the gateway beyond the read.
 
 ## 8. Pins in the person's preferences
 
