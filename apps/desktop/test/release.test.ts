@@ -91,6 +91,11 @@ describe("signing", () => {
     // A certificate without a password, only when the password is set empty on purpose.
     expect(signingProblems({ CSC_LINK: "x", CSC_KEY_PASSWORD: "" }, "mac")).toEqual([]);
     expect(signingProblems({ WIN_CSC_LINK: "x", WIN_CSC_KEY_PASSWORD: "" }, "win")).toEqual([]);
+    for (const target of ["mac", "win"] as const) {
+      expect(signingProblems({ CSC_LINK: "x", CSC_KEY_PASSWORD: " " }, target)).toEqual([
+        "CSC_KEY_PASSWORD contains only whitespace (set it empty for a certificate without a password)",
+      ]);
+    }
     // A blank variable electron-builder would take instead of a good one after it.
     expect(
       signingProblems({ WIN_CSC_LINK: "", CSC_LINK: "x", CSC_KEY_PASSWORD: "y" }, "win"),

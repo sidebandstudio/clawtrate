@@ -93,6 +93,10 @@ function certificateProblems(env: Env, target: "mac" | "win"): string[] {
     const hides = hidden(names.password, password);
     if (hides.length > 0)
       problems.push(`${password} is set but blank, and hides ${hides.join(", ")}`);
+    else if (env[password] !== "")
+      problems.push(
+        `${password} contains only whitespace (set it empty for a certificate without a password)`,
+      );
   }
   const given = certificate(env, target);
   if (given && password === null) {
