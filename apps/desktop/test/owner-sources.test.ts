@@ -145,8 +145,6 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/remote-bridge.ts:createRemoteBridge>wanted":
     "renderer; the tasks the host accepted as open, at most `MAX_VIEWER_OPEN_TASKS`, plus opens in flight",
   // Hosts.
-  "apps/desktop/src/main/mac-install.ts:observedUpdaters":
-    "one weak entry per native updater emitter with a late-error listener, released with the emitter",
   "apps/desktop/src/main/index.ts:main>sessions":
     "one bridge session per open window, removed when it closes",
   "apps/desktop/src/web-host/server.ts:<anonymous>>chunks":
