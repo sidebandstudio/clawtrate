@@ -23,6 +23,7 @@
 // State is never reused: OpenClaw keeps credentials in SQLite stores that a
 // clean profile also has, so only a folder created empty by this start is safe.
 
+import { addScriptedRoutines } from "./routines.ts";
 import { FILES_BOT, seedWorkspaceFiles } from "./seed-files.ts";
 import { randomBytes } from "node:crypto";
 import {
@@ -62,7 +63,16 @@ import {
   type Identify,
   type ProcessState,
   type RunRecord,
+  type SpawnedRole,
 } from "./state-guard.ts";
+import {
+  nodeCommandRequest,
+  nodeDeviceRequest,
+  SCRIPTED_NODE_NAME,
+  scriptedNodeArgs,
+  scriptedNodeDir,
+  scriptedNodeEnv,
+} from "./scripted-node.ts";
 import {
   CHECKOUT_DIR,
   GATEWAY_PORT,
@@ -945,7 +955,7 @@ function withInstanceLock<T>(inst: DevInstance, fn: () => Promise<T>): Promise<T
 function spawnRecorded(
   inst: DevInstance,
   runId: string,
-  role: "provider" | "gateway",
+  role: SpawnedRole,
   spawnIt: () => Gated,
 ): void {
   recordPending(inst.stateDir, runId, role);
@@ -958,6 +968,50 @@ function spawnRecorded(
     throw error;
   }
   gated.release();
+}
+
+/**
+ * Start the scripted node host (`scripted-node.ts`) on a healthy gateway, recorded
+ * like the gateway, and pair it: its device request and then its command
+ * approval, each found by what it must be and approved by id. Runs inside
+ * `start`, under its lock.
+ */
+async function startScriptedNode(
+  inst: DevInstance,
+  runId: string,
+  ports: InstancePorts,
+): Promise<void> {
+  const connection = readDevConnection(inst.connectionFile);
+  if (!connection) throw new Error(`${label(inst)} has no connection file`);
+  const dir = scriptedNodeDir(inst.stateDir);
+  assertInside(dir, inst.stateDir);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const nodeLog = openSync(join(inst.runDir, "node.log"), "w");
+  spawnRecorded(inst, runId, "node", () =>
+    inst.runner.spawnNodeGated(
+      scriptedNodeArgs(ports.gatewayPort),
+      scriptedNodeEnv(inst.stateDir, connection.token),
+      { stdio: ["ignore", nodeLog, nodeLog] },
+    ),
+  );
+  closeSync(nodeLog);
+  const json = async (args: string[]) =>
+    JSON.parse(await must(inst, [...args, "--json"])) as unknown;
+  let device: { requestId: string; deviceId: string } | null = null;
+  await waitFor(
+    `${SCRIPTED_NODE_NAME}'s pairing request`,
+    async () => (device = nodeDeviceRequest(await json(["devices", "list"]))) !== null,
+    120_000,
+  );
+  await must(inst, ["devices", "approve", device!.requestId]);
+  let request: string | null = null;
+  await waitFor(
+    `${SCRIPTED_NODE_NAME}'s command approval request`,
+    async () =>
+      (request = nodeCommandRequest(await json(["nodes", "pending"]), device!.deviceId)) !== null,
+    120_000,
+  );
+  await must(inst, ["nodes", "approve", request!]);
 }
 
 const RUN_ID_PATTERN = /^[0-9a-f]{48}$/;
@@ -977,9 +1031,14 @@ export async function start(
     plugins?: string[];
     accounts?: boolean;
     defaultLocalPairing?: boolean;
+    /** A paired machine: the gateway's own node host (`scripted-node.ts`); named instances only. */
+    node?: boolean;
   } = {},
 ): Promise<void> {
   assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
+  if (options.node && inst.name === null) {
+    throw new Error("the default instance never has a paired machine; use --instance <name>");
+  }
   const runId = options.runId ?? newRunId();
   if (!RUN_ID_PATTERN.test(runId)) throw new Error("--run-id must be 48 lowercase hex digits");
   if (options.accounts && inst.name === null) {
@@ -1121,6 +1180,7 @@ export async function start(
     // gateway has taken more than 90 seconds.
     await waitFor("the development gateway", () => gatewayHealthy(inst), 240_000);
     await assertExecDenied(inst);
+    if (options.node) await startScriptedNode(inst, runId, ports);
     const marker = readMarker(inst.stateDir);
     console.log(
       `Development gateway (${label(inst)}) ready on ws://127.0.0.1:${ports.gatewayPort}`,
@@ -1131,6 +1191,9 @@ export async function start(
       `  scripted model  http://127.0.0.1:${ports.providerPort}/v1 (pid ${marker?.providerPid})`,
     );
     console.log(`  gateway         pid ${marker?.gatewayPid}, logs in ${inst.runDir}`);
+    if (options.node) {
+      console.log(`  machine         ${SCRIPTED_NODE_NAME}, node host pid ${marker?.nodePid}`);
+    }
     if (browserBots.length > 0) {
       const { pagesPort, botCdpPorts } = browserPorts(ports, browserBots);
       console.log(`  scripted pages  http://127.0.0.1:${pagesPort}/scripted/pages/sign-in`);
@@ -1226,6 +1289,16 @@ export function listProcesses(): { pid: number; command: string }[] | null {
   });
 }
 
+/** The process can exit after its identity was checked and before the signal arrives. */
+function signalIfPresent(pid: number, signal: NodeJS.Signals): boolean {
+  try {
+    return process.kill(pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
+  }
+}
+
 /** How long the browser's processes get to exit by themselves, then after each signal. */
 export const BROWSER_EXIT_WAITS = { own: 10_000, term: 5_000, kill: 3_000 };
 
@@ -1270,8 +1343,7 @@ export async function settleBrowserProcesses(
     if (left.length === 0) break;
     for (const proc of left) {
       if (processState(proc.pid, proc.identity, inst.identify) === "alive") {
-        process.kill(proc.pid, signal);
-        stopped += 1;
+        if (signalIfPresent(proc.pid, signal)) stopped += 1;
       }
     }
     await waitGone(ms);
@@ -1302,7 +1374,7 @@ async function stopProcess(target: StopTarget, identify: Identify): Promise<bool
   if (state() !== "alive") return state() === "dead";
   const children = childProcesses(target.pid, identify);
   if (state() !== "alive") return state() === "dead";
-  process.kill(target.pid, "SIGTERM");
+  signalIfPresent(target.pid, "SIGTERM");
   // A lookup can fail for a moment while a process exits, so the wait goes on
   // through "unknown"; only a process proven alive is ever killed.
   const settled = async (ms: number) => {
@@ -1316,8 +1388,7 @@ async function stopProcess(target: StopTarget, identify: Identify): Promise<bool
   };
   let forced = false;
   if ((await settled(15_000)) === "alive") {
-    process.kill(target.pid, "SIGKILL");
-    forced = true;
+    forced = signalIfPresent(target.pid, "SIGKILL");
     await settled(5_000);
   }
   if (state() !== "dead") {
@@ -1330,8 +1401,10 @@ async function stopProcess(target: StopTarget, identify: Identify): Promise<bool
     `Stopped the ${target.role} (pid ${target.pid})${forced ? " after a forced kill" : ""}`,
   );
   for (const child of children) {
-    if (processState(child.pid, child.identity, identify) === "alive") {
-      process.kill(child.pid, "SIGTERM");
+    if (
+      processState(child.pid, child.identity, identify) === "alive" &&
+      signalIfPresent(child.pid, "SIGTERM")
+    ) {
       console.log(`Stopped a leftover child of the ${target.role} (pid ${child.pid})`);
     }
   }
@@ -1388,7 +1461,9 @@ async function stopLocked(inst: DevInstance): Promise<void> {
   const targets: StopTarget[] = [];
   /** Recorded processes already gone, perhaps ended by an earlier stop: only their ports are checked. */
   const exited: StopTarget[] = [];
-  for (const role of ["gateway", "provider"] as const) {
+  for (const role of ["node", "gateway", "provider"] as const) {
+    // A start without `--with-node` records no node.
+    if (role === "node" && marker.nodePid === undefined) continue;
     const pid = marker[`${role}Pid`];
     const identity = marker[`${role}Identity`];
     const verdict = processVerdict(pid, identity, inst.identify);
@@ -1398,7 +1473,8 @@ async function stopLocked(inst: DevInstance): Promise<void> {
       );
     }
     if (verdict.state !== "alive" && verdict.state !== "dead") continue;
-    const port = marker[`${role}Port`];
+    // The node host listens on no port of its own.
+    const port = role === "node" ? undefined : marker[`${role}Port`];
     const target = { role, pid: pid!, identity: identity!, ...(port ? { port } : {}) };
     (verdict.state === "alive" ? targets : exited).push(target);
   }
@@ -1491,7 +1567,8 @@ export async function status(
   log(`instance    ${inst.name ?? "(default)"}`);
   log(`state dir   ${runner.stateDir} (${owner})`);
   const marker = owner === "owned" ? readMarker(runner.stateDir) : null;
-  for (const role of ["provider", "gateway"] as const) {
+  for (const role of ["provider", "gateway", "node"] as const) {
+    if (role === "node" && marker?.nodePid === undefined && marker?.nodePending !== true) continue;
     const pid = marker?.[`${role}Pid`];
     const state =
       marker?.[`${role}Pending`] === true
@@ -2022,7 +2099,7 @@ export async function lockOrder(
 }
 
 const USAGE =
-  "usage: pnpm dev-gateway <start|up|seed|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-plugin <plugin>]...\n" +
+  "usage: pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-plugin <plugin>]...\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
@@ -2037,6 +2114,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       "run-id": { type: "string" },
       "with-plugin": { type: "string", multiple: true },
       "with-accounts": { type: "boolean", default: false },
+      "with-node": { type: "boolean", default: false },
       "default-local-pairing": { type: "boolean", default: false },
       agent: { type: "string" },
       provider: { type: "string" },
@@ -2057,7 +2135,18 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     else await prune();
     return;
   }
-  const known = ["start", "up", "stop", "seed", "reset", "status", "approve", "lock", "unlock"];
+  const known = [
+    "start",
+    "up",
+    "stop",
+    "seed",
+    "routines",
+    "reset",
+    "status",
+    "approve",
+    "lock",
+    "unlock",
+  ];
   if (!command || !known.includes(command)) {
     console.log(USAGE);
     process.exitCode = command ? 1 : 0;
@@ -2077,11 +2166,28 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         plugins: values["with-plugin"] ?? [],
         accounts: values["with-accounts"],
         defaultLocalPairing: values["default-local-pairing"],
+        node: values["with-node"],
       });
     case "stop":
       return stop(inst);
     case "seed":
       return seed(inst);
+    case "routines": {
+      const ids = await addScriptedRoutines(async (method, params) =>
+        parseJsonOutput(
+          await must(inst, [
+            "gateway",
+            "call",
+            method,
+            "--params",
+            JSON.stringify(params),
+            "--json",
+          ]),
+        ),
+      );
+      console.log(`Routines on ${label(inst)}: ${ids.join(", ")}`);
+      return;
+    }
     case "reset":
       return reset(inst, runId ? { runId } : {});
     case "status":

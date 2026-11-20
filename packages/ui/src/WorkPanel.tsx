@@ -13,7 +13,7 @@ import { Avatar } from "./Avatar.tsx";
 import { useBridge } from "./bridge.tsx";
 import { stampTime } from "./format.ts";
 import { CloseIcon } from "./icons.tsx";
-import { BotSettings } from "./bots/BotSettings.tsx";
+import { BotSettingsWithUsage } from "./usage/BotUsage.tsx";
 import { ComputerTab } from "./work/ComputerTab.tsx";
 import { FilesTab } from "./work/FilesTab.tsx";
 import type { FileRequest } from "./work/links.tsx";
@@ -236,8 +236,9 @@ export function WorkPanel({
           hidden={tab !== "settings"}
         >
           {bot ? (
-            <BotSettings
+            <BotSettingsWithUsage
               bot={bot}
+              task={task}
               accounts={accounts}
               bots={bots}
               tasks={tasks}

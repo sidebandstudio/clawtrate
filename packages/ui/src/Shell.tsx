@@ -1,4 +1,4 @@
-import type { ClawtrateState, HostInfo } from "@clawtrate/core";
+import { mapSessionRow, type ClawtrateState, type HostInfo } from "@clawtrate/core";
 import { canWrite } from "./access.ts";
 import { OpenTaskContext } from "./cards/index.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -17,8 +17,10 @@ import { unreadCount } from "./unread.ts";
 import { refreshFailed, StatusStrip, stripFor, useSyncPhase } from "./StatusStrip.tsx";
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
+import { setUsageOpener } from "./usage/navigation.ts";
 import { NewBot } from "./bots/NewBot.tsx";
 import "./bots/bots.css";
+import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
 import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "./work/links.tsx";
 
 /** A control that can take focus now: in the page, shown, and not behind the drawer. */
@@ -43,6 +45,7 @@ export function Shell({
   bubbles,
   onBubbles,
   onUnreadCount,
+  updateEntry,
   onOpenSettings,
   inert = false,
   onCaughtUp,
@@ -54,7 +57,8 @@ export function Shell({
   bubbles: BubbleChoice;
   onBubbles: (choice: BubbleChoice) => void;
   onUnreadCount?: ((count: number) => void) | undefined;
-  onOpenSettings: () => void;
+  updateEntry: boolean;
+  onOpenSettings: (section?: "updates") => void;
   /** Set while Settings covers the shell. */
   inert?: boolean;
   /** Whether the open task has caught up since the latest connect: until then work is last seen. */
@@ -87,7 +91,10 @@ export function Shell({
     return () => document.removeEventListener("focusin", onFocus);
   }, []);
 
-  const selection = useSelection(state, interactive);
+  const [routines, setRoutines] = useState<RoutinesNav | null>(null);
+  const routinesOpen = routines !== null;
+  const conversationVisible = routines === null;
+  const selection = useSelection(state, interactive, conversationVisible);
   const { bot, task } = selection;
   const [panelOpen, setPanelOpen] = useState(() => readPreference("panel") === "open");
   // In the one-pane layout the rail and the conversation take turns.
@@ -105,7 +112,8 @@ export function Shell({
   // Whether Work is a drawer is decided here, from the width of .main-pane, and
   // in the stylesheet by the same width (DOCK_FROM); nowhere else.
   const overlay = mainWidth !== null && mainWidth < DOCK_FROM;
-  const drawerOpen = panelOpen && overlay;
+  // The Routines view takes the main pane, Work included: no drawer, scrim or inert rail behind it.
+  const drawerOpen = panelOpen && overlay && !routines;
 
   const setPanel = useCallback((open: boolean) => {
     if (open) {
@@ -126,6 +134,15 @@ export function Shell({
     setWorkTabState(next);
     writePreference("workTab", next);
   }, []);
+  // "Raise budget" above the composer opens the bot's Usage page in the Settings tab.
+  useEffect(
+    () =>
+      setUsageOpener(() => {
+        setPanel(true);
+        setWorkTab("settings");
+      }),
+    [setPanel, setWorkTab],
+  );
   // "Open file" on a step, the file the reader shows, and the way back after "Show in chat".
   const [fileRequest, setFileRequest] = useState<FileRequest | null>(null);
   const [openFilePath, setOpenFilePath] = useState<string | null>(null);
@@ -200,7 +217,11 @@ export function Shell({
   }, [togglePanel, drawerOpen, setPanel]);
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
-  const unread = unreadCount(state.tasksByBot, selection.unreadSeen, task?.key ?? null);
+  const unread = unreadCount(
+    state.tasksByBot,
+    selection.unreadSeen,
+    conversationVisible ? (task?.key ?? null) : null,
+  );
   useEffect(() => {
     onUnreadCount?.(unread);
   }, [unread, onUnreadCount]);
@@ -248,17 +269,23 @@ export function Shell({
   // opening reads it once; later, a new reply while it is open reads it again; leaving does too.
   const openedKey = useRef<string | null>(null);
   useEffect(() => {
-    if (!taskKey || !connectedNow) return;
+    // Covered by Routines, it is not open: coming back opens it again.
+    if (!conversationVisible) openedKey.current = null;
+    if (!taskKey || !connectedNow || !conversationVisible) return;
     if (openedKey.current !== taskKey) {
       openedKey.current = taskKey;
       readTask(taskKey, true);
     } else if (taskUnread && marker === null) readTask(taskKey, false);
-  }, [taskKey, taskUnread, marker, connectedNow, readTask]);
+  }, [taskKey, taskUnread, marker, connectedNow, readTask, conversationVisible]);
+  const visibleRef = useRef(conversationVisible);
+  useEffect(() => {
+    visibleRef.current = conversationVisible;
+  }, [conversationVisible]);
   useEffect(() => {
     if (!taskKey) return;
     return () => {
       openedKey.current = null;
-      readTask(taskKey, false);
+      if (visibleRef.current) readTask(taskKey, false);
     };
   }, [taskKey, readTask]);
 
@@ -297,11 +324,36 @@ export function Shell({
   const openDetail = useCallback(
     (options?: { composer?: boolean }) => {
       if (onePane) navigatedTo.current = options?.composer ? "composer" : "detail";
+      setRoutines(null);
       setView("detail");
     },
     [onePane],
   );
   const showList = useCallback(() => setView("list"), []);
+
+  // Entering Routines closes Work (automation.md section 1); leaving returns focus to what opened it.
+  const routinesOpener = useRef<HTMLElement | null>(null);
+  const openRoutines = (nav: RoutinesNav) => {
+    if (!routines) {
+      const active = document.activeElement as HTMLElement | null;
+      routinesOpener.current = canFocus(active) ? active : null;
+    }
+    if (panelOpen) {
+      keepFocus.current = true;
+      setPanel(false);
+    }
+    setRoutines(nav);
+    setView("detail");
+  };
+  const closeRoutines = () => {
+    setRoutines(null);
+    if (onePane) setView("list");
+    const opener = routinesOpener.current;
+    routinesOpener.current = null;
+    requestAnimationFrame(() => {
+      if (canFocus(opener)) opener.focus();
+    });
+  };
   const backToList = useCallback(() => {
     navigatedTo.current = "list";
     setView("list");
@@ -325,7 +377,9 @@ export function Shell({
         rail?.querySelector<HTMLElement>(".bot")
       )?.focus();
     }
-  }, [view, taskKey]);
+    // Re-shown from under Routines, the conversation is the destination even though
+    // view and taskKey did not change.
+  }, [view, taskKey, routinesOpen]);
 
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
@@ -467,7 +521,7 @@ export function Shell({
     <div
       className="shell"
       ref={shellRef}
-      data-panel={panelOpen ? "open" : "closed"}
+      data-panel={panelOpen && !routines ? "open" : "closed"}
       data-view={view}
       inert={inert}
     >
@@ -485,50 +539,72 @@ export function Shell({
         onTheme={onTheme}
         bubbles={bubbles}
         onBubbles={onBubbles}
+        updateEntry={updateEntry}
         onOpenSettings={onOpenSettings}
         onNewBot={interactive ? openNewBot : null}
+        routines={state.routines.routines}
+        routinesOpen={routinesOpen}
+        onOpenRoutines={() => openRoutines(ROUTINES_HOME)}
+        onOpenRoutineRun={(id, runAt) =>
+          openRoutines({ ...ROUTINES_HOME, routine: id, run: runAt === null ? null : { runAt } })
+        }
         inert={drawerOpen || inert}
         interactive={interactive}
         sidebar={state.sidebar}
         newTaskHint={info.kind === "desktop" ? "⌘T" : "⌥T"}
       />
       <div className="main-pane" ref={mainRef}>
-        <OpenTaskContext.Provider value={selection.selectTask}>
-          <WorkLinksContext.Provider value={workLinks}>
-            <Conversation
-              task={task}
-              bot={bot}
-              taskCount={selection.tasks.length}
-              discovery={state.discovery}
-              transcript={transcript}
-              panelOpen={panelOpen}
-              onTogglePanel={togglePanel}
-              onOpenPanel={() => setPanel(true)}
-              onBack={backToList}
-              onReload={reload}
-              strip={
-                strip && (
-                  <StatusStrip
-                    strip={strip}
-                    retryAt={state.connection.retryAt}
-                    onRetry={() => void send({ type: "retry" })}
-                    onReload={reload}
-                  />
-                )
-              }
-              refreshNote={phase !== "dropped" && refreshFailed(transcript)}
-              interactive={interactive}
-              connection={state.connection}
-              info={info}
-              granted={granted}
-              online={state.connection.status === "connected"}
-              caughtUp={caughtUp}
-              toggleRef={toggleRef}
-              inert={drawerOpen || inert}
-              onShowComputer={showComputer}
-            />
-          </WorkLinksContext.Provider>
-        </OpenTaskContext.Provider>
+        {routines ? (
+          <RoutinesView
+            state={state}
+            nav={routines}
+            onNav={setRoutines}
+            onClose={closeRoutines}
+            onOpenTask={(botId, key) => {
+              selection.selectTask(botId, key, mapSessionRow({ key, agentId: botId }));
+              openDetail();
+            }}
+            narrow={onePane || (mainWidth !== null && mainWidth < 520)}
+            phone={onePane}
+          />
+        ) : (
+          <OpenTaskContext.Provider value={selection.selectTask}>
+            <WorkLinksContext.Provider value={workLinks}>
+              <Conversation
+                task={task}
+                bot={bot}
+                taskCount={selection.tasks.length}
+                discovery={state.discovery}
+                transcript={transcript}
+                panelOpen={panelOpen}
+                onTogglePanel={togglePanel}
+                onOpenPanel={() => setPanel(true)}
+                onBack={backToList}
+                onReload={reload}
+                strip={
+                  strip && (
+                    <StatusStrip
+                      strip={strip}
+                      retryAt={state.connection.retryAt}
+                      onRetry={() => void send({ type: "retry" })}
+                      onReload={reload}
+                    />
+                  )
+                }
+                refreshNote={phase !== "dropped" && refreshFailed(transcript)}
+                interactive={interactive}
+                connection={state.connection}
+                info={info}
+                granted={granted}
+                online={state.connection.status === "connected"}
+                caughtUp={caughtUp}
+                toggleRef={toggleRef}
+                inert={drawerOpen || inert}
+                onShowComputer={showComputer}
+              />
+            </WorkLinksContext.Provider>
+          </OpenTaskContext.Provider>
+        )}
         <button
           type="button"
           className="drawer-scrim"
@@ -536,7 +612,7 @@ export function Shell({
           tabIndex={-1}
           onClick={() => setPanel(false)}
         />
-        {panelOpen && (
+        {panelOpen && !routines && (
           <WorkPanel
             bot={bot}
             task={task}

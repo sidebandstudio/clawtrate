@@ -5,7 +5,7 @@
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { list, openInstance, prune, reset, start, stop } from "../src/cli.ts";
 import { GATE_SCRIPT, gatedSpawn, OpenclawRunner } from "../src/env.ts";
 import { stateDirFor } from "../src/instance.ts";
@@ -418,6 +418,45 @@ describe("a start holds the instance's lock until it is finished (B4)", () => {
 });
 
 describe("a stopped process is stopped once its port is closed too", () => {
+  it.each(["ESRCH", "EPERM"])(
+    "handles %s between the ownership check and the signal",
+    async (code) => {
+      const home = tempDir("clawtrate-home-");
+      const runRoot = tempDir("clawtrate-run-");
+      const gateway = deadProcess();
+      const { marker } = seedInstance(home, "alpha", { runRoot, gateway });
+      let exited = false;
+      const listening = vi.fn(async () => false);
+      const inst = testInstance(home, runRoot, "alpha", {
+        identify: (pid) =>
+          pid === gateway.pid && !exited
+            ? { state: "alive", identity: gateway.identity }
+            : processIdentity(pid),
+        listening,
+      });
+      const kill = process.kill.bind(process);
+      const signal = vi.spyOn(process, "kill").mockImplementation((pid, how) => {
+        if (how === 0) return kill(pid, 0);
+        expect([pid, how]).toEqual([gateway.pid, "SIGTERM"]);
+        exited = code === "ESRCH";
+        throw Object.assign(new Error(code), { code });
+      });
+      try {
+        if (code === "ESRCH") {
+          await stop(inst);
+          expect(listening).toHaveBeenCalledWith(marker.gatewayPort);
+          expect(existsSync(inst.runFile)).toBe(false);
+        } else {
+          await expect(stop(inst)).rejects.toMatchObject({ code: "EPERM" });
+          expect(existsSync(inst.runFile)).toBe(true);
+        }
+        expect(signal).toHaveBeenCalledWith(gateway.pid, "SIGTERM");
+      } finally {
+        signal.mockRestore();
+      }
+    },
+  );
+
   // A gateway killed while busy can show as exited while its socket is still open (issue #153).
   it("a reset waits for a stopped gateway's port to close, then removes the folder", async () => {
     const home = tempDir("clawtrate-home-");
@@ -438,6 +477,31 @@ describe("a stopped process is stopped once its port is closed too", () => {
       return true;
     };
     await reset(testInstance(home, runRoot, "alpha", { listening }));
+    expect(openAfterExit).toBe(0);
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("a reset of an instance with a paired machine stops its node by PID and still waits for the gateway's port", async () => {
+    const home = tempDir("clawtrate-home-");
+    const runRoot = tempDir("clawtrate-run-");
+    const gateway = liveProcess();
+    const node = liveProcess();
+    const { stateDir, marker } = seedInstance(home, "alpha", {
+      runRoot,
+      gateway,
+      provider: liveProcess(),
+      marker: { nodePid: node.pid, nodeIdentity: node.identity },
+    });
+    let openAfterExit = 3;
+    const listening = async (port: number) => {
+      if (port !== marker.gatewayPort) return false;
+      if (processState(gateway.pid, gateway.identity, processIdentity) === "alive") return true;
+      if (openAfterExit === 0) return false;
+      openAfterExit -= 1;
+      return true;
+    };
+    await reset(testInstance(home, runRoot, "alpha", { listening }));
+    expect(processState(node.pid, node.identity, processIdentity)).toBe("dead");
     expect(openAfterExit).toBe(0);
     expect(existsSync(stateDir)).toBe(false);
   });
