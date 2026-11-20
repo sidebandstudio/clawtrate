@@ -58,6 +58,7 @@
     ["lc=choose&primfail=noread", "Choose a primary bot: the reply is lost and the read again gets no answer (choose one, Confirm)"],
     ["pin=otto,marlow&lc=choose", "Choose a primary bot with pins: the star goes first among them (choose Marlow, Confirm)"],
     ["primary=reused&lc=choose", "Choose a primary bot: the saved id now names a bot made since"],
+    ["lc=choose&nocreated=marlow", "Choose a primary bot: a bot with no creation record (choose Marlow)"],
     ["lc=choose&primconflict=1", "Choose a primary bot: another device chose first (choose one, Confirm)"],
     ["lc=choose&access=read", "Choose a primary bot on a read-only connection"],
     ["primary=pip&bot=pip&" + st, "Pip as the primary bot, its Manage group"],

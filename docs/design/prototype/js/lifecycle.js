@@ -49,8 +49,11 @@
 
   const GATEWAY_DEFAULT = "juniper"; // agents.list defaultId
   if (p("onlybot")) app.bots.splice(0, app.bots.length, ...app.bots.filter((b) => b.id === (app.model.selectedBot || "otto")));
+  // Each bot's creation record (agents.list createdAt); null where the gateway keeps none (nocreated=<id>).
+  const CREATED = { juniper: 1763000000000, marlow: 1763100000000, otto: 1763200000000, pip: 1763300000000 };
+  if (p("nocreated")) CREATED[p("nocreated")] = null;
   const L = {
-    primary: p("primary") || null, // what users.prefs holds for this person; null: nothing stored
+    primary: p("primary") || null, // what users.prefs holds for this profile: {bot, createdAt}; null: nothing stored
     deviceOnly: p("prefs") === "device",
     dialog: null,
     opener: null,
@@ -76,10 +79,12 @@
         }
       });
   }
-  // A stored choice applies only to the bot it was made for: the same id and, where the
-  // gateway records one, the same creation time. A bot made later under that id is not it.
-  if (p("primary") === "reused") (L.primary = "pip"), (L.reused = true);
-  const storedValid = () => Boolean(L.primary && botOf(L.primary) && !L.reused);
+  // A stored choice applies only to a listed bot with its id and the same, non-null
+  // creation record. A bot made later under that id, or one with no record, is not it.
+  L.primaryCreated = L.primary ? (CREATED[L.primary] ?? null) : null;
+  if (p("primary") === "reused") (L.primary = "pip"), (L.primaryCreated = CREATED.pip - 86400000);
+  const storedValid = () => Boolean(L.primary && botOf(L.primary) && CREATED[L.primary] != null && L.primaryCreated === CREATED[L.primary]);
+  const unmatched = () => Boolean(L.primary) && !storedValid();
   const primaryId = () => (storedValid() ? L.primary : botOf(GATEWAY_DEFAULT) ? GATEWAY_DEFAULT : app.bots[0]?.id);
   // The primary bot comes first in its rail group, pinned or not; the others keep their order.
   CT.railOrder = (list) => {
@@ -96,8 +101,7 @@
     pip: { folder: "workspace-pip", files: 23, memory: "MEMORY.md and 3 notes", tasks: 4, routines: ["Weekly plan", "Sunday reminder"], routes: 0, own: ["Pip's key"] },
   };
   if (p("shared")) FACTS.pip.folder = FACTS.juniper.folder;
-  // Each bot's creation record (agents.list createdAt). A delete compares it with the preview's.
-  const CREATED = { juniper: 1763000000000, marlow: 1763100000000, otto: 1763200000000, pip: 1763300000000 };
+  // A delete compares each bot's creation record (CREATED, above) with the preview's.
   // Every gateway write the prototype sends, for the checks: [method, bot].
   L.calls = [];
   CT.lifecycleCalls = () => L.calls.slice();
@@ -178,7 +182,7 @@
   const keptLine = () =>
     L.deviceOnly
       ? `<p class="b-hint" data-lc-kept>This device only: this connection has no profile on the gateway to keep it in, so your other devices won't show it.</p>`
-      : `<p class="b-hint" data-lc-kept>This saves a Clawtrate preference for the current gateway profile. Devices using that profile see the same choice. The gateway's routing default stays the same.</p>`;
+      : `<p class="b-hint" data-lc-kept>This saves a Clawtrate preference for the current gateway profile. Devices using that profile see the same choice. Clawtrate's preference leaves the gateway's routing settings as they are.</p>`;
 
   VIEWS.intro = () =>
     sheet(
@@ -210,6 +214,8 @@
       )
       .join("");
     const busy = d.status === "saving";
+    // A bot the gateway keeps no creation record for can't be kept as the primary bot.
+    const noRecord = pick !== current && CREATED[pick] == null;
     return sheet(
       "Choose a primary bot",
       `<label class="visually-hidden" for="lc-search">Search bots</label><input class="input lc-search" id="lc-search" placeholder="Search" autocomplete="off" value="${esc(d.query || "")}" data-lc-focus />` +
@@ -217,18 +223,19 @@
         (d.status === "unconfirmed"
           ? `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Couldn't confirm your choice. Reading it again…</p>`
           : d.status === "noread"
-            ? note(`<p><b>Couldn't confirm your choice.</b> The gateway didn't answer when Clawtrate read it again. The star stays on ${esc(nameOf(current))}, the last choice read.</p>`, "danger")
+            ? note(`<p><b>Couldn't confirm your choice.</b> Check again only reads the saved choice.</p>`, "danger")
           : d.status === "failed"
-            ? note(`<p><b>Your choice wasn't saved.</b> Read again, the gateway still has ${esc(nameOf(current))}.</p>`, "danger")
+            ? note(`<p>The gateway still has ${esc(nameOf(current))} as primary.</p>`, "danger")
           : d.status === "conflict"
-            ? note(`<p><b>Another of your devices chose ${esc(nameOf(d.theirs))} a moment ago.</b> That's what the gateway has now. Confirm to choose ${esc(nameOf(pick))} instead.</p>`, "warn")
+            ? note(`<p>The gateway now has ${esc(nameOf(d.theirs))} as primary. Confirm to choose ${esc(nameOf(pick))}.</p>`, "warn")
             : "") +
-        (L.reused ? note(`<p>Your saved choice named a bot that was deleted; a bot made since has the same id, so it isn't used. Choose a primary bot.</p>`, "warn") : "") +
+        (noRecord ? note(`<p data-lc-norecord>The gateway provides no creation record for this bot, so Clawtrate can't keep it as your primary bot.</p>`, "warn") : "") +
+        (unmatched() ? note(`<p>Clawtrate couldn't match your saved choice to a bot in the gateway's current list.</p>`, "warn") : "") +
         keptLine() +
         `<p class="b-hint">The gateway's own default bot stays ${esc(nameOf(GATEWAY_DEFAULT))}. Clawtrate doesn't change it: the gateway uses it for messages no route claims.</p>`,
       B.access === "read"
         ? writeBar()
-        : button(busy ? "Saving…" : d.status === "failed" ? "Try again" : d.status === "noread" ? "Check again" : "Confirm", `data-lc="confirm-primary" data-size="lg"${(pick === current && d.status !== "conflict" && d.status !== "failed" && d.status !== "noread") || d.status === "unconfirmed" ? " disabled" : ""}${busy ? ' aria-busy="true" disabled' : ""}`, "primary"),
+        : button(busy ? "Saving…" : d.status === "failed" ? "Try again" : d.status === "noread" ? "Check again" : "Confirm", `data-lc="confirm-primary" data-size="lg"${(pick === current && d.status !== "conflict" && d.status !== "failed" && d.status !== "noread") || d.status === "unconfirmed" || noRecord ? " disabled" : ""}${busy ? ' aria-busy="true" disabled' : ""}`, "primary"),
       d.from === "intro" ? "back-intro" : "",
     );
   };
@@ -237,6 +244,8 @@
     const d = L.dialog;
     d.status = "saving";
     paint();
+    // users.prefs.set with expectedEntries: the entry the chooser read. Then users.prefs.get.
+    L.calls.push(["users.prefs.set", id, { expectedEntries: { "clawtrate.primary": L.primary ? { bot: L.primary, createdAt: L.primaryCreated } : null } }]);
     setTimeout(() => {
       // users.prefs.set, then users.prefs.get: the star moves only on what was read back.
       const lost = p("primfail") && !d.retried;
@@ -258,6 +267,7 @@
         d.conflicted = true;
         d.theirs = "marlow";
         L.primary = "marlow";
+        L.primaryCreated = CREATED.marlow;
         refreshRail();
         paint();
         return;
@@ -267,7 +277,7 @@
   }
   function applyPrimary(id) {
     L.primary = id;
-    L.reused = false;
+    L.primaryCreated = CREATED[id];
     closeDialog();
     refreshRail();
     announce(`${nameOf(id)} is your primary bot${L.deviceOnly ? " on this device" : ""}`);
@@ -578,7 +588,7 @@
   CT.botsSettingsTail = (id) => {
     const primary = id === primaryId();
     const only = app.bots.length === 1;
-    const reusedNote = L.reused && primary ? `<p class="b-hint" data-lc-reused>Your saved choice named a bot that was deleted; a bot made since has the same id, so it isn't used. Choose a primary bot.</p>` : "";
+    const reusedNote = unmatched() && primary ? `<p class="b-hint" data-lc-reused>Clawtrate couldn't match your saved choice to a bot in the gateway's current list.</p>` : "";
     const name = esc(nameOf(id));
     return (
       `<h3 class="b-tabgroup">Manage</h3><dl class="facts lc-manage">` +
@@ -1470,8 +1480,9 @@
         L.dialog = { kind: "intro" };
         return paint(true);
       case "intro-later":
-        // users.prefs: {bot: null}, "keep the gateway's default", so the dialog doesn't come back.
-        L.primary = null;
+        // Read tier: closes for this app session and writes nothing. Write tier: users.prefs
+        // {bot: null}, "keep the gateway's default", read back, so the dialog doesn't come back.
+        if (B.access !== "read") L.calls.push(["users.prefs.set", null]), (L.primary = null);
         closeDialog();
         return announce(`${nameOf(GATEWAY_DEFAULT)} keeps the star, as the gateway's default bot`);
       case "create-primary":
@@ -1671,6 +1682,8 @@
     const made = app.bots.length > L.createPrimary ? app.bots.at(-1).id : null;
     delete L.createPrimary;
     if (made) {
+      // agents.create records the bot's creation, which agents.list then reports.
+      CREATED[made] ??= Date.now();
       L.dialog = { kind: "choose", pick: made };
       L.opener = null;
       savePrimary(made);

@@ -62,7 +62,7 @@ A profile is not a person. `shouldUseGatewayOwnerProfile` (`dist/gateway-owner-p
 
 ### For the design
 
-The primary bot is a Clawtrate preference, `clawtrate.primary` in `users.prefs`: the same person's devices agree, other people keep their own, and nothing on the gateway changes. Until the person chooses, the star is on `defaultId`, as the built rail already draws it. On `no_durable_identity` the choice is kept on the device, as F-266 does for the manual order. Choosing needs the interactive tier, not admin.
+The primary bot is a Clawtrate preference, `clawtrate.primary` in `users.prefs`. Devices resolving to the same gateway profile share this preference. Setting it writes that profile's preferences and leaves routing settings as they are. Until the person chooses, the star is on `defaultId`, as the built rail already draws it. On `no_durable_identity` the choice is kept on the device, as F-266 does for the manual order. Choosing needs the interactive tier, not admin.
 
 ## 2. Name and label
 
