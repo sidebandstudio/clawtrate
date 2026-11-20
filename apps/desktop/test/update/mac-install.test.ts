@@ -1,7 +1,8 @@
+import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { lstat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { holdMacArchive } from "../../src/main/mac-archive.ts";
 import { macInstaller, serveMacArchive } from "../../src/main/mac-install.ts";
 import { tempDir } from "./harness.ts";
@@ -87,3 +88,38 @@ it
     "artifact-changed",
   );
 });
+
+it.skipIf(process.platform === "win32")(
+  "submits the default feed before announcing handoff and requests restart only on the native ready event",
+  async () => {
+    const updater = Object.assign(new EventEmitter(), {
+      setFeedURL: vi.fn(),
+      checkForUpdates: vi.fn(),
+      quitAndInstall: vi.fn(),
+    });
+    vi.doMock("electron", () => ({ autoUpdater: updater }));
+    const submitted = Promise.withResolvers<void>();
+    const installer = macInstaller("arm64", async () => null);
+    try {
+      const file = await candidate();
+      expect(await installer.inspect(file)).toBeNull();
+      expect(updater.setFeedURL).not.toHaveBeenCalled();
+      const pending = installer.launch(file, new AbortController().signal, () => {
+        expect(updater.checkForUpdates).toHaveBeenCalledTimes(1);
+        submitted.resolve();
+      });
+      await submitted.promise;
+      expect(updater.setFeedURL).toHaveBeenCalledExactlyOnceWith({
+        url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/.+\/feed$/),
+        serverType: "default",
+      });
+      expect(updater.quitAndInstall).not.toHaveBeenCalled();
+      updater.emit("update-downloaded");
+      expect(await pending).toBeNull();
+      expect(updater.quitAndInstall).toHaveBeenCalledTimes(1);
+    } finally {
+      installer.retire?.();
+      vi.doUnmock("electron");
+    }
+  },
+);
