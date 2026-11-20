@@ -338,9 +338,10 @@ async function patchConfig(
 
 /**
  * Run `body` with a temporary setting: `apply` inside the try, so a change the
- * gateway took but did not confirm in time is undone too, and `restore` in
- * the finally, whether the body passed or not. A rollback that fails stays
- * pending on `ctx` until settling retries it successfully.
+ * gateway took but did not confirm in time is undone too, and `restore`
+ * afterwards, whether the body passed or not. A rollback that fails stays
+ * pending on `ctx` until settling retries it successfully; when the check
+ * failed too, both failures are said.
  */
 export async function withConfig<T>(
   ctx: RulesContext,
@@ -349,14 +350,27 @@ export async function withConfig<T>(
   body: () => Promise<T>,
 ): Promise<T> {
   ctx.restoreSettings = restore;
+  let result: T;
   try {
     await apply();
-    return await body();
-  } finally {
-    await restore();
+    result = await body();
+  } catch (error) {
+    try {
+      await restore();
+    } catch (rollback) {
+      throw new RulesCheckFailure(
+        `${messageOf(error)}; and the rollback of its temporary setting failed: ${messageOf(rollback)}`,
+      );
+    }
     delete ctx.restoreSettings;
+    throw error;
   }
+  await restore();
+  delete ctx.restoreSettings;
+  return result;
 }
+
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
  * Whether the config holds what `holds` looks for and the gateway runs with

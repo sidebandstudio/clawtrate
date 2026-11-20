@@ -203,6 +203,25 @@ describe("the rules checks' temporary settings", () => {
     expect(steps).toEqual(["apply", "restore"]);
   });
 
+  it("say both failures when the check and its rollback both fail, and keep the rollback pending", async () => {
+    const ctx = context();
+    const restore = async () => {
+      throw new Error("config.patch refused");
+    };
+    const failed = withConfig(
+      ctx,
+      async () => {},
+      restore,
+      async () => {
+        throw new Error("timed out waiting for the card");
+      },
+    );
+    await expect(failed).rejects.toThrow(
+      "timed out waiting for the card; and the rollback of its temporary setting failed: config.patch refused",
+    );
+    expect(ctx.restoreSettings).toBe(restore);
+  });
+
   /**
    * The check that turns the plugin off, on a fake gateway whose rollback
    * (`enabled: true`) is refused `refusals` times, then a check that notes
