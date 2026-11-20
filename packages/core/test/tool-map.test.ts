@@ -243,11 +243,18 @@ describe("a released task's map reads", () => {
       await until(() => transcript()?.status === "ready");
       await new Promise<void>((resolve) => setTimeout(resolve, 100));
       expect.soft(pending.length).toBe(1);
+      // Every map the reopened task is given, from the old answer on.
+      const seen: string[] = [];
+      const stop = client.store.subscribe((state) =>
+        seen.push(Object.keys(state.transcripts[KEY]?.mcpTools ?? {}).join(",")),
+      );
       pending[0]!(answer([entry("old__tool", "old", "tool")]));
       await until(() => pending.length === 2);
       pending[1]!(answer([entry("new__tool", "new", "tool")]));
       await until(() => "new__tool" in (transcript()?.mcpTools ?? {}));
+      stop();
       expect(transcript()?.mcpTools).toEqual({ new__tool: { server: "new", tool: "tool" } });
+      expect(seen.some((names) => names.includes("old__tool"))).toBe(false);
     } finally {
       for (const resolve of pending) resolve(answer([]));
       client.stop();
