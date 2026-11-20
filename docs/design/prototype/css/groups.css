@@ -475,3 +475,26 @@
   width: 28px;
   height: 28px;
 }
+
+/* Text in a group's bubbles keeps its line breaks: a quote is one line per line. */
+.g-column .bubble {
+  white-space: pre-line;
+}
+
+/* A task's tool card in the column, without the list's own marks. */
+.g-steps {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* New group's name filter, beside the chosen chips. */
+.g-filter {
+  flex: 1 1 120px;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
