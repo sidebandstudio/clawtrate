@@ -100,7 +100,8 @@ const SCENES: Scene[] = [
       // The pictures below arrive first, so nothing moves under the pointer while it rests.
       await picturesDecoded(page);
       await settle(page);
-      await page.getByTestId("link-card").getByRole("button").hover();
+      // The preview is fetched only from its own control, never on hover.
+      await page.getByTestId("link-preview-button").click();
       await expect(page.getByTestId("link-preview")).toContainText("Library e-books");
     },
   },
@@ -146,7 +147,7 @@ const SCENES: Scene[] = [
     query: ARTIFACTS,
     ready: async (page) => {
       await openCard(page, "lending-terms.pdf");
-      await expect(page.getByTestId("artifact-why")).toContainText("no preview");
+      await expect(page.getByTestId("artifact-why")).toContainText("not its pages");
     },
   },
   {
