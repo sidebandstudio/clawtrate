@@ -3,7 +3,7 @@
 // make of its bytes, and Raw, the record `artifacts.get` returns. And "Sent in
 // chat", the task's items newest first, from the same list as the cards.
 
-import type { Artifact, ArtifactRecord } from "@clawtrate/core";
+import { MAX_ARTIFACT_BYTES, type Artifact, type ArtifactRecord } from "@clawtrate/core";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { useBridge } from "../bridge.tsx";
 import { clockTime, stampTime } from "../format.ts";
@@ -22,7 +22,16 @@ import { formatSize } from "../work/files-format.ts";
 import { CodeView } from "../work/Reader.tsx";
 import { kindIcon, MiddleName, openInBrowser, openItem } from "./cards.tsx";
 import { useArtifacts, type Content } from "./context.tsx";
-import { cardSub, clock, downloadName, fetchable, overLimit, typeWords } from "./words.ts";
+import {
+  cardSub,
+  clock,
+  downloadName,
+  fetchable,
+  overLimit,
+  tooLargeWords,
+  typeWords,
+  undecodable,
+} from "./words.ts";
 
 const isMarkdown = (artifact: Artifact) =>
   artifact.mimeType === "text/markdown" || /\.(md|markdown)$/i.test(artifact.title);
@@ -67,6 +76,8 @@ export function ArtifactReader({
   const [attempt, setAttempt] = useState(0);
   const [view, setView] = useState<"preview" | "source">("preview");
   const [raw, setRaw] = useState<ArtifactRecord | "loading" | null>(null);
+  // The reading whose picture didn't decode as its type: Try again reads it anew.
+  const [broken, setBroken] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   // On the gateway, or not established when listed: read when opened, and classified then.
   const canFetch = artifact ? fetchable(artifact) || artifact.place.kind === "unknown" : false;
@@ -185,8 +196,7 @@ export function ArtifactReader({
       <>
         <Facts artifact={artifact} sentAt={sentAt} />
         <p className="reader-why" data-testid="artifact-why">
-          {artifact.title} is {formatSize(artifact.size)}. Clawtrate opens and saves items up to 5
-          MB (Clawtrate's limit), so it can't be opened here.
+          {tooLargeWords(artifact.title, artifact.size, MAX_ARTIFACT_BYTES)}
         </p>
       </>
     );
@@ -212,8 +222,7 @@ export function ArtifactReader({
       <>
         <Facts artifact={artifact} sentAt={sentAt} />
         <p className="reader-why" data-testid="artifact-why">
-          {artifact.title} is {formatSize(loaded.size ?? artifact.size)}. Clawtrate opens and saves
-          items up to {formatSize(loaded.limit)} (Clawtrate's limit), so it can't be opened here.
+          {tooLargeWords(artifact.title, loaded.size ?? artifact.size, loaded.limit)}
         </p>
       </>
     );
@@ -272,6 +281,23 @@ export function ArtifactReader({
         </div>
       </>
     );
+  } else if (ready && ready.kind === "image" && broken === `${artifact.key}:${attempt}`) {
+    body = (
+      <div className="files-alert" role="alert" data-testid="artifact-undecodable">
+        <span>{undecodable(artifact.title, "image")}</span>
+        <button type="button" className="button" data-size="sm" onClick={retry}>
+          Try again
+        </button>
+        <button
+          type="button"
+          className="button"
+          data-size="sm"
+          onClick={() => void api.download(artifact)}
+        >
+          Download
+        </button>
+      </div>
+    );
   } else if (ready && ready.kind === "image") {
     body = (
       <button
@@ -280,7 +306,12 @@ export function ArtifactReader({
         aria-label={`Open ${artifact.title} full size`}
         onClick={(event) => openItem(api, artifact, siblings, event.currentTarget)}
       >
-        <img src={ready.url} alt={artifact.title} data-testid="artifact-picture" />
+        <img
+          src={ready.url}
+          alt={artifact.title}
+          data-testid="artifact-picture"
+          onError={() => setBroken(`${artifact.key}:${attempt}`)}
+        />
       </button>
     );
   } else if (ready && ready.kind === "audio") {

@@ -330,7 +330,10 @@ function MediaCell({
     return () => observer.disconnect();
   }, [artifact, can, wantPreview]);
   const preview = api.preview(artifact);
-  const shown = preview?.status === "ready" ? preview.url : null;
+  // A preview whose bytes don't draw as a picture leaves the quiet tile, with "No preview".
+  const [undrawn, setUndrawn] = useState<string | null>(null);
+  const ready = preview?.status === "ready" ? preview.url : null;
+  const shown = ready !== null && ready !== undrawn ? ready : null;
   const busy =
     can && artifact.kind === "image" && (preview === undefined || preview.status === "loading");
   const video = artifact.kind === "video";
@@ -354,7 +357,13 @@ function MediaCell({
       {...menu.handlers(artifact)}
     >
       {shown ? (
-        <img src={shown} alt="" draggable={false} data-single={single || undefined} />
+        <img
+          src={shown}
+          alt=""
+          draggable={false}
+          data-single={single || undefined}
+          onError={() => setUndrawn(shown)}
+        />
       ) : (
         <span className="media-quiet">
           <PictureIcon />

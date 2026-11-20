@@ -157,6 +157,42 @@ test.describe("cards and the pane", () => {
     );
   });
 
+  test("F-307: an item over the limit whose size the gateway didn't report is described without a size", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ARTIFACTS}&sizes=unknown`, "light");
+    await openCard(page, "app-screens.zip");
+    await expect(page.getByTestId("artifact-why")).toHaveText(
+      "app-screens.zip is larger than Clawtrate opens and saves: items up to 5 MB (Clawtrate's limit), so it can't be opened here.",
+    );
+  });
+
+  test("F-307: a picture whose bytes don't draw keeps the quiet tile, and the viewer and the pane say so with Try again and Download", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ARTIFACTS}&artifactbytes=broken`, "light");
+    await cardsDrawn(page);
+    const tile = cell(page, "apps-compared.png");
+    await expect(tile.locator(".media-quiet")).toContainText("No preview");
+    await expect(tile.locator("img")).toHaveCount(0);
+    await tile.click();
+    const why = "apps-compared.png didn't draw: its bytes aren't a picture this device can show.";
+    await expect(viewer(page).getByRole("alert")).toContainText(why);
+    await expect(viewer(page).getByRole("button", { name: "Try again" })).toBeVisible();
+    const [saved] = await Promise.all([
+      page.waitForEvent("download"),
+      viewer(page).getByRole("button", { name: "Download", exact: true }).click(),
+    ]);
+    expect(readFileSync((await saved.path())!, "utf8")).toBe("These bytes are not a picture.");
+    await page.keyboard.press("Escape");
+    await tile.click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Show in Files" }).click();
+    const undrawn = page.getByTestId("artifact-undecodable");
+    await expect(undrawn).toContainText(why);
+    await expect(undrawn.getByRole("button", { name: "Try again" })).toBeVisible();
+    await expect(undrawn.getByRole("button", { name: "Download" })).toBeVisible();
+  });
+
   test("F-307: a failed load says so with Try again, and a successful retry shows the preview", async ({
     page,
   }) => {

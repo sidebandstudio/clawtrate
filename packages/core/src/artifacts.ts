@@ -459,6 +459,24 @@ export function thumbnailAddress(url: string): string | null {
   return null;
 }
 
+/**
+ * What an HTTP refusal of an issued download says, and no more: only the
+ * download call's `artifact_not_found` says the gateway no longer has an item.
+ * A grant's route answers 404 for a grant that expired or is not this
+ * connection's; a ticket's answers 404 when the file it names is not there,
+ * and asks for credentials (401 or 403) when it does not accept the ticket
+ * (OpenClaw 2026.10.6, `artifact-downloads`, `managed-image-attachments`).
+ */
+export function refusedDownload(kind: IssuedDownload["kind"], status: number): string {
+  if (kind === "grant" && status === 404)
+    return "The gateway's download for this item expired or isn't available now.";
+  if (kind === "ticket" && status === 404)
+    return "The gateway didn't find this item's content where its download points.";
+  if (kind === "ticket" && (status === 401 || status === 403))
+    return "The gateway refused this item's download ticket.";
+  return `The gateway answered ${status}.`;
+}
+
 const failure = (error: unknown): ArtifactRead => {
   const refusal = refusalOf(error);
   if (refusal.type === "artifact_not_found")
@@ -579,14 +597,12 @@ export async function readArtifact(
       ? { status: "no-preview", reason: error instanceof Error ? error.message : String(error) }
       : { status: "failed", message: error instanceof Error ? error.message : String(error) };
   }
-  if (got.status === 404)
-    return preview
-      ? { status: "no-preview", reason: "The gateway has no preview of this item." }
-      : { status: "gone", message: "The gateway no longer has this item." };
-  if (got.status < 200 || got.status >= 300)
-    return preview
-      ? { status: "no-preview", reason: `The gateway answered ${got.status}.` }
-      : { status: "failed", message: `The gateway answered ${got.status}.` };
+  if (got.status < 200 || got.status >= 300) {
+    if (preview && got.status === 404)
+      return { status: "no-preview", reason: "The gateway has no preview of this item." };
+    const message = refusedDownload(issued.kind, got.status);
+    return preview ? { status: "no-preview", reason: message } : { status: "failed", message };
+  }
   const mimeType = typeOf(got.mimeType, record.mimeType);
   if (preview && contentKind(mimeType) !== "image")
     return { status: "no-preview", reason: "The gateway's preview isn't a picture." };

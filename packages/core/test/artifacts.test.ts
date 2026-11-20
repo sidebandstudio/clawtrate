@@ -383,24 +383,43 @@ describe("reading an item", () => {
     ).toEqual([]);
   });
 
-  it("F-307: a failed fetch says why, and a missing copy at the address is gone", async () => {
+  it("F-307: a refused download says what refused it; only the download call's not-found says the gateway no longer has the item", async () => {
+    const grant = `/api/artifacts/download/conn-1/${"g".repeat(43)}`;
     const { ctx } = world({
-      records: [
-        { id: managed(1, "media"), type: "file", title: "a.md", download: { mode: "url" } },
-        { id: managed(2, "media"), type: "file", title: "b.md", download: { mode: "url" } },
-      ],
+      records: [1, 2, 3, 4].map((n) => ({
+        id: managed(n, "media"),
+        type: "file",
+        title: `${n}.md`,
+        download: { mode: "url" },
+      })),
       downloads: {
         [`${managed(1, "media")}:http`]: { artifact: {}, url: ticketPath(1), expiresAt: SOON },
         [`${managed(2, "media")}:http`]: { artifact: {}, url: ticketPath(2), expiresAt: SOON },
+        [`${managed(3, "media")}:http`]: { artifact: {}, url: ticketPath(3), expiresAt: SOON },
+        [`${managed(4, "media")}:http`]: { artifact: {}, url: grant, expiresAt: SOON },
       },
-      bodies: { [ticketPath(2)]: { status: 500, body: new Uint8Array(0) } },
+      bodies: {
+        [ticketPath(2)]: { status: 500, body: new Uint8Array(0) },
+        [ticketPath(3)]: { status: 401, body: new Uint8Array(0) },
+      },
     });
-    expect(await readArtifact(ctx, SESSION, managed(1, "media"), "full")).toMatchObject({
-      status: "gone",
+    // A ticket whose file is not there (404), a server error, a refused ticket (401), and an
+    // expired or unavailable grant (404 on its route): none of them is "no longer has".
+    expect(await readArtifact(ctx, SESSION, managed(1, "media"), "full")).toEqual({
+      status: "failed",
+      message: "The gateway didn't find this item's content where its download points.",
     });
     expect(await readArtifact(ctx, SESSION, managed(2, "media"), "full")).toEqual({
       status: "failed",
       message: "The gateway answered 500.",
+    });
+    expect(await readArtifact(ctx, SESSION, managed(3, "media"), "full")).toEqual({
+      status: "failed",
+      message: "The gateway refused this item's download ticket.",
+    });
+    expect(await readArtifact(ctx, SESSION, managed(4, "media"), "full")).toEqual({
+      status: "failed",
+      message: "The gateway's download for this item expired or isn't available now.",
     });
   });
 

@@ -31,6 +31,10 @@ export type ArtifactParams = {
   failFirstOpen: boolean;
   thumbs: "ok" | "failed" | "original";
   linkPreview: boolean;
+  /** Pictures whose bytes are not the picture their type names (`artifactbytes=broken`). */
+  brokenPictures: boolean;
+  /** The zip's size is not reported, and its read is refused as too large (`sizes=unknown`). */
+  unknownSizes: boolean;
 };
 
 export function artifactParams(params: URLSearchParams): ArtifactParams {
@@ -40,6 +44,8 @@ export function artifactParams(params: URLSearchParams): ArtifactParams {
     failFirstOpen: params.get("artifactload") === "failed",
     thumbs: thumbs === "failed" || thumbs === "original" ? thumbs : "ok",
     linkPreview: params.get("linkpreview") !== "none",
+    brokenPictures: params.get("artifactbytes") === "broken",
+    unknownSizes: params.get("sizes") === "unknown",
   };
 }
 
@@ -325,7 +331,13 @@ const kindOf = (mimeType: string) =>
 
 /** The artifact commands, answered as the engine would from this task's items. */
 export function artifactAnswers(params: ArtifactParams) {
-  const items = fixtureItems();
+  const items = fixtureItems().map((item) => {
+    if (params.brokenPictures && item.artifact.kind === "image" && item.bytes)
+      return { ...item, bytes: utf8Bytes("These bytes are not a picture.") };
+    if (params.unknownSizes && item.artifact.title === "app-screens.zip")
+      return { ...item, artifact: { ...item.artifact, size: null } };
+    return item;
+  });
   const positions = new Map<number, number>();
   const artifacts: Artifact[] = items.map(({ artifact, seq }) => {
     const position = positions.get(seq) ?? 0;
@@ -365,7 +377,10 @@ export function artifactAnswers(params: ArtifactParams) {
           }
           return content(found.bytes, artifact.mimeType ?? "image/png", "image");
         }
-        if ((artifact.size ?? 0) > 5_242_880)
+        if (
+          (artifact.size ?? 0) > 5_242_880 ||
+          (params.unknownSizes && artifact.title === "app-screens.zip")
+        )
           return { status: "too-large", size: artifact.size, limit: 5_242_880 };
         opens += 1;
         if (params.failFirstOpen && opens === 1)

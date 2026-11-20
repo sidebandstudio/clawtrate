@@ -10,7 +10,7 @@ import { createPortal } from "react-dom";
 import { BackIcon, ChevronIcon, CloseIcon, CopyIcon, DownloadIcon } from "../icons.tsx";
 import { Menu, type MenuEntry } from "../Menu.tsx";
 import { useArtifacts, type Content, type ViewerEntry } from "./context.tsx";
-import { downloadName } from "./words.ts";
+import { downloadName, undecodable } from "./words.ts";
 
 const SPEEDS = [0.5, 1, 1.5, 2] as const;
 /** The video speed, kept for the session (section 14). */
@@ -35,6 +35,8 @@ export function MediaViewer() {
   const [speed, setSpeed] = useState(sessionSpeed);
   const [speedMenu, setSpeedMenu] = useState<HTMLElement | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // The reading whose bytes didn't draw or play as their type: Try again reads it anew.
+  const [broken, setBroken] = useState<string | null>(null);
   // Swipes on a touch screen: left and right move, down closes.
   const swipe = useRef<{ x: number; y: number } | null>(null);
   const entry = viewer ? viewer.entries[viewer.index] : undefined;
@@ -63,6 +65,7 @@ export function MediaViewer() {
   const artifact = entry.type === "artifact" ? entry.artifact : null;
   const title = entryTitle(entry);
   const ready = loaded.status === "ready" ? loaded : null;
+  const undrawn = broken === `${key}:${attempt}`;
   const move = (step: number) => {
     if (count < 2) return;
     setMenu(null);
@@ -116,7 +119,7 @@ export function MediaViewer() {
         <span className="glyph" data-state="working" aria-hidden="true" />
       </div>
     );
-  } else if (loaded.status === "ready" && loaded.kind === "image") {
+  } else if (loaded.status === "ready" && loaded.kind === "image" && !undrawn) {
     stage = (
       <div
         className="viewer-image"
@@ -127,10 +130,16 @@ export function MediaViewer() {
           setMenu({ x: event.clientX, y: event.clientY });
         }}
       >
-        <img src={loaded.url} alt={title} draggable={false} data-testid="viewer-image" />
+        <img
+          src={loaded.url}
+          alt={title}
+          draggable={false}
+          data-testid="viewer-image"
+          onError={() => setBroken(`${key}:${attempt}`)}
+        />
       </div>
     );
-  } else if (loaded.status === "ready" && loaded.kind === "video") {
+  } else if (loaded.status === "ready" && loaded.kind === "video" && !undrawn) {
     stage = (
       <div
         className="viewer-video"
@@ -144,6 +153,7 @@ export function MediaViewer() {
           controls
           aria-label={title}
           data-testid="viewer-video"
+          onError={() => setBroken(`${key}:${attempt}`)}
           ref={(video) => {
             if (video) video.playbackRate = speed;
           }}
@@ -205,7 +215,9 @@ export function MediaViewer() {
     stage = (
       <div className="viewer-failed" role="alert">
         <p>
-          {`Couldn't load ${title}.`} {why}
+          {ready && undrawn && (ready.kind === "image" || ready.kind === "video")
+            ? undecodable(title, ready.kind)
+            : `Couldn't load ${title}. ${why}`}
         </p>
         <button
           type="button"
@@ -217,6 +229,11 @@ export function MediaViewer() {
         >
           Try again
         </button>
+        {ready && (
+          <button type="button" className="button" onClick={save}>
+            Download
+          </button>
+        )}
       </div>
     );
   }

@@ -163,3 +163,15 @@ export function shownAgainBelow(items: TranscriptItem[]): Set<string> {
   }
   return again;
 }
+
+/** Why an item over Clawtrate's limit isn't opened; a size the gateway didn't report is not printed. */
+export function tooLargeWords(title: string, size: number | null, limit: number): string {
+  const opens = `items up to ${formatSize(limit)} (Clawtrate's limit), so it can't be opened here.`;
+  return size === null
+    ? `${title} is larger than Clawtrate opens and saves: ${opens}`
+    : `${title} is ${formatSize(size)}. Clawtrate opens and saves ${opens}`;
+}
+
+/** Bytes that came, but don't draw or play as the type they are labelled. */
+export const undecodable = (title: string, kind: "image" | "video") =>
+  `${title} didn't ${kind === "image" ? "draw" : "play"}: its bytes aren't a ${kind === "image" ? "picture" : "video"} this device can ${kind === "image" ? "show" : "play"}.`;
