@@ -61,6 +61,13 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/permissions.ts:PERMISSION_CHOICES": "static, seven choices",
   "packages/core/src/permissions.ts:lineOf>open":
     "one line's tools that nothing removes, gone when the line is read",
+  "packages/core/src/permissions.ts:UNREAD_KEYS": "static, four setting names",
+  "packages/core/src/permissions.ts:lineOf>everyLeftOut":
+    "one line's tools the allow list for every bot leaves out, gone when the line is read",
+  "packages/core/src/permissions.ts:lineOf>botLeftOut":
+    "one line's tools the bot's allow list leaves out, gone when the line is read",
+  "packages/core/src/permissions.ts:lineOf>exceptions":
+    "one line's exceptions, at most `MAX_EXCEPTIONS` and its lists, gone when the line is read",
   "packages/core/src/machines.ts:NODE_APPROVALS_COMMANDS": "static, two command names",
   "packages/core/src/machines.ts:DEFAULTS_CHOICES":
     "static, the four choices of a machine's defaults",
