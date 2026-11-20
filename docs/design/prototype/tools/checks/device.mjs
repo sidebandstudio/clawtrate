@@ -519,22 +519,57 @@ await p.close();
 
 // 7. A positive read-back for each stage (other devices) -------------------------------------
 
-await walk("another device approved: the confirmation predicts no commands; the read says paired", "screen=machines", [
+await walk("another device approved: the confirmation predicts no commands; the device entry confirms the role", "screen=machines", [
+  [none, null, ["Kitchen iPad requests the node role."]],
   [click('[data-request="ipad"] button[data-variant="primary"]'), "machines", ["Approve Kitchen iPad as a device for bots?", "Its commands are a separate request, approved separately."]],
-  [click("[data-confirm]"), "machines", ["Kitchen iPad is paired as a device for bots (read 5:22 PM)."]],
+  [click("[data-confirm]"), "machines", ["Kitchen iPad's device entry lists the node role (read 5:22 PM)."]],
 ]);
-await walk("another device's commands approved: the read lists them", "screen=machines", [
-  [click('[data-request="pc"] button[data-variant="primary"]'), "machines", ["and run programs and read files on it", "system.run"]],
+await walk("another device's commands: exact IDs, the admin line, then confirmed by their present listing", "screen=machines", [
+  [none, null, ["Workshop PC requests location.get, system.run, fs.listDir. These commands need admin approval.", "If approved and permitted, these commands can run a program or list files on Workshop PC."]],
+  [click('[data-request="pc"] button[data-variant="primary"]'), "machines", ["Workshop PC requests location.get, system.run, fs.listDir. If approved and permitted, these commands can run a program or list files on Workshop PC."]],
   [click("[data-confirm]"), "machines", ["The gateway lists these commands for Workshop PC (read 5:22 PM)"]],
 ]);
-await walk("a request that disappears says only that it is no longer pending", "screen=machines", [[link("The request disappears with no event"), "machines", ["The request is no longer pending."]]]);
-await walk("a rejection is said from the gateway's report", "screen=machines", [[click('[data-request="ipad"] button[data-variant="quiet"]'), "machines", ["The gateway reported the request rejected."]]]);
+p = await open("screen=machines");
+check("Machines: a pending declaration is not promoted to what the device offers", !/also offers|asks to offer|read files on it/.test(await text(p)));
+await p.close();
+for (const [who, q] of [["ipad", "ipad=refused"], ["pc", "pc=refused"]]) {
+  p = await open(`screen=machines&${q}`);
+  check(`a refused decision on ${who}: the refusal shown, the same request's row retained and still pending`, (await p.locator(`[data-request="${who}"]`).count()) === 1 && (await text(p, `[data-request="${who}"]`)).includes("The gateway refused the approval:") && (await text(p, `[data-request="${who}"]`)).includes("The request is still pending (read 5:22 PM).") && !(await text(p)).includes("no longer pending"));
+  await p.close();
+}
+await walk("a request that disappears with a successful read: no longer pending", "screen=machines", [[link("The request disappears with no event"), "machines", ["The request is no longer pending (read 5:22 PM)."]]]);
+await walk("a request that disappears and the read fails: never 'no longer pending'", "screen=machines", [
+  [link("It disappears, and the read fails"), "machines", ["Couldn't read the gateway. Clawtrate can't tell what happened to Kitchen iPad's request."]],
+  [async (p) => check("a missing request with a failed read says nothing about its decision", !/no longer pending|rejected|is paired|lists the node role/.test(await text(p, "[data-after]"))), null],
+]);
+await walk("a rejection is said from the event matched to the request's ID", "screen=machines", [[click('[data-request="ipad"] button[data-variant="quiet"]'), "machines", ["The gateway reported request 5d2e… rejected (device.pair.resolved, 5:22 PM)."]]]);
 p = await open("screen=machines&ipad=approved&readfail=1");
-check("a failed read never says approved", (await text(p)).includes("Couldn't read the gateway.") && !(await text(p)).includes("is paired as a device"));
+check("a failed read never says approved", (await text(p)).includes("Couldn't read the gateway.") && !/is paired|lists the node role/.test(await text(p)));
 await p.close();
-p = await open("screen=machines&access=write");
-check("below admin: one line, never a list", (await text(p)).includes("Approving other devices for bots needs admin access.") && (await p.locator(".d-request").count()) === 0);
-await p.close();
+for (const [acc, words, rows] of [
+  ["read", "Seeing paired devices needs device access.", 0],
+  ["write", "Seeing paired devices needs device access.", 0],
+  ["pairing", "Only this device's own records are listed. Seeing other devices needs admin access.", 1],
+  ["admin", "", 3],
+]) {
+  p = await open(`screen=machines&access=${acc}`);
+  const paired = await text(p, "[data-paired]");
+  check(`Paired devices at ${acc}: ${rows === 3 ? "the whole list" : rows ? "this device's own records only" : "the device-access line, no list"}`, (await p.locator("[data-paired] .facts > div").count()) === rows && (!words || paired.includes(words)) && (acc === "admin" || !paired.includes("(bots)")));
+  if (acc !== "admin")
+    check(`requests at ${acc}: the admin line, never a list`, (await text(p)).includes("Approving other devices for bots needs admin access.") && (await p.locator(".d-request").count()) === 0);
+  await p.close();
+}
+// The own node's changed-command path: compared again, approved by request ID, then the final read.
+await walk("own node's pending commands: compared against the declaration, then the resulting commands are read", "screen=mac-steps&fail=pending", [
+  [none, null, ["Compared with this Mac's declaration at 5:31 PM: calendar.events and reminders.list are declared"]],
+  [click("[data-approve-own]"), "mac-steps", ["Approved request 7a1c…. Reading the resulting commands"]],
+  [async (p) => check("after approving, the read-back step is still running: approving is not listing", (await stepStates(p)) === "done,done,running" && (await switchOff(p))), null],
+  [link("It lists an extra command"), "mac-steps", ["The gateway lists commands this Mac doesn't offer. Clawtrate disconnected it."]],
+]);
+await walk("own node's request changed since it was read: nothing approved", "screen=mac-steps&fail=pending", [
+  [link("The request changed since it was read"), "mac-steps", ["The pending request changed since Clawtrate read it. Clawtrate approved nothing.", "system.run"]],
+  [async (p) => check("a changed request offers no approval", (await p.locator("[data-approve-own]").count()) === 0), null],
+]);
 
 // 8. The share sheet: the edited note travels; a lost reply is not sent twice ----------------
 

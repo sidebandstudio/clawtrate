@@ -19,8 +19,8 @@
   const esc = (text) =>
     String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-  // What the operator connection holds: read, write (the interactive tier), or admin.
-  const access = ["read", "write", "admin"].includes(params.get("access")) ? params.get("access") : "admin";
+  // What the operator connection holds: read, write (the interactive tier), pairing (device access), or admin.
+  const access = ["read", "write", "pairing", "admin"].includes(params.get("access")) ? params.get("access") : "admin";
   const isAdmin = access === "admin";
   const screenId = params.get("screen") || "mac-off";
   const phoneScreen = /^(phone-|card-|share|siri)/.test(screenId) || params.get("dev") === "phone";
@@ -385,7 +385,7 @@
     const here = phone ? "phone-steps" : "mac-steps";
     const fail = params.get("fail");
     const at = Number(params.get("at") || 0);
-    const failedAt = { code: 1, codeother: 1, hello: 2, pair: 2, read: 3, pending: 3, extra: 3 }[fail] || 0;
+    const failedAt = { code: 1, codeother: 1, hello: 2, pair: 2, read: 3, pending: 3, changed: 3, extra: 3 }[fail] || 0;
     const state = (n) => (failedAt === n ? "failed" : failedAt ? (n < failedAt ? "done" : "waiting") : at >= n ? "done" : at + 1 === n ? "running" : "waiting");
     const retry = (label = "Try again") => `<div class="d-actions">${act(label, go(here, { fail: null, at: null }), { variant: "primary", attrs: "data-retry" })}</div>`;
     const declared = phone ? ["calendar.events", "contacts.search", "location.get", "reminders.list"] : ["location.get", "contacts.search", "calendar.events", "reminders.list"];
@@ -402,7 +402,12 @@
                 ? note("danger", "Couldn't read what the gateway lists.", `Requests to this ${what} wait until it is read.`) + retry("Check again")
                 : fail === "pending"
                   ? note("warn", `This ${what}'s commands wait for approval.`, `Pending: <code>${declared[2]}</code>, <code>${declared[3]}</code>.`) +
-                    `<div class="d-actions">${act("Approve its commands", go(here, { fail: null, at: "2" }), { variant: "primary", attrs: "data-approve-own" })}</div>`
+                    // Compared again just before node.pair.approve {requestId}: the request against the current declaration.
+                    `<p class="d-lead" data-compared>Compared with this ${what}'s declaration at 5:31 PM: <code>${declared[2]}</code> and <code>${declared[3]}</code> are declared; <code>${declared[0]}</code> and <code>${declared[1]}</code> are already listed.</p>` +
+                    `<div class="d-actions">${act("Approve its commands", go(here, { fail: null, at: "2", approved: "1" }), { variant: "primary", attrs: "data-approve-own" })}</div>` +
+                    proto(link("The request changed since it was read", go(here, { fail: "changed" })))
+                  : fail === "changed"
+                    ? note("danger", "The pending request changed since Clawtrate read it. Clawtrate approved nothing.", `It now also lists <code>system.run</code>, which this ${what} doesn't declare.`)
                   : fail === "extra"
                     ? note("danger", `The gateway lists commands this ${what} doesn't offer. Clawtrate disconnected it.`, "Listed: <code>system.run</code>.")
                     : at === 0
@@ -424,7 +429,15 @@
       steps([
         [`Getting this ${what}'s device sign-in`, state(1), state(1) === "done" ? "The gateway answered with a usable code for the node role only, for this gateway's address." : ""],
         ["Connecting as a device for bots", state(2), state(2) === "done" ? "Its hello says role node." : ""],
-        ["Reading back what the gateway lists", state(3), state(3) === "running" ? `Waiting for paired, approved, connected, and commands this ${what} declared.` : ""],
+        [
+          "Reading back what the gateway lists",
+          state(3),
+          state(3) === "running"
+            ? params.get("approved") === "1"
+              ? `Approved request 7a1c…. Reading the resulting commands: approving is not listing, and any command beyond this ${what}'s declaration disconnects it.`
+              : `Waiting for paired, approved, connected, and commands this ${what} declared.`
+            : "",
+        ],
       ]) +
       after
     );
@@ -592,47 +605,74 @@
       });
     },
 
+    // Each line says what a read or an event matched to the request's ID established, with its time.
     machines: () => {
       const ipad = params.get("ipad");
       const pc = params.get("pc");
       const dlg = params.get("dlg");
       const readfail = params.get("readfail") === "1";
-      const after = (text) => (readfail ? `<p class="d-event" data-after>Couldn't read the gateway.</p>` : `<p class="d-event" data-after>${text}</p>`);
+      const said = (text) => `<p class="d-event" data-after>${text}</p>`;
+      const unread = (who) => said(`Couldn't read the gateway. Clawtrate can't tell what happened to ${who}'s request.`) + `<div class="d-actions">${act("Check again", go("machines", { readfail: null }), { attrs: "data-reread" })}</div>`;
+      const ipadRow = (extra = "") =>
+        `<div class="d-request" data-request="ipad"><h4>Kitchen iPad requests the node role.</h4><p>iPadOS, asked 5:20 PM. Request <code>5d2e…</code></p>${extra}` +
+        `<div class="d-actions">${act("Approve", go("machines", { dlg: "ipad", ipad: null }), { variant: "primary", attrs: 'aria-label="Approve Kitchen iPad"' })}${act("Reject", go("machines", { ipad: "rejected" }), { variant: "quiet", attrs: 'aria-label="Reject Kitchen iPad"' })}</div>` +
+        proto(link("The approval is refused", go("machines", { ipad: "refused" })), link("The request disappears with no event", go("machines", { ipad: "gone" })), link("It disappears, and the read fails", go("machines", { ipad: "gone", readfail: "1" }))) +
+        `</div>`;
       const ipadBlock =
         ipad === "approved"
-          ? after("Kitchen iPad is paired as a device for bots (read 5:22 PM).")
-          : ipad === "rejected"
-            ? after("The gateway reported the request rejected.")
-            : ipad === "gone"
-              ? after("The request is no longer pending.")
-              : `<div class="d-request" data-request="ipad"><h4>Kitchen iPad asks to be a device bots can use</h4><p>iPadOS, asked 5:20 PM</p>` +
-                `<div class="d-actions">${act("Approve", go("machines", { dlg: "ipad" }), { variant: "primary", attrs: 'aria-label="Approve Kitchen iPad"' })}${act("Reject", go("machines", { ipad: "rejected" }), { variant: "quiet", attrs: 'aria-label="Reject Kitchen iPad"' })}</div>` +
-                proto(link("The request disappears with no event", go("machines", { ipad: "gone" }))) +
-                `</div>`;
+          ? readfail
+            ? unread("Kitchen iPad")
+            : said("Kitchen iPad's device entry lists the node role (read 5:22 PM).")
+          : ipad === "refused"
+            ? ipadRow(note("danger", "The gateway refused the approval: <code>missing scope: operator.admin</code>.", "The request is still pending (read 5:22 PM)."))
+            : ipad === "rejected"
+              ? said("The gateway reported request <code>5d2e…</code> rejected (<code>device.pair.resolved</code>, 5:22 PM).")
+              : ipad === "gone"
+                ? readfail
+                  ? unread("Kitchen iPad")
+                  : said("The request is no longer pending (read 5:22 PM).")
+                : ipadRow();
+      const PC_CMDS = "<code>location.get</code>, <code>system.run</code>, <code>fs.listDir</code>";
+      const pcRow = (extra = "") =>
+        `<div class="d-request" data-request="pc"><h4>Workshop PC requests ${PC_CMDS}. These commands need admin approval.</h4><p>Windows, asked 5:21 PM. Request <code>9b04…</code></p>` +
+        `<p data-tone="warn">If approved and permitted, these commands can run a program or list files on Workshop PC.</p>${extra}` +
+        `<div class="d-actions">${act("Approve", go("machines", { dlg: "pc", pc: null }), { variant: "primary", attrs: 'aria-label="Approve Workshop PC\'s commands"' })}${act("Reject", go("machines", { pc: "rejected" }), { variant: "quiet", attrs: 'aria-label="Reject Workshop PC\'s commands"' })}</div>` +
+        proto(link("The approval is refused", go("machines", { pc: "refused" }))) +
+        `</div>`;
       const pcBlock =
         pc === "approved"
-          ? after("The gateway lists these commands for Workshop PC (read 5:22 PM): <code>location.get</code>, <code>system.run</code>, <code>fs.listDir</code>.")
-          : `<div class="d-request" data-request="pc"><h4>Workshop PC asks to offer: Location, and more</h4><p><code>location.get</code>, <code>system.run</code>, <code>fs.listDir</code></p>` +
-            `<p data-tone="warn">It also offers commands that run programs or read files on it: <code>system.run</code>, <code>fs.listDir</code>.</p>` +
-            `<div class="d-actions">${act("Approve", go("machines", { dlg: "pc" }), { variant: "primary", attrs: 'aria-label="Approve Workshop PC\'s commands"' })}${act("Reject", go("machines", { pc: "rejected" }), { variant: "quiet", attrs: 'aria-label="Reject Workshop PC\'s commands"' })}</div></div>`;
-      const requests = isAdmin
-        ? `<h4 class="b-group">Devices asking to be used by bots</h4>${ipadBlock}${pc === "rejected" ? after("The gateway reported the request rejected.") : pcBlock}`
-        : `<h4 class="b-group">Devices asking to be used by bots</h4>${note("", "", "Approving other devices for bots needs admin access.")}${adminBar("Admin access needed.")}`;
+          ? readfail
+            ? unread("Workshop PC")
+            : said(`The gateway lists these commands for Workshop PC (read 5:22 PM): ${PC_CMDS}.`)
+          : pc === "refused"
+            ? pcRow(note("danger", "The gateway refused the approval: <code>node pairing changed</code>.", "The request is still pending (read 5:22 PM)."))
+            : pc === "rejected"
+              ? said("The gateway reported request <code>9b04…</code> rejected (<code>node.pair.resolved</code>, 5:22 PM).")
+              : pcRow();
+      // Below admin the two sections stay independent: the requests show the admin line; Paired devices
+      // shows controls.md §15's device-access line below pairing, this device's own records at pairing,
+      // and the whole list only at admin.
+      const requests = isAdmin ? ipadBlock + pcBlock : note("", "", "Approving other devices for bots needs admin access.") + adminBar("Admin access needed.");
+      const paired = isAdmin
+        ? facts([["This device", esc(MAC)], [`${esc(MAC)} (bots)`, "A device for bots, connected"], ["iPhone", "Last seen 4:58 PM"]])
+        : access === "pairing"
+          ? facts([["This device", esc(MAC)]]) + `<p class="d-lead" data-paired-scope>Only this device's own records are listed. Seeing other devices needs admin access.</p>`
+          : `<p class="d-lead" data-paired-scope>Seeing paired devices needs device access.</p><div class="d-actions">${act("Request access", go("machines", { req: "requested" }), { attrs: "data-request-pairing" })}</div>`;
       const body =
         `<h4 class="b-group">Machines</h4>${facts([["The gateway's machine", "Connected"], ["media-box", "Connected"]])}` +
-        requests +
-        `<h4 class="b-group">Paired devices</h4>${facts([["This device", esc(MAC)], [`${esc(MAC)} (bots)`, "A device for bots, connected"], ["iPhone", "Last seen 4:58 PM"]])}`;
+        `<h4 class="b-group">Devices asking to be used by bots</h4>${requests}` +
+        `<h4 class="b-group">Paired devices</h4><div data-paired>${paired}</div>`;
       let over = "";
       if (dlg === "ipad")
         over = dialog(
           "Approve Kitchen iPad as a device for bots?",
-          `<p>Its commands are a separate request, approved separately. What a device does with a request is up to the device.</p>`,
+          `<p>Kitchen iPad requests the node role. Its commands are a separate request, approved separately. What a device does with a request is up to the device.</p>`,
           link("Cancel", go("machines", { dlg: null }), { size: "md", attrs: "data-cancel" }) + act("Approve", go("machines", { dlg: null, ipad: "approved" }), { variant: "primary", size: "md", attrs: "data-confirm" }),
         );
       if (dlg === "pc")
         over = dialog(
           "Approve Workshop PC's commands?",
-          `<p>Requests that reach it could ask it for Location, and run programs and read files on it: <code>system.run</code>, <code>fs.listDir</code>.</p>`,
+          `<p>Workshop PC requests ${PC_CMDS}. If approved and permitted, these commands can run a program or list files on Workshop PC.</p>`,
           link("Cancel", go("machines", { dlg: null }), { size: "md", attrs: "data-cancel" }) + act("Approve", go("machines", { dlg: null, pc: "approved" }), { variant: "primary", size: "md", attrs: "data-confirm" }),
         );
       return settings({ title: "Machines", body, current: "Machines" }) + over;
