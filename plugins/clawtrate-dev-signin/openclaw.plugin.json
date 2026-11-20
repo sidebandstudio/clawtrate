@@ -48,7 +48,7 @@
       "method": "callback",
       "choiceId": "acme-callback",
       "choiceLabel": "Acme (scripted), back to the gateway",
-      "choiceHint": "the gateway takes the callback",
+      "choiceHint": "the gateway's callback, or the address pasted back",
       "groupId": "acme",
       "groupLabel": "Acme (scripted)",
       "credentialOnly": true,

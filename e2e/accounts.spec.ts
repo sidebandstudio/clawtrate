@@ -293,6 +293,15 @@ test("F-474 F-476: a sign-in with a link and a code lands where the screen says 
     "href",
     new RegExp(`^${providerUrl}/`),
   );
+  // Where it opens, before it is chosen: the parsed address without its query, and that a
+  // loopback address points to this device.
+  const href = new URL((await settings.getByTestId("open-page").getAttribute("href"))!);
+  await expect(settings.getByTestId("page-address")).toHaveText(
+    `http://${href.hostname}:${href.port}${href.pathname}`,
+  );
+  await expect(settings.getByTestId("page-opens")).toHaveText(
+    "Opens in this device's browser. This address points to this device. It points directly to the gateway's machine only when this is the gateway's machine.",
+  );
   await shots("signin-waiting");
   // The person approves on the provider's page, as account "travel".
   await scripted("/scripted/signin/answer", {
@@ -709,9 +718,7 @@ const stateOf = (href: string | null) => new URL(href!).searchParams.get("state"
 
 test("F-474: a sign-in that finishes on the gateway's machine shows the gateway's words and the port to forward, and connects when the browser comes back there", async () => {
   const settings = await startFromSettings(/^Acme \(scripted\) on the gateway's machine/);
-  await expect(settings.getByText(/This sign-in finishes on the gateway's machine/)).toBeVisible({
-    timeout: 20_000,
-  });
+  await expect(settings.getByText("The gateway says:")).toBeVisible({ timeout: 20_000 });
   await expect(settings.getByTestId("gateway-says").first()).toContainText(
     "Sign in on the scripted page.",
   );
@@ -742,15 +749,18 @@ test("F-474: a sign-in that finishes on the gateway's machine shows the gateway'
   await page.keyboard.press("Escape");
 });
 
-test("F-474: a browser sign-in whose callback the gateway takes itself waits with the page and nothing to paste", async () => {
+test("F-474: OpenRouter's order of steps, on Clawtrate's connection: the page, then the address the browser landed on pasted back, kept from view", async () => {
   const settings = await startFromSettings(/^Acme \(scripted\), back to the gateway/);
-  await expect(
-    settings.getByText(
-      /sends your browser back to the gateway, which finishes the sign-in by itself/,
-    ),
-  ).toBeVisible({ timeout: 20_000 });
-  await expect(settings.getByTestId("paste")).toHaveCount(0);
+  // The gateway offers its own callback only to a connection with a browser origin it accepts;
+  // Clawtrate's host has none, so the model asks for the address pasted back, as OpenRouter does.
+  const field = settings.getByTestId("paste");
+  await expect(field).toBeVisible({ timeout: 20_000 });
+  // The step is not marked secret, and carries the page: the field is a password field.
+  await expect(field).toHaveAttribute("type", "password");
   await expect(settings.locator(".b-code")).toHaveCount(0);
+  await expect(
+    settings.getByText(/finishes on the gateway's machine|sends your browser back|by itself/),
+  ).toHaveCount(0);
   await shots("signin-callback");
   const href = await settings.getByTestId("open-page").getAttribute("href");
   const answered = await scripted<{ redirectUrl: string }>("/scripted/signin/answer", {
@@ -758,7 +768,8 @@ test("F-474: a browser sign-in whose callback the gateway takes itself waits wit
     outcome: "approve",
     account: "returned",
   });
-  await fetch(answered.redirectUrl);
+  await field.fill(answered.redirectUrl);
+  await settings.getByRole("button", { name: "Continue" }).click();
   await expect(settings.getByRole("heading", { name: "Connected to Acme" })).toBeVisible({
     timeout: 30_000,
   });
@@ -783,7 +794,11 @@ test("F-474: on the gateway's machine and back to the gateway, refused, expired 
       outcome,
       account: `no${outcome}`,
     });
-    await fetch(answered.redirectUrl);
+    // On the gateway's machine the browser comes back to its listener; otherwise it is pasted.
+    if (method.source.includes("back to the gateway")) {
+      await settings.getByTestId("paste").fill(answered.redirectUrl, { timeout: 20_000 });
+      await settings.getByRole("button", { name: "Continue" }).click();
+    } else await fetch(answered.redirectUrl);
     await expect(settings.getByRole("heading", { name: heading })).toBeVisible({ timeout: 30_000 });
     await expect(settings.getByTestId("reread")).toHaveText(
       "Clawtrate checked the gateway's accounts: no new Acme account.",

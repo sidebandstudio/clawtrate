@@ -319,42 +319,105 @@ describe("the sign-in plugin's requests", () => {
     await expect(fetch(redirectUri)).rejects.toThrow();
   });
 
-  it("a returning sign-in brought back with its state saves the account; one approved as unconfirmed hands the gateway a setting it refuses", async () => {
-    const tokens = {
-      account: "acme:back",
-      access: "a",
-      refresh: "r",
-      expires: 1,
-    };
+  /** The scripted side of the callback model: a page with its state, then the exchange. */
+  async function callbackSide(extra: Record<string, unknown> = {}) {
+    return serve((body) => {
+      const fields = JSON.parse(body || "{}") as Record<string, unknown>;
+      if (fields.code === undefined)
+        return {
+          status: 200,
+          body: JSON.stringify({ state: "s2", authorizeUrl: "http://127.0.0.1:9/a?state=s2" }),
+        };
+      return {
+        status: 200,
+        body: JSON.stringify({
+          status: "approved",
+          tokens: { account: "acme:back", access: "a", refresh: "r", expires: 1 },
+          ...extra,
+        }),
+      };
+    });
+  }
+
+  it("the callback model, on a connection with no browser origin: a note, the page, a note with it, then the address pasted back, as OpenRouter's", async () => {
     for (const confirmed of [true, false]) {
-      const scripted = await serve((body) => {
-        const fields = JSON.parse(body || "{}") as Record<string, unknown>;
-        return fields.redirectUri !== undefined
-          ? {
-              status: 200,
-              body: JSON.stringify({ state: "s2", authorizeUrl: "http://127.0.0.1:9/a?state=s2" }),
-            }
-          : {
-              status: 200,
-              body: JSON.stringify({
-                status: "approved",
-                tokens,
-                ...(confirmed ? {} : { confirmed: false }),
-              }),
-            };
-      });
+      const scripted = await callbackSide(confirmed ? {} : { confirmed: false });
       const { method } = await registered(`${scripted.url}/scripted/signin`);
-      const run = method("callback").run({ openUrl: async () => undefined, prompter: {} });
-      await vi.waitFor(() => expect(scripted.received).toHaveLength(1));
-      const redirectUri = (JSON.parse(scripted.received[0]!) as { redirectUri: string })
-        .redirectUri;
-      await fetch(`${redirectUri}?code=c2&state=s2`);
+      const steps: string[] = [];
+      const run = method("callback").run({
+        openUrl: async (url: string) => void steps.push(`open ${url}`),
+        prompter: {
+          note: async (message: string) =>
+            void steps.push(message.includes("http") ? "note with the page" : "note"),
+          text: async (params: { sensitive?: boolean; validate: (v: string) => unknown }) => {
+            steps.push(params.sensitive ? "secret text" : "text");
+            // The address of another sign-in is refused before it is sent on.
+            expect(params.validate("http://127.0.0.1/landed?code=c2&state=other")).toMatch(
+              /another sign-in/,
+            );
+            return "http://127.0.0.1/scripted/signin/browser/landed?code=c2&state=s2";
+          },
+        },
+      });
       const result = (await run) as {
         profiles: Array<{ profileId: string }>;
         configPatch?: unknown;
       };
+      expect(steps).toEqual([
+        "note",
+        "open http://127.0.0.1:9/a?state=s2",
+        "note with the page",
+        "text",
+      ]);
+      // No listener: the scripted page is asked for no address to send the browser back to.
+      expect(JSON.parse(scripted.received[0]!)).not.toHaveProperty("redirectUri");
+      expect(JSON.parse(scripted.received[1]!)).toMatchObject({ code: "c2" });
       expect(result.profiles[0]?.profileId).toBe("acme:back");
       expect(result.configPatch !== undefined).toBe(!confirmed);
     }
+  });
+
+  it("the callback model, on a connection with a browser origin the gateway accepts: the gateway's own callback, and an http page refused as the gateway refuses it", async () => {
+    const scripted = await callbackSide();
+    const { method } = await registered(`${scripted.url}/scripted/signin`);
+    // What the gateway's `authorize` does (provider-browser-auth): its own callback path on the
+    // accepted origin, and only an https authorization page with no user info.
+    const authorize = async (params: {
+      state: string;
+      buildAuthorizationUrl: (redirect: string) => string;
+    }) => {
+      const page = new URL(
+        params.buildAuthorizationUrl("https://gateway.example/oauth/provider/callback"),
+      );
+      if (page.protocol !== "https:" || page.username || page.password)
+        throw new Error("Provider sign-in requires an HTTPS authorization URL.");
+      return { code: "c2" };
+    };
+    const opened: string[] = [];
+    await expect(
+      method("callback").run({
+        oauth: { authorize },
+        openUrl: async (url: string) => void opened.push(url),
+        prompter: {},
+      }),
+    ).rejects.toThrow(/requires an HTTPS authorization URL/);
+    // Nothing is opened and nothing is pasted: the gateway decides.
+    expect(opened).toEqual([]);
+    const pages: string[] = [];
+    await method("callback").run({
+      oauth: {
+        authorize: async (params: { buildAuthorizationUrl: (redirect: string) => string }) => {
+          pages.push(
+            params.buildAuthorizationUrl("https://gateway.example/oauth/provider/callback"),
+          );
+          return { code: "c2" };
+        },
+      },
+      openUrl: async () => undefined,
+      prompter: {},
+    });
+    expect(new URL(pages[0]!).searchParams.get("redirect_uri")).toBe(
+      "https://gateway.example/oauth/provider/callback",
+    );
   });
 });
