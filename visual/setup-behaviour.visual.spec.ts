@@ -270,15 +270,20 @@ test("F-515: the too-old card speaks of the version it read, and of no protocol"
 });
 
 test("a refused sandbox says why it was refused", async ({ page }) => {
-  await openFixture(page, "setup=refused", "light");
-  await expect(
-    page.getByText(/its file is missing, isn't in the temporary folder, or has the wrong shape/),
-  ).toBeVisible();
+  const lead = "This run can only look in a sandbox. Clawtrate couldn't use this sandbox because";
+  for (const [state, why] of [
+    [
+      "refused",
+      "its description isn't in a private run folder of its own, or has the wrong shape.",
+    ],
+    ["refused-home", "its home and working folder must be outside the account's home."],
+    ["refused-state", "its state folder or config didn't pass the run's checks."],
+    ["refused-missing", "none was given to this run."],
+  ] as const) {
+    await openFixture(page, `setup=${state}`, "light");
+    await expect(page.getByText(`${lead} ${why} Use Advanced.`)).toBeVisible();
+  }
   await expect(page.getByText(/would reach/)).toHaveCount(0);
-  await openFixture(page, "setup=refused-home", "light");
-  await expect(
-    page.getByText(/its home or working folder is in this computer's home folder/),
-  ).toBeVisible();
 });
 
 test("connected, with bots that couldn't be read, says so and doesn't open the app", async ({

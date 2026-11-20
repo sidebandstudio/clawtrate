@@ -11,10 +11,11 @@ const ROOT = join(import.meta.dirname, "..");
 
 describe("the packaged app's launches", () => {
   it("always carry the sandbox switch, beside the data folder and the debugging port", () => {
-    expect(launchArgs("/data", "/tmp/sandbox.json")).toEqual([
+    expect(launchArgs("/data", "/tmp/run/sandbox.json", "/checkout")).toEqual([
       "--user-data-dir=/data",
       "--remote-debugging-port=0",
-      "--clawtrate-setup-sandbox=/tmp/sandbox.json",
+      "--clawtrate-setup-sandbox=/tmp/run/sandbox.json",
+      "--clawtrate-setup-checkout=/checkout",
     ]);
   });
 

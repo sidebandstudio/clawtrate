@@ -1,13 +1,15 @@
 // Setting up on this computer (docs/design/setup.md §3 to §7) in the
-// desktop app, against a real gateway: an instance this file starts for
-// itself with --default-local-pairing, seen through sandboxes of its own. In
-// a sandbox the look runs only the repository's stand-in for `openclaw`
-// (e2e/openclaw-stand-in.ts): OpenClaw's own `gateway status` inspects the
-// user's whole launchd job list and chooses its probe itself, so it never
-// runs here. The stand-in answers status from the instance's recorded facts
-// and runs the real program only for the version, the auth mode and the
-// one-time code, for this instance alone. The app is the development build,
-// driven by Playwright; its native dialog is answered in its main process.
+// desktop app's development build, driven by Playwright, through sandboxes
+// of its own (docs/development/setup.md). Each launch gets a private run
+// folder whose description names this file's development instance, its
+// current run and a scenario; the host proves that run and answers the
+// look's commands with its own stand-in, so no launch here starts a program
+// of OpenClaw's. The instance, started for this file with
+// --default-local-pairing, gives the look its facts and is where Advanced
+// connects. Pairing through "This computer" goes to the host's synthetic
+// gateway in the `pairing` scenario, with the stand-in's fixture mint: it
+// proves the app's side of pairing, not OpenClaw's. The native dialog is
+// answered in the app's main process.
 //
 // The instance is recorded in a run record of this file's own before it
 // starts, so a run killed outright is cleaned up by the next `pnpm e2e`. Only
@@ -24,7 +26,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { devGateway, FORBIDDEN_PORTS, listInstances } from "./global-setup.ts";
 import { cleanUp, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
-import { realOpenclaw, writeSandbox } from "./setup-sandbox.ts";
+import { writeSandbox } from "./setup-sandbox.ts";
+import type { Scenario } from "../apps/desktop/src/setup/sandbox.ts";
 import { openInstance, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
@@ -86,19 +89,27 @@ type Launched = { app: ElectronApplication; page: Page; log: () => string; data:
 
 /**
  * Launches the development build with its own data folder and, unless told
- * not to, a sandbox. `answer` is the native dialog's answer: 0 confirms, 1 cancels.
+ * not to, a sandbox of `scenario` for this file's instance. `answer` is the
+ * native dialog's answer: 0 confirms, 1 cancels. The dialog writes a fixed
+ * line to the app's output when it answers, so the output says what came first.
  */
 async function launch(
-  options: { sandbox?: string | null; answer?: number } = {},
+  options: { sandbox?: string | null; scenario?: Scenario; answer?: number } = {},
 ): Promise<Launched> {
   const dir = folder("app");
   const data = join(dir, "user-data");
   const args = [DESKTOP, `--user-data-dir=${data}`];
   if (process.platform === "linux") args.push("--no-sandbox");
-  if (options.sandbox !== null)
-    args.push(
-      `--clawtrate-setup-sandbox=${options.sandbox ?? writeSandbox({ dir, instance: SETUP }).file}`,
-    );
+  if (options.sandbox !== null) {
+    const file =
+      options.sandbox ??
+      writeSandbox({
+        instance: SETUP,
+        parent: dir,
+        ...(options.scenario ? { scenario: options.scenario } : {}),
+      }).file;
+    args.push(`--clawtrate-setup-sandbox=${file}`);
+  }
   const app = await _electron.launch({ executablePath: ELECTRON!, args, env: appEnv(), cwd: dir });
   let output = "";
   app.process().stdout?.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));
@@ -111,6 +122,7 @@ async function launch(
     dialog.showMessageBox = (async (...args: unknown[]) => {
       const options = args.at(-1) as { message: string; detail: string };
       asked.push(`${options.message} ${options.detail}`);
+      console.log(`[e2e] The host's dialog answered ${response}.`);
       return { response, checkboxChecked: false };
     }) as typeof dialog.showMessageBox;
   }, answer);
@@ -165,7 +177,6 @@ test.beforeAll(async () => {
   test.setTimeout(600_000);
   ELECTRON = electronBinary();
   if (ELECTRON === null) throw new Error("Electron's binary is missing: run pnpm install with it");
-  expect(realOpenclaw()).not.toBe("");
   // Recorded before anything starts, so a killed run is cleaned up by the next one.
   const self = processIdentity(process.pid);
   if (self.state !== "alive") throw new Error("could not determine this process's start time");
@@ -197,52 +208,41 @@ test.afterAll(() => {
   expect(problems).toEqual([]);
 });
 
-test("an automated launch without a sandbox refuses the real computer, loudly, and finds nothing", async () => {
-  const launched = await launch({ sandbox: null });
-  await thisComputer(launched.page).click();
-  // The same on every machine: whatever OpenClaw this computer has, the look sees none of it.
-  await expect(
-    launched.page.getByRole("heading", { name: "Clawtrate didn't find OpenClaw here" }),
-  ).toBeVisible();
-  await expect.poll(launched.log).toContain("The look on this computer refused to start");
-  await close(launched);
-});
+const MINTED = "[setup] The stand-in made a one-time code for the synthetic gateway.";
+const ANSWERED = (response: number) => `[e2e] The host's dialog answered ${response}.`;
+/** A one-time code's shape, as the fixture mint and OpenClaw make them. */
+const CODE_SHAPE = /[A-Za-z0-9_-]{43}/;
 
-test("a sandbox whose program is not the stand-in is refused, and nothing runs", async () => {
-  const dir = folder("refused");
-  const sandbox = writeSandbox({ dir, instance: SETUP, openclaw: realOpenclaw() });
-  // The sandbox's program itself replaced by the real one: refused before anything starts.
-  const file = JSON.parse(readFileSync(sandbox.file, "utf8")) as Record<string, string>;
-  const real = join(dir, "real.json");
-  writeFileSync(real, JSON.stringify({ ...file, openclaw: realOpenclaw() }));
-  const launched = await launch({ sandbox: real });
+test("an automated launch without a sandbox is refused, loudly, and looks at nothing", async () => {
+  const launched = await launch({ sandbox: null });
   await thisComputer(launched.page).click();
   await expect(
     launched.page.getByRole("heading", { name: "Looking on this computer is off here" }),
   ).toBeVisible();
-  await expect(launched.page.getByText(/isn't the repository's stand-in/)).toBeVisible();
+  await expect(launched.page.getByText(/because none was given to this run\./)).toBeVisible();
+  await expect
+    .poll(launched.log)
+    .toContain(
+      "The look on this computer refused to start: this run must look in a sandbox and was given none.",
+    );
   await close(launched);
 });
 
-test("F-492 F-494: the consent declined pairs nothing, as the gateway itself says", async () => {
-  const before = devices();
-  const launched = await launch({ answer: 1 });
+test("a description that names a program is refused before anything is read or run", async () => {
+  const dir = folder("refused");
+  const sandbox = writeSandbox({ instance: SETUP, parent: dir });
+  const file = JSON.parse(readFileSync(sandbox.file, "utf8")) as Record<string, string>;
+  writeFileSync(sandbox.file, JSON.stringify({ ...file, openclaw: "/usr/local/bin/openclaw" }));
+  const launched = await launch({ sandbox: sandbox.file });
   await thisComputer(launched.page).click();
-  await expect(launched.page.getByRole("heading", { name: "OpenClaw is running" })).toBeVisible({
-    timeout: 60_000,
-  });
-  await launched.page.getByRole("button", { name: "Connect" }).click();
-  await expect.poll(() => asked(launched.app)).toHaveLength(1);
-  await expect(launched.page.getByRole("heading", { name: "OpenClaw is running" })).toBeVisible();
-  await expect(launched.page.getByRole("button", { name: "Connect" })).toBeVisible();
-  // Nothing was minted or registered: the gateway's devices are as they were.
-  expect(devices()).toEqual(before);
-  expect(readStore(launched.data)).not.toContain("deviceToken:");
+  await expect(
+    launched.page.getByRole("heading", { name: "Looking on this computer is off here" }),
+  ).toBeVisible();
+  await expect(launched.page.getByText(/or has the wrong shape\./)).toBeVisible();
   await close(launched);
 });
 
-test("F-492 F-494: the gateway on this computer is found and connected read-only with nothing typed", async () => {
-  const before = devices().paired.map((device) => device.deviceId);
+test("F-492: the look names this run's instance from its own records, with nothing typed", async () => {
   const launched = await launch();
   const { page } = launched;
   await thisComputer(page).click();
@@ -256,32 +256,75 @@ test("F-492 F-494: the gateway on this computer is found and connected read-only
     "ServiceNone registered",
   ]);
   await expect(page.locator("input")).toHaveCount(0);
+  // A development instance is never paired with: after the dialog, a fixed refusal.
   await page.getByRole("button", { name: "Connect" }).click();
-  // The app opens, read-only, with nothing typed.
+  await expect(page.getByText(/because it pairs only in its pairing scenario\./)).toBeVisible();
+  expect(launched.log()).not.toContain(MINTED);
+  expect(readStore(launched.data)).not.toContain("deviceToken:");
+  await close(launched);
+});
+
+test("F-492: the consent declined makes no code and pairs nothing", async () => {
+  const launched = await launch({ scenario: "pairing", answer: 1 });
+  await thisComputer(launched.page).click();
+  await expect(launched.page.getByRole("heading", { name: "OpenClaw is running" })).toBeVisible({
+    timeout: 60_000,
+  });
+  await launched.page.getByRole("button", { name: "Connect" }).click();
+  await expect.poll(() => asked(launched.app)).toHaveLength(1);
+  await expect(launched.page.getByRole("heading", { name: "OpenClaw is running" })).toBeVisible();
+  await expect(launched.page.getByRole("button", { name: "Connect" })).toBeVisible();
+  expect(launched.log()).toContain(ANSWERED(1));
+  expect(launched.log()).not.toContain(MINTED);
+  expect(readStore(launched.data)).not.toContain("deviceToken:");
+  await close(launched);
+});
+
+test("F-492: Connect pairs read-only with nothing typed, after the host's dialog, and opens on the bots", async () => {
+  const launched = await launch({ scenario: "pairing" });
+  const { page } = launched;
+  await thisComputer(page).click();
+  await expect(page.getByRole("heading", { name: "OpenClaw is running" })).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect(page.locator("input")).toHaveCount(0);
+  await page.getByRole("button", { name: "Connect" }).click();
+  // The app opens on its bots, read-only, with nothing typed.
   await expect(page.locator(".shell")).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("bot-list").getByText("Juniper")).toBeVisible();
   expect(await asked(launched.app)).toEqual([
     `Pair this device read-only with the ${PROFILE} gateway on this computer? The gateway saves this device.`,
   ]);
-  // The gateway itself: one new device, an operator, with exactly read, approved silently.
-  const added = devices().paired.filter((device) => !before.includes(device.deviceId));
-  expect(added).toHaveLength(1);
-  expect(added[0]).toMatchObject({
-    scopes: ["operator.read"],
-    approvedVia: "silent",
-    roles: ["operator"],
+  // The dialog answered before any code was made.
+  const output = launched.log();
+  expect(output.indexOf(ANSWERED(0))).toBeGreaterThan(-1);
+  expect(output.indexOf(MINTED)).toBeGreaterThan(output.indexOf(ANSWERED(0)));
+  // Exactly read is what this device keeps.
+  const store = JSON.parse(readStore(launched.data)) as Record<string, string>;
+  const tokens = Object.entries(store).filter(([key]) => key.startsWith("deviceToken:"));
+  expect(tokens).toHaveLength(1);
+  expect(JSON.parse(tokens[0]![1]).heldScopes).toEqual(["operator.read"]);
+  await close(launched);
+});
+
+test("F-494: the one-time code of a pairing reaches none of the app's output or stored data", async () => {
+  const launched = await launch({ scenario: "pairing" });
+  const { page } = launched;
+  await thisComputer(page).click();
+  await expect(page.getByRole("heading", { name: "OpenClaw is running" })).toBeVisible({
+    timeout: 60_000,
   });
-  // The shared token was never typed, never asked for, and is in none of the app's data or output.
-  const shared = readDevConnection(openInstance(SETUP).connectionFile)!.token;
-  expect(readStore(launched.data)).toContain("deviceToken:");
-  expect(readStore(launched.data)).not.toContain(shared);
-  expect(launched.log()).not.toContain(shared);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await expect(page.locator(".shell")).toBeVisible({ timeout: 60_000 });
+  expect(launched.log()).toContain(MINTED);
+  // No string of a one-time code's shape in the output or the store; the device token is shorter.
+  expect(launched.log()).not.toMatch(CODE_SHAPE);
+  expect(readStore(launched.data)).not.toMatch(CODE_SHAPE);
   await close(launched);
 });
 
 test("F-515: another version is named, offers Advanced, and runs nothing for the person", async () => {
-  const dir = folder("other-version");
-  const sandbox = writeSandbox({ dir, instance: SETUP, version: "2026.9.37" });
-  const launched = await launch({ sandbox: sandbox.file });
+  const launched = await launch({ scenario: "untested-version" });
   await thisComputer(launched.page).click();
   await expect(launched.page.getByRole("status").filter({ hasText: "2026.9.37" })).toHaveText(
     "OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Use Advanced to connect to it.",
@@ -295,7 +338,7 @@ test("F-515: another version is named, offers Advanced, and runs nothing for the
 
 test("F-516: another profile is named and not connected to", async () => {
   const dir = folder("others");
-  const sandbox = writeSandbox({ dir, instance: SETUP });
+  const sandbox = writeSandbox({ instance: SETUP, parent: dir });
   mkdirSync(join(sandbox.home, ".openclaw-work"));
   const launched = await launch({ sandbox: sandbox.file });
   await thisComputer(launched.page).click();

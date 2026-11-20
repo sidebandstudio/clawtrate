@@ -16,14 +16,8 @@ import {
 import { LIMITS, lookHere, type FoundGateway } from "./look.ts";
 import { parseAuthMode, parseSetupCode, parseStatus } from "./parse.ts";
 import type { RunProgram } from "./programs.ts";
-import {
-  emptyWorld,
-  guardPort,
-  guardWorld,
-  programPath,
-  SetupRefusedError,
-  type LookWorld,
-} from "./world.ts";
+import type { Opened } from "./sandbox.ts";
+import { guardPort, programPath, SetupRefusedError, type LookWorld } from "./world.ts";
 
 /** A prepared operation expires after this long and can't be repeated (§2). */
 export const OPERATION_LIFETIME_MS = 2 * 60_000;
@@ -36,12 +30,13 @@ export type Confirmation = { message: string; detail: string; confirm: string };
 
 export type SetupControllerOptions = {
   client: ClawtrateClient;
-  /** The look's world, or why there is none (a sandbox that could not be read). */
-  world: LookWorld | SetupRefusedError;
-  /** The look must be sandboxed: an automated run or a development build. */
-  sandboxed: boolean;
-  realHome: string;
-  run: RunProgram;
+  /**
+   * The world the look and Connect run against and what answers their
+   * commands, opened again for every look and every Connect: the real
+   * computer and its programs, a sandbox and its stand-in (`sandbox.ts`), or
+   * why there is none.
+   */
+  open: () => Promise<Opened | SetupRefusedError>;
   /** Ends every program the look started, by PID. */
   stopPrograms: () => void;
   /** The host's native dialog, or null where the host has none (the web preview). */
@@ -122,36 +117,27 @@ export class SetupController implements SetupHost {
     });
   }
 
-  /** The world, checked by the guard; throws `SetupRefusedError`. */
-  private world(): LookWorld {
-    const { world, sandboxed, realHome } = this.options;
-    if (world instanceof SetupRefusedError) throw world;
-    if (sandboxed && world.kind === "production") {
-      // No sandbox: the real computer is refused, loudly, and the look sees an empty one.
-      this.log(
-        new SetupRefusedError(
-          "home",
-          "this run must be sandboxed and was given no sandbox, so it looks at an empty computer",
-        ).message,
-      );
-      return emptyWorld(world.platform);
+  /** The world and its runner; throws `SetupRefusedError`. */
+  private async open(): Promise<Opened> {
+    let opened: Opened | SetupRefusedError;
+    try {
+      opened = await this.options.open();
+    } catch {
+      opened = new SetupRefusedError("file");
     }
-    guardWorld(world, { realHome });
-    return world;
+    if (opened instanceof SetupRefusedError) throw opened;
+    return opened;
   }
 
+  /** Loud, in fixed words: the log names the refusal, never an error's own text. */
   private refused(error: unknown): void {
-    this.log(error instanceof Error ? error.message : String(error));
+    const refusal = error instanceof SetupRefusedError ? error : new SetupRefusedError("file");
+    this.log(refusal.message);
     this.publish({
       ...initialSetupState,
       look: this.state.look,
       phase: "failed",
-      failure: {
-        kind: "refused",
-        exitCode: null,
-        port: null,
-        reason: error instanceof SetupRefusedError ? error.reason : "file",
-      },
+      failure: { kind: "refused", exitCode: null, port: null, reason: refusal.reason },
     });
   }
 
@@ -160,20 +146,21 @@ export class SetupController implements SetupHost {
     const attempt = (this.attempt += 1);
     this.found = null;
     this.clearSlow();
-    let world: LookWorld;
+    let opened: Opened;
     try {
-      world = this.world();
+      opened = await this.open();
     } catch (error) {
       // Loud: in the log, and in the interface as its own failure.
-      this.refused(error);
+      if (attempt === this.attempt) this.refused(error);
       return;
     }
+    if (attempt !== this.attempt) return;
     this.publish({ ...initialSetupState, phase: "looking" });
     this.slowTimer = setTimeout(() => {
       if (attempt === this.attempt && this.state.phase === "looking")
         this.publish({ ...this.state, slow: true });
     }, SLOW_LOOK_MS);
-    const report = await lookHere(world, this.options.run, {
+    const report = await lookHere(opened.world, opened.run, {
       onStep: (step) => {
         if (attempt === this.attempt && this.state.phase === "looking")
           this.publish({ ...this.state, step });
@@ -291,17 +278,21 @@ export class SetupController implements SetupHost {
       return;
     }
     prepared.used = true;
-    let world: LookWorld;
+    let opened: Opened;
     try {
-      world = this.world();
-      guardPort(found.port, world, this.options.sandboxed);
+      opened = await this.open();
+      if (attempt !== this.attempt) return;
+      // A sandbox pairs only in its pairing scenario, with the host's own synthetic gateway.
+      if (!opened.world.pairs) throw new SetupRefusedError("pairing");
+      guardPort(found.port, opened.world);
     } catch (error) {
-      this.refused(error);
+      if (attempt === this.attempt) this.refused(error);
       return;
     }
+    const { world, run } = opened;
     this.publish({ ...this.state, phase: "connecting", step: 0, failure: null });
     // The facts are read again: anything other than what the dialog showed, and nothing runs.
-    if (!(await this.unchanged(world, found))) {
+    if (!(await this.unchanged(world, run, found))) {
       if (attempt === this.attempt) this.fail({ kind: "changed" });
       return;
     }
@@ -326,7 +317,7 @@ export class SetupController implements SetupHost {
       this.fail({ kind: "changed" });
       return;
     }
-    const made = await this.options.run({
+    const made = await run({
       program: found.program,
       args: [...found.profile.args, "qr", "--json", "--voice-node", "--url", url],
       env: { ...world.env, PATH: programPath(found.program), ...found.profile.env },
@@ -346,17 +337,21 @@ export class SetupController implements SetupHost {
   }
 
   /** Whether the profile's gateway still is what the dialog named. */
-  private async unchanged(world: LookWorld, found: FoundGateway): Promise<boolean> {
+  private async unchanged(
+    world: LookWorld,
+    run: RunProgram,
+    found: FoundGateway,
+  ): Promise<boolean> {
     const env = { ...world.env, PATH: programPath(found.program), ...found.profile.env };
     const [statusRun, authRun] = await Promise.all([
-      this.options.run({
+      run({
         program: found.program,
         args: [...found.profile.args, "gateway", "status", "--json"],
         env,
         cwd: world.cwd,
         ...LIMITS.status,
       }),
-      this.options.run({
+      run({
         program: found.program,
         args: [...found.profile.args, "config", "get", "gateway.auth.mode", "--json"],
         env,

@@ -72,6 +72,16 @@ export const SETUP_STATES: Record<string, SetupState> = {
     phase: "failed",
     failure: { kind: "refused", exitCode: null, port: null, reason: "home" },
   },
+  "refused-state": {
+    ...initialSetupState,
+    phase: "failed",
+    failure: { kind: "refused", exitCode: null, port: null, reason: "state" },
+  },
+  "refused-missing": {
+    ...initialSetupState,
+    phase: "failed",
+    failure: { kind: "refused", exitCode: null, port: null, reason: "missing" },
+  },
   "found-paired": looked({ access: "more" }),
   "found-not-reported": looked({ listens: null, service: null }),
   "cant-run": looked({ outcome: "cant-run", version: null, profile: null }),

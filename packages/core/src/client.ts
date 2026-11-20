@@ -1005,8 +1005,13 @@ export class ClawtrateClient {
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(settings));
   }
 
-  /** Resume the saved gateway, if any and if allowed, unless the user disconnected from it. */
-  async start(): Promise<void> {
+  /**
+   * Resume the saved gateway, if any and if allowed, unless the user
+   * disconnected from it. With `resume: false` (a development build, an
+   * automated run, the web host's setup look) nothing saved is opened: a
+   * connection starts only when one is chosen.
+   */
+  async start(options: { resume?: boolean } = {}): Promise<void> {
     const identity = await this.loadIdentity();
     this.setConnection({ deviceId: identity.deviceId });
     // A turn limit the person chose earlier, unless the host was given one.
@@ -1015,6 +1020,7 @@ export class ClawtrateClient {
       if (validTurnLimit(saved)) this.turnLimitMs = saved * 60_000;
     }
     this.store.update((state) => ({ ...state, turnLimitMinutes: this.turnLimitMs / 60_000 }));
+    if (options.resume === false) return;
     this.settings = await this.savedSettings();
     if (this.settings?.suspended) {
       this.setConnection({ status: "disconnected", gatewayUrl: this.settings.url });

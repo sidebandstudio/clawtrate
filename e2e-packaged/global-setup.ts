@@ -36,6 +36,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -249,25 +250,34 @@ export function appEnv(): NodeJS.ProcessEnv {
 
 /**
  * The packaged app's launch arguments: its own data folder, the debugging
- * port this check drives it over, and always a sandbox. Nothing may automate
- * a packaged app without one: such an app would be a person's, and look at
- * the real computer.
+ * port this check drives it over, always a sandbox, and the checkout whose
+ * run records prove the sandbox's instance (a packaged app has no checkout of
+ * its own). Nothing may automate a packaged app without a sandbox: such an
+ * app would be a person's, and look at the real computer.
  */
-export function launchArgs(userData: string, sandbox: string): string[] {
+export function launchArgs(userData: string, sandbox: string, checkout: string): string[] {
   return [
     `--user-data-dir=${userData}`,
     "--remote-debugging-port=0",
     `--clawtrate-setup-sandbox=${sandbox}`,
+    `--clawtrate-setup-checkout=${checkout}`,
   ];
 }
 
+/** This checkout, as the dev-gateway tool records it. */
+export const CHECKOUT = realpathSync(ROOT);
+
 /**
  * The sandbox the app's look on this computer is given (docs/development/setup.md):
- * a temporary home, the repository's stand-in for `openclaw`, and this run's
- * instance as the only profile. On Windows the look runs nothing.
+ * a private run folder whose description names this run's instance and its
+ * current run. On Windows the look reads nothing and no instance runs, so the
+ * description there names none that is running.
  */
 function setupSandbox(dir: string, instance: string): string {
-  return writeSandbox({ dir: join(dir, "setup"), instance }).file;
+  const parent = join(dir, "setup");
+  mkdirSync(parent, { recursive: true });
+  const run = process.platform === "win32" ? { run: "0".repeat(48) } : {};
+  return writeSandbox({ instance, parent, ...run }).file;
 }
 
 export default async function globalSetup() {
@@ -422,11 +432,16 @@ export default async function globalSetup() {
     saveRecord(RECORDS, record);
     const sandbox = setupSandbox(dir, name);
     process.env.CLAWTRATE_PACKAGED_SANDBOX = sandbox;
-    const gated = gatedSpawn(spawn, packagedExecutable(app), launchArgs(userData, sandbox), {
-      cwd: dir,
-      env: appEnv(),
-      stdio: ["ignore", logFd, logFd],
-    });
+    const gated = gatedSpawn(
+      spawn,
+      packagedExecutable(app),
+      launchArgs(userData, sandbox, CHECKOUT),
+      {
+        cwd: dir,
+        env: appEnv(),
+        stdio: ["ignore", logFd, logFd],
+      },
+    );
     appProcess = gated.child;
     const found = processIdentity(appProcess.pid!);
     if (found.state !== "alive") {
@@ -530,7 +545,7 @@ async function windowsSetup() {
   try {
     const sandbox = setupSandbox(dir, `e2e-${randomBytes(4).toString("hex")}`);
     process.env.CLAWTRATE_PACKAGED_SANDBOX = sandbox;
-    appProcess = spawn(exe, launchArgs(userData, sandbox), {
+    appProcess = spawn(exe, launchArgs(userData, sandbox, CHECKOUT), {
       cwd: dirname(userData),
       env: appEnv(),
       stdio: ["ignore", "ignore", "inherit"],

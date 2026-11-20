@@ -555,14 +555,13 @@ const CONNECT_STEPS: Record<NonNullable<SetupLook["access"]>, string[]> = {
   more: ["Checking the gateway", "Connecting this computer", "Loading your bots"],
 };
 
-/** Why a sandbox was refused, in words. */
+/** Why a run that must look in a sandbox couldn't use the one it was given, in words. */
 const REFUSED: Record<SetupRefusal, string> = {
-  file: "its file is missing, isn't in the temporary folder, or has the wrong shape.",
-  home: "its home or working folder is in this computer's home folder.",
-  profile: "it names a profile that isn't this run's development instance.",
-  state: "its state folder would reach this computer's own OpenClaw.",
-  program: "its program isn't the repository's stand-in for OpenClaw.",
-  port: "the gateway's port isn't its instance's own.",
+  missing: "none was given to this run.",
+  file: "its description isn't in a private run folder of its own, or has the wrong shape.",
+  home: "its home and working folder must be outside the account's home.",
+  state: "its state folder or config didn't pass the run's checks.",
+  pairing: "it pairs only in its pairing scenario.",
 };
 const LOOK_STEPS = ["Finding OpenClaw", "Checking its version", "Asking the gateway"];
 
@@ -670,7 +669,7 @@ export function SetupFlow({
         <Title id="setup-title">On this computer</Title>
         <Found mark={<WarnIcon />} tone="warn" heading="Looking on this computer is off here">
           <Lede>
-            {`This copy of ${PRODUCT_NAME} is a development build or runs under a test, so it looks only in a sandbox, and the sandbox it was given was refused: ${REFUSED[setup.failure.reason ?? "file"]} Use Advanced.`}
+            {`This run can only look in a sandbox. ${PRODUCT_NAME} couldn't use this sandbox because ${REFUSED[setup.failure.reason ?? "file"]} Use Advanced.`}
           </Lede>
           <Actions>
             <Primary onClick={advanced}>Use Advanced</Primary>

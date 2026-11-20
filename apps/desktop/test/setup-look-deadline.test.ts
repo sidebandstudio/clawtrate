@@ -19,7 +19,7 @@ import type { LookWorld } from "../src/setup/world.ts";
 
 function world(values: Partial<LookWorld>): LookWorld {
   return {
-    kind: "sandbox",
+    kind: "production",
     platform: "darwin",
     home: "/nowhere/home",
     cwd: "/nowhere/home",
@@ -29,6 +29,7 @@ function world(values: Partial<LookWorld>): LookWorld {
     serviceFiles: [],
     deep: false,
     portAllowed: () => false,
+    pairs: false,
     ...values,
   };
 }

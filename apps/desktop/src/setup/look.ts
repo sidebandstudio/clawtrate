@@ -161,10 +161,19 @@ export async function lookHere(
   const files = Date.now() + FILE_CHECK_MS;
   let program: string | null;
   try {
-    program = await withDeadline(findProgram(world), files);
+    program = world.installed
+      ? world.installed.program
+      : await withDeadline(findProgram(world), files);
     if (!program) {
-      const signs = [join(world.home, ".openclaw"), ...world.serviceFiles];
-      const setUp = (await withDeadline(Promise.all(signs.map(exists)), files)).some(Boolean);
+      // A sandbox answers from its scenario: no file is checked.
+      const setUp = world.installed
+        ? world.installed.signs
+        : (
+            await withDeadline(
+              Promise.all([join(world.home, ".openclaw"), ...world.serviceFiles].map(exists)),
+              files,
+            )
+          ).some(Boolean);
       return {
         look: { ...empty, outcome: setUp ? "program-missing" : "not-found" },
         found: null,

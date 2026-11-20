@@ -6,6 +6,9 @@
 /** The OpenClaw version this build is tested against (`docs/decisions.md`). */
 export const TESTED_OPENCLAW_VERSION = "2026.10.6";
 
+/** The gateway protocol the pinned client speaks, for a host's synthetic gateway. */
+export { PROTOCOL_VERSION as GATEWAY_PROTOCOL } from "@openclaw/gateway-client/browser";
+
 /**
  * The oldest version Clawtrate connects to. The pinned protocol schema
  * describes nothing older than 2026.7 (`since: "<=2026.7"`); Clawtrate's choice.
@@ -86,8 +89,13 @@ export type SetupFailureKind =
   /** The connection failed in another way; the connection state says how. */
   | "other";
 
-/** Why a sandbox was refused: its file, its home, its profile, its state, its program, a port. */
-export type SetupRefusal = "file" | "home" | "profile" | "state" | "program" | "port";
+/**
+ * Why a run that must look in a sandbox couldn't (`docs/development/setup.md`):
+ * it was given none; its description's place or shape; its home and working
+ * folder; its development instance's state, ownership or config; or a pairing
+ * its scenario doesn't offer.
+ */
+export type SetupRefusal = "missing" | "file" | "home" | "state" | "pairing";
 
 export type SetupFailure = {
   kind: SetupFailureKind;

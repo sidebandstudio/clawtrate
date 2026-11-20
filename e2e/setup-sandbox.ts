@@ -1,74 +1,73 @@
 // A sandbox for the look on this computer (docs/development/setup.md): a
-// temporary home of its own, the repository's stand-in for `openclaw`, and
-// one development instance of this run's own. The checks write one per
-// launch; a developer writes one with
+// private folder of the launch's own under the system's temporary folder,
+// holding the look's home and working folder and the description,
+// `sandbox.json`, which names a development instance of this checkout's, that
+// instance's current run and a scenario, and nothing else. The checks write
+// one per launch; a developer writes one with
 //
-//   node e2e/setup-sandbox.ts --instance <name>
+//   node e2e/setup-sandbox.ts --instance <name> [--scenario <scenario>]
 //
-// which prints the sandbox file's path for `--clawtrate-setup-sandbox=` or
-// CLAWTRATE_SETUP_SANDBOX. Everything is under the system's temporary folder.
+// which prints the description's path for `--clawtrate-setup-sandbox=` or
+// CLAWTRATE_SETUP_SANDBOX. The instance must be running from this checkout.
 
-import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { stateDirFor, validateInstanceName } from "../tools/dev-gateway/src/instance.ts";
-import { STAND_IN_MARK } from "../apps/desktop/src/setup/world.ts";
+import { runDirFor, validateInstanceName } from "../tools/dev-gateway/src/instance.ts";
+import { readRunRecord } from "../tools/dev-gateway/src/state-guard.ts";
+import { SANDBOX_FILE, SCENARIOS, type Scenario } from "../apps/desktop/src/setup/sandbox.ts";
 
-const STAND_IN = resolve(import.meta.dirname, "openclaw-stand-in.ts");
+const ROOT = join(import.meta.dirname, "..");
 
-/** The `openclaw` on PATH, as the dev-gateway tool runs it; empty when there is none. */
-export function realOpenclaw(): string {
-  try {
-    return execFileSync("/usr/bin/which", ["openclaw"], { encoding: "utf8" }).trim();
-  } catch {
-    return "";
-  }
+export type Sandbox = { file: string; root: string; home: string };
+
+/** The run id this checkout recorded when it last started the instance. */
+export function currentRun(instance: string, checkout = ROOT): string {
+  const record = readRunRecord(
+    join(
+      runDirFor(validateInstanceName(instance), join(checkout, "tools/dev-gateway/.run")),
+      "state.json",
+    ),
+  );
+  if (!record)
+    throw new Error(`instance ${instance} has no run of this checkout's: start it first`);
+  return record.runId;
 }
 
-export type Sandbox = { file: string; home: string; program: string; stateDir: string };
-
 /**
- * Writes a sandbox into `dir` (under the temporary folder): its home, the
- * stand-in's wrapper and facts, and the sandbox file. `version` makes the
- * stand-in report another version; `openclaw` is the real program it may run.
+ * Writes a sandbox in a new private folder under `parent` (the system's
+ * temporary folder by default): its home, its working folder and its
+ * description. `run` is the instance's current run unless given.
  */
 export function writeSandbox(options: {
-  dir: string;
   instance: string;
-  openclaw?: string;
-  version?: string;
+  scenario?: Scenario;
+  parent?: string;
+  run?: string;
 }): Sandbox {
   const instance = validateInstanceName(options.instance);
-  const home = join(options.dir, "home");
-  mkdirSync(home, { recursive: true });
-  const stateDir = stateDirFor(instance, homedir());
-  const facts = join(options.dir, "stand-in.json");
-  writeFileSync(
-    facts,
-    JSON.stringify({
-      openclaw: options.openclaw ?? realOpenclaw(),
-      instance,
-      stateDir,
-      ...(options.version ? { version: options.version } : {}),
-    }),
-  );
-  const program = join(options.dir, "bin/openclaw");
-  mkdirSync(join(options.dir, "bin"), { recursive: true });
-  writeFileSync(
-    program,
-    `#!/bin/sh\n# ${STAND_IN_MARK}\nexec "${process.execPath}" "${STAND_IN}" "${facts}" "$@"\n`,
-  );
-  chmodSync(program, 0o755);
-  const file = join(options.dir, "sandbox.json");
-  writeFileSync(file, JSON.stringify({ home, openclaw: program, instance, stateDir }));
-  return { file, home, program, stateDir };
+  const root = mkdtempSync(join(options.parent ?? tmpdir(), "clawtrate-setup-"));
+  const home = join(root, "home");
+  mkdirSync(home, { mode: 0o700 });
+  mkdirSync(join(root, "work"), { mode: 0o700 });
+  const file = join(root, SANDBOX_FILE);
+  const description = {
+    instance,
+    run: options.run ?? currentRun(instance),
+    ...(options.scenario ? { scenario: options.scenario } : {}),
+  };
+  writeFileSync(file, JSON.stringify(description), { mode: 0o600 });
+  return { file, root, home };
 }
 
 if (import.meta.main) {
-  const { values } = parseArgs({ options: { instance: { type: "string" } } });
+  const { values } = parseArgs({
+    options: { instance: { type: "string" }, scenario: { type: "string" } },
+  });
   if (!values.instance) throw new Error("--instance <name> names a development instance of yours");
-  const dir = mkdtempSync(join(tmpdir(), "clawtrate-sandbox-"));
-  console.log(writeSandbox({ dir, instance: values.instance }).file);
+  const scenario = values.scenario as Scenario | undefined;
+  if (scenario !== undefined && !SCENARIOS.includes(scenario))
+    throw new Error(`--scenario is one of ${SCENARIOS.join(", ")}`);
+  console.log(writeSandbox({ instance: values.instance, ...(scenario ? { scenario } : {}) }).file);
 }

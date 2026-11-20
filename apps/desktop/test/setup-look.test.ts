@@ -3,29 +3,44 @@
 // an automated run away from the real computer. No program runs here: a
 // fake runner answers from the recordings.
 
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { lookHere } from "../src/setup/look.ts";
-import { MARKER_FILE } from "../../../tools/dev-gateway/src/state-guard.ts";
 import { checkRequest, type ProgramRequest, type ProgramResult } from "../src/setup/programs.ts";
 import {
-  emptyWorld,
+  parseDescription,
+  proveRun,
+  resolveSetupLaunch,
+  sandboxOpener,
+  SCENARIOS,
+  STAND_IN_PROGRAM,
+  validateSandbox,
+  type SandboxContext,
+} from "../src/setup/sandbox.ts";
+import {
+  accountHome,
   guardPort,
-  guardWorld,
-  isStandIn,
   mustSandbox,
   productionWorld,
-  readSandbox,
   SANDBOX_MARKERS,
   SANDBOX_SWITCHES,
-  sandboxWorld,
   SetupRefusedError,
-  STAND_IN_MARK,
   type LookWorld,
 } from "../src/setup/world.ts";
+import { MARKER_FILE } from "../../../tools/dev-gateway/src/state-guard.ts";
 import { authJson, statusJson, VERSION_LINE } from "./fixtures/openclaw-outputs.ts";
+import * as fake from "./fixtures/sandbox.ts";
 
 let dir: string;
 beforeEach(() => {
@@ -325,29 +340,34 @@ describe("the look on this computer", () => {
   });
 
   it("F-516: a sandboxed look never runs the deep status", async () => {
-    const program = join(dir, "bin/openclaw");
-    mkdirSync(join(dir, "bin"), { recursive: true });
-    writeFileSync(program, `#!/bin/sh\n# ${STAND_IN_MARK}\n`);
-    chmodSync(program, 0o755);
-    mkdirSync(join(dir, "home"), { recursive: true });
-    const world = sandboxWorld(
-      {
-        home: join(dir, "home"),
-        openclaw: program,
-        instance: "su1-test",
-        stateDir: join(dir, "state"),
-      },
-      "darwin",
-    );
-    const prefix = "--profile clawtrate-dev-su1-test ";
-    const { run, requests } = fakeRunner(
-      Object.fromEntries(
-        Object.entries(defaultTable(statusJson({ port: 19940 }))).map(([k, v]) => [prefix + k, v]),
-      ),
-    );
-    const report = await lookHere(world, run);
+    const at = fake.world();
+    const run = fake.instance({
+      home: at.home,
+      checkout: at.checkout,
+      name: "su1-test",
+      run: fake.runId("a"),
+    });
+    const { file } = fake.runFolder(join(at.base, "runs"), { instance: run.name, run: run.run });
+    const { identify } = fake.identities();
+    const opener = sandboxOpener({
+      file,
+      platform: "darwin",
+      context: { platform: "darwin", home: at.home, uid: at.uid, checkout: at.checkout, identify },
+      startGateway: () => Promise.reject(new Error("no gateway in this scenario")),
+    });
+    const opened = await opener.open();
+    if (opened instanceof SetupRefusedError) throw opened;
+    const requests: ProgramRequest[] = [];
+    const report = await lookHere(opened.world, (request) => {
+      requests.push(request);
+      return opened.run(request);
+    });
     expect(report?.look.outcome).toBe("running");
-    expect(requests.some((request) => request.args.includes("--deep"))).toBe(false);
+    expect(requests.map((request) => request.args.slice(2).join(" ")).sort()).toEqual([
+      "--version",
+      "config get gateway.auth.mode --json",
+      "gateway status --json",
+    ]);
   });
 
   it("F-492 F-516: a gateway that answered somewhere other than its own loopback port isn't offered", async () => {
@@ -406,184 +426,446 @@ describe("the look on this computer", () => {
   });
 });
 
-describe("the look's sandbox and its guard", () => {
-  /** A fake account: its home, with a default state folder in it. */
-  const account = () => {
-    const home = join(dir, "account");
-    mkdirSync(join(home, ".openclaw"), { recursive: true });
-    return home;
-  };
-  const standIn = (path: string) => {
-    mkdirSync(join(path, ".."), { recursive: true });
-    writeFileSync(path, `#!/bin/sh\n# ${STAND_IN_MARK}\nexit 0\n`);
-    chmodSync(path, 0o755);
-    return path;
-  };
-  /** A sandbox outside the account, with an instance state folder and its marker. */
-  const sandbox = (port: number | null = 19940) => {
-    const stateDir = join(dir, ".openclaw-clawtrate-dev-su1-test");
-    mkdirSync(stateDir, { recursive: true });
-    if (port !== null)
-      writeFileSync(
-        join(stateDir, MARKER_FILE),
-        JSON.stringify({
-          createdBy: "clawtrate tools/dev-gateway",
-          instance: "su1-test",
-          gatewayPort: port,
-        }),
-      );
-    mkdirSync(join(dir, "home"), { recursive: true });
-    return {
-      home: join(dir, "home"),
-      openclaw: standIn(join(dir, "bin/openclaw")),
-      instance: "su1-test",
-      stateDir,
+describe("the sandbox: a run's description, its folder and its proven instance", () => {
+  /**
+   * Three fake account homes, one checkout with two runs, and the account
+   * the host runs as. The first run is this description's; the second is a
+   * legitimate named run of the same checkout that the description doesn't
+   * select. Every check counts what it read and which processes it asked.
+   */
+  function setting(options: { description?: unknown; port?: number } = {}) {
+    const at = fake.world();
+    const mine = fake.instance({
+      home: at.home,
+      checkout: at.checkout,
+      name: "su1-test",
+      run: fake.runId("a"),
+      ...(options.port === undefined ? {} : { port: options.port }),
+    });
+    const other = fake.instance({
+      home: at.home,
+      checkout: at.checkout,
+      name: "su1-other",
+      run: fake.runId("b"),
+      port: 19960,
+    });
+    const folder = fake.runFolder(
+      join(at.base, "runs"),
+      options.description ?? { instance: mine.name, run: mine.run },
+    );
+    const files = fake.counting();
+    const processes = fake.identities();
+    const context = {
+      platform: "darwin" as NodeJS.Platform,
+      home: at.home,
+      uid: at.uid,
+      checkout: at.checkout,
+      files: files.files,
+      identify: processes.identify,
+    } satisfies SandboxContext & Parameters<typeof proveRun>[1];
+    let gateways = 0;
+    const opener = (file = folder.file) =>
+      sandboxOpener({
+        file,
+        platform: "darwin",
+        context,
+        startGateway: () => {
+          gateways += 1;
+          return Promise.reject(new Error("no gateway here"));
+        },
+      });
+    /** Opens and returns the refusal's reason, or "opened". */
+    const outcome = async (file = folder.file) => {
+      const opened = await opener(file).open();
+      return opened instanceof SetupRefusedError ? opened.reason : "opened";
     };
-  };
-  const guard =
-    (world: LookWorld, home = account()) =>
-    () =>
-      guardWorld(world, { realHome: home });
+    return {
+      ...at,
+      mine,
+      other,
+      ...folder,
+      files,
+      processes,
+      context,
+      opener,
+      outcome,
+      gateways: () => gateways,
+    };
+  }
 
-  it("passes a sandbox entirely outside the account, with the stand-in and this run's instance", () => {
-    expect(guard(sandboxWorld(sandbox(), "darwin"))).not.toThrow();
+  /** Nothing was read but the description, no process was asked about, no gateway started. */
+  const stoppedAtTheDescription = (s: ReturnType<typeof setting>) => {
+    expect(s.files.reads.every((path) => path.endsWith("/sandbox.json"))).toBe(true);
+    expect(s.processes.asked).toEqual([]);
+    expect(s.gateways()).toBe(0);
+  };
+
+  it("opens a description in a private run folder whose instance is this run's, with its home, working folder and the stand-in", async () => {
+    const s = setting();
+    const opened = await s.opener().open();
+    if (opened instanceof SetupRefusedError) throw opened;
+    expect(opened.world).toMatchObject({
+      kind: "sandbox",
+      home: join(s.root, "home"),
+      cwd: join(s.root, "work"),
+      candidates: [],
+      installed: { program: STAND_IN_PROGRAM, signs: true },
+      env: {},
+      serviceFiles: [],
+      deep: false,
+      pairs: false,
+    });
+    expect(opened.world.profiles).toEqual([
+      {
+        name: "clawtrate-dev-su1-test",
+        args: ["--profile", "clawtrate-dev-su1-test"],
+        stateDir: s.mine.stateDir,
+        required: true,
+        env: {},
+      },
+    ]);
+    // The description, the instance's marker and this checkout's run record: nothing else is read.
+    expect(s.files.reads).toEqual([
+      s.file,
+      join(s.mine.stateDir, MARKER_FILE),
+      join(s.checkout, "tools/dev-gateway/.run/instances/su1-test/state.json"),
+    ]);
+    expect(s.processes.asked).toEqual([fake.GATEWAY_PID]);
+    // A development instance's port is never one Connect may use.
+    expect(opened.world.portAllowed(s.mine.port)).toBe(false);
   });
 
-  it("refuses a sandbox home that is the account's home, above it, or inside it", () => {
-    const home = account();
-    for (const at of [home, dir, join(home, "sandbox-home")]) {
-      mkdirSync(at, { recursive: true });
-      expect(guard(sandboxWorld({ ...sandbox(), home: at }, "darwin"), home)).toThrow(
-        /its home is not outside the real home folder/,
+  it("takes exactly an instance, its run and a scenario from the closed set, and nothing that names a program, a folder or a port", () => {
+    const run = fake.runId("a");
+    expect(parseDescription(JSON.stringify({ instance: "su1-test", run }))).toEqual({
+      instance: "su1-test",
+      run,
+      scenario: "recorded",
+    });
+    for (const scenario of SCENARIOS)
+      expect(
+        parseDescription(JSON.stringify({ instance: "su1-test", run, scenario })).scenario,
+      ).toBe(scenario);
+    const refused = [
+      { instance: "su1-test", run, scenario: "live" },
+      { instance: "su1-test", run, openclaw: "/tmp/openclaw" },
+      { instance: "su1-test", run, stateDir: "/tmp/state" },
+      { instance: "su1-test", run, home: "/tmp/home" },
+      { instance: "su1-test", run, facts: "/tmp/facts.json" },
+      { instance: "su1-test", run, port: 19940 },
+      { instance: "su1-test", run: "abc" },
+      { instance: "default", run },
+      { instance: "dev", run },
+      { instance: "preview-accounts", run },
+      { instance: "../.openclaw", run },
+      [],
+      null,
+    ];
+    for (const value of refused)
+      expect(() => parseDescription(JSON.stringify(value)), JSON.stringify(value)).toThrow(
+        SetupRefusedError,
       );
+    expect(() => parseDescription("{")).toThrow(SetupRefusedError);
+  });
+
+  it("refuses a description outside a private run folder below the system's temporary root, before reading it", async () => {
+    const s = setting();
+    // Not named sandbox.json, relative, not normal.
+    for (const path of [
+      join(s.root, "other.json"),
+      "sandbox.json",
+      `${s.root}/../${s.root.split("/").pop()}/sandbox.json`,
+    ])
+      expect(await s.outcome(path), path).toBe("file");
+    // A folder that isn't under one of the system's temporary roots.
+    expect(() =>
+      validateSandbox(s.file, {
+        ...s.context,
+        roots: [{ canonical: "/nowhere", names: ["/nowhere"] }],
+      }),
+    ).toThrow(SetupRefusedError);
+    // A folder others can enter.
+    chmodSync(s.root, 0o755);
+    expect(await s.outcome()).toBe("file");
+    chmodSync(s.root, 0o700);
+    expect(s.files.reads).toEqual([]);
+    stoppedAtTheDescription(s);
+  });
+
+  it("refuses a temporary root redirected into a fake home, a linked ancestor, and a run folder inside or around the account's home", async () => {
+    const s = setting();
+    // A folder in the temporary root that is a link into the account's home.
+    const target = join(s.home, "redirected");
+    mkdirSync(target);
+    const { file } = fake.runFolder(target, { instance: s.mine.name, run: s.mine.run });
+    symlinkSync(target, join(s.base, "redirect"));
+    expect(await s.outcome(join(s.base, "redirect", file.split("/").slice(-2).join("/")))).toBe(
+      "file",
+    );
+    // The run folder itself in the account's home: never, even below the temporary root.
+    expect(await s.outcome(file)).toBe("home");
+    // The account's home inside the run folder.
+    const around = fake.runFolder(join(s.base, "around"), {
+      instance: s.mine.name,
+      run: s.mine.run,
+    });
+    expect(
+      validateSandbox.bind(null, around.file, { ...s.context, home: join(around.root, "home") }),
+    ).toThrow(/outside the account's home/);
+    expect(s.files.reads).toEqual([]);
+    stoppedAtTheDescription(s);
+  });
+
+  it("refuses a description, a home or a working folder that is a link, a second link to the description, and another account's file", async () => {
+    const s = setting();
+    // The description a link to a good one elsewhere.
+    const elsewhere = fake.runFolder(join(s.base, "elsewhere"), {
+      instance: s.mine.name,
+      run: s.mine.run,
+    });
+    const linked = fake.runFolder(join(s.base, "linked"), "{}");
+    rmSync(linked.file);
+    symlinkSync(elsewhere.file, linked.file);
+    expect(await s.outcome(linked.file)).toBe("file");
+    // A hard link to it.
+    const hard = fake.runFolder(join(s.base, "hard"), "{}");
+    rmSync(hard.file);
+    linkSync(elsewhere.file, hard.file);
+    expect(await s.outcome(hard.file)).toBe("file");
+    // Its home or working folder a link.
+    for (const folder of ["home", "work"]) {
+      const box = fake.runFolder(join(s.base, `link-${folder}`), {
+        instance: s.mine.name,
+        run: s.mine.run,
+      });
+      rmSync(join(box.root, folder), { recursive: true });
+      symlinkSync(join(s.home), join(box.root, folder));
+      expect(await s.outcome(box.file), folder).toBe("file");
+    }
+    // Another account's description.
+    expect(() => validateSandbox(s.file, { ...s.context, uid: (s.uid ?? 0) + 1 })).toThrow(
+      SetupRefusedError,
+    );
+    expect(s.processes.asked).toEqual([]);
+    expect(s.gateways()).toBe(0);
+  });
+
+  it("refuses when the account can't be read, instead of trusting HOME", async () => {
+    const s = setting();
+    expect(accountHome(() => ({ homedir: "/Users/someone" }))).toBe("/Users/someone");
+    expect(
+      accountHome(() => {
+        throw new Error("no account");
+      }),
+    ).toBeNull();
+    expect(accountHome(() => ({ homedir: "relative" }))).toBeNull();
+    expect(() => validateSandbox(s.file, { ...s.context, home: null })).toThrow(SetupRefusedError);
+    expect(() =>
+      proveRun(parseDescription(JSON.stringify({ instance: "su1-test", run: s.mine.run })), {
+        ...s.context,
+        home: null,
+      }),
+    ).toThrow(SetupRefusedError);
+    // HOME and the working folder of this process play no part.
+    const saved = process.env.HOME;
+    process.env.HOME = s.root;
+    try {
+      const opened = await s.opener().open();
+      expect(opened instanceof SetupRefusedError ? opened.reason : opened.world.home).toBe(
+        join(s.root, "home"),
+      );
+    } finally {
+      process.env.HOME = saved;
     }
   });
 
-  it("refuses programs whose HOME, or whose working folder, is in the account's home, even with a home outside", () => {
-    const home = account();
-    const world = sandboxWorld(sandbox(), "darwin");
-    expect(guard({ ...world, env: { ...world.env, HOME: join(home, "x") } }, home)).toThrow(
-      /programs' HOME/,
-    );
-    expect(guard({ ...world, cwd: join(home, "x") }, home)).toThrow(/working folder/);
-  });
-
-  it("refuses a sandbox that would run the deep status", () => {
-    expect(guard({ ...sandboxWorld(sandbox(), "darwin"), deep: true })).toThrow(/deep status/);
-  });
-
-  it("refuses the default profile, another profile, and an instance that isn't this run's", () => {
-    const world = sandboxWorld(sandbox(), "darwin");
-    const profile = world.profiles[0]!;
-    expect(guard({ ...world, profiles: [{ ...profile, args: [] }] })).toThrow(/default profile/);
+  it("refuses unrelated state in the account's home, a second legitimate run, and a run of another checkout or account", async () => {
+    // An instance folder that isn't the tool's: no marker.
+    const bare = setting({ description: { instance: "unrelated", run: fake.runId("a") } });
+    mkdirSync(join(bare.home, ".openclaw-clawtrate-dev-unrelated"));
+    expect(await bare.outcome()).toBe("state");
+    // An instance nobody started.
+    const none = setting({ description: { instance: "nobody", run: fake.runId("a") } });
+    expect(await none.outcome()).toBe("state");
+    // The second run, named with the first's run id, and the first with the second's.
+    const crossed = setting({ description: { instance: "su1-other", run: fake.runId("a") } });
+    expect(await crossed.outcome()).toBe("state");
+    const swapped = setting({ description: { instance: "su1-test", run: fake.runId("b") } });
+    expect(await swapped.outcome()).toBe("state");
+    // The same instance in another fake account's home is never looked at.
+    const s = setting();
+    fake.instance({
+      home: s.homes[1]!,
+      checkout: s.checkout,
+      name: "su1-third",
+      run: fake.runId("c"),
+    });
+    const third = fake.runFolder(join(s.base, "third"), {
+      instance: "su1-third",
+      run: fake.runId("c"),
+    });
+    expect(await s.outcome(third.file)).toBe("state");
+    // A run recorded by another checkout.
+    const foreign = setting();
+    const elsewhere = join(foreign.base, "other-checkout");
+    mkdirSync(elsewhere);
     expect(
-      guard({ ...world, profiles: [{ ...profile, name: "work", args: ["--profile", "work"] }] }),
-    ).toThrow(/not this run's development instance/);
-    const shared = "clawtrate-dev-preview-accounts";
-    expect(
-      guard({ ...world, profiles: [{ ...profile, name: shared, args: ["--profile", shared] }] }),
-    ).toThrow(/not this run's development instance/);
+      proveRun.bind(
+        null,
+        { instance: "su1-test", run: fake.runId("a"), scenario: "recorded" },
+        { ...foreign.context, checkout: elsewhere },
+      ),
+    ).toThrow(SetupRefusedError);
+    for (const each of [bare, none, crossed, swapped]) expect(each.processes.asked).toEqual([]);
   });
 
-  it("refuses the account's default state, as written, through a link, and when it is itself a link", () => {
-    const home = account();
-    expect(
-      guard(sandboxWorld({ ...sandbox(), stateDir: join(home, ".openclaw") }, "darwin"), home),
-    ).toThrow(/default profile's state/);
-    symlinkSync(join(home, ".openclaw"), join(dir, "linked-state"));
-    expect(
-      guard(sandboxWorld({ ...sandbox(), stateDir: join(dir, "linked-state") }, "darwin"), home),
-    ).toThrow(/default profile's state/);
-    // An account whose default state is a link to a folder elsewhere: that folder is the default state.
-    const moved = join(dir, "moved-account");
-    mkdirSync(join(moved, "elsewhere"), { recursive: true });
-    symlinkSync(join(moved, "elsewhere"), join(moved, ".openclaw"));
-    expect(
-      guard(sandboxWorld({ ...sandbox(), stateDir: join(moved, "elsewhere") }, "darwin"), moved),
-    ).toThrow(/default profile's state/);
-  });
-
-  it("refuses a state folder whose config file is a link", () => {
-    const box = sandbox();
-    writeFileSync(join(dir, "other.json"), "{}");
-    symlinkSync(join(dir, "other.json"), join(box.stateDir, "openclaw.json"));
-    expect(guard(sandboxWorld(box, "darwin"))).toThrow(/config file is a link/);
-  });
-
-  it("refuses a program inside the account's default state, or reached through a link into it", () => {
-    const home = account();
-    const inside = standIn(join(home, ".openclaw/bin/openclaw"));
-    expect(guard(sandboxWorld({ ...sandbox(), openclaw: inside }, "darwin"), home)).toThrow(
-      /inside the real default profile's state/,
-    );
-    symlinkSync(inside, join(dir, "linked-openclaw"));
-    expect(
-      guard(sandboxWorld({ ...sandbox(), openclaw: join(dir, "linked-openclaw") }, "darwin"), home),
-    ).toThrow(/inside the real default profile's state/);
-  });
-
-  it("refuses a program that is not the repository's stand-in, and takes one that doesn't exist", () => {
-    const real = executable(join(dir, "bin/real-openclaw"));
-    expect(guard(sandboxWorld({ ...sandbox(), openclaw: real }, "darwin"))).toThrow(/stand-in/);
-    expect(isStandIn(real)).toBe(false);
-    expect(
-      guard(sandboxWorld({ ...sandbox(), openclaw: join(dir, "bin/none") }, "darwin")),
-    ).not.toThrow();
-  });
-
-  it("lets a sandbox use its instance's own recorded port only, and never OpenClaw's default", () => {
-    const world = sandboxWorld(sandbox(19940), "darwin");
-    expect(() => guardPort(19940, world, true)).not.toThrow();
-    expect(() => guardPort(19960, world, true)).toThrow(SetupRefusedError);
-    expect(() => guardPort(19600, world, true)).toThrow(SetupRefusedError);
-    rmSync(join(sandbox().stateDir, MARKER_FILE), { force: true });
-    expect(() => guardPort(19940, sandboxWorld(sandbox(null), "darwin"), true)).toThrow(
-      SetupRefusedError,
-    );
-    // The sandboxed run's own rule holds whatever the world allows.
-    const open = { ...world, portAllowed: () => true };
-    expect(() => guardPort(18789, open, true)).toThrow(/not a development instance's/);
-    expect(() => guardPort(19001, open, true)).toThrow(/not a development instance's/);
-    expect(() => guardPort(18789, open, false)).not.toThrow();
-  });
-
-  it("reads a sandbox file only from the temporary folder, a regular file, every value with its shape", () => {
-    const allowed = join(dir, "allowed");
-    mkdirSync(allowed);
-    const file = (name: string, values: Record<string, unknown>) => {
-      const path = join(allowed, name);
-      writeFileSync(path, JSON.stringify(values));
-      return path;
-    };
-    const values = sandbox();
-    expect(readSandbox(file("ok.json", values), [allowed])).toEqual(values);
-    const outside = join(dir, "outside.json");
-    writeFileSync(outside, JSON.stringify(values));
-    expect(() => readSandbox(outside, [allowed])).toThrow(/temporary folder/);
-    symlinkSync(outside, join(allowed, "link.json"));
-    expect(() => readSandbox(join(allowed, "link.json"), [allowed])).toThrow(SetupRefusedError);
-    for (const instance of ["default", "dev", "preview-accounts"]) {
-      expect(() =>
-        readSandbox(file(`${instance}.json`, { ...values, instance }), [allowed]),
+  it("refuses a forged, stale or mismatched marker or run record, and a port off its block", async () => {
+    const cases: Array<
+      [
+        string,
+        Parameters<typeof fake.instance>[0]["marker"],
+        Parameters<typeof fake.instance>[0]["record"],
+      ]
+    > = [
+      // Forged: the shape the old guard trusted, a name and a port.
+      [
+        "forged",
+        { runId: undefined, checkout: undefined, startPid: undefined, startIdentity: undefined },
+        undefined,
+      ],
+      ["another tool", { createdBy: "someone else" }, undefined],
+      ["another instance", { instance: "su1-elsewhere" }, undefined],
+      ["stale run", { runId: fake.runId("d") }, undefined],
+      ["another checkout", { checkout: "/elsewhere" }, undefined],
+      ["ports disagree", undefined, { gatewayPort: 19980 }],
+      ["no run record", undefined, null],
+    ];
+    for (const [name, marker, record] of cases) {
+      const at = fake.world();
+      fake.instance({
+        home: at.home,
+        checkout: at.checkout,
+        name: "su1-test",
+        run: fake.runId("a"),
+        ...(marker ? { marker } : {}),
+        ...(record !== undefined ? { record } : {}),
+      });
+      const processes = fake.identities();
+      expect(
+        () =>
+          proveRun(
+            { instance: "su1-test", run: fake.runId("a"), scenario: "recorded" },
+            { home: at.home, uid: at.uid, checkout: at.checkout, identify: processes.identify },
+          ),
+        name,
+      ).toThrow(SetupRefusedError);
+      expect(processes.asked, name).toEqual([]);
+    }
+    // A port in the range but not the first of its block, a reserved one, and OpenClaw's default.
+    for (const port of [19941, 19600 + 1, 18789]) {
+      const at = fake.world();
+      fake.instance({
+        home: at.home,
+        checkout: at.checkout,
+        name: "su1-test",
+        run: fake.runId("a"),
+        port,
+      });
+      expect(
+        () =>
+          proveRun(
+            { instance: "su1-test", run: fake.runId("a"), scenario: "recorded" },
+            {
+              home: at.home,
+              uid: at.uid,
+              checkout: at.checkout,
+              identify: fake.identities().identify,
+            },
+          ),
+        String(port),
       ).toThrow(SetupRefusedError);
     }
-    expect(() => readSandbox(file("rel.json", { ...values, home: "relative" }), [allowed])).toThrow(
-      SetupRefusedError,
-    );
-    expect(() => readSandbox("relative.json", [allowed])).toThrow(SetupRefusedError);
   });
 
-  it("a sandbox's programs get its home, its working folder and its instance's profile, and no deep status", () => {
-    const world = sandboxWorld(sandbox(), "darwin");
-    expect(world.env).toEqual({ HOME: join(dir, "home"), LANG: "en_US.UTF-8", NO_COLOR: "1" });
-    expect(world.cwd).toBe(join(dir, "home"));
-    expect(world.deep).toBe(false);
-    expect(world.profiles).toHaveLength(1);
-    expect(world.profiles[0]).toMatchObject({
-      name: "clawtrate-dev-su1-test",
-      args: ["--profile", "clawtrate-dev-su1-test"],
+  it("refuses a linked default or named state, a linked home, and links among the state's files, reading nothing past them", async () => {
+    // The named state folder a link to a folder holding a good marker.
+    const linked = setting();
+    renameSync(linked.mine.stateDir, join(linked.base, "moved-state"));
+    symlinkSync(join(linked.base, "moved-state"), linked.mine.stateDir);
+    expect(await linked.outcome()).toBe("state");
+    expect(linked.files.reads).toEqual([linked.file]);
+    // A fake account whose default state is a link, with a marker in it: a description can't reach it at all.
+    const defaults = setting({
+      description: {
+        instance: "su1-test",
+        run: fake.runId("a"),
+        stateDir: join(fake.base(), ".openclaw"),
+      },
     });
-    expect(emptyWorld("darwin")).toMatchObject({ candidates: [], profiles: [], deep: false });
+    expect(await defaults.outcome()).toBe("file");
+    // The account's home reached through a link.
+    const home = setting();
+    symlinkSync(home.home, join(home.base, "home-link"));
+    expect(
+      proveRun.bind(
+        null,
+        { instance: "su1-test", run: fake.runId("a"), scenario: "recorded" },
+        { ...home.context, home: join(home.base, "home-link") },
+      ),
+    ).toThrow(SetupRefusedError);
+    // The marker a link, the config a link or a second link to another file.
+    const marker = setting();
+    renameSync(join(marker.mine.stateDir, MARKER_FILE), join(marker.base, "marker"));
+    symlinkSync(join(marker.base, "marker"), join(marker.mine.stateDir, MARKER_FILE));
+    expect(await marker.outcome()).toBe("state");
+    for (const kind of ["symlink", "hard link"]) {
+      const config = setting();
+      const path = join(config.mine.stateDir, "openclaw.json");
+      writeFileSync(join(config.base, "elsewhere.json"), "{}");
+      rmSync(path);
+      if (kind === "symlink") symlinkSync(join(config.base, "elsewhere.json"), path);
+      else linkSync(join(config.base, "elsewhere.json"), path);
+      expect(await config.outcome(), kind).toBe("state");
+      expect(config.processes.asked, kind).toEqual([]);
+    }
+    expect(linked.processes.asked).toEqual([]);
+    // A state folder another account owns.
+    const owned = setting();
+    const others = {
+      ...owned.files.files,
+      lstat: (path: string) => {
+        const entry = owned.files.files.lstat(path);
+        return entry && path === owned.mine.stateDir
+          ? Object.assign(Object.create(entry) as typeof entry, { uid: entry.uid + 1 })
+          : entry;
+      },
+    };
+    expect(() =>
+      proveRun(
+        { instance: "su1-test", run: fake.runId("a"), scenario: "recorded" },
+        { ...owned.context, files: others },
+      ),
+    ).toThrow(SetupRefusedError);
+    expect(owned.files.reads).toEqual([]);
+  });
+
+  it("says a stopped instance is stopped, from its own records, and refuses one it can't tell", async () => {
+    const stopped = setting();
+    stopped.processes.alive.clear();
+    const opened = await stopped.opener().open();
+    if (opened instanceof SetupRefusedError) throw opened;
+    const report = await lookHere(opened.world, opened.run);
+    expect(report?.look.outcome).toBe("stopped");
+    const unknown = setting();
+    const proof = () =>
+      proveRun(
+        { instance: "su1-test", run: fake.runId("a"), scenario: "recorded" },
+        {
+          ...unknown.context,
+          identify: () => ({ state: "unknown", reason: "ps failed" }),
+        },
+      );
+    expect(proof).toThrow(SetupRefusedError);
   });
 
   it("must sandbox a development build, any marker present at all, any switch, and a sandbox named by the environment", () => {
@@ -599,5 +881,75 @@ describe("the look's sandbox and its guard", () => {
       );
     }
     expect(SANDBOX_MARKERS).toContain("CLAWTRATE_SETUP_SANDBOX");
+  });
+
+  it("resolves the launch: every marker alone, the environment's file alone, a bare or empty switch, and the switch over the environment", () => {
+    const s = setting();
+    const second = fake.runFolder(join(s.base, "second"), {
+      instance: s.mine.name,
+      run: s.mine.run,
+    });
+    const launch = (options: {
+      packaged?: boolean;
+      env?: NodeJS.ProcessEnv;
+      switches?: Record<string, string>;
+    }) =>
+      resolveSetupLaunch({
+        packaged: options.packaged ?? true,
+        env: options.env ?? {},
+        switches: (name) => Object.hasOwn(options.switches ?? {}, name),
+        switchValue: (name) => options.switches?.[name] ?? "",
+        context: s.context,
+      });
+    expect(launch({}).kind).toBe("production");
+    const refused = (value: ReturnType<typeof launch>) =>
+      value.kind === "refused" ? value.error.reason : value.kind;
+    // Each marker by itself, no debugging switch, no file: refused, as given none.
+    for (const key of SANDBOX_MARKERS.filter((key) => key !== "CLAWTRATE_SETUP_SANDBOX"))
+      expect(refused(launch({ env: { [key]: "1" } })), key).toBe("missing");
+    expect(refused(launch({ packaged: false }))).toBe("missing");
+    // The environment's file alone.
+    const fromEnv = launch({ env: { CLAWTRATE_SETUP_SANDBOX: second.file } });
+    expect(fromEnv.kind === "sandbox" && fromEnv.file).toBe(second.file);
+    // An empty variable, and a bare switch: sandboxed, and given none.
+    expect(refused(launch({ env: { CLAWTRATE_SETUP_SANDBOX: "" } }))).toBe("missing");
+    expect(refused(launch({ switches: { "clawtrate-setup-sandbox": "" } }))).toBe("missing");
+    // A bare switch with the environment's file: that file.
+    const bare = launch({
+      switches: { "clawtrate-setup-sandbox": "" },
+      env: { CLAWTRATE_SETUP_SANDBOX: second.file },
+    });
+    expect(bare.kind === "sandbox" && bare.file).toBe(second.file);
+    // Both given: the switch's.
+    const both = launch({
+      switches: { "clawtrate-setup-sandbox": s.file },
+      env: { CLAWTRATE_SETUP_SANDBOX: second.file },
+    });
+    expect(both.kind === "sandbox" && both.file).toBe(s.file);
+    // Windows looks at nothing, whatever it is given; a bad file is refused with its reason.
+    expect(
+      resolveSetupLaunch({
+        packaged: false,
+        env: {},
+        switches: () => false,
+        switchValue: () => "",
+        context: { ...s.context, platform: "win32" },
+      }).kind,
+    ).toBe("windows");
+    expect(
+      refused(launch({ switches: { "clawtrate-setup-sandbox": "/tmp/nowhere/sandbox.json" } })),
+    ).toBe("file");
+    expect(s.processes.asked).toEqual([]);
+  });
+
+  it("never lets Connect use a port its world doesn't allow, and never OpenClaw's default in a sandbox", () => {
+    const sandbox = {
+      ...homeWorld(),
+      kind: "sandbox" as const,
+      portAllowed: (port: number) => port === 18789,
+    };
+    expect(() => guardPort(18789, sandbox)).toThrow(SetupRefusedError);
+    expect(() => guardPort(19940, sandbox)).toThrow(SetupRefusedError);
+    expect(() => guardPort(18789, homeWorld())).not.toThrow();
   });
 });

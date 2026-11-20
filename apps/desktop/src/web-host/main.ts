@@ -10,9 +10,11 @@
 // read-only conversation and never offers to ask for more access.
 // `--setup-look` shows the first screen of setup and lets "This computer" look
 // on the computer running this host, which is not the viewer's: it is off by
-// default, runs only in the sandbox `--setup-sandbox` names, and never pairs,
+// default, runs only in the sandbox `--setup-sandbox` names, keeps its data in
+// that sandbox's run folder, never resumes a saved gateway, and never pairs,
 // since this host has no dialog of its own to ask first (docs/decisions.md).
 
+import { realpathSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
@@ -20,15 +22,12 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { readDevConnection, selectInstance, startHostRuntime } from "../host/runtime.ts";
 import { createAccessToken, startWebHost } from "./server.ts";
+import { setupLookChoice } from "./setup-look.ts";
 import { SetupController } from "../setup/controller.ts";
 import { ProgramRunner } from "../setup/programs.ts";
-import {
-  productionWorld,
-  readSandbox,
-  realHome,
-  sandboxWorld,
-  SetupRefusedError,
-} from "../setup/world.ts";
+import { sandboxOpener } from "../setup/sandbox.ts";
+import { startSyntheticGateway } from "../setup/synthetic-gateway.ts";
+import { accountHome } from "../setup/world.ts";
 
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = join(APP_ROOT, "../..");
@@ -72,10 +71,19 @@ async function main(): Promise<void> {
     );
   }
   const port = Number(values.port);
+  // Decided before anything starts: the setup look's sandbox, or why there is none.
+  const context = {
+    platform: process.platform,
+    home: accountHome(),
+    uid: process.getuid?.() ?? null,
+  };
+  const setupLook = setupLookChoice(values, context);
+  if (setupLook.kind === "refused") throw new Error(setupLook.message);
   const runtime = await startHostRuntime({
     kind: "web",
     displayName: "Clawtrate Web",
-    dataDir: values["data-dir"] ?? defaultDataDir(),
+    dataDir:
+      setupLook.kind === "sandbox" ? setupLook.dataDir : (values["data-dir"] ?? defaultDataDir()),
     devGateway,
     autoConnectDev: values["dev-gateway"] || tokenDisabled,
     // Without an access token, anyone who can reach the port can use this host,
@@ -84,31 +92,24 @@ async function main(): Promise<void> {
     devOnly: tokenDisabled,
     recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance }),
     readOnly: values["read-only"],
+    // The setup look never resumes a saved gateway.
+    resume: setupLook.kind !== "sandbox",
   });
   const programs = new ProgramRunner();
-  if (values["setup-look"]) {
-    const sandbox = values["setup-sandbox"];
-    let world;
-    try {
-      // Without --setup-sandbox the real computer is refused and the look sees an empty one.
-      world = sandbox
-        ? sandboxWorld(readSandbox(sandbox), process.platform)
-        : productionWorld({
-            home: realHome(),
-            appData: values["data-dir"] ?? defaultDataDir(),
-            platform: process.platform,
-          });
-    } catch (error) {
-      world =
-        error instanceof SetupRefusedError ? error : new SetupRefusedError("file", String(error));
-    }
+  let closeSetup = async () => {};
+  if (setupLook.kind === "sandbox") {
+    // A development and review host: it looks only in its sandbox, through the stand-in.
+    const opener = sandboxOpener({
+      file: setupLook.file,
+      platform: process.platform,
+      context: { ...context, checkout: realpathSync(REPO_ROOT) },
+      startGateway: startSyntheticGateway,
+      log: (line) => console.log(line),
+    });
+    closeSetup = opener.close;
     runtime.policy.setup = new SetupController({
       client: runtime.client,
-      world,
-      // A development and review host: it looks only in a sandbox.
-      sandboxed: true,
-      realHome: realHome(),
-      run: programs.run,
+      open: opener.open,
       stopPrograms: () => programs.stopAll(),
       confirm: null,
       log: (line) => console.log(line),
@@ -146,6 +147,7 @@ async function main(): Promise<void> {
 
   const shutdown = () => {
     programs.stopAll();
+    void closeSetup();
     runtime.client.stop();
     void host.close().then(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();

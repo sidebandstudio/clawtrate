@@ -38,19 +38,12 @@ import {
   type ProgramRequest,
   type ProgramResult,
 } from "../src/setup/programs.ts";
-import {
-  productionWorld,
-  sandboxWorld,
-  STAND_IN_MARK,
-  type LookWorld,
-} from "../src/setup/world.ts";
-import { MARKER_FILE } from "../../../tools/dev-gateway/src/state-guard.ts";
+import { productionWorld, SetupRefusedError, type LookWorld } from "../src/setup/world.ts";
 import { authJson, qrJson, statusJson, VERSION_LINE } from "./fixtures/openclaw-outputs.ts";
 
 const PORT = 19940;
 const URL = `ws://127.0.0.1:${PORT}`;
 const CODE = "Xq3v8Lw0eXk2Rj9TaNf5Hc1UbYm7Pd4GsZi6Ko2EaVr";
-const PROFILE = "--profile clawtrate-dev-su1-test";
 
 let dir: string;
 beforeEach(() => {
@@ -58,32 +51,19 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+/**
+ * The world Connect runs against here: a production-shaped one in a
+ * temporary home whose program is a fake runner, allowed to use the found
+ * gateway's port. The sandbox's own world is tested in setup-stand-in.test.ts.
+ */
 function world(): LookWorld {
   const program = join(dir, "bin/openclaw");
   mkdirSync(join(dir, "bin"), { recursive: true });
-  writeFileSync(program, `#!/bin/sh\n# ${STAND_IN_MARK}\nexit 1\n`);
+  writeFileSync(program, "#!/bin/sh\nexit 1\n");
   chmodSync(program, 0o755);
   mkdirSync(join(dir, "home"), { recursive: true });
-  // The instance's marker, as `pnpm dev-gateway start` writes it: its port is the only one allowed.
-  const stateDir = join(dir, ".openclaw-clawtrate-dev-su1-test");
-  mkdirSync(stateDir, { recursive: true });
-  writeFileSync(
-    join(stateDir, MARKER_FILE),
-    JSON.stringify({
-      createdBy: "clawtrate tools/dev-gateway",
-      instance: "su1-test",
-      gatewayPort: PORT,
-    }),
-  );
-  return sandboxWorld(
-    {
-      home: join(dir, "home"),
-      openclaw: program,
-      instance: "su1-test",
-      stateDir: join(dir, ".openclaw-clawtrate-dev-su1-test"),
-    },
-    "darwin",
-  );
+  const home = productionWorld({ home: join(dir, "home"), appData: dir, platform: "darwin" });
+  return { ...home, candidates: [program], profiles: [home.profiles[0]!], deep: false };
 }
 
 type Reply =
@@ -94,7 +74,7 @@ function harness(
     replies?: Record<string, Reply>;
     confirm?: ((confirmation: Confirmation) => Promise<boolean>) | null;
     gateway?: FakeGateway;
-    world?: LookWorld;
+    world?: LookWorld | SetupRefusedError;
     now?: () => number;
   } = {},
 ) {
@@ -111,7 +91,7 @@ function harness(
   const run = async (request: ProgramRequest): Promise<ProgramResult> => {
     checkRequest(request);
     requests.push(request);
-    const key = request.args.join(" ").replace(`${PROFILE} `, "");
+    const key = request.args.join(" ");
     timeline.push(`run ${key}`);
     const reply = replies[key];
     const result = typeof reply === "function" ? await reply() : reply;
@@ -154,10 +134,10 @@ function harness(
         };
   const setup = new SetupController({
     client,
-    world: options.world ?? world(),
-    sandboxed: true,
-    realHome: join(dir, "real-home"),
-    run,
+    open: async () => {
+      const chosen = options.world ?? world();
+      return chosen instanceof SetupRefusedError ? chosen : { world: chosen, run };
+    },
     stopPrograms: () => void (stopped += 1),
     confirm,
     log: (line) => logs.push(line),
@@ -234,8 +214,7 @@ describe("Connect on this computer", () => {
 
     expect(h.dialogs).toEqual([
       {
-        message:
-          "Pair this device read-only with the clawtrate-dev-su1-test gateway on this computer?",
+        message: "Pair this device read-only with the default gateway on this computer?",
         detail: "The gateway saves this device.",
         confirm: "Pair",
       },
@@ -252,15 +231,7 @@ describe("Connect on this computer", () => {
       ]),
     );
     expect(minted(h.requests)).toHaveLength(1);
-    expect(minted(h.requests)[0]!.args).toEqual([
-      "--profile",
-      "clawtrate-dev-su1-test",
-      "qr",
-      "--json",
-      "--voice-node",
-      "--url",
-      URL,
-    ]);
+    expect(minted(h.requests)[0]!.args).toEqual(["qr", "--json", "--voice-node", "--url", URL]);
     const sent = h.gateway.connects[0] as { scopes: string[]; auth: Record<string, string> };
     expect(sent.scopes).toEqual(["operator.read"]);
     expect(sent.auth).toEqual({ bootstrapToken: CODE });
@@ -466,38 +437,38 @@ describe("Connect on this computer", () => {
     h.client.stop();
   });
 
-  it("an automated run with no sandbox refuses the real computer loudly, finds nothing and starts no program", async () => {
-    // A home that holds an OpenClaw and its program: the look must see none of it.
-    mkdirSync(join(dir, ".openclaw"));
-    const real = productionWorld({ home: dir, appData: dir, platform: "darwin" });
-    const h = harness({
-      world: { ...real, candidates: [...real.candidates, world().candidates[0]!] },
-    });
-    await h.client.start();
-    await h.setup.look();
-    expect(h.setup.current).toMatchObject({ phase: "found", look: { outcome: "not-found" } });
-    expect(h.logs.some((line) => line.includes("refused to start"))).toBe(true);
-    expect(h.requests).toEqual([]);
-    h.client.stop();
+  it("a run given no sandbox, or a sandbox that didn't pass, is refused in fixed words, and starts and reads nothing", async () => {
+    for (const reason of ["missing", "file", "home", "state"] as const) {
+      const h = harness({ world: new SetupRefusedError(reason) });
+      await h.client.start();
+      await h.setup.look();
+      expect(h.setup.current, reason).toMatchObject({
+        phase: "failed",
+        failure: { kind: "refused", reason },
+      });
+      expect(
+        h.logs.filter((line) => line.includes("refused to start")),
+        reason,
+      ).toEqual([`[setup] ${new SetupRefusedError(reason).message}`]);
+      expect(h.requests, reason).toEqual([]);
+      h.client.stop();
+    }
   });
 
-  it("a sandbox that reaches the real home folder is refused, loudly, and starts no program", async () => {
-    mkdirSync(join(dir, "real-home"));
-    const reaching = sandboxWorld(
-      {
-        home: join(dir, "real-home"),
-        openclaw: join(dir, "bin/openclaw"),
-        instance: "su1-test",
-        stateDir: join(dir, ".openclaw-clawtrate-dev-su1-test"),
-      },
-      "darwin",
-    );
-    const h = harness({ world: reaching });
-    await h.client.start();
-    await h.setup.look();
-    expect(h.setup.current).toMatchObject({ phase: "failed", failure: { kind: "refused" } });
-    expect(h.logs.some((line) => line.includes("real home folder"))).toBe(true);
-    expect(h.requests).toEqual([]);
+  it("an error that isn't a refusal is logged as a fixed refusal, never its own text", async () => {
+    const h = harness();
+    const secret = "fixture-secret-0123456789abcdef";
+    const setup = new SetupController({
+      client: h.client,
+      open: () => Promise.reject(new Error(`boom ${secret} /Users/someone`)),
+      stopPrograms: () => {},
+      confirm: null,
+      log: (line) => h.logs.push(line),
+    });
+    await setup.look();
+    expect(setup.current.failure).toMatchObject({ kind: "refused", reason: "file" });
+    expect(h.logs.join("\n")).not.toContain(secret);
+    expect(h.logs.join("\n")).not.toContain("/Users/");
     h.client.stop();
   });
 
@@ -739,7 +710,7 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     expect(h.setup.current.look?.access).toBe("more");
     await h.setup.connect();
     expect(h.dialogs[0]).toEqual({
-      message: "Connect this device to the clawtrate-dev-su1-test gateway on this computer?",
+      message: "Connect this device to the default gateway on this computer?",
       detail: "This device is already paired with this gateway and can also send.",
       confirm: "Connect",
     });

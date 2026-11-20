@@ -20,7 +20,7 @@ import {
   shell,
   type WebContents,
 } from "electron";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -35,15 +35,9 @@ import {
 } from "../host/runtime.ts";
 import { SetupController } from "../setup/controller.ts";
 import { ProgramRunner } from "../setup/programs.ts";
-import {
-  mustSandbox,
-  productionWorld,
-  readSandbox,
-  realHome,
-  sandboxWorld,
-  SetupRefusedError,
-  type LookWorld,
-} from "../setup/world.ts";
+import { resolveSetupLaunch, sandboxOpener, type Opened } from "../setup/sandbox.ts";
+import { startSyntheticGateway } from "../setup/synthetic-gateway.ts";
+import { accountHome, productionWorld, type SetupRefusedError } from "../setup/world.ts";
 
 app.setName("Clawtrate");
 // On Windows, the taskbar button belongs to the installer's shortcuts from the first window.
@@ -89,6 +83,7 @@ let runtime: HostRuntime | null = null;
 let window: BrowserWindow | null = null;
 /** The programs setup started, ended by PID when the app quits. */
 const programs = new ProgramRunner();
+let closeSetup: () => Promise<void> = async () => {};
 
 /** Whether a command-line switch was given, to Chromium or to the app. */
 function hasSwitch(name: string): boolean {
@@ -98,29 +93,73 @@ function hasSwitch(name: string): boolean {
   );
 }
 
+/** A switch's value, given to Chromium or to the app; empty when it has none. */
+function switchValue(name: string): string {
+  return app.commandLine?.getSwitchValue(name) ?? "";
+}
+
 /**
- * The look's world (docs/development/setup.md): the sandbox an automated run
- * or a developer names with `--clawtrate-setup-sandbox=<file>` or
- * CLAWTRATE_SETUP_SANDBOX, otherwise the real computer.
+ * How this launch sets up on this computer (docs/development/setup.md),
+ * resolved before the single-instance lock and the host runtime: the real
+ * computer for a packaged app nothing automates; otherwise only the sandbox
+ * the launch names, checked now, or a refusal.
  */
-function setupWorld(): LookWorld | SetupRefusedError {
-  const path =
-    app.commandLine?.getSwitchValue("clawtrate-setup-sandbox") ||
-    process.env.CLAWTRATE_SETUP_SANDBOX ||
-    "";
+const SETUP = resolveSetupLaunch({
+  packaged: app.isPackaged,
+  env: process.env,
+  switches: hasSwitch,
+  switchValue,
+  context: { platform: process.platform, home: accountHome(), uid: process.getuid?.() ?? null },
+});
+
+/**
+ * The checkout whose run records prove a sandbox's run: this development
+ * build's own; a packaged app is told by its launch check.
+ */
+function launcherCheckout(): string | null {
+  const path = app.isPackaged ? switchValue("clawtrate-setup-checkout") : REPO_ROOT;
   try {
-    if (path) return sandboxWorld(readSandbox(path), process.platform);
-  } catch (error) {
-    return error instanceof SetupRefusedError
-      ? error
-      : new SetupRefusedError("file", String(error));
+    return path ? realpathSync(path) : null;
+  } catch {
+    return null;
   }
-  return productionWorld({
-    home: realHome(),
-    appData: app.getPath("userData"),
-    platform: process.platform,
-    lang: process.env.LANG,
-  });
+}
+
+/** What each look and Connect opens: the real computer, the sandbox, or the refusal. */
+function setupOpener(): {
+  open: () => Promise<Opened | SetupRefusedError>;
+  close: () => Promise<void>;
+} {
+  const close = async () => {};
+  if (SETUP.kind === "refused") return { open: async () => SETUP.error, close };
+  if (SETUP.kind === "sandbox") {
+    return sandboxOpener({
+      file: SETUP.file,
+      platform: process.platform,
+      context: {
+        platform: process.platform,
+        home: accountHome(),
+        uid: process.getuid?.() ?? null,
+        checkout: launcherCheckout(),
+      },
+      startGateway: startSyntheticGateway,
+      log: (line) => console.log(line),
+    });
+  }
+  // The real computer; on Windows the look starts nothing.
+  const home = accountHome();
+  return {
+    open: async () => ({
+      world: productionWorld({
+        home: home ?? "",
+        appData: app.getPath("userData"),
+        platform: process.platform,
+        lang: process.env.LANG,
+      }),
+      run: programs.run,
+    }),
+    close,
+  };
 }
 
 /** The host's own confirmation (docs/design/setup.md §2): a native dialog, never the page. */
@@ -302,15 +341,16 @@ async function main(): Promise<void> {
     devGateway: app.isPackaged ? null : readDevConnection(REPO_ROOT, { instance: devInstance }),
     recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance: devInstance }),
     autoConnectDev: process.env.CLAWTRATE_AUTOCONNECT_DEV === "1",
+    // A development build and every automated run never resume a saved gateway.
+    resume: SETUP.kind === "production",
   });
   const { client, info, policy } = runtime;
   // Setup on this computer. A development build and every automated run look only in a sandbox.
+  const opener = setupOpener();
+  closeSetup = opener.close;
   const setup = new SetupController({
     client,
-    world: setupWorld(),
-    sandboxed: mustSandbox({ packaged: app.isPackaged, env: process.env, switches: hasSwitch }),
-    realHome: realHome(),
-    run: programs.run,
+    open: opener.open,
     stopPrograms: () => programs.stopAll(),
     confirm: confirmNatively,
     log: (line) => console.log(line),
@@ -403,6 +443,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   programs.stopAll();
+  void closeSetup();
   runtime?.client.stop();
 });
 
