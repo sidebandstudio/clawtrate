@@ -92,6 +92,7 @@ export function Shell({
   }, []);
 
   const [routines, setRoutines] = useState<RoutinesNav | null>(null);
+  const routinesOpen = routines !== null;
   const conversationVisible = routines === null;
   const selection = useSelection(state, interactive, conversationVisible);
   const { bot, task } = selection;
@@ -376,7 +377,9 @@ export function Shell({
         rail?.querySelector<HTMLElement>(".bot")
       )?.focus();
     }
-  }, [view, taskKey]);
+    // Re-shown from under Routines, the conversation is the destination even though
+    // view and taskKey did not change.
+  }, [view, taskKey, routinesOpen]);
 
   // One connection state drives the strip, the footer and the composer.
   const transcript = taskKey ? state.transcripts[taskKey] : undefined;
@@ -496,7 +499,7 @@ export function Shell({
         onOpenSettings={onOpenSettings}
         onNewBot={interactive ? openNewBot : null}
         routines={state.routines.routines}
-        routinesOpen={routines !== null}
+        routinesOpen={routinesOpen}
         onOpenRoutines={() => openRoutines(ROUTINES_HOME)}
         onOpenRoutineRun={(id, runAt) =>
           openRoutines({ ...ROUTINES_HOME, routine: id, run: runAt === null ? null : { runAt } })

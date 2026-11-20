@@ -585,6 +585,20 @@ test.describe("1440", () => {
     );
   });
 
+  test("F-193: the bot shortcut opens the selected bot's conversation from Routines", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=main&bot=otto&task=agent:otto:disk-space&routines=on", "light");
+    await page.getByRole("button", { name: "Routines", exact: true }).click();
+    await expect(view(page)).toBeVisible();
+    // The rail's order is recent activity, so ⌘1 targets the selected bot itself.
+    await page.keyboard.press("ControlOrMeta+1");
+    await expect(view(page)).toHaveCount(0);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+      "Disk almost full on the media box",
+    );
+  });
+
   test("the view has Back to the conversation, closes Work, and returns focus to the Routines button", async ({
     page,
   }) => {
@@ -652,6 +666,29 @@ test.describe("phone", () => {
     for (const element of [title, time]) {
       expect(await element.evaluate((each) => each.scrollWidth <= each.clientWidth)).toBe(true);
     }
+  });
+
+  test("F-190: reopening the selected task's conversation from Routines moves focus to it", async ({
+    page,
+  }) => {
+    await openFixture(page, ROUTINES, "light");
+    await page.getByRole("button", { name: "Back to bots" }).click();
+    await page.getByRole("button", { name: "Routines", exact: true }).click();
+    await expect(view(page)).toBeVisible();
+    const open = view(page).getByRole("button", { name: "Open Juniper's main conversation" });
+    await view(page).getByTestId("routine-row").filter({ hasText: "Stretch break" }).click();
+    await view(page).getByTestId("run-row").first().click();
+    await open.click();
+    await expect(view(page)).toHaveCount(0);
+    // The reminder ran in the conversation the shell now holds open. Routines covers
+    // it, and opening it again changes neither view nor task key.
+    await page.getByRole("button", { name: "Back to bots" }).click();
+    await page.getByRole("button", { name: "Routines", exact: true }).click();
+    await view(page).getByTestId("routine-row").filter({ hasText: "Stretch break" }).click();
+    await view(page).getByTestId("run-row").first().click();
+    await open.click();
+    await expect(view(page)).toHaveCount(0);
+    await expect(page.locator(".conversation h1")).toBeFocused();
   });
 
   test("Back to bots leaves the view for the rail, with focus on the Routines button", async ({
