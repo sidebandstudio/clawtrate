@@ -153,14 +153,17 @@ On a read-only connection the built conversation shows the access bar in the com
 
 ### Widths, themes, keyboard, screen readers, motion
 
-- Every surface here is drawn at 1440, 1100, 800 and the 390 px one-pane layout, light and dark, in the product's tokens; at 390 the controls take touch sizes (44 px).
-- Keyboard: every control is a button or a radio group; the call band's actions are in reading order (Mute, Transcript, Settings, Hang up); the call's settings and the consent sheet trap focus and return it to what opened them; Escape closes them.
-- Screen readers: the band is a `region` named "Voice chat with Otto"; the microphone mark's words are its text, not only its colour; the live transcript is a `log`; disabled buttons carry their reason as a description.
-- Motion: the microphone mark's pulse while listening and the phase's level meter hold still under reduced motion.
+- Every surface here is drawn at 1440, 1100, 800 and the 390 px one-pane layout, light and dark, in the product's tokens; at 390 the controls take touch sizes (44 px hit areas).
+- **The phone's one pane.** Back shows the list; choosing a bot shows its tasks; choosing a task opens its conversation. The call is shown in the list too (section 9), and "Show" always reaches its band.
+- **Dialogs.** The consent sheet, the second-call question and the call's settings are modal dialogs: focus moves into them, stays there, Escape closes them, and focus returns to what opened them.
+- **Choices.** A group of choice rows is a radio group with one tab stop; arrows, Home and End move and choose, and Space chooses. The call's voice, speed and language are native selects.
+- **Focus survives updates.** A phase or a caption changing never takes focus from the control that has it, and never moves the field's caret.
+- Screen readers: the band is a `region` named "Voice chat with Otto"; the microphone mark's words are its text, not only its colour; the live captions are a `log` with `aria-live="off"`; disabled buttons carry their reason as a description.
+- Motion: the microphone mark's pulse holds still under reduced motion.
 
 ### Announcements
 
-The conversation's polite live region speaks for voice, and only for these: "Listening", "Dictation stopped. The text is in your message.", "Voice chat with Otto started", "Muted", "Unmuted", "Voice chat ended", "Reconnecting the voice chat", "Voice chat with Otto reconnected", "Voice chat failed: Connection lost" (and the other reasons), "Voice: Cedar, from Otto's next reply", "The voice didn't change", "Language: Español, from what you say next", "The language didn't change". They go through the conversation's built announcer (`onAnnounce`, the polite `status` region). Live transcript lines are not announced; the transcript region is a `log` the person can read.
+The conversation's one polite status region speaks for voice, one change at a time, and only once what it says is true on screen: "Listening", "Dictation stopped. The text is in your message." (or "Dictation stopped."), "Voice chat with Otto started" (once a capture track is live and the relay ready), "Muted", "Unmuted" (once the track is live again), "Voice chat ended", "Ended on this device. Home gateway did not confirm the call ended.", "Couldn't start voice chat", "Voice chat failed: Connection lost" (and the other reasons), "Reconnected to Home gateway. The voice session could not be resumed.", "Microphone stopped. No new audio is being sent.", "Voice: Cedar, from Otto's next reply.", "Voice didn't change". They go through the conversation's built announcer (`onAnnounce`, the polite `status` region). Captions are not announced.
 
 ## 3. The two buttons in the composer
 
