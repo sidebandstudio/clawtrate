@@ -1,4 +1,4 @@
-import type { DesktopUpdates } from "@clawtrate/core";
+import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { expect, test } from "@playwright/test";
 import { contextFor, openFixture, settle, showList, SIZES, OTTO_DISK } from "./fixture.ts";
 
