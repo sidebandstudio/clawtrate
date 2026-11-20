@@ -29,7 +29,11 @@
   // The gateway's own read-only configuration (mutationAllowed: false), whatever this device's access.
   const readonlyGw = params.get("readonly") === "1";
   const admin = (access === "admin" || req === "granted") && !readonlyGw;
-  const readonlyNote = () => (readonlyGw ? `<div class="b-note" role="status">${CT.icon("lock")}<div><p><b>This gateway's settings are read-only.</b> Plugins can't be added, turned on or off, or removed here, from any app.</p></div></div>` : "");
+  const readonlyNote = () => (readonlyGw ? `<div class="b-note" role="status">${CT.icon("lock")}<div><p><b>This gateway's settings are read-only.</b> Plugins and tool servers can't be changed here.</p></div></div>` : "");
+  // Screens that write. On a read-only gateway no control leads to one; on the iPhone none leads to a server write.
+  const WRITES = ["add-confirm", "add-consent", "add-warning", "add-progress", "turnoff-confirm", "remove-confirm", "server-remove-confirm", "add-server", "command-confirm", "write-sent", "write-read", "write-result"];
+  const SERVER_WRITES = ["server-remove-confirm", "add-server", "command-confirm", "write-sent", "write-read", "write-result"];
+  const blocked = (to) => (readonlyGw && WRITES.includes(to)) || (iphone && SERVER_WRITES.includes(to));
 
   // Samples --------------------------------------------------------------------------
 
@@ -75,7 +79,7 @@
     APPS.find((a) => a.id === "postlark").missing = ["<em>Account</em> address"];
     SERVERS["notes-work"].diagnostic = "fetch failed <em>refused</em>";
   }
-  const app = (id) => APPS.find((a) => a.id === id) || APPS[0];
+  const app = (id) => [...APPS, ...MORE].find((a) => a.id === id) || APPS[0];
   // The page's own memory for one operation: the untouched form, the reviewed draft and what was saved.
   // It lives in this tab's session storage and never in an address. Header values are never kept.
   const store = {
@@ -104,7 +108,7 @@
 
   const initial = (name, size = "") => `<span class="c-initial"${size ? ` data-size="${size}"` : ""} aria-hidden="true">${esc(name[0])}</span>`;
   const link = (label, to, extra = {}, { variant, size = "sm", attrs = "" } = {}) =>
-    `<a class="button"${variant ? ` data-variant="${variant}"` : ""} data-size="${size}" href="${esc(go(to, extra))}"${attrs ? ` ${attrs}` : ""}>${esc(label)}</a>`;
+    blocked(to) ? "" : `<a class="button"${variant ? ` data-variant="${variant}"` : ""} data-size="${size}" href="${esc(go(to, extra))}"${attrs ? ` ${attrs}` : ""}>${esc(label)}</a>`;
   const pill = (text, tone = "") => `<span class="c-pill"${tone ? ` data-tone="${tone}"` : ""}>${esc(text)}</span>`;
   const note = (tone, lead, text, extra = "") =>
     `<div class="b-note"${tone ? ` data-tone="${tone}"` : ""} role="${tone === "danger" ? "alert" : "status"}">` +
@@ -203,7 +207,7 @@
       `<section class="c-section" aria-labelledby="c-section-title">` +
       `<div class="c-section-head">${back ? `<a class="icon-button c-back" href="${back}" aria-label="Back">${icon("back")}</a>` : `<a class="icon-button c-back c-to-nav" href="${go("nav")}" aria-label="Back">${icon("back")}</a>`}` +
       `<h3 id="c-section-title" tabindex="-1">${esc(title)}</h3><a class="icon-button c-close" href="${go("home")}" aria-label="Close">${icon("x")}</a></div>` +
-      `<div class="c-section-body">${body}</div>${foot ? `<div class="c-section-foot">${foot}</div>` : ""}` +
+      `<div class="c-section-body">${readonlyNote()}${body}</div>${foot ? `<div class="c-section-foot">${foot}</div>` : ""}` +
       `</section></div></div></div>`
     );
   };
@@ -225,7 +229,6 @@
   const browseLoaded = () => {
     const pickedRows = APPS.filter((a) => picked.includes(a.name));
     return (
-      readonlyNote() +
       search(iphone ? "Search plugins" : "Search across apps and skills") +
       chips("") +
       `<div id="c-results">` +
@@ -296,7 +299,6 @@
       title: a.name,
       back: go("installed"),
       body:
-        readonlyNote() +
         (params.get("busy") === "1" ? note("warn", "The gateway is busy with another change.", "Try again in a moment.", `<div class="c-actions">${link("Try again", "turnoff-confirm", { id: a.id })}</div>`) : "") +
         (said === "on" ? note("", `Turned on ${a.name}.`, `The gateway lists it as added.`) : said === "off" ? note("", `Turned off ${a.name}.`, "The gateway lists it as turned off.") : "") +
         `<div class="c-hero">${initial(a.name, "lg")}<div><p class="c-hero-name">${esc(a.name)}</p><p class="c-faint">${a.bundled ? "Comes with OpenClaw" : `by ${esc(a.author)}`} · ${esc(a.version)}</p></div></div>` +
@@ -357,7 +359,7 @@
         (s.kind === "remote" && s.signin === "oauth"
           ? group("Accounts") +
             `<p class="c-line">A second name for the same server, with its own sign-in. Bots tell them apart by name.</p>` +
-            (admin ? `<div class="c-actions">${link("Add another account", "add-server", { type: "remote", from: name })}</div>` : "")
+            (admin && !iphone ? `<div class="c-actions">${link("Add another account", "add-server", { type: "remote", from: name })}</div>` : "")
           : "") +
         (iphone ? `<p class="c-line">Change it from Clawtrate on your computer.</p>` : admin ? `<div class="c-actions c-danger-actions">${link("Remove…", "server-remove-confirm", { id: name }, { variant: "quiet" })}</div>` : "") +
         accessBar("Changing tool servers needs admin access.") +
@@ -378,7 +380,9 @@
     return {
       title: "Add a custom connector",
       body:
-        (admin
+        (iphone
+          ? `<p class="c-line">Change it from Clawtrate on your computer.</p>`
+          : admin
           ? `<form class="c-form" id="c-server-form" novalidate data-type="${esc(type)}" data-from="${esc(from || "")}">` +
             `<fieldset class="c-type"><legend>Type</legend><div class="c-seg" role="radiogroup" aria-label="Type">` +
             `<a role="radio" aria-checked="${remote}" href="${esc(go("add-server", { type: "remote" }))}">Remote HTTPS</a>` +
@@ -403,7 +407,7 @@
             `<div class="c-actions"><button type="submit" class="button" id="c-submit" data-variant="primary" data-size="sm">${remote ? "Add to gateway" : "Continue"}</button></div>` +
             `</form>`
           : `<p class="c-line">Adding a custom connector writes the gateway's settings.</p>`) +
-        accessBar("Adding a custom connector needs admin access.") +
+        (iphone ? "" : accessBar("Adding a custom connector needs admin access.")) +
         granted(),
     };
   };
@@ -583,7 +587,6 @@
       windowHtml({
         title: "On this gateway",
         body:
-          readonlyNote() +
           search("Search what's on this gateway") +
           group("Turned on") +
           rows(APPS.filter((a) => !a.bundled && ["enabled", "error"].includes(a.local)), "connector") +

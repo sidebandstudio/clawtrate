@@ -102,7 +102,7 @@ const STATES = [
   ["screen=remove-confirm&id=tasktide", ["Remove Tasktide from the gateway?", "The package @tasktide/tasktide, with: Tasktide, Tasktide sync.", "Goes", "the package's files on the gateway's machine", "its settings on the gateway", "its tools", "Stays", "any saved sign-ins, kept by the gateway in its state, not encrypted there", "a note on the gateway that Tasktide is off, so nothing turns it back on by itself"]],
   ["screen=removed&id=tasktide", ["Removed Tasktide.", "No longer installed: Tasktide, Tasktide sync."]],
   ["screen=removed-unconfirmed&id=tasktide", ["Couldn't confirm the removal.", "Check again"]],
-  ["screen=browse&readonly=1", ["This gateway's settings are read-only.", "Plugins can't be added, turned on or off, or removed here, from any app."]],
+  ["screen=browse&readonly=1", ["This gateway's settings are read-only.", "Plugins and tool servers can't be changed here."]],
   ["screen=connector&id=tasktide&readonly=1", ["This gateway's settings are read-only."]],
   ["screen=server&id=notes-work", ["notes-work", "Name on the gateway", "Added by address", "https://notes.example/mcp", "Authorization", "Hidden: the gateway doesn't show saved values. Kept by the gateway in its settings file, not encrypted there.", "Signs in with OAuth", "Gateway tool listing", "Gateway tool listing for Pip's task, read at 5:12 PM: 8 tools", "A listing shows what the gateway has discovered for this task. A bot's tool rules still decide what it is offered.", "Sign-in", "Not reported.", "The gateway doesn't report whether it's signed in to this server, or for whom. A bot's run shows whether its tools work.", "Sign in", "Accounts", "A second name for the same server, with its own sign-in. Bots tell them apart by name.", "Add another account", "Remove…"]],
   ["screen=server&id=notes-work&last=notyet", ["The gateway hasn't listed this server's tools for this task."]],
@@ -172,6 +172,40 @@ for (const [query, words] of STATES) {
   check("no screen claims a run, a time of use or every bot (ruling 7)", claims.length === 0, claims.join(" | "));
 }
 
+// Change 5: a read-only gateway says so on every page reachable from Browse, and nothing in a page leads to a write.
+// The section list still opens the custom server page, which then says the settings are read-only.
+{
+  const WRITES = ["add-confirm", "add-consent", "add-warning", "add-progress", "turnoff-confirm", "remove-confirm", "server-remove-confirm", "add-server", "command-confirm", "write-sent", "write-read", "write-result"];
+  const writesOn = (p) =>
+    p.evaluate((writes) => {
+      const to = [...document.querySelectorAll("#c-root .c-section a[href]")].map((a) => new URL(a.href).searchParams.get("screen")).filter((s) => writes.includes(s));
+      const turns = [...document.querySelectorAll("#c-root .c-section a[href]")].filter((a) => new URL(a.href).searchParams.get("now")).length;
+      const forms = document.querySelectorAll("#c-server-form, .c-confirm").length;
+      return to.length + turns + forms;
+    }, WRITES);
+  const pages = ["browse", "browse-category&cat=productivity", "browse-offline", "app&id=quillnote", "app&id=mapwhistle", "installed", "connector&id=tasktide", "connector&id=calendrop", "connector&id=ledgerkin", "server&id=notes-work", "server&id=search-index", "add-server", "add-server&type=command", "add-refused&id=quillnote"];
+  for (const tier of ["read", "admin"]) {
+    const bad = [];
+    for (const q of pages) {
+      const p = await open(`screen=${q}&readonly=1&access=${tier}`);
+      const t = await text(p);
+      if (!t.includes("This gateway's settings are read-only. Plugins and tool servers can't be changed here.") || t.includes("Request admin access") || (await writesOn(p)) > 0) bad.push(q);
+      await p.close();
+    }
+    check(`read-only gateway at the ${tier} tier: every page says so and offers no write and no request`, bad.length === 0, bad.join(" | "));
+  }
+  const d = await open("screen=browse&access=read");
+  check("a writable gateway's read-only device still sees the access bar", (await text(d)).includes("Read-only. Adding apps needs admin access.") && (await text(d)).includes("Request admin access") && !(await text(d)).includes("This gateway's settings are read-only."));
+  await d.close();
+  const p = await open("screen=installed&device=iphone", { width: 390, height: 844 });
+  check("iPhone: On this gateway offers no custom connector", (await p.getByRole("link", { name: "Add a custom connector" }).count()) === 0);
+  await p.locator('.c-row-main[aria-label^="notes-work,"]').click();
+  await at(p, "server");
+  check("iPhone at 390: the server's page opens, with no Remove and no Add another account", (await text(p)).includes("Change it from Clawtrate on your computer.") && (await writesOn(p)) === 0 && (await p.getByRole("link", { name: /Remove|Add another account/ }).count()) === 0);
+  await p.goto(`${base}&theme=light&screen=add-server&device=iphone`);
+  check("iPhone: the custom connector form isn't drawn even from its address", (await p.locator("#c-server-form").count()) === 0 && (await text(p)).includes("Change it from Clawtrate on your computer."));
+  await p.close();
+}
 {
   const p = await open("screen=browse&readonly=1&access=read");
   check("read-only gateway settings: no Add, and no request for admin access (ruling 10)", (await p.locator(".c-row-end .button").count()) === 0 && !(await text(p)).includes("Request admin access"));
