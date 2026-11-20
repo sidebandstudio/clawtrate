@@ -150,11 +150,13 @@ export async function paintedFinal(page: Page): Promise<void> {
                 const frame = () => {
                   seen.push(geometry());
                   if (seen.length < 4) requestAnimationFrame(frame);
-                  else
-                    resolve({
-                      atEnd: new Set(seen.map((one) => JSON.stringify(one))).size === 1 && atEnd(),
-                      frames: seen,
-                    });
+                  else {
+                    // Record the full boxes, but keep the wait on the original vertical layout.
+                    const layouts = seen.map(({ shelf, ...transcript }) =>
+                      JSON.stringify([transcript, shelf.map(([, top, , height]) => [top, height])]),
+                    );
+                    resolve({ atEnd: new Set(layouts).size === 1 && atEnd(), frames: seen });
+                  }
                 };
                 requestAnimationFrame(frame);
               }),
