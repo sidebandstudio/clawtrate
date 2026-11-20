@@ -5,9 +5,13 @@
 // that cannot be opened; and that nothing is fetched from any address but the
 // app's own until the person acts.
 import { readFileSync } from "node:fs";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Download, type Page } from "@playwright/test";
 import { contextFor, openFixture, SIZES } from "./fixture.ts";
+import { artifactBytes } from "../apps/desktop/src/fixture/artifacts.ts";
 import { ARTIFACTS, card, cardsDrawn, cell, openCard, sent } from "./artifacts-helpers.ts";
+
+/** What each fixture item holds, by its title. */
+const BYTES = artifactBytes();
 
 test.use(contextFor(SIZES[0]!, "light"));
 
@@ -249,21 +253,27 @@ test.describe("the card's menu", () => {
     expect(readFileSync((await download.path())!, "utf8")).toBe(
       "# Borrowing e-books\n\n## Found\n\n- Your library lends through Shelfwise.\n- Holds take about nine days.\n\n## Left\n\n- Renew the card before March.\n",
     );
-    await expect(announcer(page)).toHaveText("Downloaded borrowing-report.md");
+    // The browser chooses where, and whether: the web preview says only that it started.
+    await expect(announcer(page)).toHaveText("Download started: borrowing-report.md");
   });
 
-  test("F-304: Download all saves every on-gateway item of the message and names what it left out", async ({
+  test("F-304: Download all hands the browser each on-gateway item of the message with its exact bytes, says how many requests it received, and names what it left out", async ({
     page,
   }) => {
     await openFixture(page, ARTIFACTS, "light");
     await cardsDrawn(page);
     await cell(page, "apps-compared.png").click({ button: "right" });
     const menu = page.getByRole("menu", { name: "apps-compared.png" });
-    const names: string[] = [];
-    page.on("download", (download) => names.push(download.suggestedFilename()));
+    const downloads: Download[] = [];
+    page.on("download", (download) => downloads.push(download));
     await menu.getByRole("menuitem", { name: "Download 5 of 6" }).click();
-    await expect(announcer(page)).toHaveText("Downloaded 5 of 6. Not downloaded: cover.jpg");
-    expect(names.sort()).toEqual(
+    // Never that files were saved: the browser decides that, and doesn't tell the page.
+    await expect(announcer(page)).toHaveText(
+      "The browser received 5 download requests. Not sent: cover.jpg",
+    );
+    await expect.poll(() => downloads.length).toBe(5);
+    const names = downloads.map((download) => download.suggestedFilename()).sort();
+    expect(names).toEqual(
       [
         "apps-compared.png",
         "borrowing-walkthrough.webm",
@@ -272,6 +282,12 @@ test.describe("the card's menu", () => {
         "voice-note.wav",
       ].sort(),
     );
+    for (const download of downloads) {
+      const name = download.suggestedFilename();
+      expect(readFileSync((await download.path())!).equals(Buffer.from(BYTES[name]!)), name).toBe(
+        true,
+      );
+    }
   });
 
   test("F-305 F-306: a picture's menu copies the image to the clipboard and saves it; a video's saves it", async ({

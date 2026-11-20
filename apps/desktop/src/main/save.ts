@@ -7,9 +7,9 @@
 import { createHash, randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 
-import type { SaveResult } from "@clawtrate/core";
+import type { FolderSaveResult, SaveResult } from "@clawtrate/core";
 
-export type { SaveResult };
+export type { FolderSaveResult, SaveResult };
 
 /** The file operations a save uses, so a test can make any of them fail. */
 export type SaveFs = {
@@ -89,4 +89,49 @@ export async function writeExactly(
             ? "unchanged"
             : "unknown",
   };
+}
+
+/** The file operations a folder save uses, so a test can make any of them fail. */
+export type FolderFs = Pick<SaveFs, "readFile" | "writeFile" | "rm">;
+
+/** How many names "x (2).png", "x (3).png"… a folder save tries before it gives up. */
+const MAX_NAME_TRIES = 99;
+
+/**
+ * Write `data` as a new file in `folder`, under the plain form of `raw`
+ * (`safeFileName`): never outside the folder and never over a file that is
+ * there, the check and the creation being one step (`wx`). A name in use gets
+ * " (2)", " (3)" and so on before its extension. The file is read back, and
+ * one that does not hold exactly these bytes is removed and said as failed.
+ */
+export async function writeInFolder(
+  fs: FolderFs,
+  folder: string,
+  raw: unknown,
+  data: Uint8Array,
+): Promise<FolderSaveResult> {
+  const name = safeFileName(raw);
+  const dot = name.lastIndexOf(".");
+  const [stem, extension] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+  const wanted = digest(data);
+  for (let n = 1; n <= MAX_NAME_TRIES; n += 1) {
+    const candidate = n === 1 ? name : `${stem} (${n})${extension}`;
+    const target = join(folder, candidate);
+    if (dirname(target) !== folder || basename(target) !== candidate)
+      return { status: "failed", name, message: "That name isn't a file name in this folder." };
+    try {
+      await fs.writeFile(target, data, { flag: "wx", mode: 0o644 });
+    } catch (error) {
+      if ((error as { code?: string }).code === "EEXIST") continue;
+      await fs.rm(target, { force: true }).catch(() => {});
+      return { status: "failed", name, message: (error as Error).message ?? String(error) };
+    }
+    const held = await fs.readFile(target).then(digest, () => null);
+    if (held !== wanted) {
+      await fs.rm(target, { force: true }).catch(() => {});
+      return { status: "failed", name, message: "The saved file does not hold the same bytes." };
+    }
+    return { status: "saved", name: candidate };
+  }
+  return { status: "failed", name, message: "Every name like it is taken in this folder." };
 }

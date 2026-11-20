@@ -387,7 +387,26 @@ export type ClawtrateBridge = {
    * save dialog). Absent where the host has none: a browser downloads instead.
    */
   save?(file: { name: string; data: ArrayBuffer }): Promise<SaveResult>;
+  /**
+   * Ask the person for one folder (the desktop app's folder dialog), for
+   * several saves into it. The folder stays in the host; the page gets a
+   * number for it and its name. Absent where the host has none.
+   */
+  chooseFolder?(): Promise<FolderChoice>;
+  /** Write bytes as a new file in a folder `chooseFolder` gave: never outside it, never over a file. */
+  saveInFolder?(file: {
+    folder: number;
+    name: string;
+    data: ArrayBuffer;
+  }): Promise<FolderSaveResult>;
 };
+
+export type FolderChoice =
+  { status: "chosen"; folder: number; name: string } | { status: "cancelled" };
+
+/** How one save into a chosen folder ended: the name it has there, read back, or why not. */
+export type FolderSaveResult =
+  { status: "saved"; name: string } | { status: "failed"; name: string; message: string };
 
 /**
  * How a save ended. A failed write is read back before anything is said about

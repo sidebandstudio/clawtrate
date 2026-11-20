@@ -22,13 +22,19 @@ import {
 } from "electron";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
 import { startDesktopUpdates } from "./update/build-info.ts";
 import { createUpdatePreferenceStore } from "./update/preferences.ts";
 import { windowsAppUserModelId } from "./identity.ts";
-import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
+import {
+  safeFileName,
+  writeExactly,
+  writeInFolder,
+  type FolderSaveResult,
+  type SaveResult,
+} from "./save.ts";
 import {
   readDevConnection,
   selectInstance,
@@ -303,6 +309,53 @@ async function main(): Promise<void> {
     const ticket = saves.hold(event.sender.id, data);
     return saveHeld(saves, ticket, event.sender, safeFileName(file?.name));
   });
+  // Download all (work-pane.md, section 12): one folder, chosen once in the system's folder
+  // dialog, starting in Downloads, and each item written there as a new file. The folder's path
+  // stays here; the page gets a number for it, one per window, which the next choice replaces.
+  const folders = new Map<number, { ticket: number; path: string }>();
+  let nextFolder = 0;
+  ipcMain.handle("clawtrate:chooseFolder", async (event) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    const options = {
+      defaultPath: app.getPath("downloads"),
+      buttonLabel: "Save here",
+      properties: ["openDirectory", "createDirectory"] as Array<
+        "openDirectory" | "createDirectory"
+      >,
+    };
+    const chosen = owner
+      ? await dialog.showOpenDialog(owner, options)
+      : await dialog.showOpenDialog(options);
+    const path = chosen.filePaths[0];
+    if (chosen.canceled || !path) return { status: "cancelled" };
+    nextFolder += 1;
+    folders.set(event.sender.id, { ticket: nextFolder, path });
+    event.sender.once("destroyed", () => folders.delete(event.sender.id));
+    return { status: "chosen", folder: nextFolder, name: basename(path) };
+  });
+  ipcMain.handle(
+    "clawtrate:saveInFolder",
+    async (event, raw: unknown): Promise<FolderSaveResult> => {
+      const file = raw as { folder?: unknown; name?: unknown; data?: unknown } | null;
+      const data = file?.data;
+      const chosen = folders.get(event.sender.id);
+      if (!(data instanceof ArrayBuffer)) throw new Error("invalid file");
+      if (!chosen || chosen.ticket !== file?.folder)
+        throw new Error("No folder was chosen for this.");
+      // The same bound as a dialog's save: no more than a reader sends, one at a time.
+      const ticket = saves.hold(event.sender.id, data);
+      try {
+        return await writeInFolder(
+          { readFile, writeFile, rm },
+          chosen.path,
+          file?.name,
+          new Uint8Array(saves.get(ticket)!),
+        );
+      } finally {
+        saves.release(ticket);
+      }
+    },
+  );
   // Unread activity on the dock (macOS, Linux) or the taskbar button (Windows).
   const dot = nativeImage.createFromBitmap(Buffer.from(dotBitmap(16, [10, 110, 92])), {
     width: 16,

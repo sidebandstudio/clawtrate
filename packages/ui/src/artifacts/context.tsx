@@ -29,7 +29,7 @@ import {
   type ReactNode,
 } from "react";
 import { useBridge } from "../bridge.tsx";
-import { downloadBytes } from "../work/download.ts";
+import { browserDownload, downloadBytes } from "../work/download.ts";
 import {
   downloadable,
   downloadName,
@@ -416,23 +416,65 @@ export function ArtifactsProvider({
   );
   const downloadAll = useCallback(
     async (artifacts: Artifact[]) => {
-      const saved: string[] = [];
       const left: string[] = artifacts.filter((each) => !downloadable(each)).map(downloadName);
-      for (const artifact of artifacts.filter(downloadable)) {
+      const wanted = artifacts.filter(downloadable);
+      // The web preview: each item is handed to the browser, which saves it or not and says
+      // neither, so only the requests it received are counted.
+      if (!bridge.chooseFolder || !bridge.saveInFolder) {
+        let sent = 0;
+        for (const artifact of wanted) {
+          const got = await content(artifact);
+          if (got.status !== "ready") {
+            left.push(downloadName(artifact));
+            continue;
+          }
+          browserDownload(downloadName(artifact), got.data);
+          sent += 1;
+        }
+        announce(
+          `The browser received ${sent} download ${sent === 1 ? "request" : "requests"}.${
+            left.length ? ` Not sent: ${left.join(", ")}` : ""
+          }`,
+        );
+        return;
+      }
+      // The desktop app: one folder, chosen once; each item a new file there, said as it is on disk.
+      const folder = await bridge.chooseFolder();
+      if (folder.status !== "chosen") return;
+      const saved: string[] = [];
+      const renamed: string[] = [];
+      for (const artifact of wanted) {
         const name = downloadName(artifact);
         const got = await content(artifact);
         if (got.status !== "ready") {
           left.push(name);
           continue;
         }
-        const result = await downloadBytes(bridge, name, got.data);
-        if (result?.ok) saved.push(name);
-        else left.push(name);
+        const data = new ArrayBuffer(got.data.length);
+        new Uint8Array(data).set(got.data);
+        const result = await bridge
+          .saveInFolder({ folder: folder.folder, name, data })
+          .catch((error: unknown) => ({
+            status: "failed" as const,
+            name,
+            message: error instanceof Error ? error.message : String(error),
+          }));
+        if (result.status !== "saved") {
+          left.push(name);
+          continue;
+        }
+        saved.push(result.name);
+        if (result.name !== name) renamed.push(`${name} as ${result.name}`);
       }
       announce(
-        left.length === 0
-          ? `Downloaded ${saved.length} items`
-          : `Downloaded ${saved.length} of ${artifacts.length}. Not downloaded: ${left.join(", ")}`,
+        [
+          left.length === 0
+            ? `Saved ${saved.length} ${saved.length === 1 ? "item" : "items"} in ${folder.name}.`
+            : `Saved ${saved.length} of ${artifacts.length} in ${folder.name}. Not saved: ${left.join(", ")}.`,
+          renamed.length ? `A file of that name was there, so it saved ${renamed.join(", ")}.` : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
       );
     },
     [announce, bridge, content],

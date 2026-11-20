@@ -5,17 +5,35 @@
 // and it holds no more than a reader sends, for one dialog at a time.
 import { MAX_SAVE_BYTES } from "@clawtrate/core";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { safeFileName, writeExactly, type SaveFs } from "../src/main/save.ts";
+import {
+  safeFileName,
+  writeExactly,
+  writeInFolder,
+  type FolderFs,
+  type SaveFs,
+} from "../src/main/save.ts";
 
 type Chosen = { canceled: boolean; filePath?: string };
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, (event: unknown, raw: unknown) => unknown>(),
   dialogs: [] as Array<{ options: { defaultPath: string }; answer: (chosen: Chosen) => void }>,
+  folderDialogs: [] as Array<{
+    options: { defaultPath: string; properties: string[] };
+    answer: (chosen: { canceled: boolean; filePaths: string[] }) => void;
+  }>,
   appDir: "",
 }));
 vi.mock("electron", () => {
@@ -48,6 +66,10 @@ vi.mock("electron", () => {
     dialog: {
       showSaveDialog: (options: { defaultPath: string }) =>
         new Promise<Chosen>((answer) => electron.dialogs.push({ options, answer })),
+      showOpenDialog: (options: { defaultPath: string; properties: string[] }) =>
+        new Promise<{ canceled: boolean; filePaths: string[] }>((answer) =>
+          electron.folderDialogs.push({ options, answer }),
+        ),
     },
     ipcMain: {
       handle: (channel: string, fn: (event: unknown, raw: unknown) => unknown) =>
@@ -147,6 +169,76 @@ describe("saving a file the Work pane holds", () => {
   });
 });
 
+describe("saving several items into one folder", () => {
+  const into: FolderFs = { readFile, writeFile, rm };
+
+  it("F-304: writes each item's exact bytes as a new file in the folder, and never over a file that is there", async () => {
+    const dir = folder();
+    writeFileSync(join(dir, "usage.png"), "the person's own file");
+    const picture = Uint8Array.from([137, 80, 78, 71, 1, 2, 3]);
+    const note = new TextEncoder().encode("# Note\n");
+    expect(await writeInFolder(into, dir, "usage.png", picture)).toEqual({
+      status: "saved",
+      name: "usage (2).png",
+    });
+    expect(await writeInFolder(into, dir, "note.md", note)).toEqual({
+      status: "saved",
+      name: "note.md",
+    });
+    expect(readFileSync(join(dir, "usage.png"), "utf8")).toBe("the person's own file");
+    expect(new Uint8Array(readFileSync(join(dir, "usage (2).png")))).toEqual(picture);
+    expect(new Uint8Array(readFileSync(join(dir, "note.md")))).toEqual(note);
+  });
+
+  it("F-304: a name a bot supplied never writes outside the chosen folder", async () => {
+    const parent = folder();
+    const dir = join(parent, "chosen");
+    mkdirSync(dir);
+    for (const name of [
+      "../escape.md",
+      "../../escape.md",
+      "/tmp/escape.md",
+      "sub/escape.md",
+      "..\\escape.md",
+      "..",
+    ])
+      expect(await writeInFolder(into, dir, name, Uint8Array.from([1]))).toMatchObject({
+        status: "saved",
+      });
+    expect(readdirSync(parent)).toEqual(["chosen"]);
+    expect(readdirSync(dir).sort()).toEqual(
+      [
+        "escape (2).md",
+        "escape (3).md",
+        "escape (4).md",
+        "escape (5).md",
+        "escape.md",
+        "file",
+      ].sort(),
+    );
+  });
+
+  it("F-304: a write that fails, or reads back different bytes, is said as failed and leaves nothing", async () => {
+    const dir = folder();
+    const full: FolderFs = {
+      ...into,
+      writeFile: async () => Promise.reject(new Error("disk full")),
+    };
+    expect(await writeInFolder(full, dir, "a.md", Uint8Array.from([1]))).toEqual({
+      status: "failed",
+      name: "a.md",
+      message: "disk full",
+    });
+    const changed: FolderFs = { ...into, readFile: async () => Uint8Array.from([9]) };
+    expect(await writeInFolder(changed, dir, "b.md", Uint8Array.from([1]))).toEqual({
+      status: "failed",
+      name: "b.md",
+      message: "The saved file does not hold the same bytes.",
+    });
+    expect(readdirSync(dir)).toEqual([]);
+  });
+});
+
 describe("the main process's save handler", () => {
   let id = 0;
   /** A window's page, as the handler sees its sender. */
@@ -176,6 +268,71 @@ describe("the main process's save handler", () => {
   });
   afterEach(() => {
     while (electron.dialogs.length) answer({ canceled: true });
+    while (electron.folderDialogs.length)
+      electron.folderDialogs.shift()!.answer({ canceled: true, filePaths: [] });
+  });
+
+  it("F-304: Download all asks for one folder once, writes each item there with its bytes, and says each as it is on disk", async () => {
+    const sender = page();
+    const call = (channel: string, raw?: unknown) =>
+      Promise.resolve().then(
+        () => electron.handlers.get(channel)!({ sender }, raw) as Promise<unknown>,
+      );
+    const dir = folder();
+    writeFileSync(join(dir, "b.bin"), "already here");
+    const chosen = call("clawtrate:chooseFolder");
+    await vi.waitFor(() => expect(electron.folderDialogs).toHaveLength(1));
+    expect(electron.folderDialogs[0]!.options.properties).toContain("openDirectory");
+    expect(electron.folderDialogs[0]!.options.defaultPath).toBe(electron.appDir);
+    electron.folderDialogs.shift()!.answer({ canceled: false, filePaths: [dir] });
+    const choice = (await chosen) as { status: string; folder: number; name: string };
+    expect(choice).toMatchObject({ status: "chosen", name: basename(dir) });
+    const items = [
+      { name: "a.bin", data: Uint8Array.from([1, 2, 3]) },
+      { name: "b.bin", data: Uint8Array.from([4, 5]) },
+      { name: "../c.bin", data: supplied() },
+    ];
+    const results = [];
+    for (const item of items)
+      results.push(
+        await call("clawtrate:saveInFolder", {
+          folder: choice.folder,
+          name: item.name,
+          data: item.data.slice().buffer,
+        }),
+      );
+    // One dialog for all of them, and none of the save dialog's.
+    expect(electron.folderDialogs).toHaveLength(0);
+    expect(electron.dialogs).toHaveLength(0);
+    expect(results).toEqual([
+      { status: "saved", name: "a.bin" },
+      { status: "saved", name: "b (2).bin" },
+      { status: "saved", name: "c.bin" },
+    ]);
+    expect(new Uint8Array(readFileSync(join(dir, "a.bin")))).toEqual(items[0]!.data);
+    expect(readFileSync(join(dir, "b.bin"), "utf8")).toBe("already here");
+    expect(new Uint8Array(readFileSync(join(dir, "b (2).bin")))).toEqual(items[1]!.data);
+    expect(readFileSync(join(dir, "c.bin")).equals(supplied())).toBe(true);
+    // Another window has no folder, and a folder number it did not get writes nothing.
+    await expect(
+      Promise.resolve().then(() =>
+        electron.handlers.get("clawtrate:saveInFolder")!(
+          { sender: page() },
+          { folder: choice.folder, name: "d.bin", data: new ArrayBuffer(1) },
+        ),
+      ),
+    ).rejects.toThrow(/No folder was chosen/);
+    expect(existsSync(join(dir, "d.bin"))).toBe(false);
+  });
+
+  it("F-304: a cancelled folder dialog writes nothing", async () => {
+    const sender = page();
+    const chosen = Promise.resolve().then(() =>
+      electron.handlers.get("clawtrate:chooseFolder")!({ sender }, undefined),
+    );
+    await vi.waitFor(() => expect(electron.folderDialogs).toHaveLength(1));
+    electron.folderDialogs.shift()!.answer({ canceled: true, filePaths: [] });
+    expect(await chosen).toEqual({ status: "cancelled" });
   });
 
   it("F-319: writes exactly the bytes the page handed over, where the dialog chose", async () => {

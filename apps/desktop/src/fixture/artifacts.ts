@@ -271,6 +271,13 @@ function transcriptItems(at: number): TranscriptItem[] {
 }
 
 /** Juniper's task with every kind of card, added to the scene's state. */
+/** Each fixture item's bytes by its title, for checks that compare what was saved or copied. */
+export function artifactBytes(): Record<string, Uint8Array> {
+  return Object.fromEntries(
+    fixtureItems().flatMap((item) => (item.bytes ? [[item.artifact.title, item.bytes]] : [])),
+  );
+}
+
 export function withArtifactTask(state: ClawtrateState, now: number): ClawtrateState {
   const task: Task = {
     key: ARTIFACT_TASK,

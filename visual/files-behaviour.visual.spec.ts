@@ -454,7 +454,7 @@ test.describe("the Files tab", () => {
     expect(download.suggestedFilename()).toBe("usage.png");
     const saved = readFileSync((await download.path())!);
     expect(saved.equals(Buffer.from(shown, "base64"))).toBe(true);
-    await expect(page.getByTestId("work-announcer")).toHaveText("Downloaded usage.png");
+    await expect(page.getByTestId("work-announcer")).toHaveText("Download started: usage.png");
 
     await page.getByRole("button", { name: "Back to this task's files" }).click();
     await openRow(page, "media-box.md");

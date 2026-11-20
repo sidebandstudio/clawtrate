@@ -9,7 +9,7 @@
 //
 // With CLAWTRATE_ARTIFACT_SHOTS=<folder outside the repository>, it also
 // saves screenshots of what it checked there.
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Download, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -265,21 +265,31 @@ test("F-116 F-304: a link card and a page, and four items at once with Download 
   await expect(cell("ridge-profile.png").locator("img")).toBeVisible();
   await shoot("cards-several");
   await cell("ridge-profile.png").click({ button: "right" });
-  const names: string[] = [];
-  page.on("download", (download) => names.push(download.suggestedFilename()));
+  const downloads: Download[] = [];
+  page.on("download", (download) => downloads.push(download));
   await page
     .getByRole("menu", { name: "ridge-profile.png" })
     .getByRole("menuitem", { name: "Download all 4" })
     .click();
-  await expect(page.getByTestId("artifact-announcer")).toHaveText("Downloaded 4 items", {
-    timeout: 30_000,
-  });
-  expect(names.sort()).toEqual([
+  // The web preview says what the browser received, never that anything was saved.
+  await expect(page.getByTestId("artifact-announcer")).toHaveText(
+    "The browser received 4 download requests.",
+    { timeout: 30_000 },
+  );
+  await expect.poll(() => downloads.length).toBe(4);
+  expect(downloads.map((download) => download.suggestedFilename()).sort()).toEqual([
     "ridge-profile.png",
     "trail-chime.wav",
     "trail-photo.png",
     "trail-report.md",
   ]);
+  // Each with the bytes the bot handed over.
+  for (const download of downloads) {
+    const name = download.suggestedFilename();
+    const bytes = readFileSync((await download.path())!);
+    if (name === "trail-report.md") expect(bytes.toString("utf8")).toBe(REPORT_TEXT);
+    else expect(bytes.equals(files[`handover/${name}`]!), name).toBe(true);
+  }
   // Sent in chat lists the task's items newest first, from the same list.
   await page.getByRole("button", { name: "Show work panel" }).click();
   await page.getByRole("tab", { name: "Files" }).click();

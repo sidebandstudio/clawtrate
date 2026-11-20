@@ -1,13 +1,15 @@
 // Download (work-pane.md, section 6, F-319): exactly the bytes the reader
 // supplied, under the file's own name. The desktop app saves through its main
-// process; a browser downloads.
+// process and says what reached the disk. A browser downloads: it chooses
+// where, and whether, and tells the page neither, so the web preview says
+// only that the download started.
 
 import type { ClawtrateBridge } from "@clawtrate/core";
 
 export type DownloadOutcome =
   { ok: true; announcement: string } | { ok: false; announcement: string; detail: string | null };
 
-function browserDownload(name: string, data: Uint8Array): void {
+export function browserDownload(name: string, data: Uint8Array): void {
   const copy = new Uint8Array(data.length);
   copy.set(data);
   const url = URL.createObjectURL(new Blob([copy.buffer], { type: "application/octet-stream" }));
@@ -29,7 +31,7 @@ export async function downloadBytes(
 ): Promise<DownloadOutcome | null> {
   if (!bridge.save) {
     browserDownload(name, data);
-    return { ok: true, announcement: `Downloaded ${name}` };
+    return { ok: true, announcement: `Download started: ${name}` };
   }
   const buffer = new ArrayBuffer(data.length);
   new Uint8Array(buffer).set(data);
