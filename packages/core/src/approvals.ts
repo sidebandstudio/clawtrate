@@ -1211,7 +1211,7 @@ export function normalizeApprovals(
       approval.status !== "pending"
         ? false
         : run
-          ? isTerminal(run.state)
+          ? run.outcomeKnown && isTerminal(run.state)
           : elsewhere
             ? isTerminal(elsewhere.state)
             : approval.runEnded;
