@@ -77,6 +77,9 @@ describe("the update engine against a local feed", () => {
     expect(progress.at(-1)).toMatchObject({ received: file.body.length, total: file.body.length });
     expect(progress.length).toBeLessThanOrEqual(5);
     expect(server.requests).toEqual(["/feed.json", "/files/app.zip"]);
+    expect(await engine.download()).toEqual(ready);
+    expect(server.requests).toEqual(["/feed.json", "/files/app.zip"]);
+    expect(readFileSync(path).equals(file.body)).toBe(true);
   });
 
   it("deletes a tampered download of the right size and reports hash-mismatch", async () => {
@@ -91,6 +94,9 @@ describe("the update engine against a local feed", () => {
     const { engine } = engineFor(server, dir.path);
     await engine.check();
     expect(await engine.download()).toEqual(failed("download", "hash-mismatch"));
+    expect(downloads()).toEqual([]);
+    expect(await engine.download()).toEqual(failed("download", "hash-mismatch"));
+    expect(server.requests).toEqual(["/feed.json", "/files/app.zip"]);
     expect(downloads()).toEqual([]);
   });
 
