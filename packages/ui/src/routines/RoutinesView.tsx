@@ -522,18 +522,11 @@ function RunView({
   // The run's own session says it was an agent turn, whatever the routine was edited to since.
   const isolated = run.sessionKey?.includes(`:cron:${run.jobId}:run:`) === true;
   const command = routine.payload === "other" && !isolated;
-  // A current target runs detached, so its execution key can look like an isolated run.
-  const targetAtRun =
-    routine.updatedAt === null || routine.updatedAt <= run.runAt + (run.durationMs ?? 0);
-  const session = command
-    ? null
-    : (!isolated && run.sessionKey) ||
-      (targetAtRun ? routine.sharedSessionKey : undefined) ||
-      (routine.target === "main" && !isolated ? mainKey : null);
-  const shared =
-    session !== null ||
-    (routine.payload === "systemEvent" && !isolated) ||
-    (routine.target !== "isolated" && (!run.sessionKey || targetAtRun));
+  // The run's recorded session is the only evidence of the conversation it used: the
+  // gateway writes a job's updatedAtMs as its last run's end, so no timestamp can
+  // bound an edit, and the routine's current target may not be the one it ran with.
+  const session = command || isolated || run.sessionKey === null ? null : run.sessionKey;
+  const shared = session !== null;
   const main = session === mainKey;
   const conversation = main
     ? `${bot.name}'s main conversation`
@@ -541,7 +534,9 @@ function RunView({
       ? `the shared conversation (${session})`
       : "a shared conversation";
   const [read, retry] = useKeyedRead(
-    command || shared ? null : `${gateway}:${routine.id}:${run.runId ?? run.runAt}`,
+    command || shared || run.sessionKey === null
+      ? null
+      : `${gateway}:${routine.id}:${run.runId ?? run.runAt}`,
     () =>
       bridge.invoke({
         type: "readRunConversation",
@@ -589,6 +584,14 @@ function RunView({
               {main ? `Open ${conversation}` : "Open conversation"}
             </button>
           )}
+        </Note>
+      ) : run.sessionKey === null ? (
+        <Note testId="run-not-kept">
+          <p>
+            <strong>Clawtrate can&apos;t confirm which conversation this run used.</strong> The
+            gateway recorded no session for it, and the routine may have been edited since it ran.
+          </p>
+          {returned}
         </Note>
       ) : read.status === "loading" ? (
         <p className="r-hint">Loading this run…</p>

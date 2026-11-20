@@ -197,8 +197,10 @@ test.describe("1440", () => {
       "Runs inJuniper's main conversation",
     );
     await view(page).getByTestId("run-row").first().click();
+    // The gateway records no session for a main-target run, so the run itself
+    // cannot say which conversation it used.
     await expect(view(page).getByTestId("run-not-kept")).toContainText(
-      "This run happened in Juniper's main conversation. Its turn is there among the others",
+      "Clawtrate can't confirm which conversation this run used. The gateway recorded no session for it",
     );
   });
 
@@ -337,6 +339,42 @@ test.describe("1440", () => {
       await expect(message).toContainText("Summarise the notes I added yesterday");
       await expect(view(page).getByTestId("run-not-kept")).toHaveCount(0);
     }
+  });
+
+  test("F-190: an isolated run whose routine was edited to a main-target reminder while it ran still reads its recorded conversation", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByTestId("routine-row").filter({ hasText: "Morning digest" }).click();
+    // The gateway writes a job's updatedAtMs as its last run's end (issue #212), so
+    // an edit while the run was going is indistinguishable from the run's own end
+    // timestamp: the run's recorded session is the only word on what it used.
+    const runAt = Number(
+      await view(page).getByTestId("run-row").first().getAttribute("data-run-at"),
+    );
+    await view(page).getByTestId("run-row").first().click();
+    const message = view(page).getByTestId("scheduled-message");
+    await expect(message).toContainText("Summarise the notes I added yesterday");
+    await change(
+      page,
+      `(store) => ({ ...store, routines: store.routines.map((each) =>
+        each.id === "routine-digest"
+          ? { ...each, payload: "systemEvent", target: "main", updatedAt: ${runAt + 2600} }
+          : each) })`,
+    );
+    await expect(message).toContainText("Summarise the notes I added yesterday");
+    await expect(view(page).getByTestId("run-not-kept")).toHaveCount(0);
+  });
+
+  test("F-190: a run with no recorded session says its conversation could not be confirmed", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByTestId("routine-row").filter({ hasText: "Stretch break" }).click();
+    await view(page).getByTestId("run-row").first().click();
+    await expect(view(page).getByTestId("run-not-kept")).toContainText(
+      "Clawtrate can't confirm which conversation this run used. The gateway recorded no session for it",
+    );
   });
 
   test("F-022: a task under Routines shows its unread dot, and coming back to it reads it again", async ({
@@ -675,16 +713,16 @@ test.describe("phone", () => {
     await page.getByRole("button", { name: "Back to bots" }).click();
     await page.getByRole("button", { name: "Routines", exact: true }).click();
     await expect(view(page)).toBeVisible();
-    const open = view(page).getByRole("button", { name: "Open Juniper's main conversation" });
-    await view(page).getByTestId("routine-row").filter({ hasText: "Stretch break" }).click();
+    const open = view(page).getByRole("button", { name: "Open conversation", exact: true });
+    await view(page).getByTestId("routine-row").filter({ hasText: "Plan the week" }).click();
     await view(page).getByTestId("run-row").first().click();
     await open.click();
     await expect(view(page)).toHaveCount(0);
-    // The reminder ran in the conversation the shell now holds open. Routines covers
-    // it, and opening it again changes neither view nor task key.
+    // The run's recorded conversation is the one the shell now holds open. Routines
+    // covers it, and opening it again changes neither view nor task key.
     await page.getByRole("button", { name: "Back to bots" }).click();
     await page.getByRole("button", { name: "Routines", exact: true }).click();
-    await view(page).getByTestId("routine-row").filter({ hasText: "Stretch break" }).click();
+    await view(page).getByTestId("routine-row").filter({ hasText: "Plan the week" }).click();
     await view(page).getByTestId("run-row").first().click();
     await open.click();
     await expect(view(page)).toHaveCount(0);
