@@ -364,7 +364,9 @@ async function main(): Promise<void> {
   });
   app.on("before-quit", () => updates.shutdown());
   ipcMain.handle("clawtrate:update:get", () => updates.get());
-  ipcMain.handle("clawtrate:update:check", (_event, track: unknown) => updates.check(track));
+  ipcMain.handle("clawtrate:update:check", (_event, track: unknown, revision: unknown) =>
+    updates.check(track, revision),
+  );
   ipcMain.handle("clawtrate:update:track", (_event, track: unknown) => updates.chooseTrack(track));
   ipcMain.handle("clawtrate:update:download", (_event, id: unknown) => updates.download(id));
   // Setup on this computer. A development build and every automated run look only in a sandbox.

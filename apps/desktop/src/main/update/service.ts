@@ -220,13 +220,20 @@ export class DesktopUpdateService {
     return work;
   }
 
-  async check(expectedTrack: unknown): Promise<DesktopUpdateReply> {
+  async check(expectedTrack: unknown, expectedRevision: unknown): Promise<DesktopUpdateReply> {
     if (this.closed) return this.reply("invalid");
     if (this.switching || this.work) return this.reply("busy");
     if (expectedTrack !== "stable" && expectedTrack !== "nightly") return this.reply("invalid");
+    if (
+      typeof expectedRevision !== "number" ||
+      !Number.isSafeInteger(expectedRevision) ||
+      expectedRevision < 0
+    )
+      return this.reply("invalid");
     const { runningVersion, selectedTrack } = this.snapshot;
     if (!selectedTrack) return this.reply("invalid");
-    if (expectedTrack !== selectedTrack) return this.reply("stale");
+    if (expectedTrack !== selectedTrack || expectedRevision !== this.snapshot.revision)
+      return this.reply("stale");
     if (!runningVersion || unavailable(this.options, runningVersion, selectedTrack))
       return this.reply("invalid");
     this.engine?.cancel();
@@ -268,7 +275,7 @@ export class DesktopUpdateService {
         } catch {
           if (this.engine === engine) {
             this.snapshot = { ...this.snapshot, preferenceIssue: "update-folder-unavailable" };
-            return { kind: "not-checked" };
+            return failed("write-failed");
           }
           return;
         }

@@ -101,6 +101,7 @@ test.afterAll(async () => {
 });
 
 test("opens its window from the packaged app on the connect screen", async () => {
+  expect(USER_DATA).toBe(realpathSync.native(USER_DATA));
   // The renderer is the one inside the app's archive, not the source tree.
   const bundled = WINDOWS
     ? decodeURI(
@@ -198,10 +199,12 @@ test("starts with the update tracks compiled into the packaged app", async () =>
     state: { kind: "failed", stage: "check", reason: "not-configured" },
     selectedTrack: null,
   });
-  const reply = await page.evaluate(() =>
-    (
-      window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
-    ).clawtrateHost.desktopUpdates.check("stable"),
+  const reply = await page.evaluate(
+    (revision) =>
+      (
+        window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+      ).clawtrateHost.desktopUpdates.check("stable", revision),
+    updates.revision,
   );
   expect(reply).toEqual({ outcome: "invalid", snapshot: updates });
 });
