@@ -224,6 +224,7 @@ The release side of the updater (issue #68): the feed, what is verified before a
   ```json
   {
     "format": 1,
+    "track": "stable",
     "version": "0.2.0",
     "releaseDate": "2026-11-01T00:00:00.000Z",
     "files": {

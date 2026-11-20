@@ -14,11 +14,14 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildAddressProblem } from "../src/main/update/address.ts";
 import { FEED_FORMAT, FILE_EXTENSION, FILE_KEYS, type FileKey } from "../src/main/update/feed.ts";
+import { parseVersion, versionTrack } from "../src/main/update/version.ts";
+import type { UpdateTrack } from "@clawtrate/core";
 import { PRODUCT_NAME } from "./config.ts";
 import { releaseDate, type Env } from "./update-defines.ts";
 
 export interface FeedDocument {
   format: number;
+  track: UpdateTrack;
   version: string;
   releaseDate: string;
   files: Partial<Record<FileKey, { url: string; size: number; sha512: string }>>;
@@ -40,6 +43,8 @@ export function makeFeed(options: {
   folder: string;
   dir: string;
 }): FeedDocument {
+  const version = parseVersion(options.version);
+  if (!version) throw new Error("Invalid release version");
   const base = options.folder.endsWith("/") ? options.folder : `${options.folder}/`;
   const files: FeedDocument["files"] = {};
   for (const key of FILE_KEYS) {
@@ -52,7 +57,13 @@ export function makeFeed(options: {
       sha512: sha512Base64(path),
     };
   }
-  return { format: FEED_FORMAT, version: options.version, releaseDate: options.releaseDate, files };
+  return {
+    format: FEED_FORMAT,
+    track: versionTrack(version),
+    version: options.version,
+    releaseDate: options.releaseDate,
+    files,
+  };
 }
 
 function main(argv: string[], env: Env): void {

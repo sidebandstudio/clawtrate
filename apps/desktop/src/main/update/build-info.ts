@@ -9,6 +9,10 @@ import { UpdateEngine, type UpdateEngineOptions } from "./engine.ts";
 export { isUpdateRequired, UPDATE_REQUIRED_AFTER_MS } from "./engine.ts";
 
 declare const __CLAWTRATE_UPDATE_FEED__: string | null | undefined;
+declare const __CLAWTRATE_NIGHTLY_UPDATE_FEED__: string | null | undefined;
+export const BUILD_NIGHTLY_FEED_ADDRESS =
+  typeof __CLAWTRATE_NIGHTLY_UPDATE_FEED__ === "string" ? __CLAWTRATE_NIGHTLY_UPDATE_FEED__ : null;
+
 declare const __CLAWTRATE_RELEASE_DATE__: string | null | undefined;
 
 export const BUILD_FEED_ADDRESS: string | null =

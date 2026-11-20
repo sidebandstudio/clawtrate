@@ -175,8 +175,25 @@ describe("the constants the build writes for the update engine", () => {
   it("without a feed address the build has none, and its release date is the build's time", () => {
     expect(updateDefines({}, now)).toEqual({
       __CLAWTRATE_UPDATE_FEED__: "null",
+      __CLAWTRATE_NIGHTLY_UPDATE_FEED__: "null",
       __CLAWTRATE_RELEASE_DATE__: JSON.stringify("2026-11-19T12:00:00.000Z"),
     });
+  });
+
+  it("fixes the optional nightly address under the same build rules", () => {
+    const env = { CLAWTRATE_UPDATE_FEED_URL: "https://updates.example/stable" };
+    const url = "https://updates.example/nightly";
+    expect(
+      updateDefines({ ...env, CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: url }, now)
+        .__CLAWTRATE_NIGHTLY_UPDATE_FEED__,
+    ).toBe(JSON.stringify(url));
+    expect(() => updateDefines({ CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: url }, now)).toThrow(/stable/);
+    expect(() =>
+      updateDefines(
+        { ...env, CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: "http://updates.example/nightly" },
+        now,
+      ),
+    ).toThrow(/https/);
   });
 
   it("takes the feed address and SOURCE_DATE_EPOCH from the build's environment", () => {
@@ -235,6 +252,7 @@ describe("the feed the release writes", () => {
     });
     expect(feed).toEqual({
       format: 1,
+      track: "stable",
       version: "0.2.0",
       releaseDate: "2026-11-01T00:00:00.000Z",
       files: {

@@ -25,6 +25,7 @@ const PROGRESS_STEP_BYTES = 1024 * 1024;
 export type UpdateFailureCause =
   | "address-refused"
   | FetchCause
+  | "wrong-track"
   | "malformed-feed"
   | "no-file-for-this-system"
   | "size-mismatch"
@@ -99,6 +100,8 @@ export const DEFAULT_LIMITS: Limits = {
 
 export interface UpdateEngineOptions {
   /** The feed's address. The production constructor passes the one fixed at build time. */
+  readonly track?: import("@clawtrate/core").UpdateTrack;
+  readonly onFeedRead?: () => void;
   readonly feedAddress: string | null;
   /** The build's own release date, for F-010. The production constructor passes the build's. */
   readonly buildReleaseDate?: string | null;
@@ -141,7 +144,7 @@ export class UpdateEngine {
 
   constructor(options: UpdateEngineOptions) {
     const running = parseVersion(options.currentVersion);
-    if (!running) throw new Error("the running version is not MAJOR.MINOR.PATCH");
+    if (!running) throw new Error("invalid running release version");
     this.options = options;
     this.running = running;
     this.key = fileKeyFor(options.platform, options.arch);
@@ -226,7 +229,8 @@ export class UpdateEngine {
     } finally {
       transfer.done();
     }
-    const read = parseFeed(text, address.url, this.key, loopback);
+    this.options.onFeedRead?.();
+    const read = parseFeed(text, address.url, this.key, loopback, this.options.track);
     if (!read.ok) return this.report({ kind: "failed", stage: "check", cause: read.cause });
     const { version, releaseDate, file } = read.feed;
     if (!isNewer(version, this.running)) {
