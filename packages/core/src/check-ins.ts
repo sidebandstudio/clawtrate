@@ -428,8 +428,8 @@ const shown = ({ jobs, scheduler, settings, defaults }: Snapshot) => ({
 export async function loadCheckIns(
   ctx: CheckInsContext,
   botId?: string,
+  link = ctx.link(),
 ): Promise<CheckInRead | null> {
-  const link = ctx.link();
   if (!link.alive()) return null;
   if (!ctx.get()) ctx.set(emptyState());
   const latest = ctx.begin();
@@ -631,7 +631,7 @@ export async function saveCheckIn(
   if ("conflict" in plan) {
     if (!latest()) {
       settle("conflict", plan.conflict, true);
-      await loadCheckIns(ctx);
+      await loadCheckIns(ctx, undefined, link);
       return;
     }
     show(latest, fresh);
@@ -653,8 +653,8 @@ export async function saveCheckIn(
   } catch (error) {
     if (/changed since last load/i.test(message(error))) {
       // Said first, so the dialog never waits on the read that shows what changed.
-      settle("conflict", CHANGED, true);
-      await loadCheckIns(ctx);
+      settle("conflict", CHANGED, link.alive());
+      await loadCheckIns(ctx, undefined, link);
       return;
     }
     return settle(certainlyNotApplied(error) ? "failed" : "unknown", message(error));
@@ -682,7 +682,7 @@ export async function saveCheckIn(
       ? "Clawtrate couldn't confirm the change: the gateway's config and check-in jobs didn't both show it."
       : "The connection changed before Clawtrate could confirm the change.",
   );
-  await loadCheckIns(ctx);
+  await loadCheckIns(ctx, undefined, link);
 }
 
 /** Forget a save that ended, when its dialog closes. */

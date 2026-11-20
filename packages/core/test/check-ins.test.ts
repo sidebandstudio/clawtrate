@@ -939,11 +939,17 @@ describe("F-201 a save across a connection change", () => {
   it("F-201: a link that reports itself gone after the patch is not confirmed by anything read later", async () => {
     const { gateway, ctx, state } = fakeGateway();
     await loadCheckIns(ctx);
+    const replacementReads: string[] = [];
     gateway.before = (method) => {
-      if (gateway.patches.length === 1 && method === "config.get") gateway.linkAlive = false;
+      if (gateway.identity === "gw-2" && gateway.linkAlive) replacementReads.push(method);
+      if (gateway.identity === "gw-1" && gateway.patches.length === 1 && method === "config.get") {
+        gateway.linkAlive = false;
+        gateway.identity = "gw-2";
+      }
     };
     await saveCheckIn(ctx, "s1", "marlow", draft(state(), "marlow", { every: "24h" }));
     expect(gateway.patches).toHaveLength(1);
+    expect(replacementReads).toEqual([]);
     expect(state().save).toMatchObject({
       status: "unknown",
       error: expect.stringMatching(/connection changed/),
