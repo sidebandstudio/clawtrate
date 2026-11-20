@@ -1,9 +1,11 @@
 """Inspect final artifact structure without extracting files or running a binary."""
+import json
 import os
 import plistlib
 import stat
 import struct
 import sys
+from pathlib import Path
 from zipfile import ZipFile
 
 
@@ -41,7 +43,7 @@ def mac_app(path, cpu):
                 archive.testzip() is None)
 
 
-def windows_exe(path):
+def windows_exe(path, require_amd64=False):
     with open(path, "rb") as binary:
         size = os.fstat(binary.fileno()).st_size
         dos = binary.read(64)
@@ -52,12 +54,17 @@ def windows_exe(path):
             return False
         binary.seek(offset)
         signature, machine, sections, _, _, _, length, flags = struct.unpack("<4sHHIIIHH", binary.read(24))
-        if signature != b"PE\0\0" or machine != 0x8664 or not flags & 2 or flags & 0x2000:
+        if signature != b"PE\0\0" or machine == 0 or not flags & 2 or flags & 0x2000:
             return False
-        if not 1 <= sections <= 96 or length < 112 or offset + 24 + length + 40 * sections > size:
+        if not 1 <= sections <= 96 or length < 96 or offset + 24 + length + 40 * sections > size:
             return False
         optional = binary.read(length)
-        if optional[:2] != b"\x0b\x02":
+        magic, = struct.unpack_from("<H", optional)
+        if magic not in (0x10b, 0x20b) or (magic == 0x20b and length < 112):
+            return False
+        if (machine == 0x014c and magic != 0x10b) or (machine in (0x8664, 0xaa64) and magic != 0x20b):
+            return False
+        if require_amd64 and (machine != 0x8664 or magic != 0x20b):
             return False
         start, = struct.unpack_from("<I", optional, 16)
         has_entry = False
@@ -73,10 +80,21 @@ def windows_exe(path):
 
 
 if __name__ == "__main__":
-    key, path = sys.argv[1:]
+    key, path = sys.argv[1:3]
     try:
-        valid = (windows_exe(path) if key == "win-x64" else
-                 mac_app(path, {"mac-arm64": 0x0100000C, "mac-x64": 0x01000007}[key]))
+        if key == "unpacked-amd64":
+            valid = windows_exe(path, require_amd64=True)
+            if valid:
+                receipt = Path(sys.argv[3])
+                record = json.loads(receipt.read_text(encoding="utf-8"))
+                record["unpackedAppMachine"] = "AMD64"
+                receipt.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        elif key == "win-x64":
+            valid = windows_exe(path)
+        else:
+            valid = mac_app(path, {"mac-arm64": 0x0100000C, "mac-x64": 0x01000007}[key])
     except Exception:
         valid = False
+    if key == "unpacked-amd64" and not valid:
+        print("Could not verify and record the unpacked AMD64 app executable.", file=sys.stderr)
     sys.exit(0 if valid else 1)

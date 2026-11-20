@@ -143,8 +143,26 @@ export function plan(candidate: Candidate) {
     if (hasReceipt && receipt.sha512 !== sha512)
       issues.push(key + ": bytes differ from the build record.");
     const format = size > 0 && size <= MAX_DOWNLOAD_BYTES ? artifactFormat(key, path) : null;
-    if (!format) issues.push(key + ": invalid artifact format or architecture.");
-    files.push({ name, size, sha512, format, signing: "not checked by this plan" });
+    if (!format)
+      issues.push(
+        key === "win-x64"
+          ? "win-x64: invalid Windows executable."
+          : key + ": invalid artifact format or architecture.",
+      );
+    files.push({
+      name,
+      size,
+      sha512,
+      format,
+      signing: "not checked by this plan",
+      ...(key === "win-x64"
+        ? {
+            installedArchitecture: "not read from the installer",
+            buildJobObservation:
+              receipt.unpackedAppMachine === "AMD64" ? "win-unpacked/Clawtrate.exe is AMD64" : null,
+          }
+        : {}),
+    });
   }
   if (
     readdirSync(dir, { withFileTypes: true }).some(
@@ -238,10 +256,22 @@ export function runPlan(args: string[], print = console.log) {
     const output = join(dir, "release-plan.json");
     writeFileSync(output + ".tmp", JSON.stringify(record, null, 2) + "\n", { flag: "wx" });
     renameSync(output + ".tmp", output);
+    const windows = record.files.find((file) => file.installedArchitecture);
     print(
       [record.track, record.version, record.verdict].join(" ") +
         "\n" +
-        [record.ownerChecks, record.comparison, ...record.issues].join("\n"),
+        [
+          record.ownerChecks,
+          record.comparison,
+          ...(windows?.format ? ["Windows installer: " + windows.format + "."] : []),
+          ...(windows
+            ? ["Installed app architecture: " + windows.installedArchitecture + "."]
+            : []),
+          ...(windows?.buildJobObservation
+            ? ["Windows build job reported: " + windows.buildJobObservation + "."]
+            : []),
+          ...record.issues,
+        ].join("\n"),
     );
     return record.issues.length ? 1 : 0;
   } catch {

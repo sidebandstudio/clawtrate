@@ -28,6 +28,11 @@ it.each([
   ["retention", "retention-days: 3", "retention-days: 30"],
   ["checkout ref", "persist-credentials: false", "persist-credentials: false\n          ref: main"],
   ["action pin", "checkout@v7", "checkout@v6"],
+  [
+    "unpacked Windows app guard",
+    "unpacked-amd64 apps/desktop/dist/win-unpacked/Clawtrate.exe",
+    "win-x64 candidate/installer.exe",
+  ],
   ["assembly guard", 'test "$checked" = "$MAC_DIGESTS,$WIN_DIGEST"', "true"],
   [
     "native guard",

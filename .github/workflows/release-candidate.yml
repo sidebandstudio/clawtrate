@@ -105,6 +105,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - shell: bash
         run: node apps/desktop/packaging/candidate-build.ts candidate "$VERSION" --unsigned-only
+      - name: Check the unpacked Windows app architecture
+        run: python -I apps/desktop/packaging/inspect-candidate.py unpacked-amd64 apps/desktop/dist/win-unpacked/Clawtrate.exe candidate/win-x64.json
       - id: native
         shell: bash
         run: |

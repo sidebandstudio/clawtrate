@@ -12,6 +12,6 @@ export function artifactFormat(key: FileKey, path: string) {
   if (result.error) throw new Error("The candidate plan requires Python 3.");
   if (result.status !== 0) return null;
   return key === "win-x64"
-    ? "PE32+ x64 executable"
+    ? "Windows PE executable"
     : "ZIP with " + key.slice(4) + " Mach-O app executable";
 }

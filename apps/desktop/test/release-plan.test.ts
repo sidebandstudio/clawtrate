@@ -1,5 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -46,20 +47,22 @@ function pe(machine: number) {
   b.write("PE", 64);
   b.writeUInt16LE(machine, 68);
   b.writeUInt16LE(1, 70);
-  b.writeUInt16LE(240, 84);
+  const optionalSize = machine === 0x014c ? 224 : 240;
+  const section = 88 + optionalSize;
+  b.writeUInt16LE(optionalSize, 84);
   b.writeUInt16LE(2, 86);
-  b.writeUInt16LE(0x20b, 88);
+  b.writeUInt16LE(machine === 0x014c ? 0x10b : 0x20b, 88);
   b.writeUInt32LE(4096, 104);
-  b.writeUInt32LE(4096, 340);
-  b.writeUInt32LE(512, 344);
-  b.writeUInt32LE(512, 348);
-  b.writeUInt32LE(0x60000020, 364);
+  b.writeUInt32LE(4096, section + 12);
+  b.writeUInt32LE(512, section + 16);
+  b.writeUInt32LE(512, section + 20);
+  b.writeUInt32LE(0x60000020, section + 36);
   return b;
 }
 const samples = {
   "mac-arm64": macZip(0x0100000c),
   "mac-x64": macZip(0x01000007),
-  "win-x64": pe(0x8664),
+  "win-x64": pe(0x014c),
 };
 beforeEach(() => {
   c = {
@@ -191,13 +194,11 @@ it("checks version syntax, both track mismatches, commit, date and the HTTPS fee
   );
   expect(JSON.stringify(result)).not.toContain("private");
 });
-it("refuses text, truncated archives, swapped Mac architectures and a different PE machine even with matching receipts and feed digests", () => {
+it("refuses text, truncated archives, swapped Mac architectures even with matching receipts and feed digests", () => {
   for (const [key, bytes] of [
     [mac, Buffer.from("text")],
     [mac, samples[mac].subarray(0, -12)],
     [mac, samples["mac-x64"]],
-    ["win-x64", pe(0xaa64)],
-    ["win-x64", pe(0x014c)],
   ] as const) {
     const name = artifactName(c.version, key);
     writeFileSync(path(name), bytes);
@@ -323,4 +324,68 @@ it("compares the supplied track feeds offline, including stale, reused and super
   expect(plan({ ...nightly, buildDate: "2026-11-20T00:00:00.000Z" }).issues).toContain(
     "Nightly version day differs from the UTC build date.",
   );
+});
+
+it("accepts a 32-bit PE installer and refuses a non-executable with matching hashes", () => {
+  expect(plan(c)).toMatchObject({
+    verdict: "complete and consistent",
+    files: expect.arrayContaining([
+      expect.objectContaining({
+        format: "Windows PE executable",
+        installedArchitecture: "not read from the installer",
+        buildJobObservation: null,
+      }),
+    ]),
+  });
+  const name = artifactName(c.version, "win-x64");
+  writeFileSync(path(name), "MZ but no executable header");
+  write("win-x64.json", {
+    ...read("win-x64.json"),
+    sha512: sha512Base64(path(name)),
+    unpackedAppMachine: "AMD64",
+  });
+  rmSync(path("update-feed.json"));
+  assemble(c);
+  expect(plan(c)).toMatchObject({
+    verdict: "refused",
+    issues: ["win-x64: invalid Windows executable."],
+  });
+});
+
+it("the Windows job records AMD64 only after reading the unpacked app header", () => {
+  const unpacked = path("win-unpacked");
+  const exe = join(unpacked, "Clawtrate.exe");
+  const inspect = () =>
+    spawnSync(process.platform === "win32" ? "python" : "python3", [
+      "-I",
+      join(import.meta.dirname, "../packaging/inspect-candidate.py"),
+      "unpacked-amd64",
+      exe,
+      path("win-x64.json"),
+    ]).status;
+  expect(inspect()).toBe(1);
+  mkdirSync(unpacked);
+  writeFileSync(exe, pe(0x014c));
+  expect(inspect()).toBe(1);
+  writeFileSync(exe, pe(0xaa64));
+  expect(inspect()).toBe(1);
+  expect(read("win-x64.json").unpackedAppMachine).toBeUndefined();
+  writeFileSync(exe, pe(0x8664));
+  expect(inspect()).toBe(0);
+  rmSync(unpacked, { recursive: true });
+  const lines: string[] = [];
+  expect(
+    runPlan(["check", c.dir, c.track, c.version, c.commit, c.buildDate, c.feedUrl], (line) =>
+      lines.push(line),
+    ),
+  ).toBe(0);
+  expect(lines.join("\n")).toContain(
+    "Installed app architecture: not read from the installer.\nWindows build job reported: win-unpacked/Clawtrate.exe is AMD64.",
+  );
+  expect(read("release-plan.json").files[2].buildJobObservation).toBe(
+    "win-unpacked/Clawtrate.exe is AMD64",
+  );
+  write("win-x64.json", { ...read("win-x64.json"), unpackedAppMachine: "untrusted free text" });
+  expect(plan(c)).toMatchObject({ verdict: "complete and consistent" });
+  expect(plan(c).files[2]?.buildJobObservation).toBeNull();
 });
