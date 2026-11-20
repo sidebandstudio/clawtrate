@@ -694,6 +694,85 @@ test.describe("the status line", () => {
     await expect(firstOption).toBeFocused();
   });
 
+  test("F-163: an approval card the reader has open stays open when its run settles into history, and Raw stays usable", async ({
+    page,
+  }) => {
+    await open(page, "run-waiting");
+    const card = page.getByTestId("approval-card");
+    await card.getByRole("button", { name: "Allow", exact: true }).click();
+    await expect(card.locator(".tag")).toHaveText("Allowed once", { timeout: 5_000 });
+    await card.locator("summary").first().click();
+    await expect(card.locator(".request-resolved-body")).toBeVisible();
+
+    // The live reply is reconciled into its history row: the run is history's
+    // now, its message is in the transcript and the outbox holds nothing.
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        const user = [...transcript.items].reverse().find((item) => item.role === "user")!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              runs: transcript.runs.map((run: Run) =>
+                run.id === "run-live"
+                  ? {
+                      ...run,
+                      state: "completed" as const,
+                      endedAt: Date.now(),
+                      outcomeKnown: true,
+                      anchorItemId: user.id,
+                      textComplete: true,
+                      text: "The cache is gone; 4 GB free again.",
+                      pendingCards: [],
+                    }
+                  : run,
+              ),
+              outbox: [],
+              items: [
+                ...transcript.items,
+                {
+                  id: "row-reply:1",
+                  role: "assistant" as const,
+                  timestamp: Date.now(),
+                  model: "scripted/dev-1",
+                  blocks: [
+                    {
+                      kind: "tool-call" as const,
+                      callId: "call-exec-1",
+                      name: "exec",
+                      argumentsText: '{\n  "command": "rm -rf /srv/media/cache/thumbs"\n}',
+                      result: { isError: false, text: "Removed the cache." },
+                    },
+                    { kind: "text" as const, text: "The cache is gone; 4 GB free again." },
+                  ],
+                },
+              ],
+            },
+          },
+        };
+      });
+    });
+    await expect(page.getByTestId("transcript")).toContainText("The cache is gone", {
+      timeout: 5_000,
+    });
+    // The card kept its identity: still open, at its row, with Raw usable.
+    await expect(card.locator(".tag")).toHaveText("Allowed once");
+    await expect(card).toHaveAttribute("open", "");
+    await card.getByRole("button", { name: "Raw" }).click();
+    const panel = card.getByRole("region", { name: "What the gateway sent" });
+    await expect(panel).toContainText("What this app sent (exec.approval.resolve)");
+    await expect(panel).toContainText('"decision": "allow-once"');
+  });
+
   test("F-089: the status line stays while replies and cards arrive and leaves only when the run ends", async ({
     page,
   }) => {
