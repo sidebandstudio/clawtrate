@@ -974,14 +974,14 @@ export function runRaw(
           each.record,
         ] as [string, unknown],
     );
-  if (failure?.status === "available") events.push([RAW_HOLDS[failure.holds], failure.payload]);
   const notes: string[] = [];
   if ((!lifecycle || lifecycle.length === 0) && failure?.status !== "available") {
     notes.push("This view has no retained start or end record for the run.");
   } else if (events.length < (lifecycle?.length ?? 0)) {
     notes.push("An event was too long for this app to keep as received.");
   }
-  if (failure === null) notes.push("Reading what ended the turn…");
+  if (failure?.status === "available") events.push([RAW_HOLDS[failure.holds], failure.payload]);
+  else if (failure === null) notes.push("Reading what ended the turn…");
   else if (failure?.status === "too-large")
     notes.push(
       `${RAW_HOLDS[failure.holds]} was too large to keep here: ${failure.chars.toLocaleString("en-US")} characters, past the ${failure.limit.toLocaleString("en-US")} Clawtrate keeps.`,

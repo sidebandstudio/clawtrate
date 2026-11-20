@@ -25,6 +25,18 @@ describe("F-094: the run line's Raw for a failed run", () => {
     });
   });
 
+  it("reports a start too large to keep even when the failure event is available", () => {
+    const raw = runRaw("run-1", [{ ...start, record: null }], {
+      status: "available",
+      holds: "chat-event",
+      payload: event,
+    });
+    expect(raw).toMatchObject({
+      events: [["The chat event that ended the turn, as received", event]],
+      notes: ["An event was too long for this app to keep as received."],
+    });
+  });
+
   it("a run that did not fail reads nothing more", () => {
     const raw = runRaw("run-1", [start]);
     expect(raw).toMatchObject({ events: [[expect.any(String), start.record]] });
