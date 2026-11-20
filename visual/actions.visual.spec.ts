@@ -41,15 +41,31 @@ async function setState(page: Page, change: string, arg?: unknown) {
 /** Scroll so an element's top is at the reading line, the same way every time. */
 async function atReadingLine(target: Locator) {
   await settle(target.page());
-  await target.evaluate((element) => {
-    const scroller = element.closest<HTMLElement>('[data-testid="transcript"]')!;
-    const band = Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
-    scroller.scrollTop += Math.round(
-      element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band,
-    );
-    scroller.dispatchEvent(new Event("scroll"));
-  });
-  await settle(target.page());
+  await expect
+    .poll(
+      () =>
+        target.evaluate(async (element) => {
+          const scroller = element.closest<HTMLElement>('[data-testid="transcript"]')!;
+          const band =
+            Number.parseFloat(getComputedStyle(scroller.firstElementChild!).paddingTop) || 0;
+          const offset = () =>
+            element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - band;
+          const desired = () =>
+            Math.min(
+              scroller.scrollHeight - scroller.clientHeight,
+              Math.max(0, scroller.scrollTop + Math.round(offset())),
+            );
+          scroller.scrollTop = desired();
+          scroller.dispatchEvent(new Event("scroll"));
+          // Opening a details row can still move the transcript on the next layout.
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          );
+          return Math.abs(scroller.scrollTop - desired());
+        }),
+      { message: "place the opened summary at the reading line for the screenshot" },
+    )
+    .toBeLessThanOrEqual(1);
 }
 
 // Baselines ---------------------------------------------------------------------------
@@ -899,6 +915,9 @@ test.describe("action cards", () => {
     await line(first).click();
     await first.getByRole("tab", { name: "Raw" }).click();
     await expect(first.getByRole("tab", { name: "Raw" })).toBeFocused();
+    // Opening Raw reflows the card. Measure its position before the second read arrives.
+    await settle(page);
+    await expect(line(first)).toHaveAccessibleName(/^Read backup-2026-11-15\.log/);
     const top = (await line(first).boundingBox())!.y;
     // The second read arrives: one fold, open, its first row open on Raw, focus on that Raw tab.
     const fold = page.locator(".transcript details.card.action[data-fold]");
