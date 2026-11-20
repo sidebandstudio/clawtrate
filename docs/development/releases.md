@@ -1,38 +1,57 @@
 # Desktop release candidates
 
-Stable and Nightly each have a feed. A feed offers one version to people who selected that track. The desktop engine compares the three version numbers first. At the same three numbers the stable build follows every nightly. Nightlies sort by UTC date, then by numeric run number.
+**Updating in place is not built yet.** The desktop host can verify a download. Installation is a later app change. Keep both tracks closed until installation exists and the signed upgrade trial below passes on all three systems.
 
-The checked-in desktop package version is the last stable base. For example, from `0.1.0`, run 9 on November 19, 2026 gives `0.1.1-nightly.20261119.9`. Run 10 that day follows it. Both follow `0.1.0` and precede `0.1.1`. Keep the base current after releasing stable. Use a fresh run for a new candidate and never reuse a published version for different bytes.
+## Make a candidate
 
-## Make an unsigned candidate
+Stable and Nightly each have a fixed feed. Stable uses `X.Y.Z`. A nightly takes the checked-in desktop version, increments its patch and appends the UTC day and numeric workflow run. For example, from `0.1.0`, run 9 on November 19, 2026 gives `0.1.1-nightly.20261119.9`. Run 10 follows it. Both precede stable `0.1.1`. A selected ref can have an old base. Check its version against the actual feeds.
 
-1. In Actions, select **Desktop release candidate** and **Run workflow**. Choose the source ref. For Stable, choose `stable` and enter the exact version. For Nightly, choose `nightly` and leave the version blank. The workflow chooses the next patch, UTC date and workflow run number. An explicit nightly input must match that calculation. Starting the workflow by hand is the only trigger.
-2. Download `candidate-<version>` within three days. It contains both Mac ZIPs, the Windows installer, a build receipt per file, `update-feed.json` and `release-plan.json`. Keep the receipts with the files. They record what the trusted builders observed. The feed fixes the size, SHA-512 and versioned address of each download.
-3. Read the plan. `issues` lists inconsistent or missing evidence. `holds` lists reasons a consistent candidate cannot ship. A successful workflow has no issues, two ad hoc Mac apps, an unsigned Windows installer and placeholder feed addresses. Its verdict is **not publishable**.
+1. In Actions, choose **Desktop release candidate**, **Run workflow** and a reviewed source ref. Select `stable` and enter the exact version, or select `nightly` and leave the version blank. Nothing schedules a build. Treat a rerun as a dry-run retry. Start a fresh dispatch for a new candidate and retain its source commit and epoch.
+2. A successful workflow retains `candidate-<version>` for three days. It contains two Mac ZIPs, a Windows installer, three build records, `update-feed.json` and `release-plan.json`. The native jobs check the staged Mac apps for ad hoc signatures and Windows for an unsigned installer before retention. The assembly job matches its files to those native jobs' checksums.
+3. Read the verdict. **Refused** lists inconsistencies. **Complete and consistent** means the file names, file structures, architecture headers, sizes and hashes match, and the recorded build settings agree. The Mac check reads the executable named in the outer app's Info.plist. The Windows check requires an AMD64 PE32+ installer header. The installed payload needs a separate native check. Signing is **not checked by this plan**. A build record can be edited.
 
-To recheck a downloaded folder, run the following from the source checkout after `pnpm install`. Use the selected track's feed URL, the full commit from the run, and its UTC build time. The command reads the existing feed and rewrites the plan. Exit 0 means the local candidate passed, 1 means the plan found an inconsistency or could not run, and 2 means publication is on hold.
+Use Node 26, Python 3 and a checkout with `pnpm install --frozen-lockfile`. To recheck the retained files, take the full source commit from the workflow run and the UTC build date from the retained plan. The workflow uses `https://updates.example/stable/feed.json` and `https://updates.example/nightly/feed.json`. Set `TRACK_URL` to the chosen track's build address and `OTHER_URL` to the other address, or `-` if absent.
 
 ```sh
-node apps/desktop/packaging/release-plan.ts check candidate "$TRACK" "$VERSION" "$COMMIT" "$BUILD_DATE" "$FEED_URL"
+node apps/desktop/packaging/release-plan.ts check candidate "$TRACK" "$VERSION" "$COMMIT" "$BUILD_DATE" "$TRACK_URL" "$OTHER_URL"
 ```
+
+Exit 0 means complete and consistent. Exit 1 means refusal or an error reading or writing the candidate. Without comparison feeds the plan reports that the version was not compared with any published release.
 
 ## Owner procedure
 
-1. Choose a direct HTTPS host and approve its costs. Give each track a fixed feed address such as `/stable/feed.json` or `/nightly/feed.json`. Each file goes beside that feed in a folder named for the full version, for example `/stable/0.1.1/Clawtrate-0.1.1-mac-arm64.zip`. Serve the feed and files on one origin, with no credentials or redirects. Ordinary GitHub Release download URLs redirect. The engine refuses those redirects.
-2. Prepare the signing identities on private build machines. macOS needs a Developer ID Application certificate in `CSC_LINK` with `CSC_KEY_PASSWORD`, or a keychain identity in `CSC_NAME`. For notarization, set one complete group from the table below. On Windows use a trusted signing certificate in `WIN_CSC_LINK` with `WIN_CSC_KEY_PASSWORD`, or the `CSC_LINK` and `CSC_KEY_PASSWORD` pair. Keep signed build logs private. [Packaging](packaging.md#signing-and-notarizing) covers certificate formats and preflight checks.
-3. On Mac and Windows, check out the same approved full commit in fresh checkouts and run `pnpm install --frozen-lockfile`. Set the same `SOURCE_DATE_EPOCH` (whole UTC seconds) and build-time feed addresses on both. Set `CLAWTRATE_UPDATE_FEED_URL` for Stable and `CLAWTRATE_NIGHTLY_UPDATE_FEED_URL` for Nightly. From each checkout root run `node apps/desktop/packaging/candidate-build.ts staging <version>`. The command sets the package version for the build and restores it afterward. It records the checkout commit, build date, file digest and signature readback alongside each file.
-4. Copy the contents of both staging folders into one new `candidate` folder. Set `BUILD_DATE` to the ISO UTC time of that epoch with milliseconds (for example `2026-11-19T00:00:00.000Z`). Run the recheck command above with `assemble` in place of `check`. Require exit 0. Inspect the signing identities against your intended Apple team and Windows publisher. The plan checks the Mac ZIP's Developer ID signature and stapled notarization ticket for a certificate build, and a valid Authenticode signature on the Windows installer.
-5. Before offering the track, test two consecutive signed builds on Apple silicon, Intel Mac and Windows x64 in a controlled deployment. Install the older build, check its track, download the newer build through the app, apply it and relaunch. Verify the new version, signer continuity, installation location and preserved user data. Record the two commits, versions and results. The current desktop host can verify a download. Offering a track must wait for the in-place install path and successful device checks.
-6. Keep the last good feed and its files for each track. Upload only the three new binaries to their immutable versioned paths. Fetch each URL directly over HTTPS without following redirects. Require HTTP 200, then compare the downloaded byte length and base64 SHA-512 with the plan. When all three match, atomically replace only that track's feed with the checked `update-feed.json`. Fetch the feed from its fixed address and compare it with the local copy. Put release notes on the project's release page.
+### Choose the host, version and identities
 
-| Notarization method   | Variables                                                  |
-| --------------------- | ---------------------------------------------------------- |
-| App Store Connect key | `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`    |
-| Apple ID              | `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
-| Keychain profile      | `APPLE_KEYCHAIN_PROFILE`, optionally `APPLE_KEYCHAIN`      |
+1. Choose a direct HTTPS host and approve its costs. Use distinct fixed feeds such as `/stable/feed.json` and `/nightly/feed.json`. Store binaries in a version folder beside their feed, for example `/stable/0.1.1/Clawtrate-0.1.1-mac-arm64.zip`. The plan's local check of the address's form requires canonical unescaped paths and a distinct URL for each configured track. Both addresses, including an absent one, are compared across build records. Verify separately that the host answers, the TLS certificate is trusted by the app, and the bytes served match. The feed and its files must return HTTP 200 on the same origin and port without credentials or redirects. Ordinary GitHub Release download URLs redirect. Configure the feed and CDN to bypass caching or revalidate on every request.
+2. Save a local copy of each feed currently served and keep a private release history. After withdrawal the current feed alone cannot tell you the highest version ever offered. Choose a new version above the versions it supersedes, including the withdrawn version. Never reuse a published version or object name. Keep nightlies between the last stable and the next intended stable.
+3. Prepare the same trusted signing identities used for the preceding build. On Mac, use a Developer ID Application certificate in `CSC_LINK` with `CSC_KEY_PASSWORD`, or an identity in `CSC_NAME`. For notarization, use `APPLE_API_KEY`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`, or `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID`, or `APPLE_KEYCHAIN_PROFILE` with optional `APPLE_KEYCHAIN`. On Windows use `WIN_CSC_LINK` and `WIN_CSC_KEY_PASSWORD`, or `CSC_LINK` and `CSC_KEY_PASSWORD`. Keep credentials and signed build logs on private builders. See [Packaging](packaging.md#signing-and-notarizing).
 
-### Withdraw a release
+### Build and verify the exact bytes
 
-Restore the last good feed at the affected track's fixed URL. Fetch it and verify that it still points to the retained files. The engine never downgrades. People who installed the withdrawn version need a newer signed fix. Preserve the last good files while any supported build or feed needs them.
+On both native builders use fresh checkouts of the approved commit. Install dependencies and set the same `SOURCE_DATE_EPOCH` (whole UTC seconds), `CLAWTRATE_UPDATE_FEED_URL` and `CLAWTRATE_NIGHTLY_UPDATE_FEED_URL`. Preserve the epoch selected for the candidate. For a nightly, its UTC day must match the version. Run `node apps/desktop/packaging/candidate-build.ts staging <version>` from each checkout root. Copy both folders' contents into one fresh `candidate` directory. Set `BUILD_DATE` to the epoch in UTC ISO format with milliseconds.
 
-Host selection, credentials, paid services, signed upgrade trials, tags, publication and withdrawal stay with the owner. The workflow has read-only repository access and retains its build outputs as temporary workflow artifacts. It has no schedule or publishing job.
+Pass paths to the saved current feeds, selected track first, other track second. Use `-` for a track with no previous feed. The comparison runs offline. Investigate every refusal and check the private release history before uploading.
+
+```sh
+node apps/desktop/packaging/release-plan.ts assemble candidate "$TRACK" "$VERSION" "$COMMIT" "$BUILD_DATE" "$TRACK_URL" "$OTHER_URL" "$CURRENT_FEED" "$OTHER_FEED"
+```
+
+On Apple silicon and Intel Mac, extract each final ZIP, verify its bundle ID, internal version, architecture, Developer ID signature, expected team and stapled notarization ticket against the intended release. On Windows verify the final installer's Authenticode trust and expected publisher. Inspect the installed app's identity, internal version and x64 executable. Recheck the digests after transferring the files.
+
+### Trial on an isolated feed
+
+Use an isolated HTTPS feed separate from both public tracks, accessible only to the trial machines. Install a signed predecessor compiled with that trial address. Place the exact prospective signed successor files on the trial origin. Generate a trial feed with the same track, version, date, sizes and hashes but with the trial file URLs. Fetch all three files from that origin, verify them, then move the trial feed to the successor. Keep the production candidate and its feed intact.
+
+On Apple silicon, Intel Mac and Windows x64, start on the predecessor, check the trial feed in the app, download, install in place and relaunch. Verify the new version, signer continuity, installation location and preserved data. Record both versions, commits, file digests and results. Open a track only after two consecutive signed builds pass this trial on each system.
+
+### Offer a version
+
+Immediately before uploading, save the live feeds again and repeat the command above with `check` in place of `assemble`. Archive the verified prior feed. Upload the three immutable binaries first. GET each file through the normal CDN route without following redirects. Require HTTP 200 and compare byte length and base64 SHA-512 with the local plan. Only then atomically replace the chosen track's feed. GET it from its fixed URL and verify HTTP 200 and the exact local bytes. Put release notes on the project's release page.
+
+Retain each track's active and last good feeds and files while they serve those roles. Retain files named by other supported manifests throughout their support period. Set and record a retention window for old cached offers before opening the track. Keep superseded files through that window unless withdrawing them.
+
+### Withdraw a version
+
+Restore and verify the last good feed, or disable the feed if this was the first release. Purge cached copies of the old feed. Then remove the withdrawn binaries from their public URLs and purge their CDN copies. Confirm that each withdrawn URL fails through the normal route. A client can hold an offer and request its file without checking the feed again. Removing the files stops those later downloads. In-flight transfers may finish and copies already downloaded remain on devices. Keep a private archive of the release record. Anyone who installed the bad build needs a newer signed build because the engine never downgrades.
+
+The owner controls host costs, credentials, trials, retention, publication and withdrawal. The manual workflow uses read-only repository access and temporary workflow artifacts.
