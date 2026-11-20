@@ -515,7 +515,9 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
   const field = useRef<HTMLTextAreaElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    field.current?.focus();
+    // With no field to reply from (a read-only connection), the thread itself takes focus, so
+    // Escape reaches it.
+    (field.current ?? panel.current)?.focus();
   }, [messageId]);
   if (!env) return null;
   const transcript = env.transcript;
@@ -562,6 +564,7 @@ export function ThreadView({ messageId, onClose }: { messageId: string; onClose:
     <div
       ref={panel}
       className="thread"
+      tabIndex={-1}
       role="dialog"
       aria-label="Thread"
       data-testid="thread"
