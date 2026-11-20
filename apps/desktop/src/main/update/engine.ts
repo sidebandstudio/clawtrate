@@ -109,6 +109,7 @@ export const DEFAULT_LIMITS: Limits = {
 export interface UpdateEngineOptions {
   /** The feed's address. The production constructor passes the one fixed at build time. */
   readonly track?: UpdateTrack;
+  readonly offerId?: string;
   readonly onFeedRead?: () => void;
   readonly feedAddress: string | null;
   /** The build's own release date, for F-010. The production constructor passes the build's. */
@@ -144,7 +145,15 @@ class DownloadFailed extends Error {
 export class UpdateEngine {
   private transfer: Transfer | null = null;
   private current: UpdateState = { kind: "idle" };
-  private kept: { path: string; identity: string; sha512: string; size: number } | null = null;
+  private kept: {
+    offerId: string | null;
+    track: UpdateTrack;
+    version: string;
+    path: string;
+    identity: string;
+    sha512: string;
+    size: number;
+  } | null = null;
   private found: Found | null = null;
   private busy: Promise<UpdateState> | null = null;
   private readonly options: UpdateEngineOptions;
@@ -203,9 +212,10 @@ export class UpdateEngine {
   }
 
   /** Main only. The owning service also checks the generation and offer identity. */
-  async recheckFile(): Promise<boolean> {
+  async recheckFile(offerId: string, track: UpdateTrack | null, version: string): Promise<boolean> {
     const kept = this.kept;
-    if (!kept) return false;
+    if (!kept || kept.offerId !== offerId || kept.track !== track || kept.version !== version)
+      return false;
     const proof = await inspectUpdateFile(kept.path, kept.size).catch(() => null);
     if (this.kept === kept && proof?.identity === kept.identity && proof.sha512 === kept.sha512)
       return true;
@@ -395,7 +405,13 @@ export class UpdateEngine {
       if (!proof) throw new DownloadFailed("size-mismatch");
       if (proof.sha512 !== file.sha512) throw new DownloadFailed("hash-mismatch");
       if (transfer.signal.aborted) throw new FetchRefused(transfer.cause());
-      this.kept = { path: target, ...proof };
+      this.kept = {
+        offerId: this.options.offerId ?? null,
+        track: this.options.track ?? "stable",
+        version,
+        path: target,
+        ...proof,
+      };
     } catch (error) {
       transfer.done();
       if (renamed) await rm(target, { force: true }).catch(() => undefined);

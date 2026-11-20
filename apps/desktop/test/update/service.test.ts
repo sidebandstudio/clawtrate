@@ -471,6 +471,7 @@ it.each(["missing", "changed", "replaced", "check", "choice", "quit"])(
     const service = await start();
     const id = await offer(service);
     await service.download(id);
+    expect(await service.recheckVerified("another-offer")).toBe(false);
     expect(await service.recheckVerified(id)).toBe(true);
     const folder = join(updates, id);
     const path = join(folder, readdirSync(folder)[0]!);
@@ -560,4 +561,27 @@ it("a nightly-only build stays idle and checks only its one configured source", 
   expect(server.requests).toEqual([]);
   expect((await service.check("nightly")).snapshot.state.kind).toBe("offered");
   expect(server.requests).toEqual(["/nightly"]);
+});
+
+it("keeps a history save error visible when a track choice is draining it", async () => {
+  const prefs = store();
+  const saving = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  vi.spyOn(prefs, "set").mockImplementationOnce(async () => {
+    saving.resolve();
+    await resume.promise;
+    throw Error("disk write failed");
+  });
+  const service = await start({ store: prefs });
+  const check = service.check("stable");
+  await saving.promise;
+  const choice = service.chooseTrack("nightly");
+  resume.resolve();
+  expect((await check).outcome).toBe("superseded");
+  expect((await choice).snapshot).toMatchObject({
+    selectedTrack: "nightly",
+    state: { kind: "not-checked" },
+    lastCheck: { track: "stable" },
+    preferenceIssue: "last-check-not-saved",
+  });
 });

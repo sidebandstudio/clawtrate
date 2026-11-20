@@ -166,7 +166,7 @@ export class DesktopUpdateService {
     const { state } = this.snapshot;
     const engine = this.engine;
     if (state.kind !== "verified" || state.offerId !== offerId || !engine) return false;
-    const valid = await engine.recheckFile();
+    const valid = await engine.recheckFile(offerId, this.snapshot.selectedTrack, state.version);
     if (this.engine !== engine || this.snapshot.state !== state) return false;
     if (!valid) {
       this.publish({
@@ -199,6 +199,7 @@ export class DesktopUpdateService {
     const offerId = selectedTrack + "-" + randomUUID();
     let checkedAt: string | null = null;
     const engine: UpdateEngine = new UpdateEngine({
+      offerId,
       currentVersion: runningVersion,
       track: selectedTrack,
       feedAddress: this.options.feeds[selectedTrack],
@@ -254,7 +255,7 @@ export class DesktopUpdateService {
         try {
           await this.options.store.set("lastCheck", JSON.stringify(lastCheck));
         } catch {
-          if (this.engine !== engine) return;
+          if (this.closed || this.snapshot.lastCheck !== lastCheck) return;
           this.snapshot = { ...this.snapshot, preferenceIssue: "last-check-not-saved" };
           this.publish(this.snapshot.state);
         }
