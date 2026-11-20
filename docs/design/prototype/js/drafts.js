@@ -101,7 +101,6 @@
     ["juniper", "Juniper"],
   ];
   const SECRET_TOOL_BOTS = "Otto, Pip and Marlow";
-  const EVERY_BOT = "Otto, Pip, Marlow and Juniper";
   const PLAIN = "The gateway keeps this value in its state database on its own machine and doesn't encrypt it there.";
   const ENV_WORDS = "The gateway returns this value to callers that can list it, and supplies it to commands.";
 
@@ -647,6 +646,7 @@
       notlisted: ["warn", "Couldn't confirm the save. The name isn't listed."],
       removed: ["accent", "Removed from the Vault."],
       removedrefresh: ["accent", "Removed from the Vault. The gateway couldn't refresh settings that used it."],
+      removednoreply: ["warn", `${S.item} is no longer listed in the Vault.`],
     }[v];
     if (said) html += `<p class="d-say" data-tone="${said[0]}">${said[1]}${["saved", "savedrefresh", "listedonly"].includes(v) ? ` <code>${esc(nm)}</code>` : ""}</p>`;
     if (v === "loading") html += `<div class="d-vlist" aria-busy="true"><div class="d-skel"></div><div class="d-skel"></div><div class="d-skel"></div></div>`;
@@ -685,7 +685,7 @@
     html +=
       `<div class="b-note">${icon("eye")}<div><p><b>How it can be used.</b> Settings can use this value through its reference. When the gateway's egress proxy is enabled, it can substitute the value in supported requests to these hosts from commands on the gateway's machine. Any bot offered the Secrets tool sees its name and hosts and can remove it. The gateway doesn't limit an item to chosen bots.</p>` +
       `<p class="b-faint">Offered the Secrets tool: ${SECRET_TOOL_BOTS}, as each was last offered, Nov 19.</p></div></div>`;
-    if (S.v === "stilllisted") html += `<p class="d-say" data-tone="danger">The gateway answered, but ${e.name} is still listed. ${button("Try again", 'data-d="v-remove-yes" data-size="sm"')}</p>`;
+    if (S.v === "stilllisted") html += `<p class="d-say" data-tone="danger">${e.name} is still listed. ${button("Try again", 'data-d="v-remove-yes" data-size="sm"')}</p>`;
     if (S.v === "removeunknown") html += `<p class="d-say" data-tone="warn">Couldn't confirm the removal. The Vault couldn't be read. ${button("Check", 'data-d="v-remove-check" data-size="sm"')}</p>`;
     html += `<div class="b-actions" style="margin-top: 16px">${button("Replace…", 'data-d="v-replace"')}${button("Remove…", 'data-d="v-remove" data-tone="danger"', "quiet")}</div>`;
     return html;
@@ -720,7 +720,7 @@
       return (
         `<div class="b-dialog-shim"><dialog class="b-dialog d-dialog" data-kind="confirm" role="alertdialog" open aria-labelledby="rm-title" aria-describedby="rm-text" data-testid="remove-dialog">` +
         `<div class="b-head"><h2 id="rm-title">Remove ${e.name}?</h2></div>` +
-        `<div class="b-body"><p id="rm-text">Every bot on this gateway loses it: ${EVERY_BOT}. ${e.refs.length ? `These settings refer to this name: <code>${e.refs.join(", ")}</code>. A running process may still have the value.` : "No setting refers to this name."} Removal leaves the value in the database. The gateway's cleanup can purge the deleted row after 30 days.</p></div>` +
+        `<div class="b-body"><p id="rm-text">${e.refs.length ? `These settings refer to this name: <code>${e.refs.join(", ")}</code>. A running process may still have the value.` : "No setting refers to this name."} Removal leaves the value in the database. The gateway's cleanup can purge the deleted row after 30 days.</p></div>` +
         `<div class="b-foot b-actions">${button(v === "removing" ? "Removing…" : "Remove", `data-d="v-remove-yes" data-tone="danger"${v === "removing" ? " disabled" : ""}`, "primary")}${button("Cancel", 'data-d="v-remove-no"')}</div></dialog></div>`
       );
     }
@@ -824,6 +824,16 @@
       go({ s: "saved" }, "Saved to the gateway");
       later(() => go({ hostsBack: true }), 400);
     });
+  }
+
+  // What a removal says follows the selected read-back: the delete's answer and a fresh list.
+  function removalReadBack() {
+    const a = S.vanswer;
+    if (a === "lostlisted") return go({ v: "stilllisted" }, "Still listed");
+    if (a === "refused") return go({ v: "removeunknown" }, "Couldn't confirm the removal");
+    if (a === "lostnot") return go({ v: "removednoreply", removed: true }, "No longer listed");
+    if (a === "refresh") return go({ v: "removedrefresh", removed: true }, "Removed from the Vault");
+    go({ v: "removed", removed: true }, "Removed from the Vault");
   }
 
   root.addEventListener("click", (event) => {
@@ -968,15 +978,9 @@
         return go({ v: "item" });
       case "v-remove-yes":
         go({ v: "removing" });
-        return later(() => {
-          const a = S.vanswer;
-          if (a === "lostlisted") return go({ v: "stilllisted" });
-          if (a === "lostnot" || a === "refused") return go({ v: "removeunknown" });
-          if (a === "refresh") return go({ v: "removedrefresh", removed: true }, "Removed from the Vault");
-          go({ v: "removed", removed: true }, "Removed from the Vault");
-        });
+        return later(removalReadBack);
       case "v-remove-check":
-        return go({ v: "removed", removed: true }, "Removed from the Vault");
+        return removalReadBack();
     }
   });
 

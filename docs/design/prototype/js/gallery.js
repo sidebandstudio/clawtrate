@@ -1359,7 +1359,7 @@
           ["Drafts on other connections and with the plugin unchecked", (q) => q, ["view=draft&access=read", "view=draft&access=read&req=requested", "view=draft&access=interactive", "view=draft&p=unchecked", "view=draft&p=absent", "view=draft&p=old"]],
           ["The masked secret card", (s) => `view=secret&s=${s}`, ["pending", "typed", "hosts", "exists", "saving", "saved", "savedrefresh", "refused", "unconfirmed", "already", "skipped", "expired", "cannotask", "raw", "omitted", "missing", "kindchanged", "hostsunavailable"]],
           ["The secret card on a read-only connection", (q) => q, ["view=secret&access=read"]],
-          ["Settings, Vault", (v) => `view=vault&v=${v}`, ["list", "empty", "loading", "error", "item", "envitem", "new", "newenv", "replace", "saved", "savedrefresh", "listedonly", "notlisted", "failed", "remove", "removed", "removedrefresh", "stilllisted", "removeunknown"]],
+          ["Settings, Vault", (v) => `view=vault&v=${v}`, ["list", "empty", "loading", "error", "item", "envitem", "new", "newenv", "replace", "saved", "savedrefresh", "listedonly", "notlisted", "failed", "remove", "removed", "removedrefresh", "stilllisted", "removeunknown", "removednoreply"]],
           ["The Vault below admin", (q) => q, ["view=vault&access=interactive", "view=vault&access=read&req=denied"]],
           ["Settings, Drafts", (q) => q, ["view=drafts", "view=drafts&p=unchecked", "view=drafts&p=absent", "view=drafts&p=old", "view=drafts&access=interactive"]],
         ].map(([name, query, list]) => ({

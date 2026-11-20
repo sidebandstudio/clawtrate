@@ -123,10 +123,11 @@ const states = [
   ["view=vault&v=listedonly", ["This name and its settings are listed. Clawtrate couldn't confirm which value was saved."]],
   ["view=vault&v=notlisted", ["Couldn't confirm the save. The name isn't listed."]],
   ["view=vault&v=failed", ["Couldn't save"]],
-  ["view=vault&v=remove", ["Remove STORE_API_KEY?", "Every bot on this gateway loses it: Otto, Pip, Marlow and Juniper.", "These settings refer to this name: plugins.entries.price-tracker.config.apiKey. A running process may still have the value.", "Removal leaves the value in the database. The gateway's cleanup can purge the deleted row after 30 days."]],
+  ["view=vault&v=remove", ["Remove STORE_API_KEY?", "These settings refer to this name: plugins.entries.price-tracker.config.apiKey. A running process may still have the value.", "Removal leaves the value in the database. The gateway's cleanup can purge the deleted row after 30 days."]],
   ["view=vault&v=removed", ["Removed from the Vault."]],
   ["view=vault&v=removedrefresh", ["Removed from the Vault. The gateway couldn't refresh settings that used it."]],
-  ["view=vault&v=stilllisted", ["The gateway answered, but STORE_API_KEY is still listed."]],
+  ["view=vault&v=stilllisted", ["STORE_API_KEY is still listed."]],
+  ["view=vault&v=removednoreply", ["STORE_API_KEY is no longer listed in the Vault."]],
   ["view=vault&v=removeunknown", ["Couldn't confirm the removal. The Vault couldn't be read.", "Check"]],
   ["view=vault&access=interactive", ["Seeing the Vault needs admin access. The gateway shows its secret store to admin connections only.", "Request admin access"]],
   ["view=vault&access=read&req=denied", ["The request was denied."]],
@@ -378,11 +379,27 @@ await p.close();
 for (const [choice, words] of [
   ["ack", ["Removed from the Vault."]],
   ["refresh", ["Removed from the Vault. The gateway couldn't refresh settings that used it."]],
-  ["lostlisted", ["The gateway answered, but STORE_API_KEY is still listed."]],
+  ["lostlisted", ["STORE_API_KEY is still listed."]],
+  ["lostnot", ["STORE_API_KEY is no longer listed in the Vault."]],
   ["refused", ["Couldn't confirm the removal. The Vault couldn't be read."]],
 ])
   (await walk(`Vault: Remove → ${choice}`, "view=vault&v=item", [(pg) => bar(pg, "vanswer", choice), tap('[data-d="v-remove"]'), tap('[data-d="v-remove-yes"]')], words)).close();
-(await walk("Vault: Remove, unreadable → Check → Removed", "view=vault&v=item", [(pg) => bar(pg, "vanswer", "refused"), tap('[data-d="v-remove"]'), tap('[data-d="v-remove-yes"]'), pause(700), tap('[data-d="v-remove-check"]')], ["Removed from the Vault."])).close();
+// Check reads the selected read-back again; it never announces a removal the list didn't show.
+for (const [then, words, gone] of [
+  ["lostlisted", ["STORE_API_KEY is still listed."], ["Removed from the Vault", "no longer listed"]],
+  ["refused", ["Couldn't confirm the removal. The Vault couldn't be read."], ["Removed from the Vault", "no longer listed"]],
+  ["lostnot", ["STORE_API_KEY is no longer listed in the Vault."], ["Removed from the Vault"]],
+]) {
+  p = await walk(
+    `Vault: Remove, unreadable → Check finds ${then}`,
+    "view=vault&v=item",
+    [(pg) => bar(pg, "vanswer", "refused"), tap('[data-d="v-remove"]'), tap('[data-d="v-remove-yes"]'), pause(700), (pg) => bar(pg, "vanswer", then), tap('[data-d="v-remove-check"]')],
+    words,
+  );
+  const said = absent(await text(p), gone);
+  check(`Vault: Check finding ${then} doesn't say more than the list showed`, !said, said);
+  await p.close();
+}
 (await walk("Vault: error → Try again", "view=vault&v=error", [tap('[data-d="v-retry"]')], ["STORE_API_KEY"])).close();
 
 // Settings, Drafts
@@ -429,11 +446,11 @@ p = await b.newPage();
 await p.goto(pageUrl("gallery.html") + "?chrome=1&section=drafts");
 await p.waitForTimeout(100);
 const links = await p.evaluate(() => [...document.querySelectorAll('#drafts a[href^="drafts.html"]')].map((a) => a.getAttribute("href")));
-check("gallery: the Drafts and the Vault section links to every state", links.length === 91, String(links.length));
+check("gallery: the Drafts and the Vault section links to every state", links.length === 92, String(links.length));
 check("gallery: the section says draft examples use a proposed plugin", (await text(p, "#drafts")).includes(PROPOSED));
 check("the prototype bar links to the drafts page", await p.evaluate(() => [...document.querySelectorAll("#proto-bar a")].some((a) => a.getAttribute("href") === "drafts.html")));
 await p.close();
-const banned = ["securely", "Never shown to Otto", "can't read it back", "Every bot on the gateway can use them", "nothing waits as a draft", "Sign in to", "Filled directly to", "Securely save to Bot's vault"];
+const banned = ["securely", "Every bot on this gateway loses it", "Never shown to Otto", "can't read it back", "Every bot on the gateway can use them", "nothing waits as a draft", "Sign in to", "Filled directly to", "Securely save to Bot's vault"];
 const broken = [];
 const claims = [];
 for (const href of links) {
