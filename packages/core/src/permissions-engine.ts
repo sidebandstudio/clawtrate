@@ -49,8 +49,20 @@ export const MAX_PERMISSION_READS = 4;
 /** Scopes of the rules plugin whose last read this client keeps: every bot's, and the 8 bots read last. */
 export const MAX_KEPT_RULE_SCOPES = 9;
 
+/** A request to the gateway. */
+export type GatewayRequest = (
+  method: string,
+  params: unknown,
+  options?: { timeoutMs?: number },
+) => Promise<unknown>;
+
 export type PermissionsContext = {
-  request(method: string, params: unknown, options?: { timeoutMs?: number }): Promise<unknown>;
+  /**
+   * Requests to the gateway connected now. One read or one write uses one: when
+   * the connection changes, it sends nothing more and drops the answers still
+   * to come, so no part of a write reaches another gateway.
+   */
+  session(): GatewayRequest;
   connected(): boolean;
   admin(): boolean;
   /** Whether the gateway's method list (`hello-ok.features.methods`) names the plugin's methods. */
@@ -65,9 +77,11 @@ export type PermissionWrite = {
   /**
    * `saved` only when a read after the write shows it; `unconfirmed` when the
    * gateway's answer to the write, or the read after it, was lost; `failed`
-   * when the gateway refused it or it was never sent.
+   * when the gateway refused it or it was never sent. `partial`: of a choice
+   * made in two writes, the rules plugin's was saved and the settings' was not
+   * (`error` says why).
    */
-  outcome: "saved" | "not-shown" | "unconfirmed" | "conflict" | "failed";
+  outcome: "saved" | "not-shown" | "unconfirmed" | "conflict" | "failed" | "partial";
   error: string | null;
   /** What the gateway has now, or null when that read failed too. */
   view: BotPermissions | null;
@@ -111,13 +125,15 @@ export class PermissionsEngine {
 
   /** Whether the write being made has sent a request that changes something. */
   private writeSent = false;
+  /** Whether the write being made has had the rules plugin's part saved. */
+  private rulesSaved = false;
 
   /** One bot's permissions, read now. */
   async read(botId: string): Promise<BotPermissions> {
-    return (await this.readAll(botId)).view;
+    return (await this.readAll(botId, this.ctx.session())).view;
   }
 
-  private async readAll(botId: string): Promise<Read> {
+  private async readAll(botId: string, request: GatewayRequest): Promise<Read> {
     if (!this.ctx.connected()) throw new Error("Not connected to the gateway.");
     if (this.reads >= MAX_PERMISSION_READS)
       throw new Error(
@@ -128,19 +144,19 @@ export class PermissionsEngine {
       const { ctx } = this;
       const key = ctx.latestTask(botId);
       const [config, catalog, offered, plugin] = await Promise.all([
-        ctx.request("config.get", {}),
-        ctx.request("tools.catalog", { agentId: botId }),
+        request("config.get", {}),
+        request("tools.catalog", { agentId: botId }),
         key
-          ? ctx.request("tools.effective", { sessionKey: key }).then(
+          ? request("tools.effective", { sessionKey: key }).then(
               (answer): Offered => readOffered(answer, key),
               (error: unknown): Offered => ({ status: "failed", reason: message(error) }),
             )
           : Promise.resolve<Offered>({ status: "no-task" }),
-        this.status(),
+        this.status(request),
       ]);
       const settings = readToolSettings(config, botId);
       const tools = readToolCatalog(catalog);
-      const { rules, bot, every } = await this.rules(botId, plugin);
+      const { rules, bot, every } = await this.rules(request, botId, plugin);
       const facts: PermissionFacts = {
         botId,
         settings,
@@ -158,12 +174,12 @@ export class PermissionsEngine {
     }
   }
 
-  private async status(): Promise<RulesPluginStatus> {
+  private async status(request: GatewayRequest): Promise<RulesPluginStatus> {
     const listed = this.ctx.rulesMethods();
     if (listed === false) return { kind: "unavailable" };
     if (listed === null) return { kind: "unchecked" };
     try {
-      return readStatus(await this.ctx.request(RULES_STATUS_METHOD, {}), this.ctx.now());
+      return readStatus(await request(RULES_STATUS_METHOD, {}), this.ctx.now());
     } catch (error) {
       return { kind: "stopped", reason: message(error), answered: false };
     }
@@ -171,14 +187,15 @@ export class PermissionsEngine {
 
   /** The bot's and every bot's rules: read now while the plugin reads them, else this client's last read. */
   private async rules(
+    request: GatewayRequest,
     botId: string,
     plugin: RulesPluginStatus,
   ): Promise<{ rules: RulesSource; bot: RulesScope | null; every: RulesScope | null }> {
     if (plugin.kind === "running" && plugin.rules !== "lost") {
       try {
         const [bot, every] = await Promise.all([
-          this.ctx.request(RULES_GET_METHOD, { scope: botId }),
-          this.ctx.request(RULES_GET_METHOD, { scope: EVERY_BOT }),
+          request(RULES_GET_METHOD, { scope: botId }),
+          request(RULES_GET_METHOD, { scope: EVERY_BOT }),
         ]);
         const readAt = this.ctx.now();
         const botScope = readScope(bot, botId);
@@ -211,8 +228,11 @@ export class PermissionsEngine {
     if (!this.ctx.admin()) throw new AdminNeededError("Changing what a bot may do");
     if (this.writing) throw new Error("Another change to a bot's permissions is being saved.");
     this.writing = true;
+    // The whole choice, its reads and its writes, goes to the gateway connected now.
+    const request = this.ctx.session();
+    const readBack = () => this.readAll(botId, request).then((read) => read.view);
     try {
-      const before = await this.readAll(botId);
+      const before = await this.readAll(botId, request);
       const { facts, view } = before;
       if (base.configHash !== null && facts.settings.hash !== base.configHash)
         return { outcome: "conflict", error: null, view };
@@ -221,16 +241,25 @@ export class PermissionsEngine {
       const refusal = choiceRefusal(view, line, choice, true);
       if (refusal) throw new Error(refusal);
       this.writeSent = false;
+      this.rulesSaved = false;
       try {
-        await this.apply(botId, facts, line.tools, choice, base);
+        await this.apply(request, botId, facts, line.tools, choice, base);
       } catch (error) {
+        const after = await readBack().catch(() => null);
+        // The rules plugin's part landed and the settings' did not: both are said.
+        if (this.rulesSaved) {
+          const shown =
+            after &&
+            choiceShown(
+              after.lines.find((each) => each.id === lineId),
+              choice,
+            );
+          return shown
+            ? { outcome: "saved", error: null, view: after }
+            : { outcome: "partial", error: message(error), view: after };
+        }
         if (error instanceof ConflictError)
-          return {
-            outcome: "conflict",
-            error: null,
-            view: await this.read(botId).catch(() => null),
-          };
-        const after = await this.read(botId).catch(() => null);
+          return { outcome: "conflict", error: null, view: after };
         // No write left, or the gateway refused it: what it has now is read, and nothing is assumed.
         if (
           !this.writeSent ||
@@ -249,7 +278,7 @@ export class PermissionsEngine {
           ? { outcome: "saved", error: null, view: after }
           : { outcome: "unconfirmed", error: message(error), view: after };
       }
-      const after = await this.read(botId).catch(() => null);
+      const after = await readBack().catch(() => null);
       if (!after)
         return {
           outcome: "unconfirmed",
@@ -267,6 +296,7 @@ export class PermissionsEngine {
   }
 
   private async apply(
+    request: GatewayRequest,
     botId: string,
     facts: PermissionFacts,
     tools: string[],
@@ -275,18 +305,18 @@ export class PermissionsEngine {
   ): Promise<void> {
     const { settings, catalog } = facts;
     if (choice === "full" || choice === "auto" || choice === "exec-ask" || choice === "deny") {
-      await this.patch(execWrite(botId, settings, choice, catalog), settings.hash);
+      await this.patch(request, execWrite(botId, settings, choice, catalog), settings.hash);
       return;
     }
     if (choice === "never" || choice === "allow") {
       const write = denyWrite(botId, settings, { tools }, choice === "never", catalog);
-      if (write) await this.patch(write, settings.hash);
+      if (write) await this.patch(request, write, settings.hash);
       return;
     }
     // Ask: the plugin's rule first, so the tool is never offered unasked; then the deny comes off.
     if (!pluginHolds(facts.plugin))
       throw new Error("Asking needs Clawtrate's rules plugin running.");
-    const answer = await this.ctx.request(RULES_GET_METHOD, { scope: botId });
+    const answer = await request(RULES_GET_METHOD, { scope: botId });
     const scope = readScope(answer, botId);
     const version = scope?.version ?? 0;
     if (base.rulesVersion !== null && version !== base.rulesVersion) throw new ConflictError();
@@ -294,15 +324,17 @@ export class PermissionsEngine {
       const rules = rulesForSet(answer, botId);
       if (!rules) throw new Error("The rules plugin's rules for this bot couldn't be read whole.");
       this.writeSent = true;
-      await this.ctx.request(RULES_SET_METHOD, {
+      await request(RULES_SET_METHOD, {
         scope: botId,
         rules: [...rules, { action: "ask", tools }],
         fallback: scope?.fallback ?? false,
         expectedVersion: version,
       });
+      this.rulesSaved = true;
     }
+    // The deny list replaced is the one this choice read: against its hash, never a newer one.
     const deny = denyWrite(botId, settings, { tools }, false, catalog);
-    if (deny) await this.patch(deny, null);
+    if (deny) await this.patch(request, deny, settings.hash);
   }
 
   /**
@@ -310,13 +342,17 @@ export class PermissionsEngine {
    * page read, then the gateway applying it: `config.get` reports the new
    * revision as applied. A hash that changed meanwhile is a conflict.
    */
-  private async patch(write: ConfigWrite, baseHash: string | null): Promise<void> {
-    const before = asRecord(await this.ctx.request("config.get", {})) as RawRecord | null;
+  private async patch(
+    request: GatewayRequest,
+    write: ConfigWrite,
+    baseHash: string | null,
+  ): Promise<void> {
+    const before = asRecord(await request("config.get", {})) as RawRecord | null;
     const hash = typeof before?.hash === "string" ? before.hash : null;
     if (baseHash !== null && hash !== baseHash) throw new ConflictError();
     try {
       this.writeSent = true;
-      await this.ctx.request("config.patch", {
+      await request("config.patch", {
         raw: JSON.stringify(write.patch),
         ...(hash ? { baseHash: hash } : {}),
         ...(write.replacePaths.length > 0 ? { replacePaths: write.replacePaths } : {}),
@@ -328,7 +364,7 @@ export class PermissionsEngine {
     if (before?.configRevisionHash === undefined) return;
     const started = this.ctx.now();
     for (let reads = 0; reads < 100 && this.ctx.now() - started < 20_000; reads += 1) {
-      const now = asRecord(await this.ctx.request("config.get", {}));
+      const now = asRecord(await request("config.get", {}));
       const revised = now?.configRevisionHash !== before.configRevisionHash;
       if (revised && now?.appliedConfigHash === now?.configRevisionHash) return;
       if (!revised && (this.ctx.now() - started > 3_000 || reads >= 15)) return;

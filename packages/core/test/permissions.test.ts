@@ -81,7 +81,7 @@ class Gateway {
 
   ctx(admin = true): PermissionsContext {
     return {
-      request: (method, params) => this.answer(method, params as Json),
+      session: () => (method, params) => this.answer(method, params as Json),
       connected: () => true,
       admin: () => admin,
       rulesMethods: () => this.plugin !== "unavailable",
@@ -306,6 +306,64 @@ describe("what a bot may do", () => {
     expect(choiceRefusal(result.view!, line(result.view!, "read"), "allow", true)).toMatch(
       /rules page/,
     );
+  });
+
+  it("Ask replaces the deny list it read and no newer one: another client's change after the rule landed is kept, and both outcomes are said", async () => {
+    const gw = new Gateway();
+    botTools(gw, "pip").deny = ["write", "edit", "apply_patch"];
+    const engine = new PermissionsEngine(gw.ctx());
+    const view = await engine.read("pip");
+    const answer = gw.answer.bind(gw);
+    gw.answer = async (method, params) => {
+      const got = await answer(method, params);
+      // Another operator denies ls right after the rules plugin took the Ask.
+      if (method === "clawtrate-tool-rules.set") {
+        (botTools(gw, "pip").deny as string[]).push("ls");
+        gw.hash += 1;
+      }
+      return got;
+    };
+    const result = await engine.choose("pip", "files", "ask", {
+      configHash: view.configHash,
+      rulesVersion: view.versions.bot,
+    });
+    expect(result.outcome).toBe("partial");
+    expect(result.error).toBe("Someone else changed these settings.");
+    expect(botTools(gw, "pip").deny).toEqual(["write", "edit", "apply_patch", "ls"]);
+    expect(gw.writes().map((w) => w.method)).toEqual(["clawtrate-tool-rules.set"]);
+    expect(gw.scopes.pip!.rules).toEqual([
+      expect.objectContaining({ action: "ask", tools: ["write", "edit", "apply_patch"] }),
+    ]);
+  });
+
+  it("a choice stays on the gateway it started on: after a switch between Ask's two writes, the other gateway gets nothing", async () => {
+    const first = new Gateway();
+    const second = new Gateway();
+    botTools(first, "pip").deny = ["read", "ls"];
+    botTools(second, "pip").deny = ["read", "ls"];
+    let current = first;
+    const ctx: PermissionsContext = {
+      ...first.ctx(),
+      session: () => {
+        const bound = current;
+        return (method, params) => bound.answer(method, params as Json);
+      },
+    };
+    const engine = new PermissionsEngine(ctx);
+    const view = await engine.read("pip");
+    const answer = first.answer.bind(first);
+    first.answer = async (method, params) => {
+      const got = await answer(method, params);
+      if (method === "clawtrate-tool-rules.set") current = second;
+      return got;
+    };
+    const result = await engine.choose("pip", "read", "ask", {
+      configHash: view.configHash,
+      rulesVersion: view.versions.bot,
+    });
+    expect(second.sent).toEqual([]);
+    expect(result.outcome).toBe("saved");
+    expect(botTools(first, "pip").deny).toBeUndefined();
   });
 
   it("F-177: a rule for every bot and the bot's own rule both apply on the bot's line; another bot's line shows only the rule for every bot", async () => {

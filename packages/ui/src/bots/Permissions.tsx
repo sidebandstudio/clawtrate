@@ -810,6 +810,12 @@ function LinePage({
           text: `Sent, but whether it was saved couldn't be confirmed: ${unstopped(result.error ?? "the gateway's answer was lost")}. ${result.view ? "This shows what the gateway has now." : "Reading what the gateway has now failed too."}`,
           tone: "warn",
         });
+      } else if (result.outcome === "partial") {
+        announce("Saved in part");
+        setNote({
+          text: `The rules plugin saved ${name}'s ${choice === "ask" ? "Ask" : "rule change"}, and ${name}'s deny list in the gateway's settings wasn't changed: ${unstopped(result.error ?? "the gateway refused it")}. ${result.view ? "This shows what the gateway has now." : "Reading what the gateway has now failed."}`,
+          tone: "warn",
+        });
       } else if (result.outcome === "not-shown")
         setNote({
           text: `Sent, but ${name}'s settings read back don't show it. This shows what the gateway has now.`,

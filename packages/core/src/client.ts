@@ -962,9 +962,17 @@ export class ClawtrateClient {
   private rulesMethodsListed: boolean | null = null;
   /** What a bot may do (`permissions-engine.ts`): reads answered and kept nowhere. */
   private readonly permissions = new PermissionsEngine({
-    request: (method, params, options) => {
-      if (!this.protocol) return Promise.reject(new NotSentError());
-      return this.protocol.request(method, params, options);
+    session: () => {
+      // Bound to the connection open now: after a switch it sends nothing, and drops late answers.
+      const protocol = this.protocol;
+      return (method, params, options) => {
+        if (!protocol || protocol !== this.protocol) return Promise.reject(new NotSentError());
+        return protocol.request(method, params, options).then((answer) => {
+          if (protocol !== this.protocol)
+            throw new Error("The connection to the gateway changed before it answered.");
+          return answer;
+        });
+      };
     },
     connected: () => this.state.connection.status === "connected",
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
