@@ -1,3 +1,4 @@
+import type { VerifiedArtifact } from "./install.ts";
 // The update engine: reads the feed, compares versions, downloads the file for
 // this system and keeps it only when its size and SHA-512 are the feed's. It
 // reports typed states for the update screens and installs nothing.
@@ -145,15 +146,7 @@ class DownloadFailed extends Error {
 export class UpdateEngine {
   private transfer: Transfer | null = null;
   private current: UpdateState = { kind: "idle" };
-  private kept: {
-    offerId: string | null;
-    track: UpdateTrack;
-    version: string;
-    path: string;
-    identity: string;
-    sha512: string;
-    size: number;
-  } | null = null;
+  private kept: VerifiedArtifact | null = null;
   private found: Found | null = null;
   private busy: Promise<UpdateState> | null = null;
   private readonly options: UpdateEngineOptions;
@@ -221,6 +214,11 @@ export class UpdateEngine {
       return true;
     if (this.kept === kept) this.kept = null;
     return false;
+  }
+
+  async verifiedArtifact(id: string, track: UpdateTrack | null, version: string) {
+    const kept = this.kept;
+    return (await this.recheckFile(id, track, version)) && this.kept === kept ? kept : null;
   }
 
   private exclusive(work: () => Promise<UpdateState>): Promise<UpdateState> {

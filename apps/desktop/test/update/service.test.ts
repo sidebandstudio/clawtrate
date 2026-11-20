@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { linkSync } from "node:fs";
+import { stageAtLoopback } from "./mac-handoff-stand-in.ts";
+import type { UpdateInstaller } from "../../src/main/update/install.ts";
 import type { DesktopUpdateReply, DesktopUpdateSnapshot } from "@clawtrate/core";
 import { createUpdatePreferenceStore } from "../../src/main/update/preferences.ts";
 import { updateDefines } from "../../packaging/update-defines.ts";
@@ -761,3 +765,246 @@ it("defaults an invalid version to Stable and preserves the saved choice when fo
   expect(readFileSync(path)).toEqual(old);
   expect(server.requests).toEqual([]);
 });
+
+function installStandIn(): UpdateInstaller {
+  return { unavailable: null, inspect: vi.fn(async () => null), launch: vi.fn(async () => null) };
+}
+
+it.each(["build-not-signed", "no-installer-path"] as const)(
+  "never asks the adapter to inspect or launch when the build says %s",
+  async (reason) => {
+    const installer = { ...installStandIn(), unavailable: reason };
+    const service = await start({ installer });
+    const id = await offer(service);
+    await service.download(id);
+    expect(service.get().install).toEqual({ kind: "unavailable-in-this-build", reason });
+    expect((await service.restart(id)).outcome).toBe("invalid");
+    service.shutdown();
+    expect(installer.inspect).not.toHaveBeenCalled();
+    expect(installer.launch).not.toHaveBeenCalled();
+    expect(await store().get("attempt")).toBeNull();
+  },
+);
+
+it.each([
+  "authenticode-trust",
+  "publisher-mismatch",
+  "mac-designated-requirement",
+  "installation-context",
+] as const)(
+  "matching bytes alone cannot offer Restart when inspection reports %s",
+  async (reason) => {
+    const installer = installStandIn();
+    installer.inspect = async () => reason;
+    const service = await start({ installer });
+    const id = await offer(service);
+    expect((await service.download(id)).snapshot).toMatchObject({
+      state: { kind: "verified", offerId: id },
+      install: { kind: "unavailable-in-this-build", reason },
+    });
+    expect((await service.restart(id)).outcome).toBe("invalid");
+    expect(installer.launch).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["changed", "replaced", "truncated", "symlink", "hardlink"])(
+  "refuses a %s file between offering Restart and acting on it",
+  async (change) => {
+    const installer = installStandIn();
+    const service = await start({ installer });
+    const id = await offer(service);
+    await service.download(id);
+    const folder = join(updates, id);
+    const path = join(folder, readdirSync(folder)[0]!);
+    if (change === "truncated") writeFileSync(path, fixture.body.subarray(0, 1));
+    if (change === "changed") writeFileSync(path, Buffer.alloc(fixture.body.length, 7));
+    if (change === "hardlink") linkSync(path, path + ".other");
+    if (change === "replaced" || change === "symlink") {
+      renameSync(path, path + ".old");
+      if (change === "symlink") symlinkSync(path + ".old", path);
+      else writeFileSync(path, fixture.body);
+    }
+    expect((await service.restart(id)).snapshot.state).toMatchObject({
+      kind: "handoff-failed",
+      reason: "artifact-changed",
+    });
+    expect(installer.launch).not.toHaveBeenCalled();
+    expect(await store().get("attempt")).toBeNull();
+  },
+);
+
+it("pins Restart to the displayed verified offer across a new check of the same track", async () => {
+  const installer = installStandIn();
+  const service = await start({ installer });
+  const old = await offer(service);
+  await service.download(old);
+  const checking = service.check("stable");
+  expect((await service.restart(old)).outcome).toBe("busy");
+  await checking;
+  const state = service.get().state;
+  if (state.kind !== "offered") throw Error("Expected new offer");
+  await service.download(state.offerId);
+  expect((await service.restart(old)).outcome).toBe("stale");
+  expect((await service.restart({ path: "foreign" })).outcome).toBe("invalid");
+  expect(service.get().install).toEqual({ kind: "restart-available", offerId: state.offerId });
+  expect(installer.launch).not.toHaveBeenCalled();
+});
+
+it("F-231: one explicit Restart records the attempt before one stand-in handoff and quit", async () => {
+  const installer = installStandIn();
+  const quitAfterLaunch = vi.fn();
+  const entered = Promise.withResolvers<void>(),
+    resume = Promise.withResolvers<void>();
+  installer.launch = vi.fn(async (file) => {
+    expect(file).toMatchObject({
+      track: "stable",
+      version: "1.1.0",
+      sha512: fixture.sha512,
+      size: fixture.body.length,
+    });
+    expect(JSON.parse((await store().get("attempt"))!)).toMatchObject({
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      phase: "handoff",
+      time: expect.stringMatching(/Z$/),
+    });
+    entered.resolve();
+    await resume.promise;
+    return null;
+  });
+  const service = await start({ installer, quitAfterLaunch });
+  const id = await offer(service);
+  await service.download(id);
+  expect(installer.launch).not.toHaveBeenCalled();
+  const pending = service.restart(id);
+  expect(service.get().state.kind).toBe("preparing");
+  expect((await service.restart(id)).outcome).toBe("busy");
+  await entered.promise;
+  expect(service.get().state.kind).toBe("handing-off");
+  for (const command of [
+    service.check("stable"),
+    service.chooseTrack("nightly"),
+    service.download(id),
+    service.restart(id),
+  ])
+    expect((await command).outcome).toBe("busy");
+  expect(quitAfterLaunch).not.toHaveBeenCalled();
+  resume.resolve();
+  expect((await pending).snapshot.lastAttempt).toBeNull();
+  expect(quitAfterLaunch).toHaveBeenCalledTimes(1);
+  expect(installer.launch).toHaveBeenCalledTimes(1);
+  expect(server.requests).toEqual(["/stable", "/files/app.zip"]);
+  service.shutdown();
+  for (const [version, kind] of [
+    ["1.1.0", "target-running"],
+    ["1.0.0", "old-version-running"],
+    ["1.0.1", "unconfirmed"],
+    ["invalid", "unconfirmed"],
+  ] as const) {
+    const prefs = store();
+    if (version === "1.1.0") {
+      const get = prefs.get;
+      vi.spyOn(prefs, "get").mockImplementation(async (key) => {
+        if (key === "attempt") expect(existsSync(updates)).toBe(true);
+        return get(key);
+      });
+    }
+    const next = await start({ version, store: prefs });
+    expect(next.get().lastAttempt).toEqual({
+      kind,
+      target: "1.1.0",
+      from: "1.0.0",
+      track: "stable",
+      running: version === "invalid" ? null : version,
+    });
+    expect(existsSync(updates)).toBe(false);
+  }
+  expect(server.requests).toEqual(["/stable", "/files/app.zip"]);
+});
+
+it.each([
+  "attempt-not-saved",
+  "publisher-mismatch",
+  "installer-failed",
+  "artifact-changed",
+] as const)("reports %s without quitting or retrying", async (reason) => {
+  const installer = installStandIn(),
+    prefs = store(),
+    quitAfterLaunch = vi.fn();
+  const service = await start({ installer, store: prefs, quitAfterLaunch });
+  const id = await offer(service);
+  await service.download(id);
+  if (reason === "attempt-not-saved") vi.spyOn(prefs, "set").mockRejectedValueOnce(Error("write"));
+  if (reason === "publisher-mismatch") installer.inspect = async () => reason;
+  if (reason === "installer-failed" || reason === "artifact-changed")
+    installer.launch = vi.fn(async () => reason);
+  expect((await service.restart(id)).snapshot).toMatchObject({
+    lastAttempt: null,
+    state: { kind: "handoff-failed", reason },
+  });
+  expect((await service.restart(id)).outcome).toBe("stale");
+  expect(quitAfterLaunch).not.toHaveBeenCalled();
+  expect(installer.launch).toHaveBeenCalledTimes(
+    reason === "installer-failed" || reason === "artifact-changed" ? 1 : 0,
+  );
+});
+
+it("quit during signature inspection retires Restart without a handoff", async () => {
+  const installer = installStandIn(),
+    service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  const entered = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  installer.inspect = async () => {
+    entered.resolve();
+    await release.promise;
+    return null;
+  };
+  const pending = service.restart(id);
+  await entered.promise;
+  service.shutdown();
+  release.resolve();
+  expect((await pending).outcome).toBe("superseded");
+  expect(installer.launch).not.toHaveBeenCalled();
+  expect(await store().get("attempt")).toBeNull();
+});
+
+it.each(["success", "failure", "quit"])(
+  "the macOS stand-in's loopback listener on %s",
+  async (action) => {
+    const installer = installStandIn();
+    let url: string | undefined;
+    installer.launch = async (file) => {
+      await stageAtLoopback(file, async (address) => {
+        url = address;
+        const feed = (await (await fetch(address)).json()) as {
+          url: string;
+          size: number;
+          sha256: string;
+        };
+        const body = Buffer.from(await (await fetch(feed.url)).arrayBuffer());
+        expect(body).toEqual(fixture.body);
+        expect(feed.size).toBe(body.length);
+        expect(feed.sha256).toBe(createHash("sha256").update(body).digest("hex"));
+        expect((await fetch(new URL("/unrelated", address))).status).toBe(404);
+        if (action === "failure") throw Error("staging refused");
+      });
+      return null;
+    };
+    const service = await start({ installer });
+    const id = await offer(service);
+    await service.download(id);
+    expect(url).toBeUndefined();
+    if (action === "quit") {
+      service.shutdown();
+      expect(url).toBeUndefined();
+      return;
+    }
+    const reply = await service.restart(id);
+    expect(reply.snapshot.state.kind).toBe(action === "failure" ? "handoff-failed" : "handing-off");
+    expect(url).toBeDefined();
+    await expect(fetch(url!)).rejects.toThrow();
+  },
+);

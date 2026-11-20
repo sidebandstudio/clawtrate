@@ -45,11 +45,16 @@ it("sends only the declared update arguments over IPC", async () => {
     ["check", "check", "stable"],
     ["chooseTrack", "track", "nightly"],
     ["download", "download", "opaque-id"],
+    ["restart", "restart", "verified-id"],
   ] as const) {
     const call = updates[name] as (...args: unknown[]) => unknown;
     call(valid, "https://unused.example");
     expect(invoke).toHaveBeenLastCalledWith("clawtrate:update:" + channel, valid);
-    for (const input of [[], [{}], ...(name === "download" ? [] : [["other"]])]) {
+    for (const input of [
+      [],
+      [{}],
+      ...(name === "download" || name === "restart" ? [] : [["other"]]),
+    ]) {
       call(...input);
       expect(invoke).toHaveBeenLastCalledWith("clawtrate:update:" + channel);
     }
