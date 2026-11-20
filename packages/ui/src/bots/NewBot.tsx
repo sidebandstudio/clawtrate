@@ -6,6 +6,7 @@
 import type { AccountsState, Bot, ConnectionState, HostInfo } from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
+import { useFocusOnCommit } from "../focus.ts";
 import { Character, CHARACTER_COLORS, type BodyName } from "../Avatar.tsx";
 import { BackIcon, CloseIcon, LockIcon, PlusIcon } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
@@ -123,6 +124,7 @@ export function NewBot({
   const granted = useGranted(connection);
   const admin = connection.canAdmin;
   const [now] = useState(() => Date.now());
+  const focusOnCommit = useFocusOnCommit();
   const setDraft = (change: (draft: Draft) => Draft) =>
     setDraftState((was) => {
       const next = change(was);
@@ -132,12 +134,12 @@ export function NewBot({
   const setStep = (next: "look" | "account" | "connect") => {
     remember(KEPT, { draft, step: next });
     setStepState(next);
-    requestAnimationFrame(() => {
+    focusOnCommit(() => {
       const dialog = document.querySelector<HTMLElement>('[data-testid="new-bot"]');
-      (
+      return (
         dialog?.querySelector<HTMLElement>("[data-b-focus]") ??
         dialog?.querySelector<HTMLElement>("h2")
-      )?.focus();
+      );
     });
   };
 

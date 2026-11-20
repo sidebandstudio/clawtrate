@@ -3,7 +3,7 @@
 // Escape closes it, unless something inside it (a menu) handled Escape
 // first; focus returns to the control that opened it.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 export function Dialog({
   kind,
@@ -38,12 +38,15 @@ export function Dialog({
       dialog.querySelector<HTMLElement>("[data-b-focus]:not([disabled])") ??
       dialog.querySelector<HTMLElement>("h2[tabindex], h3[tabindex]");
     target?.focus();
+  }, []);
+  // Closed, it gives focus back as it goes, before the next key: a Tab pressed straight after
+  // moves on from the opener, and nothing a frame later takes focus back.
+  useLayoutEffect(() => {
+    const dialog = ref.current;
     return () => {
-      if (dialog.open) dialog.close();
-      requestAnimationFrame(() => {
-        // Behind a dialog still open, the browser does not let it take focus: nothing happens.
-        if (opener?.isConnected && !opener.closest("[inert]")) opener.focus();
-      });
+      if (dialog?.open) dialog.close();
+      // Behind a dialog still open, the browser does not let it take focus: nothing happens.
+      if (opener?.isConnected && !opener.closest("[inert]")) opener.focus();
     };
   }, [opener]);
   return (
