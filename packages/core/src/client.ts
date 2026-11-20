@@ -3358,7 +3358,11 @@ export class ClawtrateClient {
     if (this.state.connection.status !== "connected")
       throw new Error("Not connected to the gateway.");
     if (trigger === "@") {
+      const generation = this.generation;
       const routines = await this.request("cron.list", {}).catch(() => null);
+      // The bots are read now: from the gateway the routines came from, or not at all.
+      if (generation !== this.generation)
+        throw new Error("The gateway changed while the list was read.");
       return mentionRows(this.state.bots, routines);
     }
     const agentId = botIdFromSessionKey(key);

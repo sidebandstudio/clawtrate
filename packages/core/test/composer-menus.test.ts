@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MAX_MENU_ROWS, mentionRows, slashRows } from "../src/composer-menus.ts";
+import { KEY, openTask, URL_B } from "./client-harness.ts";
+import { deferred, until } from "./fake-gateway.ts";
 
 // Shapes as OpenClaw 2026.10.6 answers them (`skills.status`, `chat.metadata`, `cron.list`).
 const skills = {
@@ -57,5 +59,19 @@ describe("the composer's menus", () => {
         insert: "@Morning disk check",
       },
     ]);
+  });
+});
+
+describe("the @ menu's read", () => {
+  it("F-070: a list read on one gateway is not answered after the host connects to another", async () => {
+    const { client, gateway } = await openTask();
+    const routines = deferred<unknown>();
+    gateway.handlers["cron.list"] = () => routines.promise;
+    const reading = client.readComposerMenu(KEY, "@");
+    await until(() => gateway.calls("cron.list").length === 1);
+    void client.connect({ url: URL_B, token: "t" }).catch(() => {});
+    routines.resolve({ jobs: [] });
+    await expect(reading).rejects.toThrow("The gateway changed while the list was read.");
+    client.stop();
   });
 });
