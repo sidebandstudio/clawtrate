@@ -546,7 +546,7 @@
     );
   }
 
-  // Files: the eligible bots in roster order, a batch of 8 per query, 4 in flight.
+  // Files: the eligible bots in roster order, 8 per batch with the next batch on request, 4 in flight.
   function filesEligible() {
     return roster().map((b) => {
       const ws = WORKSPACES[b.id];
