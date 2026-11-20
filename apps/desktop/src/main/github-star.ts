@@ -111,7 +111,10 @@ export async function starRepository(cli: Installation | null, timeout = 8000): 
     "XDG_CONFIG_HOME",
     "GH_CONFIG_DIR",
   ]) {
-    if (process.env[name]) env[name] = process.env[name];
+    const value = process.env[name];
+    if (!value) continue;
+    if (!localPath(value)) return false;
+    env[name] = value;
   }
   running = true;
   try {
@@ -123,20 +126,23 @@ export async function starRepository(cli: Installation | null, timeout = 8000): 
     });
     return await new Promise<boolean>((answer) => {
       let status = "";
-      let complete = false;
       let noContent = false;
       let failed = false;
-      child.stdout.on("data", (chunk: Buffer) => {
-        if (complete) return;
-        const prefix = chunk.subarray(0, 4096 - status.length);
+      const readStatus = () => {
+        const available = Math.min(child.stdout.readableLength, 4096 - status.length);
+        if (!available) return;
+        const prefix = child.stdout.read(available) as Buffer;
         const lf = prefix.indexOf(10);
         status += prefix.subarray(0, lf < 0 ? prefix.length : lf).toString("latin1");
-        complete = lf >= 0 || status.length === 4096;
-        if (complete) {
+        if (lf >= 0 || status.length === 4096) {
           noContent = lf >= 0 && /^HTTP\/\d+\.\d+ 204(?: [^\r\n]*)?\r?$/.test(status);
           status = "";
+          child.stdout.off("readable", readStatus);
+          // Drain the pipe without delivering any more output to the app.
+          child.stdout.resume();
         }
-      });
+      };
+      child.stdout.on("readable", readStatus);
       const timer = setTimeout(() => {
         failed = true;
         child.kill("SIGKILL");

@@ -175,3 +175,10 @@ it("F-521: one CLI runs until close, including when the direct child times out",
   expect(readFileSync(log, "utf8")).toBe("start\n");
   expect(await starRepository(script(success))).toBe(true);
 });
+
+it("F-521: an ambiguous config location fails before launching a different account", async () => {
+  vi.stubEnv("GH_CONFIG_DIR", "relative-config");
+  const cli = script(`printf ran > "${log}"\n${success}`);
+  expect(await starRepository(cli)).toBe(false);
+  expect(existsSync(log)).toBe(false);
+});
