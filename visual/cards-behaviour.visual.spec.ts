@@ -1369,14 +1369,65 @@ test.describe("Messaged T3 Code cards", () => {
       if (!url.startsWith("http://127.0.0.1:") && !url.startsWith("data:")) outbound.push(url);
     });
     page.on("websocket", (socket) => outbound.push(socket.url()));
+    // The fixture's content policy stops a request before it is made; the attempt is still seen.
+    await page.addInitScript(() => {
+      const blocked: string[] = [];
+      (window as unknown as { blocked: string[] }).blocked = blocked;
+      document.addEventListener("securitypolicyviolation", (event) =>
+        blocked.push(event.blockedURI),
+      );
+    });
     await context.route("https://t3-code.example/**", (route) => route.abort());
     await openFixture(page, "scene=t3-started", "light");
     const card = page.getByTestId("t3-card").first();
-    // Later gateway updates: the calls return, the bot is stopped, the connection drops and returns.
-    for (const scene of ["t3-work-may-continue", "t3-thread"]) {
-      await openFixture(page, `scene=${scene}`, "light");
-    }
+    await expect(card).toHaveCount(1);
+    // Later updates to the card already drawn: the call returns with the thread's address, then
+    // the bot is being stopped; after these, the connection drops and returns.
+    await page.evaluate(() => {
+      type State = { transcripts: Record<string, { runs: Array<Record<string, unknown>> }> };
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState(change: (state: State) => State): void };
+        }
+      ).clawtrateFixture;
+      const change = (edit: (run: Record<string, unknown>) => Record<string, unknown>) =>
+        fixture.setState((state) => ({
+          ...state,
+          transcripts: Object.fromEntries(
+            Object.entries(state.transcripts).map(([key, t]) => [
+              key,
+              { ...t, runs: t.runs.map(edit) },
+            ]),
+          ),
+        }));
+      change((run) => ({
+        ...run,
+        steps: (run.steps as Array<Record<string, unknown>>).map((step) =>
+          step.toolCallId !== "call_t3"
+            ? step
+            : {
+                ...step,
+                status: "done",
+                endedAt: Date.now(),
+                result: { text: "structuredContent:\n{}", totalChars: 21 },
+                details: { mcpServer: "t3code", mcpTool: "t3_thread_launch" },
+                t3: {
+                  ...(step.t3 as object),
+                  read: true,
+                  threadId: "mcp:3f9c2a1e-7b4d-4c8a-9e2f-6a1b5c3d8e70",
+                  status: "running",
+                  link: "https://t3-code.example/threads/local/x",
+                },
+              },
+        ),
+      }));
+      change((run) => ({ ...run, state: "stopping" }));
+    });
     await card.locator(":scope > summary").click();
+    // The update reached the card drawn before it: the address it brought is offered.
+    await expect(
+      card.getByRole("link", { name: "Open the T3 Code thread in your browser" }),
+    ).toHaveCount(1);
     await card.getByRole("button", { name: "Raw for this call" }).first().click();
     await page.evaluate(() => {
       const fixture = (
@@ -1397,6 +1448,9 @@ test.describe("Messaged T3 Code cards", () => {
     });
     await settle(page);
     expect(outbound).toEqual([]);
+    expect(await page.evaluate(() => (window as unknown as { blocked: string[] }).blocked)).toEqual(
+      [],
+    );
     const stored = await page.evaluate(() =>
       JSON.stringify({ ...localStorage, ...sessionStorage }),
     );
