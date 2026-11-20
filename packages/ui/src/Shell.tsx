@@ -4,7 +4,7 @@ import { OpenTaskContext } from "./cards/index.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
-import { useFocusOnCommit } from "./focus.ts";
+import { pressMark, useFocusOnCommit } from "./focus.ts";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
 import {
   readPreference,
@@ -391,10 +391,10 @@ export function Shell({
   const showInChat = useCallback(
     (stepId: string, from: { path: string }) => {
       const callId = stepId.startsWith("tool:") ? stepId.slice(5) : stepId;
-      // The step takes focus only if the person is still where they asked from.
-      const focused = document.activeElement;
+      // The step takes focus only if the person has not moved on since asking.
+      const mark = pressMark();
       const reveal = () => {
-        const found = taskKey !== null && revealStep(taskKey, callId, focused);
+        const found = taskKey !== null && revealStep(taskKey, callId, mark);
         setChatNote("");
         requestAnimationFrame(() =>
           setChatNote(

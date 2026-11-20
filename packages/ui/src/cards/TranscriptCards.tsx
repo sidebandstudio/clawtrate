@@ -16,7 +16,7 @@ import {
   type ReactNode,
 } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
-import { stillAt } from "../focus.ts";
+import { movedOn, pressMark } from "../focus.ts";
 import { ApprovalCardView } from "./ApprovalCard.tsx";
 import {
   CardEnvContext,
@@ -152,10 +152,10 @@ export function CardScope({
   // The task can show its runs before its history has loaded, so the card may come later:
   // the arrival waits for it until the history has loaded without it.
   // It takes focus only if the person has not moved on while it waited.
-  const arriving = useRef<{ taskKey: string; runId: string; from: Element | null } | null>(null);
+  const arriving = useRef<{ taskKey: string; runId: string; mark: number } | null>(null);
   useLayoutEffect(() => {
     const runId = takeArrival(taskKey);
-    arriving.current = runId === null ? null : { taskKey, runId, from: document.activeElement };
+    arriving.current = runId === null ? null : { taskKey, runId, mark: pressMark() };
   }, [taskKey]);
   useLayoutEffect(() => {
     const pending = arriving.current;
@@ -167,7 +167,7 @@ export function CardScope({
       if (!element) return false;
       element.open = true;
       element.scrollIntoView({ block: "center" });
-      if (stillAt(pending.from))
+      if (!movedOn(pending.mark))
         element.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
       return true;
     };
@@ -186,7 +186,7 @@ export function CardScope({
     const back = takeReturnPoint(taskKey);
     if (!back) return;
     // It takes focus only if the person has not moved on while it waited.
-    const from = document.activeElement;
+    const mark = pressMark();
     let frame = 0;
     const restore = (tries: number) => {
       const element = document.getElementById(back.domId);
@@ -203,7 +203,7 @@ export function CardScope({
       const button = [...element.querySelectorAll<HTMLButtonElement>(".card-actions button")].find(
         (each) => each.textContent?.startsWith("Open in"),
       );
-      if (stillAt(from))
+      if (!movedOn(mark))
         (button ?? element.querySelector<HTMLElement>("summary"))?.focus({ preventScroll: true });
     };
     frame = requestAnimationFrame(() => (frame = requestAnimationFrame(() => restore(10))));

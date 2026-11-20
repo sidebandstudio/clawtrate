@@ -18,7 +18,7 @@ import {
 } from "@clawtrate/core";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
-import { stillAt } from "../focus.ts";
+import { movedOn, pressMark } from "../focus.ts";
 import { ChevronIcon, ExternalIcon, LockIcon } from "../icons.tsx";
 import { recall, remember } from "./memory.ts";
 import { AdminBar, CodeBlock, Note, Result, Wait } from "./parts.tsx";
@@ -152,14 +152,9 @@ export function useConnect({
   const targetName = bots.find((bot) => bot.id === targetBot)?.name ?? "this bot";
   const method = (id: string) => accounts.methods.find((each) => each.id === id) ?? null;
 
-  // Focus for a new view or stage (below): whether the person moved on while the gateway was
-  // waited on, and the view that last moved focus, with where it put it.
-  const movedOn = useRef(false);
-  const placed = useRef<{ view: string; at: Element | null } | null>(null);
-  /** The person leaves the view shown, by a key: what they go to is not the gateway's doing. */
-  const leave = () => {
-    placed.current = null;
-  };
+  // A view reached after waiting on the gateway takes no focus if the person pressed a key or
+  // a pointer meanwhile (below).
+  const quiet = useRef(false);
   const begin = useCallback(
     async (id: string) => {
       await bridge.send({ type: "dismissSignIn" }).catch(() => {});
@@ -168,30 +163,24 @@ export function useConnect({
     [bridge, forBot],
   );
   const start = async (id: string) => {
-    leave();
     setWhere({ view: "flow", method: id });
     await begin(id);
   };
   // A new view or stage moves focus on purpose: to its field, or else to its title. It moves
-  // as the view is committed, before the next key. What the gateway's answer brings (the next
-  // stage of a sign-in, or what follows it) takes no focus once the person has moved on from
-  // where the sign-in put it; nor does a view reached after waiting on the gateway.
+  // as the view is committed, before the next key.
   const shownView = `${where.view}:${where.view === "flow" ? (stage ?? "") : ""}`;
   useLayoutEffect(() => {
-    const view = shownView.slice(0, shownView.indexOf(":"));
-    const signingIn = placed.current?.view === "flow";
-    if (movedOn.current || (signingIn && !stillAt(placed.current!.at))) return;
+    if (quiet.current) return;
     const dialogs = document.querySelectorAll<HTMLElement>("dialog[open]");
     // In a dialog (New bot, Settings), or in a bot's Settings tab.
     const top =
       dialogs[dialogs.length - 1] ??
       document.querySelector<HTMLElement>('[data-testid="bot-settings"]');
     if (!top) return;
-    const target =
+    (
       top.querySelector<HTMLElement>("[data-b-focus]:not([disabled])") ??
-      top.querySelector<HTMLElement>("#create-title, #b-section-title, [data-bs-focus]");
-    target?.focus();
-    placed.current = { view, at: target };
+      top.querySelector<HTMLElement>("#create-title, #b-section-title, [data-bs-focus]")
+    )?.focus();
   }, [shownView]);
   // "Sign in again" opens on the sign-in itself.
   const [startedWith] = useState(startWith && admin ? startWith : null);
@@ -199,7 +188,7 @@ export function useConnect({
     if (startedWith) void begin(startedWith);
   }, [startedWith, begin]);
   const toMethods = async () => {
-    const from = document.activeElement;
+    const mark = pressMark();
     // A sign-in under way is left only once the gateway confirms its cancel: otherwise it stays
     // on screen, saying the cancel is not known.
     if (signIn && isSignInActive(signIn)) {
@@ -209,16 +198,14 @@ export function useConnect({
       if (!answer.cancelled) return;
     }
     await bridge.send({ type: "dismissSignIn" }).catch(() => {});
-    movedOn.current = !stillAt(from);
-    leave();
+    quiet.current = movedOn(mark);
     setWhere({ view: "methods" });
   };
   // A key's sign-in that ended without a key saved starts again where a key is typed.
   const toKey = async (provider: string) => {
-    const from = document.activeElement;
+    const mark = pressMark();
     await bridge.send({ type: "dismissSignIn" }).catch(() => {});
-    movedOn.current = !stillAt(from);
-    leave();
+    quiet.current = movedOn(mark);
     if (accounts.keyProviders.some((each) => each.provider === provider)) setKeyProvider(provider);
     setKeyOpen(true);
     setKeyAgain((n) => n + 1);
@@ -229,11 +216,11 @@ export function useConnect({
     if (keyOpen) requestAnimationFrame(() => keyRef.current?.scrollIntoView({ block: "nearest" }));
   }, [keyOpen]);
   useLayoutEffect(() => {
-    if (keyAgain > 0 && !movedOn.current) keyRef.current?.focus();
+    if (keyAgain > 0 && !quiet.current) keyRef.current?.focus();
   }, [keyAgain]);
   // The wait is over once its view is committed.
   useLayoutEffect(() => {
-    movedOn.current = false;
+    quiet.current = false;
   });
 
   // --- Choosing how -------------------------------------------------------------

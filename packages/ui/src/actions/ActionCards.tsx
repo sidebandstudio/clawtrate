@@ -46,7 +46,7 @@ import {
 import type { RawContent } from "../cards/raw.ts";
 import type { StepRawState } from "../cards/useCards.ts";
 import { useStepHandover } from "../cards/context.tsx";
-import { stillAt } from "../focus.ts";
+import { movedOn, pressMark } from "../focus.ts";
 import { ChevronIcon, FileIcon } from "../icons.tsx";
 import { useNow } from "../StatusLine.tsx";
 import { KindIcon } from "./icons.tsx";
@@ -679,9 +679,9 @@ export function ActionGroup({ members, revision }: { members: FeedMember[]; revi
     // Focus goes to the same control as on the card, once the view it is in is drawn: unless
     // the person has moved on by then.
     const control = state.control ?? null;
-    const from = document.activeElement;
+    const mark = pressMark();
     const focus = () => {
-      if (!stillAt(from)) return;
+      if (movedOn(mark)) return;
       const named = control
         ? [...details.querySelectorAll<HTMLElement>("button, [role=tab], a, summary")].find(
             (each) =>

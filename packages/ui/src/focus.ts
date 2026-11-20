@@ -4,27 +4,31 @@
 
 import { useCallback, useLayoutEffect, useState } from "react";
 
-/**
- * The person has not moved on since `from` was read: focus is still there, or it was lost
- * with the view it was in.
- */
-export function stillAt(from: Element | null): boolean {
-  const now = document.activeElement;
-  return now === from || now === null || now === document.body;
+// Every key and pointer press the person makes, counted before any handler sees it.
+let presses = 0;
+if (typeof window !== "undefined") {
+  const count = () => void (presses += 1);
+  window.addEventListener("keydown", count, true);
+  window.addEventListener("pointerdown", count, true);
+}
+
+/** A mark of the person's presses so far, read as work that ends later starts. */
+export function pressMark(): number {
+  return presses;
+}
+
+/** The person has pressed a key or a pointer since `mark`: focus is theirs, not the work's. */
+export function movedOn(mark: number): boolean {
+  return presses !== mark;
 }
 
 type Find = () => HTMLElement | null | undefined;
 
-/**
- * Ask for focus on the element `find` gives once the update made with the ask is committed.
- * With `from`, for work that finished after its key, only if the person has not moved on
- * since `from` was read.
- */
-export function useFocusOnCommit(): (find: Find, from?: Element | null) => void {
-  const [asked, ask] = useState<{ find: Find; from: Element | null | undefined } | null>(null);
+/** Ask for focus on the element `find` gives once the update made with the ask is committed. */
+export function useFocusOnCommit(): (find: Find) => void {
+  const [asked, ask] = useState<{ find: Find } | null>(null);
   useLayoutEffect(() => {
-    if (!asked || (asked.from !== undefined && !stillAt(asked.from))) return;
-    asked.find()?.focus();
+    asked?.find()?.focus();
   }, [asked]);
-  return useCallback((find: Find, from?: Element | null) => ask({ find, from }), []);
+  return useCallback((find: Find) => ask({ find }), []);
 }
