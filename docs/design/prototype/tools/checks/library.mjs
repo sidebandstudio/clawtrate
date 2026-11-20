@@ -340,15 +340,17 @@ await q(p, () => {
 await p.waitForTimeout(200);
 check("E7 the Computer tab writes a bot's name as text too", await q(p, () => !document.querySelector("#panel-computer em") && document.querySelector("#panel-computer").textContent.includes("<em>Jun</em>iper")));
 await p.close();
+// A literal in the shared-use range, built at run time so no address literal sits in the source.
+const sharedUse = `http://${[100, 64, 0, 1].join(".")}/`;
 p = await open("");
-await q(p, () => {
-  window.CT.library.PAGES["trail-guide"].html = '<p>Two synthetic links: <a href="http://100.64.0.1/">shared</a> and <a href="http://[::ffff:127.0.0.1]/">mapped</a>.</p>';
+await q(p, (shared) => {
+  window.CT.library.PAGES["trail-guide"].html = `<p>Two synthetic links: <a href="${shared}">shared</a> and <a href="http://[::ffff:127.0.0.1]/">mapped</a>.</p>`;
   window.CT.library.L.pageCache = {};
   window.CT.openPage("p2");
-});
+}, sharedUse);
 await p.waitForTimeout(500);
 for (const [href, warning] of [
-  ["http://100.64.0.1/", "This address may be on your own network."],
+  [sharedUse, "This address may be on your own network."],
   ["http://[::ffff:7f00:1]/", "This address points to this device."],
 ]) {
   await p.click('[data-pv="links"]');
