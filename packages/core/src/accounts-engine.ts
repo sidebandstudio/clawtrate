@@ -676,7 +676,11 @@ export class AccountsEngine {
         next = asRecord(
           await ctx.request(
             "wizard.next",
-            { sessionId: id, ...(pending ? { answer: pending } : {}) },
+            // The gateway takes `{stepId, value}` and refuses any other property of an answer.
+            {
+              sessionId: id,
+              ...(pending ? { answer: { stepId: pending.stepId, value: pending.value } } : {}),
+            },
             // It waits while the gateway polls the provider: up to the sign-in's own limit.
             { timeoutMs: SIGNIN_WAIT_MS, signal: abort.signal },
           ),

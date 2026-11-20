@@ -362,6 +362,13 @@ export class AccountsGateway {
     const session = this.sessions.get(params.sessionId);
     if (!session) throw new GatewayError({ code: "INVALID_REQUEST", message: "wizard not found" });
     if (params.answer) {
+      // As the gateway's schema: an answer is `{stepId, value}` and nothing else.
+      const extra = Object.keys(params.answer).filter((k) => k !== "stepId" && k !== "value");
+      if (extra.length > 0)
+        throw new GatewayError({
+          code: "INVALID_REQUEST",
+          message: `invalid wizard.next params: at /answer: unexpected property '${extra[0]}'`,
+        });
       session.answers.push(params.answer.value);
       this.typed.push(params.answer.value);
     }
