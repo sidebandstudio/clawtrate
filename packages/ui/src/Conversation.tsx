@@ -123,6 +123,8 @@ function useHoldPlace(
   scroller: RefObject<HTMLDivElement | null>,
   following: RefObject<boolean>,
   toEnd: () => void,
+  /** Set when the transcript's content or size changes: only then can a scroll be a clamp. */
+  layoutChanged: RefObject<boolean>,
 ) {
   useLayoutEffect(() => {
     const element = scroller.current;
@@ -177,6 +179,7 @@ function useHoldPlace(
     // Watching the content too covers late reflows, such as fonts arriving, and every
     // change of content: a step becoming a card, a card arriving or resolving above.
     const observer = new ResizeObserver(() => {
+      layoutChanged.current = true;
       if (following.current) toEnd();
       else hold();
       record();
@@ -195,6 +198,7 @@ function useHoldPlace(
     // A change of content that moves the reading line without changing any size (a box above
     // growing as much as one below shrinks) is held too.
     const contentChange = new MutationObserver(() => {
+      layoutChanged.current = true;
       if (following.current) return;
       hold();
       record();
@@ -217,7 +221,7 @@ function useHoldPlace(
       contentChange.disconnect();
       element.removeEventListener("scroll", onScroll);
     };
-  }, [scroller, following, toEnd]);
+  }, [scroller, following, toEnd, layoutChanged]);
 }
 
 /**
@@ -264,6 +268,7 @@ function TranscriptView({
   // The reader's own input, or a jump the page makes for them, marks the next scroll as theirs
   // for a moment. A scroll without it is a layout pass, which never stops following.
   const scrollIntentUntil = useRef(0);
+  const layoutChanged = useRef(false);
   const markScrollIntent = useCallback(() => {
     scrollIntentUntil.current = performance.now() + 750;
   }, []);
@@ -315,8 +320,14 @@ function TranscriptView({
       const element = scroller.current;
       if (!element) return;
       const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+      // A layout pass can clamp the scroll only when the layout changed: a scroll with no change
+      // of content or size since the last one moved the view for the reader.
+      const layoutPass = layoutChanged.current;
+      layoutChanged.current = false;
       const readerMoved =
-        !event.nativeEvent.isTrusted || performance.now() <= scrollIntentUntil.current;
+        !event.nativeEvent.isTrusted ||
+        performance.now() <= scrollIntentUntil.current ||
+        !layoutPass;
       const kept =
         following.current &&
         followTop.current !== null &&
@@ -343,7 +354,7 @@ function TranscriptView({
     if (atEnd) follow();
   }, [contentSize, atEnd, follow]);
 
-  useHoldPlace(scroller, following, follow);
+  useHoldPlace(scroller, following, follow, layoutChanged);
 
   // A centred stamp before the first message, and wherever more than ten
   // minutes pass or the day changes.
