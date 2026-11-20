@@ -473,6 +473,7 @@ function answerStrings(
 export function createFixtureBridge(
   name: SceneName,
   options: {
+    desktopUpdates?: ClawtrateBridge["desktopUpdates"];
     files?: FileParams;
     accounts?: AccountParams;
     routines?: RoutineParams;
@@ -490,7 +491,7 @@ export function createFixtureBridge(
   /** The next plain archive meets a run that had just started, and stops it. */
   raceArchive(): void;
   /**
-   * Hold the fixture's delayed answers (a decision applied, refused, or read
+   * Hold the fixture's timed scene steps and delayed answers (a decision applied, refused, or read
    * back; a reconnect answered) until `release`: a test that must see a state lasting only until the
    * answer comes holds it, looks, then lets the answer through.
    */
@@ -533,7 +534,7 @@ export function createFixtureBridge(
   const startSteps = () => {
     if (started) return;
     started = true;
-    for (const step of steps) setTimeout(() => set(step.change(state)), step.after);
+    for (const step of steps) deferred(() => set(step.change(state)), step.after);
   };
   let pairingChecks = 0;
   const sent: BridgeCommand[] = [];
@@ -849,7 +850,7 @@ export function createFixtureBridge(
   }
 
   return {
-    desktopUpdates: noDesktopUpdates,
+    desktopUpdates: options.desktopUpdates ?? noDesktopUpdates,
     info: name === "access-pinned" ? { ...FIXTURE_INFO, readOnly: true } : FIXTURE_INFO,
     getState: () => state,
     subscribe(listener) {

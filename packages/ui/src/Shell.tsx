@@ -45,6 +45,7 @@ export function Shell({
   bubbles,
   onBubbles,
   onUnreadCount,
+  updateEntry,
   onOpenSettings,
   inert = false,
   onCaughtUp,
@@ -56,7 +57,8 @@ export function Shell({
   bubbles: BubbleChoice;
   onBubbles: (choice: BubbleChoice) => void;
   onUnreadCount?: ((count: number) => void) | undefined;
-  onOpenSettings: () => void;
+  updateEntry: boolean;
+  onOpenSettings: (section?: "updates") => void;
   /** Set while Settings covers the shell. */
   inert?: boolean;
   /** Whether the open task has caught up since the latest connect: until then work is last seen. */
@@ -490,6 +492,7 @@ export function Shell({
         onTheme={onTheme}
         bubbles={bubbles}
         onBubbles={onBubbles}
+        updateEntry={updateEntry}
         onOpenSettings={onOpenSettings}
         onNewBot={interactive ? openNewBot : null}
         routines={state.routines.routines}

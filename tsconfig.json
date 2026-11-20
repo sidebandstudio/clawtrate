@@ -11,6 +11,8 @@
     "e2e/**/*.ts",
     "visual/**/*.ts",
     "e2e-packaged/**/*.ts",
+    "e2e-updates/**/*.ts",
+    "playwright.updates.config.ts",
     "test/**/*.ts",
     "plugins/*/test/**/*.ts",
     "playwright.config.ts",
