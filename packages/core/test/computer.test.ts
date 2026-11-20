@@ -1126,3 +1126,43 @@ describe("leaving Computer leaves the view closed (section 17)", () => {
     expect(h.calls("clawtrate-computer.view.open")).toHaveLength(1);
   });
 });
+
+describe("an answer belongs to its own pane and hand-back (F-145, section 18)", () => {
+  it("F-145: a late result of an earlier task's answer never changes the pane now shown, nor a control taken since", async () => {
+    let finishAnswer!: () => void;
+    const h = harness();
+    h.ctx.answer = () => new Promise<void>((resolve) => (finishAnswer = resolve));
+    h.env.question = question();
+    await granted(h);
+    h.views.release(h.viewer, { answer: { questionId: "ask_1", itemId: "q1", option: 0 } });
+    await flush();
+    expect(h.pane().control.status).toBe("answering");
+    // The person switches to another of Pip's tasks and takes control there.
+    h.views.show(h.viewer, "agent:pip:another-task");
+    await flush();
+    await h.views.watch(h.viewer);
+    h.streams.at(-1)!.frame();
+    await h.views.take(h.viewer);
+    expect(h.pane().control.status).toBe("granted");
+    finishAnswer();
+    await flush();
+    expect(h.pane().key).toBe("agent:pip:another-task");
+    expect(h.pane().control).toMatchObject({ status: "granted", outcome: null });
+    expect(h.views.input(h.viewer, { kind: "text", text: "still mine" })).toBe(true);
+  });
+
+  it("F-145: a failed answer's late result does not change a pane shown for another task either", async () => {
+    let failAnswer!: (error: Error) => void;
+    const h = harness();
+    h.ctx.answer = () => new Promise<void>((_resolve, reject) => (failAnswer = reject));
+    h.env.question = question();
+    await granted(h);
+    h.views.release(h.viewer, { answer: { questionId: "ask_1", itemId: "q1", option: 0 } });
+    await flush();
+    h.views.show(h.viewer, "agent:pip:another-task");
+    await flush();
+    failAnswer(new Error("refused"));
+    await flush();
+    expect(h.pane().control).toMatchObject({ status: "none", outcome: null });
+  });
+});

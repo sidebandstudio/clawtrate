@@ -480,6 +480,8 @@ type Live = {
   tabsAsked: number;
   /** The Computer tab is in front of the person: false from `leave` until the next `show`. */
   shown: boolean;
+  /** The answer on its way after a confirmed release, by its number; its result is its own. */
+  answering: number | null;
 };
 
 export type ComputerFrame = {
@@ -641,6 +643,7 @@ export class ComputerViews {
       renewTimer: null,
       tabsAsked: 0,
       shown: true,
+      answering: null,
     };
     live.shown = true;
     this.lives.set(viewer, live);
@@ -1447,11 +1450,30 @@ export class ComputerViews {
       return;
     }
     this.patchControl(live.viewer, { ...noControl, status: "answering" });
+    const token = ++this.nextSequence;
+    live.answering = token;
+    // The answer's result belongs to this pane's task and this hand-back only: a pane shown for
+    // another task since, or a take or release since, is never changed by it.
+    const mine = () => {
+      const pane = this.pane(live.viewer);
+      return (
+        live.answering === token &&
+        pane?.key === lease.key &&
+        pane.control.status === "answering" &&
+        live.lease === null
+      );
+    };
     void this.ctx
       .answer(lease.key, answer.questionId, { [answer.itemId]: [{ option: answer.option }] })
       .then(
-        () => this.patchControl(live.viewer, { ...noControl, outcome: "answered" }),
         () => {
+          if (!mine()) return;
+          live.answering = null;
+          this.patchControl(live.viewer, { ...noControl, outcome: "answered" });
+        },
+        () => {
+          if (!mine()) return;
+          live.answering = null;
           const now = this.ctx.questionStatus(lease.key, answer.questionId);
           this.patchControl(live.viewer, {
             ...noControl,
