@@ -409,6 +409,16 @@ for (const [kind, waiting] of [["unsent", "1"], ["unconfirmed", "unconfirmed"]])
   await p.close();
 }
 
+{
+  // CodeRabbit 4: Escape on setup is Cancel.
+  const p = await open("open=settings&section=gateways");
+  await press(p, "button", "Add gateway…");
+  await p.keyboard.press("Escape");
+  await p.waitForTimeout(1900);
+  check("walk: add, Escape: the same as Cancel, back to Home gateway", !(await p.evaluate(() => document.querySelector("#s-stand").open)) && (await text(p, settings)).includes("No gateway was saved on this device.") && (await rail(p)).includes("Otto") && (await footer(p)).includes("Home gateway"), `${await rail(p)} | ${await footer(p)}`);
+  await p.close();
+}
+
 // Part 5: removing (section 7) ------------------------------------------------------------------------------
 
 const REMOVED_WORDS = [

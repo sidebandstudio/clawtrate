@@ -1309,6 +1309,11 @@
       if (event.target.closest(".bot[data-bot], .task[data-task], .pin")) setTimeout(diskNote, 30);
     });
     confirmDialog.addEventListener("close", () => (confirmRun = null));
+    // Escape on setup is its Cancel: the same way back.
+    stand.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      addEnded("cancelled");
+    });
 
     // Prototype controls in the dark bar ------------------------------------------------------------------
 
