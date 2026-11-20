@@ -376,4 +376,42 @@ test.describe("a bot's model and effort in its settings", () => {
     await openFixture(page, settings(), "light");
     await expect(page.getByTestId("effort-select")).toHaveAccessibleName("Effort: Medium");
   });
+
+  test("F-042: a bot using the gateway default shows its model and reaches model selection from Settings", async ({
+    page,
+  }) => {
+    await openFixture(page, settings().replace("lock=bound", "lock=default"), "light");
+    await expect(page.getByTestId("account-word")).toHaveText("Gateway's default model");
+    const model = page.getByTestId("model-select");
+    await expect(model).toHaveAccessibleName("Model: gpt-5.5");
+    await expect(model).toBeDisabled();
+    await expect(page.getByTestId("default-model-line")).toContainText(
+      "The gateway's default model. Choose an account to pick another.",
+    );
+    await page.getByRole("button", { name: "Choose an account" }).click();
+    await expect(page.getByRole("heading", { name: "Change account", level: 3 })).toBeFocused();
+    await page.getByRole("radio", { name: /^OpenAI · Work/ }).click();
+    await expect(model).toBeEnabled();
+    await model.click();
+    await page.getByRole("menuitemradio", { name: "gpt-5.5-mini", exact: true }).click();
+    await expect(model).toHaveAccessibleName("Model: gpt-5.5-mini");
+    await expect(page.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  test("F-043: Settings shows a gateway-default bot's reported effort beside its model", async ({
+    page,
+  }) => {
+    await openFixture(
+      page,
+      settings("&boteffort=high").replace("lock=bound", "lock=default"),
+      "light",
+    );
+    await expect(page.getByTestId("model-select")).toHaveAccessibleName("Model: gpt-5.5");
+    const effort = page.getByTestId("effort-select");
+    await expect(effort).toHaveAccessibleName("Effort: High");
+    await expect(effort).toBeDisabled();
+    // Not reported, and none proposed in its place.
+    await openFixture(page, settings().replace("lock=bound", "lock=default"), "light");
+    await expect(effort).toHaveAccessibleName("Effort: Not reported");
+  });
 });

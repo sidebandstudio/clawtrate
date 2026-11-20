@@ -469,7 +469,40 @@ export function BotSettings({
           </>
         )}
         {binding.mode === "default-model" && (
-          <p className="b-hint">The gateway's default model. Choose an account to pick another.</p>
+          <>
+            {provider && model && (
+              <div style={{ marginTop: 8 }}>
+                {/* The gateway's default model, read-only: the bot has none of its own to change. */}
+                <ModelPair
+                  accounts={accounts}
+                  provider={provider}
+                  model={model}
+                  effort={bot.effort ?? null}
+                  disabled
+                  onModel={() => {}}
+                  onEffort={() => {}}
+                />
+              </div>
+            )}
+            <p className="b-hint" data-testid="default-model-line">
+              The gateway's default model. Choose an account to pick another.
+              {admin && (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    className="button"
+                    data-variant="quiet"
+                    data-size="sm"
+                    data-bs="choose"
+                    onClick={() => go("change")}
+                  >
+                    Choose an account
+                  </button>
+                </>
+              )}
+            </p>
+          </>
         )}
         <MemoryRow onOpen={() => go("memory")} />
         {extraGroups}
