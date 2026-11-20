@@ -216,6 +216,7 @@ function List({
                 they have been read. */}
             {bot === null &&
               checkIns?.status === "ready" &&
+              checkIns.readBotIds?.includes(each.id) &&
               bots.some((held) => held.id === each.id) && (
                 <span className="ci-summary" data-testid="check-in-summary">
                   {summary(checkIns?.jobs.find((job) => job.botId === each.id))}
@@ -828,7 +829,7 @@ export function RoutinesView({
   const checkInsSection = useCheckInsSection({
     active: !shown && mode === "list",
     checkIns: state.checkIns,
-    bots: chosen ? [chosen] : [],
+    bots: chosen ? [chosen] : bots,
     connection: state.connection,
     info,
     announce,

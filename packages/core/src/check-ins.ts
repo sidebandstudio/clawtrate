@@ -92,6 +92,8 @@ export type CheckInsState = {
   gatewayId: string | null;
   /** `cron.status` `enabled`: false means no scheduled check-in runs; null when not read. */
   scheduler: boolean | null;
+  /** The bot IDs covered by the last job and settings read. */
+  readBotIds: string[];
   jobs: CheckInJob[];
   /** The bots' own settings; null when the config could not be read. */
   settings: CheckInSetting[] | null;
@@ -324,6 +326,7 @@ const emptyState = (): CheckInsState => ({
   error: null,
   gatewayId: null,
   scheduler: null,
+  readBotIds: [],
   jobs: [],
   settings: null,
   defaults: null,
@@ -373,6 +376,7 @@ async function readAllJobs(request: CheckInsLink["request"]): Promise<CheckInJob
 type Snapshot = {
   hash: string | null;
   config: unknown;
+  readBotIds: string[];
   jobs: CheckInJob[];
   /** All of them, not only the listed bots'. */
   allJobs: CheckInJob[];
@@ -409,6 +413,7 @@ async function read(
     // A blank hash is no hash: the gateway reads it as missing.
     hash: typeof hash === "string" && hash.trim() !== "" ? hash : null,
     config,
+    readBotIds: bots,
     allJobs,
     jobs: allJobs.filter((job) => bots.includes(job.botId)),
     scheduler: typeof enabled === "boolean" ? enabled : null,
@@ -417,7 +422,8 @@ async function read(
   };
 }
 
-const shown = ({ jobs, scheduler, settings, defaults }: Snapshot) => ({
+const shown = ({ readBotIds, jobs, scheduler, settings, defaults }: Snapshot) => ({
+  readBotIds,
   jobs,
   scheduler,
   settings,

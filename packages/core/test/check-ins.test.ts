@@ -972,6 +972,7 @@ const emptyLoading: CheckInsState = {
   error: null,
   gatewayId: null,
   scheduler: null,
+  readBotIds: [],
   jobs: [],
   settings: null,
   defaults: null,

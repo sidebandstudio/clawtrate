@@ -13,6 +13,7 @@ const state = (main: { every: string; prompt: string | null }, kept = false): Ch
   error: null,
   gatewayId: "gw-1",
   scheduler: true,
+  readBotIds: ["main", "otto", "pip"],
   jobs: [
     {
       botId: "main",

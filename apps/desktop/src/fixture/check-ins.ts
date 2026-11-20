@@ -90,10 +90,15 @@ function jobsFor(config: Config, now: number): CheckInJob[] {
   });
 }
 
-function shown(config: Config, now: number) {
+function shown(config: Config, now: number, readBotIds: string[] = BOTS) {
   const answer = { config };
-  const jobs = jobsFor(config, now);
-  return { jobs, settings: readSettings(answer, BOTS), defaults: readDefaults(answer) };
+  const jobs = jobsFor(config, now).filter((job) => readBotIds.includes(job.botId));
+  return {
+    readBotIds,
+    jobs,
+    settings: readSettings(answer, readBotIds),
+    defaults: readDefaults(answer),
+  };
 }
 
 export function fixtureCheckIns(
@@ -125,7 +130,11 @@ export function checkInCommands(params: CheckInParams) {
     };
     switch (command.type) {
       case "refreshCheckIns": {
-        const snapshot = shown(config, Date.now());
+        const snapshot = shown(
+          config,
+          Date.now(),
+          get().bots.map((bot) => bot.id),
+        );
         const gatewayId = get().connection.gatewayId;
         set({
           ...get(),
@@ -165,7 +174,11 @@ export function checkInCommands(params: CheckInParams) {
         ) =>
           put((c) => ({
             ...c,
-            ...shown(config, Date.now()),
+            ...shown(
+              config,
+              Date.now(),
+              get().bots.map((bot) => bot.id),
+            ),
             save: { id: saveId, botId, status, error },
           }));
         put((c) => ({ ...c, save: { id: saveId, botId, status: "saving", error: null } }));

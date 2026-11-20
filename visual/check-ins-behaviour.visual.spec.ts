@@ -12,6 +12,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { contextFor, openFixture, OTTO_DISK, SIZES } from "./fixture.ts";
 import { checkIns } from "./check-ins-helpers.ts";
+import type { ClawtrateState } from "../packages/core/src/types.ts";
 import type {
   BridgeCommand,
   BridgeResultFor,
@@ -660,6 +661,46 @@ test("F-201: in the list across bots, each group head says the bot's check-ins",
       .locator(".r-group", { hasText: "ledger" })
       .locator('[data-testid="check-in-summary"]'),
   ).toHaveCount(0);
+});
+
+test("F-201: All bots reads a newly discovered bot's check-ins before showing its cadence", async ({
+  page,
+}) => {
+  await openFixture(page, `${ROUTINES}&checkins=daily`, "light");
+  type Fixture = {
+    clawtrateFixture: ClawtrateBridge & {
+      setState(change: (state: ClawtrateState) => ClawtrateState): void;
+    };
+  };
+  const marlow = await page.evaluate(() => {
+    const { clawtrateFixture } = window as unknown as Fixture;
+    const bot = clawtrateFixture.getState().bots.find((bot) => bot.id === "marlow")!;
+    clawtrateFixture.setState((state) => ({
+      ...state,
+      bots: state.bots.filter((each) => each.id !== bot.id),
+    }));
+    return bot;
+  });
+  await page.getByRole("button", { name: "Routines", exact: true }).click();
+  await expect(group(page, "Juniper")).toHaveText("Checks in every 30 minutes");
+
+  const read = Promise.withResolvers<void>();
+  await page.exposeFunction("waitForCheckInRead", () => read.promise);
+  await page.evaluate((bot) => {
+    const { clawtrateFixture, waitForCheckInRead } = window as unknown as Fixture & {
+      waitForCheckInRead: () => Promise<void>;
+    };
+    const { send } = clawtrateFixture;
+    clawtrateFixture.send = async (command) => {
+      if (command.type === "refreshCheckIns") await waitForCheckInRead();
+      return send(command);
+    };
+    clawtrateFixture.setState((state) => ({ ...state, bots: [...state.bots, bot] }));
+  }, marlow);
+  await expect(routinesView(page).getByRole("heading", { name: "Marlow" })).toBeVisible();
+  await expect(group(page, "Marlow")).toHaveCount(0);
+  read.resolve();
+  await expect(group(page, "Marlow")).toHaveText("Checks in daily");
 });
 
 test("F-201: one bot's routines show its check-ins block first, and with admin Change opens the dialog from Routines", async ({

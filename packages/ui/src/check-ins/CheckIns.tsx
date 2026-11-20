@@ -134,6 +134,7 @@ export function useCheckInsSection({
         )}
         <div className="ci-list" data-testid="check-ins">
           {bots.map((bot) => {
+            if (!checkIns.readBotIds?.includes(bot.id)) return null;
             const job = jobOf(bot.id);
             const next =
               job?.enabled && checkIns.scheduler !== false && job.nextRunAtMs !== null

@@ -1031,6 +1031,7 @@ export const CHECK_INS: Bound = object<CheckInsState>()({
   error: text(MAX_MESSAGE_LINE_CHARS),
   gatewayId: ID,
   scheduler: FLAG,
+  readBotIds: list(MAX_BOTS, ID),
   jobs: list(MAX_BOTS, checkInJob),
   settings: list(MAX_BOTS, checkInSetting),
   defaults: checkInDefaults,
