@@ -141,9 +141,9 @@ function reasonOf(call: ActionCall, facts: T3Facts | null): T3Call["error"] {
  * `details` for a tool server), a structured result is evidence only when it
  * has the shape of the mapped tool's result: one of another shape is another
  * tool's, and never re-attributed by the current map. Live, a result that names
- * no tool and carries nothing of T3 Code's leaves the call ordinary; from
- * history, where nothing named it, the map stands and the call is known less
- * well: its result could not be read.
+ * no tool and carries nothing of T3 Code's leaves the call ordinary. From
+ * history, where nothing names the tool, the map stands only for a call still
+ * in flight (`toolServerOf`): one that has ended keeps its own card.
  */
 export function t3CallOf(call: ActionCall, ctx: ReadingContext = {}): T3Call | null {
   const identity = toolServerOf(call, ctx);
