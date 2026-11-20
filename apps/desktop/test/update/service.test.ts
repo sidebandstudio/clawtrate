@@ -159,7 +159,8 @@ it("keeps the previous track when saving fails and checks it next", async () => 
   const service = await start({ store: prefs });
   expect((await service.chooseTrack("nightly")).snapshot).toMatchObject({
     selectedTrack: "stable",
-    state: { kind: "failed", stage: "preferences", reason: "write-failed" },
+    preferenceIssue: "track-not-saved",
+    state: { kind: "not-checked" },
   });
   expect(server.requests).toEqual([]);
   await offer(service);
@@ -232,7 +233,7 @@ it("a failed file-store write cannot slip into a later successful save", async (
   mkdirSync(path);
   expect((await service.chooseTrack("stable")).snapshot).toMatchObject({
     selectedTrack: "nightly",
-    state: { reason: "write-failed" },
+    preferenceIssue: "track-not-saved",
   });
   await expect(prefs.get("selectedTrack")).rejects.toThrow();
   rmSync(path, { recursive: true });
@@ -258,7 +259,7 @@ it("checks ancestry before cleanup and refuses a linked destination before openi
   });
   expect(readdirSync(outside)).toEqual(["keep"]);
   const nested = await start({ downloadDir: join(updates, "keep") });
-  expect(nested.get().state.kind).toBe("failed");
+  expect(nested.get().preferenceIssue).toBe("update-folder-unavailable");
   expect(readFileSync(join(outside, "keep"), "utf8")).toBe("keep");
   expect(server.requests).toEqual(["/stable"]);
 });
@@ -365,7 +366,7 @@ it("reads saved preferences even when the download folder cannot be cleaned", as
   expect(broken.get()).toMatchObject({
     selectedTrack: "nightly",
     lastCheck: { track: "stable" },
-    state: { reason: "write-failed" },
+    preferenceIssue: "update-folder-unavailable",
   });
 });
 it.each(["check", "download"] as const)(
@@ -435,7 +436,12 @@ it("an unsuccessful track choice still retires the file and its offer", async ()
   await service.download(id);
   vi.spyOn(prefs, "set").mockRejectedValueOnce(Error("read only"));
   expect(await service.chooseTrack("nightly")).toMatchObject({
-    snapshot: { selectedTrack: "stable", pendingTrack: null, state: { stage: "preferences" } },
+    snapshot: {
+      selectedTrack: "stable",
+      pendingTrack: null,
+      preferenceIssue: "track-not-saved",
+      state: { kind: "not-checked" },
+    },
   });
   expect((await service.download(id)).outcome).toBe("stale");
   expect(existsSync(updates)).toBe(false);
@@ -537,7 +543,10 @@ it("bounds preference reads and recovers when the file is repaired", async () =>
   ]) {
     writeFileSync(path, bad);
     const service = await start({ store: prefs });
-    expect(service.get().state).toMatchObject({ reason: "write-failed" });
+    expect(service.get()).toMatchObject({
+      preferenceIssue: "preferences-not-read",
+      state: { kind: "not-checked" },
+    });
     expect((await service.chooseTrack("nightly")).snapshot.selectedTrack).toBe("stable");
     expect(readFileSync(path, "utf8")).toBe(bad);
   }
@@ -606,4 +615,24 @@ it("keeps a history save error visible when a track choice is draining it", asyn
     lastCheck: { track: "stable" },
     preferenceIssue: "last-check-not-saved",
   });
+});
+
+it("distinguishes folder preparation from a settings read even with no source", async () => {
+  const feeds = { stable: null, nightly: null };
+  const broken = await start({ feeds, downloadDir: join(dir.path, "absent", "updates") });
+  expect(broken.get()).toMatchObject({
+    selectedTrack: null,
+    preferenceIssue: "update-folder-unavailable",
+    state: { reason: "not-configured" },
+  });
+  const prefs = store();
+  vi.spyOn(prefs, "get").mockRejectedValueOnce(Error("fixture read"));
+  const unreadable = await start({ feeds, store: prefs });
+  expect(unreadable.get()).toMatchObject({
+    selectedTrack: null,
+    preferenceIssue: "preferences-not-read",
+    state: { reason: "not-configured" },
+  });
+  expect((await start({ feeds })).get().preferenceIssue).toBeNull();
+  expect(server.requests).toEqual([]);
 });

@@ -50,7 +50,13 @@ export interface DesktopUpdateSnapshot {
   pendingTrack: UpdateTrack | null;
   /** Most recent complete feed read accepted by this host. */
   lastCheck: { track: UpdateTrack; readAt: string } | null;
-  preferenceIssue: "last-check-not-saved" | null;
+  /** Most recent local settings or storage problem, separate from the release result. */
+  preferenceIssue:
+    | "preferences-not-read"
+    | "track-not-saved"
+    | "last-check-not-saved"
+    | "update-folder-unavailable"
+    | null;
   state: DesktopUpdateState;
   install: { kind: "unavailable-in-this-build" };
 }
