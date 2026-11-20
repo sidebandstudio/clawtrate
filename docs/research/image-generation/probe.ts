@@ -119,7 +119,7 @@ for (const step of steps) {
     if (step === "avatar") {
       // Saved, and shown only up to the gateway's encoded-length limit for a data URL.
       for (const decoded of [2_097_152, 2_098_176]) {
-        sources[`a PNG data URL of ${decoded} decoded bytes`] = `data:image/png;base64,${Buffer.alloc(decoded, 7).toString("base64")}`;
+        sources[`a data URL labelled image/png with ${decoded} decoded bytes`] = `data:image/png;base64,${Buffer.alloc(decoded, 7).toString("base64")}`;
       }
     }
     for (const [label, avatar] of Object.entries(sources)) {
