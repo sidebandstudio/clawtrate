@@ -302,6 +302,86 @@ test.describe("1440", () => {
     await expect(view(page).getByTestId("run-view")).toBeVisible();
   });
 
+  test("F-193: a running row whose routine is removed stops loading and says the run is gone", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=main&routines=running", "light");
+    await rail(page, "Marlow").click();
+    await expect(view(page).getByRole("status")).toHaveText("Running…");
+    await change(
+      page,
+      `(store) => ({ ...store,
+        routines: store.routines.filter((each) => each.id !== "routine-digest"),
+        removed: { id: "routine-digest", ranOnce: false, runAt: null } })`,
+    );
+    await expect(view(page).getByTestId("run-gone")).toBeVisible();
+    await expect(view(page)).not.toContainText("Loading this run…");
+  });
+
+  test("F-190: an isolated run keeps its recorded conversation after its routine becomes a reminder or a command", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByTestId("routine-row").filter({ hasText: "Morning digest" }).click();
+    await view(page).getByTestId("run-row").first().click();
+    const message = view(page).getByTestId("scheduled-message");
+    await expect(message).toContainText("Summarise the notes I added yesterday");
+    for (const payload of ["systemEvent", "other"]) {
+      await change(
+        page,
+        `(store) => ({ ...store, routines: store.routines.map((each) =>
+          each.id === "routine-digest"
+            ? { ...each, payload: "${payload}", target: "main", updatedAt: Date.now() }
+            : each) })`,
+      );
+      await expect(message).toContainText("Summarise the notes I added yesterday");
+      await expect(view(page).getByTestId("run-not-kept")).toHaveCount(0);
+    }
+  });
+
+  test("F-022: a task under Routines shows its unread dot, and coming back to it reads it again", async ({
+    page,
+  }) => {
+    const key = "agent:otto:disk-space";
+    await openFixture(page, `scene=rail-write&bot=otto&task=${key}&routines=on`, "light");
+    const reads = () =>
+      page.evaluate(
+        (key) =>
+          (
+            window as unknown as {
+              clawtrateFixture: { sent: Array<{ type: string; key?: string }> };
+            }
+          ).clawtrateFixture.sent.filter((each) => each.type === "markTask" && each.key === key)
+            .length,
+        key,
+      );
+    await expect.poll(reads).toBe(1);
+    await page.getByRole("button", { name: "Routines", exact: true }).click();
+    // Another device marks it unread while Routines covers it.
+    await page.evaluate((key) => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        tasksByBot: {
+          ...state.tasksByBot,
+          otto: state.tasksByBot.otto!.map((task) =>
+            task.key === key
+              ? { ...task, unread: true, unreadMarker: Date.now(), updatedAt: Date.now() }
+              : task,
+          ),
+        },
+      }));
+    }, key);
+    const row = page.getByTestId("task").filter({ hasText: "Disk almost full" }).first();
+    await expect(row.locator(".unread-dot")).toHaveCount(1);
+    await view(page).getByRole("button", { name: "Back to conversation" }).click();
+    await expect.poll(reads).toBe(2);
+  });
+
   test("F-193: another routine's run never shows under this one's heading while it loads, or when it fails", async ({
     page,
   }) => {
