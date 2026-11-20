@@ -4,10 +4,75 @@ import { describe, expect, it } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { pairingEnded, protocolMismatch } from "../src/connect-errors.ts";
-import { FakeGateway, helloOk, memoryStorage, sleep, testHost, until } from "./fake-gateway.ts";
+import {
+  FakeGateway,
+  deferred,
+  helloOk,
+  memoryStorage,
+  sleep,
+  testHost,
+  tokenKey,
+  until,
+} from "./fake-gateway.ts";
 
 const URL = "ws://127.0.0.1:19001";
+const OTHER_URL = "ws://127.0.0.1:19002";
 const FAST = { reconnect: { initialMs: 20, maxMs: 40 } };
+
+/**
+ * Memory storage whose writes land one at a time, in order, as the file store's
+ * do. A test can hold a key's next write before it lands, or the answer to it
+ * after it has landed.
+ */
+function orderedStorage() {
+  const base = memoryStorage();
+  let tail: Promise<void> = Promise.resolve();
+  const beforeLanding = new Map<string, Promise<void>>();
+  const afterLanding = new Map<string, Promise<void>>();
+  const write = (key: string, change: () => void) => {
+    const landed = beforeLanding.get(key);
+    const answered = afterLanding.get(key);
+    beforeLanding.delete(key);
+    afterLanding.delete(key);
+    const run = tail.then(async () => {
+      await landed;
+      change();
+    });
+    tail = run.catch(() => {});
+    return answered ? run.then(() => answered) : run;
+  };
+  const hold = (gates: Map<string, Promise<void>>, key: string) => {
+    const gate = deferred<void>();
+    gates.set(key, gate.promise);
+    return () => gate.resolve();
+  };
+  return {
+    ...base,
+    set: (key: string, value: string) => write(key, () => void base.data.set(key, value)),
+    delete: (key: string) => write(key, () => void base.data.delete(key)),
+    /** Hold the key's next write before it lands; the returned function lets it land. */
+    holdWrite: (key: string) => hold(beforeLanding, key),
+    /** Let the key's next write land but hold its answer; the returned function answers. */
+    holdAnswer: (key: string) => hold(afterLanding, key),
+  };
+}
+
+/** Storage whose writes can be made to fail and then work again. */
+function failingStorage() {
+  const storage = memoryStorage();
+  const set = storage.set.bind(storage);
+  return Object.assign(storage, {
+    failWrites(failing: boolean) {
+      storage.set = failing ? () => Promise.reject(new Error("The disk is full.")) : set;
+    },
+  });
+}
+
+const savedSettings = (storage: { data: Map<string, string> }) =>
+  JSON.parse(storage.data.get("connection") ?? "null") as {
+    url: string;
+    suspended?: boolean;
+  } | null;
 
 /** A gateway that answers every connect with a pairing request; the id can change. */
 function pairingGateway(ids: string[]) {
@@ -305,6 +370,90 @@ describe("connecting", () => {
     await session.apply(parseBridgeCommand({ type: "disconnect" }));
     expect(client.state.connection).toMatchObject({ status: "idle", gatewayUrl: null });
     expect(storage.data.has("connection")).toBe(false);
+    client.stop();
+  });
+
+  it("forgetting a gateway while its first hello drops the shared token leaves it forgotten, after a restart too", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const storage = orderedStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    // The hello saves the device token, and waits for the answer to that write.
+    const answerToken = storage.holdAnswer(tokenKey(URL));
+    await client.connect({ url: URL, token: "bootstrap" });
+    await until(() => storage.data.has(tokenKey(URL)));
+    // Disconnect's removal is under way and has not landed yet.
+    const landForget = storage.holdWrite("connection");
+    const forgetting = client.disconnect();
+    await sleep(20);
+    // The hello moves on toward dropping the shared token from the saved gateway.
+    answerToken();
+    await sleep(50);
+    landForget();
+    await forgetting;
+    await sleep(100);
+    expect(client.state.connection).toMatchObject({ status: "idle", gatewayUrl: null });
+    expect(storage.data.has("connection"), "the gateway is not saved again").toBe(false);
+    client.stop();
+
+    const attempts = gateway.connects.length;
+    const restarted = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await restarted.start();
+    await sleep(150);
+    expect(gateway.connects.length, "a restart opens no gateway").toBe(attempts);
+    expect(restarted.state.connection.status).toBe("idle");
+    restarted.stop();
+  });
+
+  it("a gateway that could not be saved is not the one Disconnect in Settings keeps", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const storage = failingStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "bootstrap" });
+    await until(() => client.state.connection.status === "connected");
+    storage.failWrites(true);
+    await expect(client.connect({ url: OTHER_URL, token: "other" })).rejects.toThrow(
+      "The disk is full.",
+    );
+    expect(client.state.connection.gatewayUrl).toBe(URL);
+    storage.failWrites(false);
+    await createBridgeSession(client).apply(parseBridgeCommand({ type: "suspend" }));
+    expect(savedSettings(storage)).toMatchObject({ url: URL, suspended: true });
+    expect(client.state.connection).toMatchObject({ status: "disconnected", gatewayUrl: URL });
+    client.stop();
+  });
+
+  it("a Reconnect that could not be saved fails again on the next try, and opens nothing", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const storage = failingStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connect({ url: URL, token: "bootstrap" });
+    await until(() => client.state.connection.status === "connected");
+    const session = createBridgeSession(client);
+    await session.apply(parseBridgeCommand({ type: "suspend" }));
+    const sockets = gateway.sockets.length;
+    storage.failWrites(true);
+    const retry = () => session.apply(parseBridgeCommand({ type: "retry" }));
+    await expect(retry()).rejects.toThrow("The disk is full.");
+    await expect(retry(), "the second Reconnect fails too").rejects.toThrow("The disk is full.");
+    await sleep(100);
+    expect(gateway.sockets.length, "no connection is opened").toBe(sockets);
+    expect(client.state.connection.status).toBe("disconnected");
+    expect(savedSettings(storage)).toMatchObject({ url: URL, suspended: true });
     client.stop();
   });
 });
