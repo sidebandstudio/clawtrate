@@ -18,7 +18,8 @@
 //                             several (two new accounts appeared while it ran), callback (a
 //                             browser sign-in whose callback the gateway takes itself)
 //   keyread=fail              a key saved directly whose read afterwards fails
-//   keywarn=1                 a key saved directly with the gateway's warning
+//   keywarn=1                 a key saved directly with the gateway's warning (with keyread=fail
+//                             too, the warning and a failed read after it)
 //   keyfails=1                xAI's key goes through a sign-in that refuses it
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
@@ -1002,30 +1003,28 @@ export function accountCommand(
             ? a.accounts
             : [...a.accounts, account(id, null, "api_key", "key")],
         }));
+      // The gateway's own words when it saved the key and didn't confirm applying it.
+      const warning = params.keywarn
+        ? "API key saved, but the Gateway has not confirmed applying the provider settings. Run `openclaw gateway restart` to apply them."
+        : null;
       if (params.keyread) {
         // The gateway took it; the read after it failed. Check again reads it, and finds it.
         pendingRead = add;
+        const failed = "Reading its accounts again failed, so Clawtrate can't say what it has now.";
         put((a) => ({
           ...a,
           write: {
             what: "key",
             target: command.provider,
             status: "unverified",
-            error:
-              "The gateway took the key, but reading its accounts afterwards failed: models.authStatus timed out.",
+            error: warning ? `${warning} ${failed}` : `The gateway took the key. ${failed}`,
             at: Date.now(),
           },
         }));
-        return Promise.resolve({ profileId: null, warning: null });
+        return Promise.resolve({ profileId: null, warning });
       }
       add();
-      return Promise.resolve({
-        profileId: id,
-        // The gateway's own words when it saved the key and didn't confirm applying it.
-        warning: params.keywarn
-          ? "API key saved, but the Gateway has not confirmed applying the provider settings. Run `openclaw gateway restart` to apply them."
-          : null,
-      });
+      return Promise.resolve({ profileId: id, warning });
     }
     case "setAccountLabel":
       put((a) => ({

@@ -920,7 +920,7 @@ test("F-474 F-490: a sign-in's result says a lock widened only from a read that 
   await expect(page.getByText(/added the new account to Otto's lock/)).toHaveCount(0);
 });
 
-test("F-474: a key saved directly is called saved only when the read after it shows the account; Check again reads it", async ({
+test("F-474: a key saved directly whose read afterwards failed is never called saved, even when Check again lists a new account", async ({
   page,
 }) => {
   await openFixture(page, `${ADMIN}&keyread=fail`, "light");
@@ -935,9 +935,39 @@ test("F-474: a key saved directly is called saved only when the read after it sh
   await expect(newBot(page).getByRole("heading", { name: "Key saved" })).toHaveCount(0);
   await expect(newBot(page).getByRole("textbox", { name: "Label" })).toHaveCount(0);
   await newBot(page).getByRole("button", { name: "Check again" }).click();
+  // A new account in the list says nothing of whether this key was applied: no green Key saved.
+  await expect(newBot(page).getByText("The gateway now lists a new OpenAI account.")).toBeVisible();
   await newBot(page).getByRole("button", { name: "Continue" }).click();
-  await expect(newBot(page).getByRole("heading", { name: "Key saved" })).toBeVisible();
-  await expect(newBot(page).getByRole("textbox", { name: "Label" })).toBeVisible();
+  await expect(newBot(page).getByRole("heading", { name: "Key saved" })).toHaveCount(0);
+  await expect(newBot(page).getByRole("textbox", { name: "Label" })).toHaveCount(0);
+  await expect(newBot(page).getByRole("heading", { name: "Account", level: 2 })).toBeVisible();
+});
+
+test("F-475: a warning survives a failed first read and Continue after another account appears", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&keyread=fail&keywarn=1`, "light");
+  await connectFromNewBot(page);
+  await newBot(page).getByText("Use an API key instead").click();
+  await newBot(page).getByRole("combobox", { name: "Provider" }).selectOption("openai");
+  await page.getByTestId("api-key").fill("made-up-key-for-a-check-0003");
+  await newBot(page).getByRole("button", { name: "Save key" }).click();
+  const result = newBot(page).getByRole("heading", { name: "Key sent, not confirmed" });
+  await expect(result).toBeVisible();
+  const warning = newBot(page).getByText(
+    /API key saved, but the Gateway has not confirmed applying the provider settings\./,
+  );
+  await expect(warning).toBeVisible();
+  // The write's record is replaced by a later one: the warning stays with this key.
+  await change(page, `return { ...state, accounts: { ...state.accounts, write: null } };`);
+  await expect(warning).toBeVisible();
+  await newBot(page).getByRole("button", { name: "Check again" }).click();
+  await expect(newBot(page).getByText("The gateway now lists a new OpenAI account.")).toBeVisible();
+  await expect(warning).toBeVisible();
+  await expect(newBot(page).getByRole("heading", { name: "Key saved" })).toHaveCount(0);
+  await newBot(page).getByRole("button", { name: "Continue" }).click();
+  await expect(newBot(page).getByRole("heading", { name: "Key saved" })).toHaveCount(0);
+  await expect(newBot(page).getByRole("textbox", { name: "Label" })).toHaveCount(0);
 });
 
 test("F-474: when two new accounts appear during a sign-in whose answer names neither, the person may choose one to label", async ({
@@ -1196,11 +1226,19 @@ test("F-474: a sign-in saved but not confirmed stays not confirmed on the naming
   await openFixture(page, `${ADMIN}&signin=unconfirmed`, "light");
   await startMethod(page, /^xAI · /);
   await expect(page.getByRole("heading", { name: "Saved, not confirmed" })).toBeVisible();
-  await page.getByRole("button", { name: "Continue" }).click();
+  await labelNew(page, "xai:second");
   await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Saved, not confirmed" })).toBeVisible();
   await expect(page.getByText(/^Your sign-in was saved, but/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: /^Connected to/ })).toHaveCount(0);
+  // No green heading, before or after the label is saved.
+  await expect(
+    page.getByRole("heading", { name: /^(Connected to|Signed in to|Key saved)/ }),
+  ).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Label" }).fill("Spare");
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(
+    page.getByRole("heading", { name: /^(Connected to|Signed in to|Key saved)/ }),
+  ).toHaveCount(0);
 });
 
 test("F-474: an account listed after a sign-in that failed is named as listed, not finished", async ({
@@ -1212,7 +1250,14 @@ test("F-474: an account listed after a sign-in that failed is named as listed, n
   await page.getByRole("button", { name: "Name it" }).click();
   await expect(page.getByRole("textbox", { name: "Label" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Listed, not finished" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: /^Connected to/ })).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: /^(Connected to|Signed in to|Key saved)/ }),
+  ).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Label" }).fill("Spare");
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(
+    page.getByRole("heading", { name: /^(Connected to|Signed in to|Key saved)/ }),
+  ).toHaveCount(0);
 });
 
 test("F-474: a cancel the gateway declines after a code was entered is said there too", async ({
@@ -1255,10 +1300,10 @@ test("F-475: the key path says a new key replaces one only for the key the gatew
   await newBot(page).locator("details.b-disclosure summary").click();
   const provider = page.getByRole("combobox", { name: "Provider" });
   const replaces = page.getByText(
-    "This replaces the key your gateway's Anthropic settings name, Anthropic · Lab key. To keep both, add the second on the gateway's machine.",
+    "If saved, this key replaces Anthropic · Lab key, which the gateway's Anthropic settings name. To keep both, add the second on the gateway's machine.",
   );
   await provider.selectOption("openai");
-  await expect(page.getByText(/This replaces the/)).toHaveCount(0);
+  await expect(page.getByText(/this key replaces/)).toHaveCount(0);
   await provider.selectOption("anthropic");
   await expect(replaces).toBeVisible();
   const key = "made-up-key-for-the-fixture-0001";

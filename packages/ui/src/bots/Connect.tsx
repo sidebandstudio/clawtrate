@@ -79,8 +79,8 @@ type Where =
       candidate?: boolean;
     }
   | { view: "same"; provider: string }
-  /** A key the gateway took whose account the read after it didn't show. */
-  | { view: "key-check"; provider: string; known: string[] };
+  /** A key the gateway took whose account the read after it didn't show, with its warning. */
+  | { view: "key-check"; provider: string; known: string[]; warning: string | null };
 
 /**
  * The connect component's state and views. The caller draws its head and
@@ -292,7 +292,7 @@ export function useConnect({
               byKey: true,
               unconfirmed: warning ? { title: "Saved, not confirmed", text: warning } : null,
             });
-          } else setWhere({ view: "key-check", provider: keyProvider, known });
+          } else setWhere({ view: "key-check", provider: keyProvider, known, warning });
         }
       } catch (error) {
         setKeyError(error instanceof Error ? error.message : String(error));
@@ -338,9 +338,6 @@ export function useConnect({
               Use an API key instead
             </summary>
             <div className="b-disclosure-body">
-              <p className="b-hint" style={{ marginTop: 4 }}>
-                Billed per token by the provider, apart from any subscription.
-              </p>
               <label className="b-field">
                 <span>Provider</span>
                 <select
@@ -376,19 +373,18 @@ export function useConnect({
                   {keyError}
                 </p>
               )}
-              {kp?.replaces && !kp.method && (
+              {/* Only from a read that succeeded: a reference kept from an earlier one may be gone. */}
+              {kp?.replaces && !kp.method && accounts.status === "ready" && (
                 <Note tone="warn" testId="key-replaces">
                   <p>
-                    This replaces the key your gateway's {providerName(keyProvider)} settings name,{" "}
-                    {replaced ? accountName(replaced, accounts) : kp.replaces}. To keep both, add
-                    the second on the gateway's machine.
+                    If saved, this key replaces{" "}
+                    {replaced ? accountName(replaced, accounts) : kp.replaces}, which the gateway's{" "}
+                    {providerName(keyProvider)} settings name. To keep both, add the second on the
+                    gateway's machine.
                   </p>
                 </Note>
               )}
-              <p className="b-hint">
-                The key goes to your gateway, which keeps it. It is not kept on this device, and
-                Clawtrate can't read it back.
-              </p>
+              <p className="b-hint">Clawtrate sends the key to your gateway.</p>
               <div className="b-actions" style={{ marginTop: 12 }}>
                 <button
                   type="button"
@@ -426,27 +422,33 @@ export function useConnect({
     const fresh = accounts.accounts
       .filter((a) => a.provider === where.provider && !where.known.includes(a.id))
       .map((a) => a.id);
-    const found = accounts.status === "ready" && fresh.length === 1 ? fresh[0]! : null;
+    // A new account in the list says nothing of whether this key was applied: it is said, and
+    // the person returns to Accounts. The gateway's warning stays with it.
+    const appeared = accounts.status === "ready" && fresh.length > 0;
+    const written = accounts.write?.what === "key" ? accounts.write.error : null;
     return {
       title: "API key",
       backLabel: "Back to sign-in methods",
       body: (
         <Result tone="warn" mark="clock" title="Key sent, not confirmed">
-          {accounts.write?.what === "key" && accounts.write.error
-            ? accounts.write.error
-            : `The gateway took the key, but Clawtrate hasn't seen its ${who} account yet.`}{" "}
-          {found
+          {where.warning && !written?.includes(where.warning) && (
+            <>
+              <span data-testid="key-warning">{where.warning}</span>{" "}
+            </>
+          )}
+          {written ?? `The gateway took the key, but Clawtrate hasn't seen its ${who} account yet.`}{" "}
+          {appeared
             ? `The gateway now lists a new ${who} account.`
             : "Check again reads the gateway's accounts."}
         </Result>
       ),
-      foot: found ? (
+      foot: appeared ? (
         <button
           type="button"
           className="button"
           data-variant="primary"
           data-size="lg"
-          onClick={() => setWhere({ view: "label", account: found, byKey: true })}
+          onClick={() => finish(null)}
         >
           Continue
         </button>
@@ -1013,7 +1015,7 @@ export function useConnect({
     body = (
       <>
         <Result tone="danger" mark="warning" title="Couldn't connect">
-          {current.error ?? "The gateway ended the sign-in without saving it."}
+          {current.error ?? "Clawtrate could not confirm that the sign-in finished."}
         </Result>
         {reread(current)}
       </>
