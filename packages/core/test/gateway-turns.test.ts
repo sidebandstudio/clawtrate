@@ -654,6 +654,42 @@ describe("a recipient session nobody has open (F-122)", () => {
     client.stop();
   });
 
+  it("F-122: a deleted recipient's old read cannot unregister the next read for the same session", async () => {
+    const gateway = grantingGateway();
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    let reads = 0;
+    gateway.handlers["chat.history"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey !== PEER) return { messages: [] };
+      return ++reads === 1 ? first.promise : second.promise;
+    };
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      const startRead = async (id: string, index: number) => {
+        sendTo(gateway, id, index);
+        gateway.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }, PEER));
+        await until(() => transcript().linkedRuns[id]?.state === "running");
+        gateway.emit("sessions.changed", { sessionKey: PEER, runId: id, phase: "end" });
+        await until(() => reads === index + 1);
+      };
+      const remove = async (id: string) => {
+        gateway.emit("sessions.changed", { sessionKey: PEER, reason: "delete" });
+        await until(() => transcript().linkedRuns[id]?.state === "cancelled");
+      };
+      await startRead("first", 0);
+      await remove("first");
+      await startRead("second", 1);
+      first.resolve({ messages: [] });
+      await sleep(50);
+      await remove("second");
+      second.resolve({ messages: [], inFlightRun: { runId: "second" } });
+      await sleep(50);
+      expect(transcript().linkedRuns.second?.state).toBe("cancelled");
+    } finally {
+      client.stop();
+    }
+  });
+
   it("F-122: the id pairs a recipient's ends name are kept newest first, within the queue aliases' cap", async () => {
     const gateway = grantingGateway();
     let peerReads = 0;

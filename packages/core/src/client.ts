@@ -3678,7 +3678,8 @@ export class ClawtrateClient {
       });
     } finally {
       tokens.delete(token);
-      if (tokens.size === 0) this.foreignReads.delete(sessionKey);
+      if (tokens.size === 0 && this.foreignReads.get(sessionKey) === tokens)
+        this.foreignReads.delete(sessionKey);
     }
   }
 
