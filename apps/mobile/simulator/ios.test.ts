@@ -180,8 +180,11 @@ const MAIL_LINE = "Write [to the team](mailto:someone@example.com) for a copy.";
 let browserUrl = "";
 let browserGet = false;
 let browserRequests = 0;
-/** A label for a link to the listener that differs from its address only in the path's case. */
-const lookalikeLabel = () => browserUrl.replace("/clawtrate-link-check", "/Clawtrate-link-check");
+/** A link on the listener whose text differs from its address only in the path's case. */
+const lookalike = () => ({
+  text: browserUrl.replace("/clawtrate-link-check", "/Notes"),
+  url: browserUrl.replace("/clawtrate-link-check", "/notes"),
+});
 const browser = createServer((req, res) => {
   browserRequests += 1;
   if (req.method === "GET" && req.url === "/clawtrate-link-check") {
@@ -636,9 +639,9 @@ describe("the iOS app", () => {
       HIDDEN_LINK,
       MAIL_LINE,
       `The setup token was ${env.token}.`,
-      // Its text names the listener's path in another case and its link adds a slash, so it
-      // asks first. The text is not the bare address below, which iOS also names its link by.
-      `[${lookalikeLabel()}](${browserUrl}/)`,
+      // Its text names its path in another case, so it asks first. The driver matches text in
+      // any case, so the text is not the bare address below.
+      `[${lookalike().text}](${lookalike().url})`,
       browserUrl,
     ])
       await inject(reading.key, message);
@@ -710,13 +713,13 @@ describe("the iOS app", () => {
       scrollTo({ text: lit(browserUrl) }, "DOWN"),
     ]);
     // A link whose text is another address asks too; Cancel sends the listener nothing.
-    const lookalikeText = `${lit(lookalikeLabel())} \\(${lit(new URL(browserUrl).host)}\\)`;
+    const lookalikeText = `${lit(lookalike().text)} \\(${lit(new URL(browserUrl).host)}\\)`;
     await steps("lookalike-in-view", [scrollTo({ text: lookalikeText }, "UP")]);
-    const lookalike = (await boundsOf(new RegExp(`^${lookalikeText}`)))!;
+    const asking = (await boundsOf(new RegExp(`^${lookalikeText}`)))!;
     await steps("lookalike-link", [
-      { tapOn: { point: `${lookalike.x1 + 24},${lookalike.y1 + 10}` } },
+      { tapOn: { point: `${asking.x1 + 24},${asking.y1 + 10}` } },
       waitFor(lit(LINK_WORDS.ask), 10_000),
-      see(lit(`${browserUrl}/`)),
+      see(lit(lookalike().url)),
       tap(lit(LINK_WORDS.cancel)),
       waitGone(lit(LINK_WORDS.ask), 10_000),
       see({ id: "transcript" }),
