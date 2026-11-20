@@ -1877,7 +1877,7 @@ async function enterUntilTaken(page: Page): Promise<void> {
   }).toPass({ timeout: 10_000 });
 }
 
-test("F-106: under Steer, a slow message and three quick ones each appear once, in order, and are answered after the last; again after a reload", async ({
+test("F-106: under Steer, a slow message and three quick ones each appear once, shown in the order the gateway records them, and the last is answered; again after a reload", async ({
   page,
 }) => {
   test.setTimeout(240_000);
@@ -1895,26 +1895,33 @@ test("F-106: under Steer, a slow message and three quick ones each appear once, 
   }
   await expect.poll(() => gatewayIdle(key), { timeout: 120_000 }).toBe(true);
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
+  const all = ["Look at the disk use.", ...QUICK];
+  /** The messages in the order these rows hold them, each once, the first one first. */
   const check = (rows: Array<{ role: string; text: string }>) => {
-    const places = placesOf(rows, ["Look at the disk use.", ...QUICK]);
-    expect(places).toEqual([...places].sort((a, b) => a - b));
-    // A steer is a request: the gateway joins it to the turn or runs it as a turn of its own,
-    // so how the steers are answered is its own. The last one is answered.
+    const places = placesOf(rows, all);
+    expect(Math.min(...places)).toBe(places[0]);
+    // A steer is a request: the gateway joins it to the turn or holds it as a turn of its own,
+    // which it records when it runs, so how the steers are answered, and in which order they
+    // are recorded, is its own. Whichever is last is answered.
     expect(
-      rows.slice(places[3]! + 1).filter((row) => row.role === "assistant").length,
+      rows.slice(Math.max(...places) + 1).filter((row) => row.role === "assistant").length,
       "a reply after the last message",
     ).toBeGreaterThan(0);
+    return [...all].sort((a, b) => places[all.indexOf(a)]! - places[all.indexOf(b)]!);
   };
   await expect
     .poll(async () => (await historyRows(key)).length, { timeout: 30_000 })
     .toBeGreaterThan(4);
-  check(await historyRows(key));
+  const recorded = check(await historyRows(key));
   await expect
     .poll(async () => (await shownTurns(page)).filter((t) => t.role === "user").length, {
       timeout: 30_000,
     })
     .toBe(4);
-  check(await shownTurns(page));
+  // The page shows them as the gateway's history records them.
+  await expect
+    .poll(async () => check(await shownTurns(page)), { timeout: 30_000 })
+    .toEqual(recorded);
   // No message the gateway took is shown as not sent, and none is left on the shelf.
   await expect(page.getByTestId("shelf-row")).toHaveCount(0);
   await page.reload();
@@ -1925,7 +1932,7 @@ test("F-106: under Steer, a slow message and three quick ones each appear once, 
       timeout: 30_000,
     })
     .toBe(4);
-  check(await shownTurns(page));
+  expect(check(await shownTurns(page))).toEqual(recorded);
 });
 
 test("F-106: under Queue, a slow message and three quick ones each start a turn of their own, in order, each with its own reply; again after a reload", async ({
