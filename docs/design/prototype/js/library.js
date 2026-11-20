@@ -93,6 +93,8 @@
     { id: "p4", task: "m7", kind: "page", title: "Cover letter outline", doc: "cover-outline", time: "Nov 6", day: 13, seq: 9, src: "history", hist: 2 },
     { id: "i14", task: "m8", kind: "file", title: "thank-you.md", type: "Markdown", size: "1 KB", time: "Nov 4", day: 15, seq: 3, src: "artifacts" },
     { id: "k6", task: "m8", kind: "link", title: "Card ideas", href: "https://cards.example/thanks", time: "Nov 4", day: 15, seq: 4, src: "history" },
+    { id: "k8", task: "m9", kind: "link", title: "Verse ideas", href: "https://verses.example/birthday", time: "Oct 30", day: 20, seq: 4, src: "history" },
+    { id: "i15", task: "m10", kind: "file", title: "potluck.md", type: "Markdown", size: "1 KB", time: "Oct 26", day: 24, seq: 2, src: "artifacts" },
     { id: "i12", task: "m11", kind: "file", title: "old-route.md", type: "Markdown", size: "88 B", time: "Oct 20", day: 30, seq: 5, src: "artifacts" },
     { id: "k4", task: "m12", kind: "link", title: "Club site draft", href: "https://club.example/draft", time: "Oct 12", day: 38, seq: 2, src: "history" },
     { id: "pj", task: "j2", kind: "page", title: "E-book apps compared", doc: "ebook-apps", time: "3:02 PM", day: 0, seq: 2, src: "history" },
@@ -288,15 +290,51 @@
     pageCache: {},
     swallow: false,
   };
-  const startPins = params.get("pins") === "none" ? [] : params.get("pins") === "verify" ? ["p2", "gone:m11", "unverified:m12", "reset:m10"] : ["p2", "k3", "gone:m11"];
-  // The person's preference on the gateway (users.prefs), and what this device last confirmed of it.
-  const G = { value: startPins.length ? [...startPins] : null };
-  const P = { confirmed: startPins.length ? [...startPins] : null, observed: startPins.length ? [...startPins] : null };
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const verifying = params.get("pins") === "verify";
+  // A pin names its occurrence as section 4 says: the task key, the session the history read reported, the message's
+  // identity and sequence, and the artifact's id where the listing reports one (or the block, where history confirms it).
+  const sessionOf = (task) => (verifying && task === "m10" ? "s-m10-b" : `s-${task}`); // m10: the key now holds a new session
+  const msgOf = (x) => (verifying && x.task === "m9" ? `${x.task}:${x.seq}:b` : `${x.task}:${x.seq}`); // m9: sequence 4 is another message now
+  const pinFor = (x) => ({ task: x.task, session: sessionOf(x.task), msg: msgOf(x), seq: x.seq, ...(x.src === "history" ? { block: x.id } : { art: x.id }) });
+  const normalize = (v) => (typeof v === "string" ? (item(v) ? pinFor(item(v)) : null) : v); // a bare id stands for its occurrence now
+  const gone = { task: "m11", session: "s-m11", msg: "m11:7", seq: 7, art: "a-old-route-2" };
+  const startPins =
+    params.get("pins") === "none"
+      ? []
+      : verifying
+        ? [
+            pinFor(item("p2")),
+            gone,
+            { task: "m12", session: "s-m12", msg: "m12:2", seq: 2, block: "k4" },
+            { task: "m10", session: "s-m10", msg: "m10:2", seq: 2, art: "i15" },
+            { task: "m9", session: "s-m9", msg: "m9:4", seq: 4, block: "k8" },
+          ]
+        : [pinFor(item("p2")), pinFor(item("k3")), gone];
+  // The person's preference on the gateway (users.prefs), and what this device last confirmed of it.
+  const G = { value: startPins.length ? JSON.parse(JSON.stringify(startPins)) : null };
+  const P = { confirmed: startPins.length ? [...startPins] : null, observed: startPins.length ? JSON.parse(JSON.stringify(startPins)) : null };
   const canWrite = () => app && app.model.access === "write";
   const lost = () => L.lib === "offline" || ["offline", "reconnecting"].includes(app?.model.connection);
-  const pinsOf = () => P.confirmed || [];
-  const isPinned = (id) => pinsOf().includes(id);
+  const pinsOf = () => (P.confirmed || []).map(normalize).filter(Boolean);
+  // What a read establishes about a pin: its occurrence, its absence, or nothing certain.
+  function resolvePin(pin) {
+    const s = sources(pin.task);
+    const x = ITEMS.find((y) => y.task === pin.task && y.seq === pin.seq && y.id === (pin.art || pin.block));
+    const src = pin.block ? "history" : "artifacts";
+    if (s[src] === "failed") return { state: "unverified", why: `${taskTitle(pin.task)} couldn't be read.` };
+    if (pin.session !== sessionOf(pin.task)) return { state: "unverified", why: `${taskTitle(pin.task)} now holds a different session from the one pinned.` };
+    const atSeq = ITEMS.find((y) => y.task === pin.task && y.seq === pin.seq);
+    if (atSeq && msgOf(atSeq) !== pin.msg) return { state: "unverified", why: `The message at this place in ${taskTitle(pin.task)} is a different one now.` };
+    if (x) return { state: "item", x };
+    if (src === "history" && incompleteHistory(pin.task)) return { state: "unverified", why: `${taskTitle(pin.task)}'s history wasn't read in full.` };
+    return { state: "notfound" }; // a complete read of that exact session found no such occurrence
+  }
+  const pinKey = (pin) => {
+    const r = resolvePin(pin);
+    return r.state === "item" ? r.x.id : `pin:${pin.task}:${pin.seq}`;
+  };
+  const isPinned = (id) => pinsOf().some((pin) => pinKey(pin) === id);
   const gateClosed = () => phone() || params.get("gate") === "closed";
 
   // What each task's reads returned: artifacts (ok, failed) and history (ok, failed, limit, truncated).
@@ -306,6 +344,7 @@
       if (task === "m4") s.history = "truncated";
       if (task === "m5") s.history = "limit";
     }
+    if (verifying && task === "m12") s.history = "failed";
     if (L.lib === "partial") {
       if (task === "m6") Object.assign(s, { artifacts: "failed", history: "failed" });
       if (task === "m8") s.artifacts = "failed";
@@ -535,28 +574,27 @@
     return `<div class="work-empty">${mark}<h4>No ${what} ${where}.</h4></div>`;
   }
 
-  // A pin as kept: an occurrence id, or a fixture naming what a read found for it.
+  // Each pin resolved by the ordinary reads: a row only where the same-session source confirms the occurrence.
   function pinnedList(b, convTask) {
     let ids = pinsOf();
-    if (convTask) ids = ids.filter((id) => (item(id)?.task || id.split(":")[1]) === convTask.id); // the conversation's own pins only
+    if (convTask) ids = ids.filter((pin) => pin.task === convTask.id); // the conversation's own pins only
     const where = L.pinStore === "device" ? `<p class="lib-group-note" id="lib-pin-where">Kept on this device only: the gateway keeps no preferences for this connection.</p>` : "";
     if (!ids.length)
       return (
         `<div class="work-empty"><span class="empty-mark">${pinIcon()}</span><h4>Nothing pinned</h4>` +
-        `<p>Pin an item to keep it here. Pins are kept ${L.pinStore === "device" ? "on this device" : "on the gateway for every device you use"}.</p></div>`
+        `<p>Pin an item to keep it here. Pins are kept ${L.pinStore === "device" ? "on this device" : "on the gateway, for every connection on your profile"}.</p></div>`
       );
     const quiet = (id, name, line, spoken) =>
       `<li class="lib-row" data-item="${esc(id)}" data-unresolved="true"><div class="file-row" role="group" aria-label="${esc(spoken)}"><span class="file-icon">${icon("file")}</span>` +
       `<span class="file-name">${esc(name)}</span><span class="file-sub">${esc(line)}</span></div>` +
       `<button type="button" class="button lib-unpin" data-size="sm" data-lib-pin="${esc(id)}">Unpin</button></li>`;
     const rows = ids
-      .map((id) => {
-        const [state, task] = id.split(":");
-        if (state === "gone") return quiet(id, `Not found in ${taskTitle(task)}`, "A read of this task found no such message.", `A pinned item not found in ${taskTitle(task)}`);
-        if (state === "unverified") return quiet(id, "Couldn't verify this pinned item", `${taskTitle(task)} couldn't be read.`, "A pinned item that couldn't be verified");
-        if (state === "reset") return quiet(id, "Couldn't verify this pinned item", `${taskTitle(task)}'s history changed since this was pinned.`, "A pinned item that couldn't be verified");
-        const x = item(id) || itemsFor(b).find((y) => y.id === id);
-        return x ? row(x) : "";
+      .map((pin) => {
+        const r = resolvePin(pin);
+        const key = pinKey(pin);
+        if (r.state === "item") return row(r.x);
+        if (r.state === "notfound") return quiet(key, `Not found in ${taskTitle(pin.task)}`, "A complete read of this task found no such message.", `A pinned item not found in ${taskTitle(pin.task)}`);
+        return quiet(key, "Couldn't verify this pinned item", r.why, "A pinned item that couldn't be verified");
       })
       .join("");
     return `<section class="lib-group" data-group="pinned"><h3 id="lib-h-pinned">Pinned</h3>${where}<ul class="file-list" aria-labelledby="lib-h-pinned">${rows}</ul></section>`;
@@ -591,7 +629,7 @@
   function anotherDeviceWrites() {
     const id = ["i8", "i11", "i3"][otherDevice % 3];
     otherDevice += 1;
-    G.value = [id, ...(G.value || []).filter((x) => x !== id)];
+    G.value = [pinFor(item(id)), ...(G.value || []).map(normalize).filter((p) => p && pinKey(p) !== id)];
   }
   function gatewaySet(next, expected) {
     if (!same(expected, G.value)) return "conflict";
@@ -599,12 +637,12 @@
     return "ok";
   }
   function readBack() {
-    P.observed = G.value ? [...G.value] : null;
-    P.confirmed = P.observed;
+    P.observed = G.value ? JSON.parse(JSON.stringify(G.value)) : null;
+    P.confirmed = P.observed ? P.observed.map(normalize).filter(Boolean) : null;
   }
   const changeOf = (list, id, pin) => {
-    const now = (list || []).filter((x) => x !== id);
-    return pin ? [id, ...now] : now;
+    const now = (list || []).map(normalize).filter((p) => p && pinKey(p) !== id);
+    return pin ? [pinFor(item(id)), ...now] : now;
   };
 
   function togglePin(id, from) {
@@ -677,9 +715,15 @@
     const { id, pin, name } = L.pending;
     L.pending = null;
     L.uncertain = null;
+    if (params.get("pinread") === "fail") {
+      // The read on reconnect didn't answer either: the last confirmed mark stays, and so does the doubt.
+      L.uncertain = "Couldn't confirm this pin change. Checking when the gateway is back.";
+      L.pending = { id, pin, name };
+      return redraw();
+    }
     readBack(); // read, never resend
     if (isPinned(id) === pin) CT.announce(`${pin ? "Pinned" : "Unpinned"} ${name}`);
-    else L.pinError = `The ${pin ? "pin" : "unpin"} didn't reach the gateway. Try again.`;
+    else L.pinError = pin ? "This item isn't pinned on the gateway. Try again." : "This item is still pinned on the gateway. Try again.";
     redraw();
   }
   function redraw() {

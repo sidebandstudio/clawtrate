@@ -24,7 +24,7 @@ Where things were run:
 | 5 | "Updated below" | Not established by the gateway. Sharing one document id twice gives two `canvas` blocks with the same `viewId`; `canvas.document.view` then returns the HTML as it is now for both, with no revision and no event. A shipped bot's new page is a new id, with no link to the old one. **Live** and **source**. | 5 |
 | 6 | The side chat | `chat.send` to the task whose transcript holds the Page's block; accepted at the interactive tier and refused at read (`missing scope: operator.write`). **Live**. | 6 |
 | 7 | Export | What `canvas.document.view` returns: the entrypoint's HTML only, up to 10 MiB, scripts included as written; files beside it in the document's folder are not returned. **Source** and **live**. | 7 |
-| 8 | Pins | `users.prefs.get` (`operator.read`) and `users.prefs.set` (`operator.write`) on the connection's user profile: a value of at most 4,096 bytes of JSON, at most 32 keys a call, 128 keys a profile, compare-and-set with `expectedEntries`, and `users.prefs.changed {profileId, keys}` to every connection of that profile, read-only ones included. Both of the owner's devices had the profile `gateway-owner` and saw each other's change; the event names only the profile and the keys, and reaches the device that wrote too. A connection without a profile is answered `{status: "no_durable_identity"}`. **Live**, except the last (**source**). | 8 |
+| 8 | Pins | `users.prefs.get` (`operator.read`) and `users.prefs.set` (`operator.write`) on the connection's user profile: a value of at most 4,096 bytes of JSON, at most 32 keys a call and 128 keys a profile (**source**), compare-and-set with `expectedEntries`, and `users.prefs.changed {profileId, keys}` to every connection of that profile, read-only ones included. Both of the owner's devices had the profile `gateway-owner` and saw each other's change; the event names only the profile and the keys, and reaches the device that wrote too. A connection without a profile is answered `{status: "no_durable_identity"}` (**source**). The 4,097-byte refusal, compare-and-set and the events are **live**. | 8 |
 | 9 | Apps | MCP App views reach the transcript as `canvas` blocks carrying `mcpApp`; they run only with scripts (`mcp.app.view`). No development gateway produced one. **Source**. | 9 |
 
 ## 1. `artifacts.list`
@@ -215,7 +215,7 @@ events A received: [{"event":"users.prefs.changed","payload":{"profileId":"gatew
 
 ### What follows
 
-Pins kept in preferences belong to the person's profile on the gateway, not to the device: every device and client of the gateway's owner reads and changes the same entries, and each is told when another changes them. A read-only connection reads them and is refused a change. 4,096 bytes holds roughly 25 pins of a task key and an item id each. A connection the gateway gives no profile (a gateway with roles, for a device without a user) gets `no_durable_identity`, and its pins can only be kept on the device; not exercised here, since every development connection is the owner's.
+Pins kept in preferences belong to the person's profile on the gateway, not to the device: connections on the same gateway profile read the same saved pins. A read-only connection cannot change them. Each connection is told when the key changes, the writer included. A connection the gateway gives no profile (a gateway with roles, for a device without a user) gets `no_durable_identity`, and its pins can only be kept on the device; not exercised here, since every development connection is the owner's.
 
 ## 9. Apps
 

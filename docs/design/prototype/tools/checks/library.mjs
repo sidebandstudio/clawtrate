@@ -80,8 +80,8 @@ check("E10 the address with a user name and password is built at run time and st
 await p.click('[data-lib-filter="files"]');
 check("Files: only files", await q(p, () => [...document.querySelectorAll(".lib-row")].every((r) => r.dataset.kind === "file")));
 await p.click('[data-lib-filter="pinned"]');
-check("F-208 Pinned lists the pins, newest pin first", await q(p, () => [...document.querySelectorAll(".lib-row")].map((r) => r.dataset.item).join() === "p2,k3,gone:m11"));
-check("R6 absence only after a read established it: Not found in Old trail notes, with Unpin", (await text(p, '.lib-row[data-item="gone:m11"] .file-name')) === "Not found in Old trail notes" && (await text(p, '.lib-row[data-item="gone:m11"] .lib-unpin')) === "Unpin");
+check("F-208 Pinned lists the pins, newest pin first", await q(p, () => [...document.querySelectorAll(".lib-row")].map((r) => r.dataset.item).join() === "p2,k3,pin:m11:7"));
+check("E5 absence only after a complete read of that exact session: Not found in Old trail notes, with Unpin", (await text(p, '.lib-row[data-item="pin:m11:7"] .file-name')) === "Not found in Old trail notes" && (await text(p, '.lib-row[data-item="pin:m11:7"] .file-sub')) === "A complete read of this task found no such message." && (await text(p, '.lib-row[data-item="pin:m11:7"] .lib-unpin')) === "Unpin");
 check("R3 Pinned keeps the incomplete-read note", await q(p, () => Boolean(document.querySelector("#lib-incomplete"))));
 await p.close();
 
@@ -186,7 +186,7 @@ p = await open(lib + "&pinfail=conflict");
 await p.hover('.lib-row[data-item="i5"]');
 await p.click('[data-lib-pin="i5"]');
 await p.waitForTimeout(450);
-check("R6 a conflict: read the key, apply the one change once, read back: pinned, and the other device's pin kept", (await q(p, () => document.querySelector('[data-lib-pin="i5"]').getAttribute("aria-pressed") === "true" && window.CT.library.G.value.includes("i8") && window.CT.library.G.value.includes("i5"))) && (await announced(p)).includes("Pinned trail-report.md"));
+check("R6 a conflict: read the key, apply the one change once, read back: pinned, and the other device's pin kept", (await q(p, () => document.querySelector('[data-lib-pin="i5"]').getAttribute("aria-pressed") === "true" && window.CT.library.G.value.some((pin) => pin.art === "i8") && window.CT.library.G.value.some((pin) => pin.art === "i5"))) && (await announced(p)).includes("Pinned trail-report.md"));
 await p.close();
 p = await open(lib + "&pinfail=conflict2");
 await p.hover('.lib-row[data-item="i5"]');
@@ -208,10 +208,31 @@ for (const [fail, committed] of [
   const after = await q(p, () => ({ pressed: document.querySelector('[data-lib-pin="i5"]').getAttribute("aria-pressed"), value: JSON.stringify(window.CT.library.G.value), line: document.querySelector(".lib-failed span")?.textContent ?? "" }));
   check(
     `R6 no answer (${committed ? "after" : "before"} the gateway wrote it): the last confirmed mark and "Couldn't confirm", then on reconnect a read, never a resend`,
-    during.line === "Couldn't confirm this pin change. Checking when the gateway is back." && during.pressed === "false" && after.value === during.value && after.pressed === String(committed) && (committed ? (await announced(p)).includes("Pinned trail-report.md") : after.line === "The pin didn't reach the gateway. Try again."),
+    during.line === "Couldn't confirm this pin change. Checking when the gateway is back." && during.pressed === "false" && after.value === during.value && after.pressed === String(committed) && (committed ? (await announced(p)).includes("Pinned trail-report.md") : after.line === "This item isn't pinned on the gateway. Try again."),
   );
   await p.close();
 }
+p = await open(lib + "&pinfail=noanswer-after");
+await p.hover('.lib-row[data-item="i5"]');
+await p.click('[data-lib-pin="i5"]');
+await p.waitForTimeout(450);
+await q(p, () => {
+  // Another client removes the pin that did reach the gateway, before this device reconnects.
+  window.CT.library.G.value = window.CT.library.G.value.filter((pin) => pin.art !== "i5");
+  window.__before = JSON.stringify(window.CT.library.G.value);
+  window.app.setConnection("connected");
+});
+await p.waitForTimeout(100);
+check("E5 a write that reached the gateway and was removed again before reconnect: the read says it isn't pinned, claims no cause, and nothing is resent", (await text(p, ".lib-failed span")) === "This item isn't pinned on the gateway. Try again." && (await q(p, () => JSON.stringify(window.CT.library.G.value) === window.__before && document.querySelector('[data-lib-pin="i5"]').getAttribute("aria-pressed") === "false")));
+await p.close();
+p = await open(lib + "&pinfail=noanswer-before&pinread=fail");
+await p.hover('.lib-row[data-item="i5"]');
+await p.click('[data-lib-pin="i5"]');
+await p.waitForTimeout(450);
+await q(p, () => window.app.setConnection("connected"));
+await p.waitForTimeout(100);
+check("E5 the read on reconnect doesn't answer either: still Couldn't confirm, the last confirmed mark kept", (await text(p, '.lib-failed[role="status"] span')) === "Couldn't confirm this pin change. Checking when the gateway is back." && (await q(p, () => document.querySelector('[data-lib-pin="i5"]').getAttribute("aria-pressed") === "false")));
+await p.close();
 p = await open(lib + "&pinfail=limit");
 await p.hover('.lib-row[data-item="i5"]');
 await p.click('[data-lib-pin="i5"]');
@@ -224,13 +245,25 @@ await p.click('[data-lib-pin="i5"]');
 check("pins full: nothing sent, and how to make room, with no number of pins", (await text(p, ".lib-failed span")) === "Marlow's pins are full. Unpin one to pin this.");
 await p.close();
 p = await open(lib + "&pins=none&filter=pinned");
-check("nothing pinned: says where pins are kept", (await text(p, "#panel-library .work-empty h4")) === "Nothing pinned" && (await text(p, "#panel-library .work-empty p")) === "Pin an item to keep it here. Pins are kept on the gateway for every device you use.");
+check("nothing pinned: says where pins are kept", (await text(p, "#panel-library .work-empty h4")) === "Nothing pinned" && (await text(p, "#panel-library .work-empty p")) === "Pin an item to keep it here. Pins are kept on the gateway, for every connection on your profile.");
 await p.close();
 p = await open(lib + "&pins=device&filter=pinned");
 check("no preferences for this connection: pins kept on this device, and the list says so", (await text(p, "#lib-pin-where")) === "Kept on this device only: the gateway keeps no preferences for this connection.");
 await p.close();
 p = await open(lib + "&pins=verify&filter=pinned");
-check("R6 a task whose read failed, and a task key now holding another history: Couldn't verify this pinned item, never Not found", (await text(p, '.lib-row[data-item="unverified:m12"] .file-name')) === "Couldn't verify this pinned item" && (await text(p, '.lib-row[data-item="reset:m10"] .file-sub')) === "Recipe for the potluck's history changed since this was pinned." && (await text(p, '.lib-row[data-item="reset:m10"] .file-name')) === "Couldn't verify this pinned item");
+const unresolved = (key) => q(p, (k) => [document.querySelector(`.lib-row[data-item="${k}"] .file-name`)?.textContent, document.querySelector(`.lib-row[data-item="${k}"] .file-sub`)?.textContent], key);
+check("E5 a pin whose source read failed: Couldn't verify, never Not found", JSON.stringify(await unresolved("pin:m12:2")) === JSON.stringify(["Couldn't verify this pinned item", "Draft for the club site couldn't be read."]));
+check("E5 a pin whose task key now holds another session: Couldn't verify", JSON.stringify(await unresolved("pin:m10:2")) === JSON.stringify(["Couldn't verify this pinned item", "Recipe for the potluck now holds a different session from the one pinned."]));
+check("E5 a pin whose sequence now names a different message: Couldn't verify", JSON.stringify(await unresolved("pin:m9:4")) === JSON.stringify(["Couldn't verify this pinned item", "The message at this place in Birthday card verse is a different one now."]));
+check("E5 a pin a complete exact-session read doesn't hold: Not found", (await unresolved("pin:m11:7"))[0] === "Not found in Old trail notes");
+check("E5 the ordinary pin still resolves to its row", await q(p, () => Boolean(document.querySelector('.lib-row[data-item="p2"] [data-lib-open="p2"]'))));
+await p.close();
+p = await open(lib + "&lib=partial&filter=pinned");
+await q(p, () => {
+  window.CT.library.G.value = ["k6", "i14", "i10"];
+  window.CT.library.prefsChanged();
+});
+check("E5 known pins whose sources failed resolve through the same reads: Card ideas listed, the other two unverified", await q(p, () => [...document.querySelectorAll(".lib-row")].map((r) => `${r.dataset.item}:${r.dataset.unresolved || "row"}`).join() === "k6:row,pin:m8:3:true,pin:m6:3:true"));
 await p.close();
 p = await open(lib + "&state=readonly");
 check("read-only: pins as the gateway keeps them are shown", await q(p, () => document.querySelector('[data-lib-pin="p2"]').getAttribute("aria-pressed") === "true"));
@@ -676,7 +709,7 @@ await p.close();
 p = await open("&width=phone&panel=open&tab=library&state=readonly&hold=i2", phoneSize);
 check("touch and hold another item: Open and Pin", await q(p, () => [...document.querySelectorAll(".lib-hold .menu-item")].map((x) => x.textContent).join() === "Open,Pin"));
 await p.click('[data-hold="pin"]');
-check("R6 at phone width, read-only Pin opens the access request and changes nothing on the gateway", await q(p, () => document.activeElement.dataset.access === "request" && JSON.stringify(window.CT.library.G.value) === '["p2","k3","gone:m11"]'));
+check("R6 at phone width, read-only Pin opens the access request and changes nothing on the gateway", await q(p, () => document.activeElement.dataset.access === "request" && window.CT.library.G.value.length === 3 && !window.CT.library.G.value.some((pin) => pin.art === "i2")));
 await p.close();
 p = await open("&width=phone&panel=open&tab=library&lib=error", phoneSize);
 check("F-371 the iPhone's library couldn't load: its words and Try Again", (await text(p, "#panel-library .work-empty h4")) === "Couldn't load this conversation's library" && (await text(p, '#panel-library [data-lib="retry"]')) === "Try Again");
