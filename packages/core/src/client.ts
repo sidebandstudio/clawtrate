@@ -1,6 +1,7 @@
 // The gateway connection and the state it projects. Built on the official
 // browser-safe protocol client, with transport, storage and signing injected.
 
+import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   GatewayBrowserDeviceAuthLifecycle,
@@ -161,6 +162,7 @@ import {
   RawTable,
   reconcileOutbox,
   historyQueuePairs,
+  MAX_QUEUE_ALIASES,
   registerRunAlias,
   registerSteerAlias,
   settleRunFromSendAnswer,
@@ -220,6 +222,7 @@ import {
   MAX_PENDING_APPROVAL_COUNT,
   MAX_REACTIONS_PER_MESSAGE,
   MAX_RUN_TEXT_CHARS,
+  MAX_STEPS_PER_TASK,
   MAX_TASK_LINE_CHARS,
   MAX_TRACKED_TASKS as TRACKED_TASKS,
   MAX_UNROUTED,
@@ -403,6 +406,10 @@ function newestRows(rows: RawRecord[]): Map<string, RawRecord> {
 /** Sessions nobody has open whose runs are followed for bot-to-bot cards, and runs of each. */
 export const FOREIGN_SESSIONS = 16;
 export const FOREIGN_RUNS_PER_SESSION = 4;
+/** Recipient sessions with a read on their way at once, and reads of one session at once. */
+export const MAX_FOREIGN_READ_SESSIONS = MAX_TRACKED_TASKS * MAX_STEPS_PER_TASK;
+/** Reads of one session on their way at once: at most the runs a task's steps name. */
+export const MAX_FOREIGN_READS_PER_SESSION = MAX_STEPS_PER_TASK;
 const MAX_TIMER_MS = 2_147_483_647;
 /** Whole reads (`readStepRaw`, `readHistoryItem`, `readApprovalText`) in flight at once; past it one is refused. */
 export const MAX_FULL_READS = 4;
@@ -775,6 +782,14 @@ export class ClawtrateClient {
   private readonly foreign = new Map<string, TaskActivity>();
   /** Steps of foreign runs are not kept, so neither are their payloads: this table keeps nothing. */
   private readonly foreignRaw = new RawTable(0, 0);
+  /**
+   * Recipient reads on their way, by session, at most
+   * `MAX_FOREIGN_READ_SESSIONS` sessions and `MAX_FOREIGN_READS_PER_SESSION`
+   * reads of one: each read carries a token, and a deletion of the session
+   * cancels its reads' tokens, so an answer that predates the deletion is
+   * dropped whatever happened to other sessions meanwhile.
+   */
+  private readonly foreignReads = new Map<string, Set<{ cancelled: boolean }>>();
   /** Which session spawned which (`spawnedBy` on events), newest kept, at most `MAX_SPAWN_LINKS`. */
   private readonly spawnedBy = new Map<string, string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3209,6 +3224,15 @@ export class ClawtrateClient {
       ...next,
       runs: next.runs.map((run) => enforce(RUN, run.steps.length ? { ...run, steps: [] } : run)),
     };
+    // The id pairs the session's turns were named by, newest kept, as a task's own are.
+    const aliasKeys = Object.keys(next.queueAliases);
+    if (aliasKeys.length > MAX_QUEUE_ALIASES)
+      next = {
+        ...next,
+        queueAliases: Object.fromEntries(
+          aliasKeys.slice(-MAX_QUEUE_ALIASES).map((key) => [key, next.queueAliases[key]!]),
+        ),
+      };
     this.foreign.delete(sessionKey);
     this.foreign.set(sessionKey, next);
     while (this.foreign.size > FOREIGN_SESSIONS) {
@@ -3233,20 +3257,24 @@ export class ClawtrateClient {
    */
   private retireForeign(rawKey: string): void {
     const sessionKey = capId(rawKey, MAX_ID_CHARS);
-    if (!this.foreign.has(sessionKey)) return;
-    this.updateForeign(sessionKey, (activity, ctx) =>
-      activity.runs.some((run) => !isTerminal(run.state))
-        ? {
-            ...activity,
-            runs: activity.runs.map((run) =>
-              isTerminal(run.state)
-                ? run
-                : { ...finishRun(run, "cancelled", ctx), outcomeKnown: false },
-            ),
-          }
-        : activity,
-    );
-    this.foreign.delete(sessionKey);
+    if (this.foreign.has(sessionKey)) {
+      this.updateForeign(sessionKey, (activity, ctx) =>
+        activity.runs.some((run) => !isTerminal(run.state))
+          ? {
+              ...activity,
+              runs: activity.runs.map((run) =>
+                isTerminal(run.state)
+                  ? run
+                  : { ...finishRun(run, "cancelled", ctx), outcomeKnown: false },
+              ),
+            }
+          : activity,
+      );
+      this.foreign.delete(sessionKey);
+    }
+    // A deletion supersedes every read of this session on its way.
+    for (const token of this.foreignReads.get(sessionKey) ?? []) token.cancelled = true;
+    this.foreignReads.delete(sessionKey);
   }
 
   /** A run this task does not hold: a followed foreign session's, or another task's. */
@@ -3536,29 +3564,123 @@ export class ClawtrateClient {
       missing.set(sessionKey, (missing.get(sessionKey) ?? new Set()).add(runId));
     }
     for (const [sessionKey, ids] of missing) {
+      if (generation !== this.generation || !this.tracked(key)) return;
+      await this.readRecipientRuns(sessionKey, ids, generation, key);
+    }
+  }
+
+  private async readRecipientRuns(
+    sessionKey: string,
+    ids: Set<string>,
+    generation: number,
+    senderKey?: string,
+    terminal: {
+      phase: "end" | "error";
+      pairs: ReadonlyArray<readonly [string, string]>;
+    } | null = null,
+  ): Promise<void> {
+    // The read carries its own invalidation token: a deletion of this session
+    // cancels it, however many deletions of other sessions follow, and nothing
+    // else does. Admission stays within the map and per-session caps.
+    const token = { cancelled: false };
+    let tokens = this.foreignReads.get(sessionKey);
+    if (!tokens) {
+      if (this.foreignReads.size >= MAX_FOREIGN_READ_SESSIONS) return;
+      tokens = new Set();
+      this.foreignReads.set(sessionKey, tokens);
+    }
+    if (tokens.size >= MAX_FOREIGN_READS_PER_SESSION) return;
+    tokens.add(token);
+    try {
+      // What this read may settle was active before it was asked, so a run whose
+      // live start arrives while the request is pending outlives a stale answer.
+      const activeBefore = new Set(
+        (this.foreign.get(sessionKey)?.runs ?? [])
+          .filter((run) => ids.has(run.id) && !isTerminal(run.state))
+          .map((run) => run.id),
+      );
       let history: RawRecord | null;
       try {
         history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
       } catch {
-        continue;
+        return;
       }
-      if (generation !== this.generation || !this.tracked(key) || this.tracked(sessionKey)) return;
-      const aliases = Object.fromEntries(historyQueuePairs(history?.messages));
+      if (
+        generation !== this.generation ||
+        this.tracked(sessionKey) ||
+        (senderKey !== undefined && !this.tracked(senderKey)) ||
+        // A deletion of this session while the read was on its way supersedes it.
+        token.cancelled
+      )
+        return;
+      const aliases = Object.fromEntries([
+        ...(terminal?.pairs ?? []),
+        ...historyQueuePairs(history?.messages),
+      ]);
       const { messages, inFlight } = throughRunAliases(
         history?.messages,
         asRecord(history?.inFlightRun),
         aliases,
       );
-      const found = runsFromHistory(messages, inFlight, {
-        sessionKey,
-        now: this.now(),
-        raw: this.foreignRaw,
-      }).filter((run) => ids.has(run.id));
-      if (found.length === 0) continue;
-      this.updateForeign(sessionKey, (activity) => ({
-        ...activity,
-        runs: [...activity.runs.filter((run) => !ids.has(run.id)), ...found],
-      }));
+      const ctx = { sessionKey, now: this.now(), raw: this.foreignRaw };
+      const pendingInputs = asRecord(history?.pendingInputs)?.items;
+      const busy = inFlight !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
+      const found = runsFromHistory(messages, inFlight, ctx, { busy }).filter((run) =>
+        ids.has(run.id),
+      );
+      const historyIds = new Set(found.map((run) => run.id));
+      // Ends history does not establish: a busy read leaves the newest rows' run
+      // open, and an end history holds only in its rows' shape is never a reply.
+      // A terminal row naming such a run must still settle it.
+      const inferred = new Set(
+        found
+          .filter((run) => !run.outcomeKnown || (busy && !isTerminal(run.state)))
+          .map((run) => run.id),
+      );
+      const inFlightId = typeof inFlight?.runId === "string" ? inFlight.runId : null;
+      const ended = terminal
+        ? new Map([...ids].map((id) => [id, terminal.phase] as const))
+        : undefined;
+      this.updateForeign(sessionKey, (activity) => {
+        // A pair is one run: history under the gateway's id is the run the sender
+        // follows under the send's id. Renamed, never dropped: a foreign run keeps
+        // no steps, so nothing of a run still under way is lost with it.
+        const aliased = (terminal?.pairs ?? []).reduce((next, [gateway, client]) => {
+          if (gateway === client || next.queueAliases[gateway] === client) return next;
+          const shown = findRun(next, gateway);
+          const runs =
+            shown && !findRun(next, client)
+              ? next.runs.map((run) => (run === shown ? { ...run, id: client } : run))
+              : next.runs;
+          return { ...next, runs, queueAliases: { ...next.queueAliases, [gateway]: client } };
+        }, activity);
+        const followed = aliased.runs.filter((run) => ids.has(run.id));
+        const merged = mergeHistoryRuns(followed, found, ctx, busy).runs;
+        // A row said the run ended, but idle history cannot say how: settle it as
+        // vanished rather than leave the card working, unless a turn is in flight.
+        const runs = settleVanishedRuns(
+          merged,
+          activeBefore,
+          historyIds,
+          inFlightId,
+          ctx,
+          busy,
+          ended,
+          inferred,
+        );
+        const settled =
+          runs.length === merged.length && runs.every((run, i) => run === merged[i])
+            ? merged
+            : runs;
+        return {
+          ...aliased,
+          runs: [...aliased.runs.filter((run) => !ids.has(run.id)), ...settled],
+        };
+      });
+    } finally {
+      tokens.delete(token);
+      if (tokens.size === 0 && this.foreignReads.get(sessionKey) === tokens)
+        this.foreignReads.delete(sessionKey);
     }
   }
 
@@ -4108,6 +4230,37 @@ export class ClawtrateClient {
     } finally {
       this.fileReads -= 1;
     }
+  }
+
+  listMemory(botId: string) {
+    return this.wholeRead(() =>
+      listMemory((method, params) => this.request(method, params), botId),
+    );
+  }
+
+  readMemory(botId: string, path: string) {
+    return this.wholeRead(() =>
+      readMemory((method, params) => this.request(method, params), botId, path),
+    );
+  }
+
+  async writeMemory(
+    botId: string,
+    path: string,
+    gatewayId: string | null,
+    expectedHash: string | null,
+    content: string | null,
+  ) {
+    if (this.options.readOnly || !this.state.connection.canAdmin)
+      throw new Error("Changing memory requires admin access.");
+    await writeMemory(
+      (method, params) => this.request(method, params),
+      botId,
+      path,
+      gatewayId,
+      expectedHash,
+      content,
+    );
   }
 
   /** A task's files and the folder it works in, read now (`sessions.files.list`, `sessions.describe`). */
@@ -4835,6 +4988,7 @@ export class ClawtrateClient {
     this.recipients.clear();
     this.spawnedBy.clear();
     this.foreign.clear();
+    this.foreignReads.clear();
     this.listRequested.clear();
     this.listApplied.clear();
     this.toolReads.clear();
@@ -5262,9 +5416,34 @@ export class ClawtrateClient {
     const row = asRecord(payload);
     const key = typeof row?.sessionKey === "string" ? row.sessionKey : null;
     const runId = typeof row?.runId === "string" ? capId(row.runId, MAX_ID_CHARS) : null;
-    if (!row || !key || !runId || !this.tracked(key)) return;
+    if (!row || !key || !runId) return;
     const clientRunId =
       typeof row.clientRunId === "string" ? capId(row.clientRunId, MAX_ID_CHARS) : null;
+    if (!this.tracked(key)) {
+      if (row.phase !== "end" && row.phase !== "error") return;
+      const sessionKey = capId(key, MAX_ID_CHARS);
+      const activity = this.foreign.get(sessionKey);
+      // A row naming a run id pair names one run: both ids are kept, so the
+      // read and the merge see the run whatever id it or history holds it under.
+      const pairs: Array<[string, string]> =
+        clientRunId && clientRunId !== runId ? [[runId, clientRunId]] : [];
+      const named = [runId, ...pairs.map(([, client]) => client)];
+      const ids = new Set(
+        named.filter((id) => {
+          const run = activity && findRun(activity, id);
+          return run
+            ? !isTerminal(run.state)
+            : [...this.recipients.values()].some((link) => link.runs.has(id));
+        }),
+      );
+      if (ids.size === 0) return;
+      for (const id of named) ids.add(id);
+      void this.readRecipientRuns(sessionKey, ids, this.generation, undefined, {
+        phase: row.phase === "error" ? "error" : "end",
+        pairs,
+      });
+      return;
+    }
     if (clientRunId && clientRunId !== runId) {
       this.updateActivity(key, (activity) => registerRunAlias(activity, runId, clientRunId));
     }

@@ -29,6 +29,7 @@ import {
   FOREIGN_RUNS_PER_SESSION,
   FOREIGN_SESSIONS,
   MAX_ACCESS_WAITERS,
+  MAX_FOREIGN_READ_SESSIONS,
   MAX_OPENED_READS,
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
@@ -45,7 +46,7 @@ import {
   MAX_SAVE_BYTES,
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
-import { emptyActivity } from "./runs.ts";
+import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   MAX_WAITING_ID_CHARS,
@@ -164,9 +165,19 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
     max: FOREIGN_SESSIONS,
-    each: ID + jsonLength(emptyActivity) + FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
+    each:
+      ID +
+      jsonLength(emptyActivity) +
+      MAX_QUEUE_ALIASES * 2 * ID +
+      FOREIGN_RUNS_PER_SESSION * (runWithoutSteps + 1),
     row: "foreignRuns",
   },
+  foreignReads: {
+    max: MAX_FOREIGN_READ_SESSIONS,
+    each: ID + MAX_STEPS_PER_TASK * N,
+    row: "bookkeeping",
+  },
+  "foreignReads.*": { max: MAX_STEPS_PER_TASK, each: N, row: null },
   "foreign.*.runs": {
     max: FOREIGN_RUNS_PER_SESSION,
     each: runWithoutSteps,
