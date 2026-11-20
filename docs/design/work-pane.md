@@ -486,7 +486,7 @@ Cards sit in the transcript where the message put them, left-aligned with the bo
 
 ### A page
 
-A bot can make a page, an interactive document, on the gateway's canvas. The card is a file card with the page icon, the page's title, and "Page" as its type; its button is "Open".
+A bot can make a page, an interactive document, on the gateway's canvas. The card is a file card with the page icon, the page's title, and "Page" as its type; its button is "Open". How a page opens, full window beside its chat, is `library.md`, section 6, which replaces the two points below. Every route to a page, this card and any page entry in Files or the media viewer included, passes that section's gate: on each platform a page is drawn only once its rendering path passes the zero-request check, and until then the page view shows its unavailable state.
 
 - It opens in the media viewer's frame (section 14), which shows the canvas document in a web view, full window, with the conversation one Close away.
 - **Not established.** The gateway serves canvas documents (`canvas.document.view`, and a hosted address for the canvas), but neither has been exercised (section 20). Until it is, a builder ships the card and checks the view against a development gateway first. When the page cannot be loaded, the viewer says "This page can't be shown here." with the gateway's reason and "Try again".
@@ -558,11 +558,11 @@ foot           Raw
 | A picture with no content at the gateway | The quiet tile and "The gateway lists this picture, but not its content, so it can't be shown or downloaded here." No Download, no Copy image                                                                                                      |
 | The device can't draw it                 | As "Anything else" above, with Download                                                                                                                                                                                                            |
 
-**"Sent in chat"** in the Files tab (section 3) lists the task's artifacts newest first, as file rows: the kind's icon (or a 32 px thumbnail for a picture whose preview was fetched), the title, and "Sent 5:37 PM · 37 KB". A page is listed with its type, "Page"; an item at another address with "from help.library.example". They come from the same one query as the cards (section 11), so the list and the cards always agree.
+**"Sent in chat"** in the Files tab (section 3) lists the task's artifacts newest first, as file rows: the kind's icon (or a 32 px thumbnail for a picture whose preview was fetched), the title, and "Sent 5:37 PM · 37 KB". A page is listed with its type, "Page"; an item at another address with "from help.library.example". Artifact rows come from the card's artifact reads. A Page row comes from a confirmed canvas block in this task's history and opens through the Page gate.
 
 ## 14. The media viewer
 
-Pictures, video, PDF pages and pages open in one viewer that fills the window (F-117).
+Pictures, video and PDF pages open in a full-window media viewer (F-117). A canvas Page in a card or in Files opens through the gate in `library.md` §6.
 
 - **Frame.** A `dialog`, modal, over the whole window. Its ground is the dark theme's stage (`--bg` of `[data-theme="dark"]`), in either theme: a picture is judged on a dark, quiet ground, and a light frame would glare around a dark video. All of its controls use the dark theme's tokens, so it adds no colour.
 - **Top bar**, 56 px, floating like the conversation's: at the left the item's title (15/500) and, when there are several, "2 of 3" (13, faint); at the right round buttons for Download, Copy image (pictures), and Close. Each has its name and tooltip: "Download usage.png", "Copy the image", "Close the viewer (Esc)".

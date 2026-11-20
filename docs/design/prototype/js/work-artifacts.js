@@ -375,19 +375,12 @@
   let viewerOpener = null;
   let speed = "1×";
   function sequence(id) {
-    if (id === "page") return ["page"];
     const a = A[id];
     if (a.pages) return [id];
     // An item with no content at the gateway is not offered in the viewer's sequence.
     return a.group ? byTask(a.task).filter((k) => A[k].group === a.group && fetchable(A[k])) : [id];
   }
   function stage(id, page) {
-    if (id === "page") {
-      return (
-        `<div class="viewer-page"><div class="viewer-page-inner"><h2>E-book apps compared</h2><p>Sort by titles, wait time or cost. This is the page's content, shown from the gateway's canvas.</p>` +
-        `<table><thead><tr><th>App</th><th>Titles</th><th>Typical wait</th></tr></thead><tbody><tr><td>Shelfwise</td><td>48,000</td><td>9 days</td></tr><tr><td>PageLoop</td><td>31,000</td><td>14 days</td></tr><tr><td>Readmore</td><td>22,000</td><td>6 days</td></tr></tbody></table></div></div>`
-      );
-    }
     const a = A[id];
     if (a.pages) return `<div class="viewer-pdf">${pdfPage(page || 1, a.pages)}</div>`;
     if (a.kind === "video") {
@@ -400,6 +393,30 @@
     return `<div class="viewer-image" data-zoom="fit" role="img" aria-label="${esc(a.name)}">${a.art()}</div>`;
   }
   function openViewer(id, opener, page) {
+    // A page never opens in this viewer: it goes through the Page gate (library.md, section 6) where that page is
+    // loaded, and otherwise fails closed. Nothing of the page is read, parsed or drawn here.
+    if (id === "page") {
+      if (CT.openPage) return CT.openPage("pj", opener);
+      viewerOpener = opener || document.activeElement;
+      viewer?.remove();
+      viewer = document.createElement("div");
+      viewer.className = "viewer";
+      viewer.dataset.theme = "dark";
+      viewer.dataset.id = "page";
+      viewer.dataset.n = 0;
+      viewer._ids = ["page"];
+      viewer.setAttribute("role", "dialog");
+      viewer.setAttribute("aria-modal", "true");
+      viewer.setAttribute("aria-label", "E-book apps compared");
+      viewer.innerHTML =
+        `<div class="viewer-bar"><div class="viewer-title"><strong>E-book apps compared</strong></div>` +
+        `<button type="button" class="icon-button" data-v="close" aria-label="Close the viewer" title="Close (Esc)">${icon("x")}</button></div>` +
+        `<div class="viewer-stage"><p class="viewer-closed" role="status">Clawtrate can't show pages here yet.</p></div>`;
+      $(".app").appendChild(viewer);
+      $(".shell").inert = true;
+      $('[data-v="close"]', viewer).focus();
+      return;
+    }
     const ids = sequence(id);
     const i = ids.indexOf(id);
     viewerOpener = opener || document.activeElement;
