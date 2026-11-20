@@ -79,6 +79,11 @@
   color: var(--text-muted);
   white-space: nowrap;
 }
+/* A tag longer than its row wraps inside its pill rather than pushing the row wider. */
+.k-pin .k-tag {
+  max-width: 100%;
+  white-space: normal;
+}
 .k-tag[data-tone="warn"] {
   background: var(--warn-soft);
   color: var(--warn);
@@ -230,7 +235,7 @@
 }
 .k-pin {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 0 var(--space-2);
   padding: 4px var(--space-2) 4px 0;
@@ -239,6 +244,7 @@
   border-top: 1px solid var(--border);
 }
 .k-pin-open {
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;

@@ -25,8 +25,8 @@
   const online = () => ["connected", "synced"].includes(app.model.connection);
   let minute = 41;
   const clock = () => `5:${String(minute++).padStart(2, "0")} PM`;
-  // A write's answer arrives after ANSWER ms, and the page's own read after READ ms more.
-  const ANSWER = 300;
+  // A write's answer arrives after ANSWER ms (the address's `answer`, else 300), and the page's own read after READ ms more.
+  const ANSWER = Number(p("answer")) || 300;
   const READ = 300;
   const later = (ms, f) => setTimeout(f, ms);
   // Every request the prototype sends, as sent: what a check reads to see what a click captured.
@@ -113,9 +113,9 @@
   // A read of one skill, as skills.library.read returns it, or what the gateway refuses.
   const read = (id) => {
     const s = gw(id);
-    if (!s) return { error: "NOT_FOUND" };
+    if (!s) return { error: "INVALID_REQUEST", code: "SKILL_LIBRARY_NOT_FOUND" };
     if (s.removed) return { removed: true, slug: s.slug };
-    if (!visible(s)) return { error: "NOT_FOUND" };
+    if (!visible(s)) return { error: "INVALID_REQUEST", code: "SKILL_LIBRARY_NOT_FOUND" };
     return { rev: s.rev, slug: s.slug, description: s.description, body: s.body, extra: [...s.extra], raw: s.raw, files: s.files.map((f) => ({ ...f })), shared: s.shared, enabled: s.enabled, saved: s.saved, owner: s.owner, ownerLabel: s.ownerLabel };
   };
   // Another device's save, on the gateway's side.
@@ -140,32 +140,52 @@
     return "published";
   }
 
-  // A task's saved skills: each pin keeps its own revision and that revision's text.
+  // On the gateway: "gone" was removed; "elsewhere" was someone else's, no longer shared;
+  // "hiddengone" was someone else's, unshared, and then removed.
+  G.skills.push({ ...skill("gone", "old-route-notes", "Use when you note a route.", "Write down the route's turns."), removed: true });
+  G.skills.push(skill("elsewhere", "shared-loop", "Use when walking the shared loop.", "Go anticlockwise.", { owner: "robin", ownerLabel: "Robin Park", shared: false }));
+  G.skills.push({ ...skill("hiddengone", "robins-old-loop", "Use when walking Robin's old loop.", "Go clockwise.", { owner: "robin", ownerLabel: "Robin Park", shared: false }), removed: true });
+  // An earlier revision of trail-checklist, kept in its history as every revision is.
+  {
+    const trail = gw("trail");
+    const earlier = { ...trail, body: "1. Check the forecast.\n2. Pack water." };
+    trail.history.unshift({ rev: revOf(earlier), md: markdown(earlier) });
+  }
+  const OLD_TRAIL = gw("trail").history[0].rev;
+  const PINS = p("pins");
+  // pins=full: a task with the 64 library skills the gateway allows.
+  if (PINS === "full") for (let i = 0; i < 64; i += 1) G.skills.push(skill(`f${i}`, `walk-note-${i + 1}`, "Use when a walk needs a note.", "Write the note."));
+
+  // A task's saved skills: each pin keeps its own revision, and that revision's text from the
+  // skill's history. A revision the history doesn't have can't be pinned.
   const pinOf = (id, rev) => {
     const s = gw(id);
-    return { skillId: id, rev: rev || s.rev, slug: s.slug, description: s.description, body: s.body };
+    const h = s?.history.find((entry) => entry.rev === (rev || s.rev));
+    if (!h) return null;
+    const x = CT.skillsParts(h.md);
+    return { skillId: s.id, rev: h.rev, slug: s.slug, description: x.description, body: x.body };
   };
-  const OLD_TRAIL = hash("an earlier trail-checklist");
-  const PINS = p("pins");
   const pins = {
     j1:
       PINS === "none"
         ? []
-        : [
-            { ...pinOf("trail", PINS === "outdated" || PINS === "removed" ? OLD_TRAIL : null), ...(PINS === "outdated" || PINS === "removed" ? { body: "1. Check the forecast.\n2. Pack water." } : {}) },
-            pinOf("kitchen"),
-            pinOf("weather"),
-            ...(PINS === "removed" ? [{ skillId: "gone", rev: hash("gone"), slug: "old-route-notes", description: "Use when you note a route.", body: "Write down the route's turns." }] : []),
-            ...(PINS === "unavailable" ? [{ skillId: "elsewhere", rev: hash("elsewhere"), slug: "shared-loop", description: "Use when walking the shared loop.", body: "Go anticlockwise." }] : []),
-          ],
+        : PINS === "full"
+          ? Array.from({ length: 64 }, (_, i) => pinOf(`f${i}`))
+          : [
+              pinOf("trail", PINS === "outdated" || PINS === "removed" ? OLD_TRAIL : null),
+              pinOf("kitchen"),
+              pinOf("weather"),
+              ...(PINS === "removed" ? [pinOf("gone"), pinOf("hiddengone")] : []),
+              ...(PINS === "unavailable" || PINS === "entryfail" ? [pinOf("elsewhere")] : []),
+            ],
     jlearn: [pinOf("kitchen"), pinOf("weather")],
     p1: [pinOf("ridge"), pinOf("kitchen")],
   };
-  // On the gateway: "gone" was removed; "elsewhere" was someone else's, no longer shared.
-  G.skills.push({ ...skill("gone", "old-route-notes", "Use when you note a route.", "Write down the route's turns."), removed: true });
-  G.skills.push({ ...skill("elsewhere", "shared-loop", "Use when walking the shared loop.", "Go anticlockwise.", { owner: "robin", ownerLabel: "Robin Park", shared: false }) });
-  // skills.status {agentId, sessionKey}: weather-check's needs aren't met for these tasks.
-  const notEligible = new Set(["weather"]);
+  // pins=every: the task holds every skill this connection can attach.
+  if (PINS === "every") pins.j1 = G.skills.filter((s) => visible(s)).map((s) => pinOf(s.id));
+  // skills.status {agentId, sessionKey}: weather-check is not eligible for these tasks, and the
+  // status reports it disabled; it names no missing requirement.
+  const STATUS = { weather: { eligible: false, disabled: true, missing: null } };
 
   const listParam = p("list");
   const selected = app.model.selectedBot;
@@ -194,11 +214,7 @@
     status: null, // what the last write's read showed
     compare: null, // {theirs}
     listStatus: null,
-    taskView: null,
-    taskStatus: null,
-    taskPending: null,
-    taskRead: {},
-    attachOpen: false,
+    tasks: {}, // per task key: its last read, pending write, outcome, held revision, attach menu
     pinState: PINS === "error" ? "error" : "ready",
     listDraft: null,
     listNote: null,
@@ -798,13 +814,22 @@
     const what = f.list === undefined ? "no filter" : f.list.length === 0 ? "none" : `only ${f.list.length}`;
     return f.own ? `its own filter, ${what}` : `the gateway's default, ${what}`;
   };
+  const CAP = 64;
+  // skills.library.list {sessionKey}: the task's selections, each with its own revision and text.
+  const readTask = (key) => (pins[key] || []).map((x) => ({ ...x }));
+  // What the section shows is the task's last read, kept per task with its time.
+  const shown = (key) => (K.tasks[key] ||= { list: readTask(key), at: "5:41 PM", status: null, pending: null, held: null, attachOpen: false });
+  // session.attachable: library entries this connection can read that the task doesn't hold, each at its current revision.
+  const attachableFor = (list) => G.skills.filter((s) => visible(s) && !list.some((x) => x.skillId === s.id)).map((s) => ({ skillId: s.id, slug: s.slug, description: s.description, rev: s.rev }));
 
   // How a pin stands against the library, from this read.
   function pinState(x) {
     const s = gw(x.skillId);
     if (!s || !visible(s)) {
-      const r = read(x.skillId);
-      return r.removed ? { kind: "removed", words: "Removed from the library" } : { kind: "unavailable", words: "Library entry unavailable" };
+      const r = PINS === "entryfail" ? { error: "UNAVAILABLE" } : read(x.skillId);
+      if (r.removed === true) return { kind: "removed", words: "Removed from the library" };
+      if (r.code === "SKILL_LIBRARY_NOT_FOUND") return { kind: "unavailable", words: "Library entry unavailable" };
+      return { kind: "unread", words: "Couldn't read the library entry" };
     }
     if (s.rev !== x.rev) return { kind: "different", words: "Different library revision", lib: s.rev };
     return { kind: "same" };
@@ -813,30 +838,38 @@
   function taskSection() {
     const bot = app.model.selectedBot;
     const t = taskKey();
-    const list = pins[t];
-    if (!list) return "";
-    if (K.taskView) return heldView(K.taskView);
-    let html = `<section class="work-section k-task" aria-labelledby="k-task-title"><h3 id="k-task-title" tabindex="-1">Skills in this task</h3>`;
-    if (K.pinState === "error")
+    if (!t) return "";
+    const v = shown(t);
+    if (v.held) return heldView(v.held);
+    const list = v.list;
+    let html = `<section class="work-section k-task" aria-labelledby="k-task-title" data-k-task="${esc(t)}"><h3 id="k-task-title" tabindex="-1">Skills in this task</h3>`;
+    if (K.pinState === "error" && t === "j1")
       return html + `<p class="work-note">Couldn't load this task's skills. The gateway answered: Session not found.</p>${button("Try again", 'data-k="pins-retry" data-size="sm"')}</section>`;
     const states = list.map((x) => [x, pinState(x)]);
     const blocked = states.some(([, s]) => s.kind === "removed" || s.kind === "unavailable");
     const different = states.some(([, s]) => s.kind === "different");
-    html += `<p class="b-hint k-pins-read">As read at ${K.taskRead[t] || "5:41 PM"}. The skills this task has saved for its next turns, each at its revision.</p>`;
-    if (K.taskPending) html += pendingLine(K.taskPending);
+    const busyHere = Boolean(v.pending) || !online();
+    html += `<p class="b-hint k-pins-read">As read at ${v.at}. The skills this task has saved for its next turns, each at its revision.</p>`;
+    if (v.pending) html += pendingLine(v.pending);
     if (different && canWrite())
-      html += `<div class="k-update">${button("Update to the library's current revisions", `data-k="refresh" data-size="sm"${blocked || K.taskPending || !online() ? " disabled" : ""}`)}<small>${blocked ? "Detach the skills marked unavailable or removed first: the gateway refuses to update a task that has one." : "Updates every skill in this task."}</small></div>`;
+      html += `<div class="k-update">${button("Update to the library's current revisions", `data-k="refresh" data-size="sm"${blocked || busyHere ? " disabled" : ""}`)}<small>${blocked ? "Detach the skills marked unavailable or removed first: the gateway refuses to update a task that has one." : "Updates every skill in this task."}</small></div>`;
     if (!list.length) html += `<p class="work-note">This task has no skills from your library.</p>`;
     else
       html += `<ul class="k-pins">${states
         .map(([x, st]) => {
-          const needs = notEligible.has(x.skillId);
-          const tags = [st.kind !== "same" ? tag(st.words, st.kind === "different" ? "" : "warn") : "", needs ? tag("Needs not met") : ""].join("");
-          const line = [st.kind === "different" ? `The library has revision ${st.lib.slice(0, 12)}.` : "", needs ? "The gateway says what it needs isn't there, for this task." : ""].filter(Boolean).join(" ");
+          const status = STATUS[x.skillId];
+          const ineligible = status && status.eligible === false;
+          const tags = [st.kind !== "same" ? tag(st.words, st.kind === "different" ? "" : "warn") : "", ineligible ? tag("Not eligible in the gateway's skill status") : "", status?.missing ? tag("Needs not met") : ""].join("");
+          const line = [
+            st.kind === "different" ? `The library has revision ${st.lib.slice(0, 12)}.` : "",
+            ineligible ? `The gateway's skill status for this task lists it as not eligible${status.disabled ? ", and as disabled" : ""}.` : "",
+          ]
+            .filter(Boolean)
+            .join(" ");
           return (
-            `<li class="k-pin"><button type="button" class="k-pin-open" data-k-pin="${x.skillId}" aria-label="${esc(`${x.slug}, revision ${x.rev.slice(0, 12)}${st.kind !== "same" ? `, ${st.words.toLowerCase()}` : ""}${needs ? ", needs not met" : ""}`)}">` +
+            `<li class="k-pin"><button type="button" class="k-pin-open" data-k-pin="${x.skillId}" aria-label="${esc(`${x.slug}, revision ${x.rev.slice(0, 12)}${st.kind !== "same" ? `, ${st.words.toLowerCase()}` : ""}${ineligible ? ", not eligible in the gateway's skill status" : ""}`)}">` +
             `<span class="k-row-name">${esc(x.slug)}</span>${rev(x.rev)}<span class="k-tags">${tags}</span></button>` +
-            (canWrite() ? button("Detach", `data-k="detach" data-value="${x.skillId}" data-size="sm" aria-label="Detach ${esc(x.slug)}"${K.taskPending || !online() ? " disabled" : ""}`, "quiet") : "") +
+            (canWrite() ? button("Detach", `data-k="detach" data-value="${x.skillId}" data-size="sm" aria-label="Detach ${esc(x.slug)}"${busyHere ? " disabled" : ""}`, "quiet") : "") +
             (line ? `<small class="k-why">${esc(line)}</small>` : "") +
             `</li>`
           );
@@ -844,20 +877,22 @@
         .join("")}</ul>`;
     html += `<p class="b-hint k-filter-line">${esc(botName(bot))}'s skill filter is ${esc(filterWords(bot))}. A filter can leave out a skill this task has; it is set in ${esc(botName(bot))}'s settings, apart from these.</p>`;
     if (canWrite()) {
-      const attachable = G.skills.filter((s) => visible(s) && !list.some((x) => x.skillId === s.id));
-      html += `<div class="k-attach"><button type="button" class="button" data-size="sm" data-k="attach-open" aria-expanded="${K.attachOpen}"${K.taskPending || !online() ? " disabled" : ""}>Attach a skill</button>`;
-      if (K.attachOpen)
+      const attachable = attachableFor(list);
+      const full = list.length >= CAP;
+      html += `<div class="k-attach"><button type="button" class="button" data-size="sm" data-k="attach-open" aria-expanded="${v.attachOpen}"${busyHere || full ? " disabled" : ""}>Attach a skill</button>`;
+      if (full) html += `<p class="work-note">This task already has 64 library skills. Detach one to make room.</p>`;
+      else if (v.attachOpen)
         html += attachable.length
-          ? `<ul class="k-attach-list" aria-label="Skills to attach">${attachable.map((s) => `<li><button type="button" class="k-attach-item" data-k="attach" data-value="${s.id}"><span class="k-row-name">${esc(s.slug)}</span><small>${esc(s.description)}</small></button></li>`).join("")}</ul>`
-          : `<p class="work-note">Every skill in your library is in this task.</p>`;
+          ? `<ul class="k-attach-list" aria-label="Skills to attach">${attachable.map((s) => `<li><button type="button" class="k-attach-item" data-k="attach" data-value="${s.skillId}" data-rev="${s.rev}"><span class="k-row-name">${esc(s.slug)}</span>${rev(s.rev)}<small>${esc(s.description)}</small></button></li>`).join("")}</ul>`
+          : `<p class="work-note">No skills are available to attach.</p>`;
       html += `</div>`;
     } else html += `<p class="b-hint">Changing a task's skills needs write access.</p>`;
-    if (K.taskStatus) html += K.taskStatus;
+    if (v.status) html += v.status;
     return html + `</section>`;
   }
 
   function heldView(id) {
-    const x = pins[taskKey()].find((y) => y.skillId === id);
+    const x = shown(taskKey()).list.find((y) => y.skillId === id);
     return (
       `<section class="work-section k-task k-held" aria-labelledby="k-held-title"><div class="b-subhead">${backTo("Back to details", "held-back")}<h3 id="k-held-title" tabindex="-1">${esc(x.slug)}</h3></div>` +
       CONTENT +
@@ -866,47 +901,81 @@
     );
   }
 
+  let paintedTask = null;
   function paintTask(focus) {
     const host = $("#panel-details");
     if (!host) return;
+    // Choosing another task closes a held revision that was open; nothing of one task shows in another.
+    if (paintedTask && paintedTask !== taskKey() && K.tasks[paintedTask]) {
+      K.tasks[paintedTask].held = null;
+      K.tasks[paintedTask].attachOpen = false;
+    }
+    paintedTask = taskKey();
     $(".k-task", host)?.remove();
     host.insertAdjacentHTML("beforeend", taskSection());
     if (focus) $(focus, host)?.focus();
   }
   CT.skillsTaskSection = () => paintTask();
 
-  // A task write, captured with its task, skill and revision; the section says what the
-  // next read of that task shows (section 9).
-  function taskWrite(kind, skillId) {
+  // A task write, captured with its task, skill and revision at the click; the section of
+  // that task alone says what the next read of that task shows (section 9).
+  function taskWrite(kind, skillId, revision) {
     const key = taskKey();
-    const sub = { key, kind, skillId, rev: skillId ? gw(skillId)?.rev : null };
+    const sub = { key, kind, skillId, revision };
+    const request = { method: "skills.library.activate", sessionKey: key, action: kind, ...(skillId ? { skillId } : {}), ...(kind === "attach" ? { revision } : {}) };
+    sent.push(request);
     const mode = takeMode("task");
-    K.taskPending = { refresh: "Updating…", detach: "Detaching…", attach: "Attaching…" }[kind];
-    K.taskStatus = null;
+    const v = shown(key);
+    v.pending = { refresh: "Updating…", detach: "Detaching…", attach: "Attaching…" }[kind];
+    v.status = null;
+    v.attachOpen = false;
     paintTask();
     later(ANSWER, () => {
-      const list = pins[sub.key];
-      let answer = { ok: true };
+      const list = pins[sub.key] || (pins[sub.key] = []);
+      let answer;
       if (mode === "refused") answer = { error: "Session changed before activation; refresh and retry." };
-      else {
-        if (kind === "refresh") list.forEach((x) => gw(x.skillId) && Object.assign(x, pinOf(x.skillId)));
-        if (kind === "detach") pins[sub.key] = list.filter((y) => y.skillId !== sub.skillId);
-        if (kind === "attach") list.push(pinOf(sub.skillId, sub.rev));
-        if (mode === "lost") answer = null;
+      else if (kind === "refresh") {
+        if (list.some((x) => !gw(x.skillId) || !visible(gw(x.skillId)))) answer = { error: "A selected skill is no longer available. Detach it before refreshing." };
+        else {
+          list.forEach((x, i) => (list[i] = pinOf(x.skillId)));
+          answer = { ok: true };
+        }
+      } else if (kind === "detach") {
+        pins[sub.key] = list.filter((y) => y.skillId !== sub.skillId);
+        answer = { ok: true };
+      } else {
+        const pin = pinOf(sub.skillId, sub.revision);
+        if (list.length >= CAP) answer = { error: "This session already has 64 library skills." };
+        else if (!pin) answer = { error: "Skill revision not found." };
+        else {
+          list.push(pin);
+          answer = { ok: true, selection: { skillId: pin.skillId, revision: pin.rev } };
+        }
       }
+      if (mode === "lost" && answer.ok) answer = null;
       later(READ, () => {
-        K.taskPending = null;
-        K.taskRead[sub.key] = clock();
-        const running = p("running") === "1";
-        const after = `${running ? " The turn running now keeps the skills it started with." : ""}`;
-        const done = { refresh: "Updated: reading the task again, its skills are at the library's current revisions.", detach: "Detached: reading the task again, it no longer has that skill.", attach: "Attached: reading the task again, it has that skill." }[kind];
-        K.taskStatus = answer?.error
-          ? `<p class="b-field-error" role="status">The gateway answered: ${esc(answer.error)} Nothing changed; the skills above are as read again.</p>`
-          : answer
-            ? `<p class="b-hint" role="status">${done} From this task's next turn.${after}</p>`
-            : `<p class="b-hint" role="status">Couldn't tell whether the change reached the gateway. The skills above are as read again.${after}</p>`;
-        if (sub.key === taskKey()) paintTask();
-        announce(answer?.error ? "Couldn't change the task's skills" : answer ? done.split(":")[0] : "Couldn't tell whether it changed");
+        v.pending = null;
+        const running = p("running") === "1" ? " The turn running now keeps the skills it started with." : "";
+        const after = mode === "readfail" ? null : readTask(sub.key);
+        const unsure = answer ? "" : "Couldn't tell whether the change reached the gateway. ";
+        let words;
+        if (!after) words = `${answer?.error ? `The gateway answered: ${esc(answer.error)} ` : unsure}Couldn't read this task's skills again.`;
+        else {
+          v.list = after;
+          v.at = clock();
+          const held = after.find((x) => x.skillId === sub.skillId);
+          if (answer?.error) words = `The gateway answered: ${esc(answer.error)} The skills shown are from the next read.`;
+          else if (kind === "refresh") words = `${answer ? "Updated. " : unsure}Reading the task again shows these saved revisions, from its next turn.${running}`;
+          else if (kind === "detach") words = held ? `${unsure}Reading the task again, it still has revision ${held.rev.slice(0, 12)}.` : `${answer ? "Detached. " : unsure}Reading the task again, it no longer has that skill.${running}`;
+          else if (!held) words = `${unsure}Reading the task again, it doesn't have that skill.`;
+          else if (answer && held.rev !== answer.selection.revision) words = `The gateway returned revision ${held.rev.slice(0, 12)}. Reading the task again, it has revision ${held.rev.slice(0, 12)}.`;
+          else words = `${answer ? "Attached. " : unsure}Reading the task again, it has revision ${held.rev.slice(0, 12)}. From this task's next turn.${running}`;
+        }
+        v.status = `<p class="${answer?.error || !after ? "b-field-error" : "b-hint"}" role="status">${words}</p>`;
+        // Only the task the write was for shows or announces it.
+        if (sub.key !== taskKey()) return;
+        paintTask();
+        announce(!after ? "Couldn't read this task's skills again." : answer?.error ? "Couldn't change the task's skills" : answer ? { refresh: "Updated", detach: "Detached", attach: "Attached" }[kind] : "Couldn't tell whether it changed");
       });
     });
   }
@@ -1065,7 +1134,7 @@
     if (!line || taskKey() !== "jlearn") return;
     const slug = line.dataset.kAttachFor;
     const s = G.skills.find((x) => x.slug === slug && x.id === "trail");
-    const held = pins.jlearn.find((x) => x.skillId === s?.id);
+    const held = shown("jlearn").list.find((x) => x.skillId === s?.id);
     if (!s || !visible(s)) line.innerHTML = `<span>It isn't in your library now, so it can't be attached here.</span>`;
     else if (held) line.innerHTML = `<span>This task has it, revision ${esc(held.rev.slice(0, 12))}.</span>`;
     else if (!canWrite()) line.innerHTML = `<span>This task doesn't have it. Attaching it needs write access.</span>`;
@@ -1173,7 +1242,7 @@
     }
     const pin = event.target.closest("[data-k-pin]");
     if (pin) {
-      K.taskView = pin.dataset.kPin;
+      shown(taskKey()).held = pin.dataset.kPin;
       return paintTask("#k-held-title");
     }
     const choice = event.target.closest("[data-k-choice]");
@@ -1257,8 +1326,9 @@
         });
       // Skills in this task
       case "held-back": {
-        const from = K.taskView;
-        K.taskView = null;
+        const v = shown(taskKey());
+        const from = v.held;
+        v.held = null;
         paintTask();
         return $(`[data-k-pin="${from}"]`, $("#panel-details"))?.focus();
       }
@@ -1268,7 +1338,7 @@
       case "refresh":
         return taskWrite("refresh");
       case "detach": {
-        const x = pins[taskKey()].find((y) => y.skillId === value);
+        const x = shown(taskKey()).list.find((y) => y.skillId === value);
         const st = pinState(x);
         if (st.kind === "removed" || st.kind === "unavailable")
           return D.confirmBox({
@@ -1280,13 +1350,15 @@
           });
         return taskWrite("detach", value);
       }
-      case "attach-open":
-        K.attachOpen = !K.attachOpen;
+      case "attach-open": {
+        const v = shown(taskKey());
+        v.attachOpen = !v.attachOpen;
         paintTask();
         return $('[data-k="attach-open"]', $("#panel-details"))?.focus();
+      }
       case "attach":
-        K.attachOpen = false;
-        return taskWrite("attach", value);
+        // The revision the attachable row showed at the click.
+        return taskWrite("attach", value, t.dataset.rev);
       // A bot's skills
       case "list-save":
         return saveList(bot);
@@ -1349,7 +1421,10 @@
         return later(ANSWER, () => {
           if (mode !== "refused") pins[sub.key].push(pinOf(sub.skillId, sub.rev));
           later(READ, () => {
-            const held = pins[sub.key].find((x) => x.skillId === sub.skillId);
+            const v = shown(sub.key);
+            v.list = readTask(sub.key);
+            v.at = clock();
+            const held = v.list.find((x) => x.skillId === sub.skillId);
             if (taskKey() === sub.key) {
               const l = $("#k-card-attach");
               if (l)
@@ -1386,7 +1461,7 @@
   }
 
   // busy: a write on any of these pages is still waiting for its answer or its read.
-  const busy = () => Boolean(K.pending || K.taskPending || K.listPending || K.learnedPending || document.querySelector("#k-card-attach .k-pending"));
+  const busy = () => Boolean(K.pending || Object.values(K.tasks).some((v) => v.pending) || K.listPending || K.learnedPending || document.querySelector("#k-card-attach .k-pending"));
   window.skills = { G, K, pins, openPage, read, otherSave, sent, busy };
   paintTask();
   paintCards();

@@ -29,7 +29,7 @@ const open = async (query = "", viewport = { width: 1440, height: 900 }) => {
   p.on("request", (r) => /^https?:/i.test(r.url()) && outbound.push(r.url()));
   await p.goto(base + (query ? "&" + query : ""));
   await p.waitForFunction(() => Boolean(window.skills) && document.readyState === "complete", null, { timeout: 20000 });
-  await p.waitForTimeout(250);
+  await p.waitForTimeout(400);
   return p;
 };
 const text = (p, sel) => p.evaluate((s) => document.querySelector(s)?.textContent.replace(/\s+/g, " ").trim() || "", sel);
@@ -45,8 +45,11 @@ const wait = async (p, ms = SETTLE) => {
 };
 const announced = async (p) => {
   await p.waitForTimeout(80);
+  await p.waitForFunction(() => document.querySelector("#b-announce").textContent, null, { timeout: 3000 }).catch(() => {});
   return p.evaluate(() => document.querySelector("#b-announce").textContent);
 };
+// Cases that type while a write waits give the write a slower answer, so a slow machine still types in time.
+const SLOW = "&answer=2000";
 const confirmText = (p) => text(p, "#confirm-dialog");
 const typeInto = async (p, sel, value) => {
   await p.fill(sel, value);
@@ -198,19 +201,18 @@ check("S4 a team skill below admin is read-only, in the gateway's words", (await
 await p.close();
 
 // Saving (section 5) ---------------------------------------------------------------------------------
-p = await open(LIB + "&skill=trail");
+p = await open(LIB + "&skill=trail" + SLOW);
 await typeInto(p, "#k-body", "1. Check the forecast.\n2. Pack water and a map.");
 check("S5 an edit enables Save", !(await p.evaluate(() => document.querySelector('[data-k="save"]').disabled)));
 await p.click('[data-k="save"]');
 await wait(p, 100);
 t = await dialog(p);
 check("S5 R4 pending: Saving…, and no outcome before the read", t.includes("Saving…") && !t.includes("Saved revision") && (await p.evaluate(() => document.querySelector('[data-k="save"]').disabled)));
+await typeInto(p, "#k-body", "1. Check the forecast.\n2. Pack water and a map.\n3. Typed while it saved.");
 await p.focus("#k-desc");
 await p.keyboard.press("Escape");
 await p.click('[data-k="to-list"]');
-await wait(p, 60);
 check("S2 R8 a pending Save: Escape and Back wait, the page stays open on its subject", (await p.evaluate(() => document.querySelector("#settings-dialog").open)) && (await text(p, "#b-section-title")) === "trail-checklist" && !(await confirmText(p)).includes("Leave without saving?") && (await p.evaluate(() => window.skills.K.page)) === "trail");
-await typeInto(p, "#k-body", "1. Check the forecast.\n2. Pack water and a map.\n3. Typed while it saved.");
 await wait(p);
 t = await dialog(p);
 g = await gwRead(p, "trail");
@@ -381,7 +383,7 @@ check("S2 R4 offline: the edit stays, Save waits for the connection", (await dia
 await p.close();
 
 // A new skill (section 6) -----------------------------------------------------------------------------
-p = await open(LIB);
+p = await open(LIB + SLOW);
 await p.click('[data-k="new"]');
 await wait(p, 150);
 check("S6 New skill: the title, the name rule, focus on Name", (await text(p, "#b-section-title")) === "New skill" && (await dialog(p)).includes("Lowercase letters, digits and hyphens, starting with a letter or digit, up to 63 characters.") && (await p.evaluate(() => document.activeElement?.id)) === "k-slug");
@@ -462,7 +464,7 @@ check("S6 over the gateway's limit in bytes: said before sending", (await text(p
 await p.close();
 
 // Removing (section 7) and sharing (section 8) -------------------------------------------------------
-p = await open(LIB + "&skill=trail");
+p = await open(LIB + "&skill=trail" + SLOW);
 await typeInto(p, "#k-body", "An edit that isn't saved.");
 await p.click('[data-k="remove"]');
 await wait(p, 120);
@@ -604,7 +606,7 @@ p = await open(TASK);
 t = await details(p);
 check("S9 R5 the task's skills, each with the task's own revision", await p.evaluate(() => [...document.querySelectorAll(".k-pin")].every((li) => li.querySelector(".k-rev").textContent === window.skills.pins.j1.find((x) => x.skillId === li.querySelector("[data-k-pin]").dataset.kPin).rev.slice(0, 12))));
 check("S9 R5 the read's time, and what these are", t.includes("As read at 5:41 PM. The skills this task has saved for its next turns, each at its revision."));
-check("S9 R2 needs not met is the only availability shown, for this task", has(t, "Needs not met", "The gateway says what it needs isn't there, for this task.") && !t.includes("Not given"));
+check("S9 R5 an ineligible skill the status reports as disabled: not eligible, never Needs not met", has(t, "Not eligible in the gateway's skill status", "The gateway's skill status for this task lists it as not eligible, and as disabled.") && !t.includes("Needs not met") && !t.includes("Not given"));
 check("S9 R2 the bot's filter is shown apart from the pins", t.includes("Juniper's skill filter is the gateway's default, no filter. A filter can leave out a skill this task has; it is set in Juniper's settings, apart from these."));
 check("S9 nothing different: no Update", !(await p.$('[data-k="refresh"]')));
 await p.click('[data-k-pin="kitchen"]');
@@ -615,23 +617,55 @@ await wait(p, 120);
 check("S9 R8 Back returns focus to the row that opened it", (await p.evaluate(() => document.activeElement?.dataset.kPin)) === "kitchen");
 await p.click('[data-k="attach-open"]');
 await wait(p, 100);
-check("S9 Attach lists only skills the task doesn't have", has(await details(p), "pack-list", "ridge-safety") && !(await p.$('.k-attach-item[data-value="trail"]')));
-await p.click('.k-attach-item[data-value="ridge"]');
+check("S9 Attach lists only skills the task doesn't have, each with its revision", has(await details(p), "pack-list", "ridge-safety") && !(await p.$('.k-attach-item[data-value="trail"]')) && (await text(p, '.k-attach-item[data-value="pack"] .k-rev')) === (await gwRead(p, "pack")).rev.slice(0, 12));
+const picked = (await gwRead(p, "pack")).rev;
+const pickedBody = (await gwRead(p, "pack")).body;
+await p.click('.k-attach-item[data-value="pack"]');
+// A library save lands between the pick and the answer: what was picked is what is attached.
+await p.evaluate(() => window.skills.otherSave("pack"));
 await wait(p, 100);
-check("S9 R4 pending: Attaching…, no outcome yet", (await details(p)).includes("Attaching…") && !(await details(p)).includes("Attached:"));
+check("S9 R4 pending: Attaching…, no outcome yet", (await details(p)).includes("Attaching…") && !(await details(p)).includes("Attached."));
 await wait(p);
-check("S9 attached: from the read, from the next turn", has(await details(p), "Attached: reading the task again, it has that skill. From this task's next turn.") && Boolean(await p.$('[data-k-pin="ridge"]')));
+g = await p.evaluate(() => window.skills.pins.j1.find((x) => x.skillId === "pack"));
+check(
+  "S9 R5 attach sends the task key, the skill and the revision shown at the click; the task holds that revision and its text",
+  JSON.stringify(await p.evaluate(() => window.skills.sent.at(-1))) === JSON.stringify({ method: "skills.library.activate", sessionKey: "j1", action: "attach", skillId: "pack", revision: picked }) && g.rev === picked && g.body === pickedBody && (await gwRead(p, "pack")).rev !== picked,
+);
+check("S9 attached: the read's exact revision, from the next turn", (await details(p)).includes(`Attached. Reading the task again, it has revision ${picked.slice(0, 12)}. From this task's next turn.`) && (await announced(p)) === "Attached");
 await p.click('[data-k="detach"][data-value="kitchen"]');
 await wait(p);
-check("S9 detached: from the read", has(await details(p), "Detached: reading the task again, it no longer has that skill.") && !(await p.$('[data-k-pin="kitchen"]')));
+check("S9 detached: from the read", has(await details(p), "Detached. Reading the task again, it no longer has that skill.") && !(await p.$('[data-k-pin="kitchen"]')) && JSON.stringify(await p.evaluate(() => window.skills.sent.at(-1))) === JSON.stringify({ method: "skills.library.activate", sessionKey: "j1", action: "detach", skillId: "kitchen" }));
 await p.close();
 
+// Another task chosen while a write is pending: the write keeps its task, and nothing of it shows in the other.
 p = await open(TASK);
+await p.click('[data-k-pin="kitchen"]');
+await wait(p, 100);
+await p.evaluate(() => window.app.openTask("juniper", "j3"));
+await wait(p, 150);
+check("S9 R5 another task doesn't show the first task's held revision", !(await p.$(".k-held")) && (await details(p)).includes("This task has no skills from your library."));
+await p.evaluate(() => window.app.openTask("juniper", "j1"));
+await wait(p, 150);
+check("S9 R5 coming back, the held revision was closed when the task changed", !(await p.$(".k-held")) && Boolean(await p.$('[data-k-pin="kitchen"]')));
 await p.click('[data-k="attach-open"]');
 await p.click('.k-attach-item[data-value="ridge"]');
-await p.click('[data-testid="bot-list"] [data-task="j3"], .task-row[data-task="j3"]').catch(() => p.evaluate(() => window.app.openTask("j3")));
+await p.evaluate(() => window.app.openTask("juniper", "j3"));
 await wait(p);
-check("S9 R5 a task write keeps its own task when another is opened meanwhile", await p.evaluate(() => window.skills.pins.j1.some((x) => x.skillId === "ridge") && !window.skills.pins.j3));
+t = await details(p);
+check("S9 R5 a task write keeps its own task when another is opened meanwhile; its outcome isn't shown there", (await p.evaluate(() => window.skills.pins.j1.some((x) => x.skillId === "ridge") && !(window.skills.pins.j3 || []).length)) && !t.includes("Attached") && !t.includes("Attaching"));
+await p.evaluate(() => window.app.openTask("juniper", "j1"));
+await wait(p, 150);
+check("S9 R5 back on the first task, its own outcome is there", (await details(p)).includes("Attached. Reading the task again, it has revision"));
+await p.close();
+
+// A full task and a task with nothing left to attach.
+p = await open(TASK + "&pins=full");
+check("S9 R5 at 64 skills: Attach is disabled, and says why", (await details(p)).includes("This task already has 64 library skills. Detach one to make room.") && (await p.evaluate(() => document.querySelector('[data-k="attach-open"]').disabled)));
+await p.close();
+p = await open(TASK + "&pins=every");
+await p.click('[data-k="attach-open"]');
+await wait(p, 100);
+check("S9 R5 nothing attachable: the menu says so", (await details(p)).includes("No skills are available to attach."));
 await p.close();
 
 p = await open(TASK + "&pins=outdated&running=1");
@@ -646,18 +680,31 @@ await p.click('[data-k="held-back"]');
 await p.click('[data-k="refresh"]');
 await wait(p);
 t = await details(p);
-check("F-361 S9 updated, from the read: from the next turn; the running turn keeps its own", has(t, "Updated: reading the task again, its skills are at the library's current revisions. From this task's next turn. The turn running now keeps the skills it started with.") && !t.includes("Different library revision"));
+check("F-361 S9 updated, from the read: from the next turn; the running turn keeps its own", has(t, "Updated. Reading the task again shows these saved revisions, from its next turn. The turn running now keeps the skills it started with.") && !t.includes("Different library revision") && JSON.stringify(await p.evaluate(() => window.skills.sent.at(-1))) === JSON.stringify({ method: "skills.library.activate", sessionKey: "j1", action: "refresh" }));
 await p.close();
 
 p = await open(TASK + "&pins=removed");
 t = await details(p);
 check("S9 R5 a removed skill: told by the gateway's read, blocks Update", has(t, "Removed from the library", "Detach the skills marked unavailable or removed first: the gateway refuses to update a task that has one.") && (await p.evaluate(() => document.querySelector('[data-k="refresh"]').disabled)));
+check("S9 R6 a removed entry this connection can read is called removed", (await text(p, '.k-pin:has([data-k-pin="gone"])')).includes("Removed from the library"));
 await p.click('[data-k="detach"][data-value="gone"]');
 await wait(p, 120);
 check("S9 detaching a removed skill says it can't come back", (await confirmText(p)).includes("It was removed from your library, so it can't be attached again."));
 await p.click('#confirm-dialog [data-b="confirm-ok"]');
 await wait(p);
-check("S9 then Update is offered", !(await p.evaluate(() => document.querySelector('[data-k="refresh"]').disabled)));
+check("S9 Update stays blocked while another removed skill is held", await p.evaluate(() => document.querySelector('[data-k="refresh"]').disabled));
+await p.close();
+p = await open(TASK + "&pins=entryfail&access=write");
+t = await text(p, '.k-pin:has([data-k-pin="elsewhere"])');
+check("S9 R5 a failed read of the entry is said as such, not removed or unavailable", t.includes("Couldn't read the library entry") && !t.includes("Library entry unavailable") && !t.includes("Removed"));
+await p.close();
+// Read-only: an exact pin this task holds stays readable while its library entry is hidden.
+p = await open(TASK + "&pins=unavailable&access=read");
+await p.evaluate(() => window.app.openTask("juniper", "j1")); // the read tier starts on the bot's latest task
+await wait(p, 150);
+await p.click('[data-k-pin="elsewhere"]');
+await wait(p, 150);
+check("S9 R6 read-only: a pin whose library entry is hidden opens at its exact revision", (await details(p)).includes("the one this task has") && (await p.evaluate(() => document.querySelector("[data-k-held]").textContent)) === "Go anticlockwise." && (await gwRead(p, "elsewhere")).code === "SKILL_LIBRARY_NOT_FOUND");
 await p.close();
 p = await open(TASK + "&pins=unavailable&access=write");
 t = await details(p);
@@ -666,14 +713,17 @@ await p.click('[data-k="detach"][data-value="elsewhere"]');
 await wait(p, 120);
 check("S9 R5 detaching it says it may not come back", (await confirmText(p)).includes("Its library entry isn't available to this connection, so it may not be attachable again."));
 await p.close();
-for (const [mode, words] of [
-  ["refused", "The gateway answered: Session changed before activation; refresh and retry. Nothing changed; the skills above are as read again."],
-  ["lost", "Couldn't tell whether the change reached the gateway. The skills above are as read again."],
+for (const [mode, words, ann] of [
+  ["refused", "The gateway answered: Session changed before activation; refresh and retry. The skills shown are from the next read.", "Couldn't change the task's skills"],
+  ["lost", "Couldn't tell whether the change reached the gateway. Reading the task again, it no longer has that skill.", "Couldn't tell whether it changed"],
+  ["readfail", "Couldn't read this task's skills again.", "Couldn't read this task's skills again."],
 ]) {
   p = await open(TASK + "&taskw=" + mode);
   await p.click('[data-k="detach"][data-value="kitchen"]');
   await wait(p);
-  check(`S9 R4 a task write ${mode}: its words, from the read`, (await details(p)).includes(words));
+  t = await details(p);
+  check(`S9 R4 a task write ${mode}: its words, from the read`, t.includes(words) && !t.includes("Nothing changed") && !t.includes("Detached.") && (await announced(p)) === ann, t.slice(0, 300));
+  if (mode === "readfail") check("S9 R4 a failed read keeps the last pins and their time", Boolean(await p.$('[data-k-pin="kitchen"]')) && t.includes("As read at 5:41 PM."));
   await p.close();
 }
 for (const [state, words] of [
