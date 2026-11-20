@@ -754,6 +754,17 @@ describe("own lines' words (11.4)", () => {
       object: "T3 Code to stop",
       detail: "Stop requested",
     });
+    // A listing with no known delivery still says which listing was asked for.
+    for (const [tool, object] of [
+      ["t3_project_list", "T3 Code for its projects"],
+      ["t3_thread_list", "T3 Code for its threads"],
+    ] as const) {
+      const listing = live(tool, {}, null, { open: true });
+      expect(lineOf({ ...listing, status: "stopped", runStopped: true }, MAP)).toMatchObject({
+        verb: "Asked",
+        object,
+      });
+    }
     const open = live("t3_thread_read", { threadId: THREAD }, null, { open: true });
     expect(lineOf(open, MAP)).toMatchObject({
       verb: "Reading the thread in",

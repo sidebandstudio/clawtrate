@@ -537,6 +537,8 @@ export const T3_WORDS = {
     t3_thread_read: "to read a T3 Code thread",
     t3_thread_wait: "to wait for T3 Code",
     t3_thread_interrupt: "T3 Code to stop",
+    t3_project_list: "T3 Code for its projects",
+    t3_thread_list: "T3 Code for its threads",
   } as Record<string, string>,
   /** The head of an item whose call was not made: what was tried (11.3). */
   itemTried: {
