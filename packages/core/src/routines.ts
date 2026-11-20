@@ -105,6 +105,8 @@ export type RoutinesState = {
   routines: Routine[];
   /** Routines past `MAX_ROUTINES` the gateway listed (heartbeat jobs among those not read); the list says so. */
   omitted: number;
+  /** Changes with each event, even about a routine outside the retained list, and each read published. */
+  revision: number;
   /**
    * The last routine the `removed` event took away: `ranOnce` only when the
    * gateway's `finished` came just before with a snapshot of the one-shot
@@ -120,6 +122,7 @@ export const initialRoutinesState: RoutinesState = {
   schedulerOn: null,
   routines: [],
   omitted: 0,
+  revision: 0,
   removed: null,
 };
 
@@ -376,6 +379,20 @@ export function applyCronEvent(routines: Routine[], payload: RawRecord): Routine
     if (!current) return routines;
     if (runAt !== null && current.runningAt !== null && runAt < current.runningAt) return routines;
     if (runAt !== null && current.lastRunAt !== null && runAt < current.lastRunAt) return routines;
+    if (!fromJob) {
+      const status = str(payload.status);
+      const duration = num(payload.durationMs);
+      next = {
+        ...next,
+        lastRunAt: runAt ?? next.lastRunAt,
+        lastEndedAt: runAt !== null && duration !== null ? runAt + duration : null,
+        lastStatus: status === "ok" || status === "error" || status === "skipped" ? status : null,
+        lastError: cut(str(payload.error), MAX_ROUTINE_RUN_TEXT_CHARS),
+        nextRunAt: Object.hasOwn(payload, "nextRunAtMs")
+          ? num(payload.nextRunAtMs)
+          : next.nextRunAt,
+      };
+    }
     next = { ...next, runningAt: null };
   }
   if (at < 0) return routines.length < MAX_ROUTINES ? [...routines, next] : routines;
@@ -612,12 +629,18 @@ export class RoutinesEngine {
       }
       if (seq !== this.loadSeq) return;
       if (this.invalidated && attempt < MAX_REREADS) continue;
-      if (this.invalidated && this.ctx.get().status === "loaded") {
+      if (this.invalidated) {
         // Overtaken every time: keep what the events made and look again soon.
         this.schedule(RETRY_MS);
         return;
       }
-      this.ctx.update((state) => ({ ...state, status: "loaded", error: null, ...read }));
+      this.ctx.update((state) => ({
+        ...state,
+        status: "loaded",
+        error: null,
+        ...read,
+        revision: (state.revision + 1) % Number.MAX_SAFE_INTEGER,
+      }));
       this.scheduleIfRunning();
       return;
     }
@@ -701,6 +724,7 @@ export class RoutinesEngine {
       for (const update of this.updates) if (update.id === jobId) update.removed = true;
     const before = this.ctx.get();
     const kept = before.routines.find((each) => each.id === jobId);
+    if (action !== "added" && jobId && before.removed?.id === jobId && !kept) return;
     const routines = applyCronEvent(before.routines, record);
     const finished = this.lastFinished;
     this.lastFinished =
@@ -715,16 +739,30 @@ export class RoutinesEngine {
             runAt: finished?.jobId === jobId ? finished.runAt : null,
           }
         : before.removed;
-    // A retained routine gone while others were left out: read again to fill its place.
-    // A finish for a routine not listed (added while away, or never seen): the gateway says.
+    // At the retention cap only the gateway can confirm membership and the omission count.
     const refill =
-      (action === "removed" && kept !== undefined && before.omitted > 0) ||
+      (action === "removed" && before.omitted > 0) ||
+      (action === "added" &&
+        !kept &&
+        before.routines.length >= MAX_ROUTINES &&
+        parseRoutine(record.job) !== null) ||
+      (action === "finished" &&
+        kept &&
+        routines !== before.routines &&
+        !asRecord(record.job) &&
+        (num(record.runAtMs) === null ||
+          str(record.status) === null ||
+          !Object.hasOwn(record, "nextRunAtMs"))) ||
       (action === "finished" &&
         kept === undefined &&
         before.omitted === 0 &&
         parseRoutine(record.job) !== null);
-    if (routines !== before.routines || removed !== before.removed)
-      this.ctx.update((state) => ({ ...state, routines, removed }));
+    this.ctx.update((state) => ({
+      ...state,
+      routines,
+      removed,
+      revision: (state.revision + 1) % Number.MAX_SAFE_INTEGER,
+    }));
     if (refill) void this.load();
     else this.scheduleIfRunning();
   }
@@ -987,6 +1025,7 @@ export class RoutinesEngine {
    */
   async calendarRuns(from: number, to: number): Promise<CalendarRuns> {
     const runs: RoutineRun[] = [];
+    const seen = new Set<string>();
     let offset = 0;
     while (offset < MAX_CALENDAR_RUNS) {
       const result = asRecord(
@@ -997,8 +1036,13 @@ export class RoutinesEngine {
         }),
       );
       const entries = arr(result?.entries);
-      for (const run of parseRuns(result, PAGE))
-        if (run.runAt >= from && run.runAt < to) runs.push(run);
+      for (const run of parseRuns(result, PAGE)) {
+        if (run.runAt < from || run.runAt >= to) continue;
+        const key = JSON.stringify([run.jobId, run.runId ?? run.runAt]);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        runs.push(run);
+      }
       const last = asRecord(entries.at(-1));
       // Finished before `from`, so every later page's runs started before it too.
       const reachedStart = (num(last?.ts) ?? num(last?.runAtMs) ?? from) < from;

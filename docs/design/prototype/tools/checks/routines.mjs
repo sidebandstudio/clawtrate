@@ -4,7 +4,8 @@
 // away card, at the four widths and in both themes.
 // Run from the repository root:  node docs/design/prototype/tools/checks/routines.mjs
 import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium, pageUrl } from "./browser.mjs";
 // The pinned gateway schema: every request a page sends is checked against it.
@@ -415,7 +416,10 @@ p = await open("view=run&routine=reminder&run=0&state=ran-once");
 check("a reminder's run is in the main conversation: no transcript of its own, its summary and a way there", (await text(p, ".b-note")).startsWith("This run happened in Marlow's main conversation.") && (await text(p, '[data-testid="returned"]')) === "Posted the reminder in Marlow's main conversation." && (await has(p, '.b-note [data-r="open-bot"]')) && !(await has(p, '[data-testid="scheduled-message"]')));
 await p.close();
 p = await open("view=routine&routine=digest");
-await event(p, { action: "updated", job: { id: "digest", sessionTarget: "current" } });
+for (const sessionTarget of ["session:planning", "current"]) {
+  await event(p, { action: "updated", job: { id: "digest", sessionTarget } });
+  check(`F-188 a ${sessionTarget} routine names its shared conversation`, (await text(p, '[data-fact="runs-in"] dd')) === "The conversation it was made in");
+}
 await p.click('[data-testid="run-row"]');
 check("F-190 a recorded isolated run still shows its transcript after the routine switches to current", (await text(p, '[data-testid="scheduled-message"] p')).startsWith("Summarise the notes I added yesterday,"));
 await p.click('[data-r="back-to-routine"]');
@@ -598,7 +602,8 @@ const CRON_TABLE = [
 const springExpr = "30 2 14 3 *";
 const springRun = "2027-03-14T07:30:00.000Z";
 if (process.env.OPENCLAW_PACKAGE_DIR) {
-  const { Cron } = await import(new URL("../croner/dist/croner.js", `file://${process.env.OPENCLAW_PACKAGE_DIR.replace(/\/?$/, "/")}`).href);
+  const gatewayRequire = createRequire(resolve(process.env.OPENCLAW_PACKAGE_DIR, "package.json"));
+  const { Cron } = gatewayRequire("croner");
   const from = new Date(Date.UTC(2026, 10, 18, 15, 12));
   const spring = new Cron(springExpr, { timezone: "America/New_York", catch: false });
   check("F-195 pinned Croner shifts 2:30 AM into 3:30 AM", spring.nextRun(from)?.toISOString() === springRun);
@@ -660,7 +665,7 @@ for (const [expr, want] of CRON_TABLE) {
   if (want === "ok")
     check(`F-195 cron ${expr}: saved as written, and the new routine's page opens`, !err && got.length === 1 && got[0].method === "cron.add" && JSON.stringify(got[0].params.schedule) === JSON.stringify({ kind: "cron", expr, tz: "America/New_York" }) && (await text(p, "#view-title")) === "Often");
   else
-    check(`F-195 cron ${expr}: refused before any request (${want})`, got.length === 0 && (await p.evaluate(() => document.querySelector("#edit-dialog").open)) && (want === "floor" ? err === "Routines run at least 5 minutes apart." : want === "never" ? err === "This never runs in the next eight years." : err.startsWith("The gateway can't read this: ")), err);
+    check(`F-195 cron ${expr}: refused before any request (${want})`, (await p.evaluate(() => window.routines.dispatched.length === 0 && document.querySelector("#edit-dialog").open)) && (want === "floor" ? err === "Routines run at least 5 minutes apart." : want === "never" ? err === "This never runs in the next eight years." : err.startsWith("The gateway can't read this: ")), err);
   await p.close();
 }
 p = await open();
@@ -803,7 +808,7 @@ await p.fill("#e-date", "");
 check("Once with no date: the preview asks for one", (await text(p, '[data-testid="preview"]')) === "Choose a date and a time to see when it runs.");
 await p.click('[data-r="save"]');
 await p.waitForTimeout(700);
-check("Once with no date: Save says what is missing and sends nothing", (await text(p, "#e-when-error")) === "Choose a date and a time." && (await p.evaluate(() => window.routines.sent.length)) === 0);
+check("Once with no date: Save says what is missing and sends nothing", (await text(p, "#e-when-error")) === "Choose a date and a time." && (await p.evaluate(() => window.routines.dispatched.length)) === 0);
 await p.fill("#e-date", "2026-11-21");
 await p.fill('[data-e="time"]', "");
 check("Once with no time: the preview asks for it", (await text(p, '[data-testid="preview"]')) === "Choose a date and a time to see when it runs.");
@@ -856,7 +861,7 @@ await p.click('[data-r="back-to-routine"]');
 check("and its page then says it was deleted", (await text(p, ".b-note")).startsWith("This routine was deleted. It won't run again.") && !(await has(p, '[data-r="run-now"]')));
 await p.close();
 p = await open("view=routine&routine=reminder");
-await event(p, FIN("reminder", "once-1", 10, 12, { summary: "Posted the reminder." }));
+await event(p, FIN("reminder", "once-1", 10, 12, { summary: "Posted the reminder.", manual: false, nextRunAtMs: null }));
 await event(p, { action: "removed", jobId: "reminder" });
 check("a one-shot's finished then removed: it ran once and the gateway removed it, with its run", (await text(p, ".b-note")).startsWith("This routine ran once, and the gateway removed it. Its run succeeded today 10:12 AM.") && (await count(p, '[data-testid="run-row"]')) === 1);
 await p.close();
@@ -918,7 +923,8 @@ await p.fill("#e-name", "Keep this draft");
 await p.click('[data-r="save"]');
 await event(p, { action: "removed", jobId: "digest" });
 await p.waitForTimeout(700);
-check("a removal during Save keeps the draft in recovery without applying the edit", (await has(p, '[data-r="save-as-new"]')) && (await p.inputValue("#e-name")) === "Keep this draft" && (await p.evaluate(() => window.routines.sent.length)) === 0);
+check("a removal during Save keeps the unanswered draft without applying the edit", (await has(p, '[data-r="check-now"]')) && (await p.inputValue("#e-name")) === "Keep this draft" && (await p.evaluate(() => window.routines.sent.length)) === 0);
+await p.click('[data-r="check-now"]');
 await p.click('[data-r="save-as-new"]');
 await p.waitForTimeout(700);
 check("the removed routine's draft can still be saved as new", (await lastSent(p))?.method === "cron.add" && (await text(p, "#view-title")) === "Keep this draft");
@@ -947,7 +953,7 @@ await p.fill("#e-name", "");
 await event(p, { action: "updated", job: { id: "digest", name: "Theirs" } });
 await p.click('[data-r="conflict-save"]');
 await p.waitForTimeout(700);
-check("Save mine anyway is validated: an empty name is refused and nothing is sent", (await text(p, "#e-name-error")) === "Give it a name." && (await p.evaluate(() => window.routines.sent.length)) === 0);
+check("Save mine anyway is validated: an empty name is refused and nothing is sent", (await text(p, "#e-name-error")) === "Give it a name." && (await p.evaluate(() => window.routines.dispatched.length)) === 0);
 await p.fill("#e-name", "Mine");
 await p.click('[data-r="save"]');
 await p.waitForTimeout(700);
@@ -964,7 +970,7 @@ await p.fill("#e-name", "");
 await event(p, { action: "removed", jobId: "reminder" });
 await p.click('[data-r="save-as-new"]');
 await p.waitForTimeout(700);
-check("Save as a new routine is validated: an empty name is refused and nothing is sent", (await text(p, "#e-name-error")) === "Give it a name." && (await p.evaluate(() => window.routines.sent.length)) === 0);
+check("Save as a new routine is validated: an empty name is refused and nothing is sent", (await text(p, "#e-name-error")) === "Give it a name." && (await p.evaluate(() => window.routines.dispatched.length)) === 0);
 await p.fill("#e-name", "Send the draft to Sam");
 await p.click('[data-r="save"]');
 await p.waitForTimeout(700);
@@ -1077,14 +1083,19 @@ const REQUIRED = [
 const missingLinks = REQUIRED.filter((q) => !links.includes(q));
 check("gallery: links to every address-only routines state by name", missingLinks.length === 0, JSON.stringify(missingLinks));
 check("gallery F-200: an offer is a reply, with no offer card or Accept button", (await text(p, "#proactive .spec:nth-of-type(1) .bubble")).startsWith("The venue's quote expires on Friday") && !(await p.evaluate(() => [...document.querySelector("#proactive .spec-box").querySelectorAll("button, .card")].length)));
-check("gallery F-364: the connector's failure is a failed action card with the tool's error, and the bot's reply; no Reconnect button or badge", (await p.evaluate(() => { const box = document.querySelectorAll("#proactive .spec-box")[1]; const card = box.querySelector(".action"); return !!card && /failed/i.test(card.dataset.state || card.getAttribute("data-status") || card.textContent) && box.textContent.includes("Gmail signed me out") && ![...box.querySelectorAll("button")].some((x) => /Reconnect/.test(x.textContent)); })));
+const connector = p.locator("#proactive .spec-box").nth(1);
+const connectorAction = connector.locator(".action");
+await connectorAction.locator("summary").first().click();
+check("gallery F-364: the action card shows the tool's error and the reply offers to reconnect", (await connectorAction.innerText()).includes("401 Unauthorized") && (await connector.innerText()).includes("Gmail signed me out") && (await connector.getByRole("button", { name: "Reconnect" }).count()) === 0);
+await connectorAction.getByText("Raw", { exact: true }).click();
+check("gallery F-364: Raw shows the recorded connector call", (await connectorAction.innerText()).includes("gmail__search_messages"));
 await p.close();
 for (const href of links) {
   const pg = await b.newPage({ viewport: { width: 1100, height: 760 } });
   const errs = [];
   pg.on("pageerror", (e) => errs.push(String(e)));
   // The optional local fonts file is absent from a fresh copy by design (README.md).
-  pg.on("console", (m) => m.type() === "error" && !/fonts\.local\.css|ERR_FILE_NOT_FOUND/.test(m.text() + (m.location().url || "")) && errs.push(m.text()));
+  pg.on("console", (m) => m.type() === "error" && !m.location().url?.endsWith("/fonts.local.css") && errs.push(m.text()));
   await pg.goto(pageUrl(href) + (href.includes("?") ? "&" : "?") + "chrome=0");
   await pg.waitForTimeout(120);
   if (errs.length) check(`gallery link ${href}: no errors`, false, JSON.stringify(errs));
@@ -1159,6 +1170,15 @@ check("phone: Back shows the bots, focus on the Routines button", (await p.evalu
 await p.click("#routines-button");
 check("phone: the Routines button opens the view", (await p.evaluate(() => document.querySelector(".shell").dataset.view)) === "detail" && (await text(p, "#view-title")) === "Routines");
 check("phone: the view switch is 44 px tall", (await p.evaluate(() => document.querySelector(".r-seg button").getBoundingClientRect().height >= 44)));
+await p.click('.r-head [data-r="new"]');
+await p.click('[data-e-kind="days"]');
+await p.locator(".r-days").scrollIntoViewIfNeeded();
+check("phone: weekday buttons have separate 44 px hit areas", await p.locator(".r-days button").evaluateAll((buttons) =>
+  buttons.length === 7 && buttons.every((button) => {
+    const rect = button.getBoundingClientRect();
+    return rect.width >= 44 && rect.height >= 44 && button.contains(document.elementFromPoint(rect.x + 22, rect.y + 22));
+  }),
+));
 await p.close();
 p = await open("view=routine&routine=digest", { width: 800, height: 760 });
 check("800: the page header keeps Run now and More only", (await p.evaluate(() => getComputedStyle(document.querySelector(".r-head [data-wide]")).display)) === "none" && (await has(p, '[data-r="more"]')));

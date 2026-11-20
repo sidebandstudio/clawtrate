@@ -14,6 +14,7 @@ import { BackIcon, ChevronIcon } from "../icons.tsx";
 import { useKeyedRead } from "./read.ts";
 import {
   frequent,
+  hasOccurrence,
   occurrences,
   ownerOf,
   runKey,
@@ -140,7 +141,7 @@ export function Calendar({
       (each) =>
         frequent(each) &&
         addDays(day, 1) > now &&
-        occurrences(each, Math.max(day, now), addDays(day, 1)).length > 0,
+        hasOccurrence(each, Math.max(day, now), addDays(day, 1)),
     ),
   );
   const headId = useId();

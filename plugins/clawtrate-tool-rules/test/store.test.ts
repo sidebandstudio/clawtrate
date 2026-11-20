@@ -335,3 +335,23 @@ describe("a decision record set aside as oversized", () => {
     expect(() => statSync(aside)).toThrow();
   });
 });
+
+describe("a record the cap evicted", () => {
+  it("leaves the file once it is thirty days old, though newer records are kept", () => {
+    const dir = folder();
+    const day = 86_400_000;
+    let now = 0;
+    const fields = { agentId: "otto", tool: "read", decision: "none", source: null };
+    const log = new DecisionLog(dir, { now: () => now, max: 10 });
+    const first = log.add(fields);
+    now = 10 * day;
+    // Ten more: the first is evicted, and one extra line is not enough for a compaction.
+    for (let i = 0; i < 10; i += 1) log.add(fields);
+    expect(log.list({ limit: 50 }).records.map((r) => r.id)).not.toContain(first);
+    expect(readFileSync(join(dir, "decisions.jsonl"), "utf8")).toContain(first);
+    now = 31 * day;
+    log.prune();
+    expect(readFileSync(join(dir, "decisions.jsonl"), "utf8")).not.toContain(first);
+    expect(log.list({ limit: 50 }).records).toHaveLength(10);
+  });
+});

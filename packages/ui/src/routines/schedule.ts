@@ -305,12 +305,29 @@ export function occurrences(routine: Routine, from: number, to: number): number[
   return [...own, ...scheduled(routine.schedule, next, Math.max(from, next + 1), to)];
 }
 
-function scheduled(schedule: RoutineSchedule, next: number, from: number, to: number): number[] {
+export function hasOccurrence(routine: Routine, from: number, to: number): boolean {
+  const next = routine.nextRunAt;
+  if (!routine.enabled || next === null || next >= to) return false;
+  if (next >= from) return true;
+  return (
+    computable(routine) &&
+    routine.schedule.kind !== "at" &&
+    scheduled(routine.schedule, next, Math.max(from, next + 1), to, 1).length > 0
+  );
+}
+
+function scheduled(
+  schedule: RoutineSchedule,
+  next: number,
+  from: number,
+  to: number,
+  limit = 2_000,
+): number[] {
   if (schedule.kind === "every") {
     const out: number[] = [];
     const step = schedule.everyMs!;
     let at = next + Math.ceil((from - next) / step) * step;
-    while (at < to && out.length < 2_000) {
+    while (at < to && out.length < limit) {
       out.push(at);
       at += step;
     }
@@ -342,7 +359,10 @@ function scheduled(schedule: RoutineSchedule, next: number, from: number, to: nu
         const earlier = partsIn(at - HOUR, tz);
         if (earlier.hour === hour && earlier.minute === minute && earlier.day === wall.day)
           at -= HOUR;
-        if (at >= from && at < to) times.add(at);
+        if (at >= from && at < to) {
+          if (limit === 1) return [at];
+          times.add(at);
+        }
       }
   }
   // A skipped wall time can land on another occurrence after the gap.

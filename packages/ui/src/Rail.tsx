@@ -178,7 +178,7 @@ function RoutineRow({
         data-routine={routine.id}
         data-state={routine.runningAt !== null ? "working" : failed ? "failed" : undefined}
         aria-label={`${routine.name}, routine run${routine.runningAt !== null ? ", running" : failed ? ", failed" : ""}`}
-        onClick={() => onOpen(routine.id, routine.runningAt === null ? at : null)}
+        onClick={() => onOpen(routine.id, at)}
       >
         <ClockIcon className="task-pin" />
         <span className="task-title">{routine.name}</span>
@@ -251,6 +251,7 @@ function TaskRows({
   archived,
   cap,
   now,
+  onScreenKey,
 }: {
   bot: Bot;
   tasks: Task[];
@@ -270,6 +271,8 @@ function TaskRows({
   /** Rows shown before "Show all": fewer in one pane, so the rest of the list stays in view. */
   cap: number;
   now: number;
+  /** The task whose conversation is on screen: none while Routines covers it. */
+  onScreenKey: string | null;
 }) {
   const currentKey = selection.bot?.id === bot.id ? (selection.task?.key ?? null) : null;
   const all = selection.showAll.has(bot.id);
@@ -310,7 +313,8 @@ function TaskRows({
         const { task } = row;
         const current = task.key === currentKey;
         const unread =
-          (!current || selection.keptUnread.has(task.key)) && isUnread(task, selection.unreadSeen);
+          (task.key !== onScreenKey || selection.keptUnread.has(task.key)) &&
+          isUnread(task, selection.unreadSeen);
         const state = taskState(task, selection.seen, selection.task?.key ?? null);
         const spoken =
           task.title +
@@ -557,7 +561,7 @@ export function Rail({
   const gateway = gatewayLabel(connection.gatewayUrl);
   const words = presenceWords(connection, catchingUp);
   const dot = presenceDot(connection, catchingUp);
-  const onScreenKey = selection.task?.key ?? null;
+  const onScreenKey = routinesOpen ? null : (selection.task?.key ?? null);
   const manual = roster.prefs.sort === "manual";
   const sortLabel = SORT_ORDERS.find((order) => order.id === roster.prefs.sort)!.label;
 
@@ -598,11 +602,13 @@ export function Rail({
       ],
     [matches, arranged],
   );
+  const pinHasRoutines = (botId: string) =>
+    arranged.pinned.some(
+      (bot) => bot.id === botId && recentRoutineRuns(bot, routines, now).length > 0,
+    );
   const owner = matches
     ? undefined
-    : arranged.pinned.find(
-        (bot) => selection.isOpen(bot.id) && (tasksByBot[bot.id]?.length ?? 0) > 1,
-      );
+    : arranged.pinned.find((bot) => selection.isOpen(bot.id, pinHasRoutines(bot.id)));
 
   useEffect(() => {
     if (!announcement) return;
@@ -842,13 +848,14 @@ export function Rail({
 
   // A pinned tile. The grid has one task block, with one owner at a time.
   const clickPin = (bot: Bot, count: number) => {
-    if (count < 2) {
+    const hasRoutines = pinHasRoutines(bot.id);
+    if (count < 2 && !hasRoutines) {
       selection.selectBot(bot.id);
       onOpen();
     } else if (bot.id === owner?.id) {
-      selection.toggleFold(bot.id);
+      selection.toggleFold(bot.id, hasRoutines);
     } else if (onePane || bot.id === selection.bot?.id) {
-      selection.unfoldOnly(bot.id, pinnedIds);
+      selection.unfoldOnly(bot.id, pinnedIds, hasRoutines);
     } else {
       selection.selectBot(bot.id);
       selection.release(pinnedIds.filter((id) => id !== bot.id));
@@ -1055,6 +1062,7 @@ export function Rail({
     const botId = row.dataset.bot ?? null;
     const isPin = row.classList.contains("pin");
     const isBot = isPin || row.classList.contains("bot");
+    const hasPinRoutines = isPin && botId !== null && pinHasRoutines(botId);
     if (
       event.altKey &&
       event.shiftKey &&
@@ -1080,9 +1088,14 @@ export function Rail({
     } else if (event.key === "Home" || event.key === "End") {
       event.preventDefault();
       rows[event.key === "Home" ? 0 : rows.length - 1]?.focus();
-    } else if (event.key === "ArrowRight" && isBot && botId && !selection.isOpen(botId)) {
+    } else if (
+      event.key === "ArrowRight" &&
+      isBot &&
+      botId &&
+      !selection.isOpen(botId, hasPinRoutines)
+    ) {
       event.preventDefault();
-      if (isPin) selection.unfoldOnly(botId, pinnedIds);
+      if (isPin) selection.unfoldOnly(botId, pinnedIds, hasPinRoutines);
       else selection.toggleFold(botId);
     } else if (event.key === "ArrowLeft") {
       event.preventDefault();
@@ -1095,7 +1108,8 @@ export function Rail({
         } else {
           row.closest(".bot-group")?.querySelector<HTMLElement>(":scope > .bot")?.focus();
         }
-      } else if (botId && selection.isOpen(botId)) selection.toggleFold(botId);
+      } else if (botId && selection.isOpen(botId, hasPinRoutines))
+        selection.toggleFold(botId, hasPinRoutines);
     } else if (
       isBot &&
       botId &&
@@ -1500,7 +1514,7 @@ export function Rail({
   const taskEntries = (bot: Bot, task: Task): MenuEntry[] => {
     const unread =
       isUnread(task, selection.unreadSeen) &&
-      (task.key !== selection.task?.key || selection.keptUnread.has(task.key));
+      (task.key !== onScreenKey || selection.keptUnread.has(task.key));
     const trigger = menu?.trigger ?? null;
     const close = () => setMenu(null);
     return tidy([
@@ -1780,6 +1794,7 @@ export function Rail({
             archived={archivedProps(bot)}
             cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
             now={now}
+            onScreenKey={onScreenKey}
           />
         )}
       </li>
@@ -1792,7 +1807,7 @@ export function Rail({
       summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
       runningRoutine(bot.id),
     );
-    const several = tasks.length > 1;
+    const several = tasks.length > 1 || pinHasRoutines(bot.id);
     return (
       <li key={bot.id}>
         <button
@@ -1986,6 +2001,7 @@ export function Rail({
                   archived={archivedProps(owner)}
                   cap={onePane ? TASK_CAP_ONE_PANE : TASK_CAP}
                   now={now}
+                  onScreenKey={onScreenKey}
                 />
               </li>
             )}

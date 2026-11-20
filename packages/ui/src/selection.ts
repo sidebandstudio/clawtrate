@@ -158,7 +158,11 @@ const NOTHING_SEEN: SeenMap = Object.freeze({}) as SeenMap;
  * them; a read-only connection, whose reads the gateway never hears, keeps its
  * own memory of what it read.
  */
-export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
+export function useSelection(
+  state: ClawtrateState,
+  gatewayOwnsUnread = false,
+  conversationVisible = true,
+) {
   const [botId, setBotId] = useState<string | null>(() => readPreference("bot"));
   const [taskByBot, setTaskByBot] = useState<Record<string, string>>(() => readJson("tasks"));
   const [seen, setSeen] = useState<SeenMap>(() => readJson(SEEN_KEY));
@@ -176,6 +180,11 @@ export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
   const gatewayId = state.connection.gatewayId;
   const [linked, setLinked] = useState<{ task: Task; gatewayId: string | null } | null>(null);
   const remembered = bot ? taskByBot[bot.id] : undefined;
+  if (
+    linked?.gatewayId === gatewayId &&
+    state.tasksByBot[linked.task.botId]?.some((t) => t.key === linked.task.key)
+  )
+    setLinked(null);
   const task =
     tasks.find((t) => t.key === remembered) ??
     (linked?.gatewayId === gatewayId &&
@@ -189,13 +198,13 @@ export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
   // Leaving a task marks it read as of its latest activity, so its dot only
   // returns for activity that happens after this viewer saw it.
   const markRead = useCallback(() => {
-    if (!task || keptUnread.has(task.key)) return;
+    if (!conversationVisible || !task || keptUnread.has(task.key)) return;
     setSeen((current) => {
       const next = markSeen(current, task);
       if (next !== current) writePreference(SEEN_KEY, JSON.stringify(next));
       return next;
     });
-  }, [task, keptUnread]);
+  }, [task, keptUnread, conversationVisible]);
 
   /**
    * A read the gateway refused or that failed: this viewer forgets having read
@@ -296,16 +305,17 @@ export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
   );
 
   const isOpen = useCallback(
-    (id: string) =>
-      (state.tasksByBot[id]?.length ?? 0) > 1 && (held.has(id) || (id === bot?.id && !openFolded)),
+    (id: string, hasRoutineRows = false) =>
+      (hasRoutineRows || (state.tasksByBot[id]?.length ?? 0) > 1) &&
+      (held.has(id) || (id === bot?.id && !openFolded)),
     [state.tasksByBot, held, bot, openFolded],
   );
 
   /** Fold or unfold by hand, without changing the selection. */
   const toggleFold = useCallback(
-    (id: string) => {
-      if ((state.tasksByBot[id]?.length ?? 0) < 2) return;
-      if (isOpen(id)) {
+    (id: string, hasRoutineRows = false) => {
+      if (!hasRoutineRows && (state.tasksByBot[id]?.length ?? 0) < 2) return;
+      if (isOpen(id, hasRoutineRows)) {
         updateHeld((ids) => ids.delete(id));
         if (id === bot?.id) setFolded(true);
       } else {
@@ -318,10 +328,10 @@ export function useSelection(state: ClawtrateState, gatewayOwnsUnread = false) {
 
   /** Make one bot the only one unfolded among `group` (the pinned bots: their block has one owner). */
   const unfoldOnly = useCallback(
-    (id: string, group: string[]) => {
+    (id: string, group: string[], hasRoutineRows = false) => {
       updateHeld((ids) => {
         for (const other of group) if (other !== id) ids.delete(other);
-        if ((state.tasksByBot[id]?.length ?? 0) > 1) ids.add(id);
+        if (hasRoutineRows || (state.tasksByBot[id]?.length ?? 0) > 1) ids.add(id);
       });
       if (bot && bot.id !== id && group.includes(bot.id)) setFolded(true);
       if (bot?.id === id) setFolded(false);

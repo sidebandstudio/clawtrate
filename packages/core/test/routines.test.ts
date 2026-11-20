@@ -226,6 +226,58 @@ describe("F-024: the list stays true when events and reads cross", () => {
     routines.onClose();
   });
 
+  it("retries an initial list when events invalidate every immediate read", async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    const { routines, state } = engine({
+      "cron.status": () => ({ enabled: true }),
+      "cron.list": () => {
+        reads += 1;
+        if (reads > 3) return { jobs: [], hasMore: false };
+        routines.onEvent({ jobId: JOB, action: "removed" });
+        return { jobs: [job()], hasMore: false };
+      },
+    });
+    await routines.load();
+    expect(state()).toMatchObject({ status: "loading", routines: [] });
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    expect(state()).toMatchObject({ status: "loaded", routines: [] });
+    routines.onClose();
+  });
+
+  it("a fresh read changes the revision, so a bot's own read is made again after a reconnect", async () => {
+    const { routines, state } = engine({
+      "cron.status": () => ({ enabled: true }),
+      "cron.list": () => ({ jobs: [job()], hasMore: false }),
+    });
+    await routines.load();
+    const first = state().revision;
+    await routines.load();
+    expect(state().revision).not.toBe(first);
+    routines.onClose();
+  });
+
+  it("uses the gateway's finish fields when the event has no job snapshot", () => {
+    const current = parseRoutine(job({}, { runningAtMs: 20, lastRunStatus: "ok" }))!;
+    const finished = applyCronEvent([current], {
+      jobId: JOB,
+      action: "finished",
+      runAtMs: 20,
+      durationMs: 5,
+      status: "error",
+      error: "The job failed.",
+      nextRunAtMs: 50,
+    });
+    expect(finished[0]).toMatchObject({
+      runningAt: null,
+      lastRunAt: 20,
+      lastEndedAt: 25,
+      lastStatus: "error",
+      lastError: "The job failed.",
+      nextRunAt: 50,
+    });
+  });
+
   it("an older finish does not clear a newer start, and a start older than the last run marks nothing", () => {
     const running = applyCronEvent([parseRoutine(job({}, { lastRunAtMs: 10 }))!], {
       jobId: JOB,

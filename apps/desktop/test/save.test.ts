@@ -22,6 +22,7 @@ vi.mock("electron", () => {
   const app = {
     setName() {},
     enableSandbox() {},
+    getVersion: () => "1.0.0",
     getAppPath: () => electron.appDir,
     getPath: () => electron.appDir,
     whenReady: async () => {},

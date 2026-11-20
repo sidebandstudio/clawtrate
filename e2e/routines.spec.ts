@@ -226,7 +226,7 @@ test("F-024: started marks the routine and its bot as working, and finished clea
   await expect(view().locator('[data-testid="run-row"][data-running="true"]')).toBeVisible();
   await expect(botRow("Otto").first()).toHaveAttribute("data-state", "working");
   await expect(botRow("Otto").first()).toContainText(`Running ${name}`);
-  // Its row under Otto opens the routine, where the run in progress is.
+  // Its row under Otto follows this run into its recorded conversation.
   const otto = botRow("Otto").first();
   if ((await otto.getAttribute("aria-expanded")) === "false") {
     await otto.focus();
@@ -235,13 +235,13 @@ test("F-024: started marks the routine and its bot as working, and finished clea
   await view().getByRole("button", { name: "Back to routines" }).click();
   await page.getByTestId("routine-task").filter({ hasText: name }).click();
   await expect(view().getByRole("heading", { name })).toBeVisible();
-  await expect(view().locator('[data-testid="run-row"][data-running="true"]')).toBeVisible();
+  await expect(view().getByRole("status")).toHaveText("Running…");
   await started;
-  // finished: the mark clears and the run is listed with how it ended.
-  await expect(view().getByTestId("routine-state")).not.toContainText("Running", {
-    timeout: 30_000,
-  });
+  await expect(view().getByTestId("run-view")).toBeVisible({ timeout: 30_000 });
   await expect(botRow("Otto").first()).not.toContainText(`Running ${name}`);
+  await view()
+    .getByRole("button", { name: `Back to ${name}, all runs` })
+    .click();
   await expect(view().getByTestId("run-row")).toHaveCount(1);
   await expect(view().getByTestId("run-row").first()).toContainText("Succeeded");
   await expect(view().getByTestId("run-row").first()).toContainText("started by hand");
@@ -364,14 +364,20 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
 test("F-355: a routine's page lists the 20 runs that finished most recently, in the gateway's order, when it has more", async () => {
   test.setTimeout(240_000);
   const name = `Many runs ${STAMP}`;
-  // No directive: the scripted model's shortest reply.
-  const job = await add(scriptedRoutine(name, "pip", "Note the time."));
+  // The list needs recorded runs, so use a reminder that does not wait on a model turn.
+  const job = await add({
+    ...scriptedRoutine(name, "main"),
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: "Note the time." },
+  });
+  await openRoutines();
+  await expect(row(name)).toBeVisible({ timeout: 20_000 });
   for (let index = 0; index < 22; index += 1) expect((await runNow(job.id)).ok).toBe(true);
   const all = await call<{ entries: RunEntry[] }>("cron.runs", { id: job.id, limit: 200 });
   expect(all.entries.length).toBe(22);
   // The gateway's order (newest finished first) is the contract; the page does not reorder it.
   const newest = all.entries.slice(0, 20).map((entry) => String(entry.runAtMs));
-  await openRoutines();
   await row(name).click();
   const rows = view().locator('[data-testid="run-row"][data-run-at]');
   await expect(rows).toHaveCount(20);
