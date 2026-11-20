@@ -38,6 +38,7 @@ import {
   SearchIcon,
   SectionIcon,
   SettingsIcon,
+  DownloadIcon,
   SortIcon,
   StarIcon,
   TrashIcon,
@@ -413,6 +414,7 @@ export function Rail({
   onTheme,
   bubbles,
   onBubbles,
+  updateEntry,
   onOpenSettings,
   onNewBot,
   inert,
@@ -437,7 +439,8 @@ export function Rail({
   onTheme: (choice: ThemeChoice) => void;
   bubbles: BubbleChoice;
   onBubbles: (choice: BubbleChoice) => void;
-  onOpenSettings: () => void;
+  updateEntry: boolean;
+  onOpenSettings: (section?: "updates") => void;
   /**
    * "New bot" in the "+" menu (visual-language.md section 7, bots.md section
    * 3); absent, with the "+" itself, when the connection may not write.
@@ -1726,6 +1729,17 @@ export function Rail({
     );
   };
 
+  const updateButton = updateEntry && (
+    <button
+      type="button"
+      className="icon-button update-entry"
+      aria-label="Open Updates"
+      title="Open Updates"
+      onClick={() => onOpenSettings("updates")}
+    >
+      <DownloadIcon />
+    </button>
+  );
   return (
     <nav className="rail" aria-label="Bots" inert={inert}>
       <div className="rail-top">
@@ -1741,6 +1755,7 @@ export function Rail({
           <SettingsIcon />
           <span className="status-dot" data-status={dot} />
         </button>
+        {updateButton}
         {query === null ? (
           <>
             <button
@@ -1964,6 +1979,7 @@ export function Rail({
             <span>{words}</span>
           </span>
         </button>
+        {updateButton}
       </div>
       {menu?.kind === "gateway" && (
         <Menu

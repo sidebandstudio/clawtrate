@@ -1,3 +1,4 @@
+import { appEnv, debuggingPort } from "./desktop-driver.ts";
 // Starts the packaged app for the launch check and returns the teardown that
 // quits it and removes everything this run created.
 //
@@ -34,6 +35,7 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  realpathSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -238,13 +240,6 @@ function cliEnv(): NodeJS.ProcessEnv {
 }
 
 /** The app's environment: nothing that could point it at a development gateway or change Electron. */
-export function appEnv(): NodeJS.ProcessEnv {
-  return Object.fromEntries(
-    Object.entries(process.env).filter(
-      ([key]) => !/^(CLAWTRATE_|ELECTRON_|NODE_OPTIONS$|OPENCLAW_)/.test(key),
-    ),
-  );
-}
 
 export default async function globalSetup() {
   if (process.platform === "win32") return windowsSetup();
@@ -318,7 +313,7 @@ export default async function globalSetup() {
   const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
   record.dirs.push(dir);
   saveRecord(RECORDS, record);
-  const userData = join(dir, "user-data");
+  const userData = join(realpathSync.native(dir), "user-data");
 
   const teardown = async () => {
     const problems: string[] = [];
@@ -426,28 +421,6 @@ export default async function globalSetup() {
   return teardown;
 }
 
-/** Waits for Chromium to write the debugging port it chose into the data folder, and reads it. */
-async function debuggingPort(userData: string, app: ChildProcess): Promise<number> {
-  const portFile = join(userData, "DevToolsActivePort");
-  const deadline = Date.now() + 30_000;
-  for (;;) {
-    try {
-      const port = Number(readFileSync(portFile, "utf8").split("\n")[0]);
-      if (!Number.isInteger(port) || port <= 0 || FORBIDDEN_PORTS.includes(port)) {
-        throw new Error(`unexpected debugging port ${port}`);
-      }
-      return port;
-    } catch (error) {
-      // Chromium may still hold the file exclusively on Windows after creating it.
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "EBUSY") throw error;
-    }
-    if (app.exitCode !== null) throw new Error(`the app exited with ${app.exitCode}`);
-    if (Date.now() > deadline) throw new Error("the app did not open its debugging port");
-    await sleep(200);
-  }
-}
-
 /**
  * The Windows run: the packaged app alone, with a temporary data folder. No
  * development gateway runs on Windows, so there are no instances, no run
@@ -463,7 +436,7 @@ async function windowsSetup() {
   const REAL_DATA = realData();
   const realBefore = fingerprint(REAL_DATA);
   const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
-  const userData = join(dir, "user-data");
+  const userData = join(realpathSync.native(dir), "user-data");
   mkdirSync(userData);
   let appProcess: ChildProcess | null = null;
 
