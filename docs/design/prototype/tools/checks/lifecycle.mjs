@@ -458,16 +458,23 @@ await p.close();
 // A write to the instructions in the conversation (section 7) ---------------------------------------
 const role = (p) => text(p, "#lc-role");
 p = await open("bot=juniper&task=j1&rolechange=1");
-check("F-041 a run's write to the instructions posts an event line naming the file", (await role(p)).startsWith("Juniper wrote to AGENTS.md"));
+check("F-041 a file tool that named AGENTS.md, with a modification time in the run: the observation, no writer", (await text(p, "#lc-role summary")).trim() === "AGENTS.md · modification time 5:41 PM" && !(await text(p, "#transcript")).includes("I've changed my instructions"));
 await click(p, "#lc-role summary");
 t = await role(p);
-check("F-041 opened, it says what a read established and nothing more", has(t, "Juniper's write tool changed AGENTS.md in its workspace during this run: the gateway says the file was last changed at 5:41 PM, after the call started.", "Clawtrate can't show what changed or undo it here: the gateway keeps no earlier version of the file."));
+check("F-041 opened, it says what a read established and nothing more", t.includes("A file tool named AGENTS.md. The gateway reports a modification at 5:41 PM. It doesn't report who made it.") && !/wrote|changed AGENTS|Juniper's write/.test(t));
 check("F-041 no difference, no Accept, no Undo in this unit", !(await p.$("#lc-role .lc-diff")) && (await p.evaluate(() => ![...document.querySelectorAll("#lc-role button")].some((x) => ["Accept", "Undo"].includes(x.textContent)))));
 await clickText(p, "#lc-role", "Open instructions");
 await waitText(p, "#panel-settings", "Personality · SOUL.md");
 check("S7 Open instructions opens the page", (await panel(p)).includes("Personality · SOUL.md"));
 t = await panel(p);
 check("S6 the editor says the gateway controls loading, with no fixed figure", t.includes("The gateway controls when it loads these files and how much of them it includes.") && !t.includes("20,000") && !t.includes("keeps the copy it started with"));
+await p.close();
+
+p = await open("bot=juniper&task=j1&rolechange=1&rolemtime=outside");
+check("F-041 a modification time outside the run: no line", !(await p.$("#lc-role")) && !(await text(p, "#transcript")).includes("modification time"));
+await p.close();
+p = await open("bot=juniper&task=j1&rolechange=1&rolewriter=second");
+check("F-041 another connection modified it in the same window: the same line, still no attribution", (await text(p, "#lc-role summary")).trim() === "AGENTS.md · modification time 5:41 PM" && !/Juniper|wrote/.test(await role(p)));
 await p.close();
 
 // Duplicate (section 8) -----------------------------------------------------------------------------

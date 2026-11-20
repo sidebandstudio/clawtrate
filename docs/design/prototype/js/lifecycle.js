@@ -1,6 +1,6 @@
 // The rest of a bot's life (docs/design/bots-lifecycle.md), on top of bots.js
 // and bot-settings.js: the primary bot, the picture editor, the name and label
-// in place, instructions, a role change in the conversation, duplicate, export,
+// in place, instructions, a file tool naming the instructions in the conversation, duplicate, export,
 // import and delete. Every gateway answer here is a local fixture; each state
 // says only what its fixture "read back".
 //
@@ -17,7 +17,7 @@
 //   edit=name|label     the hero's name or label open for editing
 //   namefail=1          the gateway refuses the rename
 //   bview=instructions  the Instructions page (instr=conflict: the file changed meanwhile)
-//   rolechange=1        Juniper's open task shows that a run wrote to its instructions
+//   rolechange=1        Juniper's open task shows a file tool named AGENTS.md, and its modification time
 //   delbot=<id>         the bot the Delete or Duplicate dialog is for (default: the open bot)
 //   shared=1            Pip's workspace folder is also Juniper's
 //   files=1             Delete's folder option ticked
@@ -749,8 +749,10 @@
   // A write to the instructions, in the conversation (section 7) ----------------------------------
   // Drawn only when the call's path, read as the Work pane reads it, is the bot's
   // own AGENTS.md or SOUL.md in the task's folder that is the bot's workspace, the
-  // call ended without an error, and agents.files.get says the file changed after
-  // the call started. No difference and no Undo: the gateway keeps no earlier version.
+  // call ended without an error, and agents.files.get reports a modification time
+  // within the run. It names no writer: the read reports a time, not who made it.
+  // rolemtime=outside: the time falls outside the run, so there is no line;
+  // rolewriter=second: another connection wrote it in the same window, which reads the same.
 
   const R = { on: Boolean(p("rolechange")), open: false };
   if (R.on) {
@@ -759,8 +761,7 @@
     t.html =
       `<div class="stamp">Today 5:41 PM</div>` +
       `<div class="turn" data-role="user" data-testid="transcript-turn"><div class="msg" data-role="user"><div class="bubble">From now on keep your answers under 200 words.</div></div></div>` +
-      `<div class="turn" data-role="assistant" data-testid="transcript-turn"><div class="msg" data-role="assistant"><div class="bubble md">Done. I've changed my instructions to keep answers under 200 words.</div></div></div>` +
-      `<div id="lc-role" data-testid="role-line"></div>`;
+      (p("rolemtime") === "outside" ? "" : `<div id="lc-role" data-testid="role-line"></div>`);
     t.fresh = false;
   }
   function roleLine() {
@@ -768,9 +769,8 @@
     if (!slot || slot.dataset.drawn === String(R.open)) return;
     slot.dataset.drawn = String(R.open);
     slot.innerHTML =
-      `<details class="event-details"${R.open ? " open" : ""}><summary class="event-line">Juniper wrote to AGENTS.md${icon("chevron", "icon chevron")}</summary>` +
-      `<div class="card event-body"><p class="b-p">Juniper's write tool changed AGENTS.md in its workspace during this run: the gateway says the file was last changed at 5:41 PM, after the call started.</p>` +
-      `<p class="b-p b-faint">Clawtrate can't show what changed or undo it here: the gateway keeps no earlier version of the file.</p>` +
+      `<details class="event-details"${R.open ? " open" : ""}><summary class="event-line">AGENTS.md · modification time 5:41 PM${icon("chevron", "icon chevron")}</summary>` +
+      `<div class="card event-body"><p class="b-p">A file tool named AGENTS.md. The gateway reports a modification at 5:41 PM. It doesn't report who made it.</p>` +
       `<div class="b-actions">${button("Open instructions", 'data-lc="open-instructions" data-size="sm"')}</div></div></details>`;
     CT.hydrate(slot);
   }
