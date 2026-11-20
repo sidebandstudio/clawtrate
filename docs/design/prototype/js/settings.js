@@ -59,8 +59,9 @@
     hw: p("hw") || "on", // on, pending (off at the next start), off, pendingOn
     saveFail: p("savefail") === "1",
     unsaved: false,
-    // A protocol refusal on Home gateway's connection: "client" (this build is older) or "gateway" (the gateway is).
-    refused: ["client", "gateway"].includes(p("required")) ? p("required") : null,
+    // A protocol refusal on Home gateway's connection: "client" (this build is older), "gateway" (the gateway is),
+    // or "unknown" (no valid protocol number, or one inside the offered range). It stays on Home's record.
+    refused: { client: "client", gateway: "gateway", noprotocol: "unknown" }[p("required")] || null,
     retryOk: p("retryok") === "1", // the next handshake succeeds
     install: p("install") === "1", // the updater offers a replacement this build can install
     compact: p("compact") || "none",
@@ -303,6 +304,17 @@
           announce(`Couldn't reach ${gw(id).name}`);
           return;
         }
+        // Home's address still refuses this connection's protocol: the refusal comes back, not the identity check.
+        if (id === "home" && S.refused && !S.retryOk) {
+          S.inUse = "home";
+          S.target = null;
+          S.conn = "refused";
+          S.returnFailed = false;
+          renderRequired();
+          rs();
+          then?.();
+          return;
+        }
         identityCheck(id, then);
       }, 900);
     }
@@ -338,7 +350,7 @@
       }, 500);
     }
     function arrive(id) {
-      S.refused = null;
+      if (id === "home") S.refused = null; // cleared only by a successful arrival at Home, or Home's removal
       S.inUse = id;
       S.target = null;
       S.conn = "connected";
@@ -558,6 +570,7 @@
       // Every step on disk: the gateway is gone from this device.
       S.removal = { id, outcome: "done", marks: {}, rec: said };
       S.order = S.order.filter((x) => x !== id);
+      if (id === "home") S.refused = null;
       if (S.page === id) S.page = null;
       if (id === S.inUse) {
         S.inUse = null;
@@ -613,16 +626,16 @@
       const g = gw(S.inUse);
       const scopes = { read: ["operator.read"], write: ["operator.read", "operator.write", "operator.approvals", "operator.questions"], admin: ["operator.read", "operator.write", "operator.approvals", "operator.questions", "operator.admin"] }[D.B.access];
       const refused = S.conn === "refused";
-      const theirs = S.refused === "client" ? 5 : 3;
+      const theirs = { client: 5, gateway: 3 }[S.refused];
       const body =
         savedHere() +
         `<dl class="facts"><div><dt>Address</dt><dd>${esc(g.route)}</dd></div><div><dt>State</dt><dd>${refused ? "Can't use it" : "Connected"}</dd></div>` +
         `<div><dt>This device</dt><dd class="mono">device ${DEVICE.slice(0, 6)}</dd></div><div><dt>Granted scopes</dt><dd class="b-wrap-value">${refused ? "None while not connected" : scopes.join(", ")}</dd></div>` +
         `<div><dt>${refused ? "Last seen" : "Gateway"}</dt><dd>${refused ? (S.refused === "gateway" ? "OpenClaw 2026.4.2 on Nov 12" : "OpenClaw 2026.10.6 on Nov 18") : "OpenClaw 2026.10.6"}</dd></div></dl>` +
         (refused
-          ? `<div class="form-error" role="alert" data-testid="gateway-problem"><strong>This gateway speaks another protocol</strong>The address saved for ${esc(g.name)} replied with protocol ${theirs}. This version of Clawtrate speaks protocol 4.${S.refused === "gateway" ? " Update OpenClaw on the gateway's computer to use it with this version." : ""}</div>`
+          ? `<div class="form-error" role="alert" data-testid="gateway-problem"><strong>This gateway speaks another protocol</strong>${refusalLead(g.name)}${S.refused === "gateway" ? " Update OpenClaw on the gateway's computer to use it with this version." : ""}</div>`
           : "") +
-        `<div class="b-actions" style="margin-top:16px">${button("Disconnect", 'data-action="disconnect" data-size="sm"')}${button("Other gateways", 'data-s="to-gateways" data-size="sm"', "quiet")}` +
+        `<div class="b-actions" style="margin-top:16px">${refused ? "" : button("Disconnect", 'data-action="disconnect" data-size="sm"')}${button("Other gateways", 'data-s="to-gateways" data-size="sm"', "quiet")}` +
         `<span class="spacer"></span>${button("Remove this gateway…", `data-s="remove" data-gw="${S.inUse}" data-size="sm" data-tone="danger"`, "quiet")}</div>`;
       return { title: "Gateway", back: back("Back to settings", "to-nav"), body };
     };
@@ -640,7 +653,9 @@
         failedpaired: ["warn", "warning", "No gateway was saved on this device.", `Setup had already paired with that gateway, so its record of this device may remain there; on that gateway's computer, openclaw devices list shows it. Clawtrate is connected to ${esc(gw(S.addFrom || "home").name)} again.`],
       }[S.added];
       const added =
-        addedText && S.conn === "connected"
+        addedText && S.conn === "refused"
+          ? `<div class="s-result" data-testid="add-result">${D.result("warn", "warning", addedText[2], `Clawtrate can't use ${esc(gw(S.addFrom).name)}: the address saved for it refused this connection's protocol.`)}</div>`
+          : addedText && S.conn === "connected"
           ? `<div class="s-result" data-testid="add-result">${D.result(...addedText)}</div>`
           : S.added && S.returnFailed
             ? `<div class="s-result" data-testid="add-result">${D.result("danger", "warning", "No gateway was saved on this device.", `Clawtrate couldn't reach ${esc(gw(S.addFrom).name)}.`)}<div class="b-actions" style="justify-content:center">${button("Retry", 'data-s="retry-return"', "primary")}</div></div>`
@@ -829,15 +844,24 @@
       });
     }
 
+    // The refusal's first sentence: the protocol the saved address replied with, or only that it refused.
+    function refusalLead(name) {
+      const theirs = { client: 5, gateway: 3 }[S.refused];
+      return theirs
+        ? `The address saved for ${esc(name)} replied with protocol ${theirs}. This version of Clawtrate speaks protocol 4.`
+        : `The address saved for ${esc(name)} refused this connection's protocol.`;
+    }
     // A protocol refusal (section 11): that connection's alone. The rail is empty, nothing is
     // asked of the gateway, and Your gateways, Add gateway and Remove stay reachable.
     function renderRequired() {
       if (!S.refused || S.inUse !== "home" || S.conn !== "refused") return;
       const name = gw("home").name;
-      const theirs = S.refused === "client" ? 5 : 3;
+      const theirs = { client: 5, gateway: 3 }[S.refused];
       const canInstall = S.feed && S.install && !S.dev && !phone();
       const how =
-        S.refused === "gateway"
+        S.refused === "unknown"
+          ? ""
+          : S.refused === "gateway"
           ? `<p>Update OpenClaw on the gateway's computer to use it with this version.</p>`
           : `<p>Update required to use ${esc(name)}. Other gateways aren't affected.</p>` +
             (phone()
@@ -845,16 +869,16 @@
               : canInstall
                 ? ""
                 : `<p>This copy can't update itself. A newer Clawtrate is needed to use ${esc(name)}.</p>`);
-      const tried = S.lastTry ? `<p class="s-tried" role="status">Tried again at 5:42 PM: protocol ${theirs} again.</p>` : "";
-      showEmpty(`Can't use ${esc(name)}`, `The address saved for it replied with protocol ${theirs}.`);
+      const tried = S.lastTry ? `<p class="s-tried" role="status">Tried again at 5:42 PM: ${theirs ? `protocol ${theirs}` : "refused"} again.</p>` : "";
+      showEmpty(`Can't use ${esc(name)}`, theirs ? `The address saved for it replied with protocol ${theirs}.` : "The address saved for it refused this connection's protocol.");
       $("#new-button").hidden = true;
       $("#transcript").innerHTML =
         `<div class="transcript-inner"><section class="s-refusal" aria-labelledby="s-refusal-title" data-testid="refusal">` +
         `<h2 id="s-refusal-title" tabindex="-1">Can't use ${esc(name)}</h2>` +
-        `<p>The address saved for ${esc(name)} replied with protocol ${theirs}. This version of Clawtrate speaks protocol 4.</p>${how}${tried}` +
+        `<p>${refusalLead(name)}</p>${how}${tried}` +
         `<div class="b-actions">${canInstall && S.refused === "client" ? button("Update", 'data-s="refusal-update"', "primary") : ""}` +
         `${button("Try again", 'data-s="refusal-retry"')}${button("Your gateways", 'data-s="refusal-gateways"', "quiet")}</div></section></div>`;
-      strip(`Can't use ${esc(name)}`, `protocol ${theirs}`, `<button type="button" data-s="refusal-retry">Try again</button>`, "danger");
+      strip(`Can't use ${esc(name)}`, theirs ? `protocol ${theirs}` : "", `<button type="button" data-s="refusal-retry">Try again</button>`, "danger");
       renderMenu();
     }
 
@@ -1064,10 +1088,11 @@
           strip(`Connecting to ${esc(gw("home").name)}`);
           return setTimeout(() => {
             if (S.retryOk) {
-              S.refused = null;
+              // The new handshake succeeded; Home is in use only after its identity check.
               S.lastTry = false;
-              arrive("home");
-              announce(`Connected to ${gw("home").name}`);
+              S.inUse = null;
+              S.target = "home";
+              identityCheck("home", () => announce(`Connected to ${gw("home").name}`));
             } else {
               S.lastTry = true;
               renderRequired();

@@ -549,6 +549,21 @@ for (const [dir, theirs] of [["client", 5], ["gateway", 3]]) {
     await press(p, "button", "Home gateway gateway.local · Can't use it");
     const pane = await text(p, settings);
     check(`F-518 ${name}: the Gateway pane, Remove reachable, a version only as last seen`, pane.includes("Can't use it") && pane.includes("Remove this gateway…") && pane.includes("Last seen") && pane.includes(lead));
+    check(`F-518 ${name}: the refused Gateway pane draws no Disconnect`, (await p.locator('#settings-dialog [data-action="disconnect"]').count()) === 0);
+    // Add, then Cancel: the way back meets the same refusal, and nothing of Home's old content returns.
+    await press(p, "button", "Other gateways");
+    await press(p, "button", "Add gateway…");
+    await press(p, "button", "Cancel", 1900);
+    const back = await text(p, settings);
+    check(`F-518 ${name}: Add, then Cancel: the refusal again, the rail empty`, (await p.locator('[data-testid="refusal"]').count()) === 1 && (await rail(p)).includes("Can't use Home gateway") && !/Otto|Juniper/.test(await rail(p)) && (await p.locator("#composer").isHidden()) && (await p.locator("#new-button").isHidden()));
+    check(`F-518 ${name}: Add, then Cancel: the Add result kept, never "connected again"`, back.includes("No gateway was saved on this device.") && !back.includes("Clawtrate is connected to Home gateway again"), back.slice(0, 300));
+    await press(p, "button", "Home gateway gateway.local · Can't use it");
+    await press(p, "button", "Remove this gateway…");
+    check(`F-518 ${name}: after Add and Cancel, Remove still opens its confirmation`, (await text(p, confirm)).includes("Remove Home gateway from this device?"));
+    if (count === "one") {
+      await Promise.all([p.waitForURL(/setup\.html/), click(p, '#confirm-dialog [data-s="confirm-ok"]', 200)]);
+      check(`F-518 ${name}: removing the only gateway opens setup`, p.url().includes("setup.html"), p.url());
+    }
     check(`F-518 ${name}: no page errors`, p.errors.length === 0, p.errors.join(" | "));
     await p.close();
   }
@@ -556,7 +571,20 @@ for (const [dir, theirs] of [["client", 5], ["gateway", 3]]) {
 {
   const p = await open("required=client&retryok=1");
   await click(p, '[data-testid="refusal"] [data-s="refusal-retry"]', 800);
-  check("F-518: a handshake that succeeds ends the refusal", (await rail(p)).includes("Otto") && (await p.locator('[data-testid="refusal"]').count()) === 0 && (await announced(p)) === "Connected to Home gateway");
+  check("F-518: a handshake that succeeds goes through the identity check first", (await rail(p)).includes("Confirming this is Home gateway…") && (await p.locator("#composer").isHidden()));
+  await p.waitForTimeout(600);
+  check("F-518: a handshake that succeeds ends the refusal", (await rail(p)).includes("Otto") && (await p.locator('[data-testid="refusal"]').count()) === 0 && (await p.locator("#composer").isVisible()) && (await announced(p)) === "Connected to Home gateway");
+  await p.close();
+}
+{
+  const p = await open("required=noprotocol");
+  const t = await text(p, '[data-testid="refusal"]');
+  check("F-518, no protocol number: the address refused this connection's protocol, with Try again and Your gateways", t.includes("The address saved for Home gateway refused this connection's protocol.") && t.includes("Try again") && t.includes("Your gateways"), t);
+  check("F-518, no protocol number: neither update instruction", !/Update required|Update OpenClaw|can't update itself|App Store|protocol 4/.test(t) && (await p.getByRole("button", { name: "Update", exact: true }).count()) === 0, t);
+  await click(p, '[data-testid="refusal"] [data-s="refusal-gateways"]', 200);
+  await press(p, "button", "Home gateway gateway.local · Can't use it");
+  const pane = await text(p, '#settings-dialog [data-testid="gateway-problem"]');
+  check("F-518, no protocol number: the Gateway pane uses the same sentence", pane.includes("The address saved for Home gateway refused this connection's protocol.") && !/Update OpenClaw|protocol 4/.test(pane), pane);
   await p.close();
 }
 {
