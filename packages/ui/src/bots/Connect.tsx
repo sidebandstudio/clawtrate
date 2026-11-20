@@ -104,13 +104,23 @@ export function useConnect({
     const kept = keptLabel(accounts);
     return kept ? { view: "label", ...kept } : { view: "methods" };
   });
+  // The mark of the person's last action here (see focus below). A resumed sign-in counts
+  // from when the view mounts.
+  const op = useRef(pressMark());
   // The label step is kept while it is open; leaving it any other way than closing lets it go.
-  const setWhere = (next: Where) => {
+  // A view the gateway's answer brings keeps the mark of the action that caused it.
+  const showWhere = (next: Where) => {
     remember(
       LABEL_KEPT,
       next.view === "label" ? { account: next.account, byKey: next.byKey } : null,
     );
     setWhereState(next);
+  };
+  // A view the person goes to now takes the mark of now; one reached after waiting on the
+  // gateway carries the mark of the action that waited.
+  const setWhere = (next: Where, mark: number = pressMark()) => {
+    op.current = mark;
+    showWhere(next);
   };
   const [label, setLabel] = useState("");
   const [labelError, setLabelError] = useState<string | null>(null);
@@ -133,8 +143,8 @@ export function useConnect({
     if (where.view === "flow" && signIn && signIn.method === where.method && result) {
       const added = result.added[0];
       if (stage === "connected" && added)
-        setWhere({ view: "label", account: added, byKey: signIn.byKey });
-      else if (stage === "refreshed") setWhere({ view: "same", provider: signIn.provider });
+        showWhere({ view: "label", account: added, byKey: signIn.byKey });
+      else if (stage === "refreshed") showWhere({ view: "same", provider: signIn.provider });
     }
   }
   useEffect(() => {
@@ -152,9 +162,6 @@ export function useConnect({
   const targetName = bots.find((bot) => bot.id === targetBot)?.name ?? "this bot";
   const method = (id: string) => accounts.methods.find((each) => each.id === id) ?? null;
 
-  // A view reached after waiting on the gateway takes no focus if the person pressed a key or
-  // a pointer meanwhile (below).
-  const quiet = useRef(false);
   const begin = useCallback(
     async (id: string) => {
       await bridge.send({ type: "dismissSignIn" }).catch(() => {});
@@ -166,22 +173,45 @@ export function useConnect({
     setWhere({ view: "flow", method: id });
     await begin(id);
   };
-  // A new view or stage moves focus on purpose: to its field, or else to its title. It moves
-  // as the view is committed, before the next key.
+  // A new view or stage moves focus on purpose: to its field, or else to its title; a key
+  // tried again, to the key's field. It moves as the view is committed, before the next key,
+  // and once per commit. If the person pressed a key or a pointer since the action that brought
+  // it, focus stays on the control they are on; or, if that went with the old view, it goes to
+  // this view's Back or Close.
   const shownView = `${where.view}:${where.view === "flow" ? (stage ?? "") : ""}`;
+  const retried = useRef(keyAgain);
+  // Set while Back or Try again waits on the gateway to let the sign-in go: what that shows on
+  // the way (the sign-in, dismissed) takes no focus; the view they go to does.
+  const leaving = useRef(false);
   useLayoutEffect(() => {
-    if (quiet.current) return;
+    const again = retried.current !== keyAgain;
+    retried.current = keyAgain;
+    if (leaving.current) return;
     const dialogs = document.querySelectorAll<HTMLElement>("dialog[open]");
     // In a dialog (New bot, Settings), or in a bot's Settings tab.
     const top =
       dialogs[dialogs.length - 1] ??
       document.querySelector<HTMLElement>('[data-testid="bot-settings"]');
     if (!top) return;
+    if (movedOn(op.current)) {
+      const active = document.activeElement;
+      const usable =
+        active instanceof HTMLElement &&
+        active !== document.body &&
+        active.getClientRects().length > 0 &&
+        !active.matches(":disabled");
+      if (!usable)
+        [...top.querySelectorAll<HTMLElement>(".b-back, .b-close")]
+          .find((each) => each.getClientRects().length > 0)
+          ?.focus();
+      return;
+    }
     (
+      (again ? keyRef.current : null) ??
       top.querySelector<HTMLElement>("[data-b-focus]:not([disabled])") ??
       top.querySelector<HTMLElement>("#create-title, #b-section-title, [data-bs-focus]")
     )?.focus();
-  }, [shownView]);
+  }, [shownView, keyAgain]);
   // "Sign in again" opens on the sign-in itself.
   const [startedWith] = useState(startWith && admin ? startWith : null);
   useEffect(() => {
@@ -189,39 +219,39 @@ export function useConnect({
   }, [startedWith, begin]);
   const toMethods = async () => {
     const mark = pressMark();
+    op.current = mark;
+    leaving.current = true;
     // A sign-in under way is left only once the gateway confirms its cancel: otherwise it stays
     // on screen, saying the cancel is not known.
     if (signIn && isSignInActive(signIn)) {
       const answer = await bridge
         .invoke({ type: "cancelSignIn" })
         .catch(() => ({ cancelled: false }));
-      if (!answer.cancelled) return;
+      if (!answer.cancelled) {
+        leaving.current = false;
+        return;
+      }
     }
     await bridge.send({ type: "dismissSignIn" }).catch(() => {});
-    quiet.current = movedOn(mark);
-    setWhere({ view: "methods" });
+    leaving.current = false;
+    setWhere({ view: "methods" }, mark);
   };
   // A key's sign-in that ended without a key saved starts again where a key is typed.
   const toKey = async (provider: string) => {
     const mark = pressMark();
+    op.current = mark;
+    leaving.current = true;
     await bridge.send({ type: "dismissSignIn" }).catch(() => {});
-    quiet.current = movedOn(mark);
+    leaving.current = false;
     if (accounts.keyProviders.some((each) => each.provider === provider)) setKeyProvider(provider);
     setKeyOpen(true);
     setKeyAgain((n) => n + 1);
-    setWhere({ view: "methods" });
+    setWhere({ view: "methods" }, mark);
   };
   // The key's fields, brought into view as the disclosure opens (a phone shows little at once).
   useEffect(() => {
     if (keyOpen) requestAnimationFrame(() => keyRef.current?.scrollIntoView({ block: "nearest" }));
   }, [keyOpen]);
-  useLayoutEffect(() => {
-    if (keyAgain > 0 && !quiet.current) keyRef.current?.focus();
-  }, [keyAgain]);
-  // The wait is over once its view is committed.
-  useLayoutEffect(() => {
-    quiet.current = false;
-  });
 
   // --- Choosing how -------------------------------------------------------------
   if (where.view === "methods") {
@@ -256,10 +286,12 @@ export function useConnect({
       // The field is cleared at once: the key is in this one request, and nowhere after it.
       if (keyRef.current) keyRef.current.value = "";
       const known = accounts.accounts.filter((a) => a.provider === keyProvider).map((a) => a.id);
+      const mark = pressMark();
+      op.current = mark;
       setKeyError(null);
       setSaving(true);
       try {
-        if (kp?.method) setWhere({ view: "flow", method: kp.method });
+        if (kp?.method) setWhere({ view: "flow", method: kp.method }, mark);
         const { profileId } = await bridge.invoke({
           type: "saveApiKey",
           provider: keyProvider,
@@ -270,12 +302,12 @@ export function useConnect({
           // Saved only when the read after it shows the account; otherwise it says so.
           if (profileId) {
             announce("Key saved");
-            setWhere({ view: "label", account: profileId, byKey: true });
-          } else setWhere({ view: "key-check", provider: keyProvider, known });
+            setWhere({ view: "label", account: profileId, byKey: true }, mark);
+          } else setWhere({ view: "key-check", provider: keyProvider, known }, mark);
         }
       } catch (error) {
         setKeyError(error instanceof Error ? error.message : String(error));
-        setWhere({ view: "methods" });
+        setWhere({ view: "methods" }, mark);
       } finally {
         setSaving(false);
       }
@@ -447,7 +479,10 @@ export function useConnect({
           className="button"
           data-variant="primary"
           data-size="lg"
-          onClick={() => void bridge.send({ type: "refreshAccounts" }).catch(() => {})}
+          onClick={() => {
+            op.current = pressMark();
+            void bridge.send({ type: "refreshAccounts" }).catch(() => {});
+          }}
         >
           Check again
         </button>
@@ -637,7 +672,10 @@ export function useConnect({
       className="button"
       data-variant="quiet"
       disabled={current.saving || current.cancelling}
-      onClick={() => void bridge.send({ type: "cancelSignIn" }).catch(() => {})}
+      onClick={() => {
+        op.current = pressMark();
+        void bridge.send({ type: "cancelSignIn" }).catch(() => {});
+      }}
     >
       {current.saving ? "Saving…" : "Cancel"}
     </button>
@@ -848,6 +886,7 @@ export function useConnect({
       if (!value.trim()) return;
       // Cleared as it is sent: the code goes to the gateway in this one request.
       if (pasteRef.current) pasteRef.current.value = "";
+      op.current = pressMark();
       await bridge.send({ type: "answerSignIn", value }).catch(() => {});
     };
     body = step.sensitive ? (
@@ -993,7 +1032,10 @@ export function useConnect({
           className="button"
           data-variant="primary"
           data-size="lg"
-          onClick={() => void bridge.send({ type: "recheckSignIn" }).catch(() => {})}
+          onClick={() => {
+            op.current = pressMark();
+            void bridge.send({ type: "recheckSignIn" }).catch(() => {});
+          }}
         >
           Check again
         </button>
