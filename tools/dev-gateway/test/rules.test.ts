@@ -480,13 +480,23 @@ describe("the rules checks' recipient run", () => {
 });
 
 describe("the rules checks' approval clean-up", () => {
-  /** One check that passes, on a fake gateway; `list` answers each pending-approvals request. */
-  const drive = async (list: (final: boolean) => unknown) => {
+  /**
+   * One check that passes, on a fake gateway; `list` answers each
+   * pending-approvals request, and `during` runs in the check. `final` holds
+   * the requests the final clean-up made.
+   */
+  const drive = async (
+    list: (final: boolean) => unknown,
+    during: (...args: Parameters<(typeof RULES_CHECKS)[number]["run"]>) => void = () => {},
+  ) => {
     let final = false;
+    const requests: string[] = [];
     const op = {
       events: [],
       lastSeq: 0,
-      request: async (method: string) => {
+      request: async (method: string, params: Record<string, unknown> = {}) => {
+        if (final)
+          requests.push(`${method} ${String(params.sessionKey ?? params.id ?? "")}`.trim());
         if (method === "plugin.approval.list") return list(final);
         if (method === "clawtrate-tool-rules.status") return { hook: { registered: true } };
         if (method === "clawtrate-tool-rules.get") return { scopes: {} };
@@ -494,7 +504,14 @@ describe("the rules checks' approval clean-up", () => {
       },
     } as unknown as OperatorSession;
     const held = RULES_CHECKS.splice(0);
-    RULES_CHECKS.push({ name: "a check", covers: [], run: async () => void (final = true) });
+    RULES_CHECKS.push({
+      name: "a check",
+      covers: [],
+      run: async (ctx, world) => {
+        during(ctx, world);
+        final = true;
+      },
+    });
     const lines: string[] = [];
     vi.useFakeTimers();
     try {
@@ -507,12 +524,28 @@ describe("the rules checks' approval clean-up", () => {
         (line) => lines.push(line),
       );
       await vi.advanceTimersByTimeAsync(5 * 60_000);
-      return { result: await outcome, lines };
+      return { result: await outcome, lines, final: requests };
     } finally {
       vi.useRealTimers();
       RULES_CHECKS.splice(0, RULES_CHECKS.length, ...held);
     }
   };
+
+  it("denies the waiting cards and stops the runs though a rollback keeps failing", async () => {
+    const run = await drive(
+      (final) => (final ? [{ id: "card-1" }] : []),
+      (ctx, world) => {
+        world.keys.add("agent:otto:task");
+        ctx.restoreSettings = async () => {
+          throw new Error("config.patch refused");
+        };
+      },
+    );
+    expect(run.result).toEqual({ passed: 1, failed: 1 });
+    expect(run.lines.at(-1)).toMatch(/^FAIL {2}the final clean-up/);
+    expect(run.final).toContain("plugin.approval.resolve card-1");
+    expect(run.final).toContain("chat.abort agent:otto:task");
+  });
 
   it("fails the final clean-up when the pending approvals cannot be listed", async () => {
     const run = await drive((final) => {

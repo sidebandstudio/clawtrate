@@ -1239,16 +1239,23 @@ export const RULES_CHECKS: RulesCheck[] = [
 /** Stop every run in the checks' tasks, deny every card still waiting, and empty the rules. */
 async function settle(ctx: RulesContext, world: World): Promise<boolean> {
   const { admin } = ctx.clients;
+  // A check's rollback that failed is retried first; until it succeeds, nothing
+  // more starts, but the cards and runs are cleared all the same.
+  let restored = true;
   try {
-    // A check's rollback that failed is retried first; until it succeeds, nothing more starts.
     await ctx.restoreSettings?.();
     delete ctx.restoreSettings;
+  } catch {
+    restored = false;
+  }
+  try {
     for (const id of await waitingCards(admin)) {
       await call(admin, "plugin.approval.resolve", { id, decision: "deny" });
     }
     if (!(await drainSessions(admin, world.keys))) return false;
     // Verified gone, also a card cancelled between the listing and its answer.
     if ((await waitingCards(admin)).length !== 0) return false;
+    if (!restored) return false;
     await pluginRunning(ctx);
     await clearRules(ctx);
     return true;
