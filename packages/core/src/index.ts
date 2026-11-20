@@ -72,6 +72,7 @@ export {
   SendTooLargeError,
   SESSION_PAGE_SIZE,
   SETUP_ENDPOINT_CHANGED,
+  SETUP_PAIRING_GONE,
   validateGatewayUrl,
   type ClientOptions,
   type ConnectOptions,

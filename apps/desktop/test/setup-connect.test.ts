@@ -232,7 +232,8 @@ describe("Connect on this computer", () => {
     expect(h.dialogs).toEqual([
       {
         message: "Pair this device read-only with the default gateway on this computer?",
-        detail: "The gateway saves this device.",
+        detail:
+          "Clawtrate asks for read access. The gateway may ask its owner to approve this device.",
         confirm: "Pair",
       },
     ]);
@@ -939,7 +940,7 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     h.client.stop();
   });
 
-  it("F-492: a device already paired with more than read is told so, in the dialog and on its card", async () => {
+  it("F-492: a device with a saved pairing that holds write is told it has one, and Connect asks for read alone and holds read", async () => {
     const h = harness();
     await h.storage.set(
       tokenKey(URL),
@@ -955,20 +956,31 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     });
     await h.client.start();
     await h.setup.look();
-    expect(h.setup.current.look?.access).toBe("more");
+    expect(h.setup.current.look?.access).toBe("paired");
     await h.setup.connect();
+    await until(() => h.setup.current.phase === "done");
     expect(h.dialogs[0]).toEqual({
-      message: "Connect this device to the default gateway on this computer?",
-      detail: "This device is already paired with this gateway and can also send.",
-      confirm: "Connect",
+      message: "Connect this device read-only to the default gateway on this computer?",
+      detail: "This device has a saved pairing for this address.",
+      confirm: "Connect read-only",
     });
-    expect(JSON.stringify(h.dialogs)).not.toMatch(/read-only/);
+    expect(JSON.stringify(h.dialogs)).not.toMatch(/can also send|already paired/);
+    expect((h.gateway.connects[0] as { scopes: string[] }).scopes).toEqual(["operator.read"]);
+    expect(h.client.state.connection.canWrite).toBe(false);
     expect(minted(h.requests)).toEqual([]);
     h.client.stop();
   });
 
-  it("F-492: a device already paired to read is told it can only read", async () => {
-    const h = harness();
+  it("F-492: a saved pairing gone after the dialog sends nothing, and the card asks for a new consent", async () => {
+    const h = harness({
+      replies: {
+        "gateway status --json": () => {
+          // The pairing is removed while the facts are read again after the dialog.
+          if (h.dialogs.length > 0) h.storage.data.delete(tokenKey(URL));
+          return { stdout: statusJson({ port: PORT }) };
+        },
+      },
+    });
     await h.storage.set(
       tokenKey(URL),
       JSON.stringify({
@@ -977,17 +989,13 @@ describe("Connect goes only to the gateway that answered, and says what is true"
         heldScopes: ["operator.read"],
       }),
     );
-    h.gateway.connectReply = () => ({
-      ok: true,
-      payload: helloOk(["operator.read"], "device-token"),
-    });
     await h.client.start();
     await h.setup.look();
-    expect(h.setup.current.look?.access).toBe("read");
     await h.setup.connect();
-    expect(h.dialogs[0]?.detail).toBe(
-      "This device is already paired with this gateway and can only read.",
-    );
+    await until(() => h.setup.current.phase === "found");
+    expect(h.setup.current.look?.access).toBe("new");
+    expect(h.gateway.connects).toEqual([]);
+    expect(minted(h.requests)).toEqual([]);
     h.client.stop();
   });
 

@@ -358,25 +358,6 @@ describe("what a setup connection publishes, whatever the gateway sends", () => 
     expect(storage.data.has(tokenKey(URL))).toBe(false);
     client.stop();
   });
-
-  it("F-492: says what this device can already do on a gateway", async () => {
-    const storage = memoryStorage({
-      [tokenKey("ws://127.0.0.1:19960")]: JSON.stringify({
-        token: "t",
-        grantedScopes: ["operator.read"],
-        heldScopes: ["operator.read", "operator.write"],
-      }),
-      [tokenKey(URL)]: JSON.stringify({
-        token: "t",
-        grantedScopes: ["operator.read"],
-        heldScopes: ["operator.read"],
-      }),
-    });
-    const client = new ClawtrateClient(testHost(new FakeGateway(), storage), FAST);
-    expect(await client.deviceAccess(URL)).toBe("read");
-    expect(await client.deviceAccess("ws://127.0.0.1:19960")).toBe("more");
-    expect(await client.deviceAccess("ws://127.0.0.1:19980")).toBe("new");
-  });
 });
 
 describe("the setup connection's endpoint check", () => {

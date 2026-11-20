@@ -293,7 +293,7 @@ test("F-492: Connect pairs read-only with nothing typed, after the host's dialog
   await expect(page.locator(".shell")).toBeVisible({ timeout: 60_000 });
   await expect(page.getByTestId("bot-list").getByText("Juniper")).toBeVisible();
   expect(await asked(launched.app)).toEqual([
-    `Pair this device read-only with the ${PROFILE} gateway on this computer? The gateway saves this device.`,
+    `Pair this device read-only with the ${PROFILE} gateway on this computer? Clawtrate asks for read access. The gateway may ask its owner to approve this device.`,
   ]);
   // The dialog answered before any code was made.
   const output = launched.log();

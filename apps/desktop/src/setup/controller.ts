@@ -8,6 +8,7 @@
 import {
   initialSetupState,
   SETUP_ENDPOINT_CHANGED,
+  SETUP_PAIRING_GONE,
   type ClawtrateClient,
   type ClawtrateState,
   type SetupFailure,
@@ -52,30 +53,24 @@ export type SetupControllerOptions = {
 };
 
 /**
- * The dialog's words (§2, "The host's confirmation"). Read-only is said only
- * when it is true: a device already paired with that gateway is told what it
- * can already do there.
+ * The dialog's words (§2, "The host's confirmation"). Connect asks for read
+ * access, always: a device with a saved pairing for this address reconnects
+ * asking for read alone.
  */
 export function pairConfirmation(
   found: FoundGateway,
-  access: "new" | "read" | "more" = "new",
+  access: "new" | "paired" = "new",
 ): Confirmation {
   const where = `the ${found.profile.name} gateway on this computer`;
-  if (access === "more")
-    return {
-      message: `Connect this device to ${where}?`,
-      detail: "This device is already paired with this gateway and can also send.",
-      confirm: "Connect",
-    };
-  if (access === "read")
+  if (access === "paired")
     return {
       message: `Connect this device read-only to ${where}?`,
-      detail: "This device is already paired with this gateway and can only read.",
-      confirm: "Connect",
+      detail: "This device has a saved pairing for this address.",
+      confirm: "Connect read-only",
     };
   return {
     message: `Pair this device read-only with ${where}?`,
-    detail: "The gateway saves this device.",
+    detail: "Clawtrate asks for read access. The gateway may ask its owner to approve this device.",
     confirm: "Pair",
   };
 }
@@ -312,10 +307,10 @@ export class SetupController implements SetupHost {
     // Every socket the client opens for this, retries included, finds the same listener first.
     const listening = () => this.sameListener(opened, found);
     if (paired) {
-      // Already paired with this gateway: the next Connect reuses the device (§7).
+      // A saved pairing for this address: reused, asking for read alone (§7).
       this.publish({ ...this.state, step: 1 });
       this.watch(attempt, found.port);
-      await client.connect({ url: found.url, token: null });
+      await client.connectForSetup(found.url, { check: listening });
       return;
     }
     const made = await opened.run({
@@ -413,6 +408,16 @@ export class SetupController implements SetupHost {
       if (connection.status === "error") {
         this.stopWatching();
         const code = connection.error?.code;
+        // The saved pairing went before the socket asked: back to the card, for a new consent.
+        if (code === SETUP_PAIRING_GONE) {
+          this.publish({
+            ...this.state,
+            phase: "found",
+            failure: null,
+            look: this.state.look && { ...this.state.look, access: "new" },
+          });
+          return;
+        }
         this.fail({
           kind:
             code === "SETUP_GRANT_REFUSED"

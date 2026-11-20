@@ -524,6 +524,8 @@ type StagedDeviceToken = { deviceId: string; role: string; token: string; scopes
 export const SETUP_GRANT_REFUSED = "SETUP_GRANT_REFUSED";
 /** A setup connection's endpoint no longer passed the host's check before a socket was opened. */
 export const SETUP_ENDPOINT_CHANGED = "SETUP_ENDPOINT_CHANGED";
+/** A setup reuse found no saved token for its gateway any more: a new consent is needed. */
+export const SETUP_PAIRING_GONE = "SETUP_PAIRING_GONE";
 /** Any refusal of a setup connection but the few the setup screens name. A code of the client's own. */
 export const SETUP_CONNECT_REFUSED = "SETUP_CONNECT_REFUSED";
 /** The gateway codes a setup connection publishes as they are; any other is `SETUP_CONNECT_REFUSED`. */
@@ -778,7 +780,7 @@ export class ClawtrateClient {
    * publishes only typed outcomes: fixed codes and words, never the gateway's
    * own codes, text, request fields or version.
    */
-  private setupIntent: { url: string } | null = null;
+  private setupIntent: { url: string; reuse: boolean } | null = null;
   /**
    * The setup connection whose first device token is staged here until its
    * grant is checked (`setupGrant`): written only for the operator role with
@@ -1105,7 +1107,7 @@ export class ClawtrateClient {
     this.settings = { url, token: null };
     this.pairingSeen = null;
     this.setupCheck = setup.check ? { url, check: setup.check } : null;
-    this.setupIntent = { url };
+    this.setupIntent = { url, reuse: false };
     this.setupCode = {
       url,
       bootstrapToken: options.bootstrapToken,
@@ -1115,14 +1117,28 @@ export class ClawtrateClient {
   }
 
   /**
-   * What this device can already do on the gateway at `url`: `new` with no
-   * token there, `read` when it holds read only, `more` when it holds more.
+   * Reconnect for the host's setup with this device's saved token for `url`,
+   * asking for `operator.read` alone, on this socket and its retries, whatever
+   * the saved record holds or comes to hold. Wider access the device already
+   * holds stays saved for later ordinary connections. If the token is gone by
+   * the time the socket asks, nothing is sent and the connection ends with
+   * `SETUP_PAIRING_GONE`.
    */
-  async deviceAccess(url: string): Promise<"new" | "read" | "more"> {
-    const identity = await this.loadIdentity();
-    const record = await this.loadToken(validateGatewayUrl(url), identity.deviceId, "operator");
-    if (!record) return "new";
-    return record.heldScopes.some((scope) => !READ_SCOPES.includes(scope)) ? "more" : "read";
+  async connectForSetup(url: string, setup: { check?: () => boolean } = {}): Promise<void> {
+    const target = validateGatewayUrl(url);
+    if (!this.isAllowed(target)) throw new GatewayNotAllowedError(target);
+    if (this.settings?.url !== target) this.abandonAccessRequest("Switched to another gateway.");
+    this.setupCode = null;
+    this.settings = { url: target, token: null };
+    this.pairingSeen = null;
+    this.setupCheck = setup.check ? { url: target, check: setup.check } : null;
+    this.setupIntent = { url: target, reuse: true };
+    await this.open();
+  }
+
+  /** Whether this device has a saved pairing for the gateway at `url`: `new` without one. */
+  async deviceAccess(url: string): Promise<"new" | "paired"> {
+    return (await this.hasDeviceToken(url)) ? "paired" : "new";
   }
 
   /** Whether this device already holds a token for the gateway at `url`. */
@@ -1411,13 +1427,20 @@ export class ClawtrateClient {
           ) {
             throw new Error("The gateway changed while access was being approved.");
           }
-          const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(scopes, ADMIN_SCOPE);
-          const pairing = askedPairing && scopes.includes(PAIRING_SCOPE);
+          // Only what the upgrade asked for, or what an asked scope implies, is kept: a
+          // pairing-only upgrade adds pairing and nothing else, whatever the gateway granted.
+          const within = scopes.filter((scope) =>
+            scope === PAIRING_SCOPE
+              ? target.includes(scope)
+              : target.some((asked) => scopeSatisfied([asked], scope)),
+          );
+          const admin = target.includes(ADMIN_SCOPE) && scopeSatisfied(within, ADMIN_SCOPE);
+          const pairing = askedPairing && within.includes(PAIRING_SCOPE);
           await this.writeToken(url, deviceId, role, {
             token,
-            grantedScopes: scopes,
+            grantedScopes: within,
             heldScopes: [
-              ...heldFromGrant(scopes),
+              ...heldFromGrant(within),
               ...(admin ? [ADMIN_SCOPE] : []),
               ...(pairing ? [PAIRING_SCOPE] : []),
             ],
@@ -4724,7 +4747,9 @@ export class ClawtrateClient {
         deviceId: identity.deviceId,
         paired,
         requestedScopes:
-          stored && !this.options.readOnly ? [...stored.heldScopes] : [...READ_SCOPES],
+          stored && !this.options.readOnly && !this.isSetup(settings.url)
+            ? [...stored.heldScopes]
+            : [...READ_SCOPES],
         upgrade: sameGateway ? state.connection.upgrade : initialScopeUpgrade,
         serverVersion: sameGateway ? state.connection.serverVersion : null,
         gatewayId: sameGateway ? state.connection.gatewayId : null,
@@ -4818,6 +4843,22 @@ export class ClawtrateClient {
       buildConnectPlan: async ({ nonce, challengeTs }) => {
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
         this.heldToken = token?.token ?? null;
+        const setup = this.isSetup(settings.url);
+        // A setup reuse whose token is gone sends nothing: the person consents again.
+        if (setup && !token && this.setupIntent?.reuse) {
+          this.close();
+          this.setupIntent = null;
+          this.setConnection({
+            status: "error",
+            retryAt: null,
+            error: {
+              code: SETUP_PAIRING_GONE,
+              message: "This device's saved pairing for this address is gone.",
+              hint: null,
+            },
+          });
+          throw new Error("the saved pairing is gone");
+        }
         // The host's one-time code, while it lives, for a device not yet paired with this gateway.
         const code =
           !token && this.setupCode?.url === settings.url && this.now() < this.setupCode.expiresAtMs
@@ -4825,8 +4866,10 @@ export class ClawtrateClient {
             : null;
         // Once paired, the device token is the credential; the bootstrap token is no longer sent.
         const bootstrap = token || code ? null : settings.token;
-        // Exactly the scopes this client means to hold, never what the token happens to allow.
-        const requested = token && !this.options.readOnly ? token.heldScopes : [...READ_SCOPES];
+        // Exactly the scopes this client means to hold, never what the token happens to allow;
+        // a setup connection asks for read alone, a token that arrived meanwhile included.
+        const requested =
+          token && !this.options.readOnly && !setup ? token.heldScopes : [...READ_SCOPES];
         const plan = await lifecycle.buildPlan({
           client,
           role: "operator",
@@ -5212,9 +5255,13 @@ export class ClawtrateClient {
     const bootId = asRecord(hello.server)?.bootId;
     this.gatewayBootId =
       typeof bootId === "string" && bootId.length > 0 && bootId.length <= 96 ? bootId : null;
-    // Only what this connection asked for is used: a wider grant is held to the request.
+    // Only what this connection asked for is used: the signed request is the ceiling. A
+    // wider grant that implies an asked scope supplies it; an unasked scope never enters.
     const asked = this.state.connection.requestedScopes;
-    const scopes = [...(hello.auth.scopes ?? [])].filter((scope) => asked.includes(scope));
+    const granted = [...(hello.auth.scopes ?? [])];
+    const scopes = asked.filter((scope) =>
+      scope === PAIRING_SCOPE ? granted.includes(scope) : scopeSatisfied(granted, scope),
+    );
     const canWrite = scopeSatisfied(scopes, WRITE_SCOPE);
     const policy = asRecord(hello.policy);
     const number = (value: unknown) =>
@@ -6361,7 +6408,8 @@ export class ClawtrateClient {
         if (!record) return null;
         return {
           token: record.token,
-          scopes: this.options.readOnly ? [...READ_SCOPES] : [...record.heldScopes],
+          scopes:
+            this.options.readOnly || this.isSetup(url) ? [...READ_SCOPES] : [...record.heldScopes],
         };
       },
       store: async ({ deviceId, role, token, scopes }) => {

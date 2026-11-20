@@ -266,9 +266,8 @@ function runningFacts(look: SetupLook): Array<[string, string]> {
 
 /** What Connect does, said only as far as it is true for this device. */
 const CONNECT_HINT: Record<NonNullable<SetupLook["access"]>, string> = {
-  new: "Connect pairs this computer with the gateway as a device that can only read, and the gateway keeps it. Sending or changing anything is asked for later.",
-  read: "This device is already paired with this gateway and can only read.",
-  more: "This device is already paired with this gateway and can also send.",
+  new: "Clawtrate asks for read access. The gateway may ask its owner to approve this device.",
+  paired: "This device has a saved pairing for this address. Clawtrate asks for read access.",
 };
 
 /** Other services and profiles the look saw: named, never used. */
@@ -336,7 +335,7 @@ function LookResult({
                     if (!confirming) void send({ type: "setupConnect" });
                   }}
                 >
-                  Connect
+                  Connect read-only
                 </button>
               </Actions>
               <Hint>{CONNECT_HINT[look.access ?? "new"]}</Hint>
@@ -550,9 +549,8 @@ const FAILURES: Record<
 
 /** Connect's steps: a new pairing, or a device that is already paired there. */
 const CONNECT_STEPS: Record<NonNullable<SetupLook["access"]>, string[]> = {
-  new: ["Making a one-time code", "Pairing this computer, read-only", "Loading your bots"],
-  read: ["Checking the gateway", "Connecting this computer, read-only", "Loading your bots"],
-  more: ["Checking the gateway", "Connecting this computer", "Loading your bots"],
+  new: ["Making a one-time code", "Requesting read access", "Loading your bots"],
+  paired: ["Checking the gateway", "Requesting read access", "Loading your bots"],
 };
 
 /** Why a run that must look in a sandbox couldn't use the one it was given, in words. */

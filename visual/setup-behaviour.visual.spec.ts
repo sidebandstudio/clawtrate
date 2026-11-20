@@ -89,12 +89,17 @@ test("F-492: Connect asks the host and shows its steps; nothing in the page take
   page,
 }) => {
   await openFixture(page, "setup=found", "light");
-  await page.getByRole("button", { name: "Connect" }).click();
+  await expect(
+    page.getByText(
+      "Clawtrate asks for read access. The gateway may ask its owner to approve this device.",
+    ),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Connect read-only" }).click();
   expect(await sent(page)).toEqual(["setupConnect"]);
   await expect(page.getByRole("heading", { name: "Connecting" })).toBeVisible();
   await expect(page.getByRole("list", { name: "Steps" }).getByRole("listitem")).toHaveText([
     "Making a one-time code",
-    "Pairing this computer, read-only",
+    "Requesting read access",
     "Loading your bots",
   ]);
   await expect(page.locator("input")).toHaveCount(0);
@@ -218,14 +223,17 @@ test("On Windows, This computer leads to the Windows card, which runs nothing an
   await expect(page.getByRole("button", { name: "Use another computer" })).toBeVisible();
 });
 
-test("F-492: a device already paired with more than read is told so, and nothing on the card says read-only", async ({
+test("F-492: a device with a saved pairing is told it has one for this address, and Connect still asks for read", async ({
   page,
 }) => {
   await openFixture(page, "setup=found-paired", "light");
   await expect(
-    page.getByText("This device is already paired with this gateway and can also send."),
+    page.getByText(
+      "This device has a saved pairing for this address. Clawtrate asks for read access.",
+    ),
   ).toBeVisible();
-  await expect(page.getByText(/only read|read-only/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Connect read-only" })).toBeVisible();
+  await expect(page.getByText(/can also send|already paired/)).toHaveCount(0);
 });
 
 test("F-516: a bind or a service the look didn't establish is not reported", async ({ page }) => {

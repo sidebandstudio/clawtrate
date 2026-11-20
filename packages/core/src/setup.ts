@@ -59,11 +59,8 @@ export type SetupLook = {
   port: number | null;
   /** For `not-token`: the gateway's other sign-in. */
   authMode: "password" | "none" | "trusted-proxy" | null;
-  /**
-   * What this device can already do there: `new` when it isn't paired with
-   * that gateway, `read` when it holds read only, `more` when it can also send.
-   */
-  access: "new" | "read" | "more" | null;
+  /** Whether this device has a saved pairing for that address: `new` when it hasn't. */
+  access: "new" | "paired" | null;
   /** Other OpenClaw services and profiles the look saw, named and never used. */
   others: string[];
 };
