@@ -529,7 +529,8 @@ export const SETUP_PAIRING_GONE = "SETUP_PAIRING_GONE";
 /** Any refusal of a setup connection but the few the setup screens name. A code of the client's own. */
 export const SETUP_CONNECT_REFUSED = "SETUP_CONNECT_REFUSED";
 /** The gateway codes a setup connection publishes as they are; any other is `SETUP_CONNECT_REFUSED`. */
-const SETUP_CODES = new Set(["AUTH_BOOTSTRAP_TOKEN_INVALID", "PAIRING_REQUIRED"]);
+const namedSetupCode = (code: string) =>
+  code === "AUTH_BOOTSTRAP_TOKEN_INVALID" || code === "PAIRING_REQUIRED";
 /** A gateway version as a setup screen may show it: a date version, nothing else. */
 const setupVersion = (value: unknown): string | null =>
   typeof value === "string" && /^\d{4}\.\d{1,2}\.\d{1,3}$/.test(value) ? value : null;
@@ -5139,7 +5140,7 @@ export class ClawtrateClient {
     // A setup connection publishes typed outcomes only: the few codes its screens name,
     // fixed words, and nothing else the gateway sent.
     const setup = this.isSetup(url);
-    const code = setup ? (SETUP_CODES.has(raw) ? raw : SETUP_CONNECT_REFUSED) : raw;
+    const code = setup ? (namedSetupCode(raw) ? raw : SETUP_CONNECT_REFUSED) : raw;
     const hint =
       !setup && typeof details.remediationHint === "string" ? details.remediationHint : null;
     const message = setup
