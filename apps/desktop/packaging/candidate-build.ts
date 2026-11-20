@@ -18,7 +18,7 @@ import { FILE_KEYS, type FileKey } from "../src/main/update/feed.ts";
 import { parseVersion, versionTrack } from "../src/main/update/version.ts";
 import { artifactName, sha512Base64 } from "./feed.ts";
 import { releaseDate } from "./update-defines.ts";
-import { feedFingerprint } from "./release-plan.ts";
+import { compiledAddresses } from "./candidate-addresses.ts";
 
 const app = fileURLToPath(new URL("../", import.meta.url));
 const dist = join(app, "dist");
@@ -80,13 +80,7 @@ function build(dir: string, version: string) {
   const parsed = parseVersion(version);
   if (!parsed || !process.env.SOURCE_DATE_EPOCH)
     throw new Error("Expected candidate version and epoch.");
-  const feedUrl =
-    process.env[
-      versionTrack(parsed) === "nightly"
-        ? "CLAWTRATE_NIGHTLY_UPDATE_FEED_URL"
-        : "CLAWTRATE_UPDATE_FEED_URL"
-    ];
-  if (!feedUrl) throw new Error("Expected the track's build-time feed address.");
+  const feedAddresses = compiledAddresses(versionTrack(parsed), process.env);
   const buildDate = releaseDate(process.env, new Date());
   const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   const manifest = join(app, "package.json");
@@ -125,7 +119,7 @@ function build(dir: string, version: string) {
         name,
         sha512: sha512Base64(path),
         signing,
-        feedHash: feedFingerprint(feedUrl),
+        feedAddresses,
       };
       writeFileSync(join(dir, key + ".json"), JSON.stringify(receipt, null, 2) + "\n");
     }

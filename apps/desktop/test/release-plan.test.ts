@@ -11,13 +11,8 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import {
-  assemble,
-  plan,
-  runPlan,
-  feedFingerprint,
-  type Candidate,
-} from "../packaging/release-plan.ts";
+import { assemble, plan, runPlan, type Candidate } from "../packaging/release-plan.ts";
+import { feedAddresses, compiledAddresses } from "../packaging/candidate-addresses.ts";
 import { artifactName, sha512Base64 } from "../packaging/feed.ts";
 import { macReadback } from "../packaging/candidate-build.ts";
 import { FILE_KEYS } from "../src/main/update/feed.ts";
@@ -82,7 +77,7 @@ beforeEach(() => {
       name,
       commit: c.commit,
       buildDate: c.buildDate,
-      feedHash: feedFingerprint(c.feedUrl),
+      feedAddresses: feedAddresses(c.track, c.feedUrl),
       sha512: sha512Base64(path(name)),
       signing: key === "win-x64" ? "authenticode-valid" : "developer-id-notarized",
     });
@@ -166,7 +161,7 @@ it("binds the build receipt to its name, source, date, compiled feed address and
     commit: "b".repeat(40),
     buildDate: "2026-11-20",
     name: "other",
-    feedHash: "different",
+    feedAddresses: "different",
     sha512: "wrong",
   });
   expect(plan(c).issues).toHaveLength(5);
@@ -191,7 +186,7 @@ it("checks version syntax, both track mismatches, commit, date and the HTTPS fee
     expect.arrayContaining([
       "Expected a full source commit.",
       "Expected a UTC build date.",
-      "Expected a direct HTTPS feed address.",
+      "Expected distinct, canonical HTTPS feed addresses.",
     ]),
   );
   expect(JSON.stringify(result)).not.toContain("private");
@@ -260,4 +255,34 @@ it("reports absent evidence without claiming a different build was observed", ()
     "mac-arm64: missing feed entry.",
     "mac-arm64: missing or wrong build receipt.",
   ]);
+});
+
+it("compares both compiled feed addresses including absence and rejects ambiguous paths", () => {
+  expect(plan({ ...c, otherFeedUrl: "https://example.org/nightly/feed.json" }).issues).toContain(
+    "mac-arm64: feed address pair differs in the build record.",
+  );
+  expect(compiledAddresses("nightly", { CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: c.feedUrl })).toEqual({
+    nightly: expect.any(String),
+    stable: null,
+  });
+  for (const url of [
+    c.feedUrl,
+    c.feedUrl.replace("org", "org."),
+    c.feedUrl.replace("stable", "%2e%2e"),
+    c.feedUrl.replace("stable", "stable%2Fnested"),
+    c.feedUrl + "/../feed.json",
+    c.feedUrl + "?",
+    c.feedUrl + "#",
+    c.feedUrl.replace("org", "org:443"),
+  ]) {
+    expect(plan({ ...c, otherFeedUrl: url }).issues).toContain(
+      "Expected distinct, canonical HTTPS feed addresses.",
+    );
+    expect(() =>
+      compiledAddresses("stable", {
+        CLAWTRATE_UPDATE_FEED_URL: c.feedUrl,
+        CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: url,
+      }),
+    ).toThrow();
+  }
 });

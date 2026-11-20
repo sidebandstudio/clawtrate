@@ -1,8 +1,8 @@
 import { artifactFormat } from "./candidate-format.ts";
-import { createHash } from "node:crypto";
+import { feedAddresses, localFeedAddress } from "./candidate-addresses.ts";
 import { lstatSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildAddressProblem } from "../src/main/update/address.ts";
+
 import { MAX_DOWNLOAD_BYTES, MAX_FEED_BYTES } from "../src/main/update/engine.ts";
 import { FEED_FORMAT, FILE_KEYS, parseReleaseDate, type FileKey } from "../src/main/update/feed.ts";
 import { parseVersion, versionTrack } from "../src/main/update/version.ts";
@@ -12,10 +12,6 @@ function fullCommit(commit: string) {
   return /^[0-9a-f]{40}$/.test(commit) && commit.length === 40;
 }
 
-export function feedFingerprint(url: string) {
-  return createHash("sha256").update(url).digest("hex");
-}
-
 export interface Candidate {
   dir: string;
   track: string;
@@ -23,6 +19,7 @@ export interface Candidate {
   commit: string;
   buildDate: string;
   feedUrl: string;
+  otherFeedUrl?: string;
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -55,9 +52,9 @@ export function plan(candidate: Candidate) {
     issues.push("Version and track must match.");
   if (!validCommit) issues.push("Expected a full source commit.");
   if (!validDate) issues.push("Expected a UTC build date.");
-  const address = buildAddressProblem(feedUrl) ? null : new URL(feedUrl);
-  if (!address || address.search || address.hash || address.pathname.endsWith("/"))
-    issues.push("Expected a direct HTTPS feed address.");
+  const address = localFeedAddress(feedUrl);
+  const addresses = feedAddresses(track, feedUrl, candidate.otherFeedUrl);
+  if (!addresses) issues.push("Expected distinct, canonical HTTPS feed addresses.");
 
   const allowed = new Set(["update-feed.json", "release-plan.json"]);
   const feed = json(join(dir, "update-feed.json"));
@@ -75,8 +72,12 @@ export function plan(candidate: Candidate) {
     allowed.add(receiptName);
     const receipt = json(join(dir, receiptName));
     const hasReceipt = Object.keys(receipt).length > 0;
-    if (hasReceipt && receipt.feedHash !== feedFingerprint(feedUrl))
-      issues.push(key + ": build used a different feed address.");
+    const hashes = object(receipt.feedAddresses);
+    if (
+      hasReceipt &&
+      (!addresses || hashes.stable !== addresses.stable || hashes.nightly !== addresses.nightly)
+    )
+      issues.push(key + ": feed address pair differs in the build record.");
     if (hasReceipt && receipt.commit !== commit)
       issues.push(key + ": missing or different source commit.");
     if (hasReceipt && receipt.buildDate !== buildDate)
@@ -119,6 +120,7 @@ export function plan(candidate: Candidate) {
     version: parsed ? version : null,
     commit: validCommit ? commit : null,
     buildDate: validDate ? buildDate : null,
+    feedAddresses: addresses,
     files,
     verdict: issues.length ? "refused" : "complete and consistent",
     issues,
@@ -133,7 +135,7 @@ export function assemble(candidate: Candidate) {
     !parseVersion(version) ||
     !fullCommit(commit) ||
     parseReleaseDate(buildDate) !== buildDate ||
-    buildAddressProblem(feedUrl)
+    !feedAddresses(candidate.track, feedUrl, candidate.otherFeedUrl)
   )
     return;
   for (const key of FILE_KEYS) {
@@ -154,7 +156,7 @@ export function assemble(candidate: Candidate) {
 }
 
 export function runPlan(args: string[], print = console.log) {
-  const [mode, dir, track, version, commit, buildDate, feedUrl] = args;
+  const [mode, dir, track, version, commit, buildDate, feedUrl, otherFeedUrl] = args;
   if (
     !(mode === "assemble" || mode === "check") ||
     !dir ||
@@ -162,15 +164,24 @@ export function runPlan(args: string[], print = console.log) {
     !version ||
     !commit ||
     !buildDate ||
-    !feedUrl
+    !feedUrl ||
+    args.length > 8
   ) {
     console.error(
-      "Usage: release-plan.ts assemble|check DIR TRACK VERSION COMMIT ISO_DATE FEED_URL",
+      "Usage: release-plan.ts assemble|check DIR TRACK VERSION COMMIT ISO_DATE TRACK_URL [OTHER_URL|-]",
     );
     return 1;
   }
   try {
-    const candidate = { dir, track, version, commit, buildDate, feedUrl };
+    const candidate = {
+      dir,
+      track,
+      version,
+      commit,
+      buildDate,
+      feedUrl,
+      ...(otherFeedUrl && otherFeedUrl !== "-" ? { otherFeedUrl } : {}),
+    };
     if (mode === "assemble") assemble(candidate);
     const record = plan(candidate);
     const output = join(dir, "release-plan.json");
