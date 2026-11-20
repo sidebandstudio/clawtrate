@@ -934,6 +934,7 @@ export class ClawtrateClient {
       return times.length > 0 ? Math.max(...times) : null;
     },
     connected: () => this.state.connection.status === "connected",
+    generation: () => this.generation,
     canWrite: () => this.state.connection.canWrite,
     ensureWrite: () => this.ensureScope(WRITE_SCOPE),
     applyRow: (key, fields) => this.applyRowFields(key, fields),

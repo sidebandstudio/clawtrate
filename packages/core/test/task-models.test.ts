@@ -93,6 +93,7 @@ function rig(options: { task?: Partial<Task>; active?: boolean; write?: boolean 
     refreshed: 0,
     released: [] as string[],
     refuse: null as string | null,
+    generation: 1,
   };
   const storage = memoryStorage();
   let id = 0;
@@ -134,6 +135,7 @@ function rig(options: { task?: Partial<Task>; active?: boolean; write?: boolean 
     active: () => state.active,
     lastTurnEnd: () => 5_000,
     connected: () => true,
+    generation: () => state.generation,
     canWrite: () => options.write ?? true,
     ensureWrite: async () => {},
     applyRow: (_key, fields) => {
@@ -312,6 +314,66 @@ describe("a task's model and effort", () => {
     expect(r.view().held).toBeNull();
     expect(r.patches()).toEqual([]);
     expect(released).toBe(1);
+  });
+
+  it("F-042: a retry belongs to the gateway that received the first attempt", async () => {
+    const r = rig();
+    let gateway = "first-gateway";
+    let resume!: () => void;
+    const attempts: string[] = [];
+    const rows: unknown[] = [];
+    const request = r.ctx.request;
+    const applyRow = r.ctx.applyRow;
+    r.ctx.storageKey = () => `clawtrate.task-models:${gateway}`;
+    r.ctx.pause = () => new Promise<void>((resolve) => (resume = resolve));
+    r.ctx.applyRow = (key, fields) => {
+      rows.push(fields);
+      applyRow(key, fields);
+    };
+    r.ctx.request = async (method, params) => {
+      if (method !== "sessions.patch") return request(method, params);
+      attempts.push(gateway);
+      if (attempts.length === 1) throw Object.assign(new Error("busy"), { retryable: true });
+      return request(method, params);
+    };
+    await opened(r);
+    const reads = r.requests.filter((each) => each.method === "models.list").length;
+    const save = r.engine.choose(KEY, { model: "acme/dev-2", effort: null });
+    await until(() => Boolean(resume));
+    // Another gateway, on a new connection; a restored copy can have the same key and session.
+    gateway = "second-gateway";
+    r.state.generation += 1;
+    resume();
+    await save;
+    await r.engine.settled(KEY);
+    expect(attempts).toEqual(["first-gateway"]);
+    // No row, no line, no read and no queue callback reach the replacement gateway's client.
+    expect(rows).toEqual([]);
+    expect(r.view().events).toEqual([]);
+    expect(r.view().saving).toBe(false);
+    expect(r.state.released).toEqual([]);
+    expect(r.state.refreshed).toBe(0);
+    expect(r.requests.filter((each) => each.method === "models.list")).toHaveLength(reads);
+    expect(await r.storage.get("clawtrate.task-models:second-gateway")).toBeNull();
+    // A save on the new connection starts on its own.
+    expect(r.engine.hasWork(KEY)).toBe(false);
+  });
+
+  it("F-042: a list of models read for an earlier connection is not taken", async () => {
+    const r = rig();
+    let answer!: (value: unknown) => void;
+    const request = r.ctx.request;
+    r.ctx.request = (method, params) =>
+      method === "models.list"
+        ? new Promise((resolve) => (answer = resolve))
+        : request(method, params);
+    r.engine.open(KEY);
+    await until(() => Boolean(answer));
+    r.state.generation += 1;
+    answer({ models: [{ id: "dev-9", provider: "acme", thinkingLevels: [] }] });
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(r.view().models).toEqual([]);
+    expect(r.view().catalog).toBe("loading");
   });
 
   it("F-045: Keep lets go of a held change", async () => {

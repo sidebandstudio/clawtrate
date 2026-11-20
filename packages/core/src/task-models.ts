@@ -111,6 +111,11 @@ export type TaskModelsContext = {
   /** The gateway's time of the end of the task's last turn, or of its last message. */
   lastTurnEnd(key: string): number | null;
   connected(): boolean;
+  /**
+   * The client's connection: it changes with every new connection, to this
+   * gateway or another. Work started on one connection is dropped on the next.
+   */
+  generation(): number;
   canWrite(): boolean;
   /** Write access, held already: nothing here asks for it (25.6). */
   ensureWrite(): Promise<void>;
@@ -339,6 +344,9 @@ type StoreJob = {
 /** How a save ended. */
 type SaveOutcome = "saved" | "unconfirmed" | "dropped" | { refused: string };
 
+/** A save on its way: which opening of the task, and which connection, it belongs to. */
+type TrackedSave = { done: Promise<void>; opening: number | undefined; generation: number };
+
 /** The gateway refused the change; its reason is the message. */
 export class TaskModelRefusedError extends Error {
   constructor(reason: string) {
@@ -349,8 +357,12 @@ export class TaskModelRefusedError extends Error {
 
 export class TaskModelsEngine {
   private readonly ctx: TaskModelsContext;
-  /** A save on its way, per followed task: a message to that task waits for it. */
-  private readonly saves = new Map<string, Promise<void>>();
+  /**
+   * A save on its way, per followed task: a message to that task waits for it.
+   * One started for an earlier opening of the task, or on an earlier connection,
+   * no longer counts: a new opening starts on its own.
+   */
+  private readonly saves = new Map<string, TrackedSave>();
   /**
    * Reads and writes of this device's record still to make, one per gateway
    * and task: a second request for the same pair joins the first. Only the
@@ -393,7 +405,17 @@ export class TaskModelsEngine {
 
   /** A change waits or is on its way: the task is kept followed until it is saved. */
   hasWork(key: string): boolean {
-    return this.saves.has(key) || (this.ctx.get()[key]?.held ?? null) !== null;
+    return this.ownSave(key) !== null || (this.ctx.get()[key]?.held ?? null) !== null;
+  }
+
+  /** The save on its way for this opening of the task, on this connection, if there is one. */
+  private ownSave(key: string): TrackedSave | null {
+    const save = this.saves.get(key);
+    return save &&
+      save.opening === this.openings.get(key) &&
+      save.generation === this.ctx.generation()
+      ? save
+      : null;
   }
 
   /** After a reconnect: every followed task's models again, and any held change once nothing runs. */
@@ -408,12 +430,26 @@ export class TaskModelsEngine {
   /** `models.list {sessionKey}`: the models of the task's provider. */
   async readCatalog(key: string): Promise<void> {
     if (!this.ctx.get()[key]) return;
+    // An answer, or a retry, for another connection or an earlier opening of the task is dropped.
+    const generation = this.ctx.generation();
+    const opening = this.openings.get(key);
+    const live = () => this.ctx.generation() === generation && this.openings.get(key) === opening;
     this.patch(key, (view) => ({
       ...view,
       catalog: view.catalog === "ready" ? "ready" : "loading",
     }));
     try {
-      const answer = await onceMore(() => this.ctx.request("models.list", { sessionKey: key }));
+      const read = () => this.ctx.request("models.list", { sessionKey: key });
+      let answer: unknown;
+      try {
+        answer = await read();
+      } catch (error) {
+        if ((error as { retryable?: unknown } | null)?.retryable !== true || !live()) throw error;
+        await new Promise<void>((resolve) => setTimeout(() => resolve(), SAVE_RETRY_MS));
+        if (!live()) return;
+        answer = await read();
+      }
+      if (!live()) return;
       const provider = parseModelRef(this.ctx.task(key)?.model)?.provider ?? null;
       const models = readCatalog(answer)
         .filter((each) => provider === null || each.provider === provider)
@@ -425,6 +461,7 @@ export class TaskModelsEngine {
         models,
       }));
     } catch (error) {
+      if (!live()) return;
       this.patch(key, (view) => ({
         ...view,
         catalog: "error",
@@ -463,7 +500,7 @@ export class TaskModelsEngine {
       this.keep(key);
       return "unchanged";
     }
-    if (this.ctx.active(key) || this.saves.has(key) || !this.ctx.connected()) {
+    if (this.ctx.active(key) || this.ownSave(key) || !this.ctx.connected()) {
       this.patch(key, (current) => ({
         ...current,
         held: { ...desired, at: this.ctx.now(), sessionId: held?.sessionId ?? task.sessionId },
@@ -501,7 +538,7 @@ export class TaskModelsEngine {
    * the turn starts until it is done.
    */
   release(key: string): boolean {
-    if (this.saves.has(key)) return true;
+    if (this.ownSave(key)) return true;
     const held = this.ctx.get()[key]?.held;
     if (!held) return false;
     // A task the gateway no longer lists: its held change is dropped, once, and never sent.
@@ -521,7 +558,7 @@ export class TaskModelsEngine {
 
   /** Wait for a save on its way to this task, if there is one. */
   settled(key: string): Promise<void> {
-    return this.saves.get(key) ?? Promise.resolve();
+    return this.ownSave(key)?.done ?? Promise.resolve();
   }
 
   private save(
@@ -529,6 +566,18 @@ export class TaskModelsEngine {
     desired: TaskModelChoice,
     sessionId: string | null,
   ): Promise<SaveOutcome> {
+    // The connection, the opening of the task, its session and the gateway the save starts on: it
+    // goes on only while all four are still the same, and is dropped, unsaid, once one is not.
+    const generation = this.ctx.generation();
+    const opening = this.openings.get(key);
+    const gateway = this.ctx.storageKey();
+    const session = sessionId ?? this.ctx.task(key)?.sessionId ?? null;
+    const sameClient = () =>
+      this.ctx.generation() === generation && this.ctx.storageKey() === gateway;
+    const live = () =>
+      sameClient() &&
+      this.openings.get(key) === opening &&
+      (session === null || (this.ctx.task(key)?.sessionId ?? null) === session);
     const run = (async (): Promise<SaveOutcome> => {
       const task = this.ctx.task(key);
       const view = this.ctx.get()[key];
@@ -580,20 +629,31 @@ export class TaskModelsEngine {
       let outcome: SaveOutcome;
       const lines: TaskModelEvent[] = [];
       let refused: { error: string; at: number } | null = null;
+      /** The save is let go: its connection, opening, session or gateway is not the one it began on. */
+      const stale = (): SaveOutcome => {
+        // The view, when it is still this opening's, stops saying it saves; nothing else is touched.
+        if (this.openings.get(key) === opening)
+          this.patch(key, (current) => ({ ...current, saving: false, pending: null }));
+        return "dropped";
+      };
       try {
         await this.ctx.ensureWrite();
+        if (!live()) return stale();
         let answer: RawRecord | null = null;
         for (let attempt = 0; ; attempt += 1) {
+          if (!live()) return stale();
           try {
             answer = asRecord(await this.ctx.request("sessions.patch", params));
             break;
           } catch (error) {
+            if (!live()) return stale();
             const wait = retryAfter(error, attempt);
             if (wait === null || attempt + 1 >= MAX_SAVE_ATTEMPTS || !this.ctx.connected())
               throw error;
             await (this.ctx.pause ?? ((ms) => new Promise((r) => setTimeout(r, ms))))(wait);
           }
         }
+        if (!live()) return stale();
         // What the answer itself shows: the model it resolved, and the level it keeps or uses.
         const resolved = asRecord(answer?.resolved);
         const entry = asRecord(answer?.entry);
@@ -623,6 +683,7 @@ export class TaskModelsEngine {
         if (missing.model || missing.effort) lines.push(event("unconfirmed", missing, null));
         outcome = missing.model || missing.effort ? "unconfirmed" : "saved";
       } catch (error) {
+        if (!live()) return stale();
         const reason = cut(errorText(error), MAX_TASK_MODEL_ERROR_CHARS);
         if (this.ctx.refusal(error)) {
           this.ctx.log(`the change of ${key}'s model was refused: ${reason}`);
@@ -651,14 +712,15 @@ export class TaskModelsEngine {
       return outcome;
     })();
     const tracked = run.finally(() => {
-      if (this.saves.get(key) === done) this.saves.delete(key);
-      this.ctx.released(key);
+      // Only its own entry is cleared; only the connection it began on hears that it ended.
+      if (this.saves.get(key)?.done === done) this.saves.delete(key);
+      if (sameClient()) this.ctx.released(key);
     });
     const done = tracked.then(
       () => undefined,
       () => undefined,
     );
-    this.saves.set(key, done);
+    this.saves.set(key, { done, opening, generation });
     return tracked;
   }
 
