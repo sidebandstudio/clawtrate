@@ -404,7 +404,7 @@ describe("the look on this computer", () => {
     const opener = sandboxOpener({
       file,
       platform: "darwin",
-      context: { platform: "darwin", home: at.home, uid: at.uid, checkout: at.checkout, identify },
+      context: { platform: process.platform, home: at.home, uid: at.uid, checkout: at.checkout, identify },
       startGateway: () => Promise.reject(new Error("no gateway in this scenario")),
     });
     const opened = await opener.open();
@@ -649,7 +649,7 @@ describe("the sandbox: a run's description, its folder and its proven instance",
     const files = fake.counting();
     const processes = fake.identities();
     const context = {
-      platform: "darwin" as NodeJS.Platform,
+      platform: process.platform,
       home: at.home,
       uid: at.uid,
       checkout: at.checkout,

@@ -89,7 +89,7 @@ describe("a sandboxed host's start", () => {
       run: fake.runId("a"),
     });
     const folder = fake.runFolder(join(at.base, "runs"), { instance: run.name, run: run.run });
-    const context = { platform: "darwin" as NodeJS.Platform, home: at.home, uid: at.uid };
+    const context = { platform: process.platform, home: at.home, uid: at.uid };
     const launch = (file: string | null) =>
       resolveSetupLaunch({
         packaged: false,
@@ -186,7 +186,7 @@ describe("the web host's setup look", () => {
     const folder = fake.runFolder(join(at.base, "runs"), { instance: run.name, run: run.run });
     return {
       ...folder,
-      context: { platform: "darwin" as NodeJS.Platform, home: at.home, uid: at.uid },
+      context: { platform: process.platform, home: at.home, uid: at.uid },
     };
   }
 
