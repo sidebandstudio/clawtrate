@@ -317,14 +317,19 @@
     );
   }
 
-  function offPage({ phone = false, after = "" } = {}) {
+  // saved=1: this device keeps a node sign-in from before (Stop keeps it). Only admin can get a new one;
+  // a saved one reconnects without admin.
+  const saved = params.get("saved") === "1";
+
+  function offPage({ phone = false, after = "", recs } = {}) {
     const what = phone ? "iPhone" : "Mac";
     const apps = phone ? PHONE_APPS : MAC_APPS;
     return (
-      `<div class="d-switch-row"><h4>Let bots use this ${what}</h4>${sw(false, go(phone ? "phone-confirm" : "mac-confirm"), `Let bots use this ${what}`, !isAdmin)}` +
+      `<div class="d-switch-row"><h4>Let bots use this ${what}</h4>${sw(false, go(phone ? "phone-confirm" : "mac-confirm", saved ? { saved: "1" } : {}), `Let bots use this ${what}`, !isAdmin && !saved)}` +
       `<p>Bots, and other devices connected to the gateway with write access, could then send this ${what} requests for the apps you allow below. Clawtrate asks you before an app's first use.</p></div>` +
-      (isAdmin ? "" : note("", "", `Letting bots use this ${what} needs admin access: only an admin connection can get this ${what}'s device sign-in.`) + adminBar("Admin access needed.")) +
+      (isAdmin || saved ? "" : note("", "", `Letting bots use this ${what} needs admin access: only an admin connection can get this ${what}'s device sign-in.`) + adminBar("Admin access needed.")) +
       after +
+      records(phone, recs || (phone ? PHONE_RECORDS() : history ? MAC_RECORDS : [])) +
       botsLine() +
       `<h4 class="b-group">Apps it would offer</h4><ul class="d-apps" aria-label="Apps this ${what} would offer">${apps.map((a) => appRow(a, { phone, off: true })).join("")}</ul>` +
       never(phone) +
@@ -342,15 +347,40 @@
       `<p class="s-host-caption">The app's own dialog, not part of the page (a stand-in for the native dialog)</p>` +
       `<div class="s-host-body"><img src="${logo}" alt="" width="40" height="40" /><div>` +
       `<h2 id="s-host-title" tabindex="-1">Let bots on ${GATEWAY} use this ${what}?</h2><div id="s-host-detail" class="s-host-detail">` +
-      `<p>Clawtrate will ask the connected gateway for a one-time sign-in for this ${what} as a device for bots. The next screen shows what the gateway listed.</p>` +
+      (saved
+        ? `<p>Clawtrate will connect with this ${what}'s saved device sign-in. The next screen shows what the gateway listed.</p>`
+        : `<p>Clawtrate will ask the connected gateway for a one-time sign-in for this ${what} as a device for bots. The next screen shows what the gateway listed.</p>`) +
       `<p>It offers ${apps}. Clawtrate asks you before an app's first use. Later requests that reach this device may use an app you allowed without asking again.</p></div>` +
-      `</div></div><div class="s-host-buttons"><a class="button" data-size="sm" href="${go(phone ? "phone-off" : "mac-off")}" data-host-cancel>Cancel</a>` +
-      `<a class="button" data-variant="primary" data-size="sm" href="${go(phone ? "phone-steps" : "mac-steps")}" data-host-confirm>Let bots use this ${what}</a></div></div></div>`
+      `</div></div><div class="s-host-buttons"><a class="button" data-size="sm" href="${saved ? go(phone ? "phone-stopped" : "mac-stopped", { saved: "1" }) : go(phone ? "phone-off" : "mac-off")}" data-host-cancel>Cancel</a>` +
+      `<a class="button" data-variant="primary" data-size="sm" href="${go(phone ? "phone-steps" : "mac-steps", saved ? { saved: "1" } : {})}" data-host-confirm>Let bots use this ${what}</a></div></div></div>`
     );
   };
 
   // Turning on: each step's done mark follows its own simulated read (`at`); `fail` picks what a read showed.
+  // Turning on again with the saved node sign-in: no code; the same read-back; the fence stays closed until it.
+  function savedSteps(phone) {
+    const what = phone ? "iPhone" : "Mac";
+    const here = phone ? "phone-steps" : "mac-steps";
+    const at = Number(params.get("at") || 0);
+    const unread = params.get("fail") === "read";
+    const state = (n) => (unread && n === 2 ? "failed" : at >= n ? "done" : at + 1 === n ? "running" : "waiting");
+    const said = `The gateway listed ${phone ? PHONE : MAC} (bots) as connected at 5:31 PM.`;
+    return (
+      `<div class="d-switch-row"><h4>Let bots use this ${what}</h4>${sw(false, "", `Let bots use this ${what}`, true)}<p>Turning on again. Each step is done only when the gateway's answer shows it.</p></div>` +
+      steps([
+        [`Connecting with this ${what}'s saved device sign-in`, state(1), state(1) === "done" ? "Its hello says role node." : ""],
+        ["Reading back what the gateway lists", state(2), state(2) === "running" ? `Requests to this ${what} wait until it is read.` : ""],
+      ]) +
+      (unread
+        ? note("danger", "Couldn't read what the gateway lists.", `Requests to this ${what} wait until it is read.`) + `<div class="d-actions">${act("Check again", go(here, { saved: "1", fail: null, at: "1" }), { variant: "primary", attrs: "data-retry" })}</div>`
+        : at === 0
+          ? proto(link("The node's hello arrives", go(here, { saved: "1", at: "1" })), link("The gateway refuses the saved sign-in", go(phone ? "phone-refused" : "mac-refused", { saved: null, at: null })))
+          : proto(link("The read-back agrees", go(phone ? "phone-on" : "mac-on", { saved: null, at: null, said })), link("It can't be read", go(here, { saved: "1", fail: "read" }))))
+    );
+  }
+
   function stepsPage(phone) {
+    if (saved) return savedSteps(phone);
     const what = phone ? "iPhone" : "Mac";
     const here = phone ? "phone-steps" : "mac-steps";
     const fail = params.get("fail");
@@ -516,12 +546,18 @@
     },
 
     "mac-stop": () => settings({ title: "This Mac", body: onPage() }) + stopDialog(false),
-    "mac-stopped": () => settings({ title: "This Mac", body: offPage({ after: stoppedNote(false) + records(false, STOP_RECORDS) }) }),
+    "mac-stopped": () => settings({ title: "This Mac", body: offPage({ after: stoppedNote(false), recs: STOP_RECORDS }) }),
 
     "mac-offline": () =>
       settings({
         title: "This Mac",
         body: onPage({ state: `<p class="d-state">Not connected. Clawtrate is trying again.<small>The gateway last saw it at 5:02 PM (connect).</small></p>` }),
+      }),
+    "phone-refused": () =>
+      settings({
+        title: "This iPhone",
+        phone: true,
+        body: offPage({ phone: true, after: `<p class="d-state" data-tone="danger">The gateway refused this iPhone's device sign-in. Turn it on again to get a new one.</p>` }),
       }),
     "mac-refused": () =>
       settings({
@@ -629,24 +665,33 @@
     return dialog(
       `Stop letting bots use this ${what}?`,
       `<p>This ${what} stops answering at once, here, whether or not the gateway can be reached. An operation already started can't always be undone: a message already sent stays sent.</p>` +
-        `<p>The gateway keeps this ${what} as a device, and its allowlist as it is, until an admin changes them.</p>` +
-        (isAdmin ? `<label class="d-check"><input type="checkbox" data-also-remove /> <span>Also remove it from the gateway</span></label>` : ""),
-      link("Cancel", go(phone ? "phone-on" : "mac-on"), { size: "md", attrs: "data-cancel" }) + act("Stop", go(phone ? "phone-stopped" : "mac-stopped", { said: "Stopped on this " + what }), { variant: "primary", size: "md", attrs: "data-stop" }),
+        `<p>This ${what} keeps its saved device sign-in, so turning it on again needs no new code. This ${what}'s separate operator sign-in and the gateway's allowlist stay as read.</p>` +
+        (isAdmin ? `<label class="d-check"><input type="checkbox" data-also-remove /> <span>Also remove this ${what}'s node pairing from the gateway</span></label>` : ""),
+      link("Cancel", go(phone ? "phone-on" : "mac-on"), { size: "md", attrs: "data-cancel" }) + act("Stop", go(phone ? "phone-stopped" : "mac-stopped", { saved: "1", said: "Stopped on this " + what }), { variant: "primary", size: "md", attrs: "data-stop" }),
     );
   }
 
   function stoppedNote(phone) {
     const what = phone ? "iPhone" : "Mac";
     const removed = params.get("removed");
+    // Whether the node is listed, and its connection state, only from a fresh read.
     const status = down
-      ? "Gateway status couldn't be checked."
+      ? removed === "unknown"
+        ? "Gateway status couldn't be checked. Clawtrate couldn't confirm the removal."
+        : "Gateway status couldn't be checked."
       : removed === "1"
         ? "Removed from the gateway (read 5:40 PM)."
         : removed === "fail"
           ? `Couldn't remove it from the gateway: <code>node pairing removal denied</code>. It's stopped on this ${what}.`
           : `The gateway lists this ${what} as a device, not connected (read 5:40 PM).`;
+    // The saved node sign-in is cleared only on a confirmed absence.
+    const cred = saved
+      ? `<p data-cred>This ${what} keeps its saved device sign-in: turning it on again uses it, with no new code.</p>`
+      : removed === "1"
+        ? `<p data-cred>The gateway confirmed the removal, so this ${what}'s device sign-in was cleared. Turning it on again needs a new one, from admin.</p>`
+        : "";
     const allowlist = !down && params.get("own") === "listed" ? `<p>The gateway's allowlist still lists ${chosenApp[2].map((c) => `<code>${c}</code>`).join(", ")} (read 5:40 PM).</p>` : "";
-    return `<div class="b-note" role="status" data-stopped>${icon("clock")}<div><p><b>Stopped on this ${what}.</b> ${status}</p>${allowlist}<p>The apps' decisions on this ${what} stay as they were.</p></div></div>`;
+    return `<div class="b-note" role="status" data-stopped>${icon("clock")}<div><p><b>Stopped on this ${what}.</b> ${status}</p>${cred}${allowlist}<p>The apps' decisions on this ${what} stay as they were.</p></div></div>`;
   }
 
   // The permission card ---------------------------------------------------------
@@ -1056,15 +1101,18 @@
     });
   }
 
-  // "Also remove it from the gateway" changes where Stop leads.
+  // "Also remove this device's node pairing from the gateway" changes where Stop leads.
   const also = root.querySelector("[data-also-remove]");
   if (also) {
     const stop = root.querySelector("[data-stop]");
     const base = stop.dataset.go;
     also.addEventListener("change", () => {
       const next = new URL(base, location.href);
-      if (also.checked) next.searchParams.set("removed", "1");
+      // With the gateway unreachable the removal can't be confirmed, and the saved sign-in is kept.
+      if (also.checked) next.searchParams.set("removed", down ? "unknown" : "1");
       else next.searchParams.delete("removed");
+      if (also.checked && !down) next.searchParams.delete("saved");
+      else next.searchParams.set("saved", "1");
       stop.dataset.go = `device.html${next.search}`;
     });
   }

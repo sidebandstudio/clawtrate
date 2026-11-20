@@ -436,7 +436,50 @@ p = await open("screen=mac-stopped&removed=fail");
 check("a failed removal: says so, and that it's stopped here", (await text(p)).includes("Couldn't remove it from the gateway") && (await text(p)).includes("It's stopped on this Mac."));
 await p.close();
 p = await open("screen=mac-stop&access=write");
-check("stopping below admin: no Also remove it from the gateway", (await p.locator("[data-also-remove]").count()) === 0);
+check("stopping below admin: no node-pairing removal", (await p.locator("[data-also-remove]").count()) === 0);
+await p.close();
+p = await open("screen=mac-stop");
+check("the removal option says what it removes, and the dialog says the operator sign-in and allowlist stay", (await text(p, "label.d-check")).trim() === "Also remove this Mac's node pairing from the gateway" && (await text(p, "[role=alertdialog]")).includes("This Mac's separate operator sign-in and the gateway's allowlist stay as read."));
+await p.close();
+// The saved node sign-in after Stop: no code, at write too; a confirmed removal clears it; an unknown one doesn't.
+const codeStep = (p) => p.evaluate(() => document.body.textContent.includes("Getting this") || document.body.textContent.includes("one-time sign-in"));
+{
+  let sawCode = false;
+  await walk("Stop only at write, then on again with the saved sign-in: a positive read-back and no code step", "screen=mac-on&access=write", [
+    [sw, "mac-stop"],
+    [click("[data-stop]"), "mac-stopped", ["Stopped on this Mac.", "This Mac keeps its saved device sign-in: turning it on again uses it, with no new code."]],
+    [async (p) => check("stopped at write with a saved sign-in: the switch is available, with no admin request", (await p.locator(".b-switch[data-go]").count()) === 1 && (await p.getByRole("button", { name: "Request admin access" }).count()) === 0), null],
+    [sw, "mac-confirm", ["Clawtrate will connect with this Mac's saved device sign-in."]],
+    [async (p) => (sawCode ||= await codeStep(p)), null],
+    [click("[data-host-confirm]"), "mac-steps", ["Connecting with this Mac's saved device sign-in"]],
+    [async (p) => { sawCode ||= await codeStep(p); check("saved sign-in: only the connect and the read-back steps, the switch not checked", (await stepStates(p)) === "running,waiting" && (await switchOff(p))); }, null],
+    [link("The node's hello arrives"), "mac-steps", ["Requests to this Mac wait until it is read."]],
+    [async (p) => (sawCode ||= await codeStep(p)), null],
+    [link("The read-back agrees"), "mac-on", ["The gateway listed Studio Mac (bots) as connected at 5:31 PM."]],
+  ]);
+  check("the saved-sign-in path never asked for a code", !sawCode);
+}
+await walk("Stop and remove, confirmed: the sign-in cleared; below admin the switch needs admin and the records stay", "screen=mac-stop", [
+  [click("[data-also-remove]"), null],
+  [click("[data-stop]"), "mac-stopped", ["Removed from the gateway (read 5:40 PM).", "this Mac's device sign-in was cleared"]],
+  [async (p) => check("after a confirmed removal, saved is cleared", (await param(p, "saved")) === null), null],
+]);
+p = await open("screen=mac-stopped&removed=1&access=write");
+check("confirmed removal, below admin: the switch is unavailable and the recorded requests are still visible", (await p.locator(".b-switch").getAttribute("aria-disabled")) === "true" && (await p.locator(".d-record").count()) >= 5 && (await text(p)).includes("Requests to this device"));
+await p.close();
+p = await open("screen=mac-stopped&link=down&saved=1");
+check("stopped with the gateway unreachable: the records are still on the page", (await p.locator(".d-record").count()) >= 5 && (await text(p)).includes("Gateway status couldn't be checked."));
+await p.close();
+await walk("an unknown removal keeps the saved sign-in; its later refusal is the sign-in refusal, never a new credential", "screen=mac-stop&link=down", [
+  [click("[data-also-remove]"), null],
+  [click("[data-stop]"), "mac-stopped", ["Clawtrate couldn't confirm the removal.", "This Mac keeps its saved device sign-in"]],
+  [sw, "mac-confirm"],
+  [click("[data-host-confirm]"), "mac-steps"],
+  [link("The gateway refuses the saved sign-in"), "mac-refused", ["The gateway refused this Mac's device sign-in."]],
+  [async (p) => check("after the refusal: no saved sign-in, and no code was requested on the way", (await param(p, "saved")) === null && !(await codeStep(p))), null],
+]);
+p = await open("screen=mac-refused&access=write");
+check("a refused sign-in below admin: recovery needs admin, and nothing is minted", (await p.locator(".b-switch").getAttribute("aria-disabled")) === "true" && (await text(p)).includes("needs admin access"));
 await p.close();
 for (const [screen, opts] of [["mac-on&allowed=calendar&own=listed&local=allowed&app=messages", {}], ["phone-on&history=1&allowed=location", phone]]) {
   p = await open(`screen=${screen}`, opts);
