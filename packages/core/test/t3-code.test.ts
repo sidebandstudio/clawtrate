@@ -24,6 +24,7 @@ import {
   runsFromHistory,
   structuredFromText,
   t3CallOf,
+  t3ArgFacts,
   t3ResultFacts,
   latestSent,
   threadKey,
@@ -1234,5 +1235,20 @@ describe("a result replaced by the gateway", () => {
     const call = t3(callFromStep(step, run));
     expect(call?.unread).toBe(true);
     expect(call?.reported).toBeNull();
+  });
+});
+
+describe("the arguments' facts within their bound", () => {
+  it("F-441: the longest ids, title and message fit MAX_T3_FACTS_CHARS, and the thread is kept whole", () => {
+    const thread = "t".repeat(512);
+    const facts = t3ArgFacts({
+      threadId: thread,
+      environmentId: "e".repeat(512),
+      title: "T".repeat(256),
+      message: '"'.repeat(1_000),
+    });
+    expect(JSON.stringify(facts).length).toBeLessThanOrEqual(MAX_T3_FACTS_CHARS);
+    expect(facts?.argThread).toBe(thread);
+    expect(facts?.argMessageShort).toBe(true);
   });
 });

@@ -162,7 +162,8 @@ export function t3ArgFacts(args: unknown): T3Facts | null {
   }
   if (a.afterPosition !== undefined && a.afterPosition !== null) out.argAfter = true;
   if (str(a.itemId)) out.argItem = true;
-  return Object.keys(out).length ? out : null;
+  // Fitted as stored: the bound would otherwise drop the whole, the thread's id with it.
+  return Object.keys(out).length ? fitT3Facts(out) : null;
 }
 
 /** The facts of a result's structured content; for a failure, its `code` and `message`. */
