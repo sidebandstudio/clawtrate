@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { artifactName, makeFeed } from "../packaging/feed.ts";
 import {
+  checkMacSignature,
   macSignatureKind,
   signingPlan,
   signingProblems,
@@ -184,6 +185,25 @@ describe("signing", () => {
     expect(build).toContain("console.log(signingSummary(plan, target));");
     expect(build).toContain('spawnSync("codesign", ["--display", "--verbose=2", app]');
     expect(build.indexOf("signingSummary(")).toBeLessThan(build.indexOf("await build("));
+  });
+
+  it("requires a successful readback of the requested signature on each macOS bundle", () => {
+    const adHoc = { status: 0, stderr: "Signature=adhoc\n" };
+    const certificate = { status: 0, stderr: "Authority=Example\n" };
+    expect(checkMacSignature("ad-hoc", adHoc).matches).toBe(true);
+    expect(checkMacSignature("developer-id", certificate).matches).toBe(true);
+    expect(checkMacSignature("ad-hoc", certificate).matches).toBe(false);
+    expect(checkMacSignature("developer-id", adHoc).matches).toBe(false);
+    for (const plan of ["ad-hoc", "developer-id"] as const) {
+      for (const result of [
+        { status: 1, stderr: "Signature=adhoc\n" },
+        { status: 1, stderr: "Authority=Example\n" },
+        { status: 0, stderr: "code object is not signed at all" },
+        { status: null, stderr: null },
+      ]) {
+        expect(checkMacSignature(plan, result)).toEqual({ kind: "none", matches: false });
+      }
+    }
   });
 });
 

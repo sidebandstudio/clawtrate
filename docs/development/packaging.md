@@ -49,7 +49,7 @@ For inline base64 use the `data:application/x-pkcs12;base64,` prefix so electron
 
 A certificate and its password go together. A build given one without the other stops packaging before electron-builder starts, naming the missing variable; it never builds unsigned, or with an empty password, without saying so. For a certificate that has no password, set the password variable to an empty string (`CSC_KEY_PASSWORD=`). A certificate variable that is set but blank stops the build too, and so does a blank `WIN_` variable that would hide a generic one electron-builder would otherwise use.
 
-Before electron-builder starts, Clawtrate prints the signing plan. On macOS it reads the signature of each app found in the expected output folders and reports `ad hoc`, `certificate` or `none`. The readback checks whether certificate signing was requested and whether the bundle has that signature kind. Keep the entire output of a signed build private. Clawtrate's plan, preflight and signature-kind lines omit input values. The build passes through electron-builder's output, which can include identity names, hashes, paths and signing input values in errors.
+Before electron-builder starts, Clawtrate prints the signing plan. On macOS it checks both app bundles after packaging. The build fails if it cannot read a bundle's signature or if the signature differs from the plan. Keep the entire output of a signed build private. Clawtrate's plan, preflight and signature-kind lines omit input values. The build passes through electron-builder's output, which can include identity names, hashes, paths and signing input values in errors.
 
 ## The update feed
 

@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { build, Platform } from "electron-builder";
 import { LOGO_PATH, MANIFEST_PATH, sha256 } from "../../../tools/brand/src/make-icons.ts";
 import { builderConfig, PRODUCT_NAME } from "./config.ts";
-import { macSignatureKind, signingPlan, signingProblems, signingSummary } from "./signing.ts";
+import { checkMacSignature, signingPlan, signingProblems, signingSummary } from "./signing.ts";
 
 const APP_DIR = join(import.meta.dirname, "..");
 
@@ -75,11 +75,10 @@ for (const artifact of artifacts) console.log(artifact);
 if (target === "mac") {
   for (const folder of ["mac-arm64", "mac"]) {
     const app = join(APP_DIR, "dist", folder, `${PRODUCT_NAME}.app`);
-    if (!existsSync(app)) continue;
     const shown = spawnSync("codesign", ["--display", "--verbose=2", app], { encoding: "utf8" });
-    const kind = macSignatureKind(shown.stderr ?? "");
+    const { kind, matches } = checkMacSignature(plan.mac, shown);
     console.log(`Signature of dist/${folder}/${PRODUCT_NAME}.app: ${kind}.`);
-    if ((plan.mac === "developer-id") !== (kind === "certificate")) {
+    if (!matches) {
       console.error("The signature is not the one the signing variables asked for.");
       process.exitCode = 1;
     }

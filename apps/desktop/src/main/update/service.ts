@@ -135,19 +135,25 @@ export class DesktopUpdateService {
       this.snapshot.runningVersion,
       track,
     ) ?? { kind: "not-checked" };
+    let issue: DesktopUpdateSnapshot["preferenceIssue"] = "update-folder-unavailable";
     try {
       await this.work;
+      if (this.closed) return this.reply("superseded");
       await this.clearDownloads();
-      try {
-        await this.options.store.set("selectedTrack", track);
-        this.snapshot = { ...this.snapshot, selectedTrack: track };
-        this.clearIssue("track-not-saved");
-        this.clearIssue("update-folder-unavailable");
-      } catch {
-        this.snapshot = { ...this.snapshot, preferenceIssue: "track-not-saved" };
-      }
+      if (this.closed) return this.reply("superseded");
+      issue = "track-not-saved";
+      await this.options.store.set("selectedTrack", track);
+      issue = null;
     } catch {
-      this.snapshot = { ...this.snapshot, preferenceIssue: "update-folder-unavailable" };
+      // The phase identifies the failed local operation.
+    }
+    if (this.closed) return this.reply("superseded");
+    if (issue) {
+      this.snapshot = { ...this.snapshot, preferenceIssue: issue };
+    } else {
+      this.snapshot = { ...this.snapshot, selectedTrack: track };
+      this.clearIssue("track-not-saved");
+      this.clearIssue("update-folder-unavailable");
     }
     this.switching = false;
     this.snapshot = { ...this.snapshot, pendingTrack: null };
@@ -163,6 +169,7 @@ export class DesktopUpdateService {
     this.snapshot = {
       ...this.snapshot,
       revision: this.snapshot.revision + 1,
+      pendingTrack: null,
       state: { kind: "not-checked" },
     };
   }
@@ -194,17 +201,33 @@ export class DesktopUpdateService {
     return clearUpdateDirectory(this.options.downloadDir);
   }
 
+  private runWork(
+    engine: UpdateEngine,
+    initial: DesktopUpdateState,
+    run: () => Promise<DesktopUpdateState | undefined>,
+    failure: DesktopUpdateState,
+  ): Promise<void> {
+    const work = Promise.resolve()
+      .then(run)
+      .catch(() => failure)
+      .then((state) => {
+        // Observers can act on the terminal state as soon as they receive it.
+        this.work = null;
+        if (this.engine === engine && state) this.publish(state);
+      });
+    this.work = work;
+    this.publish(initial);
+    return work;
+  }
+
   async check(expectedTrack: unknown): Promise<DesktopUpdateReply> {
     if (this.closed) return this.reply("invalid");
     if (this.switching || this.work) return this.reply("busy");
     if (expectedTrack !== "stable" && expectedTrack !== "nightly") return this.reply("invalid");
     const { runningVersion, selectedTrack } = this.snapshot;
+    if (!selectedTrack) return this.reply("invalid");
     if (expectedTrack !== selectedTrack) return this.reply("stale");
-    if (
-      !runningVersion ||
-      !selectedTrack ||
-      unavailable(this.options, runningVersion, selectedTrack)
-    )
+    if (!runningVersion || unavailable(this.options, runningVersion, selectedTrack))
       return this.reply("invalid");
     this.engine?.cancel();
     const offerId = selectedTrack + "-" + randomUUID();
@@ -236,63 +259,53 @@ export class DesktopUpdateService {
       },
     });
     this.engine = engine;
-    this.work = (async () => {
-      try {
-        await this.clearDownloads();
-      } catch {
-        if (this.engine === engine) {
-          this.snapshot = { ...this.snapshot, preferenceIssue: "update-folder-unavailable" };
-          this.publish({ kind: "not-checked" });
-        }
-        return;
-      }
-      if (this.engine !== engine) return;
-      const result = await engine.check();
-      if (this.engine !== engine) return;
-      this.clearIssue("update-folder-unavailable");
-      const lastCheck = checkedAt ? { track: selectedTrack, readAt: checkedAt } : null;
-      if (lastCheck) this.snapshot = { ...this.snapshot, lastCheck };
-      switch (result.kind) {
-        case "available":
-          this.publish({
-            kind: "offered",
-            version: result.version,
-            releaseDate: result.releaseDate,
-            offerId,
-          });
-          break;
-        case "up-to-date":
-          this.publish({ kind: "nothing-newer" });
-          break;
-        case "not-configured":
-          this.publish(failed("not-configured"));
-          break;
-        case "failed":
-          this.publish(failed(result.cause));
-          break;
-      }
-      if (lastCheck) {
+    await this.runWork(
+      engine,
+      { kind: "checking" },
+      async () => {
         try {
-          await this.options.store.set("lastCheck", JSON.stringify(lastCheck));
-          if (this.snapshot.preferenceIssue === "last-check-not-saved" && !this.closed) {
-            this.clearIssue("last-check-not-saved");
-            this.publish(this.snapshot.state);
-          }
+          await this.clearDownloads();
         } catch {
-          if (this.closed || this.snapshot.lastCheck !== lastCheck) return;
-          this.snapshot = { ...this.snapshot, preferenceIssue: "last-check-not-saved" };
-          this.publish(this.snapshot.state);
+          if (this.engine === engine) {
+            this.snapshot = { ...this.snapshot, preferenceIssue: "update-folder-unavailable" };
+            return { kind: "not-checked" };
+          }
+          return;
         }
-      }
-    })()
-      .catch(() => {
-        if (this.engine === engine) this.publish(failed("unreachable"));
-      })
-      .finally(() => {
-        this.work = null;
-      });
-    this.publish({ kind: "checking" });
-    await this.work;
+        if (this.engine !== engine) return;
+        const result = await engine.check();
+        if (this.engine !== engine) return;
+        this.clearIssue("update-folder-unavailable");
+        const lastCheck = checkedAt ? { track: selectedTrack, readAt: checkedAt } : null;
+        if (lastCheck) {
+          this.snapshot = { ...this.snapshot, lastCheck };
+          this.publish(this.snapshot.state);
+          try {
+            await this.options.store.set("lastCheck", JSON.stringify(lastCheck));
+            if (!this.closed) this.clearIssue("last-check-not-saved");
+          } catch {
+            if (!this.closed && this.snapshot.lastCheck === lastCheck)
+              this.snapshot = { ...this.snapshot, preferenceIssue: "last-check-not-saved" };
+          }
+        }
+        switch (result.kind) {
+          case "available":
+            return {
+              kind: "offered",
+              version: result.version,
+              releaseDate: result.releaseDate,
+              offerId,
+            };
+          case "up-to-date":
+            return { kind: "nothing-newer" };
+          case "not-configured":
+            return failed("not-configured");
+          case "failed":
+            return failed(result.cause);
+        }
+      },
+      failed("unreachable"),
+    );
     if (this.engine !== engine) return this.reply("superseded");
     return this.reply("accepted");
   }
@@ -306,47 +319,38 @@ export class DesktopUpdateService {
     if (!engine || state.kind !== "offered" || state.offerId !== id) return this.reply("stale");
     const expected = engine.offeredBytes;
     if (expected === null) return this.reply("stale");
-    const reportFailure = (reason: DesktopUpdateFailure) => {
-      this.publish({
-        kind: "failed",
-        stage: "download",
-        reason,
-        retry: "check",
-        lastOffer: { version: state.version, releaseDate: state.releaseDate },
-      });
-    };
-    this.work = Promise.resolve()
-      .then(async () => {
+    const downloadFailure = (reason: DesktopUpdateFailure): DesktopUpdateState => ({
+      kind: "failed",
+      stage: "download",
+      reason,
+      retry: "check",
+      lastOffer: { version: state.version, releaseDate: state.releaseDate },
+    });
+    await this.runWork(
+      engine,
+      { kind: "downloading", version: state.version, received: 0, expected },
+      async () => {
         if (this.engine !== engine) return;
         try {
           await prepareUpdateDirectory(this.options.downloadDir, state.offerId);
         } catch {
-          if (this.engine === engine) {
+          if (this.engine === engine)
             this.snapshot = { ...this.snapshot, preferenceIssue: "update-folder-unavailable" };
-            reportFailure("write-failed");
-          }
-          return;
+          return downloadFailure("write-failed");
         }
         if (this.engine !== engine) return;
         const result = await engine.download();
-        if (this.engine !== engine) return;
-        if (result.kind === "ready") {
-          this.publish({
+        if (result.kind === "ready")
+          return {
             kind: "verified",
             offerId: state.offerId,
             version: result.version,
             size: expected,
-          });
-        } else if (result.kind === "failed") reportFailure(result.cause);
-      })
-      .catch(() => {
-        if (this.engine === engine) reportFailure("write-failed");
-      })
-      .finally(() => {
-        this.work = null;
-      });
-    this.publish({ kind: "downloading", version: state.version, received: 0, expected });
-    await this.work;
+          };
+        if (result.kind === "failed") return downloadFailure(result.cause);
+      },
+      downloadFailure("write-failed"),
+    );
     return this.reply(this.engine === engine ? "accepted" : "superseded");
   }
 }

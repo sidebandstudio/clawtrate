@@ -7,7 +7,7 @@ import { ClawtrateClient } from "../src/client.ts";
 import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { SIDEBAR_PREF_KEY } from "../src/sidebar.ts";
 import { MAX_LISTED_TASKS } from "../src/state-bounds.ts";
-import { FAST, grantingGateway, KEY, openTask, URL_A } from "./client-harness.ts";
+import { agentEvent, FAST, grantingGateway, KEY, openTask, URL_A } from "./client-harness.ts";
 import { deferred, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const PIP_TASK = "agent:pip:dashboard:2cc23cbf-30e2-4416-837a-56d92c983588";
@@ -429,4 +429,56 @@ describe("Stop and archive, and delete, through the engine's own Stop", () => {
     expect(gateway.calls("chat.send")).toHaveLength(1);
     client.stop();
   });
+
+  it("F-277 F-278: with two runs active and nothing naming the current one, Stop and archive still stops them, then archives", async () => {
+    const gateway = grantingGateway();
+    let current = true;
+    // A reconnect missed the original run's end: its rows stop at a tool call, and the gateway
+    // has another run in flight. Stop alone is withheld here; archiving the task is not.
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        {
+          role: "user",
+          content: "First",
+          __openclaw: { id: "u1", idempotencyKey: "original:user" },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "exec", arguments: { command: "ls" } }],
+          stopReason: "toolUse",
+          __openclaw: { id: "a1", runId: "original" },
+        },
+      ],
+      hasMore: false,
+      ...(current ? { inFlightRun: { runId: "current" } } : {}),
+    });
+    gateway.handlers["sessions.describe"] = () => ({
+      session: { key: KEY, sessionId: "s-1", hasActiveRun: current },
+    });
+    gateway.handlers["chat.abort"] = (params) => {
+      const { runId } = params as { runId?: string };
+      if (runId !== "current") return { ok: true, aborted: false, runIds: [] };
+      current = false;
+      setTimeout(() => {
+        gateway.emit(
+          "agent",
+          agentEvent("current", 9, "lifecycle", { phase: "end", aborted: true }),
+        );
+      }, 0);
+      return { ok: true, aborted: true, runIds: ["current"] };
+    };
+    gateway.handlers["sessions.patch"] = () => ({ ok: true });
+    const { client, transcript } = await openTask({ gateway });
+    gateway.emit("agent", agentEvent("original", 1, "lifecycle", { phase: "start" }));
+    gateway.emit("agent", agentEvent("current", 1, "lifecycle", { phase: "start" }));
+    await until(() => transcript().runs.filter((each) => each.state === "running").length === 2);
+    const started = Date.now();
+    await expect(client.archiveTask(KEY, { stop: true })).resolves.toBeDefined();
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(gateway.calls("chat.abort")).toContainEqual({ sessionKey: KEY, runId: "current" });
+    expect(gateway.calls("sessions.patch")).toEqual([
+      { key: KEY, archived: true, expectedSessionId: "s-1" },
+    ]);
+    client.stop();
+  }, 20_000);
 });

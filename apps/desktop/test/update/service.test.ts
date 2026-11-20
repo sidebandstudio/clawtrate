@@ -10,6 +10,11 @@ import { UpdateEngine } from "../../src/main/update/engine.ts";
 import { DesktopUpdateService } from "../../src/main/update/service.ts";
 import { bytes, feedFor, feedServer, json, payload, tempDir, type FeedServer } from "./harness.ts";
 
+import { rename } from "node:fs/promises";
+vi.mock(import("node:fs/promises"), async (original) => {
+  const actual = await original();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
 let server: FeedServer;
 let dir: ReturnType<typeof tempDir>;
 let updates: string;
@@ -224,6 +229,34 @@ it.each(["check", "download"] as const)(
   },
 );
 
+it("keeps the old preference file until an atomic replacement and on a commit failure", async () => {
+  const prefs = store(),
+    path = join(dir.path, "preferences.json");
+  await prefs.set("selectedTrack", "stable");
+  const old = readFileSync(path);
+  const entered = Promise.withResolvers<void>(),
+    release = Promise.withResolvers<void>();
+  vi.mocked(rename).mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    throw Error("rename refused");
+  });
+  const saving = prefs.set("selectedTrack", "nightly");
+  try {
+    expect(
+      await Promise.race([entered.promise.then(() => "rename"), saving.then(() => "complete")]),
+    ).toBe("rename");
+    expect(readFileSync(path)).toEqual(old);
+    expect(JSON.parse(readFileSync(path + ".next", "utf8"))).toEqual({ selectedTrack: "nightly" });
+  } finally {
+    release.resolve();
+  }
+  await expect(saving).rejects.toThrow("rename refused");
+  expect(readFileSync(path)).toEqual(old);
+  expect(existsSync(path + ".next")).toBe(false);
+  await prefs.set("selectedTrack", "nightly");
+  expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ selectedTrack: "nightly" });
+});
 it("a failed file-store write cannot slip into a later successful save", async () => {
   const prefs = store();
   const service = await start({ store: prefs });
@@ -290,6 +323,33 @@ it("gives same-version offers separate private destinations and removes the olde
   expect(readFileSync(join(fresh, readdirSync(fresh)[0]!))).toEqual(other.body);
 });
 
+it("accepts a download as soon as an observer sees the offer", async () => {
+  const prefs = store();
+  const saving = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  vi.spyOn(prefs, "set").mockImplementationOnce(async () => {
+    saving.resolve();
+    await finish.promise;
+  });
+  let download: Promise<DesktopUpdateReply> | undefined;
+  const service = await start({
+    store: prefs,
+    changed: ({ state }) => {
+      if (state.kind === "offered") download = service.download(state.offerId);
+    },
+  });
+  const check = service.check("stable");
+  await saving.promise;
+  const stateWhileSaving = service.get().state.kind;
+  finish.resolve();
+  await check;
+  expect(await download).toMatchObject({
+    outcome: "accepted",
+    snapshot: { state: { kind: "verified" } },
+  });
+  expect(stateWhileSaving).toBe("checking");
+});
+
 it("marks the command busy before notifying a throwing observer", async () => {
   const replies: Promise<DesktopUpdateReply>[] = [];
   const service = await start({
@@ -338,6 +398,10 @@ it("reports check eligibility at launch and stops unsupported checks before tran
     expect(service.get().state).toMatchObject({ reason: "unsupported-system" });
   }
   const empty = await start({ feeds: { stable: null, nightly: null } });
+  for (const track of ["stable", "nightly", undefined])
+    expect(await empty.check(track)).toEqual({ outcome: "invalid", snapshot: empty.get() });
+  const single = await start({ feeds: { stable: server.origin + "/stable", nightly: null } });
+  expect((await single.check("nightly")).outcome).toBe("stale");
   expect(empty.get()).toMatchObject({ selectedTrack: null, state: { reason: "not-configured" } });
   expect((await start({ version: "invalid" })).get().state).toMatchObject({
     reason: "invalid-version",
@@ -427,6 +491,43 @@ it.each(["check", "download"] as const)(
     );
     const revisions = snapshots.map((s) => s.revision);
     expect(revisions.every((r, i) => i === 0 || revisions[i - 1]! < r)).toBe(true);
+  },
+);
+it.each(["before save", "during successful save", "during failed save"])(
+  "retires a track choice at shutdown %s",
+  async (phase) => {
+    const prefs = store(),
+      service = await start({ store: prefs });
+    const entered = Promise.withResolvers<void>(),
+      release = Promise.withResolvers<void>();
+    const set = prefs.set;
+    const spy = vi.spyOn(prefs, "set").mockImplementationOnce(async (key, value) => {
+      entered.resolve();
+      await release.promise;
+      if (phase === "during failed save") throw Error("write refused");
+      await set(key, value);
+    });
+    const choice = service.chooseTrack("nightly");
+    if (phase !== "before save") await entered.promise;
+    const count = snapshots.length;
+    expect(snapshots.at(-1)?.pendingTrack).toBe("nightly");
+    service.shutdown();
+    const closed = service.get();
+    expect(closed).toMatchObject({ selectedTrack: "stable", pendingTrack: null });
+    release.resolve();
+    expect(await choice).toEqual({ outcome: "superseded", snapshot: closed });
+    expect(spy).toHaveBeenCalledTimes(phase === "before save" ? 0 : 1);
+    for (const reply of await Promise.all([
+      service.chooseTrack("nightly"),
+      service.check("stable"),
+      service.download("id"),
+    ]))
+      expect(reply).toEqual({ outcome: "invalid", snapshot: closed });
+    expect(snapshots).toHaveLength(count);
+    expect(service.get()).toBe(closed);
+    expect((await start()).get().selectedTrack).toBe(
+      phase === "during successful save" ? "nightly" : "stable",
+    );
   },
 );
 it("an unsuccessful track choice still retires the file and its offer", async () => {
@@ -590,7 +691,18 @@ it("a nightly-only build stays idle and checks only its one configured source", 
   });
   expect((await service.chooseTrack("stable")).outcome).toBe("invalid");
   expect(server.requests).toEqual([]);
-  expect((await service.check("nightly")).snapshot.state.kind).toBe("offered");
+  const checked = await service.check("nightly");
+  expect(checked).toMatchObject({
+    outcome: "accepted",
+    snapshot: {
+      runningTrack: "stable",
+      selectedTrack: "nightly",
+      lastCheck: { track: "nightly", readAt: expect.stringMatching(/Z$/) },
+      state: { kind: "offered" },
+    },
+  });
+  const again = await start({ feeds: { stable: null, nightly: server.origin + "/nightly" } });
+  expect(again.get().lastCheck).toEqual(checked.snapshot.lastCheck);
   expect(server.requests).toEqual(["/nightly"]);
 });
 
@@ -634,5 +746,45 @@ it("distinguishes folder preparation from a settings read even with no source", 
     state: { reason: "not-configured" },
   });
   expect((await start({ feeds })).get().preferenceIssue).toBeNull();
+  expect(server.requests).toEqual([]);
+});
+
+it("returns invalid for missing idle arguments and busy during a choice", async () => {
+  const service = await start();
+  const malformed = () =>
+    Promise.all([
+      service.check(undefined),
+      service.chooseTrack(undefined),
+      service.download(undefined),
+    ]);
+  expect((await malformed()).map((r) => r.outcome)).toEqual(["invalid", "invalid", "invalid"]);
+  const choice = service.chooseTrack("nightly");
+  expect((await malformed()).map((r) => r.outcome)).toEqual(["busy", "busy", "busy"]);
+  await choice;
+  expect((await service.check("stable")).outcome).toBe("stale");
+  expect(server.requests).toEqual([]);
+});
+
+it("defaults an invalid version to Stable and preserves the saved choice when folder cleanup fails", async () => {
+  const service = await start({ version: "invalid" });
+  expect(service.get()).toMatchObject({
+    tracks: [{ track: "stable" }, { track: "nightly" }],
+    runningTrack: null,
+    selectedTrack: "stable",
+  });
+  const prefs = store();
+  await prefs.set("selectedTrack", "stable");
+  const path = join(dir.path, "preferences.json"),
+    old = readFileSync(path);
+  const broken = await start({ store: prefs, downloadDir: join(dir.path, "missing", "updates") });
+  expect(await broken.chooseTrack("nightly")).toMatchObject({
+    outcome: "accepted",
+    snapshot: {
+      preferenceIssue: "update-folder-unavailable",
+      selectedTrack: "stable",
+      pendingTrack: null,
+    },
+  });
+  expect(readFileSync(path)).toEqual(old);
   expect(server.requests).toEqual([]);
 });

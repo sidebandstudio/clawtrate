@@ -5,7 +5,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isUpdateRequired, UpdateEngine, type UpdateState } from "../../src/main/update/index.ts";
 import {
   bytes,
@@ -19,6 +19,11 @@ import {
   type Handler,
 } from "./harness.ts";
 
+import { inspectUpdateFile } from "../../src/main/inspect-update-file.ts";
+vi.mock(import("../../src/main/inspect-update-file.ts"), async (original) => {
+  const actual = await original();
+  return { ...actual, inspectUpdateFile: vi.fn(actual.inspectUpdateFile) };
+});
 let server: FeedServer;
 let dir: { path: string; remove(): void };
 
@@ -80,6 +85,31 @@ describe("the update engine against a local feed", () => {
     expect(await engine.download()).toEqual(ready);
     expect(server.requests).toEqual(["/feed.json", "/files/app.zip"]);
     expect(readFileSync(path).equals(file.body)).toBe(true);
+  });
+
+  it("verifies the file even if a progress observer throws", async () => {
+    const file = payload(2_500_000);
+    server.route(
+      "/feed.json",
+      json(feedFor(server.origin, "0.2.0", { size: file.body.length, sha512: file.sha512 })),
+    );
+    server.route("/files/app.zip", bytes(file.body));
+    let threwDuringTransfer = false;
+    const { engine } = engineFor(server, dir.path, {
+      onState(state) {
+        if (state.kind === "downloading" && state.received > 0 && state.received < state.total) {
+          threwDuringTransfer = true;
+          throw new Error("progress observer closed");
+        }
+        if (state.kind === "ready") return Promise.reject(new Error("observer closed"));
+      },
+    });
+    await engine.check();
+    const ready = await engine.download();
+    expect(threwDuringTransfer).toBe(true);
+    expect(ready.kind).toBe("ready");
+    expect(engine.state).toBe(ready);
+    if (ready.kind === "ready") expect(readFileSync(ready.path).equals(file.body)).toBe(true);
   });
 
   it("deletes a tampered download of the right size and reports hash-mismatch", async () => {
@@ -523,3 +553,42 @@ describe("the update engine against a local feed", () => {
 function payloadEntry(): { size: number; sha512: string } {
   return { size: 100, sha512: `${"A".repeat(86)}==` };
 }
+
+it.each(["finish", "cancel"])(
+  "stops transfer deadlines before local verification: %s",
+  async (action) => {
+    const file = payload(2048);
+    server.route(
+      "/feed.json",
+      json(feedFor(server.origin, "0.2.0", { size: file.body.length, sha512: file.sha512 })),
+    );
+    server.route("/files/app.zip", bytes(file.body));
+    const { engine } = engineFor(server, dir.path, {
+      offerId: "current",
+      limits: { idleTimeoutMs: 500 },
+    });
+    await engine.check();
+    const entered = Promise.withResolvers<void>(),
+      release = Promise.withResolvers<void>();
+    const inspect = vi.mocked(inspectUpdateFile).getMockImplementation()!;
+    vi.mocked(inspectUpdateFile).mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return inspect(...args);
+    });
+    const work = engine.download();
+    await entered.promise;
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    if (action === "cancel") engine.cancel();
+    release.resolve();
+    const result = await work;
+    if (action === "cancel") {
+      expect(result).toMatchObject({ kind: "failed", cause: "unreachable" });
+      expect(downloads()).toEqual([]);
+      expect(await engine.recheckFile("current", "stable", "0.2.0")).toBe(false);
+    } else {
+      expect(result.kind).toBe("ready");
+      if (result.kind === "ready") expect(readFileSync(result.path)).toEqual(file.body);
+    }
+  },
+);

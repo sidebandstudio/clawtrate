@@ -29,3 +29,29 @@ it("delivers each update to later subscribers when the first throws", async () =
   stopFirst();
   expect(events.listenerCount(channel)).toBe(0);
 });
+
+it("sends only the declared update arguments over IPC", async () => {
+  vi.resetModules();
+  const invoke = vi.fn(),
+    expose = vi.fn();
+  vi.doMock("electron", () => ({
+    ipcRenderer: { invoke },
+    contextBridge: { exposeInMainWorld: expose },
+  }));
+  await import("../../src/preload/index.ts");
+  const api: DesktopHostApi = expose.mock.calls[0]![1];
+  const updates = api.desktopUpdates;
+  for (const [name, channel, valid] of [
+    ["check", "check", "stable"],
+    ["chooseTrack", "track", "nightly"],
+    ["download", "download", "opaque-id"],
+  ] as const) {
+    const call = updates[name] as (...args: unknown[]) => unknown;
+    call(valid, "https://unused.example");
+    expect(invoke).toHaveBeenLastCalledWith("clawtrate:update:" + channel, valid);
+    for (const input of [[], [{}], ...(name === "download" ? [] : [["other"]])]) {
+      call(...input);
+      expect(invoke).toHaveBeenLastCalledWith("clawtrate:update:" + channel);
+    }
+  }
+});
