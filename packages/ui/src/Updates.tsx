@@ -240,6 +240,7 @@ export function Updates({
   const attempt =
     s.revision === 0 &&
     !working &&
+    !message &&
     !pending &&
     s.selectedTrack === s.lastAttempt?.track &&
     (state.kind === "not-checked" ||

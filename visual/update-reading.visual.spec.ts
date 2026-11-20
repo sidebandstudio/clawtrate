@@ -305,3 +305,33 @@ for (const reason of [
     });
   });
 }
+
+test("F-231: an unanswered check leaves the startup retry advice out", async ({ page }) => {
+  await openFixture(page, "scene=main&updates=not-checked&after=old-version-running", "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  await page.getByRole("button", { name: "Updates", exact: true }).click();
+  const result = page.getByRole("group", { name: "Update status" });
+  await expect(result).toContainText(
+    "Clawtrate 0.1.0 is running, not 0.2.0. Check for updates to try again.",
+  );
+  const revision = await page.evaluate(async () => {
+    const host = (window as unknown as OfferProbe).clawtrateFixture.desktopUpdates;
+    host.check = async () => {
+      throw new Error("Missing reply");
+    };
+    return (await host.get()).revision;
+  });
+  expect(revision).toBe(0);
+  await page.getByRole("button", { name: "Check for Updates" }).click();
+  await expect(result).toContainText("Couldn't get a reply to the update check.");
+  await expect(
+    page
+      .locator(".updates-section .facts div")
+      .filter({ has: page.getByText("Version", { exact: true }) })
+      .locator("dd"),
+  ).toContainText("Clawtrate 0.1.0");
+  await expect(page.locator(".updates-section")).not.toContainText("not 0.2.0");
+  await expect(page.locator(".updates-section")).not.toContainText(
+    "Check for updates to try again.",
+  );
+});
