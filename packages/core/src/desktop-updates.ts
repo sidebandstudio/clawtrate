@@ -119,7 +119,7 @@ export interface DesktopUpdateReply {
 export interface DesktopUpdates {
   get(): Promise<DesktopUpdateSnapshot>;
   subscribe(listener: (snapshot: DesktopUpdateSnapshot) => void): () => void;
-  check(expectedTrack: UpdateTrack): Promise<DesktopUpdateReply>;
+  check(expectedTrack: UpdateTrack, expectedRevision: number): Promise<DesktopUpdateReply>;
   chooseTrack(track: UpdateTrack): Promise<DesktopUpdateReply>;
   /** A stale or unknown identity leaves the current snapshot alone. */
   download(offerId: string): Promise<DesktopUpdateReply>;

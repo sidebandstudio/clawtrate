@@ -41,8 +41,14 @@ it("sends only the declared update arguments over IPC", async () => {
   await import("../../src/preload/index.ts");
   const api: DesktopHostApi = expose.mock.calls[0]![1];
   const updates = api.desktopUpdates;
+  const check = updates.check as (...args: unknown[]) => unknown;
+  check("stable", 7, "https://unused.example");
+  expect(invoke).toHaveBeenLastCalledWith("clawtrate:update:check", "stable", 7);
+  for (const args of [[], ["other", 7], ["nightly", {}], ["stable", -1]]) {
+    check(...args);
+    expect(invoke).toHaveBeenLastCalledWith("clawtrate:update:check");
+  }
   for (const [name, channel, valid] of [
-    ["check", "check", "stable"],
     ["chooseTrack", "track", "nightly"],
     ["download", "download", "opaque-id"],
     ["restart", "restart", "verified-id"],
