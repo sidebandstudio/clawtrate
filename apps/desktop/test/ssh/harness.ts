@@ -146,10 +146,21 @@ export function makeWorld(root: string): TestWorld {
   };
 }
 
-/** A stand-in `openclaw` in the test home's first fixed place, answering from files the test writes. */
+/**
+ * A stand-in `openclaw` in the test home's first fixed place, answering from
+ * files the test writes. Beside the LOOK's commands it answers `qr --json
+ * --voice-node --url <url>` (from `qr-<profile>.json`, or by running
+ * `qr-<profile>.sh` when the test wrote one), `gateway start` and `gateway
+ * stop`, and appends every command's arguments, which carry no code, to
+ * `calls`.
+ */
 export function installStubOpenclaw(home: string): {
   setVersion(text: string): void;
   setStatus(profile: "default" | "clawtrate", json: unknown, exit?: number): void;
+  setCode(profile: "default" | "clawtrate", json: unknown, exit?: number): void;
+  setCodeScript(profile: "default" | "clawtrate", script: string): void;
+  setStart(profile: "default" | "clawtrate", exit: number): void;
+  calls(): string[];
 } {
   const bin = join(home, ".openclaw", "bin");
   const stub = join(home, ".openclaw", "stub");
@@ -160,10 +171,18 @@ export function installStubOpenclaw(home: string): {
     [
       "#!/bin/sh",
       'd="$HOME/.openclaw/stub"',
-      'case "$*" in',
-      '  --version) cat "$d/version" ;;',
-      '  "gateway status --json") cat "$d/status-default.json"; exit "$(cat "$d/exit-default")" ;;',
-      '  "--profile clawtrate gateway status --json") cat "$d/status-clawtrate.json"; exit "$(cat "$d/exit-clawtrate")" ;;',
+      'printf \'%s\\n\' "$*" >> "$d/calls"',
+      'p=default',
+      'if [ "${1:-}" = --profile ] && [ "${2:-}" = clawtrate ]; then p=clawtrate; shift 2; fi',
+      'case "$p $*" in',
+      '  "default --version") cat "$d/version" ;;',
+      '  "default gateway status --json") cat "$d/status-default.json"; exit "$(cat "$d/exit-default")" ;;',
+      '  "clawtrate gateway status --json") cat "$d/status-clawtrate.json"; exit "$(cat "$d/exit-clawtrate")" ;;',
+      '  "$p qr --json --voice-node --url ws://127.0.0.1:"*)',
+      '    if [ -f "$d/qr-$p.sh" ]; then exec /bin/sh "$d/qr-$p.sh" "$@"; fi',
+      '    cat "$d/qr-$p.json"; exit "$(cat "$d/qr-exit-$p")" ;;',
+      '  "$p gateway start") : > "$d/started-$p"; exit "$(cat "$d/start-exit-$p" 2>/dev/null || echo 0)" ;;',
+      '  "$p gateway stop") : > "$d/stopped-$p"; exit 0 ;;',
       "  *) exit 2 ;;",
       "esac",
       "",
@@ -175,6 +194,17 @@ export function installStubOpenclaw(home: string): {
     setStatus: (profile, json, exit = 0) => {
       writeFileSync(join(stub, `status-${profile}.json`), JSON.stringify(json, null, 2));
       writeFileSync(join(stub, `exit-${profile}`), String(exit));
+    },
+    setCode: (profile, json, exit = 0) => {
+      writeFileSync(join(stub, `qr-${profile}.json`), JSON.stringify(json));
+      writeFileSync(join(stub, `qr-exit-${profile}`), String(exit));
+    },
+    setCodeScript: (profile, script) =>
+      writeFileSync(join(stub, `qr-${profile}.sh`), script, { mode: 0o700 }),
+    setStart: (profile, exit) => writeFileSync(join(stub, `start-exit-${profile}`), String(exit)),
+    calls: () => {
+      const path = join(stub, "calls");
+      return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean) : [];
     },
   };
 }

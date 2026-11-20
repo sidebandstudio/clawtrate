@@ -106,3 +106,21 @@ export function establishPrivateDir(
     current = parent;
   }
 }
+
+/**
+ * The host's boundary: `make` builds the SSH transport only after `dir` and
+ * its ancestors are established as private; otherwise nothing is made and SSH
+ * setup goes to Advanced.
+ */
+export function afterPrivacyCheck<T>(
+  dir: string,
+  make: () => T,
+  options: { uid?: number | null; platform?: NodeJS.Platform; root?: string; log?: (line: string) => void } = {},
+): T | { refused: "app-files-unsafe" } {
+  const verdict = establishPrivateDir(dir, options);
+  if (!verdict.ok) {
+    options.log?.(`[setup] The app's SSH folder isn't proven private (${verdict.reason}).`);
+    return { refused: "app-files-unsafe" };
+  }
+  return make();
+}

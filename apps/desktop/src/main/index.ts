@@ -38,7 +38,7 @@ import {
 } from "../host/runtime.ts";
 import { SetupController } from "../setup/controller.ts";
 import { SetupRouter, SetupSlice } from "../setup/host.ts";
-import { establishPrivateDir } from "../setup/private-dir.ts";
+import { afterPrivacyCheck } from "../setup/private-dir.ts";
 import { RemoteSetup, type HostAnswer, type HostQuestion } from "../setup/remote.ts";
 import { RouteStore, routedStorage } from "../setup/routes.ts";
 import { productionWorld as sshProductionWorld } from "./ssh/world.ts";
@@ -233,12 +233,9 @@ function sshTransportFor(dataDir: string): SshTransport | { refused: "app-files-
   } catch {
     return { refused: "app-files-unsafe" };
   }
-  const verdict = establishPrivateDir(dir);
-  if (!verdict.ok) {
-    console.log(`[setup] The app's SSH folder isn't proven private (${verdict.reason}).`);
-    return { refused: "app-files-unsafe" };
-  }
-  return new SshTransport(sshProductionWorld(dir));
+  return afterPrivacyCheck(dir, () => new SshTransport(sshProductionWorld(dir)), {
+    log: (line) => console.log(line),
+  });
 }
 
 function createWindow(): BrowserWindow {

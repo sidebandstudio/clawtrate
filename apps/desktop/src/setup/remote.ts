@@ -88,6 +88,8 @@ export function sshRouteKey(parts: {
 }
 
 const newRouteId = () => `r${randomBytes(6).toString("hex")}`;
+/** Destinations whose route id this run remembers. */
+const MAX_REMEMBERED_IDS = 16;
 
 const emptyThere = (destination: string): SshSetup => ({
   destination,
@@ -157,6 +159,8 @@ export class RemoteSetup {
   /** Every local address a route's forward has had: only the current one while it is up is allowed. */
   private readonly localUrls = new Set<string>();
   private watching: (() => void) | null = null;
+  /** The route id each destination was prepared with in this run, so its pin is found again. */
+  private readonly ids = new Map<string, string>();
 
   constructor(options: RemoteSetupOptions) {
     this.options = options;
@@ -241,10 +245,23 @@ export class RemoteSetup {
       return;
     }
     // A computer saved before keeps its route id, so its pinned key is checked, never replaced by itself.
+    // So is one looked at before in this run, pinned and not yet connected.
     const saved = this.options.routes.list().find((route) => route.destination === destination);
-    let prepared = transport.prepareRoute(saved?.id ?? newRouteId(), destination);
+    let prepared = transport.prepareRoute(
+      saved?.id ?? this.ids.get(destination) ?? newRouteId(),
+      destination,
+    );
     if (!prepared.ok && prepared.kind === "forward-open")
       prepared = transport.prepareRoute(newRouteId(), destination);
+    if (prepared.ok) {
+      this.ids.delete(destination);
+      this.ids.set(destination, prepared.id);
+      // A few names are remembered; the oldest goes first.
+      for (const name of this.ids.keys()) {
+        if (this.ids.size <= MAX_REMEMBERED_IDS) break;
+        this.ids.delete(name);
+      }
+    }
     if (!prepared.ok) {
       if (prepared.kind === "invalid-destination") {
         this.publish({ ...initialSetupState, there: { ...base, invalid: true } });
