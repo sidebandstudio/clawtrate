@@ -409,14 +409,16 @@ export function Permissions({
   const name = bot.name;
   const focusIn = (selector: string) =>
     requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(selector)?.focus());
-  const open = (id: string) => {
+  // Back returns focus to the control that opened the line: its row, or its link in the glance.
+  const opener = useRef<string | null>(null);
+  const open = (id: string, from: "row" | "glance" = "row") => {
+    opener.current = `[data-c-${from === "glance" ? "glance" : "line"}="${CSS.escape(id)}"]`;
     setLineId(id);
     focusIn("[data-bs-focus]");
   };
   const back = () => {
-    const from = lineId;
     setLineId(null);
-    focusIn(from ? `[data-c-line="${CSS.escape(from)}"]` : "[data-bs-focus]");
+    focusIn(opener.current ?? "[data-bs-focus]");
   };
   const [forBot, setForBot] = useState(bot.id);
   if (forBot !== bot.id) {
@@ -554,7 +556,7 @@ function Overview({
 }: {
   view: BotPermissions;
   name: string;
-  onLine: (id: string) => void;
+  onLine: (id: string, from?: "row" | "glance") => void;
 }) {
   const groups = permissionGroups(view.lines);
   const byId = new Map(view.lines.map((line) => [line.id, line]));
@@ -652,8 +654,9 @@ function Overview({
                       <button
                         type="button"
                         className="c-glance-link"
+                        data-c-glance={line.id}
                         aria-label={extra ? `${line.words} (${extra})` : line.words}
-                        onClick={() => onLine(line.id)}
+                        onClick={() => onLine(line.id, "glance")}
                       >
                         {line.words}
                         {extra && <span className="c-glance-extra"> ({extra})</span>}

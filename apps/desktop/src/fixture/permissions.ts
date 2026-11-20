@@ -10,7 +10,7 @@
 // `error`, `fresh`: before the bot's first task), `override=1` (the gateway's
 // settings deny a tool the bot allows), `write=` how a save goes (`refused`,
 // `conflict`, `hidden`: sent and not shown by the read-back, `lost`: no answer came,
-// `stored`: stored and not reported in use).
+// `stored`: stored and not reported in use), `long=1` (a second tool server, with a long name).
 
 import {
   choiceRefusal,
@@ -39,6 +39,8 @@ export type PermissionParams = {
   perm: string | null;
   override: boolean;
   write: string | null;
+  /** A second tool server with a long name. */
+  long?: boolean;
 };
 
 export function permissionParams(params: URLSearchParams): PermissionParams {
@@ -47,6 +49,7 @@ export function permissionParams(params: URLSearchParams): PermissionParams {
     read: params.get("read"),
     perm: params.get("perm"),
     override: params.get("override") === "1",
+    long: params.get("long") === "1",
     write: params.get("write"),
   };
 }
@@ -79,7 +82,11 @@ const CATALOG = {
   ],
 };
 
-function initialConfig(override: boolean): Json {
+/** A tool server's long name, and the prefix the gateway gives its tools (sanitized and cut to 30). */
+const LONG_SERVER = `Review.ServerLong${"x".repeat(64)}`;
+const LONG_PREFIX = `Review-ServerLong${"x".repeat(13)}`;
+
+function initialConfig(override: boolean, long = false): Json {
   return {
     tools: {
       allow: [
@@ -96,6 +103,7 @@ function initialConfig(override: boolean): Json {
         "progress_card",
         "automations",
         "coder__*",
+        ...(long ? [`${LONG_PREFIX}__*`] : []),
       ],
       deny: [
         "gateway",
@@ -121,7 +129,7 @@ function initialConfig(override: boolean): Json {
         pip: { tools: {} },
       },
     },
-    mcp: { servers: { coder: {} } },
+    mcp: { servers: { coder: {}, ...(long ? { [LONG_SERVER]: {} } : {}) } },
   };
 }
 
@@ -158,7 +166,7 @@ function initialScopes(): Record<string, RulesScope> {
 
 /** The permissions commands, answered on made-up facts. Undefined for any other command. */
 export function permissionCommands(now: number, params: PermissionParams, admin: () => boolean) {
-  let config = initialConfig(params.override);
+  let config = initialConfig(params.override, params.long);
   let hash = 1;
   const scopes = initialScopes();
   const readAt = now - 5 * MINUTE;
@@ -222,9 +230,14 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
               status: "listed",
               taskKey: `agent:${botId}:main`,
               available: listed(config, botId),
-              servers: listed(config, botId).includes("coder__run_checks")
-                ? [{ name: "coder", prefix: "coder" }]
-                : [],
+              servers: [
+                ...(listed(config, botId).includes("coder__run_checks")
+                  ? [{ name: "coder", prefix: "coder" }]
+                  : []),
+                ...(params.long && listed(config, botId).includes(`${LONG_PREFIX}__send_message`)
+                  ? [{ name: LONG_SERVER, prefix: LONG_PREFIX }]
+                  : []),
+              ],
             },
       plugin: status,
       rules: readable
@@ -338,7 +351,11 @@ function listed(config: Json, botId: string): string[] {
     Array.isArray(list) &&
     list.some((e: string) => e === id || (e.endsWith("*") && id.startsWith(e.slice(0, -1))));
   const allows = [every.allow, own.allow].filter(Array.isArray);
-  return [...CATALOG.groups.flatMap((g) => g.tools.map((t) => t.id)), "coder__run_checks"].filter(
+  return [
+    ...CATALOG.groups.flatMap((g) => g.tools.map((t) => t.id)),
+    "coder__run_checks",
+    `${LONG_PREFIX}__send_message`,
+  ].filter(
     (id) =>
       !names(every.deny, id) &&
       !names(own.deny, id) &&

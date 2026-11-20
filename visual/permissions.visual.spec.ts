@@ -88,6 +88,20 @@ const SCENES: Scene[] = [
     },
   },
   { name: "line-connector", ids: "F-222", query: q(""), ready: line("server:coder") },
+  {
+    name: "line-long-server",
+    ids: "F-176",
+    query: q("long=1"),
+    ready: async (page) => {
+      await line(`server:Review.ServerLong${"x".repeat(64)}`)(page);
+      // The heading wraps inside the panel: nothing is wider than the page.
+      const heading = page.getByRole("heading", { level: 3, name: /^Tool server Review/ });
+      const tab = page.getByTestId("permission-line");
+      const [h, t] = await Promise.all([heading.boundingBox(), tab.boundingBox()]);
+      expect(h!.x + h!.width).toBeLessThanOrEqual(t!.x + t!.width + 0.5);
+      expect(await tab.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    },
+  },
   { name: "line-locked", ids: "F-176", query: q("override=1"), ready: line("web") },
   { name: "line-read-only", ids: "F-176", query: q("", "read"), ready: line("files") },
   {
@@ -166,7 +180,7 @@ test.describe("keyboard and screen reader", () => {
     const row = page.locator('[data-c-line="tasks"]');
     // A line reads its words, value, exceptions and mark.
     await expect(row).toHaveAccessibleName(
-      /^Look at its tasks, Allowed, Not offered: sessions_history\. Open\.$/,
+      /^Look at its tasks, Allowed, Not offered: sessions_history \(set on the gateway\)\. Open\.$/,
     );
     await row.click();
     const group = page.getByRole("radiogroup", { name: "Otto may:" });
@@ -183,5 +197,10 @@ test.describe("keyboard and screen reader", () => {
     ).toHaveCount(1);
     await page.getByRole("button", { name: "Back to what Otto may do" }).click();
     await expect(page.locator('[data-c-line="tasks"]')).toBeFocused();
+    // Opened from its link in the glance, Back returns to that link.
+    await page.locator('[data-c-glance="read"]').click();
+    await expect(page.getByTestId("permission-line")).toBeVisible();
+    await page.getByRole("button", { name: "Back to what Otto may do" }).click();
+    await expect(page.locator('[data-c-glance="read"]')).toBeFocused();
   });
 });
