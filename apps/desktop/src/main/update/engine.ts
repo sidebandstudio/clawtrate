@@ -3,6 +3,7 @@
 // reports typed states for the update screens and installs nothing.
 // docs/decisions.md, "Updates and release signing", has its rules.
 
+import type { UpdateTrack } from "@clawtrate/core";
 import { createHash, randomUUID } from "node:crypto";
 import {
   close as closeFile,
@@ -15,6 +16,7 @@ import { mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { inspectUpdateFile } from "../inspect-update-file.ts";
 import { checkFeedAddress, type LoopbackHttpForTests } from "./address.ts";
 import { FILE_EXTENSION, fileKeyFor, parseFeed, type FeedFile, type FileKey } from "./feed.ts";
 import { FetchRefused, open, readAll, Transfer, type FetchCause } from "./fetch.ts";
@@ -31,6 +33,7 @@ const PROGRESS_STEP_BYTES = 1024 * 1024;
 export type UpdateFailureCause =
   | "address-refused"
   | FetchCause
+  | "wrong-track"
   | "malformed-feed"
   | "no-file-for-this-system"
   | "size-mismatch"
@@ -105,6 +108,9 @@ export const DEFAULT_LIMITS: Limits = {
 
 export interface UpdateEngineOptions {
   /** The feed's address. The production constructor passes the one fixed at build time. */
+  readonly track?: UpdateTrack;
+  readonly offerId?: string;
+  readonly onFeedRead?: () => void;
   readonly feedAddress: string | null;
   /** The build's own release date, for F-010. The production constructor passes the build's. */
   readonly buildReleaseDate?: string | null;
@@ -137,7 +143,17 @@ class DownloadFailed extends Error {
 }
 
 export class UpdateEngine {
+  private transfer: Transfer | null = null;
   private current: UpdateState = { kind: "idle" };
+  private kept: {
+    offerId: string | null;
+    track: UpdateTrack;
+    version: string;
+    path: string;
+    identity: string;
+    sha512: string;
+    size: number;
+  } | null = null;
   private found: Found | null = null;
   private busy: Promise<UpdateState> | null = null;
   private readonly options: UpdateEngineOptions;
@@ -147,7 +163,7 @@ export class UpdateEngine {
 
   constructor(options: UpdateEngineOptions) {
     const running = parseVersion(options.currentVersion);
-    if (!running) throw new Error("the running version is not MAJOR.MINOR.PATCH");
+    if (!running) throw new Error("invalid running release version");
     this.options = options;
     this.running = running;
     this.key = fileKeyFor(options.platform, options.arch);
@@ -170,6 +186,10 @@ export class UpdateEngine {
       : null;
   }
 
+  get offeredBytes(): number | null {
+    return this.found?.file.size ?? null;
+  }
+
   /** F-010 now: the last check found a newer version and this build is more than 14 days old. */
   updateRequired(now: Date): boolean {
     return isUpdateRequired(this.newer, this.options.buildReleaseDate ?? null, now);
@@ -185,11 +205,30 @@ export class UpdateEngine {
     return this.exclusive(() => this.runDownload());
   }
 
+  /** Stop the request and let its normal cleanup finish before reusing the folder. */
+  cancel(): void {
+    this.kept = null;
+    this.transfer?.stop("unreachable");
+  }
+
+  /** Main only. The owning service also checks the generation and offer identity. */
+  async recheckFile(offerId: string, track: UpdateTrack | null, version: string): Promise<boolean> {
+    const kept = this.kept;
+    if (!kept || kept.offerId !== offerId || kept.track !== track || kept.version !== version)
+      return false;
+    const proof = await inspectUpdateFile(kept.path, kept.size).catch(() => null);
+    if (this.kept === kept && proof?.identity === kept.identity && proof.sha512 === kept.sha512)
+      return true;
+    if (this.kept === kept) this.kept = null;
+    return false;
+  }
+
   private exclusive(work: () => Promise<UpdateState>): Promise<UpdateState> {
     if (this.busy) return this.busy;
     // Publish the shared promise before work synchronously reports its first state.
     const { promise, resolve } = Promise.withResolvers<UpdateState>();
     const run = promise.finally(() => {
+      this.transfer = null;
       this.busy = null;
     });
     this.busy = run;
@@ -218,6 +257,7 @@ export class UpdateEngine {
   private async runCheck(): Promise<UpdateState> {
     // A new check forgets the last one's offer first, so a check that fails
     // leaves no newer version behind to report, require or download.
+    this.kept = null;
     this.found = null;
     const loopback = this.options.loopbackHttpForTests;
     const address = checkFeedAddress(this.options.feedAddress, loopback);
@@ -230,7 +270,10 @@ export class UpdateEngine {
     }
     this.report({ kind: "checking" });
     const { maxFeedBytes, feedTimeoutMs, idleTimeoutMs } = this.limits;
-    const transfer = new Transfer(feedTimeoutMs, Math.min(idleTimeoutMs, feedTimeoutMs));
+    const transfer = (this.transfer = new Transfer(
+      feedTimeoutMs,
+      Math.min(idleTimeoutMs, feedTimeoutMs),
+    ));
     let text: string;
     try {
       const response = await open(address.url, transfer, maxFeedBytes, this.userAgent);
@@ -240,7 +283,8 @@ export class UpdateEngine {
     } finally {
       transfer.done();
     }
-    const read = parseFeed(text, address.url, this.key, loopback);
+    this.options.onFeedRead?.();
+    const read = parseFeed(text, address.url, this.key, loopback, this.options.track);
     if (!read.ok) return this.report({ kind: "failed", stage: "check", cause: read.cause });
     const { version, releaseDate, file } = read.feed;
     if (!isNewer(version, this.running)) {
@@ -271,8 +315,12 @@ export class UpdateEngine {
       this.report({ kind: "downloading", version, releaseDate, received, total: file.size });
 
     progress(0);
-    const transfer = new Transfer(this.limits.downloadTimeoutMs, this.limits.idleTimeoutMs);
+    const transfer = (this.transfer = new Transfer(
+      this.limits.downloadTimeoutMs,
+      this.limits.idleTimeoutMs,
+    ));
     const hash = createHash("sha512");
+    let renamed = false;
     let received = 0;
     let reported = 0;
     try {
@@ -361,20 +409,34 @@ export class UpdateEngine {
         if (error instanceof DownloadFailed) throw error;
         throw new FetchRefused(transfer.cause());
       }
+      transfer.done();
+      if (transfer.signal.aborted) throw new FetchRefused(transfer.cause());
       if (received !== file.size) throw new DownloadFailed("size-mismatch");
       if (hash.digest("base64") !== file.sha512) throw new DownloadFailed("hash-mismatch");
       if (received !== reported) progress(received);
       try {
         await rename(partial, target);
+        renamed = true;
       } catch {
         throw new DownloadFailed("write-failed");
       }
+      const proof = await inspectUpdateFile(target, file.size);
+      if (!proof) throw new DownloadFailed("size-mismatch");
+      if (proof.sha512 !== file.sha512) throw new DownloadFailed("hash-mismatch");
+      if (transfer.signal.aborted) throw new FetchRefused(transfer.cause());
+      this.kept = {
+        offerId: this.options.offerId ?? null,
+        track: this.options.track ?? "stable",
+        version,
+        path: target,
+        ...proof,
+      };
     } catch (error) {
       transfer.done();
+      if (renamed) await rm(target, { force: true }).catch(() => undefined);
       await rm(partial, { force: true }).catch(() => undefined);
       return this.report(failure("download", error));
     }
-    transfer.done();
     return this.report({ kind: "ready", version, releaseDate, path: target });
   }
 }
