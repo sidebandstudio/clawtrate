@@ -655,6 +655,7 @@
     if (!canWrite() && L.pinStore === "gateway") {
       L.access = "read";
       L.accessFor = "pin";
+      L.accessItem = id;
       return renderAccess();
     }
     if (pin && L.full) {
@@ -845,23 +846,37 @@
   }
 
   function chat(x, b) {
-    const msgs =
-      x.task === "m2"
-        ? [
-            ["user", "Make me a trail page for Saturday."],
-            ["assistant", "I made a page with Saturday's routes."],
-            ["user", "Add the forest track too."],
-            ["assistant", "Done: the page now has the forest track."],
-          ]
-        : [
-            ["user", "What should I pack?"],
-            ["assistant", "Here is a page for it."],
-          ];
     const head =
       `<div class="page-chat-head">${CT.avatar ? CT.avatar(b.id) : ""}<strong>${esc(taskTitle(x.task))}</strong>` +
       `<button type="button" class="icon-button page-chat-close" data-variant="quiet" data-pv="chat-close" aria-label="Close the chat" title="Close the chat">${icon("x")}</button></div>`;
-    const list = `<div class="page-chat-log" id="page-chat-log">${msgs.map(([r, m]) => `<div class="msg" data-role="${r}"><div class="bubble">${esc(m)}</div></div>`).join("")}</div>`;
+    const list = `<div class="page-chat-log" id="page-chat-log">${sideLog()}</div>`;
     return head + list + `<div class="page-chat-foot">${chatFoot(x, b)}</div>`;
+  }
+  // The side chat draws the occurrence task's own transcript and outbox, as the conversation renders them (the Page
+  // view made that task the open one). Only message and queue state is copied: no card, link, control or id.
+  function sideLog() {
+    const inner = $("#transcript .transcript-inner") || $("#transcript");
+    if (!inner) return "";
+    return [...inner.children]
+      .filter((el) => el.matches(".turn, .event-line"))
+      .slice(-14)
+      .map((el) => {
+        const c = el.cloneNode(true);
+        c.querySelectorAll(".artifacts, button, input, textarea, select, [tabindex]").forEach((e) => e.replaceWith());
+        c.querySelectorAll("a").forEach((a) => a.replaceWith(document.createTextNode(a.textContent)));
+        [c, ...c.querySelectorAll("[id], [data-testid]")].forEach((e) => {
+          e.removeAttribute("id");
+          e.removeAttribute("data-testid");
+        });
+        return c.outerHTML;
+      })
+      .join("");
+  }
+  function refreshSideLog() {
+    const log = view && $("#page-chat-log", view);
+    if (!log) return;
+    log.innerHTML = sideLog();
+    log.scrollTop = log.scrollHeight;
   }
   function chatFoot(x, b) {
     if (!canWrite())
@@ -1310,11 +1325,18 @@
       L.access = null;
       $$(".lib-access").forEach((el) => el.remove());
       CT.announce("Access granted");
+      // A request from Chat puts focus in the composer; one from Pin returns to Pin, which waits to be chosen again.
+      const fromChat = L.accessFor === "chat";
       if (view) {
         refreshChat();
-        $('[data-pv="pin"]', view).focus();
-      } else if (sheet) openPhonePage(sheet._x);
-      else rerender();
+        (fromChat ? $("#page-chat-input") : $('[data-pv="pin"]', view))?.focus();
+      } else if (sheet) {
+        openPhonePage(sheet._x);
+        $(fromChat ? '[data-ps="message"]' : '[data-ps="close"]', sheet)?.focus();
+      } else {
+        rerender();
+        ($(`[data-lib-pin="${L.accessItem}"]`) || $(`[data-lib-open="${L.accessItem}"]`))?.focus();
+      }
       return;
     }
     L.access = decision === "deny" ? "denied" : "expired";
@@ -1383,15 +1405,7 @@
         const x = view._x;
         app.model.drafts[x.task] = field.value;
         if (!app.send()) return field.focus(); // the conversation's own send: its checks, its outbox, its transcript
-        const turns = $$("#transcript .turn[data-role='user']");
-        const last = turns.at(-1);
-        const text = last?.querySelector(".bubble")?.textContent || "";
-        const waiting = last?.dataset.waiting === "true";
-        $("#page-chat-log").insertAdjacentHTML(
-          "beforeend",
-          `<div class="msg" data-role="user" data-sent="${waiting ? "waiting" : "sent"}"><div class="bubble">${esc(text)}</div></div>` +
-            `<div class="event-line" data-side="end">${waiting ? "Sends when reconnected" : "Sent"}</div>`,
-        );
+        refreshSideLog(); // drawn from that transcript, so both views show the same pending, then confirmed, message
         field.value = app.model.drafts[x.task] || "";
         return field.focus();
       }
@@ -1510,7 +1524,8 @@
         event.preventDefault();
         return openExport(view._x, $('[data-pv="export"]', view));
       }
-      if (view && t.id === "page-chat-input" && (event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      // Enter sends from the side composer as from the conversation's (conversation.md, section 15); Shift+Enter is a new line.
+      if (view && t.id === "page-chat-input" && event.key === "Enter" && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
         return $('[data-pv="send"]').click();
       }
@@ -1629,6 +1644,9 @@
     ready(a) {
       app = a;
       base.ready?.(a);
+      // Whenever the conversation's transcript changes (a send, a queued message settling on reconnect), the side chat follows.
+      const transcript = $("#transcript");
+      if (transcript) new MutationObserver(() => refreshSideLog()).observe(transcript, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-waiting"] });
       if (params.get("state") === "readonly") app.model.access = "read";
       rerender();
       if (params.get("lib") === "loading") return;

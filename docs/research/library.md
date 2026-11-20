@@ -183,7 +183,7 @@ So a client can tell that one document was shown again later in a task, and noth
 
 ## 6. The side chat
 
-The Page's block sits in one task's transcript, and `chat.send {sessionKey, message, idempotencyKey}` to that task is the side chat. Live: the probe's task took five `chat.send`s at the interactive tier; on the read tier, `chat.send` to it with the text `About the page “Trail guide”: probe` was refused with `{"code":"FORBIDDEN","message":"missing scope: operator.write"}`. The gateway adds nothing to a message's text; what the person reads in the field is what is sent.
+The Page's block sits in one task's transcript, and `chat.send {sessionKey, message, idempotencyKey}` to that task is the side chat. Live: the probe's task took five `chat.send`s at the interactive tier; on the read tier, `chat.send` to it with the text `About the page “Trail guide”: probe` was refused with `{"code":"FORBIDDEN","message":"missing scope: operator.write"}`. The test text was read back unchanged in the task transcript.
 
 ## 7. Export
 

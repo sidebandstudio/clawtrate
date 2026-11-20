@@ -496,7 +496,7 @@ await p.close();
 
 p = await open("&page=trail-guide&state=readonly");
 await p.waitForTimeout(500);
-check("read-only: the chat's messages, and Request access in the composer's place", (await text(p, ".page-chat-readonly span")) === "Read-only: messages can't be sent from this device." && (await q(p, () => !document.querySelector("#page-chat-input") && document.querySelectorAll("#page-chat-log .msg").length === 4)));
+check("E6 read-only: the side chat draws the task's own transcript, and Request access in the composer's place", (await text(p, ".page-chat-readonly span")) === "Read-only: messages can't be sent from this device." && (await q(p, () => { const side = [...document.querySelectorAll("#page-chat-log .bubble")].map((b) => b.textContent); const conv = [...document.querySelectorAll("#transcript .turn .bubble")].map((b) => b.textContent).slice(-side.length); return !document.querySelector("#page-chat-input") && side.length > 0 && JSON.stringify(side) === JSON.stringify(conv) && !document.querySelector("#page-chat-log button, #page-chat-log a, #page-chat-log [id]"); })));
 await p.click('[data-pv="pin"]');
 check("R7 Pin in a read-only Page: the access request inside the Page view, focused", await q(p, () => document.querySelector(".page-view").contains(document.activeElement) && document.activeElement.dataset.access === "request" && !document.querySelector("#panel-library .lib-access")));
 await p.click('[data-access="request"]');
@@ -512,6 +512,32 @@ await p.waitForTimeout(400);
 check("R7 Request access from the side chat doesn't stall: waiting for the owner, inside the Page view", (await text(p, "#page-access .shelf-text")).startsWith("Waiting for the gateway's owner."));
 await q(p, () => window.CT.library.owner("approve"));
 check("R7 …approved: the composer appears in the side chat", await q(p, () => Boolean(document.querySelector("#page-chat-input"))) && (await announced(p)).includes("Access granted"));
+check("E6 …approved from Chat: focus is in the composer, and nothing was pinned", await q(p, () => document.activeElement.id === "page-chat-input" && window.CT.library.G.value.length === 3));
+await p.close();
+p = await open("&page=trail-guide&state=readonly");
+await p.waitForTimeout(500);
+await p.click('[data-pv="pin"]');
+await p.click('[data-access="request"]');
+await p.waitForTimeout(400);
+await q(p, () => window.CT.library.owner("approve"));
+check("E6 approved from Pin: focus returns to Pin, which waits to be chosen again; nothing written", await q(p, () => document.activeElement.dataset.pv === "pin" && document.activeElement.getAttribute("aria-pressed") === "true" && window.CT.library.G.value.length === 3));
+await p.close();
+p = await open("&page=trail-guide");
+await p.waitForTimeout(600);
+await q(p, () => window.app.setConnection("reconnecting"));
+await p.fill("#page-chat-input", "A queued message from the Page");
+await p.press("#page-chat-input", "Enter");
+check("E6 queued offline with Enter: the same pending turn in the conversation and the side chat", await q(p, () => {
+  const conv = document.querySelector('#transcript [data-waiting="true"] .bubble')?.textContent;
+  const side = document.querySelector('#page-chat-log [data-waiting="true"] .bubble')?.textContent;
+  return conv === "A queued message from the Page" && side === conv && document.querySelector("#page-chat-log").textContent.includes("Sends when reconnected");
+}));
+await q(p, () => window.app.setConnection("syncing"));
+await p.waitForTimeout(1300);
+check("E6 …reconnected: the same confirmed turn in both, and the waiting label gone from both", await q(p, () => {
+  const side = document.querySelector("#page-chat-log").textContent;
+  return !document.querySelector('#transcript [data-waiting="true"], #page-chat-log [data-waiting="true"]') && !side.includes("Sends when reconnected") && side.includes("A queued message from the Page") && document.querySelector("#transcript").textContent.includes("A queued message from the Page");
+}));
 await p.close();
 
 p = await open("");
