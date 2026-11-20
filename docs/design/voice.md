@@ -317,10 +317,9 @@ The band's "Settings" opens a small dialog, "Voice chat settings for Otto", that
 
 ### Language (F-462)
 
-- "Auto-detect" (sending none) or a language, sent as its two-letter code when a session starts (research §7). "Home gateway passes it to its voice provider."
-- **During a call**, a session's language cannot change (no method changes it; research §7), so choosing one starts a new relayed session for the same call: `talk.session.create {sessionKey, voice, language, capabilities}` on the same task, while the old session still runs (the gateway allows two per connection; research §5). When the new one is `ready`, the device sends its audio there and closes the old one with `talk.session.close`. Meanwhile the row says "Changing the language to Español…", and the old session keeps listening, so nothing said is lost. Then: "Language: Español, from what you say next." The band, its time and its transcript stay as they are: to the person it is one call. A reply the old session was still speaking is cut off.
-- Refused or failed: "The language didn't change: <the gateway's message, as text>. The call goes on as before." The old session goes on, and the kept choice stays what it was.
-- What the provider keeps of the call across the two sessions is not established (the bundled docs say a voice change preserves the chat and captions; nothing says so for this). The turns already said are saved in the task either way (section 10).
+- **This call keeps its language.** A session's language is set only when it is created (`talk.session.create {language}`, two lowercase letters), and no method changes it on a running session (research §7). The dialog says "This call: Español requested. The provider decides how it uses it." when this call was created with a language, and "This call: provider default." when it was created without one.
+- **"Language for new calls"** saves the bot's language for its next calls (section 2): "Provider default", which sends none and leaves the provider's own setting in force, or a language. It changes nothing on this call and starts no other session.
+- "Español requested" is all that is shown about a language: the gateway passes it to the realtime provider, and no answer says what the provider does with it, so nothing says the provider understands or detects it.
 - On dictation through the gateway the language is not offered: "The gateway's dictation doesn't take a language in this version." On the device route the language is the recognizer's.
 
 ## 8. Ending a call, and a call that fails
