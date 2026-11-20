@@ -60,6 +60,7 @@ export class DesktopUpdateService {
   private engine: UpdateEngine | null = null;
   private work: Promise<void> | null = null;
   private switching = false;
+  private closed = false;
   private readonly options: UpdateServiceOptions;
   private snapshot: DesktopUpdateSnapshot;
   private constructor(options: UpdateServiceOptions, snapshot: DesktopUpdateSnapshot) {
@@ -123,6 +124,7 @@ export class DesktopUpdateService {
   }
 
   async chooseTrack(track: unknown): Promise<DesktopUpdateReply> {
+    if (this.closed) return this.reply("invalid");
     if (this.switching) return this.reply("busy");
     if (
       (track !== "stable" && track !== "nightly") ||
@@ -155,11 +157,41 @@ export class DesktopUpdateService {
     return this.reply("accepted");
   }
 
+  shutdown(): void {
+    this.closed = true;
+    this.engine?.cancel();
+    this.engine = null;
+    this.snapshot = {
+      ...this.snapshot,
+      revision: this.snapshot.revision + 1,
+      state: { kind: "not-checked" },
+    };
+  }
+
+  /** Main only. Validate the current offer and its kept file again before use. */
+  async recheckVerified(offerId: string): Promise<boolean> {
+    const { state } = this.snapshot;
+    const engine = this.engine;
+    if (state.kind !== "verified" || state.offerId !== offerId || !engine) return false;
+    const valid = await engine.recheckFile();
+    if (this.engine !== engine || this.snapshot.state !== state) return false;
+    if (!valid) {
+      this.publish({
+        kind: "failed",
+        stage: "download",
+        reason: "artifact-changed",
+        retry: "check",
+      });
+    }
+    return valid;
+  }
+
   private clearDownloads() {
     return clearUpdateDirectory(this.options.downloadDir);
   }
 
   async check(expectedTrack: unknown): Promise<DesktopUpdateReply> {
+    if (this.closed) return this.reply("invalid");
     if (this.switching || this.work) return this.reply("busy");
     if (expectedTrack !== "stable" && expectedTrack !== "nightly") return this.reply("invalid");
     const { runningVersion, selectedTrack } = this.snapshot;
@@ -170,86 +202,87 @@ export class DesktopUpdateService {
       unavailable(this.options, runningVersion, selectedTrack)
     )
       return this.reply("invalid");
-    {
-      const offerId = selectedTrack + "-" + randomUUID();
-      let checkedAt: string | null = null;
-      const engine: UpdateEngine = new UpdateEngine({
-        currentVersion: runningVersion,
-        track: selectedTrack,
-        feedAddress: this.options.feeds[selectedTrack],
-        buildReleaseDate: this.options.releaseDate,
-        downloadDir: join(this.options.downloadDir, offerId),
-        platform: this.options.platform,
-        arch: this.options.arch,
-        ...(this.options.loopbackHttpForTests && {
-          loopbackHttpForTests: this.options.loopbackHttpForTests,
-        }),
-        onFeedRead: () => {
-          if (this.engine === engine) checkedAt = new Date().toISOString();
-        },
-        onState: (state) => {
+    this.engine?.cancel();
+    const offerId = selectedTrack + "-" + randomUUID();
+    let checkedAt: string | null = null;
+    const engine: UpdateEngine = new UpdateEngine({
+      currentVersion: runningVersion,
+      track: selectedTrack,
+      feedAddress: this.options.feeds[selectedTrack],
+      buildReleaseDate: this.options.releaseDate,
+      downloadDir: join(this.options.downloadDir, offerId),
+      platform: this.options.platform,
+      arch: this.options.arch,
+      ...(this.options.loopbackHttpForTests && {
+        loopbackHttpForTests: this.options.loopbackHttpForTests,
+      }),
+      onFeedRead: () => {
+        if (this.engine === engine) checkedAt = new Date().toISOString();
+      },
+      onState: (state) => {
+        if (this.engine !== engine) return;
+        if (state.kind === "downloading" && state.received !== 0)
+          this.publish({
+            kind: "downloading",
+            version: state.version,
+            received: state.received,
+            expected: state.total,
+          });
+      },
+    });
+    this.engine = engine;
+    this.work = (async () => {
+      await this.clearDownloads();
+      if (this.engine !== engine) return;
+      const result = await engine.check();
+      if (this.engine !== engine) return;
+      const lastCheck = checkedAt ? { track: selectedTrack, readAt: checkedAt } : null;
+      if (lastCheck) this.snapshot = { ...this.snapshot, lastCheck, preferenceIssue: null };
+      switch (result.kind) {
+        case "available":
+          this.publish({
+            kind: "offered",
+            version: result.version,
+            releaseDate: result.releaseDate,
+            offerId,
+          });
+          break;
+        case "up-to-date":
+          this.publish({ kind: "nothing-newer" });
+          break;
+        case "not-configured":
+          this.publish(failed("not-configured"));
+          break;
+        case "failed":
+          this.publish(failed(result.cause));
+          break;
+      }
+      if (lastCheck) {
+        try {
+          await this.options.store.set("lastCheck", JSON.stringify(lastCheck));
+        } catch {
           if (this.engine !== engine) return;
-          if (state.kind === "downloading" && state.received !== 0)
-            this.publish({
-              kind: "downloading",
-              version: state.version,
-              received: state.received,
-              expected: state.total,
-            });
-        },
+          this.snapshot = { ...this.snapshot, preferenceIssue: "last-check-not-saved" };
+          this.publish(this.snapshot.state);
+        }
+      }
+    })()
+      .catch(() => {
+        if (this.engine === engine) this.publish(failed("write-failed", "preferences"));
+      })
+      .finally(() => {
+        this.work = null;
       });
-      this.engine = engine;
-      this.work = (async () => {
-        await this.clearDownloads();
-        if (this.engine !== engine) return;
-        const result = await engine.check();
-        if (this.engine !== engine) return;
-        const lastCheck = checkedAt ? { track: selectedTrack, readAt: checkedAt } : null;
-        if (lastCheck) this.snapshot = { ...this.snapshot, lastCheck, preferenceIssue: null };
-        switch (result.kind) {
-          case "available":
-            this.publish({
-              kind: "offered",
-              version: result.version,
-              releaseDate: result.releaseDate,
-              offerId,
-            });
-            break;
-          case "up-to-date":
-            this.publish({ kind: "nothing-newer" });
-            break;
-          case "not-configured":
-            this.publish(failed("not-configured"));
-            break;
-          case "failed":
-            this.publish(failed(result.cause));
-            break;
-        }
-        if (lastCheck) {
-          try {
-            await this.options.store.set("lastCheck", JSON.stringify(lastCheck));
-          } catch {
-            this.snapshot = { ...this.snapshot, preferenceIssue: "last-check-not-saved" };
-            this.publish(this.snapshot.state);
-          }
-        }
-      })()
-        .catch(() => {
-          if (this.engine === engine) this.publish(failed("write-failed", "preferences"));
-        })
-        .finally(() => {
-          this.work = null;
-        });
-      this.publish({ kind: "checking" });
-      await this.work;
-      if (this.engine !== engine) return this.reply("superseded");
-    }
+    this.publish({ kind: "checking" });
+    await this.work;
+    if (this.engine !== engine) return this.reply("superseded");
     return this.reply("accepted");
   }
 
   async download(id: unknown): Promise<DesktopUpdateReply> {
     const { state } = this.snapshot;
     const engine = this.engine;
+    if (this.closed) return this.reply("invalid");
     if (this.switching || this.work) return this.reply("busy");
     if (typeof id !== "string" || !id) return this.reply("invalid");
     if (!engine || state.kind !== "offered" || state.offerId !== id) return this.reply("stale");

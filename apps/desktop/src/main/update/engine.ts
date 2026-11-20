@@ -16,6 +16,7 @@ import { mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { inspectUpdateFile } from "../inspect-update-file.ts";
 import { checkFeedAddress, type LoopbackHttpForTests } from "./address.ts";
 import { FILE_EXTENSION, fileKeyFor, parseFeed, type FeedFile, type FileKey } from "./feed.ts";
 import { FetchRefused, open, readAll, Transfer, type FetchCause } from "./fetch.ts";
@@ -143,6 +144,7 @@ class DownloadFailed extends Error {
 export class UpdateEngine {
   private transfer: Transfer | null = null;
   private current: UpdateState = { kind: "idle" };
+  private kept: { path: string; identity: string; sha512: string; size: number } | null = null;
   private found: Found | null = null;
   private busy: Promise<UpdateState> | null = null;
   private readonly options: UpdateEngineOptions;
@@ -196,7 +198,19 @@ export class UpdateEngine {
 
   /** Stop the request and let its normal cleanup finish before reusing the folder. */
   cancel(): void {
+    this.kept = null;
     this.transfer?.stop("unreachable");
+  }
+
+  /** Main only. The owning service also checks the generation and offer identity. */
+  async recheckFile(): Promise<boolean> {
+    const kept = this.kept;
+    if (!kept) return false;
+    const proof = await inspectUpdateFile(kept.path, kept.size).catch(() => null);
+    if (this.kept === kept && proof?.identity === kept.identity && proof.sha512 === kept.sha512)
+      return true;
+    if (this.kept === kept) this.kept = null;
+    return false;
   }
 
   private exclusive(work: () => Promise<UpdateState>): Promise<UpdateState> {
@@ -225,6 +239,7 @@ export class UpdateEngine {
   private async runCheck(): Promise<UpdateState> {
     // A new check forgets the last one's offer first, so a check that fails
     // leaves no newer version behind to report, require or download.
+    this.kept = null;
     this.found = null;
     const loopback = this.options.loopbackHttpForTests;
     const address = checkFeedAddress(this.options.feedAddress, loopback);
@@ -287,6 +302,7 @@ export class UpdateEngine {
       this.limits.idleTimeoutMs,
     ));
     const hash = createHash("sha512");
+    let renamed = false;
     let received = 0;
     let reported = 0;
     try {
@@ -371,11 +387,18 @@ export class UpdateEngine {
       if (received !== reported) progress(received);
       try {
         await rename(partial, target);
+        renamed = true;
       } catch {
         throw new DownloadFailed("write-failed");
       }
+      const proof = await inspectUpdateFile(target, file.size);
+      if (!proof) throw new DownloadFailed("size-mismatch");
+      if (proof.sha512 !== file.sha512) throw new DownloadFailed("hash-mismatch");
+      if (transfer.signal.aborted) throw new FetchRefused(transfer.cause());
+      this.kept = { path: target, ...proof };
     } catch (error) {
       transfer.done();
+      if (renamed) await rm(target, { force: true }).catch(() => undefined);
       await rm(partial, { force: true }).catch(() => undefined);
       return this.report(failure("download", error));
     }

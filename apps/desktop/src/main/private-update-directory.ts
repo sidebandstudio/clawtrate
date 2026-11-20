@@ -47,13 +47,6 @@ async function makePrivateDirectory(path: string): Promise<void> {
   }
   // Windows ignores POSIX mode bits. Create the directory with a protected
   // DACL so the artifact inherits just the current user's full-control rule.
-  const shell = join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
   const script = [
     "$ErrorActionPreference='Stop'",
     "$p=$env:CLAWTRATE_PRIVATE_DIRECTORY",
@@ -69,13 +62,28 @@ async function makePrivateDirectory(path: string): Promise<void> {
     "$rules=$actual.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])",
     "if (!$actual.AreAccessRulesProtected -or $rules.Count -ne 1 -or $rules[0].IdentityReference -ne $sid -or $rules[0].AccessControlType -ne 'Allow' -or $rules[0].FileSystemRights -ne 'FullControl' -or ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint)) {throw 'Directory permissions refused'}",
   ].join("\n");
-  await promisify(execFile)(
+  await runUpdatePowerShell(script, { CLAWTRATE_PRIVATE_DIRECTORY: path }, 15000);
+}
+
+export function runUpdatePowerShell(
+  script: string,
+  values: Record<string, string>,
+  timeout: number,
+) {
+  const shell = join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  return promisify(execFile)(
     shell,
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
     {
-      env: { ...process.env, CLAWTRATE_PRIVATE_DIRECTORY: path },
+      env: { ...process.env, ...values },
       windowsHide: true,
-      timeout: 15000,
+      timeout,
     },
   );
 }

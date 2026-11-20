@@ -442,3 +442,47 @@ it("attributes a completed read across a switch while its history write drains",
   expect(service.get()).toMatchObject({ selectedTrack: "nightly", lastCheck });
   expect((await start()).get().lastCheck).toEqual(lastCheck);
 });
+
+it("checks the kept bytes after the final download progress event", async () => {
+  let id = "";
+  const service = await start({
+    changed: (snapshot) => {
+      snapshots.push(snapshot);
+      if (
+        snapshot.state.kind === "downloading" &&
+        snapshot.state.received === fixture.body.length
+      ) {
+        const folder = join(updates, id);
+        writeFileSync(join(folder, readdirSync(folder)[0]!), Buffer.alloc(fixture.body.length, 42));
+      }
+    },
+  });
+  id = await offer(service);
+  expect((await service.download(id)).snapshot.state).toMatchObject({ reason: "hash-mismatch" });
+  expect(snapshots.some((s) => s.state.kind === "verified")).toBe(false);
+  expect(readdirSync(join(updates, id))).toEqual([]);
+});
+
+it.each(["missing", "changed", "replaced", "check", "choice", "quit"])(
+  "retires the verified record on %s",
+  async (event) => {
+    const service = await start();
+    const id = await offer(service);
+    await service.download(id);
+    expect(await service.recheckVerified(id)).toBe(true);
+    const folder = join(updates, id);
+    const path = join(folder, readdirSync(folder)[0]!);
+    if (event === "missing") rmSync(path);
+    if (event === "changed") writeFileSync(path, Buffer.alloc(fixture.body.length, 7));
+    if (event === "replaced") {
+      renameSync(path, path + ".old");
+      writeFileSync(path, fixture.body);
+    }
+    if (event === "check") await service.check("stable");
+    if (event === "choice") await service.chooseTrack("nightly");
+    if (event === "quit") service.shutdown();
+    expect(await service.recheckVerified(id)).toBe(false);
+    if (["missing", "changed", "replaced"].includes(event))
+      expect(service.get().state).toMatchObject({ reason: "artifact-changed" });
+  },
+);

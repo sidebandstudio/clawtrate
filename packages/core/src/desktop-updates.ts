@@ -17,6 +17,7 @@ export type DesktopUpdateFailure =
   | "malformed-feed"
   | "wrong-track"
   | "size-mismatch"
+  | "artifact-changed"
   | "hash-mismatch"
   | "write-failed";
 
@@ -26,7 +27,7 @@ export type DesktopUpdateState =
   | { kind: "nothing-newer" }
   | { kind: "offered"; version: string; releaseDate: string; offerId: string }
   | { kind: "downloading"; version: string; received: number; expected: number }
-  /** The byte count and SHA-512 matched the feed. */
+  /** After writing, this file matched the feed’s size and SHA-512. Installing must check the exact bytes again. */
   | { kind: "verified"; offerId: string; version: string; size: number }
   | {
       kind: "failed";
