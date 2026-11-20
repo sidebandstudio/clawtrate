@@ -31,7 +31,7 @@ const holdFrames = (page: Page) =>
       for (const callback of held.splice(0)) real(callback);
     };
   });
-/** The held frames run, and the frame they run in is over. */
+/** Runs the held callbacks and waits until they have run. */
 const releaseFrames = (page: Page) =>
   page.evaluate(
     () =>
@@ -80,15 +80,20 @@ test("F-034: shapes and colours are radio groups of one tab stop; arrows move an
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("radio", { name: "gem" })).toBeFocused();
   await expect(page.getByRole("radio", { name: "gem" })).toHaveAttribute("aria-checked", "true");
-  // Frames held from Home until after Tab, as on a slow runner: a focus move the key left for a
-  // later frame would land after Tab and take focus back from the colours.
+  // Frames asked for from Home on run only after Tab: a focus move the key left for a later
+  // frame lands after Tab and takes focus back from the colours.
   await holdFrames(page);
   await page.keyboard.press("Home");
   await expect(page.getByRole("radio", { name: "pebble" })).toHaveAttribute("aria-checked", "true");
+  // Read while the frames are held: Home itself moved focus to the shape it chose.
+  const homeFocusedPebble = await page
+    .getByRole("radio", { name: "pebble" })
+    .evaluate((radio) => radio === document.activeElement);
   // One tab stop: Tab leaves the group for the colours.
   await page.keyboard.press("Tab");
   await releaseFrames(page);
   await expect(page.getByRole("radio", { name: "Pink" })).toBeFocused();
+  expect(homeFocusedPebble).toBe(true);
   await page.getByRole("textbox", { name: "Name" }).press("Enter");
   await expect(page.getByRole("heading", { name: "Account", level: 2 })).toBeVisible();
   await expect(page.getByText("Choose the account Viral runs on.")).toBeVisible();
