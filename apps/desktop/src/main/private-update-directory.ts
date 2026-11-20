@@ -1,7 +1,41 @@
 import { execFile } from "node:child_process";
 import { lstat, mkdir, realpath, rm } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, win32 } from "node:path";
 import { promisify } from "node:util";
+
+type DirectoryIdentity = {
+  dev: bigint;
+  ino: bigint;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+};
+
+/** An NTFS short name identifies the same directory entry. A junction does not. */
+export async function checkWindowsDirectorySpelling(
+  path: string,
+  canonical: string,
+  inspect: (path: string) => Promise<DirectoryIdentity> = (path) => lstat(path, { bigint: true }),
+): Promise<void> {
+  while (path.toLowerCase() !== canonical.toLowerCase()) {
+    const [entry, actual] = await Promise.all([inspect(path), inspect(canonical)]);
+    if (
+      !entry.isDirectory() ||
+      entry.isSymbolicLink() ||
+      !actual.isDirectory() ||
+      actual.isSymbolicLink() ||
+      !entry.ino ||
+      entry.dev !== actual.dev ||
+      entry.ino !== actual.ino
+    )
+      throw Error("Linked update directory");
+    const parent = win32.dirname(path);
+    const canonicalParent = win32.dirname(canonical);
+    if (parent === path || canonicalParent === canonical)
+      throw Error("Different update directory roots");
+    path = parent;
+    canonical = canonicalParent;
+  }
+}
 
 /** Validate every parent before removing anything or creating an offer's directory. */
 async function checkParents(root: string): Promise<void> {
@@ -10,13 +44,8 @@ async function checkParents(root: string): Promise<void> {
   const expected =
     process.platform === "darwin" ? parent.replace(/^\/(tmp|var)(\/|$)/, "/private/$1$2") : parent;
   const canonical = await realpath(parent);
-  if (
-    process.platform === "win32"
-      ? canonical.toLowerCase() !== expected.toLowerCase()
-      : canonical !== expected
-  ) {
-    throw Error("Linked update directory");
-  }
+  if (process.platform === "win32") await checkWindowsDirectorySpelling(parent, canonical);
+  else if (canonical !== expected) throw Error("Linked update directory");
   for (let current = canonical; ; current = dirname(current)) {
     const info = await lstat(current);
     if (!info.isDirectory() || info.isSymbolicLink()) throw Error("Invalid update directory");
@@ -47,13 +76,6 @@ async function makePrivateDirectory(path: string): Promise<void> {
   }
   // Windows ignores POSIX mode bits. Create the directory with a protected
   // DACL so the artifact inherits just the current user's full-control rule.
-  const shell = join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
   const script = [
     "$ErrorActionPreference='Stop'",
     "$p=$env:CLAWTRATE_PRIVATE_DIRECTORY",
@@ -69,13 +91,28 @@ async function makePrivateDirectory(path: string): Promise<void> {
     "$rules=$actual.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])",
     "if (!$actual.AreAccessRulesProtected -or $rules.Count -ne 1 -or $rules[0].IdentityReference -ne $sid -or $rules[0].AccessControlType -ne 'Allow' -or $rules[0].FileSystemRights -ne 'FullControl' -or ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint)) {throw 'Directory permissions refused'}",
   ].join("\n");
-  await promisify(execFile)(
+  await runUpdatePowerShell(script, { CLAWTRATE_PRIVATE_DIRECTORY: path }, 15000);
+}
+
+export function runUpdatePowerShell(
+  script: string,
+  values: Record<string, string>,
+  timeout: number,
+) {
+  const shell = join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  return promisify(execFile)(
     shell,
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
     {
-      env: { ...process.env, CLAWTRATE_PRIVATE_DIRECTORY: path },
+      env: { ...process.env, ...values },
       windowsHide: true,
-      timeout: 15000,
+      timeout,
     },
   );
 }

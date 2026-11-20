@@ -45,7 +45,7 @@ describe("the build's release date", () => {
         arch: "arm64",
         downloadDir: join(dir.path, "updates"),
         changed: () => {},
-        store: { get: async () => null, set: async () => {}, delete: async () => {} },
+        store: { get: async () => null, set: async () => {} },
       });
       await service.check("stable");
       expect(ages).toEqual([false, true]);

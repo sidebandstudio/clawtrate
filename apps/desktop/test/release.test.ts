@@ -205,7 +205,10 @@ describe("the constants the build writes for the update engine", () => {
       updateDefines({ ...env, CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: url }, now)
         .__CLAWTRATE_NIGHTLY_UPDATE_FEED__,
     ).toBe(JSON.stringify(url));
-    expect(() => updateDefines({ CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: url }, now)).toThrow(/stable/);
+    expect(updateDefines({ CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: url }, now)).toMatchObject({
+      __CLAWTRATE_UPDATE_FEED__: "null",
+      __CLAWTRATE_NIGHTLY_UPDATE_FEED__: JSON.stringify(url),
+    });
     expect(() =>
       updateDefines(
         { ...env, CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: "http://updates.example/nightly" },

@@ -35,8 +35,13 @@ const api: DesktopHostApi = {
     chooseTrack: (track) => ipcRenderer.invoke("clawtrate:update:track", track),
     download: (id) => ipcRenderer.invoke("clawtrate:update:download", id),
     subscribe(listener) {
-      const changed = (_event: IpcRendererEvent, snapshot: DesktopUpdateSnapshot) =>
-        listener(snapshot);
+      const changed = (_event: IpcRendererEvent, snapshot: DesktopUpdateSnapshot) => {
+        try {
+          listener(snapshot);
+        } catch {
+          // Deliver this revision to the remaining subscribers.
+        }
+      };
       ipcRenderer.on("clawtrate:update:changed", changed);
       return () => ipcRenderer.removeListener("clawtrate:update:changed", changed);
     },

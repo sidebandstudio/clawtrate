@@ -12,7 +12,12 @@ import {
 } from "../../src/main/update/index.ts";
 import { buildAddressProblem, checkFeedAddress } from "../../src/main/update/address.ts";
 import { parseReleaseDate } from "../../src/main/update/feed.ts";
-import { isNewer, parseVersion, type Version } from "../../src/main/update/version.ts";
+import {
+  formatVersion,
+  isNewer,
+  parseVersion,
+  type Version,
+} from "../../src/main/update/version.ts";
 import { feedServer, tempDir } from "./harness.ts";
 
 const APP = join(import.meta.dirname, "../..");
@@ -80,7 +85,7 @@ describe("the feed's address is the build's", () => {
         version: "0.1.0",
         packaged: true,
         changed: () => {},
-        store: { get: async () => null, set: async () => {}, delete: async () => {} },
+        store: { get: async () => null, set: async () => {} },
         downloadDir: join(dir.path, "updates"),
         platform: "darwin",
         arch: "arm64",
@@ -222,6 +227,14 @@ describe("versions", () => {
     ["0.9.0", "1.0.0", false],
   ] as const)("%s against %s is newer: %s", (a, b, expected) => {
     expect(isNewer(v(a), v(b))).toBe(expected);
+  });
+
+  it("round trips the maximum nightly and the first supported year", () => {
+    const max = "999999.999999.999999-nightly.99991231.999999999999";
+    expect(max.length).toBe(50);
+    for (const version of [max, "0.0.0-nightly.10000101.0"])
+      expect(formatVersion(parseVersion(version)!)).toBe(version);
+    expect(parseVersion("0.0.0-nightly.09991231.0")).toBeNull();
   });
 
   it("refuses versions outside the stable and nightly grammar", () => {

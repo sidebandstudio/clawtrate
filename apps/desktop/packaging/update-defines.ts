@@ -1,8 +1,4 @@
-// The two constants the build writes into the main process's bundle for the
-// update engine (`src/main/update/build-info.ts`): the feed's address, from
-// CLAWTRATE_UPDATE_FEED_URL at build time, and the build's own release date,
-// from SOURCE_DATE_EPOCH or the time of the build. The packaged app cannot
-// change either.
+// The build fixes each track’s optional address and the build’s own release date.
 
 import { buildAddressProblem } from "../src/main/update/address.ts";
 
@@ -19,7 +15,6 @@ export function updateDefines(env: Env, now: Date): Record<string, string> {
   }
   const address = feed("CLAWTRATE_UPDATE_FEED_URL");
   const nightly = feed("CLAWTRATE_NIGHTLY_UPDATE_FEED_URL");
-  if (nightly && !address) throw new Error("The nightly feed needs a stable feed.");
   return {
     __CLAWTRATE_NIGHTLY_UPDATE_FEED__: JSON.stringify(nightly),
     __CLAWTRATE_UPDATE_FEED__: JSON.stringify(address),
