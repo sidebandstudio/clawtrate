@@ -6,6 +6,7 @@ import {
   effortLevels,
   emptyTaskModel,
   followingEffort,
+  MAX_LOGGED_TASKS,
   shownChoice,
   TaskModelAccessError,
   TaskModelRefusedError,
@@ -635,6 +636,69 @@ describe("a task's model and effort", () => {
     expect(sets).toHaveLength(1);
     const kept = JSON.parse(sets[0]!) as { tasks: Array<[string, { events: unknown[] }]> };
     expect(kept.tasks[0]![1].events).toHaveLength(5);
+  });
+
+  it("F-045: a confirmed change line survives closing its task while storage is busy", async () => {
+    const r = rig();
+    const disk = memoryStorage();
+    let release!: () => void;
+    let gets = 0;
+    r.ctx.storage = {
+      get: async (name) => {
+        gets += 1;
+        if (gets === 1) await new Promise<void>((resolve) => (release = resolve));
+        return disk.get(name);
+      },
+      set: (name, value) => disk.set(name, value),
+      delete: (name) => disk.delete(name),
+    };
+    await opened(r);
+    expect(await r.engine.choose(KEY, { model: "acme/dev-2", effort: null })).toBe("saved");
+    expect(r.view().events.map((e) => e.id)).toEqual(["id-1"]);
+    // The task is let go while the opening's read still waits on the storage.
+    r.engine.close(KEY);
+    release();
+    await until(() => (disk.data.get("clawtrate.task-models:gateway-1") ?? "").includes("id-1"));
+    r.engine.open(KEY);
+    await until(() => r.view().events.length === 1);
+    expect(r.view().events[0]).toMatchObject({ id: "id-1", model: "acme/dev-2" });
+  });
+
+  it("F-045: tasks opened, changed and let go while storage is slow keep at most the record's own number of writes, and no reads", async () => {
+    const r = rig();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const written: string[] = [];
+    r.ctx.storage = {
+      get: async () => {
+        await gate;
+        return written.at(-1) ?? null;
+      },
+      set: async (_name, value) => {
+        written.push(value);
+      },
+      delete: async () => {},
+    };
+    const internals = r.engine as unknown as {
+      storeLoads: Map<string, unknown>;
+      storeWrites: Map<string, unknown>;
+    };
+    const keys = Array.from({ length: MAX_LOGGED_TASKS + 8 }, (_, i) => `${KEY}:${i}`);
+    for (const key of keys) {
+      r.engine.open(key);
+      await until(() => r.ctx.get()[key]?.catalog === "ready");
+      const model = r.task().model === "acme/dev-2" ? "acme/dev-1" : "acme/dev-2";
+      expect(await r.engine.choose(key, { model, effort: null })).toBe("saved");
+      r.engine.close(key);
+      expect(internals.storeLoads.size).toBe(0);
+      expect(internals.storeWrites.size).toBeLessThanOrEqual(MAX_LOGGED_TASKS);
+    }
+    expect(internals.storeWrites.size).toBe(MAX_LOGGED_TASKS);
+    release();
+    await until(() => internals.storeWrites.size === 0 && written.length === MAX_LOGGED_TASKS);
+    const last = JSON.parse(written.at(-1)!) as { tasks: Array<[string, unknown]> };
+    // The most recently changed tasks, as many as the record keeps.
+    expect(last.tasks.map(([key]) => key)).toEqual(keys.slice(-MAX_LOGGED_TASKS));
   });
 
   it("F-044: a record that is not one is ignored", async () => {

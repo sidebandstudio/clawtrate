@@ -332,14 +332,14 @@ export class TaskModelAccessError extends Error {
   }
 }
 
-/** Reads and writes of one task's record for one gateway, joined. */
-type StoreJob = {
-  storageKey: string;
-  key: string;
-  opening: number;
-  load: boolean;
-  persist: boolean;
-};
+/** A read of one task's record for this opening of it, on the gateway it was asked for. */
+type LoadJob = { storageKey: string; key: string; opening: number };
+/**
+ * A write of one task's lines to its gateway's record: the lines as they were
+ * when it was asked for, kept with that gateway's key, so a task let go, or a
+ * change of gateway, before the write is made loses none of them.
+ */
+type WriteJob = { storageKey: string; key: string; events: TaskModelEvent[] };
 
 /** How a save ended. */
 type SaveOutcome = "saved" | "unconfirmed" | "dropped" | { refused: string };
@@ -364,11 +364,18 @@ export class TaskModelsEngine {
    */
   private readonly saves = new Map<string, TrackedSave>();
   /**
-   * Reads and writes of this device's record still to make, one per gateway
-   * and task: a second request for the same pair joins the first. Only the
-   * present gateway's are kept, so at most one per followed task.
+   * Reads of this device's record still to make, one per gateway and task: a
+   * second for the same pair joins the first. Only the present gateway's, and
+   * only for a followed task (letting one go removes its read), so at most one
+   * per followed task.
    */
-  private readonly storeQueue = new Map<string, StoreJob>();
+  private readonly storeLoads = new Map<string, LoadJob>();
+  /**
+   * Writes still to make, one per gateway and task, each with its lines: a
+   * second for the same pair joins the first. At most the `MAX_LOGGED_TASKS`
+   * most recently changed pairs, as many as the record keeps.
+   */
+  private readonly storeWrites = new Map<string, WriteJob>();
   private storeRunning = false;
   /** Which opening of each followed task a job belongs to: a job for an earlier one is dropped. */
   private readonly openings = new Map<string, number>();
@@ -395,6 +402,8 @@ export class TaskModelsEngine {
   close(key: string): void {
     if (this.hasWork(key)) return;
     this.openings.delete(key);
+    // Its reads are not needed now; its writes are made, with the lines they were asked with.
+    for (const [id, job] of this.storeLoads) if (job.key === key) this.storeLoads.delete(id);
     this.ctx.update((all) => {
       if (!all[key]) return all;
       const next = { ...all };
@@ -727,48 +736,49 @@ export class TaskModelsEngine {
   // The record on this device ----------------------------------------------------------------
 
   private loadLog(key: string): void {
-    this.queueStore(key, "load");
-  }
-
-  private persist(key: string): void {
-    this.queueStore(key, "persist");
-  }
-
-  private queueStore(key: string, what: "load" | "persist"): void {
     const storageKey = this.ctx.storageKey();
     const opening = this.openings.get(key);
     if (!storageKey || opening === undefined) return;
-    // Jobs for another gateway are stale: this device now follows this one.
-    for (const [id, job] of this.storeQueue)
-      if (job.storageKey !== storageKey) this.storeQueue.delete(id);
-    const id = `${storageKey}\u0000${key}`;
-    const job = this.storeQueue.get(id) ?? {
-      storageKey,
-      key,
-      opening,
-      load: false,
-      persist: false,
-    };
-    job[what] = true;
-    job.opening = opening;
-    this.storeQueue.set(id, job);
+    // Reads for another gateway are stale: this device now follows this one.
+    for (const [id, job] of this.storeLoads)
+      if (job.storageKey !== storageKey) this.storeLoads.delete(id);
+    this.storeLoads.set(`${storageKey}\u0000${key}`, { storageKey, key, opening });
     void this.runStore();
   }
 
-  /** One job at a time; each reads the record once, and acts only if its gateway and task are still current. */
+  /** Write the task's lines as they are now, under the gateway they were made on. */
+  private persist(key: string): void {
+    const storageKey = this.ctx.storageKey();
+    const events = this.ctx.get()[key]?.events;
+    if (!storageKey || !events) return;
+    const id = `${storageKey}\u0000${key}`;
+    const before = this.storeWrites.get(id);
+    // The most recently changed last; the oldest goes beyond the record's own limit.
+    this.storeWrites.delete(id);
+    this.storeWrites.set(id, {
+      storageKey,
+      key,
+      events: before ? mergeEvents(before.events, events) : events,
+    });
+    while (this.storeWrites.size > MAX_LOGGED_TASKS)
+      this.storeWrites.delete(this.storeWrites.keys().next().value!);
+    void this.runStore();
+  }
+
+  /** One pair at a time, its record read once for its read and its write. */
   private async runStore(): Promise<void> {
     if (this.storeRunning) return;
     this.storeRunning = true;
     try {
-      for (
-        let next = this.storeQueue.entries().next();
-        !next.done;
-        next = this.storeQueue.entries().next()
-      ) {
-        const [id, job] = next.value;
-        this.storeQueue.delete(id);
+      for (;;) {
+        const id = this.storeWrites.keys().next().value ?? this.storeLoads.keys().next().value;
+        if (id === undefined) break;
+        const load = this.storeLoads.get(id) ?? null;
+        const write = this.storeWrites.get(id) ?? null;
+        this.storeLoads.delete(id);
+        this.storeWrites.delete(id);
         try {
-          await this.store(job);
+          await this.store(load, write);
         } catch (error) {
           this.ctx.log(`the task model record was not read or written: ${errorText(error)}`);
         }
@@ -778,29 +788,26 @@ export class TaskModelsEngine {
     }
   }
 
-  private async store(job: StoreJob): Promise<void> {
+  private async store(load: LoadJob | null, write: WriteJob | null): Promise<void> {
+    const storageKey = (write ?? load)!.storageKey;
+    const key = (write ?? load)!.key;
+    // A read shows its lines only to the opening, and the gateway, it was asked for.
     const current = () =>
-      this.ctx.storageKey() === job.storageKey &&
-      this.openings.get(job.key) === job.opening &&
-      this.ctx.get()[job.key] !== undefined;
-    if (!current()) return;
-    const tasks = readLog(await this.ctx.storage.get(job.storageKey));
-    // Read for another gateway, or for an earlier opening of the task: dropped.
-    if (!current()) return;
-    if (job.load) {
-      const entry = tasks.find(([k]) => k === job.key)?.[1];
-      if (entry)
-        this.patch(job.key, (view) => ({
-          ...view,
-          events: mergeEvents(entry.events, view.events),
-        }));
-    }
-    if (job.persist) {
-      const view = this.ctx.get()[job.key]!;
-      const rest = tasks.filter(([k]) => k !== job.key);
-      rest.push([job.key, { events: view.events }]);
+      load !== null &&
+      this.ctx.storageKey() === load.storageKey &&
+      this.openings.get(key) === load.opening &&
+      this.ctx.get()[key] !== undefined;
+    if (!write && !current()) return;
+    const tasks = readLog(await this.ctx.storage.get(storageKey));
+    const stored = tasks.find(([k]) => k === key)?.[1].events ?? [];
+    if (current() && stored.length > 0)
+      this.patch(key, (view) => ({ ...view, events: mergeEvents(stored, view.events) }));
+    if (write) {
+      const rest = tasks.filter(([k]) => k !== key);
+      // What the record has, joined with what was asked to be written, by id.
+      rest.push([key, { events: mergeEvents(stored, write.events) }]);
       await this.ctx.storage.set(
-        job.storageKey,
+        storageKey,
         JSON.stringify({ v: 1, tasks: rest.slice(-MAX_LOGGED_TASKS) }),
       );
     }

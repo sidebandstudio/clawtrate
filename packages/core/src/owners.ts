@@ -47,6 +47,7 @@ import {
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
 import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
+import { MAX_LOGGED_TASKS, MAX_TASK_MODEL_EVENTS } from "./task-models.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   MAX_WAITING_ID_CHARS,
@@ -72,6 +73,7 @@ import {
   MAX_TRACKED_TASKS,
   MAX_UNROUTED,
   RUN,
+  TASK_MODEL_EVENT,
   WORST_ROW_CHARS,
 } from "./state-bounds.ts";
 
@@ -259,9 +261,16 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // A task's model and effort (`task-models.ts`): the save on its way for each followed task, which
   // a message to that task waits for. Its view and lines are the state's `taskModels`.
   "taskModels.saves": { max: T, each: ID, row: "bookkeeping" },
-  // Reads and writes of this device's record still to make: one per followed task, only for the
-  // present gateway (others are dropped when one is queued), each its gateway's key and the task's.
-  "taskModels.storeQueue": { max: T, each: 3 * ID + 3 * N, row: "bookkeeping" },
+  // Reads of this device's record still to make: one per followed task (letting a task go removes
+  // its read), only for the present gateway, each its gateway's key, the task's and its opening.
+  "taskModels.storeLoads": { max: T, each: 3 * ID + N, row: "bookkeeping" },
+  // Writes still to make, each with the lines it was asked with: the `MAX_LOGGED_TASKS` most
+  // recently changed pairs of gateway and task, each its two keys and up to 16 lines.
+  "taskModels.storeWrites": {
+    max: MAX_LOGGED_TASKS,
+    each: 3 * ID + MAX_TASK_MODEL_EVENTS * worstCase(TASK_MODEL_EVENT),
+    row: "bookkeeping",
+  },
   // Which opening of each followed task the jobs belong to.
   "taskModels.openings": { max: T, each: ID + N, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader

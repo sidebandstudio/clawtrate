@@ -1012,7 +1012,8 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
 
 // A task's model and effort (task-models.ts).
 const taskModelId = id(MAX_TASK_MODEL_ID_CHARS);
-const taskModelEvent = object<TaskModelEvent>()({
+/** One line a change of a task's model or effort left, as kept and as written to the device. */
+export const TASK_MODEL_EVENT: Bound = object<TaskModelEvent>()({
   id: taskModelId,
   outcome: ENUM,
   at: NUMBER,
@@ -1041,7 +1042,7 @@ export const TASK_MODEL: Bound = object<TaskModelView>()({
     error: text(MAX_TASK_MODEL_ERROR_CHARS),
     at: NUMBER,
   }),
-  events: list(MAX_TASK_MODEL_EVENTS, taskModelEvent),
+  events: list(MAX_TASK_MODEL_EVENTS, TASK_MODEL_EVENT),
 });
 // Routines (routines.ts): the list only; runs and their conversations are never kept.
 const routineSchedule = object<RoutineSchedule>()({
