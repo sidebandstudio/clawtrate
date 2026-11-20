@@ -1,0 +1,13 @@
+{
+  "id": "clawtrate-memory-probe",
+  "name": "Clawtrate memory probe",
+  "description": "Development only: resolve a bot workspace for memory research.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -13,6 +13,7 @@ import {
   type ReadingContext,
   activeRun,
   isActive,
+  runningRunId,
   questionPending,
   type OutgoingMessage,
   type Run,
@@ -30,6 +31,16 @@ export function currentRun(transcript: Transcript | undefined): Run | undefined 
 
 /** Whether a question from this run is pending: it holds every outgoing message (the engine's rule). */
 export { questionPending };
+
+/**
+ * The status line while the gateway retries the model request by itself (F-082). Only a rate
+ * limit is called one; any other reason the gateway names is not put into words it did not
+ * give: the retry is said plainly, with its attempt.
+ */
+export function retryPhrase(retry: NonNullable<Run["retry"]>): string {
+  const attempt = `Retrying, attempt ${retry.attempt} of ${retry.of}`;
+  return retry.reason === "rate_limit" ? `Rate limited. ${attempt}` : attempt;
+}
 
 /**
  * The call whose running words the status line says: the latest to start
@@ -115,6 +126,16 @@ export function statusLineFor(
       badge: "waiting",
       phrase: "Waiting for you",
       tone: "warn",
+      startedAt: null,
+      callId: null,
+    };
+  } else if (run.retry) {
+    // The gateway retries by itself first; the failed card comes only when the retries are used up.
+    view = {
+      state: "thinking",
+      badge: null,
+      phrase: retryPhrase(run.retry),
+      tone: "live",
       startedAt: null,
       callId: null,
     };
@@ -208,16 +229,20 @@ export function composerFor(
 ): ComposerView {
   const run = currentRun(transcript);
   const offline = !options.connected;
+  // A pending question holds every message, also when no run is shown as active.
+  const held = !!transcript && questionPending(transcript, run);
   if (!run || !transcript) {
     return {
       placeholder: offline
         ? "Offline. Messages send when you reconnect."
-        : `Message ${options.bot}`,
-      mode: "send",
+        : held
+          ? `Answer above, or message ${options.bot}`
+          : `Message ${options.bot}`,
+      mode: held ? "hold" : "send",
       stoppable: null,
       stopping: false,
-      modeWord: null,
-      menu: "idle",
+      modeWord: !offline && held ? "Hold" : null,
+      menu: held ? "hold" : "idle",
       offline,
     };
   }
@@ -234,7 +259,6 @@ export function composerFor(
       offline,
     };
   }
-  const held = questionPending(transcript, run);
   const waiting = run.state === "waiting" || held || run.pendingCards.length > 0;
   const mode: SendMode = held ? "hold" : options.chosen === "queue" ? "queue" : "steer";
   return {
@@ -242,10 +266,12 @@ export function composerFor(
       ? "Offline. Messages send when you reconnect."
       : waiting
         ? `Answer above, or message ${options.bot}`
-        : `Steer ${options.bot}`,
+        : `Message ${options.bot}`,
     mode,
     // Offline the composer is its offline form: Send alone.
-    stoppable: isActive(run.state) && !offline ? run : null,
+    // Only one current run, as the engine establishes it (`runningRunId`), is offered Stop.
+    stoppable:
+      isActive(run.state) && !offline && runningRunId(transcript, run.id) === run.id ? run : null,
     stopping: false,
     modeWord: offline ? null : mode === "hold" ? "Hold" : mode === "queue" ? "Queue" : "Steer",
     menu: held ? "hold" : "run",
@@ -259,7 +285,7 @@ export function sendName(mode: SendMode): string {
     case "send":
       return "Send";
     case "steer":
-      return "Steer this turn";
+      return "Request a steer";
     case "queue":
       return "Queue after this turn";
     case "hold":
@@ -302,42 +328,44 @@ export function shelfMessages(transcript: Transcript | undefined): OutgoingMessa
 
 /** A run's ending, said as section 16 and 17 say it. */
 export type RunEnding =
-  | { kind: "stopped"; after: string | null; elsewhere: boolean }
+  | {
+      kind: "stopped";
+      after: string | null;
+      elsewhere: boolean;
+      /** This client stopped it after that many tool calls in a row timed out (F-101). */
+      timeouts: number | null;
+    }
   | { kind: "finished-before-stop" }
-  | { kind: "turn-limit"; minutes: number | null; reason: string | null }
+  /** Stop was asked for, and the run has ended, but nothing the gateway sent says how. */
+  | { kind: "stop-unknown" }
+  /** This client stopped the run at the person's "Turn time limit" (F-100), once confirmed. */
+  | { kind: "turn-limit"; minutes: number }
+  /** The gateway ended the run at a time limit of its own (its run's `timeoutPhase`). */
+  | { kind: "gateway-timeout"; reason: string | null }
   | { kind: "failed"; reason: string };
 
 /**
- * How a finished run ended, when the transcript says more than its text. A
- * stop is from elsewhere only when this device neither pressed Stop nor sent
- * a stop command (`/stop`, which the gateway handles without a run) while
- * the run was going.
+ * How a finished run ended, when the transcript says more than its text. A stop is this
+ * client's only when its own Stop of that run stands (`stopRequestedAt`, cleared when the gateway
+ * refused it; a typed `/stop` marks the exact runs its answer names).
  */
-export function endingOf(run: Run, transcript?: Transcript): RunEnding | null {
+export function endingOf(run: Run, _transcript?: Transcript): RunEnding | null {
   if (run.state === "completed" && run.finishedBeforeStop) return { kind: "finished-before-stop" };
   if (run.state === "stopped") {
-    if (!run.outcomeKnown) return null;
-    const commanded = (transcript?.outbox ?? []).some(
-      (message) =>
-        message.status === "handled" &&
-        (run.startedAt === null || message.createdAt >= run.startedAt) &&
-        (run.endedAt === null || message.createdAt <= run.endedAt),
-    );
+    if (!run.outcomeKnown) return run.stopRequestedAt !== null ? { kind: "stop-unknown" } : null;
+    if (run.turnLimit !== undefined && run.turnLimit > 0)
+      return { kind: "turn-limit", minutes: run.turnLimit };
     return {
       kind: "stopped",
       after: runDuration(run),
-      elsewhere: run.stopRequestedAt === null && !commanded,
+      elsewhere: run.stopRequestedAt === null,
+      // 0: the automatic stop failed, so this stop is not the timeouts'.
+      timeouts: run.stoppedForTimeouts ? run.stoppedForTimeouts : null,
     };
   }
   if (run.state === "failed") {
-    if (run.error?.kind === "turn-limit" || run.ending?.timeoutPhase) {
-      const minutes = /(\d+)-minute/.exec(run.error?.message ?? "")?.[1];
-      return {
-        kind: "turn-limit",
-        minutes: minutes ? Number(minutes) : null,
-        reason: run.error?.message ?? null,
-      };
-    }
+    if (run.ending?.timeoutPhase)
+      return { kind: "gateway-timeout", reason: run.error?.message ?? null };
     return { kind: "failed", reason: run.error?.message ?? "The gateway gave no reason." };
   }
   return null;
