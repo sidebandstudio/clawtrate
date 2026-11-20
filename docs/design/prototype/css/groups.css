@@ -321,6 +321,10 @@
   color: var(--text-faint);
 }
 
+.g-column .composer-inner {
+  position: relative;
+}
+
 .g-column .composer-box {
   flex-direction: column;
   align-items: stretch;
@@ -332,11 +336,22 @@
   gap: 6px;
 }
 
+/* The count of bots a message goes to, and what each costs. */
+.g-cost {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+.g-to[data-tone="warn"] {
+  color: var(--warn);
+}
+
 /* new: the mention list, opening upward from the pill. */
 .g-mentions {
   position: absolute;
   bottom: calc(100% - 8px);
-  left: var(--space-5);
+  left: 0;
   z-index: 5;
   min-width: 220px;
 }
