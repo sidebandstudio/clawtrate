@@ -609,10 +609,11 @@ for (const mode of ["mac", "manual"] as const) {
         await expect(result).toContainText("Clawtrate stayed open.");
         await expect(restart).toHaveCount(0);
         rmSync(join(profile, "block-quit"));
+        writeFileSync(join(profile, "lose-acknowledgement"), "");
         await requestFile(page);
         await restart.click();
         await confirm.click();
-        await locked("Handing Clawtrate");
+        await locked("Couldn't confirm the handoff to the system updater.");
         const ids = readFileSync(join(profile, "restart-calls"), "utf8")
           .trim()
           .split("\n")
