@@ -14,6 +14,8 @@ type Shot = {
   scene: string;
   rows: string;
   prepare?: (page: Page) => Promise<Locator>;
+  /** It opens something the view holds in place, so the transcript need not rest at its end. */
+  holds?: true;
 };
 
 const thread = (page: Page) => page.getByTestId("t3-card").first();
@@ -36,9 +38,10 @@ const openOwn = async (page: Page) => {
 
 const SHOTS: Shot[] = [
   { name: "closed", scene: "t3-thread", rows: T3, prepare: async (page) => thread(page) },
-  { name: "open", scene: "t3-thread", rows: `${T3} F-135`, prepare: openCard },
+  { name: "open", holds: true, scene: "t3-thread", rows: `${T3} F-135`, prepare: openCard },
   {
     name: "joined-raw",
+    holds: true,
     scene: "t3-thread",
     rows: "F-313",
     prepare: async (page) => {
@@ -51,6 +54,7 @@ const SHOTS: Shot[] = [
   },
   {
     name: "read-cut",
+    holds: true,
     scene: "t3-read-cut",
     rows: "F-133",
     prepare: async (page) => {
@@ -60,6 +64,7 @@ const SHOTS: Shot[] = [
   },
   {
     name: "own-line",
+    holds: true,
     scene: "t3-thread",
     rows: "F-313",
     prepare: async (page) => {
@@ -72,19 +77,37 @@ const SHOTS: Shot[] = [
   { name: "started", scene: "t3-started", rows: "F-134", prepare: async (page) => thread(page) },
   { name: "approval", scene: "t3-approval", rows: "F-134", prepare: async (page) => thread(page) },
   { name: "checking", scene: "t3-checking", rows: "F-134", prepare: async (page) => column(page) },
-  { name: "refused", scene: "t3-refused", rows: "F-314", prepare: openCard },
+  { name: "refused", holds: true, scene: "t3-refused", rows: "F-314", prepare: openCard },
   // A launch that ended without naming a thread is a card of its own, opened.
-  { name: "failed", scene: "t3-failed", rows: "F-314", prepare: openOwn },
-  { name: "not-sent", scene: "t3-not-sent", rows: "F-470", prepare: openOwn },
-  { name: "delivery-unknown", scene: "t3-delivery-unknown", rows: "F-470", prepare: openOwn },
-  { name: "work-may-continue", scene: "t3-work-may-continue", rows: "F-137", prepare: openCard },
+  { name: "failed", holds: true, scene: "t3-failed", rows: "F-314", prepare: openOwn },
+  { name: "not-sent", holds: true, scene: "t3-not-sent", rows: "F-470", prepare: openOwn },
+  {
+    name: "delivery-unknown",
+    holds: true,
+    scene: "t3-delivery-unknown",
+    rows: "F-470",
+    prepare: openOwn,
+  },
+  {
+    name: "work-may-continue",
+    holds: true,
+    scene: "t3-work-may-continue",
+    rows: "F-137",
+    prepare: openCard,
+  },
   {
     name: "two-threads",
     scene: "t3-two-threads",
     rows: "F-441",
     prepare: async (page) => column(page),
   },
-  { name: "before-record", scene: "t3-before-record", rows: "F-313", prepare: openCard },
+  {
+    name: "before-record",
+    holds: true,
+    scene: "t3-before-record",
+    rows: "F-313",
+    prepare: openCard,
+  },
   { name: "listings", scene: "t3-listings", rows: "F-313", prepare: async (page) => column(page) },
 ];
 
@@ -99,7 +122,8 @@ for (const size of SIZES) {
           const target = await (shot.prepare ?? (async (p: Page) => thread(p)))(page);
           await page.mouse.move(0, 0);
           // A shot that opened something holds it in view: the transcript stays where it is.
-          await paintedFinal(page, { atEnd: shot.prepare === undefined });
+          // Every other shot is taken at the transcript's end.
+          await paintedFinal(page, { atEnd: !shot.holds });
           await expect(target).toHaveScreenshot(`t3-${shot.name}-${theme}-${size.name}.png`);
         });
       }
