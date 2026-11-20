@@ -61,10 +61,20 @@ export type ArtifactKind = "file" | "image" | "audio" | "video";
 
 /** Where an item's content is, from its download mode and, for an address, the address. */
 export type ArtifactPlace =
-  /** In the transcript, or at an address on the gateway: Open and Download. */
+  /**
+   * Its bytes come from the gateway: in the transcript, or through a download
+   * the gateway issued (a managed ticket or a connection grant). Open and Download.
+   */
   | { kind: "gateway" }
-  /** At an address somewhere else: only "Open in your browser", on the person's choice. */
+  /**
+   * At an address the transcript names, on the gateway's origin or anywhere
+   * else, that the gateway did not issue as a download: never fetched by
+   * Clawtrate, only opened in the browser on the person's choice, with the
+   * whole address shown first.
+   */
   | { kind: "elsewhere"; host: string; url: string }
+  /** Not established when the list was read: it is read, and classified, only when opened. */
+  | { kind: "unknown" }
   /** The gateway lists it with no content it can send (`unsupported`). */
   | { kind: "none" };
 
@@ -168,28 +178,86 @@ export function gatewayOrigin(gatewayUrl: string): string | null {
   }
 }
 
+const MANAGED_DOWNLOAD =
+  /^\/api\/chat\/media\/outgoing\/([^/?#]+)\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/full$/i;
+const GRANT_DOWNLOAD = /^\/api\/artifacts\/download\/[^/?#]+\/[A-Za-z0-9_-]{43}$/;
+const MEDIA_TICKET = /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
+/** A download the gateway issued itself, as the host fetches it. */
+export type IssuedDownload = { kind: "ticket" | "grant"; url: string };
+
 /**
- * Where an address the gateway gave is: a path under `/api/` or an address on
- * the gateway's own origin is on the gateway; any other `http:` or `https:`
- * address is elsewhere; anything else is neither, and nothing fetches it.
+ * A download address the gateway issued, from an `artifacts.download`
+ * answer, or null. Only two forms are: a managed media ticket for this task's
+ * own session (`/api/chat/media/outgoing/<session>/<attachment>/full?mediaTicket=v1.…`)
+ * and a connection-bound grant (`/api/artifacts/download/<connection>/<ticket>`),
+ * each a path on the gateway's own origin, exactly as written, with no user
+ * information, and answered with its `expiresAt`. An item with no managed
+ * replacement is answered with the address its transcript block names and no
+ * `expiresAt` (OpenClaw 2026.10.6, `artifacts.download`), whatever that
+ * address looks like: it is never one of these.
  */
-export function placeOf(
-  address: string,
+export function issuedDownload(
+  answer: unknown,
   gatewayUrl: string,
-): { kind: "gateway"; url: string } | { kind: "elsewhere"; host: string; url: string } | null {
-  if (address.length > MAX_ADDRESS_CHARS) return null;
+  sessionKey: string,
+): IssuedDownload | null {
+  const record = asRecord(answer);
+  const address = str(record?.url);
   const origin = gatewayOrigin(gatewayUrl);
-  if (address.startsWith("/api/") && !address.startsWith("//") && origin)
-    return { kind: "gateway", url: `${origin}${address}` };
+  if (!address || !origin || !str(record?.expiresAt) || address.length > MAX_ADDRESS_CHARS)
+    return null;
+  if (!address.startsWith("/") || address.startsWith("//")) return null;
   let url: URL;
   try {
-    url = new URL(address);
+    url = new URL(address, origin);
+  } catch {
+    return null;
+  }
+  // Written exactly as the gateway's own routes are: nothing the parser had to normalize.
+  if (`${url.pathname}${url.search}` !== address || `${url.protocol}//${url.host}` !== origin)
+    return null;
+  if (url.username || url.password || url.hash) return null;
+  const managed = MANAGED_DOWNLOAD.exec(url.pathname);
+  if (managed) {
+    let session: string;
+    try {
+      session = decodeURIComponent(managed[1]!);
+    } catch {
+      return null;
+    }
+    const keys = [...url.searchParams.keys()];
+    if (session !== sessionKey || keys.length !== 1 || keys[0] !== "mediaTicket") return null;
+    if (!MEDIA_TICKET.test(url.searchParams.get("mediaTicket") ?? "")) return null;
+    return { kind: "ticket", url: url.toString() };
+  }
+  if (GRANT_DOWNLOAD.test(url.pathname) && url.search === "")
+    return { kind: "grant", url: url.toString() };
+  return null;
+}
+
+/**
+ * An address a transcript names, whole, for the person to open on their
+ * choice: an `http:` or `https:` address, or a path, which is on the
+ * gateway's origin. Null for anything else. Never fetched by Clawtrate.
+ */
+export function transcriptAddress(
+  address: string,
+  gatewayUrl: string,
+): { kind: "elsewhere"; host: string; url: string } | null {
+  if (address.length > MAX_ADDRESS_CHARS) return null;
+  const origin = gatewayOrigin(gatewayUrl);
+  let url: URL;
+  try {
+    url =
+      address.startsWith("/") && !address.startsWith("//") && origin
+        ? new URL(address, origin)
+        : new URL(address);
   } catch {
     return null;
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-  if (origin && `${url.protocol}//${url.host}` === origin) return { kind: "gateway", url: address };
-  return { kind: "elsewhere", host: url.hostname, url: address };
+  return { kind: "elsewhere", host: url.hostname, url: url.toString() };
 }
 
 /** One record of `artifacts.list` as a card's facts; null for a record without an id or kind. */
@@ -268,12 +336,12 @@ export async function listArtifacts(ctx: ArtifactContext, key: string): Promise<
       const download = asRecord(
         await ctx.request("artifacts.download", { sessionKey: key, artifactId: artifact.id }),
       );
+      if (issuedDownload(download, ctx.gatewayUrl, key)) continue;
       const address = str(download?.url);
-      const place = address ? placeOf(address, ctx.gatewayUrl) : null;
-      if (place?.kind === "elsewhere") artifact.place = place;
-      else if (!place) artifact.place = { kind: "none" };
+      artifact.place = (address && transcriptAddress(address, ctx.gatewayUrl)) || { kind: "none" };
     } catch {
-      // Not established: it stays on the gateway, and opening it says what the gateway answers.
+      // Not established: nothing is fetched for it by itself; opening it asks again.
+      artifact.place = { kind: "unknown" };
     }
   }
   const { kept, omitted } = fitting(listed, ctx.maxChars);
@@ -334,10 +402,11 @@ async function fetchFromGateway(
     });
   } catch (error) {
     clearTimeout(timer);
+    // The download address is a capability: no error says it, or anything that might.
     throw new Error(
       controller.signal.aborted
         ? "The gateway did not send it in time."
-        : `Couldn't reach the gateway: ${error instanceof Error ? error.message : String(error)}`,
+        : "Couldn't reach the gateway.",
       { cause: error },
     );
   }
@@ -476,20 +545,25 @@ export async function readArtifact(
     }
   }
 
-  let address: string | null;
+  let answer: Record<string, unknown> | null;
   try {
-    const answer = asRecord(
+    answer = asRecord(
       await ctx.request("artifacts.download", { sessionKey: key, artifactId, transport: "http" }),
     );
-    address = str(answer?.url);
   } catch (error) {
     return failure(error);
   }
-  const place = address ? placeOf(address, ctx.gatewayUrl) : null;
-  if (!place) return { status: "failed", message: "The gateway gave no address for this item." };
-  if (place.kind === "elsewhere") return { status: "elsewhere", host: place.host, url: place.url };
+  // Only what the gateway issued as a download is fetched; any other address
+  // is the transcript's, and the person may open it, never this host.
+  const issued = issuedDownload(answer, ctx.gatewayUrl, key);
+  if (!issued) {
+    const address = str(answer?.url);
+    const named = address ? transcriptAddress(address, ctx.gatewayUrl) : null;
+    if (named) return { status: "elsewhere", host: named.host, url: named.url };
+    return { status: "failed", message: "The gateway gave no download for this item." };
+  }
 
-  const url = ownBytes ? place.url : thumbnailAddress(place.url);
+  const url = ownBytes ? issued.url : thumbnailAddress(issued.url);
   if (!url)
     return { status: "no-preview", reason: "The gateway serves no thumbnail for this item." };
   const limit = preview ? MAX_PREVIEW_BYTES : MAX_ARTIFACT_BYTES;

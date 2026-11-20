@@ -10,7 +10,8 @@ import {
   listArtifacts,
   MAX_ARTIFACT_BYTES,
   MAX_PREVIEW_BYTES,
-  placeOf,
+  issuedDownload,
+  transcriptAddress,
   previewLink,
   readArtifact,
   readArtifactRecord,
@@ -31,6 +32,8 @@ import { memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.
 const GATEWAY = "ws://127.0.0.1:19980";
 const ORIGIN = "http://127.0.0.1:19980";
 const SESSION = "agent:main:dashboard:one";
+/** The `expiresAt` the gateway answers an issued download with. */
+const SOON = "2026-11-19T00:05:00.000Z";
 
 const managed = (n: number, kind: "image" | "media") =>
   `artifact_managed_${kind}_0000000${n}-0000-4000-8000-000000000000`;
@@ -253,7 +256,9 @@ describe("reading an item", () => {
           download: { mode: "url" },
         },
       ],
-      downloads: { [`${managed(1, "media")}:http`]: { artifact: {}, url: ticketPath(1) } },
+      downloads: {
+        [`${managed(1, "media")}:http`]: { artifact: {}, url: ticketPath(1), expiresAt: SOON },
+      },
       bodies: { [ticketPath(1)]: { type: "text/markdown", body: bytes } },
     });
     const read = await readArtifact(ctx, SESSION, managed(1, "media"), "full");
@@ -303,7 +308,7 @@ describe("reading an item", () => {
     expect(first).toMatchObject({ status: "content", bytes: 5 });
     expect(inline.fetched).toEqual([]);
 
-    const path = "/api/artifacts/download/conn-1/ticket-1";
+    const path = `/api/artifacts/download/conn-1/${"g".repeat(43)}`;
     const viaHttp = world({
       records: [
         {
@@ -385,8 +390,8 @@ describe("reading an item", () => {
         { id: managed(2, "media"), type: "file", title: "b.md", download: { mode: "url" } },
       ],
       downloads: {
-        [`${managed(1, "media")}:http`]: { artifact: {}, url: ticketPath(1) },
-        [`${managed(2, "media")}:http`]: { artifact: {}, url: ticketPath(2) },
+        [`${managed(1, "media")}:http`]: { artifact: {}, url: ticketPath(1), expiresAt: SOON },
+        [`${managed(2, "media")}:http`]: { artifact: {}, url: ticketPath(2), expiresAt: SOON },
       },
       bodies: { [ticketPath(2)]: { status: 500, body: new Uint8Array(0) } },
     });
@@ -411,7 +416,9 @@ describe("reading an item", () => {
         },
         { id: managed(2, "media"), type: "audio", title: "note.wav", download: { mode: "url" } },
       ],
-      downloads: { [`${managed(2, "media")}:http`]: { artifact: {}, url: ticketPath(2) } },
+      downloads: {
+        [`${managed(2, "media")}:http`]: { artifact: {}, url: ticketPath(2), expiresAt: SOON },
+      },
       bodies: {
         [ticketPath(2)]: { type: "audio/wav", body: new Uint8Array(MAX_ARTIFACT_BYTES + 10) },
       },
@@ -457,9 +464,9 @@ describe("reading an item", () => {
         { id: managed(4, "media"), type: "file", title: "a.md", download: { mode: "url" } },
       ],
       downloads: {
-        [`${managed(1, "image")}:http`]: { artifact: {}, url: ticketPath(1) },
-        [`${managed(2, "image")}:http`]: { artifact: {}, url: ticketPath(2) },
-        [`${managed(3, "image")}:http`]: { artifact: {}, url: ticketPath(3) },
+        [`${managed(1, "image")}:http`]: { artifact: {}, url: ticketPath(1), expiresAt: SOON },
+        [`${managed(2, "image")}:http`]: { artifact: {}, url: ticketPath(2), expiresAt: SOON },
+        [`${managed(3, "image")}:http`]: { artifact: {}, url: ticketPath(3), expiresAt: SOON },
       },
       bodies: {
         [ticketPath(1)]: { type: "image/png", body: small },
@@ -503,7 +510,9 @@ describe("reading an item", () => {
           download: { mode: "url" },
         },
       ],
-      downloads: { [`${managed(1, "image")}:http`]: { artifact: {}, url: ticketPath(1) } },
+      downloads: {
+        [`${managed(1, "image")}:http`]: { artifact: {}, url: ticketPath(1), expiresAt: SOON },
+      },
       bodies: {
         [ticketPath(1).replace("/full?", "/thumbnail?")]: {
           type: "text/html",
@@ -520,29 +529,107 @@ describe("reading an item", () => {
     expect(thumbnailAddress(`${ORIGIN}${ticketPath(1)}`)).toBe(
       `${ORIGIN}${ticketPath(1).replace("/full?", "/thumbnail?")}`,
     );
-    expect(thumbnailAddress(`${ORIGIN}/api/artifacts/download/c/t`)).toBe(
-      `${ORIGIN}/api/artifacts/download/c/t?variant=thumbnail`,
+    expect(thumbnailAddress(`${ORIGIN}/api/artifacts/download/c/${"g".repeat(43)}`)).toBe(
+      `${ORIGIN}/api/artifacts/download/c/${"g".repeat(43)}?variant=thumbnail`,
     );
     expect(thumbnailAddress("https://elsewhere.example/x.png")).toBeNull();
   });
 
-  it("F-307: only the gateway's own origin is ever an address on the gateway", () => {
-    expect(placeOf("/api/chat/media/outgoing/a/b/full", GATEWAY)).toEqual({
-      kind: "gateway",
-      url: `${ORIGIN}/api/chat/media/outgoing/a/b/full`,
+  it("F-307: only a download the gateway issued is fetched: a ticket for this task, or a grant, as written, with its expiry", () => {
+    const grant = `/api/artifacts/download/conn-1/${"g".repeat(43)}`;
+    const issued = (url: string, expiresAt: string | null = SOON, key = SESSION) =>
+      issuedDownload({ artifact: {}, url, ...(expiresAt ? { expiresAt } : {}) }, GATEWAY, key);
+    expect(issued(ticketPath(1))).toEqual({ kind: "ticket", url: `${ORIGIN}${ticketPath(1)}` });
+    expect(issued(grant)).toEqual({ kind: "grant", url: `${ORIGIN}${grant}` });
+    // The same addresses as a transcript names them: no expiry, so not issued.
+    expect(issued(ticketPath(1), null)).toBeNull();
+    expect(issued(grant, null)).toBeNull();
+    // Another task's ticket, another shape, another origin, user information, a normalized path.
+    expect(issued(ticketPath(1), SOON, "agent:main:dashboard:two")).toBeNull();
+    expect(issued("/api/files/secret.txt")).toBeNull();
+    expect(issued(`${ORIGIN}${ticketPath(1)}`)).toBeNull();
+    expect(issued(`//gateway.example${grant}`)).toBeNull();
+    expect(issued(`${grant}?variant=thumbnail`)).toBeNull();
+    expect(
+      issued(`/api/chat/media/outgoing/x/../../files/a${ticketPath(1).slice(-60)}`),
+    ).toBeNull();
+    expect(issued(`${ticketPath(1)}&extra=1`)).toBeNull();
+    // A transcript address is kept whole, for the person to open.
+    expect(transcriptAddress("/api/files/secret.txt", GATEWAY)).toEqual({
+      kind: "elsewhere",
+      host: "127.0.0.1",
+      url: `${ORIGIN}/api/files/secret.txt`,
     });
-    expect(placeOf(`${ORIGIN}/api/x`, GATEWAY)).toEqual({
-      kind: "gateway",
-      url: `${ORIGIN}/api/x`,
+    expect(transcriptAddress("https://help.library.example/a.pdf", GATEWAY)).toMatchObject({
+      host: "help.library.example",
     });
-    expect(placeOf("//evil.example/api/x", GATEWAY)).toBeNull();
-    expect(placeOf("http://127.0.0.1:2/api/x", GATEWAY)).toMatchObject({ kind: "elsewhere" });
-    expect(placeOf("javascript:alert(1)", GATEWAY)).toBeNull();
-    expect(placeOf("/elsewhere/x", GATEWAY)).toBeNull();
-    expect(placeOf("/api/x", "wss://gateway.example")).toEqual({
-      kind: "gateway",
-      url: "https://gateway.example/api/x",
+    expect(transcriptAddress("javascript:alert(1)", GATEWAY)).toBeNull();
+  });
+
+  it("F-307: an item whose message names a path on the gateway is never fetched: listed, previewed or opened", async () => {
+    const named =
+      "/api/chat/media/outgoing/agent%3Amain%3Adashboard%3Aone/00000009-0000-4000-8000-000000000000/full?mediaTicket=v1.a.b";
+    const { ctx, fetched } = world({
+      records: [
+        {
+          id: "artifact_path",
+          type: "image",
+          title: "inside.png",
+          sizeBytes: 900_000,
+          messageSeq: 2,
+          download: { mode: "url" },
+        },
+        {
+          id: "artifact_api",
+          type: "file",
+          title: "secret.txt",
+          messageSeq: 2,
+          download: { mode: "url" },
+        },
+      ],
+      downloads: {
+        "artifact_path:inline": { artifact: {}, url: named },
+        "artifact_path:http": { artifact: {}, url: named },
+        "artifact_api:inline": { artifact: {}, url: "/api/files/secret.txt" },
+        "artifact_api:http": { artifact: {}, url: "/api/files/secret.txt" },
+      },
+      bodies: {
+        [named]: { type: "image/png", body: picture(900) },
+        "/api/files/secret.txt": { body: utf8Bytes("x") },
+      },
     });
+    const list = await listArtifacts(ctx, SESSION);
+    expect(list.artifacts.map((each) => each.place)).toEqual([
+      { kind: "elsewhere", host: "127.0.0.1", url: `${ORIGIN}${named}` },
+      { kind: "elsewhere", host: "127.0.0.1", url: `${ORIGIN}/api/files/secret.txt` },
+    ]);
+    for (const part of ["preview", "full"] as const) {
+      expect(await readArtifact(ctx, SESSION, "artifact_path", part)).toMatchObject({
+        status: "elsewhere",
+      });
+    }
+    expect(await readArtifact(ctx, SESSION, "artifact_api", "full")).toMatchObject({
+      status: "elsewhere",
+    });
+    expect(fetched).toEqual([]);
+  });
+
+  it("F-307: a listing whose download answer failed fetches nothing by itself", async () => {
+    const { ctx, fetched } = world({
+      records: [
+        {
+          id: "artifact_x",
+          type: "image",
+          title: "x.png",
+          sizeBytes: 10,
+          download: { mode: "url" },
+        },
+      ],
+      downloads: { "artifact_x:inline": refusal("busy", { type: "unavailable" }) },
+    });
+    const list = await listArtifacts(ctx, SESSION);
+    expect(list.artifacts[0]!.place).toEqual({ kind: "unknown" });
+    expect(fetched).toEqual([]);
   });
 
   it("F-115: Raw is the record artifacts.get returns, and a page is read by its id", async () => {

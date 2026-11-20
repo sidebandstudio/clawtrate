@@ -99,14 +99,18 @@ test.describe("cards and the pane", () => {
     await openFixture(page, ARTIFACTS, "light");
     await openCard(page, "lending-faq.pdf");
     await expect(page.getByTestId("artifact-why")).toHaveText(
-      "This file is at help.library.example, outside the gateway. Opening it leaves the app, and it may have changed since it was sent.",
+      "The message names this file by its address. Clawtrate doesn't fetch it; opening it leaves the app, and what is there may have changed since it was sent.",
+    );
+    // The whole address, before the choice.
+    await expect(page.getByTestId("artifact-address")).toHaveText(
+      "https://help.library.example/lending-faq.pdf",
     );
     await expect(page.getByRole("button", { name: /^Download/ })).toHaveCount(0);
     const [popup] = await Promise.all([
       page.waitForEvent("popup"),
       page
         .getByRole("button", {
-          name: "Open lending-faq.pdf at help.library.example in your browser",
+          name: "Open https://help.library.example/lending-faq.pdf in your browser",
         })
         .click(),
     ]);

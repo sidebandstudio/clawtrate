@@ -35,7 +35,6 @@ import {
   cardSub,
   clock,
   downloadable,
-  downloadName,
   fetchable,
   trailingLink,
   typeWords,
@@ -71,7 +70,6 @@ export function artifactEntries(
   opener: HTMLElement | null,
 ): MenuEntry[] {
   const entries: MenuEntry[] = [];
-  const name = downloadName(artifact);
   const can = downloadable(artifact);
   entries.push({
     kind: "item",
@@ -81,11 +79,12 @@ export function artifactEntries(
   if (can)
     entries.push({ kind: "item", label: "Download", onSelect: () => void api.download(artifact) });
   if (artifact.place.kind === "elsewhere") {
-    const { host, url } = artifact.place;
+    const { url } = artifact.place;
     entries.push({
       kind: "item",
       label: "Open in your browser",
-      note: `Opens ${name} at ${host} in your browser`,
+      // The whole address, shown beside the choice before anything leaves the app.
+      note: url,
       onSelect: () => openInBrowser(url),
     });
   }

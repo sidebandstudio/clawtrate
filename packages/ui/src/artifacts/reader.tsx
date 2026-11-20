@@ -67,7 +67,8 @@ export function ArtifactReader({
   const [view, setView] = useState<"preview" | "source">("preview");
   const [raw, setRaw] = useState<ArtifactRecord | "loading" | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
-  const canFetch = artifact ? fetchable(artifact) : false;
+  // On the gateway, or not established when listed: read when opened, and classified then.
+  const canFetch = artifact ? fetchable(artifact) || artifact.place.kind === "unknown" : false;
   // Over Clawtrate's limit by the size the gateway gave: said without fetching.
   const tooLarge = artifact ? canFetch && overLimit(artifact) : false;
 
@@ -119,22 +120,33 @@ export function ArtifactReader({
   const siblings = [...api.byItem.values()].find((each) => each.includes(artifact)) ?? [artifact];
   const playing = api.playing?.key === artifact.key ? api.playing : null;
 
+  // An address the message names, known when listed or learned on opening: never fetched here.
+  const away =
+    artifact.place.kind === "elsewhere"
+      ? artifact.place
+      : loaded.status === "elsewhere"
+        ? { host: loaded.host, url: loaded.url }
+        : null;
+
   let body;
-  if (artifact.place.kind === "elsewhere") {
-    const { host, url } = artifact.place;
+  if (away) {
+    const { url } = away;
     body = (
       <>
         <Facts artifact={artifact} sentAt={sentAt} />
         <p className="reader-why" data-testid="artifact-why">
-          This file is at {host}, outside the gateway. Opening it leaves the app, and it may have
-          changed since it was sent.
+          The message names this file by its address. Clawtrate doesn't fetch it; opening it leaves
+          the app, and what is there may have changed since it was sent.
+        </p>
+        <p className="reader-address" data-testid="artifact-address">
+          <code>{url}</code>
         </p>
         <p>
           <button
             type="button"
             className="button"
             data-variant="default"
-            aria-label={`Open ${name} at ${host} in your browser`}
+            aria-label={`Open ${url} in your browser`}
             onClick={() => openInBrowser(url)}
           >
             <ExternalIcon />
