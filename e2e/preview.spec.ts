@@ -2286,13 +2286,13 @@ const actionLines = (page: Page) =>
     nodes.map((node) => node.getAttribute("aria-label")!.replace(/, ([0-9.]+ seconds|done)$/, "")),
   );
 
-// These runs go to a task no other check sends to, so nothing another check leaves behind
-// (a stopped run, a refused send) changes them.
+// These runs go to a task of their own, so nothing another check leaves behind (a stopped run,
+// a refused send, another check's reads) changes them.
 test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five files fold into one card, the status line says the running card and brings it into view, and the run ends with a run line", async ({
   page,
 }) => {
   await openShell(page);
-  await openTask(page, "Pip", "Two days in the mountains");
+  const { title } = await ownTaskOf(page, "pip", "Pip", "Go through the workspace");
   await composer(page).fill("Go through the workspace. #read-six #slow-tool 8");
   await page.keyboard.press("Enter");
   // While the slow tool runs: the reads are one card, the slow call its own card, running.
@@ -2335,7 +2335,7 @@ test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five 
   // History reloaded: the page is loaded again and reads the task anew; the same cards.
   await page.reload();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
-  await openTask(page, "Pip", "Two days in the mountains");
+  await openTask(page, "Pip", title);
   await expect(page.getByTestId("run-line").last()).toBeVisible({ timeout: 30_000 });
   // Every card is the same. History keeps no `details` for a tool-server result, but the
   // gateway's map of tool names (`tools.effective`) still names the server and tool.
@@ -2348,12 +2348,10 @@ test("F-488 F-090: a real run of 42 actions shows all 42, live and after the pag
 }) => {
   test.setTimeout(180_000);
   await openShell(page);
-  await openTask(page, "Pip", "Two days in the mountains");
-  // This run's line is one more than the task has now; earlier checks left runs here.
-  const lines = await page.getByTestId("run-line").count();
+  const { title } = await ownTaskOf(page, "pip", "Pip", "Read it all");
   await composer(page).fill(`Read it all. ${Array(7).fill("#read-six").join(" ")}`);
   await page.keyboard.press("Enter");
-  await expect(page.getByTestId("run-line")).toHaveCount(lines + 1, { timeout: 120_000 });
+  await expect(page.getByTestId("run-line")).toHaveCount(1, { timeout: 120_000 });
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 120_000 });
   const run = page.getByTestId("run-line").last();
   await expect(run.locator("summary")).toHaveAccessibleName(/^Worked for \d+s · 42 actions$/);
@@ -2371,7 +2369,7 @@ test("F-488 F-090: a real run of 42 actions shows all 42, live and after the pag
 
   await page.reload();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
-  await openTask(page, "Pip", "Two days in the mountains");
+  await openTask(page, "Pip", title);
   await expect(page.getByText("Read it all.", { exact: false }).last()).toBeVisible({
     timeout: 30_000,
   });
