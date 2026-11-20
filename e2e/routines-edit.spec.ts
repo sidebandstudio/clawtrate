@@ -665,7 +665,10 @@ test("F-196: a time-zone change asks again when an unlisted routine would be cha
   await openRoutines();
   await view().getByRole("combobox", { name: "Bots" }).selectOption({ label: "Pip" });
   const line = view().getByTestId("routines-zone");
-  await expect(line).toContainText("Mixed: New York, London");
+  // The zones are said in the list's next-run order, which depends on the hour.
+  await expect(line).toContainText("Mixed:");
+  await expect(line).toContainText("New York");
+  await expect(line).toContainText("London");
   await line.getByRole("button", { name: "Change…" }).click();
   const dialog = page.getByTestId("routines-zone-dialog");
   await dialog.getByLabel("Time zone").selectOption("Asia/Tokyo");
