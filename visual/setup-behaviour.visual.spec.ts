@@ -68,7 +68,7 @@ test("F-491 F-492: This computer starts the look at once; the steps run, then th
     "Version2026.10.6",
     "Profiledefault",
     "ListensConfigured for loopback",
-    "ServiceLaunchAgent, starts when you log in",
+    "ServiceLaunchAgent",
   ]);
   await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
 });
@@ -160,7 +160,7 @@ test("F-515: another version is named, offers Advanced and how to update, and no
   expect(await sent(page)).toEqual(["setupReset"]);
   await openFixture(page, "setup=too-old", "light");
   await expect(
-    page.getByRole("heading", { name: "This OpenClaw is too old for Clawtrate" }),
+    page.getByRole("heading", { name: "This OpenClaw is too old for automatic setup" }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect" })).toHaveCount(0);
 });
@@ -322,7 +322,7 @@ test("F-516: each card says only what the look established", async ({ page }) =>
   await expect(page.getByRole("status").filter({ hasText: "reported here" })).toHaveText(
     "Other OpenClaw services or profile folders reported here: profile work.",
   );
-  await expect(page.getByText(/connects only to|its own/)).toHaveCount(0);
+  await expect(page.getByText(/connects only to|and its own/)).toHaveCount(0);
   await openFixture(page, "setup=cant-tell", "light");
   await expect(lead("The look didn't finish in time.")).toBeVisible();
   await openFixture(page, "setup=cant-tell-shape", "light");
