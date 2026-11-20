@@ -2342,17 +2342,22 @@ export function settleRunFromWait(
         str(answer.livenessState) !== null ||
         classifyLifecycleTerminal("end", answer) === "hard_timeout"));
   if (!ended) return activity;
-  return updateRun(activity, runId, (run) =>
-    isTerminal(run.state) || run.state === "queued"
-      ? run
-      : terminalFromLifecycle(
-          run,
-          status === "error" ? "error" : "end",
-          answer,
-          num(answer.endedAt) ?? ctx.now,
-          ctx,
-        ),
-  );
+  // OpenClaw reads a run its revoked access cut short as aborted (`resolveAgentRunWaitTerminalFacts`).
+  const facts =
+    status !== "ok" && str(answer.stopReason) === "auth-revoked"
+      ? { ...answer, stopReason: "aborted" }
+      : answer;
+  return updateRun(activity, runId, (run) => {
+    // An end established already is final; an inferred one gives way to the gateway's.
+    if (run.state === "queued" || (isTerminal(run.state) && run.outcomeKnown)) return run;
+    return terminalFromLifecycle(
+      reopenInferred(run),
+      status === "error" ? "error" : "end",
+      facts,
+      num(answer.endedAt) ?? ctx.now,
+      ctx,
+    );
+  });
 }
 
 function endingOf(data: RawRecord, previous: RunEnding | null): RunEnding {
