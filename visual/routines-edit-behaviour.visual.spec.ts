@@ -139,6 +139,26 @@ test.describe("1440", () => {
     await expect(editor(page)).toContainText("The gateway can't read this");
   });
 
+  test("F-195: a cron expression that never runs in the next eight years is refused at Save, and nothing is sent", async ({
+    page,
+  }) => {
+    await open(page);
+    await fillNew(page);
+    await editor(page).getByText("More", { exact: true }).click();
+    await editor(page).getByLabel("Cron expression").fill("0 0 8 1 1 * 2036");
+    await save(page).click();
+    await expect(editor(page).getByLabel("Cron expression")).toBeFocused();
+    await expect(editor(page)).toContainText("This never runs in the next eight years.");
+    const sent = await page.evaluate(() =>
+      (
+        window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } }
+      ).clawtrateFixture.sent.map((each) => each.type),
+    );
+    expect(sent).not.toContain("createRoutine");
+    await editor(page).getByLabel("Cron expression").fill("0 0 8 1 1 * 2030");
+    await expect(editor(page)).not.toContainText("This never runs");
+  });
+
   test("F-189: a refused save says why and keeps what was typed", async ({ page }) => {
     await open(page, `${ADMIN}&save=refused`);
     await fillNew(page, "Kept name");

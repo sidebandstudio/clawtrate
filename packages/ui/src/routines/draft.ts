@@ -301,6 +301,7 @@ export function shortestGap(expr: string, tz: string, now: number): number | nul
 export type Problems = Partial<Record<"name" | "text" | "when" | "cron", string>>;
 
 const FLOOR = "Routines run at least 5 minutes apart.";
+const NEVER = "This never runs in the next eight years.";
 
 /** What stops a save, before any request is made (section 9). */
 export function problems(draft: Draft, now: number, textLocked = false): Problems {
@@ -314,6 +315,7 @@ export function problems(draft: Draft, now: number, textLocked = false): Problem
     try {
       if ((shortestGap(draft.cron, zoneOf(draft), now) ?? Infinity) < MIN_GAP_MINUTES)
         out.cron = FLOOR;
+      else if (nextRuns(draft, now).length === 0) out.cron = NEVER;
     } catch (error) {
       out.cron = `The gateway can't read this: ${(error as Error).message}`;
     }
@@ -355,7 +357,16 @@ export function nextRuns(draft: Draft, now: number): number[] {
       // The bulk iterator can revisit an instant during a daylight-saving gap.
       // Croner moves a wall time the clocks skip past the gap; the gateway
       // runs only at an instant that matches the pattern, so it skips that day.
-      const end = now + WINDOW_DAYS * DAY;
+      const tz = schedule.tz ?? viewerZone();
+      const endDate = new Date(Date.parse(`${wall(now, tz).date}T00:00:00Z`) + WINDOW_DAYS * DAY);
+      const end = zonedTime(
+        endDate.getUTCFullYear(),
+        endDate.getUTCMonth() + 1,
+        endDate.getUTCDate(),
+        0,
+        0,
+        tz,
+      );
       const runs = [];
       while (runs.length < 3) {
         const next = cron.nextRun(new Date(now));

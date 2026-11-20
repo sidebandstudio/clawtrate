@@ -82,6 +82,27 @@ describe("F-195: at least five minutes apart", () => {
     expect(shortestGap("0 0,59 0,23 1,3,4 1 * 2033", NY, NOW)).toBe(1);
     expect(shortestGap("0 0,59 0,23 1,3 1 * 2033", NY, NOW)).toBe(59);
   });
+
+  it("refuses a schedule that never runs in the eight years from today", () => {
+    // From Nov 20, 2026 the window ends as Nov 20, 2034 begins.
+    const now = zonedTime(2026, 11, 20, 15, 0, NY);
+    const cron = (expr: string) => problems(draft({ cron: expr, tz: NY }), now).cron;
+    for (const expr of [
+      "0 0 8 1 1 * 2036",
+      "0 0 0 1 1 * 2040",
+      "0 0 0 20 11 * 2034",
+      "0 0 8 20 11 * 2026",
+    ])
+      expect(cron(expr), expr).toBe("This never runs in the next eight years.");
+  });
+
+  it("accepts a schedule that runs once in the eight years from today", () => {
+    const now = zonedTime(2026, 11, 20, 15, 0, NY);
+    for (const expr of ["0 0 8 1 1 * 2030", "0 59 23 19 11 * 2034"]) {
+      expect(problems(draft({ cron: expr, tz: NY }), now), expr).toEqual({});
+      expect(nextRuns(draft({ cron: expr, tz: NY }), now), expr).toHaveLength(1);
+    }
+  });
 });
 
 describe("F-189: the draft", () => {
