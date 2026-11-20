@@ -193,7 +193,7 @@ export function accountLine(
         ? "Which bots can use it isn't clear"
         : users.length > 0
           ? users.join(", ")
-          : "No bot's settings name it",
+          : "No bot names it",
   };
 }
 
