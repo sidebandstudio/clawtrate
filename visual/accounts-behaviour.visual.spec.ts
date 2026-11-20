@@ -1167,6 +1167,21 @@ test("F-474: an account listed after a sign-in that failed is named as listed, n
   await expect(page.getByRole("heading", { name: /^Connected to/ })).toHaveCount(0);
 });
 
+test("F-474: a cancel the gateway declines after a code was entered is said there too", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=decline-checking`, "light");
+  await startMethod(page, /^ChatGPT in the browser/);
+  await page.getByTestId("paste").fill("made-up-code");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByText(/Finishing the sign-in with OpenAI/)).toBeVisible();
+  await newBot(page).getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByTestId("too-late")).toHaveText(
+    "Too late to cancel: the gateway is saving the sign-in.",
+  );
+  await expect(newBot(page).getByRole("button", { name: "Saving…" })).toBeDisabled();
+});
+
 test("F-474: too late to cancel: Cancel reads Saving…, disabled, and Back keeps the sign-in while the gateway saves", async ({
   page,
 }) => {

@@ -1121,6 +1121,19 @@ export function useConnect({
     body = <Wait>Finishing the sign-in with {who}…</Wait>;
   }
 
+  // A cancel the gateway declined is said wherever one can be declined: the waiting view says it
+  // in place; every other stage of a sign-in still going says it here, after a code or a key too.
+  if (current && isSignInActive(current) && current.saving && current.stage !== "waiting") {
+    body = (
+      <>
+        {body}
+        <p className="b-hint" data-testid="too-late">
+          Too late to cancel: the gateway is saving the sign-in.
+        </p>
+      </>
+    );
+  }
+
   if (current?.cancelUnknown && isSignInActive(current)) {
     body = (
       <>

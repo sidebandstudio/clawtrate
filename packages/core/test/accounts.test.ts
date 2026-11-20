@@ -1117,6 +1117,33 @@ describe("sign-ins, through the gateway's own methods", () => {
       expect(readKeyProviders(view(source))[0]?.replaces).toBeNull();
   });
 
+  it("a start the gateway fails is followed by a read of its accounts, so the screen leaves Checking", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.gateway.handlers["models.authLogin"] = (params) => {
+      // It may have begun something before failing: an account appears.
+      fake.shared.push({ id: "acme:half", provider: "acme", type: "api_key" });
+      void params;
+      throw new GatewayError({ code: "UNAVAILABLE", message: "provider plugin crashed" });
+    };
+    await client.startSignIn(CHOICES.device, null);
+    expect(accounts().signIn).toMatchObject({ stage: "failed", error: "provider plugin crashed" });
+    expect(accounts().signIn?.result).toMatchObject({ added: ["acme:half"], readFailed: false });
+    client.stop();
+  });
+
+  it("a busy gateway started nothing: no read is claimed after it", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    fake.gateway.handlers["models.authLogin"] = () => {
+      throw new GatewayError({
+        code: "UNAVAILABLE",
+        message: "A wizard is already running for this gateway.",
+      });
+    };
+    await client.startSignIn(CHOICES.device, null);
+    expect(accounts().signIn?.stage).toBe("busy");
+    client.stop();
+  });
+
   it("too late to cancel: the gateway refuses because it is saving", async () => {
     const { client, fake, accounts } = await accountsClient();
     await client.startSignIn(CHOICES.device, null);

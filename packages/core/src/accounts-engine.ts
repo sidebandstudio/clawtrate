@@ -477,8 +477,12 @@ export class AccountsEngine {
       });
     } catch (error) {
       const message = this.scrub(errorText(error));
-      this.setSignIn(signIn.id, { stage: isBusy(message) ? "busy" : "failed", error: message });
+      const busy = isBusy(message);
+      this.setSignIn(signIn.id, { stage: busy ? "busy" : "failed", error: message });
       this.forgetSecrets();
+      // A start that failed may still have begun something: what the gateway has is read, and
+      // the screen says what that read showed. A busy gateway started nothing.
+      if (!busy) await this.afterSignIn(signIn.id, before);
       return;
     }
     await this.paused((pause) => this.follow(signIn.id, null, key, before, pause), untilEnd);

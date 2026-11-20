@@ -12,7 +12,8 @@
 //                             the open bot's binding and evidence
 //   signin=<stage>            where a sign-in that starts goes: waiting (default),
 //                             failed, expired, cancelled, ended, busy, unconfirmed, saving,
-//                             checking (an answer stays checking), unverified (the read after
+//                             checking (an answer stays checking), decline-checking (and a
+//                             cancel there is declined), unverified (the read after
 //                             it failed), cancel-unknown (the cancel's answer says nothing),
 //                             several (two new accounts appeared while it ran), callback (a
 //                             browser sign-in whose callback the gateway takes itself)
@@ -919,13 +920,19 @@ export function accountCommand(
         return Promise.resolve();
       }
       signIn({ stage: "checking" });
-      // signin=checking: the gateway is still finishing, for a picture of that stage.
-      if (params.signin !== "checking") later(400, () => connected());
+      // signin=checking: the gateway is still finishing, for a picture of that stage;
+      // signin=decline-checking: and it declines a cancel there, as it does once it is saving.
+      if (params.signin !== "checking" && params.signin !== "decline-checking")
+        later(400, () => connected());
       return Promise.resolve();
     }
     case "cancelSignIn":
       // signin=saving: the gateway declines the cancel; it is saving.
       if (accounts().signIn?.saving) return Promise.resolve({ cancelled: false });
+      if (params.signin === "decline-checking") {
+        signIn({ saving: true });
+        return Promise.resolve({ cancelled: false });
+      }
       // signin=cancel-unknown: the gateway's answer to the cancel says nothing.
       if (params.signin === "cancel-unknown") {
         signIn({ cancelUnknown: true });
