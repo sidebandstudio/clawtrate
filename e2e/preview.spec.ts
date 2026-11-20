@@ -2338,8 +2338,9 @@ test("F-488 F-091 F-082 F-087: a real run with several steps: six reads of five 
   await openTask(page, "Pip", title);
   await expect(page.getByTestId("run-line").last()).toBeVisible({ timeout: 30_000 });
   // Every card is the same. History keeps no `details` for a tool-server result, but the
-  // gateway's map of tool names (`tools.effective`) still names the server and tool.
-  expect(await actionLines(page)).toEqual(ended);
+  // gateway's map of tool names (`tools.effective`) still names the server and tool, once the
+  // task's read of it, made after the history loads, has been answered.
+  await expect.poll(() => actionLines(page), { timeout: 30_000 }).toEqual(ended);
   expect(ended).toContain("Used coder, slow task");
 });
 
