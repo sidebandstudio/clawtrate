@@ -123,6 +123,16 @@ describe("F-189: the draft", () => {
     ]);
   });
 
+  it("previews a daily time the clocks skip as the gateway runs it: not that day", () => {
+    const daily = draft({ when: "daily", time: "02:30", tz: NY });
+    const before = zonedTime(2027, 3, 12, 12, 0, NY);
+    expect(nextRuns(daily, before).map((ms) => new Date(ms).toISOString())).toEqual([
+      "2027-03-13T07:30:00.000Z",
+      "2027-03-15T06:30:00.000Z",
+      "2027-03-16T06:30:00.000Z",
+    ]);
+  });
+
   it("writes Once as a time with its zone's offset", () => {
     expect(isoAt("2035-01-01", "09:00", NY)).toBe("2035-01-01T09:00:00-05:00");
     expect(isoAt("2035-07-01", "09:00", NY)).toBe("2035-07-01T09:00:00-04:00");

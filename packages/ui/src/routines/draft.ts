@@ -353,12 +353,15 @@ export function nextRuns(draft: Draft, now: number): number[] {
         ...(schedule.tz ? { timezone: schedule.tz } : {}),
       });
       // The bulk iterator can revisit an instant during a daylight-saving gap.
+      // Croner moves a wall time the clocks skip past the gap; the gateway
+      // runs only at an instant that matches the pattern, so it skips that day.
+      const end = now + WINDOW_DAYS * DAY;
       const runs = [];
       while (runs.length < 3) {
-        const next = cron.nextRun(new Date(now))?.getTime();
-        if (next === undefined || next <= now) break;
-        runs.push(next);
-        now = next;
+        const next = cron.nextRun(new Date(now));
+        if (!next || next.getTime() <= now || next.getTime() >= end) break;
+        if (cron.match(next)) runs.push(next.getTime());
+        now = next.getTime();
       }
       return runs;
     } catch {
