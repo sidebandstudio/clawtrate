@@ -568,7 +568,14 @@ const waited = (status: string, timedOut = false, threadId = T3_THREAD) => ({
 const REPLY_TEXT =
   "Done. The weekly check now skips machines that are asleep and lists them in the log.\nA test covers a machine that wakes late.";
 function readOf(
-  opts: { cut?: boolean; otherCut?: boolean; hasMore?: boolean; threadId?: string } = {},
+  opts: {
+    cut?: boolean;
+    otherCut?: boolean;
+    hasMore?: boolean;
+    threadId?: string;
+    /** The read's `limit`: only that many items, from the oldest, are on its page. */
+    limit?: number;
+  } = {},
 ) {
   const run = "run-2";
   const item = (type: string, text: string, cut = false, n = 0) => ({
@@ -588,6 +595,11 @@ function readOf(
     createdBy: type === "user_message" ? "user" : "agent",
     creationSource: "provider",
   });
+  const items = [
+    item("user_message", "Also add a test for machines that wake up late.", false, 0),
+    item("tool", "Ran the project's checks.", opts.otherCut === true, 1),
+    item("assistant_message", REPLY_TEXT, opts.cut === true, 2),
+  ].slice(0, opts.limit);
   return {
     thread: {
       threadId: opts.threadId ?? T3_THREAD,
@@ -599,12 +611,8 @@ function readOf(
       settled: true,
     },
     recentRuns: [{ runId: run, ordinal: 2, status: "completed" }],
-    items: [
-      item("user_message", "Also add a test for machines that wake up late.", false, 0),
-      item("tool", "Ran the project's checks.", opts.otherCut === true, 1),
-      item("assistant_message", REPLY_TEXT, opts.cut === true, 2),
-    ],
-    nextPosition: 2,
+    items,
+    nextPosition: items.at(-1)!.position,
     hasMore: opts.hasMore === true,
   };
 }
@@ -1152,7 +1160,7 @@ function build(
         b,
         "t3_thread_read",
         "call_t3p",
-        readOf({ hasMore: true, otherCut: true }),
+        readOf({ hasMore: true, otherCut: true, limit: 2 }),
         ago(3) + 600,
       );
       return { extra: { mcpTools: T3_MAP }, b: b.end(ago(1)) };

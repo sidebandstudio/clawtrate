@@ -467,6 +467,9 @@ test.describe("T3 Code thread cards", () => {
     await expect(page2).toContainText(
       "Part of the run only: an item's text was cut, and the rest was not read",
     );
+    // Its first two items hold no reply: the reply is on a later page.
+    await expect(page2).toContainText("No reply of the latest run on this page.");
+    await expect(page2).not.toContainText("skips machines that are asleep");
     await expect(card).not.toContainText("Read to the end");
   });
 
