@@ -91,7 +91,7 @@ export type RoutinesState = {
   routines: Routine[];
   /** Routines past `MAX_ROUTINES` the gateway listed (heartbeat jobs among those not read); the list says so. */
   omitted: number;
-  /** Changes even for an event about a routine outside the retained list. */
+  /** Changes with each event, even about a routine outside the retained list, and each read published. */
   revision: number;
   /**
    * The last routine the `removed` event took away: `ranOnce` only when the
@@ -462,7 +462,13 @@ export class RoutinesEngine {
         this.schedule(RETRY_MS);
         return;
       }
-      this.ctx.update((state) => ({ ...state, status: "loaded", error: null, ...read }));
+      this.ctx.update((state) => ({
+        ...state,
+        status: "loaded",
+        error: null,
+        ...read,
+        revision: (state.revision + 1) % Number.MAX_SAFE_INTEGER,
+      }));
       this.scheduleIfRunning();
       return;
     }

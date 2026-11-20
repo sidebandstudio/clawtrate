@@ -229,6 +229,18 @@ describe("F-024: the list stays true when events and reads cross", () => {
     routines.onClose();
   });
 
+  it("a fresh read changes the revision, so a bot's own read is made again after a reconnect", async () => {
+    const { routines, state } = engine({
+      "cron.status": () => ({ enabled: true }),
+      "cron.list": () => ({ jobs: [job()], hasMore: false }),
+    });
+    await routines.load();
+    const first = state().revision;
+    await routines.load();
+    expect(state().revision).not.toBe(first);
+    routines.onClose();
+  });
+
   it("uses the gateway's finish fields when the event has no job snapshot", () => {
     const current = parseRoutine(job({}, { runningAtMs: 20, lastRunStatus: "ok" }))!;
     const finished = applyCronEvent([current], {
