@@ -711,6 +711,17 @@ describe("the streamed-output check", () => {
     ).toThrow(/holds more of the output/);
   });
 
+  it("orders by receipt, not by clock: an update and the result in the same millisecond pass", () => {
+    expect(() =>
+      checkStreamedOutput(
+        [event(1, 100), event(2, 300)],
+        [lines(1), lines(2)],
+        event(3, 300),
+        output,
+      ),
+    ).not.toThrow();
+  });
+
   it("fails an update received after the command's result", () => {
     expect(() =>
       checkStreamedOutput(

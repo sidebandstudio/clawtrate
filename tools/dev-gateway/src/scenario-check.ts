@@ -76,7 +76,7 @@ function expect(condition: unknown, message: string): asserts condition {
  * A command's output streamed while it ran: at least two updates, the first a
  * proper prefix of the whole output, each holding the one before, at least one
  * longer than the one before, and every one received before the command's
- * result. Output held back and sent whole, or only at the end, fails it.
+ * result (`seq`, this connection's order). Output held back and sent whole, or only at the end, fails it.
  */
 export function checkStreamedOutput(
   updates: readonly GatewayEvent[],
@@ -98,7 +98,8 @@ export function checkStreamedOutput(
     "a later update holds more of the output than the one before",
   );
   expect(
-    updates.every((e) => e.at < result.at),
+    // By the order this connection received them: two events can share a millisecond.
+    updates.every((e) => e.seq < result.seq),
     "every update came before the command's result",
   );
 }
