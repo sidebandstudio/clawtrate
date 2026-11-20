@@ -305,6 +305,7 @@ t = await hero(p);
 check("S4 an http picture is never loaded, and says so", t.includes("Marlow's picture is at http://pictures.example/marlow.png, an http address, which Clawtrate doesn't load.") && !t.includes("Load picture"));
 await p.close();
 p = await open(`bot=marlow&${settings}&outside=1&lc=export&delbot=marlow`);
+await waitText(p, "#lc-dialog", "The file will hold exactly this");
 check("S9 an outside picture is left out of a file", (await dlg(p)).includes("PictureLeft out: it's an outside address"));
 await p.close();
 for (const [tool, words] of [
@@ -493,44 +494,74 @@ check("S2 below admin Duplicate asks for admin", (await dlg(p)).includes("Duplic
 await p.close();
 
 // Export and import (section 9) ------------------------------------------------------------------------
+const exportReview = async (q) => {
+  const p = await open(q);
+  await waitText(p, "#lc-dialog", "The file will hold exactly this");
+  return p;
+};
 p = await open("lc=export&delbot=pip");
+check("S9 Export reads and checks the bot before it shows the review", (await dlg(p)).includes("Reading Pip from the gateway…"));
+await waitText(p, "#lc-dialog", "The file will hold exactly this");
 t = await dlg(p);
 check("F-049 Export says it's Clawtrate's own format", t.includes("A Clawtrate file: this app's own JSON format, for another Clawtrate to read. The gateway doesn't know it."));
-check("F-049 it shows exactly what the file will hold, model by name with the account left out", has(t, "The file will hold exactly this", "NamePip", "LabelPlanning", "PictureA PNG of its character, 128 by 128", "Modelopenai/gpt-5.5-mini · its account, OpenAI · Home, left out", "EffortLow"));
+check("F-049 it shows exactly what the file will hold, model by name with the account left out", has(t, "The file will hold exactly this", "NamePip", "LabelPlanning", "PNG, 128 by 128", "Modelopenai/gpt-5.5-mini · its account, OpenAI · Home, left out", "EffortLow"));
+check("F-049 the picture is shown as the file will hold it", await p.evaluate(() => Boolean(document.querySelector('.lc-exp-values .avatar[role="img"][aria-label="The picture as the file will hold it"]'))));
+check("F-049 the exact values wrap instead of being cut", await p.evaluate(() => getComputedStyle(document.querySelector(".lc-exp-values dd")).overflowWrap === "anywhere"));
 check("F-049 the instructions are in only when chosen", t.includes("Instructions, if you choose them") && (await p.evaluate(() => [...document.querySelectorAll("[data-lc-expfile]")].every((x) => !x.checked))) && !(await p.$(".lc-exp-text")));
 await click(p, '[data-lc-expfile="agents"]');
-check("F-049 a chosen file is shown in full before it's written", (await text(p, ".lc-exp-text")).includes("You help with planning."));
+const shown = await text(p, ".lc-exp-text");
+check("F-049 a chosen file is shown in full before it's written", shown.includes("You help with planning."));
 t = await dlg(p);
-check("F-049 it says what the file leaves out and what its fields can hold", t.includes("The file leaves out account bindings and sign-in stores. The fields you export can contain private text, credentials or paths. Review them before saving.") && !t.includes("secret"));
+check("F-049 it says what the file leaves out and what its fields can hold", t.includes("The file leaves out account bindings and sign-in stores. The fields you export can contain private text, credentials or paths. Review them before saving.") && !t.includes("secret") && !t.includes("Nothing was sent"));
 check("F-049 it lists what is never in the file, tool settings first", has(t, "Never in a Clawtrate file", "Tool permissions and skills", "Memory and About you (MEMORY.md, notes, USER.md)", "Routines", "Channel routes"));
 check("S9 no gateway-package path is offered in the app", !t.includes("claws") && !(await p.$("[data-lc-way]")));
-await observeText(p, "#lc-dialog", "Reading Pip from the gateway…");
+// Another client changes AGENTS.md on the gateway after the review showed it.
+await p.evaluate(() => CT.lifecycleEditSource("pip", "agents", "# Pip\n\nA newer text nobody reviewed.\n"));
 await clickText(p, "#lc-dialog", "Export file…");
-check("S9 exporting reads the bot first", (await sawText(p)));
-await waitText(p, "#b-announce", "Saved Pip.clawtrate-bot.json, 4 KB");
-check("F-049 a save the host confirmed names the file and its size", (await dlg(p)).includes("Saved Pip.clawtrate-bot.json, 4 KB") && (await announced(p)) === "Saved Pip.clawtrate-bot.json, 4 KB");
+await waitText(p, "#b-announce", "Saved Pip backup.clawtrate-bot.json");
+const handed = await p.evaluate(() => JSON.parse(CT.lifecycleHandoff()));
+check("F-049 the bytes handed to the host are the reviewed ones, not a newer read", handed.bot.instructions["AGENTS.md"].replace(/\s+/g, " ").trim() === shown.trim() && !JSON.stringify(handed).includes("A newer text nobody reviewed") && !handed.bot.instructions["SOUL.md"]);
+t = await dlg(p);
+check("F-049 a save the host confirmed names the host's file and the size", /Saved Pip backup\.clawtrate-bot\.json, \d+ KB/.test(t) && !t.includes("Saved Pip.clawtrate-bot.json") && /^Saved Pip backup\.clawtrate-bot\.json, \d+ KB$/.test(await announced(p)));
 await p.close();
+
+p = await exportReview("lc=export&delbot=pip");
+await click(p, '[data-lc-expfile="agents"]');
+await p.evaluate(() => CT.lifecycleEditSource("pip", "agents", "# Pip\n\nChanged meanwhile.\n"));
+await clickText(p, "#lc-dialog", "Reload from gateway");
+await waitText(p, "#lc-dialog", "The bot changed on the gateway since this was read.");
+check("S9 Reload from gateway returns to the review when the selected bytes changed", has(await dlg(p), "The bot changed on the gateway since this was read. Review the new values before saving.", "Changed meanwhile.", "Export file…"));
+await p.close();
+
 for (const [exp, words] of [
   ["web", ["Download requested", "Your browser decides where the file goes and whether it keeps it."]],
   ["cancelled", ["Not saved", "You closed the save dialog. Nothing was written."]],
-  ["unchanged", ["Couldn't save", "The file that was there before, Pip.clawtrate-bot.json, still holds what it held."]],
-  ["absent", ["Couldn't save", "No file was written."]],
-  ["saved-anyway", ["Saved Pip.clawtrate-bot.json, 4 KB", "The save reported an error, “the disk is full”, but reading the file back shows it holds the export."]],
-  ["unknown", ["Couldn't save", "Clawtrate couldn't tell what the file holds now."]],
-  ["readfail", ["Couldn't read Pip's instructions", "The gateway didn't answer. Nothing was saved."]],
+  ["unchanged", ["Couldn't save", "The selected file still contains its previous bytes."]],
+  ["absent", ["Couldn't save", "The selected file isn't there."]],
+  ["saved-anyway", ["Export saved,", "The save reported an error, but the selected file contains the export."]],
+  ["unknown", ["Couldn't save", "Clawtrate couldn't tell what the selected file holds now."]],
 ]) {
-  p = await open(`lc=export&delbot=pip&exp=${exp}`);
+  p = await exportReview(`lc=export&delbot=pip&exp=${exp}`);
   await clickText(p, "#lc-dialog", "Export file…");
   await waitText(p, "#lc-dialog", words[0]);
-  check(`S9 the host's save ends ${exp}: said as the host reported it`, has(await dlg(p), ...words));
+  t = await dlg(p);
+  check(`S9 the host's save ends ${exp}: said as the host reported it, with no suggested file name`, has(t, ...words) && !t.includes("Pip.clawtrate-bot.json") && !t.includes("Nothing was sent"));
   await p.close();
 }
-p = await open("lc=export&delbot=pip&exp=absent");
-await clickText(p, "#lc-dialog", "Export file…");
-await waitText(p, "#lc-dialog", "No file was written.");
+p = await open("lc=export&delbot=pip&exp=readfail");
+await waitText(p, "#lc-dialog", "Couldn't read AGENTS.md. Try again.");
+check("S9 a read that fails stays before the review, and nothing is handed over", !(await dlg(p)).includes("The file will hold exactly this") && (await p.evaluate(() => CT.lifecycleHandoff())) === null);
 await clickText(p, "#lc-dialog", "Try again");
-await waitText(p, "#lc-dialog", "Saved Pip.clawtrate-bot.json, 4 KB");
-check("S9 after a failed save, Try again saves", (await dlg(p)).includes("Saved Pip.clawtrate-bot.json, 4 KB"));
+await waitText(p, "#lc-dialog", "The file will hold exactly this");
+check("S9 ... Try again reads, then shows the review", (await dlg(p)).includes("Export file…"));
+await p.close();
+p = await exportReview("lc=export&delbot=pip&exp=absent");
+await clickText(p, "#lc-dialog", "Export file…");
+await waitText(p, "#lc-dialog", "The selected file isn't there.");
+const first = await p.evaluate(() => CT.lifecycleHandoff());
+await clickText(p, "#lc-dialog", "Try again");
+await waitText(p, "#lc-dialog", "Saved Pip backup.clawtrate-bot.json");
+check("S9 after a failed save, Try again saves the same bytes", (await p.evaluate(() => CT.lifecycleHandoff())) === first);
 await p.close();
 
 p = await open("");

@@ -537,3 +537,19 @@
 .lc-drop-phone .button {
   width: 100%;
 }
+
+/* Export's review: the exact values wrap rather than cut; the picture is shown as the file holds it. */
+.lc-exp-values dd {
+  overflow-wrap: anywhere;
+  white-space: normal;
+  text-align: right;
+}
+.lc-exp-pic {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.lc-exp-pic .avatar {
+  width: 32px;
+  height: 32px;
+}

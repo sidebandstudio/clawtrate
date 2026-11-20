@@ -99,7 +99,7 @@
     ["lc=export&delbot=pip&exp=absent", "Export: the save failed, no file (Export file…)"],
     ["lc=export&delbot=pip&exp=saved-anyway", "Export: an error, but the file holds the export (Export file…)"],
     ["lc=export&delbot=pip&exp=unknown", "Export: the save failed, the file unknown (Export file…)"],
-    ["lc=export&delbot=pip&exp=readfail", "Export: the read fails (Export file…)"],
+    ["lc=export&delbot=pip&exp=readfail", "Export: the read before the review fails"],
     ["lc=import", "Import a bot from a Clawtrate file"],
     ["lc=import&imp=review", "Import: the review"],
     ["lc=import&imp=unavailable", "Import: the review, a model this gateway doesn't offer"],

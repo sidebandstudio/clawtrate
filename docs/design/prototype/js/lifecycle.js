@@ -898,57 +898,117 @@
     "Other files in the workspace folder",
   ];
   const neverList = () => `<ul class="lc-list">${NEVER.map((x) => `<li>${x}</li>`).join("")}</ul>`;
-  const fileName = (name) => `${name.replace(/[^A-Za-z0-9 _-]+/g, "").trim() || "bot"}.clawtrate-bot.json`;
+  // The name the host reports for a confirmed save: the person may change it in the save dialog.
+  const HOST_NAME = "Pip backup.clawtrate-bot.json";
   const EXPORT_WORDS = {
-    saved: (f) => [`Saved ${f}, 4 KB`, "Nothing was sent anywhere."],
-    web: () => ["Download requested", "Your browser decides where the file goes and whether it keeps it. Nothing was sent anywhere else."],
+    saved: (size) => [`Saved ${HOST_NAME}, ${size}`, ""],
+    web: () => ["Download requested", "Your browser decides where the file goes and whether it keeps it."],
     cancelled: () => ["Not saved", "You closed the save dialog. Nothing was written."],
-    unchanged: (f) => ["Couldn't save", `The disk is full. The file that was there before, ${f}, still holds what it held.`],
-    absent: () => ["Couldn't save", "The disk is full. No file was written."],
-    "saved-anyway": (f) => [`Saved ${f}, 4 KB`, "The save reported an error, “the disk is full”, but reading the file back shows it holds the export."],
-    unknown: () => ["Couldn't save", "The disk is full. Clawtrate couldn't tell what the file holds now."],
-    readfail: () => ["Couldn't read Pip's instructions", "The gateway didn't answer. Nothing was saved."],
+    unchanged: () => ["Couldn't save", "The disk is full. The selected file still contains its previous bytes."],
+    absent: () => ["Couldn't save", "The disk is full. The selected file isn't there."],
+    "saved-anyway": (size) => [`Export saved, ${size}`, "The save reported an error, but the selected file contains the export."],
+    unknown: () => ["Couldn't save", "The disk is full. Clawtrate couldn't tell what the selected file holds now."],
   };
+  // The candidate, read and checked before the review (agents.list, config.get, agents.files.get).
+  // Export file hands over the bytes built from it, and never reads the gateway again.
+  function readCandidate(id) {
+    const b = D.binding[id] || {};
+    const a = D.acct(b.account);
+    const i = instr(id);
+    const outside = Boolean(L.outsidePicture(id));
+    return {
+      name: nameOf(id),
+      label: botOf(id)?.label || null,
+      outside,
+      picture: outside ? null : `data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHL${id}`,
+      model: `${a ? a.provider : "openai"}/${b.model || "gpt-5.5"}`,
+      account: a ? D.acctName(a) : "none",
+      effort: b.effort || "Medium",
+      agents: i.agents,
+      soul: i.soul,
+    };
+  }
+  const exportBytes = (c, files) => {
+    const instructions = {};
+    if (files.agents) instructions["AGENTS.md"] = c.agents;
+    if (files.soul) instructions["SOUL.md"] = c.soul;
+    const bot = { name: c.name, label: c.label, picture: c.picture, model: c.model, effort: c.effort };
+    if (files.agents || files.soul) bot.instructions = instructions;
+    return JSON.stringify({ format: "clawtrate.bot", formatVersion: 1, writtenBy: "Clawtrate 0.4.0", bot }, null, 2);
+  };
+  const sizeOf = (bytes) => `${Math.max(1, Math.ceil(new Blob([bytes]).size / 1024))} KB`;
+  // For the checks: what was handed to the host, and an edit made on the gateway meanwhile.
+  CT.lifecycleHandoff = () => L.handoff || null;
+  CT.lifecycleEditSource = (id, file, text) => (instr(id)[file] = text);
+  function readExport(d) {
+    d.read = "loading";
+    paint();
+    setTimeout(() => {
+      if (L.dialog !== d) return;
+      if (p("exp") === "readfail" && !d.readFailed) {
+        d.readFailed = true;
+        d.read = "failed";
+        paint(true);
+        return announce("Couldn't read AGENTS.md");
+      }
+      const before = d.candidate && exportBytes(d.candidate, d.files);
+      d.candidate = readCandidate(d.bot);
+      d.read = null;
+      d.reloaded = Boolean(before);
+      d.changed = Boolean(before) && before !== exportBytes(d.candidate, d.files);
+      paint(true);
+      if (before) announce(d.changed ? "Reloaded: the bot changed on the gateway" : "Reloaded: nothing changed");
+    }, 300);
+  }
 
   VIEWS.export = (d) => {
     const id = d.bot;
     const name = esc(nameOf(id));
-    const f = fileName(nameOf(id));
-    const b = D.binding[id] || {};
-    const a = D.acct(b.account);
-    const i = instr(id);
-    if (d.exp === "saving") return sheet(`Export ${name}`, `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>${d.saveStage === "save" ? "Waiting for the save dialog…" : `Reading ${name} from the gateway…`}</p>`, "");
+    if (d.read === "loading") return sheet(`Export ${name}`, `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Reading ${name} from the gateway…</p>`, "");
+    if (d.read === "failed")
+      return sheet(
+        `Export ${name}`,
+        note(`<p>Couldn't read AGENTS.md. Try again.</p>`, "warn"),
+        button("Try again", 'data-lc="export-reread" data-size="lg" data-lc-focus', "primary") + button("Close", 'data-lc="close" data-size="lg"', "quiet"),
+      );
+    if (d.exp === "saving") return sheet(`Export ${name}`, `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>Waiting for the save dialog…</p>`, "");
     if (d.exp && EXPORT_WORDS[d.exp]) {
-      const [title, text] = EXPORT_WORDS[d.exp](f);
+      const [title, text] = EXPORT_WORDS[d.exp](sizeOf(d.bytes));
       const ok = d.exp === "saved" || d.exp === "web" || d.exp === "saved-anyway";
       return sheet(
         `Export ${name}`,
-        `<div class="b-result"><span class="empty-mark"${ok ? "" : ' data-tone="warn"'}>${icon(ok ? "check" : "warning")}</span><h3 tabindex="-1" data-lc-focus>${title}</h3><p>${text}</p></div>`,
+        `<div class="b-result"><span class="empty-mark"${ok ? "" : ' data-tone="warn"'}>${icon(ok ? "check" : "warning")}</span><h3 tabindex="-1" data-lc-focus>${title}</h3>${text ? `<p>${text}</p>` : ""}</div>`,
         ok ? button("Done", 'data-lc="close" data-size="lg"') : button("Try again", 'data-lc="export-file" data-size="lg"', "primary") + button("Close", 'data-lc="close" data-size="lg"', "quiet"),
       );
     }
-    const outside = L.outsidePicture(id);
+    const c = d.candidate;
     const val = (label, value) => `<div><dt>${label}</dt><dd>${value}</dd></div>`;
     const fileRow = (key, file, text) =>
       `<label class="b-check lc-item"><input type="checkbox" data-lc-expfile="${key}"${d.files?.[key] ? " checked" : ""} /><span class="lc-item-text"><span>${file} <span class="b-faint">· ${lines(text)} ${lines(text) === 1 ? "line" : "lines"}</span></span></span></label>` +
       (d.files?.[key] ? `<pre class="lc-theirs lc-exp-text">${esc(text)}</pre>` : "");
     return sheet(
       `Export ${name}`,
-      `<p class="b-hint lc-first">A Clawtrate file: this app's own JSON format, for another Clawtrate to read. The gateway doesn't know it.</p>` +
+      (d.changed ? note(`<p>The bot changed on the gateway since this was read. Review the new values before saving.</p>`, "warn") : "") +
+        `<p class="b-hint lc-first">A Clawtrate file: this app's own JSON format, for another Clawtrate to read. The gateway doesn't know it.</p>` +
         `<h4 class="b-group">The file will hold exactly this</h4>` +
         `<dl class="facts lc-exp-values">` +
-        val("Name", name) +
-        val("Label", esc(botOf(id)?.label || "None")) +
-        val("Picture", outside ? `<span class="b-faint">Left out: it's an outside address</span>` : L.photo[id] ? "A JPEG, 128 by 128" : "A PNG of its character, 128 by 128") +
-        val("Model", `${esc(a ? a.provider : "openai")}/${esc(b.model || "gpt-5.5")} <span class="b-faint">· its account, ${esc(a ? D.acctName(a) : "none")}, left out</span>`) +
-        val("Effort", esc(b.effort || "Medium")) +
+        val("Name", esc(c.name)) +
+        val("Label", esc(c.label || "None")) +
+        val(
+          "Picture",
+          c.outside
+            ? `<span class="b-faint">Left out: it's an outside address</span>`
+            : `<span class="lc-exp-pic"><span class="avatar" data-bot="${id}" role="img" aria-label="The picture as the file will hold it"></span>PNG, 128 by 128</span>`,
+        ) +
+        val("Model", `${esc(c.model)} <span class="b-faint">· its account, ${esc(c.account)}, left out</span>`) +
+        val("Effort", esc(c.effort)) +
         `</dl>` +
         `<h4 class="b-group">Instructions, if you choose them</h4>` +
-        fileRow("agents", "AGENTS.md", i.agents) +
-        fileRow("soul", "SOUL.md", i.soul) +
+        fileRow("agents", "AGENTS.md", c.agents) +
+        fileRow("soul", "SOUL.md", c.soul) +
         note(`<p>The file leaves out account bindings and sign-in stores. The fields you export can contain private text, credentials or paths. Review them before saving.</p>`, "warn") +
         `<h4 class="b-group">Never in a Clawtrate file</h4>${neverList()}`,
-      button("Export file…", 'data-lc="export-file" data-size="lg" data-lc-focus', "primary"),
+      button("Export file…", 'data-lc="export-file" data-size="lg" data-lc-focus', "primary") + button("Reload from gateway", 'data-lc="export-reload" data-size="lg"', "quiet"),
     );
   };
 
@@ -1336,7 +1396,8 @@
         return app.selectBot(nid);
       }
       case "open-export":
-        return openDialog("export", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot, exp: null, files: {} });
+        openDialog("export", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot, exp: null, files: {}, read: "loading" });
+        return readExport(L.dialog);
       case "open-import":
         // From the gateway menu too, which every tier has; the "+" menu is absent at the read tier.
         if (!$("#gateway-menu").hidden) {
@@ -1346,21 +1407,24 @@
         return openDialog("import", $("#new-button"), { kind: "import", stage: null, name: "Wren", copy: { look: true, model: true, instr: true } });
       case "open-delete":
         return openDialog("delete", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el, { bot, files: Boolean(p("files")), read: p("delread") || null });
-      case "export-file":
-        L.dialog.exp = "saving";
-        L.dialog.saveStage = "read";
+      case "export-file": {
+        // The bytes the review showed go to the host as they are; nothing is read again.
+        const d = L.dialog;
+        d.bytes ??= exportBytes(d.candidate, d.files);
+        L.handoff = d.bytes;
+        d.exp = "saving";
         paint();
         return setTimeout(() => {
-          // agents.list, config.get and the chosen agents.files.get, then the host's save.
-          L.dialog.saveStage = "save";
-          paint();
-          setTimeout(() => {
-            const want = p("exp");
-            L.dialog.exp = want && EXPORT_WORDS[want] && !L.dialog.retried ? ((L.dialog.retried = !["saved", "web", "saved-anyway"].includes(want)), want) : "saved";
-            paint(true);
-            announce(EXPORT_WORDS[L.dialog.exp](fileName(nameOf(L.dialog.bot)))[0]);
-          }, 300);
+          const want = p("exp");
+          d.exp = want && EXPORT_WORDS[want] && !d.retried ? ((d.retried = !["saved", "web", "saved-anyway"].includes(want)), want) : "saved";
+          paint(true);
+          announce(EXPORT_WORDS[d.exp](sizeOf(d.bytes))[0]);
         }, 300);
+      }
+      case "export-reload":
+        return readExport(L.dialog);
+      case "export-reread":
+        return readExport(L.dialog);
       case "import-choose":
         L.dialog.stage = "reading";
         L.dialog.refused = null;
@@ -1405,6 +1469,7 @@
     const ef = e.target.closest("[data-lc-expfile]");
     if (ef) {
       L.dialog.files[ef.dataset.lcExpfile] = ef.checked;
+      L.dialog.bytes = null;
       paint();
       $(`[data-lc-expfile="${ef.dataset.lcExpfile}"]`, dialog)?.focus();
     }
@@ -1464,7 +1529,7 @@
   if (start === "choose") openDialog("choose", $("#bot-list .bot"));
   if (start === "picture") openDialog("picture", $(".lc-hero-pic") || hero, { bot: app.model.selectedBot, tab: p("ptab") || "bot", upload: p("upload") || null });
   if (start === "duplicate") openDialog("duplicate", null, { bot: p("delbot") || app.model.selectedBot, name: `${nameOf(p("delbot") || app.model.selectedBot)} copy`, copy: { look: true, model: true, instr: true, tools: true }, acct: null });
-  if (start === "export") openDialog("export", null, { bot: p("delbot") || app.model.selectedBot, exp: null, files: {} });
+  if (start === "export") openDialog("export", null, { bot: p("delbot") || app.model.selectedBot, exp: null, files: {}, read: "loading" }), readExport(L.dialog);
   if (start === "import") openDialog("import", $("#new-button"), { kind: "import", stage: p("imp") ? "reading" : null, name: "Wren", copy: { look: true, model: true, instr: true } });
   if (start === "import" && p("imp")) setTimeout(() => { L.dialog.stage = Object.keys(REFUSALS).includes(p("imp")) ? ((L.dialog.triedOther = true), "refused") : "review"; paint(); }, 0);
   if (start === "delete") openDialog("delete", null, { bot: p("delbot") || app.model.selectedBot, files: Boolean(p("files")), read: p("delread") || null });
