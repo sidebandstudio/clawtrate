@@ -70,7 +70,7 @@ it("removes old files and makes zero requests at launch, on get, and on choosing
   expect(server.requests).toEqual([]);
   const id = await offer(service);
   expect((await service.download(id)).snapshot).toMatchObject({
-    state: { kind: "verified", version: nightly, size: fixture.body.length },
+    state: { kind: "verified", offerId:id, version: nightly, size: fixture.body.length },
   });
   expect(readdirSync(updates)).toHaveLength(1);
   expect(server.requests).toEqual(["/nightly", "/files/app.zip"]);

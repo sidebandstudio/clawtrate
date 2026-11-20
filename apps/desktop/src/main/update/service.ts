@@ -248,7 +248,7 @@ export class DesktopUpdateService {
         const result = await engine.download();
         if (this.engine !== engine) return;
         if (result.kind === "ready") {
-          this.publish({ kind: "verified", version: result.version, size: expected });
+          this.publish({ kind: "verified", offerId: state.offerId, version: result.version, size: expected });
         } else if (result.kind === "failed") reportFailure(result.cause);
       })
       .catch(() => {

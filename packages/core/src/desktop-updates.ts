@@ -26,7 +26,7 @@ export type DesktopUpdateState =
   | { kind: "offered"; version: string; releaseDate: string; offerId: string }
   | { kind: "downloading"; version: string; received: number; expected: number }
   /** The byte count and SHA-512 matched the feed. */
-  | { kind: "verified"; version: string; size: number }
+  | { kind: "verified"; offerId: string; version: string; size: number }
   | {
       kind: "failed";
       reason: DesktopUpdateFailure;
