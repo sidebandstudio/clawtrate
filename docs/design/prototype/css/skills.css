@@ -326,8 +326,14 @@
 }
 
 /* The skill cards (section 12) */
+/* The instructions take the rest of their row and read from the left, like "Use when…". */
+.k-card-facts dd:has(> .k-plain) {
+  flex: 1 1 0;
+}
 .k-card-facts dd .k-plain {
   margin-top: 2px;
+  width: 100%;
+  text-align: left;
 }
 .k-card-says {
   margin: 0 0 6px;
