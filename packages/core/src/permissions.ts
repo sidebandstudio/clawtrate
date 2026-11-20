@@ -503,13 +503,24 @@ export async function revokeGrant(
  *   `allowlist` is the file as it is now, to confirm again from.
  * - `ambiguous`: the bot's list has more than one entry with that id; nothing was written.
  * - `not-listed`: the shown revision has no such entry; nothing was written.
- * - `removed` / `still-listed`: from the whole file read after the write, never
- *   from the entries kept for display. `removed` names the entry as the file
- *   held it when it was written without it.
- * - `unknown`: the file could not be read afterwards.
+ * - `still-listed`: the whole file read after the write still has the entry.
+ * - `removed`: the write was accepted with a complete file, and the whole file
+ *   read after it is that same revision and digest, without the entry. It names
+ *   the entry as the file held it before the write.
+ * - `not-confirmed`: the file read after it lacks the entry, but the write was
+ *   refused, its answer was incomplete, or the two revisions differ: something
+ *   else may have removed it.
+ * - `unknown`: the file could not be read afterwards, or not whole.
  */
 export type AllowlistRemoveResult = {
-  outcome: "removed" | "still-listed" | "not-listed" | "changed" | "ambiguous" | "unknown";
+  outcome:
+    | "removed"
+    | "still-listed"
+    | "not-listed"
+    | "changed"
+    | "ambiguous"
+    | "not-confirmed"
+    | "unknown";
   /** The entry the write took out, as the shown revision held it. */
   removed: { agentId: string; pattern: string } | null;
   error: string | null;
@@ -542,6 +553,8 @@ export async function removeAllowlistEntry(
   const { agentId, entryId, shownHash, shownDigest } = target;
   let removed: AllowlistRemoveResult["removed"] = null;
   let error: string | null = null;
+  /** The file as the accepted write left it, when its answer was a complete file. */
+  let written: ApprovalsSnapshot | null = null;
   try {
     const before = approvalsSnapshot(await ctx.request("exec.approvals.get", {}));
     if ("invalid" in before)
@@ -568,7 +581,7 @@ export async function removeAllowlistEntry(
     const entries = agent.allowlist as unknown[];
     removed = { agentId, pattern: cut(matching[0]!.pattern) ?? "(no pattern)" };
     target.assertCurrent?.();
-    await ctx.request("exec.approvals.set", {
+    const reply = await ctx.request("exec.approvals.set", {
       file: {
         ...before.file,
         agents: {
@@ -581,6 +594,9 @@ export async function removeAllowlistEntry(
       },
       baseHash: shownHash,
     });
+    const accepted = approvalsSnapshot(reply);
+    if ("invalid" in accepted) error = accepted.invalid;
+    else written = accepted;
   } catch (caught) {
     error = errorText(caught);
   }
@@ -604,10 +620,14 @@ export async function removeAllowlistEntry(
       error: error ?? after.invalid,
       allowlist: { status: "failed", message: after.invalid },
     };
-  const still = entriesWithId(after.file, agentId, entryId).length > 0;
+  if (entriesWithId(after.file, agentId, entryId).length > 0)
+    return { outcome: "still-listed", removed: null, error, allowlist: allowlistFrom(after) };
+  // Gone from the whole file: removed by this write only if it was accepted and the read is its file.
+  const confirmed =
+    written !== null && after.hash === written.hash && after.digest === written.digest;
   return {
-    outcome: still ? "still-listed" : "removed",
-    removed: still ? null : removed,
+    outcome: confirmed ? "removed" : "not-confirmed",
+    removed: confirmed ? removed : null,
     error,
     allowlist: allowlistFrom(after),
   };

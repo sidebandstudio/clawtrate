@@ -376,8 +376,8 @@ test("F-178: with admin access, the gateway machine's allowlist entry from Alway
   await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
   await confirm.getByRole("button", { name: "Remove" }).click();
   await expect(
-    page.getByText(`Removed ${pattern} for otto. Read back at `, { exact: false }),
-  ).toContainText("the gateway's file no longer lists it.", { timeout: 20_000 });
+    page.getByText(`Removed ${pattern} for otto. The file read back no longer lists the entry.`),
+  ).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("b-announcer")).toHaveText("Removed");
   const after = await admin.request<{ file: { agents: Record<string, { allowlist?: Json[] }> } }>(
     "exec.approvals.get",

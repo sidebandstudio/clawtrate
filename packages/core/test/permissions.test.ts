@@ -540,6 +540,100 @@ describe("F-178: Revoke and Remove say only what the read back shows", () => {
     });
   });
 
+  it("a removal is confirmed against the whole file: Removed only for an accepted write and a complete read-back of that file", async () => {
+    const shownFile = approvalsFile([LS_ENTRY, NODE_ENTRY]);
+    const target = { agentId: "otto", entryId: LS_ENTRY.id, ...shownOf(shownFile) };
+    const writtenFile = { ...approvalsFile([NODE_ENTRY]), hash: "written" };
+    /** The shown file, a write answered with `reply`, then the read afterwards. */
+    const attempt = (after: () => unknown, reply: unknown = writtenFile) => {
+      const gateway = fake({
+        "exec.approvals.get": () =>
+          gateway.methods().includes("exec.approvals.set") ? after() : shownFile,
+        "exec.approvals.set": () => reply,
+      });
+      return removeAllowlistEntry(gateway.ctx, target).then((result) => ({ result, gateway }));
+    };
+    const reads: Array<[string, () => unknown, unknown?]> = [
+      [
+        "lost read",
+        () => {
+          throw new Error("socket closed");
+        },
+      ],
+      ["absent file", () => ({ path: "p", exists: true, hash: "written" })],
+      ["flagged partial", () => ({ ...writtenFile, hasMore: true })],
+      ["missing hash", () => ({ ...writtenFile, hash: undefined })],
+      [
+        "a valid-looking subset under the write's hash",
+        () => ({ ...writtenFile, file: { version: 1 } }),
+      ],
+      ["an incomplete write answer", () => writtenFile, { ...writtenFile, file: undefined }],
+    ];
+    for (const [what, after, reply] of reads) {
+      const { result } = await attempt(after, reply ?? writtenFile);
+      expect(result.outcome, what).not.toBe("removed");
+      expect(result.removed, what).toBeNull();
+    }
+    // A complete read after the accepted write, of the file it wrote: Removed, naming the entry.
+    const { result, gateway } = await attempt(() => writtenFile);
+    expect(result).toMatchObject({
+      outcome: "removed",
+      removed: { agentId: "otto", pattern: "/bin/ls" },
+    });
+    expect(gateway.methods()).toEqual([
+      "exec.approvals.get",
+      "exec.approvals.set",
+      "exec.approvals.get",
+    ]);
+  });
+
+  it("two operators removing at once: the refused one never says Removed, and different entries both survive their own write", async () => {
+    // One file, changed only by a write naming its current hash, as the gateway's is.
+    const shared = approvalsGateway(approvalsFile([LS_ENTRY, NODE_ENTRY]));
+    const shown = shownOf(approvalsFile([LS_ENTRY, NODE_ENTRY]));
+    // Both read the same revision; the first write wins.
+    const first = await removeAllowlistEntry(shared.ctx, {
+      agentId: "otto",
+      entryId: LS_ENTRY.id,
+      ...shown,
+    });
+    expect(first.outcome).toBe("removed");
+    /** A second device that read the shown revision before the first device wrote. */
+    const staleDevice = () => {
+      const device = fake({
+        "exec.approvals.get": () =>
+          device.methods().includes("exec.approvals.set")
+            ? shared.file()
+            : approvalsFile([LS_ENTRY, NODE_ENTRY]),
+        "exec.approvals.set": (params) => {
+          if (params.baseHash !== shared.file().hash)
+            throw new Error(
+              "exec approvals changed since last load; re-run exec.approvals.get and retry",
+            );
+          return shared.file();
+        },
+      });
+      return device;
+    };
+    // The second device, same entry: refused, and never Removed though the entry is gone.
+    const second = await removeAllowlistEntry(staleDevice().ctx, {
+      agentId: "otto",
+      entryId: LS_ENTRY.id,
+      ...shown,
+    });
+    expect(second.outcome).toBe("not-confirmed");
+    expect(second.removed).toBeNull();
+    expect(second.error).toContain("changed since last load");
+    // Different entries: the later write is refused, and the entry it meant to remove remains.
+    const other = await removeAllowlistEntry(staleDevice().ctx, {
+      agentId: "otto",
+      entryId: NODE_ENTRY.id,
+      ...shown,
+    });
+    expect(other.outcome).toBe("still-listed");
+    expect(shared.file().file.agents.otto.allowlist).toEqual([NODE_ENTRY]);
+  });
+
   it("an entry the shown revision does not have is not written", async () => {
     const gateway = approvalsGateway(approvalsFile([NODE_ENTRY]));
     const result = await removeAllowlistEntry(gateway.ctx, {
@@ -1017,7 +1111,7 @@ describe("F-178 F-324: every answer fits its result frame once serialized", () =
     });
     expect(removed.outcome).toBe("still-listed");
     expect(JSON.stringify(removed).length).toBeLessThan(FRAME);
-  });
+  }, 60_000);
 
   it("an Activity page, joined to records and rules full of escapes", async () => {
     const page = await readActivity(

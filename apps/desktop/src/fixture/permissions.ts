@@ -13,7 +13,8 @@
 //                                                more: three more, one of a routine that is gone;
 //                                                expiring: the live grant ends a minute from now)
 //   revoke=refused|gone                          how Revoke goes: the gateway refuses, or lists no such grant
-//   remove=changed                               Remove finds the entry edited in place after the confirmation opened
+//   remove=changed|hidden                        Remove finds the entry edited in place after the
+//                                                confirmation opened, or moved past the rows shown
 //   saved=long                                   two entries whose long patterns share their shown start
 // A hello later than the scene's (connectedAt in the future) reads the file as another revision.
 //   audit=empty|off|error|loading|end            activity (default: a page with older ones after it)
@@ -440,6 +441,17 @@ export function permissionCommand(
       });
     }
     case "removeAllowlistEntry": {
+      if (params.remove === "hidden") {
+        // Another admin's write moved this entry past the rows the page shows: a new revision.
+        removed.add(command.entryId);
+        removed.add("edited-hidden");
+        return Promise.resolve({
+          outcome: "changed",
+          removed: null,
+          error: null,
+          allowlist: allowlist(),
+        });
+      }
       if (params.remove === "changed" && !removed.has("edited")) {
         removed.add("edited");
         return Promise.resolve({

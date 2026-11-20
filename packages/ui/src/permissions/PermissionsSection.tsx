@@ -577,23 +577,32 @@ function SavedPart({
         } else
           setNotes((all) => ({
             ...all,
-            [id]: `The gateway's file changed since it was shown, and no longer lists this entry for ${bot}. Nothing was removed.`,
+            [id]: "The gateway's file changed since it was shown, and nothing was removed. This entry isn't shown in the refreshed list.",
           }));
         announce("Nothing removed");
         return;
       }
-      const note =
-        result.outcome === "removed"
-          ? `Removed ${result.removed?.pattern ?? entry.pattern} for ${bot}. Read back at ${clockTime(Date.now())}: the gateway's file no longer lists it.`
-          : result.outcome === "ambiguous"
-            ? `Nothing was removed: the gateway's file has more than one entry for ${bot} with this id, so Clawtrate can't tell which one you confirmed.`
-            : result.outcome === "not-listed"
-              ? `The gateway's file no longer lists ${entry.pattern} for ${bot}; nothing was written.`
-              : result.outcome === "still-listed"
-                ? `Couldn't remove ${entry.pattern} for ${bot}.${result.error ? ` ${result.error}` : ""} The gateway's file still lists it.`
-                : `Couldn't read the gateway's file back.${result.error ? ` ${result.error}` : ""}`;
+      // A refused write of a file that changed meanwhile: the refreshed file can be confirmed from.
+      const stale =
+        result.outcome !== "removed" &&
+        /changed since last load/.test(result.error ?? "") &&
+        now !== undefined &&
+        removable(now);
+      const note = stale
+        ? "The gateway's file changed. Confirm this entry from the refreshed file."
+        : result.outcome === "removed" && result.removed
+          ? `Removed ${result.removed.pattern} for ${bot}. The file read back no longer lists the entry.`
+          : result.outcome === "not-confirmed" || result.outcome === "removed"
+            ? `Clawtrate couldn't confirm removal.${result.error ? ` ${result.error}` : ""}`
+            : result.outcome === "ambiguous"
+              ? `Nothing was removed: the gateway's file has more than one entry for ${bot} with this id, so Clawtrate can't tell which one you confirmed.`
+              : result.outcome === "not-listed"
+                ? `The gateway's file no longer lists ${entry.pattern} for ${bot}; nothing was written.`
+                : result.outcome === "still-listed"
+                  ? `Couldn't remove ${entry.pattern} for ${bot}.${result.error ? ` ${result.error}` : ""} The gateway's file still lists it.`
+                  : `Couldn't read the gateway's file back.${result.error ? ` ${result.error}` : ""}`;
       setNotes((all) => ({ ...all, [id]: note }));
-      announce(result.outcome === "removed" ? "Removed" : "Couldn't remove");
+      announce(result.outcome === "removed" && result.removed ? "Removed" : "Couldn't remove");
     } catch (error) {
       setNotes((all) => ({ ...all, [id]: `Couldn't remove. ${errorText(error)}` }));
       announce("Couldn't remove");

@@ -342,7 +342,9 @@ test.describe("behaviour", () => {
     expect((await sent(page)).some((each) => each.type === "removeAllowlistEntry")).toBe(false);
     await entry.getByRole("button", { name: "Remove…" }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Remove" }).click();
-    await expect(page.getByText(/^Removed \/bin\/ls for Otto\. Read back at /)).toBeVisible();
+    await expect(
+      page.getByText("Removed /bin/ls for Otto. The file read back no longer lists the entry."),
+    ).toBeVisible();
     await expect(page.getByTestId("allowlist-entry").filter({ hasText: "/bin/ls" })).toHaveCount(0);
     await expect(announced(page)).toHaveText("Removed");
     // The entry the file keeps without an id offers no Remove.
@@ -375,11 +377,33 @@ test.describe("behaviour", () => {
     // Confirmed again, it is written against the revision now shown, and names that entry.
     await again.getByRole("button", { name: "Remove" }).click();
     await expect(
-      page.getByText(/^Removed \/usr\/bin\/true for Otto\. Read back at /),
+      page.getByText(
+        "Removed /usr/bin/true for Otto. The file read back no longer lists the entry.",
+      ),
     ).toBeVisible();
     expect(
       (await sent(page)).filter((each) => each.type === "removeAllowlistEntry").at(-1),
     ).toMatchObject({ shownHash: "fixture-hash-2" });
+  });
+
+  test("F-178: a conflict whose entry is past the rows shown says it isn't shown, and removes nothing", async ({
+    page,
+  }) => {
+    await openFixture(page, `${ADMIN}&remove=hidden`, "light");
+    await permissions("Saved approvals", grants)(page);
+    await page
+      .getByTestId("allowlist-entry")
+      .filter({ hasText: "/bin/ls" })
+      .getByRole("button", { name: "Remove…" })
+      .click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Remove" }).click();
+    await expect(
+      page.getByText(
+        "The gateway's file changed since it was shown, and nothing was removed. This entry isn't shown in the refreshed list.",
+      ),
+    ).toBeVisible();
+    await expect(page.getByText(/^Removed /)).toHaveCount(0);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
   });
 
   test("F-178: a confirmation open when a new connection arrives closes without a command; the new row sends its own revision and digest", async ({
