@@ -142,7 +142,7 @@ public static class VerifiedInstaller {
     return current;
   }
 
-  public static string Run(string path, long size, string app, bool launch) {
+  public static string Run(string path, long size, string app, string expectedVersion, bool launch) {
     if (!System.Text.RegularExpressions.Regex.IsMatch(path, @"^[A-Za-z]:\\") ||
         !System.Text.RegularExpressions.Regex.IsMatch(app, @"^[A-Za-z]:\\")) return "installation-context";
     if (new DriveInfo(Path.GetPathRoot(path)).DriveType != DriveType.Fixed ||
@@ -174,6 +174,11 @@ public static class VerifiedInstaller {
           file.Position = 0;
           string publisher = TrustedPublisher(imagePath, image);
           if (publisher == null) return "authenticode-trust";
+          // Read under the same namespace and image locks as WinVerifyTrust.
+          var metadata = System.Diagnostics.FileVersionInfo.GetVersionInfo(path);
+          if (metadata.ProductName != "Clawtrate" || metadata.OriginalFilename != "ClawtrateSetup.exe")
+            return "installer-product";
+          if (metadata.ProductVersion != expectedVersion) return "installer-version";
           string identity = info.volume + "." + info.indexHigh + "." + info.indexLow;
           Console.WriteLine("proof " + identity + " " + file.Length + " " + digest + " " + runningPublisher + " " + publisher);
           if (!launch) return "ok";
@@ -195,7 +200,7 @@ public static class VerifiedInstaller {
 }
 '@
 [VerifiedInstaller]::Run($env:CLAWTRATE_UPDATE_FILE,[long]$env:CLAWTRATE_UPDATE_SIZE,$env:CLAWTRATE_RUNNING_IMAGE,
-    ($env:CLAWTRATE_INSTALL_MODE -eq 'launch'))
+    $env:CLAWTRATE_UPDATE_VERSION, ($env:CLAWTRATE_INSTALL_MODE -eq 'launch'))
 `;
 
 export async function windowsInstall(
@@ -211,6 +216,7 @@ export async function windowsInstall(
       {
         CLAWTRATE_UPDATE_FILE: file.path,
         CLAWTRATE_UPDATE_SIZE: String(file.size),
+        CLAWTRATE_UPDATE_VERSION: file.version,
         CLAWTRATE_RUNNING_IMAGE: process.execPath,
         CLAWTRATE_INSTALL_MODE: launch ? "launch" : "inspect",
       },
@@ -250,6 +256,8 @@ export async function windowsInstall(
       case "ok":
         return checked && !signal?.aborted ? null : failure;
       case "authenticode-trust":
+      case "installer-product":
+      case "installer-version":
       case "publisher-mismatch":
       case "running-signature-untrusted":
       case "artifact-changed":

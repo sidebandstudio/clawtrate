@@ -97,3 +97,20 @@ it.each(["running-signature-untrusted", "installation-context", "inspection-fail
     expect(await pending).toBe(reason);
   },
 );
+
+it.each([
+  ["1.1.0", "installer-product"],
+  ["1.0.9", "installer-version"],
+  ["1.1.0-nightly.20261101.2", "installer-version"],
+])("checks the signed setup kind and full offer version against %s", async (actual, reason) => {
+  const native = nativeStandIn();
+  const pending = windowsInstall(file, pin, false);
+  const [script, env] = vi.mocked(runUpdatePowerShell).mock.lastCall!;
+  expect(script).toContain('metadata.OriginalFilename != "ClawtrateSetup.exe"');
+  expect(script).toContain("metadata.ProductVersion != expectedVersion");
+  expect(env.CLAWTRATE_UPDATE_VERSION).toBe(file.version);
+  native.finish(
+    actual === env.CLAWTRATE_UPDATE_VERSION ? "installer-product" : "installer-version",
+  );
+  expect(await pending).toBe(reason);
+});
