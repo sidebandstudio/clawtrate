@@ -21,8 +21,7 @@ export function readCheck(value: unknown): DesktopUpdateSnapshot["lastCheck"] {
   return (track === "stable" || track === "nightly") && date ? { track, readAt: date } : null;
 }
 
-const keys = ["selectedTrack", "lastCheck", "attempt"] as const;
-type Key = (typeof keys)[number];
+type Key = keyof Preferences;
 export interface StoredUpdatePreferences {
   prefs: Preferences;
   invalid: Set<Key>;
@@ -33,7 +32,7 @@ function project(value: unknown): StoredUpdatePreferences {
     throw Error("Invalid update preferences");
   const prefs: Preferences = {},
     invalid = new Set<Key>();
-  for (const key of keys) {
+  for (const key of ["selectedTrack", "lastCheck", "attempt"] as const) {
     if (!Object.hasOwn(value, key)) continue;
     const field: unknown = (value as Record<string, unknown>)[key];
     try {
