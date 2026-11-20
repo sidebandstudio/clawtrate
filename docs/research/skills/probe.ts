@@ -27,6 +27,8 @@
 //   extra      a stale mutate, an existing task after a list change, what
 //              each tier reads of the config, a stale baseHash
 //   stalecfg   a config.patch on a stale baseHash
+//   round2     frontmatter a save keeps or loses, a disabled skill's
+//              defaults, opposite share writes, an inherited empty list
 //   call       one request: --method <m> [--params <json>]
 //   workshop   the bot's skill_workshop from a non-admin and an admin
 //              device (#learn, #learn-workshop), the change feed, archive
@@ -693,7 +695,75 @@ async function call() {
   }
 }
 
-const experiments: Record<string, () => Promise<void>> = { pair, tiers, library, task, running, perbot, workshop, extra, stalecfg, call };
+/** Second round: frontmatter kept or lost by a save, defaults for a disabled skill, opposite share writes, an inherited list. */
+async function round2() {
+  const a = await device(values.data, "A");
+  const b = await device(values.data2, "B");
+  const x = await device(values.admin, "admin");
+  try {
+    const slug = `ferry-times-${tag}`;
+    const head = `---\nname: ${slug}\ndescription: Use when checking the ferry.\nuser-invocable: false\nmetadata: {"openclaw":{"requires":{"bins":["curl"]}}}\n---\n\n`;
+    const s1 = await a.attempt("skills.library.save", { expectedRevision: null, slug, content: `${head}Check the timetable.\n`, files: [{ path: "references/times.md", content: "First ferry 6:10.\n" }] });
+    say("1. saved with user-invocable and metadata:", receipt(s1));
+    const id = s1.result.entry.skillId;
+    const t1 = await a.request("sessions.create", { agentId: "main", label: `ferry ${tag}` });
+    const status = async (key: string) => {
+      const st = await a.attempt("skills.status", { agentId: "main", sessionKey: key });
+      const row = st.result?.skills?.find((k: Rec) => k.name === s1.result.entry.name);
+      return row ? { eligible: row.eligible, userInvocable: row.userInvocable } : "not listed";
+    };
+    say("   skills.status in a new task:", await status(t1.key));
+    // The first round's editor wrote name, description and body only.
+    const plain = await a.attempt("skills.library.save", { skillId: id, expectedRevision: s1.result.entry.revision, slug, content: `---\nname: ${slug}\ndescription: Use when checking the ferry.\n---\n\nCheck the timetable twice.\n`, retainFiles: ["references/times.md"] });
+    const r1 = await a.attempt("skills.library.read", { skillId: id });
+    say("2. a save of name, description and body only:", { state: plain.result?.state, keepsUserInvocable: r1.result.content.includes("user-invocable"), keepsMetadata: r1.result.content.includes("metadata"), files: r1.result.files.map((f: Rec) => f.path) });
+    const t2 = await a.request("sessions.create", { agentId: "main", label: `ferry2 ${tag}` });
+    say("   skills.status in a task created after it:", await status(t2.key), "| the first task:", await status(t1.key));
+    // Replacing only the body, inside the frontmatter as read.
+    const kept = await a.attempt("skills.library.save", { skillId: id, expectedRevision: r1.result.entry.revision, slug, content: `${head}Check the timetable twice.\n`, retainFiles: ["references/times.md"] });
+    const r2 = await a.attempt("skills.library.read", { skillId: id });
+    say("3. a save that keeps the frontmatter as read:", { state: kept.result?.state, keepsUserInvocable: r2.result.content.includes("user-invocable: false"), keepsMetadata: r2.result.content.includes('"bins":["curl"]') });
+    // Disabled, then saved.
+    const dis = await a.attempt("skills.library.mutate", { skillId: id, expectedRevision: r2.result.entry.revision, action: "disable" });
+    const s3 = await a.attempt("skills.library.save", { skillId: id, expectedRevision: dis.result.entry.revision, slug, content: `${head}Check the timetable three times.\n`, retainFiles: ["references/times.md"] });
+    const t3 = await a.request("sessions.create", { agentId: "main", label: `ferry3 ${tag}` });
+    say("4. saved while disabled:", { enabled: s3.result.entry.enabled, nextAction: s3.result.nextAction, newTaskPins: (await selections(a, t3.key)).filter((y: Rec) => y.slug === slug) });
+    const att = await a.attempt("skills.library.activate", { sessionKey: t3.key, action: "attach", skillId: id });
+    say("   attached explicitly:", att.ok ? att.result.selections.filter((y: Rec) => y.skillId === id).map((y: Rec) => String(y.revision).slice(0, 12)) : att.error);
+    // Opposite share writes on the same revision.
+    const cur = (await a.attempt("skills.library.read", { skillId: id })).result.entry;
+    const [sh, un] = await Promise.all([
+      a.attempt("skills.library.mutate", { skillId: id, expectedRevision: cur.revision, action: "share" }),
+      b.attempt("skills.library.mutate", { skillId: id, expectedRevision: cur.revision, action: "unshare" }),
+    ]);
+    const team = (await a.attempt("skills.library.list", { scope: "team" })).result.entries.some((e: Rec) => e.skillId === id);
+    say("5. share from A and unshare from B on one revision:", { share: sh.ok ? sh.result.entry.shared : sh.error, unshare: un.ok ? un.result.entry.shared : un.error, inTeamListAfter: team });
+    // A removed skill's refusal, as the client receives it.
+    const before = (await a.attempt("skills.library.read", { skillId: id })).result.entry;
+    await a.attempt("skills.library.mutate", { skillId: id, expectedRevision: before.revision, action: "remove" });
+    const again = await a.attempt("skills.library.save", { skillId: id, expectedRevision: before.revision, slug, content: `${head}x\n` });
+    say("6. a save on the removed skill:", again.error);
+    // An inherited empty default list, with no key for the bot.
+    const lake = `lake-path-${tag}`;
+    await a.attempt("skills.library.save", { expectedRevision: null, slug: lake, content: skillText(lake, "Use when walking the lake path.", "Go clockwise.") });
+    const c0 = await x.request("config.get", {});
+    say("7. Juniper's key:", Object.hasOwn(c0.config.agents.entries.main, "skills") ? c0.config.agents.entries.main.skills : "missing", "| defaults.skills:", c0.config.agents.defaults?.skills ?? "missing");
+    const set = await x.attempt("config.patch", { raw: JSON.stringify({ agents: { defaults: { skills: [] } } }), baseHash: c0.hash });
+    await sleep(1500);
+    const t4 = await a.request("sessions.create", { agentId: "main", label: `inherit ${tag}` });
+    const g4 = await turn(a, t4.key, "#skills");
+    say("   with defaults.skills [] and no key:", set.ok ? "patched" : set.error, "| pins hold it:", (await selections(a, t4.key)).some((y: Rec) => y.slug === lake), "| the turn was given:", g4.text);
+    const c1 = await x.request("config.get", {});
+    const back = await x.attempt("config.patch", { raw: JSON.stringify({ agents: { defaults: { skills: null } } }), baseHash: c1.hash, replacePaths: ["agents.defaults.skills"] });
+    await sleep(1500);
+    const g5 = await turn(a, t4.key, "#skills");
+    say("   defaults removed:", back.ok ? "patched" : back.error, "| the same task's next turn:", libraryLines(g5.text, lake));
+  } finally {
+    for (const d of [a, b, x]) d.stop();
+  }
+}
+
+const experiments: Record<string, () => Promise<void>> = { pair, tiers, library, task, running, perbot, workshop, extra, stalecfg, call, round2 };
 const run = experiments[experiment ?? ""];
 if (!run) throw new Error(`unknown experiment ${experiment}; one of ${Object.keys(experiments).join(", ")}`);
 await run();
