@@ -115,14 +115,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install chromium
       - run: pnpm visual
-      # What a failed check saw: the actual and difference pictures, traces and error contexts.
-      - if: failure()
+      # What a failed or flaky check saw: the first attempt's actual and difference pictures,
+      # traces and attachments, even when the retry passed. Passing attempts leave their
+      # folders empty, so this stays small.
+      - if: always()
         uses: actions/upload-artifact@v7
         with:
           name: visual-results
           path: test-results/
           retention-days: 3
       # Unsigned: no signing variables are set, so the app is signed ad hoc and not notarized.
+      - run: pnpm test:desktop-updates
       - run: pnpm package:mac
 
   windows:
@@ -141,6 +144,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # Unsigned: no signing variables are set.
+      - run: pnpm test:desktop-updates
       - run: pnpm package:win
       # For inspection only: unsigned, and never a release.
       - uses: actions/upload-artifact@v7

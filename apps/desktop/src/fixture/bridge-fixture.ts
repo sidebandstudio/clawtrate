@@ -2,6 +2,7 @@
 // implements the same ClawtrateBridge the desktop and web hosts do, holds
 // everything in memory, and never opens a socket or makes a request.
 
+import { fixtureRoutines, routineCommand, type RoutineParams } from "./routines.ts";
 import {
   applyApprovalResolved,
   applyQuestionResolved,
@@ -144,6 +145,7 @@ function loaded(now: number): ClawtrateState {
     unroutedApprovalsOmitted: 0,
     creations: [],
     accounts: initialState.accounts,
+    routines: initialState.routines,
     retention: initialState.retention,
   };
 }
@@ -471,8 +473,10 @@ function answerStrings(
 export function createFixtureBridge(
   name: SceneName,
   options: {
+    desktopUpdates?: ClawtrateBridge["desktopUpdates"];
     files?: FileParams;
     accounts?: AccountParams;
+    routines?: RoutineParams;
     usage?: UsageParams;
     machines?: MachineParams;
   } = {},
@@ -487,7 +491,7 @@ export function createFixtureBridge(
   /** The next plain archive meets a run that had just started, and stops it. */
   raceArchive(): void;
   /**
-   * Hold the fixture's delayed answers (a decision applied, refused, or read
+   * Hold the fixture's timed scene steps and delayed answers (a decision applied, refused, or read
    * back; a reconnect answered) until `release`: a test that must see a state lasting only until the
    * answer comes holds it, looks, then lets the answer through.
    */
@@ -500,13 +504,21 @@ export function createFixtureBridge(
   const fileParams = options.files ?? { state: null, checkout: false, failFirstOpen: false };
   const fileAnswer = fileAnswers(now, fileParams);
   const accountParams = options.accounts ?? NO_ACCOUNT_PARAMS;
+  const routineParams = options.routines ?? { state: "none" };
   let state =
     fileParams.state === null
       ? initial
       : { ...initial, transcripts: withFileRuns(initial.transcripts, now, fileParams) };
   // Every scene with bots has the gateway's accounts; the address can give it more access.
   if (state.bots.length > 0)
-    state = withAccess({ ...state, accounts: fixtureAccounts(now, accountParams) }, accountParams);
+    state = withAccess(
+      {
+        ...state,
+        accounts: fixtureAccounts(now, accountParams),
+        routines: fixtureRoutines(now, routineParams),
+      },
+      accountParams,
+    );
   // And the usage the gateway reports, with this person's budgets.
   const usageParams = options.usage ?? NO_USAGE_PARAMS;
   if (state.bots.length > 0) state = { ...state, usage: fixtureUsage(now, usageParams) };
@@ -522,7 +534,7 @@ export function createFixtureBridge(
   const startSteps = () => {
     if (started) return;
     started = true;
-    for (const step of steps) setTimeout(() => set(step.change(state)), step.after);
+    for (const step of steps) deferred(() => set(step.change(state)), step.after);
   };
   let pairingChecks = 0;
   const sent: BridgeCommand[] = [];
@@ -548,6 +560,11 @@ export function createFixtureBridge(
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   async function apply(command: BridgeCommand): Promise<unknown> {
+    const routine = routineCommand(command, () => state, now, routineParams);
+    if (routine) {
+      sent.push(command);
+      return routine;
+    }
     const usage = usageCommand(command, () => state, set, usageParams);
     if (usage) {
       sent.push(command);
@@ -833,7 +850,7 @@ export function createFixtureBridge(
   }
 
   return {
-    desktopUpdates: noDesktopUpdates,
+    desktopUpdates: options.desktopUpdates ?? noDesktopUpdates,
     info: name === "access-pinned" ? { ...FIXTURE_INFO, readOnly: true } : FIXTURE_INFO,
     getState: () => state,
     subscribe(listener) {

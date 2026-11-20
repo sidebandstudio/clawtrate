@@ -272,6 +272,7 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "store.value": "the state, bounded by its schema (`state-bounds.ts`) and counted in `state`",
   "accounts.ctx": "the client's own functions, handed to the accounts engine",
   "accounts.signInAbort": "a handle that ends the one sign-in request that waits",
+  "routines.ctx": "the client's own functions, handed to the routines engine",
   "usage.ctx": "the client's own functions, handed to the usage engine",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
 };
@@ -284,6 +285,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   store: "ObservableStore",
   fileTransfers: "FileTransfers",
   accounts: "AccountsEngine",
+  routines: "RoutinesEngine",
   usage: "UsageEngine",
   machines: "MachinesEngine",
   waiting: "WaitingIndex",
