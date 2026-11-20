@@ -192,9 +192,9 @@
     const mine = S.call && ["live"].includes(S.call.state) ? S.call.relayIds : [];
     const others = openRelays().filter((r) => !mine.includes(r.id));
     if (!others.length) return null;
-    if (others.some((r) => r.state === "closing" || r.state === "creating")) return { why: "Ending the previous voice session…" };
-    const until = Math.max(...others.map((r) => r.expiresAt));
-    return { why: `The previous voice session may still be open on ${GATEWAY}. A new voice chat can start after ${clock(until)}, when that session is scheduled to end.`, until };
+    if (others.some((r) => (r.state === "closing" || r.state === "creating") && r.connGen === undefined)) return { why: "Ending the previous voice session…" };
+    // A scheduled end confirms nothing: only a close reply or a matching terminal close releases a relay.
+    return { why: `The previous voice session may still be open on ${GATEWAY}. This connection cannot confirm that it ended.` };
   };
 
   const callReason = () => {
@@ -937,7 +937,7 @@
   // talk.session.create with the disclosed provider by id; nothing is sent until it is ready.
   function createRelay(c) {
     c.state = "creating";
-    const relay = { id: null, attempt: c.attempt, state: "creating", expiresAt: NOW + 1800, task: c.task };
+    const relay = { id: null, attempt: c.attempt, gen: S.gen, state: "creating", expiresAt: NOW + 1800, task: c.task };
     S.relays.push(relay);
     c.relay = relay;
     S.io.creates.push({ kind: "realtime", attempt: c.attempt, provider: c.provider, sessionKey: c.task, language: c.lang || undefined, voice: c.requestedVoice || undefined, capabilities: ["voice-selection"] });
@@ -994,7 +994,7 @@
     S.held[vs] = c.secs;
     const saved = (S.history[c.task] || []).some((r) => voiceIdOf(r) === vs || c.relayIds.includes(voiceIdOf(r)));
     if (!saved && !(S.heldEmpty[c.task] || []).some((e) => e.vs === vs)) (S.heldEmpty[c.task] ||= []).push({ vs, secs: c.secs });
-    if (!confirmed) S.lineNotes[vs] = `Ended on this device. ${GATEWAY} did not confirm the call ended.`;
+    if (!confirmed) S.lineNotes[vs] = `Ended on this device. ${GATEWAY} did not confirm the previous session ended.`;
   }
 
   function endCall(confirmed) {
@@ -1003,7 +1003,7 @@
     leaveLine(c, confirmed);
     S.call = null;
     render();
-    say(confirmed ? "Voice chat ended" : `Ended on this device. ${GATEWAY} did not confirm the call ended.`);
+    say(confirmed ? "Voice chat ended" : `Ended on this device. ${GATEWAY} did not confirm the previous session ended.`);
     focusKey("call");
     const next = S.next;
     S.next = null;
@@ -1137,17 +1137,24 @@
         break;
       }
       case "error": {
+        // An error reports an error; it releases nothing. Local media stops, and close is requested if still owned here.
         if (!c || !c.ready || c.state !== "live") return;
         stopMedia(c);
-        for (const r of S.relays) if (c.relayIds.includes(r.id)) r.state = "closed";
+        for (const r of S.relays)
+          if (c.relayIds.includes(r.id) && r.state === "open" && r.connGen === undefined && S.connected) {
+            r.state = "closing";
+            S.io.closes.push({ kind: "realtime", id: r.id, why: "error" });
+            later(() => ev("closeResult", { ok: !S.flags.closeFail, id: r.id }), 200);
+          }
         leaveLine(c, true);
-        S.call = { ...c, state: "failed", reason: "The call ended unexpectedly", second: `${GATEWAY} ended the call: ${data.message || "Realtime provider closed the session."}` };
+        S.call = { ...c, state: "failed", reason: "The call ended unexpectedly", second: `${GATEWAY} reported an error: ${data.message || "Realtime provider closed the session."}` };
         say("Voice chat failed: The call ended unexpectedly");
         break;
       }
       case "close": {
         // A matching terminal close ends that relay even with no reply to close. Never across a reconnect.
-        const r = S.relays.find((x) => x.id === data.id && x.state !== "closed" && x.connGen === undefined);
+        // Only from the owning connection: a relay unresolved at a drop is never released by an event of another generation.
+        const r = S.relays.find((x) => x.id === data.id && x.state !== "closed" && x.connGen === undefined && (data.gen === undefined || data.gen === x.gen));
         if (!r) return;
         r.state = "closed";
         delete S.lineNotes[data.id];
@@ -1161,7 +1168,7 @@
       }
       case "closeResult": {
         const ids = data.id ? [data.id] : c && c.state === "ending" ? c.relayIds : [];
-        for (const r of S.relays) if (ids.includes(r.id) && r.state === "closing") r.state = data.ok ? "closed" : "unconfirmed";
+        for (const r of S.relays) if (ids.includes(r.id) && r.state === "closing" && r.connGen === undefined) r.state = data.ok ? "closed" : "unconfirmed";
         if (c && c.state === "ending" && !data.id) return endCall(Boolean(data.ok));
         break;
       }
@@ -1193,9 +1200,8 @@
         break;
       }
       case "expire": {
-        // The scheduled end of every relay that may still be open has passed.
-        for (const r of S.relays) if (r.state === "unconfirmed") r.state = "closed";
-        for (const k of Object.keys(S.lineNotes)) delete S.lineNotes[k];
+        // The scheduled end (expiresAt) has passed: a schedule for a close attempt, which confirms no release.
+        S.clockPast = true;
         break;
       }
       case "trackEnded": {
@@ -1510,7 +1516,7 @@
     S.consent.add(callKey());
     const c = newCall(task, S.providerId);
     const id = `vs${c.attempt}`;
-    S.relays.push({ id, attempt: c.attempt, state: "open", expiresAt: NOW + 1800 - 134, task });
+    S.relays.push({ id, attempt: c.attempt, gen: S.gen, state: "open", expiresAt: NOW + 1800 - 134, task });
     Object.assign(c, { state: "live", ready: true, capture: true, relayIds: [id], secs: 134, clockAt: NOW, expiresAt: NOW + 1800 - 134, voices: VOICES.slice(), canChange: true, voice: "Alloy" });
     S.io.micOpens += 1;
     S.call = c;
@@ -1572,7 +1578,7 @@
         ...newCall(t, S.providerId),
         state: "failed",
         reason: none ? "No connection" : "The call ended unexpectedly",
-        second: none ? `This device isn't connected to ${GATEWAY}. Start again when it reconnects.` : `${GATEWAY} ended the call: Realtime provider closed the session.`,
+        second: none ? `This device isn't connected to ${GATEWAY}. Start again when it reconnects.` : `${GATEWAY} reported an error: Realtime provider closed the session.`,
       };
       if (none) S.connected = false;
       return;
@@ -1649,7 +1655,7 @@
     extra.innerHTML =
       `<span class="run-controls v-bar">` +
       b("speak", "Otto speaks") + b("caption", "A caption") + b("saved", "The turn is saved") +
-      b("drop", "Drop connection") + b("expire", "Old session's end passes") + b("unplug", "Unplug microphone") + b("revoke", "Revoke access") +
+      b("drop", "Drop connection") + b("expire", "Old session's scheduled end passes") + b("unplug", "Unplug microphone") + b("revoke", "Revoke access") +
       b("error", "Gateway ends the call") + b("background", "App to background") + b("botvoice", "Bot asks for a voice") + b("remote", "Another device saves") +
       t("closeFail", "Close fails") + t("createFail", "Start refused") + t("voiceFail", "Voice change fails") + t("prefFail", "Saving fails") + t("prefConflict", "Saving conflicts") + t("dictFail", "Dictation refused") + t("sendFail", "Send fails") +
       b("shortcut-dict", "Shortcut: Start Dictation") + b("shortcut-call", "Shortcut: Start Voice Chat with Juniper") + b("shortcut-action", "Action Button") + b("settings", "Settings") +
