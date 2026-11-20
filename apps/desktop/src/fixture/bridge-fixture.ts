@@ -12,6 +12,7 @@ import {
   endDecision,
   endReadback,
   initialState,
+  MAX_RAW_ENTRY_CHARS,
   noteSent,
   readbackPending,
   resolveRequest,
@@ -21,9 +22,11 @@ import {
   type BridgeCommand,
   type BridgeResultFor,
   type ClawtrateBridge,
+  noDesktopUpdates,
   type ClawtrateState,
   type ConnectionState,
   type HostInfo,
+  type RunRawRead,
   type TaskActivity,
   type Transcript,
 } from "@clawtrate/core";
@@ -58,9 +61,11 @@ import {
   withAccess,
   type AccountParams,
 } from "./accounts.ts";
-import { LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
+import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machines.ts";
+import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 
 export const FIXTURE_INFO: HostInfo = {
   kind: "web",
@@ -123,6 +128,14 @@ const connected: ConnectionState = {
   scopes: ["operator.read"],
   deviceId: DEVICE_ID,
   paired: true,
+  // What OpenClaw 2026.10.6 advertises by default: images 6 MiB, files the 25 MiB frame's
+  // budget once base64-encoded (18.6 MiB), frames 25 MiB.
+  sendLimits: {
+    imageBytes: 6 * 1024 * 1024,
+    fileBytes: 19_464_192,
+    payloadBytes: 25 * 1024 * 1024,
+    files: 20,
+  },
 };
 
 function loaded(now: number): ClawtrateState {
@@ -463,7 +476,14 @@ function answerStrings(
 
 export function createFixtureBridge(
   name: SceneName,
-  options: { files?: FileParams; accounts?: AccountParams; artifacts?: ArtifactParams } = {},
+  options: {
+    desktopUpdates?: ClawtrateBridge["desktopUpdates"];
+    files?: FileParams;
+    accounts?: AccountParams;
+    usage?: UsageParams;
+    machines?: MachineParams;
+    artifacts?: ArtifactParams;
+  } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
   /** Every command the interface sent, for tests that check what was asked of the host. */
@@ -475,7 +495,7 @@ export function createFixtureBridge(
   /** The next plain archive meets a run that had just started, and stops it. */
   raceArchive(): void;
   /**
-   * Hold the fixture's delayed answers (a decision applied, refused, or read
+   * Hold the fixture's timed scene steps and delayed answers (a decision applied, refused, or read
    * back; a reconnect answered) until `release`: a test that must see a state lasting only until the
    * answer comes holds it, looks, then lets the answer through.
    */
@@ -498,6 +518,9 @@ export function createFixtureBridge(
   // Every scene with bots has the gateway's accounts; the address can give it more access.
   if (state.bots.length > 0)
     state = withAccess({ ...state, accounts: fixtureAccounts(now, accountParams) }, accountParams);
+  // And the usage the gateway reports, with this person's budgets.
+  const usageParams = options.usage ?? NO_USAGE_PARAMS;
+  if (state.bots.length > 0) state = { ...state, usage: fixtureUsage(now, usageParams) };
   const listeners = new Set<(state: ClawtrateState) => void>();
   const set = (next: ClawtrateState) => {
     state = next;
@@ -510,7 +533,7 @@ export function createFixtureBridge(
   const startSteps = () => {
     if (started) return;
     started = true;
-    for (const step of steps) setTimeout(() => set(step.change(state)), step.after);
+    for (const step of steps) deferred(() => set(step.change(state)), step.after);
   };
   let pairingChecks = 0;
   const sent: BridgeCommand[] = [];
@@ -534,7 +557,18 @@ export function createFixtureBridge(
   const railRefused = new Set<string>();
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
+  const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   async function apply(command: BridgeCommand): Promise<unknown> {
+    const usage = usageCommand(command, () => state, set, usageParams);
+    if (usage) {
+      sent.push(command);
+      return usage;
+    }
+    const machine = machineCommand(command, () => state, set);
+    if (machine) {
+      sent.push(command);
+      return machine;
+    }
     const account = accountCommand(command, () => state, set, accountParams);
     if (account) {
       sent.push(command);
@@ -792,6 +826,23 @@ export function createFixtureBridge(
           .find((each) => each.id === command.stepId);
         return (step?.raw ? { status: "available", raw: step.raw } : null) as BridgeResultFor<C>;
       }
+      case "readRunRaw": {
+        // As the engine answers: the event kept beside the state, or why there is none.
+        const run = state.transcripts[command.key]?.runs.find((each) => each.id === command.runId);
+        if (!run) return null as BridgeResultFor<C>;
+        const raw = run.error?.raw;
+        const read: RunRawRead = !raw
+          ? { status: "not-kept", holds: null }
+          : raw.chars > MAX_RAW_ENTRY_CHARS
+            ? {
+                status: "too-large",
+                holds: raw.holds,
+                chars: raw.chars,
+                limit: MAX_RAW_ENTRY_CHARS,
+              }
+            : { status: "available", holds: raw.holds, payload: FAILED_EVENT };
+        return read as BridgeResultFor<C>;
+      }
       default:
         // The live scenes answer their own commands (takeBackMessage, sendAgain, sendMessage).
         return (await apply(command)) as BridgeResultFor<C>;
@@ -799,6 +850,7 @@ export function createFixtureBridge(
   }
 
   return {
+    desktopUpdates: options.desktopUpdates ?? noDesktopUpdates,
     info: name === "access-pinned" ? { ...FIXTURE_INFO, readOnly: true } : FIXTURE_INFO,
     getState: () => state,
     subscribe(listener) {

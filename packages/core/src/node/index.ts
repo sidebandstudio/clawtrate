@@ -25,8 +25,8 @@ async function writePrivateFile(path: string, contents: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temp = `${path}.${process.pid}.tmp`;
   await writeFile(temp, contents, { mode: 0o600 });
+  await chmod(temp, 0o600);
   await rename(temp, path);
-  await chmod(path, 0o600);
 }
 
 /** A key/value store persisted as one JSON file with owner-only permissions. */
@@ -46,9 +46,10 @@ export function createFileStore(path: string): KeyValueStore {
   };
   const persist = (mutate: (data: Record<string, string>) => void) => {
     const run = queue.then(async () => {
-      const data = await load();
+      const data = { ...(await load()) };
       mutate(data);
       await writePrivateFile(path, `${JSON.stringify(data, null, 2)}\n`);
+      cache = data;
     });
     queue = run.catch(() => {});
     return run;
