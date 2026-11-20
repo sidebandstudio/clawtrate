@@ -56,6 +56,12 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/scopes.ts:ADMIN_SCOPES": "static, five scopes",
   "packages/core/src/accounts-engine.ts:CERTAIN_REFUSALS": "static, seven error codes",
   "packages/core/src/accounts.ts:KIND_RECORDS": "static, the four kinds Clawtrate records",
+  "packages/core/src/machines.ts:NODE_APPROVALS_COMMANDS": "static, two command names",
+  "packages/core/src/machines.ts:DEFAULTS_CHOICES":
+    "static, the four choices of a machine's defaults",
+  "packages/core/src/machines.ts:KNOWN_HOSTS": "static, the four exec hosts",
+  "packages/core/src/machines.ts:readMachines>places":
+    "one read's command place per listed bot, at most `MAX_BOTS`, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>missing":
     "one creation's steps that did not land, at most four, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>errors":
@@ -91,6 +97,15 @@ const ALLOWED: Record<string, string> = {
     "static, an empty list copied on write",
   "packages/core/src/accounts.ts:initialAccountsState.bindings":
     "static, an empty list copied on write",
+  "packages/core/src/usage.ts:initialUsage.budgets": "static, an empty list copied on write",
+  "packages/core/src/usage.ts:initialUsage.counts": "static, an empty list copied on write",
+  "packages/core/src/usage.ts:initialUsage.limits.providers":
+    "static, an empty list copied on write",
+  // One read: what a usage report or a count gathers while it is read, returned and dropped.
+  "packages/core/src/usage-engine.ts:inTurn>out":
+    "one read: the answers of one batch of usage requests, returned to its caller",
+  "packages/core/src/usage-engine.ts:sources>named":
+    "one read: the runs the sending tasks' results name, dropped when the report is answered",
   // Values that go into the bounded state, captured only by an update that runs at once.
   "packages/core/src/client.ts:completeCreation>message.attachments":
     "the new outgoing message's files, empty; kept only in the outbox, under its bound",

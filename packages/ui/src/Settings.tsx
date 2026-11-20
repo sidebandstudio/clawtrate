@@ -16,6 +16,8 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
+import { useUsageSection } from "./usage/UsageSection.tsx";
+import { useMachinesSection } from "./machines/Machines.tsx";
 import { Dialog } from "./bots/Dialog.tsx";
 import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
@@ -65,11 +67,13 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = "gateway" | "accounts" | "conversation";
+type Section = "gateway" | "accounts" | "conversation" | "usage" | "machines";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
   ["conversation", "Conversation"],
+  ["usage", "Usage"],
+  ["machines", "Machines"],
 ];
 
 /** How long a bot's turn may run before Clawtrate stops it, in minutes; 50 by default (F-100). */
@@ -251,6 +255,15 @@ export function Settings({
   );
 
   const accountsSection = useAccountsSection({ accounts, bots, connection, info, announce, toNav });
+  const usageSection = useUsageSection({ bots, connection, info, announce, toNav });
+  const machinesSection = useMachinesSection({
+    active: section === "machines",
+    connection,
+    info,
+    bots,
+    announce,
+    toNav,
+  });
 
   const gatewayPane = (
     <>
@@ -390,7 +403,11 @@ export function Settings({
               body: <ConversationPane announce={announce} />,
               foot: null,
             }
-          : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+          : section === "usage"
+            ? usageSection
+            : section === "machines"
+              ? machinesSection
+              : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">
