@@ -1,7 +1,4 @@
-// The update engine for the update screens (#69). Nothing imports it yet: a
-// build of the app makes no request to an update host. docs/decisions.md,
-// "Updates and release signing", says what it checks and what it does not.
-
+// Main-process update feed and download primitives.
 export {
   UpdateEngine,
   DEFAULT_LIMITS,
@@ -18,6 +15,6 @@ export {
   type UpdateFailureCause,
   type UpdateState,
 } from "./engine.ts";
-export { BUILD_FEED_ADDRESS, BUILD_RELEASE_DATE, productionUpdateEngine } from "./build-info.ts";
+export { BUILD_FEED_ADDRESS, BUILD_RELEASE_DATE, startDesktopUpdates } from "./build-info.ts";
 export { FEED_FORMAT, FILE_KEYS, fileKeyFor, type FileKey } from "./feed.ts";
 export { type LoopbackHttpForTests } from "./address.ts";

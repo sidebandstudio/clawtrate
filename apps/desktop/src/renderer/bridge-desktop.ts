@@ -17,6 +17,7 @@ export async function createDesktopBridge(api: DesktopHostApi): Promise<Clawtrat
     for (const listener of listeners) listener(state);
   });
   return {
+    desktopUpdates: api.desktopUpdates,
     info: hello.info,
     getState: () => state,
     subscribe(listener) {
