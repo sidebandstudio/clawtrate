@@ -46,6 +46,7 @@ Every document in the repository, by what you want to do.
 - `research/setup-flow/`: the probe behind the setup flow note.
 - [Notifications](research/notifications.md): who receives approvals, questions and a run's end, where notification settings can be kept, and what Electron lets the app know and do, from OpenClaw's source, live runs and Electron's documentation.
 - `research/notifications/`: the probe behind the notifications note.
+- [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
 ## Writing docs
