@@ -126,4 +126,15 @@ describe("the scripted T3 Code stand-in", () => {
     }
     t3.close();
   });
+
+  it("refuses the listing's filter and paging rather than list what they would leave out", async () => {
+    const t3 = createT3Code(() => 0);
+    for (const args of [{ statuses: ["running"] }, { limit: 1 }, { cursor: 1 }]) {
+      const out = await t3.callTool("t3_thread_list", { allProjects: true, ...args });
+      expect([out.isError, structured(out).code]).toEqual([true, "invalid_request"]);
+    }
+    const all = await t3.callTool("t3_thread_list", { allProjects: true });
+    expect(all.isError).not.toBe(true);
+    t3.close();
+  });
 });

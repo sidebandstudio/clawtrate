@@ -627,6 +627,10 @@ export function createT3Code(clock: () => number = Date.now) {
         const projectId = typeof args.projectId === "string" ? args.projectId : null;
         if (!projectId && args.allProjects !== true)
           return failure("target_required", "Pass projectId or allProjects: true.");
+        // One unfiltered page is all this stand-in lists: what would filter or page it is refused.
+        for (const option of ["statuses", "limit", "cursor"])
+          if (args[option] !== undefined)
+            return failure("invalid_request", `This stand-in does not support ${option}.`);
         const listed = [...threads.values()].filter(
           (each) => !projectId || each.projectId === projectId,
         );
