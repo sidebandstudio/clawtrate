@@ -133,7 +133,7 @@ describe it after the send: {"key":"agent:otto:dashboard:7eb06132-…","createdV
 
 So a client must check that a member's task still exists before it sends to it; sending blindly to a deleted member task starts a new, empty one. The check catches only a task already gone when it runs: a task deleted between the check and the send is made again by the send.
 
-**The gateway's own guard** (`guard`): `chat.send` takes `sessionId` and `expectedLeafEntryId`. When `queueMode` is not `"steer"` and `expectedLeafEntryId` is given, the handler refuses the send unless `sessionId` matches the task now at that key (`assertExpectedLeafActive`, `<openclaw>/dist/chat-send-handler-D_7lP5Io.mjs` lines 3488-3501, applied at lines 3933, 4044 and 4997; with `sessionId` given, line 3499 lets an ancestor of the active entry pass, and live a task with history accepted `null`). `sessionId` alone only fails a send whose task still exists under another identity (line 4998); it does not stop a send to a deleted task.
+**The gateway's own guard** (`guard`): `chat.send` takes `sessionId` and `expectedLeafEntryId`. When `queueMode` is not `"steer"` and `expectedLeafEntryId` is given, the handler refuses the send unless `sessionId` matches the task now at that key (`assertExpectedLeafActive`, `<openclaw>/dist/chat-send-handler-D_7lP5Io.mjs` lines 3488-3501, applied at lines 3933, 4044 and 4997; with `sessionId` given, line 3499 lets an ancestor of the active entry pass, and live a task with history accepted `null`). `sessionId` alone did not prevent delivery to an already replaced task (`replaced`: with a replacement already at the key, a send carrying the old `sessionId` alone answered `started` and ended `final` in the replacement, while the same send with `expectedLeafEntryId: null` was refused).
 
 ```
 guarded send to a task with history (sessionId, expectedLeafEntryId null): {"ok":true,"result":{"status":"started"}}
@@ -145,7 +145,7 @@ the same with queueMode steer, after deletion: started; the key now holds a new 
 guarded send while the task runs: started; both runs ended final
 ```
 
-So a send guarded with the task's confirmed `sessionId` and `expectedLeafEntryId: null`, with no `queueMode` (the task's own default then applies), is refused when the task has gone, on an empty task, a task with history or a running one. A send with `queueMode: "steer"` cannot be guarded this way and remakes a deleted task.
+Admission and a replacement are two moments. The guard runs while the gateway admits the send (lines 3933, 4044 and 4997), against the task at the key at that moment: a send guarded with the task's confirmed `sessionId` and `expectedLeafEntryId: null`, with no `queueMode` (the task's own default then applies), is refused when the task has gone or another session holds the key by then, on an empty task, a task with history or a running one. A task deleted after the send was admitted, and a replacement made later by someone else's send, are not seen by it: what was admitted was admitted to the session then at the key. A disappearance observed during admission can also give "Session … was deleted while starting work. Retry." (line 4994). A send with `queueMode: "steer"` cannot be guarded this way and remakes a deleted task.
 
 **A deleted bot refuses** (`delbot`): `chat.send` answered "Unknown agent id \"probe-wren\"" (section 8).
 
