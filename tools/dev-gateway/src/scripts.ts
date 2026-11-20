@@ -168,10 +168,11 @@ export function planReply(
     const memory = messages
       .filter((message) => message.role === "system")
       .map(messageText)
-      .join("\n")
+      .map((prompt) => prompt.split("\n<!-- /openclaw:attempt:STABLE -->", 1)[0]!)
+      .find((prompt) => /^## .*\/MEMORY\.md\s*$/m.test(prompt))
       // A heading stops the extract only when it names another workspace file, as the
       // gateway's injected-file headings do; a `##` inside the memory itself does not.
-      .match(/^## .*\/MEMORY\.md\s*\n([\s\S]*?)(?=^## [^\n]*\/[^\n]*\.md\s*$|(?![\s\S]))/m)?.[1]
+      ?.match(/^## .*\/MEMORY\.md\s*\n([\s\S]*?)(?=^## [^\n]*\/[^\n]*\.md\s*$|(?![\s\S]))/m)?.[1]
       ?.trim();
     return [{ kind: "text", text: memory || "I have no root memory for this task." }];
   }

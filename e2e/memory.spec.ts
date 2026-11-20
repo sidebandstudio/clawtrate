@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
+import { messageText, type ChatMessage } from "../tools/dev-gateway/src/scripts.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { devGateway } from "./global-setup.ts";
 
@@ -59,11 +60,12 @@ async function askMemory() {
   const run = await gateway.send(memoryKey, "What do you remember about me?");
   expect((await gateway.terminal(String(run.runId))).state).toBe("final");
   // Only the newest reply: the session's history keeps what earlier turns answered.
-  const history = await gateway.request<{ messages: { role: string; content: unknown }[] }>(
-    "chat.history",
-    { sessionKey: memoryKey, limit: 6 },
-  );
-  return JSON.stringify(history.messages.filter((message) => message.role === "assistant").at(-1));
+  const history = await gateway.request<{ messages: ChatMessage[] }>("chat.history", {
+    sessionKey: memoryKey,
+    limit: 6,
+  });
+  const reply = history.messages.findLast((message) => message.role === "assistant");
+  return reply ? messageText(reply) : null;
 }
 
 test.describe.configure({ mode: "serial" });
@@ -115,7 +117,7 @@ test("F-212: edits a root item after an explicit admin request", async ({ page }
   await memory.getByRole("button", { name: "Save memory" }).click();
   await expect(memory.getByText(revised, { exact: true })).toBeVisible({ timeout: 15_000 });
   await expect.poll(async () => (await root()).content, { timeout: 30_000 }).toBe(revised);
-  expect(await askMemory()).toContain(revised);
+  expect(await askMemory()).toBe(revised);
 });
 
 test("F-377: adds root memory and a separate Markdown note", async ({ page }) => {
@@ -156,9 +158,7 @@ test("F-375: confirms deletion and removes an item from the bot's next new priva
   await item.getByRole("button", { name: "Delete", exact: true }).click();
   await confirm.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(item).toHaveCount(0);
-  const reply = await askMemory();
-  expect(reply).toContain(revised);
-  expect(reply).not.toContain(added);
+  expect(await askMemory()).toBe(revised);
 
   await memory.getByRole("button", { name: "memory/release.md" }).click();
   await memory
@@ -187,9 +187,12 @@ test("F-216: a bot replies to the ordinary memory question with the memory it re
   await composer.fill("What do you remember about me?");
   await composer.press("Enter");
   await expect(page.getByTestId("memory-page")).toBeHidden();
-  await expect(page.getByTestId("message").filter({ hasText: revised })).toBeVisible({
-    timeout: 30_000,
-  });
+  await expect(
+    page
+      .getByTestId("message")
+      .filter({ hasText: revised })
+      .locator(".bubble:not([data-streaming])"),
+  ).toHaveText(revised, { timeout: 30_000 });
 });
 
 test("F-212: a concurrent write keeps the gateway's revision and leaves the draft available", async ({

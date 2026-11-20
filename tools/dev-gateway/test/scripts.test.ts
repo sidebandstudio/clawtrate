@@ -70,6 +70,31 @@ describe("planReply", () => {
     });
   });
 
+  it("F-216: the last workspace file ends before the gateway's dynamic instructions", () => {
+    const memory = "Keep a weekly release log.\n\n## Preferred days\nFridays.";
+    const prompt = [
+      "<!-- openclaw:attempt:STABLE -->",
+      "## /workspace/MEMORY.md",
+      "",
+      memory,
+      "",
+      "<!-- /openclaw:attempt:STABLE -->",
+      "<!-- openclaw:attempt:DYNAMIC -->",
+      "## Temporal Context",
+      "Current date: 2026-11-20",
+      "<!-- /openclaw:attempt:DYNAMIC -->",
+    ].join("\n");
+    expect(
+      planReply(
+        [
+          { role: "system", content: prompt },
+          { role: "user", content: "What do you remember about me?" },
+        ],
+        ALL_TOOLS,
+      ),
+    ).toEqual([{ kind: "text", text: memory }]);
+  });
+
   it("gives every scripted prompt a unique text", () => {
     const prompts = SEED_BOTS.flatMap((bot) =>
       bot.tasks.flatMap((task) => task.turns.map((t) => t.prompt)),
