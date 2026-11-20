@@ -3,9 +3,12 @@ import { constants } from "node:fs";
 import { open, rename, rm } from "node:fs/promises";
 import { parseReleaseDate } from "./feed.ts";
 
+import { readAttempt } from "./attempt.ts";
+
 export const MAX_PREFERENCE_BYTES = 1024;
 
 interface Preferences {
+  attempt?: ReturnType<typeof readAttempt>;
   selectedTrack?: UpdateTrack;
   lastCheck?: NonNullable<DesktopUpdateSnapshot["lastCheck"]>;
 }
@@ -35,6 +38,10 @@ function project(value: unknown): Preferences {
     if (!record) throw Error("Invalid last check");
     prefs.lastCheck = record;
   }
+  if ("attempt" in value)
+    prefs.attempt = readAttempt(
+      typeof value.attempt === "string" ? JSON.parse(value.attempt) : value.attempt,
+    );
   return prefs;
 }
 
@@ -70,11 +77,13 @@ export function createUpdatePreferenceStore(path: string) {
     async get(key: string): Promise<string | null> {
       const prefs = await load(path);
       if (key === "selectedTrack") return prefs.selectedTrack ?? null;
+      if (key === "attempt") return prefs.attempt ? JSON.stringify(prefs.attempt) : null;
       if (key === "lastCheck") return prefs.lastCheck ? JSON.stringify(prefs.lastCheck) : null;
       throw Error("Unknown update preference");
     },
     async set(key: string, value: string): Promise<void> {
-      if (key !== "selectedTrack" && key !== "lastCheck") throw Error("Unknown update preference");
+      if (key !== "selectedTrack" && key !== "lastCheck" && key !== "attempt")
+        throw Error("Unknown update preference");
       const prefs = project({ ...(await load(path)), [key]: value });
       const temp = path + ".next";
       await rm(temp, { force: true });
@@ -82,6 +91,7 @@ export function createUpdatePreferenceStore(path: string) {
       try {
         try {
           await file.writeFile(JSON.stringify(prefs));
+          await file.sync();
         } finally {
           await file.close();
         }
