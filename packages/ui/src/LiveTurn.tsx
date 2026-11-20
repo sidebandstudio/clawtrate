@@ -9,10 +9,14 @@ import {
   type Bot,
   type OutgoingMessage,
   type Run,
+  type RunErrorRaw,
+  type RunRawRead,
   type Transcript,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useBridge } from "./bridge.tsx";
+import { useBridge, useClawtrateState } from "./bridge.tsx";
+import { useAnnounce } from "./cards/parts.tsx";
+import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
 import { endingOf } from "./live.ts";
 import { Markdown } from "./Markdown.tsx";
@@ -37,7 +41,7 @@ export function OutgoingBubble({
   let caption: ReactNode = null;
   switch (message.status) {
     case "sent":
-      if (message.mode === "steer") caption = <span>Steer</span>;
+      if (message.mode === "steer") caption = <span>Steer requested</span>;
       break;
     case "awaiting-access":
     case "sending":
@@ -152,7 +156,55 @@ export function IncompleteCaption() {
   );
 }
 
+/** A bot's name from one of its session keys (`agent:<bot>:…`), or the key's bot id. */
+function botOfSession(bots: readonly Bot[], key: string): string {
+  const id = /^agent:([^:]+):/.exec(key)?.[1] ?? key;
+  return bots.find((each) => each.id === id)?.name ?? id;
+}
+
+/** "a, b and c". */
+function listed(words: string[]): string {
+  return words.length <= 1
+    ? (words[0] ?? "")
+    : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+}
+
+/**
+ * The lines under a stop's note: every helper run and bot run the gateway reported stopped with
+ * the run, each recipient whose stop it refused or did not answer, and each message whose delivery
+ * is not known (F-298). No process is named: the gateway does not say which run started one.
+ */
+export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => string): string[] {
+  const also = run.stoppedWith;
+  if (!also) return [];
+  const lines: string[] = [];
+  const stopped: string[] = [];
+  if (also.helpers > 0)
+    stopped.push(also.helpers === 1 ? "1 helper run" : `${also.helpers} helper runs`);
+  for (const key of also.bots) stopped.push(`${nameOf(key)}'s run for this message`);
+  if (stopped.length > 0) lines.push(`Stopped with it: ${listed(stopped)}.`);
+  for (const key of also.refused)
+    lines.push(`The gateway refused to stop ${nameOf(key)}'s run for this message.`);
+  for (const key of also.unanswered)
+    lines.push(`${nameOf(key)}'s run for this message may still be going: its stop got no answer.`);
+  for (const key of also.uncertain)
+    lines.push(`The message to ${nameOf(key)} may or may not have been delivered.`);
+  if (also.omitted > 0)
+    lines.push(
+      `${also.omitted} more ${also.omitted === 1 ? "run was" : "runs were"} asked to stop, not listed here.`,
+    );
+  return lines;
+}
+
 /** The text of the message that started a run, for "Try again". */
+/** The message a run's own message replied to, from the outbox or from history's reference. */
+export function messageReplyOf(run: Run, transcript: Transcript): string | null {
+  const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
+  if (outgoing) return outgoing.replyToId ?? null;
+  const anchor = transcript.items.find((item) => item.id === run.anchorItemId);
+  return anchor?.replyTo?.id ?? null;
+}
+
 export function messageTextOf(run: Run, transcript: Transcript): string | null {
   const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
   if (outgoing) return outgoing.text;
@@ -181,8 +233,13 @@ export function RunEnding({
   taskKey: string;
 }) {
   const bridge = useBridge();
+  const announce = useAnnounce();
+  const bots = useClawtrateState().bots;
   const [dismissed, setDismissed] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [rawOpen, setRawOpen] = useState(false);
+  const [rawRead, setRawRead] = useState<RunRawRead | null>(null);
+  const requestRef = useRef<HTMLPreElement>(null);
   // Dismiss and the line swap places; focus follows to what replaced it.
   const moved = useRef(false);
   const lineRef = useRef<HTMLButtonElement>(null);
@@ -199,16 +256,51 @@ export function RunEnding({
   const ending = endingOf(run, transcript);
   if (!ending) return null;
   if (ending.kind === "stopped") {
+    const also = stoppedWithLines(run, (key) => botOfSession(bots, key));
+    return (
+      <div className="turn-note" data-testid="stop-note" data-run={run.id}>
+        <span className="glyph" data-state="stopped" aria-hidden="true" />
+        <div>
+          {ending.timeouts !== null ? (
+            <p>
+              <b>Stopped after {ending.timeouts} tool calls in a row timed out.</b> The machine{" "}
+              {bot.name} works on may not be responding. Completed actions are not undone.
+            </p>
+          ) : (
+            <p>
+              <b>
+                {ending.after ? `Stopped after ${ending.after}` : "Stopped"}
+                {ending.elsewhere ? "," : "."}
+              </b>{" "}
+              {ending.elsewhere ? "with no local Stop confirmed. " : ""}
+              Completed actions are not undone.
+            </p>
+          )}
+          {ending.timeouts === null &&
+            transcript.outbox.some(
+              (message) =>
+                message.runId === run.id && message.mode === "steer" && message.leftAt !== null,
+            ) && <p>The gateway may still run messages it already accepted.</p>}
+          {(run.omittedTools ?? 0) > 0 && (
+            <p>Some actions are no longer shown. Other bots' work may continue.</p>
+          )}
+          {also.length > 0 && (
+            <ul className="turn-note-list" data-testid="stopped-with">
+              {also.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    );
+  }
+  if (ending.kind === "stop-unknown") {
     return (
       <div className="turn-note" data-testid="stop-note" data-run={run.id}>
         <span className="glyph" data-state="stopped" aria-hidden="true" />
         <p>
-          <b>
-            {ending.after ? `Stopped after ${ending.after}` : "Stopped"}
-            {ending.elsewhere ? "," : "."}
-          </b>{" "}
-          {ending.elsewhere ? "from another device or session. " : ""}
-          Completed actions are not undone.
+          <b>Stop requested.</b> The gateway has not confirmed that the turn stopped.
         </p>
       </div>
     );
@@ -225,16 +317,19 @@ export function RunEnding({
   }
   // A send the gateway refused already says so under your message.
   if (run.error?.kind === "not-started") return null;
+  // The app's own limit and the gateway's are worded apart: each says who ended the turn.
   const title =
     ending.kind === "turn-limit"
-      ? ending.minutes
-        ? `${bot.name}'s turn reached its ${ending.minutes} minute limit`
-        : `${bot.name}'s turn reached its time limit`
-      : `${bot.name} couldn't finish this turn`;
+      ? `${bot.name}'s turn reached its ${ending.minutes} minute limit`
+      : ending.kind === "gateway-timeout"
+        ? `${bot.name}'s turn reached the gateway's time limit`
+        : `${bot.name} couldn't finish this turn`;
   const reason =
     ending.kind === "turn-limit"
-      ? "The gateway ended the turn so it would not hang. Send a message to pick up where it left off."
-      : ending.reason;
+      ? "Clawtrate stopped it at the Turn time limit in Settings, and the gateway confirmed. Send a message to pick up where it left off."
+      : ending.kind === "gateway-timeout"
+        ? "The gateway ended the turn so it would not hang. Send a message to pick up where it left off."
+        : ending.reason;
   if (dismissed) {
     return (
       <button
@@ -248,7 +343,33 @@ export function RunEnding({
       </button>
     );
   }
+  // A stop at the turn limit stops the other bots' runs it started too, as Stop does (F-296).
+  const also =
+    ending.kind === "turn-limit" ? stoppedWithLines(run, (key) => botOfSession(bots, key)) : [];
   const text = messageTextOf(run, transcript);
+  const requestId = run.requestId ?? null;
+  const raw = run.error?.raw;
+  const showRaw = (open: boolean) => {
+    setRawOpen(open);
+    // Read when it is opened, as a step's raw is; it is not in the state.
+    if (open && raw && !rawRead)
+      void bridge.invoke({ type: "readRunRaw", key: taskKey, runId: run.id }).then(
+        (read) => setRawRead(read ?? { status: "not-kept", holds: null }),
+        () => setRawRead({ status: "not-kept", holds: raw.holds }),
+      );
+  };
+  const copyRequest = async () => {
+    if (!requestId) return;
+    if ((await copyText(requestId)) === "copied") announce("Copied request ID");
+    else {
+      // The clipboard refused: the id is shown in Raw and selected for a manual copy.
+      showRaw(true);
+      requestAnimationFrame(() => {
+        if (requestRef.current) selectContents(requestRef.current);
+      });
+      announce("Couldn't copy. The text is selected.");
+    }
+  };
   return (
     <div className="card turn-error" role="alert" data-testid="turn-error" data-run={run.id}>
       <WarnIcon />
@@ -265,40 +386,128 @@ export function RunEnding({
         <CloseIcon />
       </button>
       <p className="turn-error-reason">{reason}</p>
+      {ending.kind === "turn-limit" && (run.omittedTools ?? 0) > 0 && (
+        <p className="turn-error-reason">
+          Some actions are no longer shown. Other bots' work may continue.
+        </p>
+      )}
+      {also.length > 0 && (
+        <ul className="turn-note-list turn-error-reason" data-testid="stopped-with">
+          {also.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
       {retryError && (
         <p className="turn-error-reason" data-testid="retry-error">
           Couldn't send it again: {retryError}
         </p>
       )}
-      {text && (
+      {(text || requestId || raw) && (
         <div className="turn-error-actions">
-          <button
-            type="button"
-            className="button"
-            data-size="sm"
-            onClick={() => {
-              setRetryError(null);
-              // The engine still holds the message: its words and files go again together.
-              // Otherwise only history has it, and history gives the words alone.
-              const held = transcript.outbox.some((message) => message.id === run.messageId);
-              const again = held
-                ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: run.messageId! })
-                : bridge.invoke({
-                    type: "sendMessage",
-                    key: taskKey,
-                    text,
-                    mode: "auto",
-                    attachmentIds: [],
-                  });
-              void again.catch((error: unknown) =>
-                setRetryError(error instanceof Error ? error.message : String(error)),
-              );
-            }}
-          >
-            Try again
-          </button>
+          {text && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              onClick={() => {
+                setRetryError(null);
+                // The engine still holds the message: its words and files go again together.
+                // Otherwise only history has it, and history gives the words alone. A reply
+                // goes again as a reply to the same message.
+                const held = transcript.outbox.some((message) => message.id === run.messageId);
+                const parent = messageReplyOf(run, transcript);
+                const again = held
+                  ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: run.messageId! })
+                  : bridge.invoke({
+                      type: "sendMessage",
+                      key: taskKey,
+                      text,
+                      mode: "auto",
+                      attachmentIds: [],
+                      ...(parent ? { replyToId: parent } : {}),
+                    });
+                void again.catch((error: unknown) =>
+                  setRetryError(error instanceof Error ? error.message : String(error)),
+                );
+              }}
+            >
+              Try again
+            </button>
+          )}
+          {requestId && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              data-variant="quiet"
+              onClick={() => void copyRequest()}
+            >
+              Copy request ID
+            </button>
+          )}
+          {(requestId || raw) && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              data-variant="quiet"
+              aria-expanded={rawOpen}
+              onClick={() => showRaw(!rawOpen)}
+            >
+              Raw
+            </button>
+          )}
+        </div>
+      )}
+      {rawOpen && (
+        <div className="raw-panel turn-error-raw" data-testid="turn-error-raw">
+          {requestId && (
+            <>
+              <p className="code-label">Request ID</p>
+              <pre className="code-block" ref={requestRef} data-testid="request-id" tabIndex={0}>
+                {requestId}
+              </pre>
+            </>
+          )}
+          <RunRawView read={raw ? rawRead : { status: "not-kept", holds: null }} />
         </div>
       )}
     </div>
+  );
+}
+
+/** What a failed run's Raw holds, in words: exactly that, and as received. */
+const RAW_HOLDS: Record<RunErrorRaw["holds"], string> = {
+  "chat-event": "The chat event that ended the turn, as received",
+  "lifecycle-data": "The data of the agent lifecycle event that ended the turn, as received",
+  "send-answer": "The gateway's answer to the send that started the turn, as received",
+};
+
+/** A failed run's Raw, once read (F-301): what it holds, or why it is not here. */
+function RunRawView({ read }: { read: RunRawRead | null }) {
+  if (!read) return <p className="raw-state">Reading…</p>;
+  if (read.status === "available")
+    return (
+      <>
+        <p className="code-label">{RAW_HOLDS[read.holds]}</p>
+        <pre className="code-block" tabIndex={0} data-testid="run-raw">
+          {JSON.stringify(read.payload, null, 2)}
+        </pre>
+      </>
+    );
+  if (read.status === "too-large")
+    return (
+      <p className="raw-state" data-testid="run-raw-state">
+        {RAW_HOLDS[read.holds]} was too large to keep here: {read.chars.toLocaleString("en-US")}{" "}
+        characters, past the {read.limit.toLocaleString("en-US")} Clawtrate keeps.
+      </p>
+    );
+  return (
+    <p className="raw-state" data-testid="run-raw-state">
+      {read.holds
+        ? `${RAW_HOLDS[read.holds]} is no longer kept here.`
+        : "Clawtrate kept nothing the gateway sent for this failure."}
+    </p>
   );
 }
