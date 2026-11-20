@@ -296,19 +296,23 @@ Widths: at 1440, 1100 and 800 the band spans the conversation column above the c
 
 ## 7. Voice, speed and language
 
-The call's Settings open a `menu`-surface panel (`.call-settings`) under the band with three rows. Each says where it is kept (section 2): "Saved for Otto on Home gateway, so your other devices use it too."
+The band's "Settings" opens a small dialog, "Voice chat settings for Otto", that traps focus, closes with Escape or "Close", and returns focus to "Settings". It has three groups. Each says what applies to this call and, separately, what is saved for the next ones and whether that save is confirmed (section 2).
 
 ### Voice (F-410)
 
-- The list is the voices the call's provider offers for its model, from the create's answer or `talk.catalog` (`voices`, `voicesByModel`), with "Default" first, which means sending none.
-- Choosing one calls `talk.voice.set {voice, voiceSessionId}`. For a relayed call the gateway answers with `talk.voice.change`; the client creates the replacement session (`talk.session.create {…, voiceChangeId}`) and reports with `talk.voice.complete` (research §7: "Setting a voice reconnects that call while preserving its chat and captions"). Meanwhile the row says "Changing to Cedar…" and the call goes on. When the replacement is ready: "Voice: Cedar, from Otto's next reply." The choice is kept for Otto at once.
-- Refused or failed ("Voice is not in this call's catalog", a failed replacement): "The voice didn't change: <the gateway's message, as text>." The call goes on with its voice, and the kept choice stays what it was.
-- The provider lists no voices for its model: the row says "OpenAI Realtime Voice offers no voices to choose from on Home gateway." and shows no list. (The gateway refuses a change only then, or for a call created without `voice-selection`, which Clawtrate never creates.)
-- The kept voice is sent as `voice` when the next call starts. If the provider no longer lists it, the call starts without it and the band says once "Cedar isn't offered by Home gateway any more, so this call uses its default voice." The kept choice returns to Default.
+- **What can be chosen.** `talk.voice.get` by the call's current `voiceSessionId`. The voices it returns are offered, in a native select, only when it answers `canChange: true`. Otherwise: "OpenAI Realtime Voice offers no voices to choose from for this call." and no list.
+- **Choosing a voice** sends `talk.voice.set {voice, voiceSessionId}` and keeps it pending: the dialog and the band say "Changing to Cedar… The current reply may stop." The choice of the same voice sends nothing (the gateway would answer `applied` with no change).
+- **The gateway's request.** On the matching `talk.voice.change` with `phase: "requested"`, the client creates exactly one replacement: `talk.session.create {voiceChangeId, sessionKey, language, capabilities: ["voice-selection"]}`, with the original task and language. When the replacement is ready, the client stops routing audio to the original, drops the original's queued output, closes the original, and completes with `talk.voice.complete {changeId, voiceSessionId: <the replacement's>, outcome: "ready"}`.
+- **Applied, then saved.** The new voice is shown only when `talk.voice.set` answers `status: "applied"` for that replacement on the current connection: "Voice: Cedar, from Otto's next reply.", announced once. Only then is the choice saved for Otto (section 2): "Saving…", then the confirmed note.
+- **When it doesn't change.** A refusal of the set ("Voice is not in this call's catalog…", "A voice change is already in progress…", a timeout after 60 seconds): "Voice didn't change: <the gateway's message>. Still using Alloy." A replacement that fails while the original still works: the client completes with `outcome: "failed"`, closes the replacement if there is one, and says the same. If the original has already ended, or the connection dropped, the call's own failure or unconfirmed end is shown instead (section 8), never a changed voice. The saved choice stays the last confirmed one.
+- **"Default for future calls"** clears the saved voice, so later calls send no `voice`; it doesn't change this call: "Otto's next calls use the provider's default voice. This call keeps Cedar." There is no "Default" voice to set on a call: `talk.voice.set` has none.
+- **A change the device didn't ask for** (a `requested` change with no pending choice of this device): declined with `talk.voice.complete {outcome: "failed"}` before any replacement is created; the band says "Otto asked for a different voice. Clawtrate kept Alloy for this call."
+- **A saved voice the provider no longer lists**: the call starts without it, and the band says once "Ember isn't offered by Home gateway any more, so this call uses the provider's default voice." The saved choice is kept.
+- **Changed on another device**: applies from the next call, and is said as that ("Changed on another device: voice Sage from Otto's next call."); it never changes this call.
 
 ### Speed (F-461)
 
-- 0.5×, 0.75×, 1×, 1.25×, 1.5×, 2×, a radio group. It changes how fast this device plays what the bot says, at once, and nothing on the gateway (research §7). The row says "Plays at 1.5× on this device." The choice is kept for Otto (section 2), so another device plays at the same speed.
+- 0.5×, 0.75×, 1×, 1.25×, 1.5×, 2×, a native select. It changes how fast this device plays what the bot says, at once, and nothing on the gateway (research §7). The row says "Plays at 1.5× on this device." The choice is saved for Otto as in section 2, with the same "Saving…" and confirmation, and another device plays at that speed from its next call.
 - The same speed applies to this bot's voice memos (section 11).
 
 ### Language (F-462)
