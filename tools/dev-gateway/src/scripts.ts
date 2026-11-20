@@ -169,7 +169,9 @@ export function planReply(
       .filter((message) => message.role === "system")
       .map(messageText)
       .join("\n")
-      .match(/^## .*\/MEMORY\.md\s*\n([\s\S]*?)(?=^## |(?![\s\S]))/m)?.[1]
+      // A heading stops the extract only when it names another workspace file, as the
+      // gateway's injected-file headings do; a `##` inside the memory itself does not.
+      .match(/^## .*\/MEMORY\.md\s*\n([\s\S]*?)(?=^## [^\n]*\/[^\n]*\.md\s*$|(?![\s\S]))/m)?.[1]
       ?.trim();
     return [{ kind: "text", text: memory || "I have no root memory for this task." }];
   }

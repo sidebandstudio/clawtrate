@@ -79,6 +79,8 @@ export function BotMemory({
   const [revision, setRevision] = useState(0);
   const [readError, setReadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  /** The gateway's current text of a note whose refused save left a draft: read again to show it. */
+  const [conflictNote, setConflictNote] = useState<string | null>(null);
   const online = connection.status === "connected";
   const canEdit = online && connection.canAdmin && !info.readOnly;
   const granted = useGranted(connection);
@@ -120,12 +122,32 @@ export function BotMemory({
     return (now?.hash ?? null) === file.hash ? null : { text: now?.content ?? "" };
   })();
 
+  /** The list's metadata for a note can lag behind a read; a read's revision is the current one. */
+  const noteRead = (document: MemoryDocument) => {
+    setNote(document);
+    setData((current) =>
+      current && current.notes.files.some((entry) => entry.path === document.path)
+        ? {
+            ...current,
+            notes: {
+              ...current.notes,
+              files: current.notes.files.map((entry) =>
+                entry.path === document.path
+                  ? { path: entry.path, hash: document.hash, modifiedAt: document.modifiedAt }
+                  : entry,
+              ),
+            },
+          }
+        : current,
+    );
+  };
+
   async function openNote(path: string) {
     setNote(null);
     setReadingNote(path);
     setActionError(null);
     try {
-      setNote(await bridge.invoke({ type: "readMemory", botId, path }));
+      noteRead(await bridge.invoke({ type: "readMemory", botId, path }));
     } catch (error) {
       setActionError(errorText(error));
     } finally {
@@ -154,12 +176,21 @@ export function BotMemory({
       setDraft(null);
       setDeleting(null);
       setNote(null);
+      setConflictNote(null);
       setRevision((current) => current + 1);
       announce(text === null ? "Memory deleted" : "Memory saved");
     } catch (error) {
       setDeleting(null);
       setActionError(errorText(error));
       setRevision((current) => current + 1);
+      // A refused save leaves the draft; read the note again so the screen says what it now holds.
+      if (isNote) {
+        try {
+          setConflictNote((await bridge.invoke({ type: "readMemory", botId, path })).content);
+        } catch {
+          // The next open of the note reports the read failure itself.
+        }
+      }
     } finally {
       setBusy(false);
     }
@@ -180,15 +211,16 @@ export function BotMemory({
           <select
             className="input"
             disabled={busy}
-            value={current.path === "MEMORY.md" ? "root" : "note"}
+            value={current.path.startsWith("memory/") ? "note" : current.path}
             onChange={(event) =>
               setDraft({
                 ...current,
-                path: event.target.value === "root" ? "MEMORY.md" : "memory/",
+                path: event.target.value === "note" ? "memory/" : event.target.value,
               })
             }
           >
-            <option value="root">Root memory</option>
+            <option value="MEMORY.md">Root memory</option>
+            <option value="USER.md">About you</option>
             <option value="note">As a note</option>
           </select>
         </label>
@@ -223,9 +255,11 @@ export function BotMemory({
         <div role="status">
           <p>
             {name}'s memory changed while you were editing. Your text is kept here
-            {changed.text === null ? "." : "; the file now has:"}
+            {(changed.text ?? conflictNote) === null ? "." : "; the file now has:"}
           </p>
-          {changed.text !== null && <p>{changed.text || "Nothing."}</p>}
+          {(changed.text ?? conflictNote) !== null && (
+            <p>{(changed.text ?? conflictNote) || "Nothing."}</p>
+          )}
         </div>
       )}
       {actionError && <p role="alert">{actionError}</p>}
@@ -236,6 +270,7 @@ export function BotMemory({
           disabled={busy}
           onClick={() => {
             setDraft(null);
+            setConflictNote(null);
             setActionError(null);
           }}
         >
@@ -288,6 +323,7 @@ export function BotMemory({
               onClick={() => {
                 setActionError(null);
                 setDraft({ path: item.file.path, text: item.text, item });
+                setConflictNote(null);
               }}
             >
               Edit
@@ -412,6 +448,7 @@ export function BotMemory({
                   onClick={() => {
                     setActionError(null);
                     setDraft({ path: "MEMORY.md", text: "", item: null });
+                    setConflictNote(null);
                   }}
                 >
                   Add memory

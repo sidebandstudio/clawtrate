@@ -51,6 +51,25 @@ describe("planReply", () => {
     expect(JSON.stringify(plan)).toContain("something new");
   });
 
+  it("answers the memory question with the memory the task received, through an internal heading", () => {
+    const plan = planReply(
+      [
+        {
+          role: "system",
+          content:
+            "## /state/workspaces/otto/USER.md\nPrefers weekly summaries.\n## /state/workspaces/otto/MEMORY.md\nKeep a weekly release log.\n\n## Preferred days\nFridays.\n## /state/workspaces/otto/AGENTS.md\nOther rules.",
+        },
+        { role: "user", content: "[Mon 09:00] What do you remember about me?" },
+      ],
+      ALL_TOOLS,
+    );
+    const text = plan.find((step) => step.kind === "text");
+    expect(text).toMatchObject({
+      kind: "text",
+      text: "Keep a weekly release log.\n\n## Preferred days\nFridays.",
+    });
+  });
+
   it("gives every scripted prompt a unique text", () => {
     const prompts = SEED_BOTS.flatMap((bot) =>
       bot.tasks.flatMap((task) => task.turns.map((t) => t.prompt)),
