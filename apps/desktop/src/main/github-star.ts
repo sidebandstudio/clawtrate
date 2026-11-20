@@ -137,7 +137,7 @@ export async function starRepository(cli: Installation | null, timeout = 8000): 
   ]) {
     const value = process.env[name];
     if (!value) continue;
-    if (!localPath(value)) return false;
+    if (!isAbsolute(value)) return false;
     env[name] = value;
   }
   running = true;
