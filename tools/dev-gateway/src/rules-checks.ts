@@ -13,9 +13,10 @@
 // asserts what it does and says so in its name (the plugin turned off in the
 // middle of a run, a run another bot's message started).
 
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { OperatorSession } from "./operator.ts";
+import type { GatewayEvent, OperatorSession } from "./operator.ts";
 import { drainSessions } from "./scenario-check.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -57,6 +58,8 @@ export type RulesContext = {
   gatewayLog: string;
   /** The instance's state folder, which holds the plugin's rules file. */
   stateDir: string;
+  /** A temporary setting's rollback that has not succeeded yet: settling retries it. */
+  restoreSettings?: () => Promise<void>;
 };
 
 const PLUGIN = "clawtrate-tool-rules";
@@ -138,7 +141,14 @@ async function clearRules(ctx: RulesContext): Promise<void> {
   for (const scope of Object.keys(await scopes(ctx))) await save(ctx, scope, []);
 }
 
-type ToolCall = { name: string; isError: boolean; text: string; details: JsonRecord };
+/** A tool call of a run; `result` says whether its result arrived at all. */
+type ToolCall = {
+  name: string;
+  result: boolean;
+  isError: boolean;
+  text: string;
+  details: JsonRecord;
+};
 type BotRun = { runId: string; state: string; calls: ToolCall[] };
 
 type World = { stamp: string; keys: Set<string>; counter: number };
@@ -171,25 +181,48 @@ async function finish(ctx: RulesContext, runId: string, timeoutMs = 120_000): Pr
   const op = ctx.clients.interactive;
   const end = await op.terminal(runId, timeoutMs);
   await sleep(300);
+  return { runId, state: String(end.state), calls: toolCallsOf(op.runEvents(runId)) };
+}
+
+/**
+ * A run's tool calls from its events, in the order they started: each result
+ * joined to its own start by the gateway's call id. A result whose start was
+ * not seen is ignored.
+ */
+export function toolCallsOf(events: GatewayEvent[]): ToolCall[] {
   const calls: ToolCall[] = [];
-  for (const event of op.runEvents(runId)) {
+  const byId = new Map<string, ToolCall>();
+  for (const event of events) {
     const payload = rec(event.payload);
     if (event.event !== "agent" || payload.stream !== "tool") continue;
     const data = rec(payload.data);
+    const id = typeof data.toolCallId === "string" ? data.toolCallId : "";
     if (data.phase === "start") {
-      calls.push({ name: String(data.name), isError: false, text: "", details: {} });
+      const started = {
+        name: String(data.name),
+        result: false,
+        isError: false,
+        text: "",
+        details: {},
+      };
+      calls.push(started);
+      if (id) byId.set(id, started);
     } else if (data.phase === "result") {
-      const last = calls.at(-1);
-      if (!last) continue;
+      const matched = id ? byId.get(id) : undefined;
+      if (!matched) continue;
       const result = rec(data.result);
       const blocks = Array.isArray(result.content) ? (result.content as JsonRecord[]) : [];
-      last.isError = data.isError === true;
-      last.text = blocks.map((block) => String(block.text ?? "")).join("\n");
-      last.details = rec(result.details);
+      matched.result = true;
+      matched.isError = data.isError === true;
+      matched.text = blocks.map((block) => String(block.text ?? "")).join("\n");
+      matched.details = rec(result.details);
     }
   }
-  return { runId, state: String(end.state), calls };
+  return calls;
 }
+
+/** Whether a call ran: its result arrived, and it is not an error. A start alone is not. */
+export const ranOk = (call: ToolCall | undefined) => call?.result === true && !call.isError;
 
 type Card = { id: string; request: JsonRecord; createdAtMs: number; expiresAtMs: number };
 
@@ -225,7 +258,8 @@ function cardsSeen(ctx: RulesContext, since: Record<RulesClient, number>, runId?
 /** The ids of the plugin cards a connection can list as waiting. */
 async function waitingCards(op: OperatorSession): Promise<string[]> {
   const listed = await op.request<unknown>("plugin.approval.list", {}, 30_000);
-  return (Array.isArray(listed) ? (listed as unknown[]) : []).map((card) => String(rec(card).id));
+  expect(Array.isArray(listed), "the gateway did not return a list of pending approvals");
+  return (listed as unknown[]).map((card) => String(rec(card).id));
 }
 
 async function resolve(ctx: RulesContext, id: string, decision: string): Promise<void> {
@@ -285,22 +319,75 @@ async function patchConfig(
 ): Promise<void> {
   const admin = ctx.clients.admin;
   const before = await admin.request<Revision>("config.get", {});
-  const patched = await admin.request<{ ok?: boolean }>("config.patch", {
+  const patched = await admin.request<{ ok?: boolean; noop?: boolean }>("config.patch", {
     raw: JSON.stringify(patch),
     baseHash: before.hash,
     ...(replacePaths.length > 0 ? { replacePaths } : {}),
   });
   expect(patched.ok === true, `config.patch was refused: ${show(patched)}`);
+  // Already saved (a retry whose first answer was lost): the gateway makes no
+  // new revision, so the saved one is waited on until the gateway runs it.
+  const saved = patched.noop === true;
   const started = Date.now();
   while (Date.now() - started < 30_000) {
     const now = await admin.request<Revision>("config.get", {}).catch(() => null);
-    if (now && now.configRevisionHash !== before.configRevisionHash) {
+    if (now && (saved || now.configRevisionHash !== before.configRevisionHash)) {
       if (now.appliedConfigHash === now.configRevisionHash) return;
     }
     await sleep(200);
   }
   throw new RulesCheckFailure("the gateway did not apply the patched config within 30 seconds");
 }
+
+/**
+ * Run `body` with a temporary setting: `apply` inside the try, so a change the
+ * gateway took but did not confirm in time is undone too, and `restore`
+ * afterwards, whether the body passed or not. A rollback that fails stays
+ * pending on `ctx` until settling retries it successfully; when the check
+ * failed too, both failures are said.
+ */
+export async function withConfig<T>(
+  ctx: RulesContext,
+  apply: () => Promise<void>,
+  restore: () => Promise<void>,
+  body: () => Promise<T>,
+): Promise<T> {
+  ctx.restoreSettings = restore;
+  let result: T;
+  try {
+    await apply();
+    result = await body();
+  } catch (error) {
+    try {
+      await restore();
+    } catch (rollback) {
+      throw new RulesCheckFailure(
+        `${messageOf(error)}; and the rollback of its temporary setting failed: ${messageOf(rollback)}`,
+      );
+    }
+    delete ctx.restoreSettings;
+    throw error;
+  }
+  await restore();
+  delete ctx.restoreSettings;
+  return result;
+}
+
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/**
+ * Whether the config holds what `holds` looks for and the gateway runs with
+ * it: a rollback already in place needs no new revision.
+ */
+async function configHolds(
+  ctx: RulesContext,
+  holds: (config: JsonRecord) => boolean,
+): Promise<boolean> {
+  const now = await ctx.clients.admin.request<Revision & { config?: unknown }>("config.get", {});
+  return holds(rec(now.config)) && now.appliedConfigHash === now.configRevisionHash;
+}
+const entryOf = (config: JsonRecord, bot: string) => rec(rec(rec(config.agents).entries)[bot]);
+const pluginEntryOf = (config: JsonRecord) => rec(rec(rec(config.plugins).entries)[PLUGIN]);
 
 const botEntry = async (ctx: RulesContext, bot: string) =>
   rec(rec(rec(rec(await ctx.clients.admin.request("config.get", {})).config).agents).entries)[bot];
@@ -353,6 +440,17 @@ export async function eventually<T>(
     }
     await sleep(everyMs);
   }
+}
+
+/**
+ * Whether a history message is the result of the call a decision record
+ * names: its `toolCallId`, hashed as the gateway's audit log and the plugin
+ * hash it, is the record's `callId`.
+ */
+export function isResultOfCall(message: JsonRecord, callId: string | null): boolean {
+  const id = message.toolCallId;
+  if (typeof id !== "string" || id.length === 0 || !callId) return false;
+  return `sha256:${createHash("sha256").update(id).digest("hex")}` === callId;
 }
 
 export const logSaysAfter = (log: Buffer, text: string, from: number) =>
@@ -522,7 +620,7 @@ export const RULES_CHECKS: RulesCheck[] = [
       const first = await finish(ctx, runId);
       same(first.state, "final", "the first run's end");
       expect(
-        first.calls.length === 1 && first.calls[0]!.name === "write" && !first.calls[0]!.isError,
+        first.calls.length === 1 && first.calls[0]!.name === "write" && ranOk(first.calls[0]),
         `Allow once did not run the write: ${show(first.calls)}`,
       );
       const again = marks(ctx);
@@ -628,7 +726,7 @@ export const RULES_CHECKS: RulesCheck[] = [
       const readRun = await start(ctx, key, "#read");
       const read = await finish(ctx, readRun);
       expect(
-        read.calls[0]?.name === "read" && !read.calls[0].isError,
+        read.calls[0]?.name === "read" && ranOk(read.calls[0]),
         `the allowed read: ${show(read.calls)}`,
       );
       same(cardsSeen(ctx, free, readRun), [], "who received a card for the allowed read");
@@ -828,7 +926,7 @@ export const RULES_CHECKS: RulesCheck[] = [
       const free = marks(ctx);
       const freeRun = await start(ctx, key, "#write");
       const ran = await finish(ctx, freeRun);
-      expect(ran.calls[0] && !ran.calls[0].isError, `the exact Allow: ${show(ran.calls)}`);
+      expect(ranOk(ran.calls[0]), `the exact Allow: ${show(ran.calls)}`);
       same(cardsSeen(ctx, free, freeRun), [], "who received a card for the exact Allow");
     },
   },
@@ -851,42 +949,55 @@ export const RULES_CHECKS: RulesCheck[] = [
         await finish(ctx, runId);
         return `${String(card.request.title)}\n${String(card.request.description)}`;
       };
-      await patchConfig(ctx, FORWARD_NOWHERE);
-      try {
-        same(
-          (await statusOf(ctx)).cardDetails,
-          { mode: "redacted", because: "forwarding-configured" },
-          "card details with forwarding",
-        );
-        const redacted = await cardText();
-        expect(
-          !redacted.includes(WRITE_PATH) &&
-            !redacted.includes(BOT) &&
-            redacted.endsWith("The details are in Clawtrate."),
-          `the forwarded card carries the target or the bot: ${redacted}`,
-        );
-        await patchConfig(ctx, {
-          plugins: { entries: { [PLUGIN]: { config: { cardDetails: "full" } } } },
-        });
-        await pluginRunning(ctx);
-        same(
-          (await statusOf(ctx)).cardDetails,
-          { mode: "full", because: "setting" },
-          "card details forced by the setting",
-        );
-        const full = await cardText();
-        expect(full.includes(WRITE_PATH), `the forced card left out the target: ${full}`);
-      } finally {
-        await patchConfig(
+      const restore = async () => {
+        const restored = await configHolds(
           ctx,
-          {
-            approvals: null,
-            plugins: { entries: { [PLUGIN]: { config: { cardDetails: null } } } },
-          },
-          ["approvals.plugin.targets"],
+          (config) =>
+            config.approvals === undefined &&
+            rec(pluginEntryOf(config).config).cardDetails === undefined,
         );
+        if (!restored) {
+          await patchConfig(
+            ctx,
+            {
+              approvals: null,
+              plugins: { entries: { [PLUGIN]: { config: { cardDetails: null } } } },
+            },
+            ["approvals.plugin.targets"],
+          );
+        }
         await pluginRunning(ctx);
-      }
+      };
+      await withConfig(
+        ctx,
+        () => patchConfig(ctx, FORWARD_NOWHERE),
+        restore,
+        async () => {
+          same(
+            (await statusOf(ctx)).cardDetails,
+            { mode: "redacted", because: "forwarding-configured" },
+            "card details with forwarding",
+          );
+          const redacted = await cardText();
+          expect(
+            !redacted.includes(WRITE_PATH) &&
+              !redacted.includes(BOT) &&
+              redacted.endsWith("The details are in Clawtrate."),
+            `the forwarded card carries the target or the bot: ${redacted}`,
+          );
+          await patchConfig(ctx, {
+            plugins: { entries: { [PLUGIN]: { config: { cardDetails: "full" } } } },
+          });
+          await pluginRunning(ctx);
+          same(
+            (await statusOf(ctx)).cardDetails,
+            { mode: "full", because: "setting" },
+            "card details forced by the setting",
+          );
+          const full = await cardText();
+          expect(full.includes(WRITE_PATH), `the forced card left out the target: ${full}`);
+        },
+      );
       same(
         (await statusOf(ctx)).cardDetails,
         { mode: "full", because: "no-forwarding" },
@@ -954,30 +1065,45 @@ export const RULES_CHECKS: RulesCheck[] = [
         const since = marks(ctx);
         const runId = await start(ctx, key, "#write");
         const card = await cardFor(ctx, runId, since.interactive);
-        if (change === "rules") await save(ctx, BOT, [{ action: "allow", tools: ["write"] }]);
-        else
-          await patchConfig(ctx, {
-            agents: { entries: { [BOT]: { tools: { deny: ["web_search"] } } } },
-          });
-        expect(
-          (await waitingCards(ctx.clients.interactive)).includes(card.id),
-          `the card was no longer listed after the ${change} change`,
-        );
-        await resolve(ctx, card.id, "allow-once");
-        const run = await finish(ctx, runId);
-        const write = run.calls[0];
-        if (change === "rules") {
-          expect(write && !write.isError, `after a rules change: ${show(run.calls)}`);
-        } else {
+        const answer = async () => {
           expect(
-            write?.isError && write.text.includes(GATEWAY_UNAVAILABLE),
-            `after a config change: ${show(run.calls)}`,
+            (await waitingCards(ctx.clients.interactive)).includes(card.id),
+            `the card was no longer listed after the ${change} change`,
           );
+          await resolve(ctx, card.id, "allow-once");
+          return finish(ctx, runId);
+        };
+        if (change === "rules") {
+          await save(ctx, BOT, [{ action: "allow", tools: ["write"] }]);
+          const run = await answer();
+          expect(ranOk(run.calls[0]), `after a rules change: ${show(run.calls)}`);
+          continue;
         }
+        // The deny is undone however the check ends.
+        const run = await withConfig(
+          ctx,
+          () =>
+            patchConfig(ctx, {
+              agents: { entries: { [BOT]: { tools: { deny: ["web_search"] } } } },
+            }),
+          async () => {
+            if (
+              await configHolds(ctx, (config) => rec(entryOf(config, BOT).tools).deny === undefined)
+            ) {
+              return;
+            }
+            await patchConfig(ctx, { agents: { entries: { [BOT]: { tools: { deny: null } } } } }, [
+              `agents.entries.${BOT}.tools.deny`,
+            ]);
+          },
+          answer,
+        );
+        const write = run.calls[0];
+        expect(
+          write?.isError && write.text.includes(GATEWAY_UNAVAILABLE),
+          `after a config change: ${show(run.calls)}`,
+        );
       }
-      await patchConfig(ctx, { agents: { entries: { [BOT]: { tools: { deny: null } } } } }, [
-        `agents.entries.${BOT}.tools.deny`,
-      ]);
       same(await botEntry(ctx, BOT), original, "Juniper's settings once the deny is removed again");
       await pluginRunning(ctx);
     },
@@ -1000,8 +1126,13 @@ export const RULES_CHECKS: RulesCheck[] = [
         60_000,
         since.interactive,
       );
-      await patchConfig(ctx, { plugins: { entries: { [PLUGIN]: { enabled: false } } } });
-      try {
+      const plugin = (enabled: boolean) => () =>
+        patchConfig(ctx, { plugins: { entries: { [PLUGIN]: { enabled } } } });
+      const pluginBackOn = async () => {
+        if (await configHolds(ctx, (config) => pluginEntryOf(config).enabled === true)) return;
+        await plugin(true)();
+      };
+      await withConfig(ctx, plugin(false), pluginBackOn, async () => {
         const off = await rules(ctx.clients.reader, "status");
         expect(!off.ok, `status still answered with the plugin off: ${show(off)}`);
         // The run that started with the plugin keeps its hook: its write is asked.
@@ -1009,10 +1140,10 @@ export const RULES_CHECKS: RulesCheck[] = [
         await resolve(ctx, card.id, "allow-once");
         const during = await finish(ctx, runId);
         same(
-          during.calls.map((c) => [c.name, c.isError]),
+          during.calls.map((c) => [c.name, ranOk(c)]),
           [
-            ["coder__slow_task", false],
-            ["write", false],
+            ["coder__slow_task", true],
+            ["write", true],
           ],
           "the run the plugin was turned off in",
         );
@@ -1022,13 +1153,11 @@ export const RULES_CHECKS: RulesCheck[] = [
         const freshRun = await start(ctx, fresh, "#write");
         const run = await finish(ctx, freshRun);
         expect(
-          run.calls[0]?.name === "write" && !run.calls[0].isError,
+          run.calls[0]?.name === "write" && ranOk(run.calls[0]),
           `the write with the plugin off: ${show(run.calls)}`,
         );
         same(cardsSeen(ctx, after), [], "who received a card with the plugin off");
-      } finally {
-        await patchConfig(ctx, { plugins: { entries: { [PLUGIN]: { enabled: true } } } });
-      }
+      });
       const status = await pluginRunning(ctx);
       same(
         [rec(status.rules).state, status.enforcing],
@@ -1048,7 +1177,6 @@ export const RULES_CHECKS: RulesCheck[] = [
         await op.request("sessions.messages.subscribe", { key: "agent:pip:main" }).catch(() => {});
       }
       const since = marks(ctx);
-      const sentAt = Date.now();
       const runId = await start(ctx, key, "#message-read");
       const run = await finish(ctx, runId);
       same(
@@ -1056,9 +1184,18 @@ export const RULES_CHECKS: RulesCheck[] = [
         ["sessions_send"],
         "Marlow's tool calls",
       );
+      // The run Marlow's send started, as the send's own result names it.
+      const send = run.calls[0];
+      const recipientRunId = send?.details.runId;
+      expect(
+        ranOk(send) && typeof recipientRunId === "string" && recipientRunId.length > 0,
+        `Marlow's send named no run: ${show(run.calls)}`,
+      );
       // Pip's run can still be queued after Marlow's send returns: wait for its record.
       const record = await eventually("Pip's decision record", async () =>
-        (await decisionsOf(ctx, { agentId: "pip", limit: 5 })).find((r) => Number(r.at) >= sentAt),
+        (await decisionsOf(ctx, { agentId: "pip", runId: recipientRunId, limit: 5 })).find(
+          (r) => r.tool === "read",
+        ),
       );
       same(cardsSeen(ctx, since), [], "who received a card");
       same(
@@ -1066,7 +1203,8 @@ export const RULES_CHECKS: RulesCheck[] = [
         ["read", "ask", "cancelled"],
         "Pip's call in the decision record",
       );
-      // The refused read's result is written after the hook returns: wait for it in the history.
+      // The refused read's result is written after the hook returns: wait for this
+      // run's result in the history, matched to the decision record by its call id.
       const text = await eventually("Pip's read result in its history", async () => {
         const history = answered(
           await call(ctx.clients.admin, "chat.history", {
@@ -1075,11 +1213,10 @@ export const RULES_CHECKS: RulesCheck[] = [
           }),
           "Pip's main task",
         );
-        const results = ((history.messages ?? []) as JsonRecord[]).filter(
-          (m) => m.role === "toolResult" && m.toolName === "read",
+        const mine = ((history.messages ?? []) as JsonRecord[]).find(
+          (m) => m.role === "toolResult" && isResultOfCall(m, record.callId),
         );
-        const last = results.at(-1);
-        return last ? JSON.stringify(last.content ?? "") : undefined;
+        return mine ? JSON.stringify(mine.content ?? "") : undefined;
       });
       expect(text.includes(GATEWAY_UNAVAILABLE), `Pip's read result: ${text.slice(0, 300)}`);
     },
@@ -1102,11 +1239,29 @@ export const RULES_CHECKS: RulesCheck[] = [
 /** Stop every run in the checks' tasks, deny every card still waiting, and empty the rules. */
 async function settle(ctx: RulesContext, world: World): Promise<boolean> {
   const { admin } = ctx.clients;
-  for (const id of await waitingCards(admin).catch(() => [])) {
-    await call(admin, "plugin.approval.resolve", { id, decision: "deny" });
-  }
-  if (!(await drainSessions(admin, world.keys))) return false;
+  // A check's rollback that failed is retried first; until it succeeds, nothing
+  // more starts, but the cards and runs are cleared all the same.
+  let restored = true;
   try {
+    await ctx.restoreSettings?.();
+    delete ctx.restoreSettings;
+  } catch {
+    restored = false;
+  }
+  // A sweep that fails does not keep the runs from being stopped.
+  let swept = true;
+  try {
+    for (const id of await waitingCards(admin)) {
+      await call(admin, "plugin.approval.resolve", { id, decision: "deny" });
+    }
+  } catch {
+    swept = false;
+  }
+  try {
+    if (!(await drainSessions(admin, world.keys))) return false;
+    // Verified gone, also a card cancelled between the listing and its answer.
+    if ((await waitingCards(admin)).length !== 0) return false;
+    if (!restored || !swept) return false;
     await pluginRunning(ctx);
     await clearRules(ctx);
     return true;
@@ -1146,6 +1301,12 @@ export async function runRulesChecks(
       leftBusy = `the check before it ("${check.name}") failed`;
     }
   }
-  await settle(ctx, world);
+  // A run that leaves a busy task or rules in place has not passed.
+  if (!(await settle(ctx, world))) {
+    failed += 1;
+    log(
+      "FAIL  the final clean-up: the instance could not be brought back to no rules and no running task",
+    );
+  }
   return { passed, failed };
 }
