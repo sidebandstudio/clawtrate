@@ -110,17 +110,25 @@ foreach ($id in @(${pids.map(Number).join(", ")})) { "$id $([ClawtrateCheck.Toke
  */
 export function askToClose(pid: number): string | null {
   try {
-    execFileSync("taskkill.exe", ["/PID", String(Number(pid))], { stdio: "pipe" });
+    execFileSync("taskkill.exe", ["/PID", String(Number(pid))], {
+      stdio: "pipe",
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+    });
     return null;
   } catch (error) {
-    return String((error as { stderr?: Buffer }).stderr ?? error).trim();
+    return (error as { stderr?: Buffer }).stderr?.toString().trim() || String(error);
   }
 }
 
 /** Ends a process and its children by PID, for cleanup after a failure only. */
 export function forceEnd(pid: number): void {
   try {
-    execFileSync("taskkill.exe", ["/F", "/T", "/PID", String(Number(pid))], { stdio: "ignore" });
+    execFileSync("taskkill.exe", ["/F", "/T", "/PID", String(Number(pid))], {
+      stdio: "ignore",
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+    });
   } catch {
     // already gone
   }

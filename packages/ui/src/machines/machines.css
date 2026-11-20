@@ -1,0 +1,148 @@
+/* Where a bot runs and Settings, Machines (controls.md sections 14, 15, 19).
+   Only existing tokens. A value never shortens: it wraps, paths at their slashes. */
+
+.m-facts > div {
+  align-items: flex-start;
+  padding: 10px 0;
+}
+
+.m-facts[role="radiogroup"] > div {
+  padding: 0;
+}
+
+/* In the Work pane's narrow tab, a fact's value goes under its label. */
+.b-tab .m-facts > div {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.b-tab .m-facts dt {
+  max-width: none;
+  font-size: var(--text-sm);
+}
+
+.b-tab .m-facts dd.m-value {
+  text-align: left;
+}
+
+.m-value .copy-value,
+.m-value button {
+  vertical-align: middle;
+}
+
+.m-facts dt {
+  max-width: 40%;
+}
+
+.m-facts dd.m-value {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.m-path {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.m-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs, 12px);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.m-mark .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.m-sentence {
+  margin: 8px 2px 4px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.m-label {
+  display: block;
+  margin: 0 0 6px;
+}
+
+.m-subgroup {
+  margin: 14px 2px 6px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+button.b-open.m-open {
+  min-height: 56px;
+}
+
+.m-open-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+}
+
+.m-open-text small {
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.m-form {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.m-form .input {
+  width: 100%;
+}
+
+.m-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.m-page .b-select {
+  width: 100%;
+}
+
+.m-page section + section {
+  margin-top: 4px;
+}
+
+/* The phone: values go under their labels, choices take the full width, rows are taller. */
+@media (max-width: 640px) {
+  .m-facts > div {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+  }
+
+  .m-facts dt {
+    max-width: none;
+  }
+
+  .m-facts dd.m-value {
+    text-align: left;
+  }
+
+  .m-row-actions {
+    justify-content: flex-start;
+  }
+
+  .m-facts[role="radiogroup"] button.b-open {
+    min-height: 44px;
+  }
+}

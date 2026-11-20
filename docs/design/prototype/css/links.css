@@ -1,0 +1,13 @@
+.links-status {
+  margin: 0 auto var(--space-2);
+  max-width: 100%;
+  padding-inline: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.links-status:empty {
+  position: absolute;
+  margin: 0;
+}
