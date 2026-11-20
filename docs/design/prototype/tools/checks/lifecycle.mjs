@@ -223,7 +223,7 @@ t = await dlg(p);
 check("F-269 with no image tool, Generate is disabled with the row's words and the gateway's reason", t.includes("Image generation isn't available on this gateway") && t.includes("The gateway doesn't offer Juniper its image tool: “Denied by tools.deny”, in the gateway's own words.") && (await p.evaluate(() => [...document.querySelectorAll("#lc-dialog button")].find((x) => x.textContent === "Generate" && !x.dataset.lcTab).disabled)));
 await p.close();
 p = await open(`bot=juniper&${settings}&lc=picture&ptab=generate&imagetool=1`);
-check("S4 with the tool offered, it says generating isn't in this version", (await dlg(p)).includes("Generating a picture isn't available in this version") && (await dlg(p)).includes("The gateway lists an image tool for Juniper, which doesn't say a provider is ready, and a picture comes back in Juniper's reply, not to this screen."));
+check("S4 with the tool offered, it says generating isn't in this version", (await dlg(p)).includes("Generating a picture isn't available in this version") && (await dlg(p)).includes("The gateway lists an image tool for Juniper, which doesn't say a provider is ready, and a picture would come back in Juniper's task, not to this screen."));
 await p.close();
 p = await open(`bot=juniper&${settings}&lc=picture&ptab=generate&imagetool=unknown`);
 check("S4 with no task to ask about, it says it can't tell yet", (await dlg(p)).includes("The gateway says which tools Juniper is offered for one of its tasks, and Juniper has none yet. Start a task, then look here again."));

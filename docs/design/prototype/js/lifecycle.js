@@ -318,7 +318,7 @@
         unlisted: ["Image generation isn't available on this gateway", `The gateway doesn't list an image tool for ${who}'s task.`],
         unknown: ["Not known yet", `The gateway says which tools ${who} is offered for one of its tasks, and ${who} has none yet. Start a task, then look here again.`],
         unreadable: ["Couldn't read the tools", `Clawtrate couldn't read which tools the gateway offers ${who}: the gateway didn't answer.`],
-        offered: ["Generating a picture isn't available in this version", `The gateway lists an image tool for ${who}, which doesn't say a provider is ready, and a picture comes back in ${who}'s reply, not to this screen. You can ask ${who} for a picture in a task, then upload it.`],
+        offered: ["Generating a picture isn't available in this version", `The gateway lists an image tool for ${who}, which doesn't say a provider is ready, and a picture would come back in ${who}'s task, not to this screen. You can ask ${who} for a picture in a task, then upload it.`],
       }[{ 1: "offered", unknown: "unknown", unlisted: "unlisted", unreadable: "unreadable", unavailable: "unavailable" }[p("imagetool")] || "excluded"];
       body = `<div class="b-result"><span class="empty-mark">${icon("image")}</span><h3>${g[0]}</h3><p>${g[1]}</p></div>` + (p("imagetool") === "unreadable" ? `<div class="b-actions lc-center-actions">${button("Try again", 'data-lc="tools-reread" data-size="sm"')}</div>` : "");
       foot = button("Generate", 'data-size="lg" disabled', "primary");
