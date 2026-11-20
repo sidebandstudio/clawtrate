@@ -119,24 +119,6 @@ test("opens its window from the packaged app on the connect screen", async () =>
   expect(updates).toMatchObject({
     install: { kind: "unavailable-in-this-build", reason: "build-not-signed" },
     lastAttempt: null,
-    tracks: [],
-    preferenceIssue: null,
-    lastCheck: null,
-    state: { kind: "failed", reason: "not-configured" },
-    selectedTrack: null,
-  });
-  expect(
-    await page.evaluate(() =>
-      (
-        window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
-      ).clawtrateHost.desktopUpdates.check("stable"),
-    ),
-  ).toMatchObject({
-    outcome: "invalid",
-    snapshot: {
-      lastCheck: null,
-      state: { kind: "failed", reason: "not-configured" },
-    },
   });
   expect(
     await page.evaluate(() =>
@@ -176,6 +158,42 @@ test("opens its window from the packaged app on the connect screen", async () =>
   ]);
   expect(page_.csp).toContain("default-src 'self'");
   expect(page_.csp).toContain("script-src 'self'");
+});
+
+test("starts with the update tracks compiled into the packaged app", async () => {
+  const updates = await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+    ).clawtrateHost.desktopUpdates.get(),
+  );
+  expect(updates).toMatchObject({
+    revision: 0,
+    preferenceIssue: null,
+    lastCheck: null,
+    pendingTrack: null,
+  });
+  const tracks = updates.tracks.map(({ track }) => track);
+  const supported = ["stable", "nightly"] as const;
+  expect(tracks).toEqual(supported.filter((track) => tracks.includes(track)));
+  if (tracks.length) {
+    for (const { source } of updates.tracks)
+      expect(new URL(`https://${source}`).hostname).toBe(source);
+    expect(updates.selectedTrack).toBe(
+      tracks.find((track) => track === updates.runningTrack) ?? tracks[0],
+    );
+    expect(updates.state).toEqual({ kind: "not-checked" });
+    return;
+  }
+  expect(updates).toMatchObject({
+    state: { kind: "failed", stage: "check", reason: "not-configured" },
+    selectedTrack: null,
+  });
+  const reply = await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+    ).clawtrateHost.desktopUpdates.check("stable"),
+  );
+  expect(reply).toEqual({ outcome: "invalid", snapshot: updates });
 });
 
 test("names its window Clawtrate, as Windows sees it", async () => {

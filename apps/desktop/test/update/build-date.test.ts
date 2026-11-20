@@ -91,3 +91,40 @@ it.each([
     }
   },
 );
+
+it.each([
+  { tracks: [] },
+  { tracks: ["stable"] },
+  { tracks: ["nightly"] },
+  { tracks: ["stable", "nightly"] },
+])("exposes the sources compiled for this build ($tracks)", async ({ tracks }) => {
+  const env = {
+    CLAWTRATE_UPDATE_FEED_URL: tracks.includes("stable")
+      ? "https://stable.invalid/feed"
+      : undefined,
+    CLAWTRATE_NIGHTLY_UPDATE_FEED_URL: tracks.includes("nightly")
+      ? "https://nightly.invalid/feed"
+      : undefined,
+  };
+  for (const [name, value] of Object.entries(updateDefines(env, new Date()))) {
+    vi.stubGlobal(name, JSON.parse(value));
+  }
+  const { startDesktopUpdates } = await import("../../src/main/update/build-info.ts");
+  const dir = tempDir();
+  try {
+    const service = await startDesktopUpdates({
+      version: "0.1.0",
+      packaged: true,
+      platform: "darwin",
+      arch: "arm64",
+      downloadDir: join(dir.path, "updates"),
+      changed: () => {},
+      store: { get: async () => null, set: async () => {} },
+    });
+    expect(service.get().tracks).toEqual(
+      tracks.map((track) => ({ track, source: track + ".invalid" })),
+    );
+  } finally {
+    dir.remove();
+  }
+});
