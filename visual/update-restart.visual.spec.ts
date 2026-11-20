@@ -1,4 +1,4 @@
-import type { ClawtrateState } from "@clawtrate/core";
+import type { ClawtrateState } from "../packages/core/src/types.ts";
 import {
   MAX_TRACKED_TASKS,
   MAX_OUTBOX,
