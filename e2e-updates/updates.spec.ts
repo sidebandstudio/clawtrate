@@ -144,7 +144,7 @@ const test = base.extend<{ desktopApp: TestApp }>({
 test("F-231: checks only the chosen feed and downloads matching bytes on request", async ({
   desktopApp,
 }) => {
-  const { page, server, filePath, body, resume, rendererRequests } = desktopApp;
+  const { page, server, filePath, body, manifest, resume, rendererRequests } = desktopApp;
   await page.keyboard.press("ControlOrMeta+,");
   await page.getByRole("button", { name: "Updates", exact: true }).click();
   const line = page.locator(".updates-section dd").last();
@@ -202,6 +202,13 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   await page.getByRole("button", { name: "Download", exact: true }).click();
   await expect(line).toHaveText("Couldn't download the update. Try again.");
   await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
+  const key = fileKeyFor(process.platform, process.arch)!;
+  const files = manifest.files as Record<string, { size: number; sha512: string; url: string }>;
+  server.route(
+    "/stable",
+    json({ ...manifest, files: { [key]: { ...files[key]!, size: body.length + 1 } } }),
+  );
+  server.route(filePath, (_req, res) => res.end(body));
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(line).toHaveText("Clawtrate 1.1.0 is offered by the update source.");
   expect(server.requests).toEqual([
@@ -213,10 +220,26 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
     "/stable",
   ]);
 
-  server.route(filePath, (_req, res) => res.end(body.subarray(1)));
   await download.click();
   await expect(line).toHaveText("Couldn't download the update. Try again.");
   await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
+  const reading = await page.evaluate(() =>
+    (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get(),
+  );
+  expect(reading.state).toMatchObject({
+    kind: "failed",
+    stage: "download",
+    reason: "size-mismatch",
+  });
+  expect(server.requests).toEqual([
+    "/stable",
+    filePath,
+    "/nightly",
+    "/stable",
+    filePath,
+    "/stable",
+    filePath,
+  ]);
   expect(rendererRequests).toEqual([]);
 });
 
