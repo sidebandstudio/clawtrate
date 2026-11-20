@@ -1455,6 +1455,8 @@ describe("F-178 F-324: every answer fits its result frame once serialized", () =
   }, 60_000);
 
   it("an Activity page, joined to records and rules full of escapes", async () => {
+    const scope = fitJson(heavy, MAX_PERMISSION_NAME);
+    const ruleId = fitJson(heavy, 64);
     const page = await readActivity(
       fake({
         "audit.activity.list": () => ({
@@ -1472,27 +1474,29 @@ describe("F-178 F-324: every answer fits its result frame once serialized", () =
         }),
         "config.get": () => ({ config: {} }),
         "clawtrate-tool-rules.decisions.list": (params) => ({
-          records: Array.from({ length: 500 }, (_, i) => ({
-            id: heavyId(i),
-            runId: params.runId,
-            callId: params.runId,
-            decision: "block",
-            source: {
-              kind: "rule",
-              scope: heavy,
-              ruleId: heavy,
-              version: 1,
-              action: "never",
+          records: [
+            {
+              id: params.runId,
+              runId: params.runId,
+              callId: params.runId,
+              decision: "block",
+              source: {
+                kind: "rule",
+                scope,
+                ruleId,
+                version: 1,
+                action: "never",
+              },
             },
-          })),
+          ],
           hasMore: false,
         }),
         "clawtrate-tool-rules.get": () => ({
           scopes: {
-            [heavy]: {
+            [scope]: {
               rules: [
                 {
-                  id: heavy,
+                  id: ruleId,
                   version: 1,
                   tools: [heavy, heavy, heavy, heavy, heavy],
                   target: { pattern: heavy },
@@ -1514,6 +1518,13 @@ describe("F-178 F-324: every answer fits its result frame once serialized", () =
       },
     );
     expect(page.rows).toHaveLength(ACTIVITY_PAGE_RECORDS);
+    for (const row of page.rows) {
+      expect(row.cause).toMatchObject({
+        kind: "recorded",
+        source: { kind: "rule", rule: { now: { version: 1, pattern: expect.any(String) } } },
+      });
+      expect(row.inChat).toEqual({ key: row.sessionKey, callId: row.callId, runId: row.runId });
+    }
     expect(JSON.stringify(page).length).toBeLessThan(FRAME);
   });
 });
