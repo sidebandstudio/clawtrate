@@ -63,6 +63,24 @@ describe("signing", () => {
         "win",
       ),
     ).not.toMatch(/secret/);
+    const inputs = {
+      CSC_LINK: "data:application/x-pkcs12;base64,Rml4dHVyZQ==",
+      CSC_KEY_PASSWORD: "FixturePassWord",
+      APPLE_API_KEY: "FixtureNotaryKey",
+    };
+    for (const target of ["mac", "win"] as const) {
+      const planLine = signingSummary(signingPlan(inputs), target);
+      const partialErrors = signingProblems(inputs, target);
+      if (target === "mac") {
+        expect(partialErrors).toEqual([
+          "APPLE_API_KEY set without APPLE_API_KEY_ID, APPLE_API_ISSUER",
+        ]);
+      }
+      for (const value of Object.values(inputs)) {
+        expect(planLine).not.toContain(value);
+        expect(partialErrors.join("\n")).not.toContain(value);
+      }
+    }
   });
 
   it("takes a certificate and its password together, read as electron-builder reads them, on each system", () => {
