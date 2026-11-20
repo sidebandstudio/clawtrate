@@ -118,6 +118,7 @@ test("opens its window from the packaged app on the connect screen", async () =>
   );
   expect(updates).toMatchObject({
     tracks: [],
+    preferenceIssue: null,
     lastCheck: null,
     state: { kind: "failed", reason: "not-configured" },
     selectedTrack: null,
