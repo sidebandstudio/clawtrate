@@ -589,12 +589,6 @@ for (const mode of ["mac", "mac-unconfirmed", "manual"] as const) {
       rmSync(join(profile, "hold-inspect"));
       await locked("Handing Clawtrate");
       rmSync(join(profile, "hold-launch"));
-      expect(
-        readFileSync(join(profile, "restart-calls"), "utf8")
-          .trim()
-          .split("\n")
-          .map((s) => JSON.parse(s)),
-      ).toEqual([id]);
       if (mode === "mac") {
         await locked("Clawtrate handed the update to the macOS updater.");
         for (const [version, line] of [
@@ -610,18 +604,22 @@ for (const mode of ["mac", "mac-unconfirmed", "manual"] as const) {
           await openUpdates(next);
           await expect(next.locator(".update-result")).toContainText(line);
         }
-        expect(server.requests).toEqual(["/stable", filePath]);
       } else if (mode === "manual") {
         await expect(result).toContainText("Couldn't hand the update to the installer.");
         await expect(result.getByRole("button", { name: "Check for Updates" })).toBeVisible();
         await expect(restart).toHaveCount(0);
-        expect(server.requests).toEqual(["/stable", filePath]);
       } else {
         await locked(
           "Clawtrate couldn't confirm that the macOS updater accepted the update. macOS may still install it when Clawtrate quits. After reopening, Clawtrate reports the version that is running.",
         );
-        expect(server.requests).toEqual(["/stable", filePath]);
       }
+      expect(
+        readFileSync(join(profile, "restart-calls"), "utf8")
+          .trim()
+          .split("\n")
+          .map((s) => JSON.parse(s)),
+      ).toEqual([id]);
+      expect(server.requests).toEqual(["/stable", filePath]);
       expect(rendererRequests).toEqual([]);
     });
   });
