@@ -17,7 +17,7 @@
     String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
   // Every display setting and the access tier are kept when moving between screens.
-  const KEEP = ["theme", "width", "motion", "chrome", "access", "picked", "device", "readonly", "skills", "marked", "gwprofile"];
+  const KEEP = ["theme", "width", "motion", "chrome", "access", "picked", "device", "readonly", "skills", "apps", "marked", "gwprofile"];
   // On the iPhone the window is "Plugins" (F-380), with its own words.
   const iphone = params.get("device") === "iphone";
   const go = (to, extra = {}) => {
@@ -45,7 +45,7 @@
     ["developer-tools", "Developer tools"],
   ];
   const APPS = [
-    { id: "quillnote", name: "Quillnote", summary: "Notes and notebooks your bots can read and add to.", author: "quillnote-labs", cats: ["productivity"], featured: true, version: "2.4.1", release: "2.4.1", local: "install", install: { source: "clawhub", packageName: "@quillnote-labs/quillnote" }, servers: [["quillnote", true]], skills: ["Daily notes"], host: "auth.quillnote.example", readme: "Quillnote keeps notes in notebooks. With this connector a bot can search your notes, read a page and add one.\nIt signs in to your Quillnote account with OAuth; the gateway keeps the sign-in." },
+    { id: "quillnote", name: "Quillnote", summary: "Notes and notebooks your bots can read and add to.", author: "quillnote-labs", cats: ["productivity"], featured: true, version: "2.4.1", release: "2.4.1", local: "install", install: { source: "clawhub", packageName: "@quillnote-labs/quillnote" }, servers: [["quillnote", true]], skills: ["Daily notes"], host: "auth.quillnote.example", configuration: [["Workspace", true], ["Default notebook", false]], verification: "Verified publisher", security: "No findings in the latest scan", readme: "Quillnote keeps notes in notebooks. With this connector a bot can search your notes, read a page and add one.\nIt signs in to your Quillnote account with OAuth; the gateway keeps the sign-in." },
     { id: "tasktide", name: "Tasktide", summary: "Tasks, due dates and lists.", author: "tasktide", package: "@tasktide/tasktide", official: true, cats: ["productivity"], featured: true, version: "1.9.0", local: "enabled", servers: [["tasktide", true]], auth: "authorized", host: "auth.tasktide.example" },
     { id: "calendrop", name: "Calendrop", summary: "Calendars and free time.", author: "calendrop", cats: ["productivity"], featured: true, version: "3.0.2", local: "enabled", servers: [["calendrop", true], ["calendrop-rooms", true], ["calendrop-files", true]], mcpAuth: [{ serverName: "calendrop", state: "unauthenticated" }, { serverName: "calendrop-rooms", state: "authorized" }], host: "auth.calendrop.example" },
     { id: "tasktide-reminders", name: "Tasktide reminders", summary: "Reminders for Tasktide's due dates.", author: "tasktide", package: "@tasktide/tasktide", cats: ["productivity"], version: "1.9.0", local: "enabled" },
@@ -60,7 +60,7 @@
   ];
   // The next page of the overview, after "Show more" (the gateway's nextCursor).
   const MORE = [
-    { id: "mapwhistle", name: "Mapwhistle", summary: "Places, routes and travel times.", author: "mapwhistle", cats: ["productivity"], version: "1.1.0", release: "1.1.0", local: "install", packageName: "@mapwhistle/mapwhistle" },
+    { id: "mapwhistle", name: "Mapwhistle", summary: "Places, routes and travel times.", author: "mapwhistle", cats: ["productivity"], version: "1.1.0", release: "1.1.0", local: "install", packageName: "@mapwhistle/mapwhistle", readme: Array.from({ length: 15 }, (_, i) => `Mapwhistle readme line ${i + 1}.`).join("\n") },
     { id: "tunebarrow", name: "Tunebarrow", summary: "Playlists and listening history.", author: "tunebarrow", cats: ["productivity"], version: "0.9.2", local: "install", packageName: "@tunebarrow/tunebarrow" },
   ];
   const SKILLS = [
@@ -338,7 +338,7 @@
         (a.bundled ? `<p class="c-line">Comes with OpenClaw, so it can be turned off but not removed.</p>` : "") +
         group("Tools") +
         `<ul class="c-list">${(a.servers || [[a.id, false]]).map(([s]) => `<li><span class="mono">${esc(s)}</span>, a tool server</li>`).join("")}${(a.skills || []).map((k) => `<li>${esc(k)}, a skill</li>`).join("")}</ul>` +
-        `<p class="c-line">Which bots may use these is in each bot's settings.</p>` +
+        `<p class="c-line">Which bots may use these is in <a href="controls.html" data-c="bot-settings">each bot's settings</a>.</p>` +
         accountRow(a) +
         `<div class="c-actions">${actions.join("")}${removable && admin ? link("Remove…", "remove-confirm", { id: a.id }, { variant: "quiet" }) : ""}</div>` +
         accessBar("Changing connectors needs admin access.") +
@@ -521,7 +521,9 @@
   // The picker (section 15) -----------------------------------------------------------------
 
   const picker = () =>
-    `<div class="c-scrim"><div class="c-window c-picker" role="dialog" aria-modal="true" aria-labelledby="c-picker-title">` +
+    params.get("featured") === "none"
+      ? ""
+      : `<div class="c-scrim"><div class="c-window c-picker" role="dialog" aria-modal="true" aria-labelledby="c-picker-title">` +
     `<div class="c-picker-body"><h2 id="c-picker-title">What do you use every day?</h2>` +
     `<p class="c-text">Pick the apps you use. Nothing is connected now; they come first in Connect apps.</p>` +
     search("Search apps") +
@@ -535,6 +537,7 @@
   const A = () => app(params.get("id") || "quillnote");
   const SCREENS = {
     home: () => "",
+    // ?featured=none: the featured answer is empty or unavailable, so the picker is not shown and not marked seen.
     nav: () => windowHtml({ title: "Browse", body: browseLoaded(), pane: "nav" }),
     browse: () => windowHtml({ title: iphone ? "Plugins" : "Browse", body: browseLoaded() }),
     "browse-loading": () =>
@@ -552,7 +555,7 @@
       windowHtml({
         title: "Browse",
         body:
-          `<p class="c-state" aria-busy="true">Asking the catalog… This can take up to 15 seconds.</p>` +
+          `<p class="c-state" aria-busy="true">Asking the catalog… This can take a moment.</p>` +
           proto("the catalog", [link("Answers", "browse", {}, { variant: "quiet" }), link("Still can't be reached", "browse-offline", {}, { variant: "quiet" })]),
       }),
     "browse-error": () => windowHtml({ title: "Browse", body: note("danger", "Couldn't load the catalog.", "Plugin discovery is unavailable: the gateway is shutting down.", `<div class="c-actions">${link("Try again", "browse-loading")}</div>`) }),
@@ -563,6 +566,14 @@
     },
     app: () => {
       const a = A();
+      if (params.get("detail") === "fail")
+        return windowHtml({
+          title: a.name,
+          back: go("browse"),
+          body: note("danger", "Couldn't load this app's details.", "ClawHub is unavailable: fetch failed.", `<div class="c-actions">${link("Try again", "app", { id: a.id })}</div>`),
+        });
+      const lines = (a.readme || a.summary).split("\n");
+      const readme = (list) => esc(list.join("\n")).replace(/\n/g, "<br />");
       return windowHtml({
         title: a.name,
         back: go("browse"),
@@ -570,11 +581,15 @@
           `<div class="c-hero">${initial(a.name, "lg")}<div><p class="c-hero-name">${esc(a.name)}</p><p class="c-faint">by ${esc(a.author)}${a.official ? " · Official" : ""}</p></div></div>` +
           `<p class="c-text">${esc(a.summary)}</p>` +
           group("What it adds") +
-          `<ul class="c-list">${(a.servers || []).map(([s, o]) => `<li><span class="mono">${esc(s)}</span>, a tool server${o ? " that signs in with OAuth" : ""}</li>`).join("")}${(a.skills || []).map((k) => `<li>${esc(k)}, a skill</li>`).join("")}</ul>` +
+          `<ul class="c-list">${(a.servers || []).map(([s, o]) => `<li><span class="mono">${esc(s)}</span>, a tool server${o ? " that signs in with OAuth" : ""}</li>`).join("")}${(a.skills || []).map((k) => `<li>${esc(k)}, a skill</li>`).join("")}${(a.configuration || []).map(([f, req]) => `<li data-c="setting">${esc(f)}, a setting${req ? " (required)" : ""}</li>`).join("")}</ul>` +
           group("About") +
-          `<p class="c-text c-readme">${esc(a.readme || a.summary).replace(/\n/g, "<br />")}</p>` +
+          `<p class="c-text c-readme">${readme(lines.slice(0, 12))}</p>` +
+          (lines.length > 12 ? `<details class="c-details" data-c="show-all"><summary>Show all</summary><p class="c-text c-readme">${readme(lines.slice(12))}</p></details>` : "") +
           `<p class="c-faint">Version ${esc(a.version)}</p>` +
+          (a.verification ? `<p class="c-faint" data-c="verification">Verification: ${esc(a.verification)}</p>` : "") +
+          (a.security ? `<p class="c-faint" data-c="security">Security: ${esc(a.security)}</p>` : "") +
           (a.local === "unavailable" ? `<p class="c-line">Not available for this gateway's version.</p>` : "") +
+          proto("the detail lookup", [link("Fails", "app", { id: a.id, detail: "fail" }, { variant: "quiet" })]) +
           granted(),
         foot: addable(a) ? (admin ? link("Add", "add-confirm", { id: a.id }, { variant: "primary" }) : accessBar("Adding apps needs admin access.")) : "",
       });
@@ -852,9 +867,10 @@
     `<ul class="c-bots">${["juniper", "otto", "marlow", "pip"].map((b) => `<li><span class="avatar">${CT.character(b)}</span><span>${b[0].toUpperCase() + b.slice(1)}</span></li>`).join("")}</ul>` +
     `<div class="c-rail-foot"><a class="button c-connect-apps" data-size="sm" href="${go("browse")}">${icon("plug")}Connect apps</a>` +
     `<p class="c-gateway"><span class="c-dot"></span>Home gateway</p></div></aside>` +
-    `<main class="c-main">${screen === "chat" ? chat() : `<p class="c-empty">Open Connect apps from the foot of the rail.</p>` + (screen === "home" ? proto("first run", [link("What do you use every day?", "picker", {}, { variant: "quiet" }), link("A connect card", "chat", {}, { variant: "quiet" })]) : "")}</main></div>`;
+    `<main class="c-main">${screen === "chat" ? chat() : `<p class="c-empty">Open Connect apps from the foot of the rail.</p>` + (screen === "home" ? proto("first run", [link("What do you use every day?", "picker", {}, { variant: "quiet" }), link("No featured answer", "picker", { featured: "none" }, { variant: "quiet" }), link("A connect card", "chat", {}, { variant: "quiet" })]) : "")}</main></div>`;
 
   const root = document.getElementById("c-root");
+  if (screen === "picker" && params.get("featured") !== "none") store.set("picker-seen", true);
   const render = SCREENS[screen] || SCREENS.home;
   root.innerHTML = shell() + render();
   document.getElementById("c-live").textContent = ANNOUNCE[screen] || (params.get("said") === "on" ? `Turned on ${app(params.get("id")).name}` : params.get("said") === "off" ? `Turned off ${app(params.get("id")).name}` : req === "granted" ? "Admin access granted" : req === "asking" ? "Asking the gateway" : "");
@@ -902,39 +918,70 @@
   // Escape closes the top-most surface.
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    const field = document.getElementById("c-q");
+    if (field && field.value) {
+      event.preventDefault();
+      field.value = "";
+      field.dispatchEvent(new Event("input"));
+      return;
+    }
     const cancel = root.querySelector(".c-confirm .c-actions .button[data-variant='quiet']");
     if (cancel) location.href = cancel.href;
     else if (root.querySelector(".c-window")) location.href = go("home");
   });
 
-  // Search: filters the rows as it is typed; on Browse it also searches skills.
+  // Search: filters the rows as it is typed; on Browse it also searches skills (section 4).
+  // ?apps=remote: the app search came back with remoteError and the gateway's own rows; ?apps=refused: the RPC refused.
   const q = document.getElementById("c-q");
-  if (q && screen !== "picker") {
-    const results = document.getElementById("c-results");
-    const original = results ? results.innerHTML : "";
+  const results = document.getElementById("c-results");
+  if (q && screen === "installed") {
+    // On this gateway searches its own rows only.
+    q.addEventListener("input", () => {
+      const text = q.value.trim().toLowerCase();
+      const found = [...root.querySelectorAll(".c-section-body .c-row")].filter((li) => {
+        const hit = !text || li.textContent.toLowerCase().includes(text);
+        li.hidden = !hit;
+        return hit;
+      });
+      let none = document.getElementById("c-none");
+      if (!none) {
+        q.closest(".c-search").insertAdjacentHTML("afterend", `<p class="c-state" id="c-none" data-c="none" hidden>No installed apps match on this gateway.</p>`);
+        none = document.getElementById("c-none");
+      }
+      none.hidden = Boolean(found.length) || !text;
+      document.getElementById("c-live").textContent = text ? (found.length ? `${found.length} on this gateway` : "No installed apps match on this gateway") : "";
+    });
+  } else if (q && results && screen !== "picker") {
+    const original = results.innerHTML;
     const offline = screen === "browse-offline";
     q.addEventListener("input", () => {
       const text = q.value.trim().toLowerCase();
-      if (!results) return;
       if (!text) {
         results.innerHTML = original;
         root.querySelector(".c-chips")?.removeAttribute("hidden");
+        document.getElementById("c-live").textContent = "";
         return;
       }
       root.querySelector(".c-chips")?.setAttribute("hidden", "");
-      const pool = offline ? APPS.filter((a) => a.local !== "install" && a.local !== "unavailable") : APPS;
-      const apps = pool.filter((a) => `${a.name} ${a.summary}`.toLowerCase().includes(text));
-      const skillsFailed = params.get("skills") === "fail";
-      const skills = offline || skillsFailed ? [] : SKILLS.filter((s) => `${s.name} ${s.text}`.toLowerCase().includes(text));
+      const appsAnswer = offline || params.get("apps") === "remote" ? "remote" : params.get("apps") === "refused" ? "refused" : "ok";
+      const local = APPS.filter((a) => a.local !== "install" && a.local !== "unavailable");
+      const apps = appsAnswer === "refused" ? [] : (appsAnswer === "remote" ? local : APPS).filter((a) => `${a.name} ${a.summary}`.toLowerCase().includes(text));
+      const skillsAnswer = offline ? "offline" : params.get("skills") === "fail" ? "fail" : "ok";
+      const skills = skillsAnswer === "ok" ? SKILLS.filter((s) => `${s.name} ${s.text}`.toLowerCase().includes(text)) : [];
+      const appStatus = { remote: "The catalog didn't answer this search.", refused: "Couldn't search for apps." }[appsAnswer] || "";
+      const appEmpty = appsAnswer === "remote" ? "No installed apps match on this gateway." : "No apps match.";
+      const skillStatus = { offline: "Searching skills needs the catalog.", fail: "Skills search didn't answer." }[skillsAnswer] || "";
       results.innerHTML =
-        !apps.length && !skills.length && !offline && !skillsFailed
+        appsAnswer === "ok" && skillsAnswer === "ok" && !apps.length && !skills.length
           ? `<p class="c-state" data-c="none">No apps or skills match "${esc(q.value.trim())}".</p>`
-          : group(offline ? "On this gateway" : "Apps") +
-            (offline ? `<p class="c-line">The catalog didn't answer this search.</p>` : "") +
-            (apps.length ? rows(apps, offline ? "connector" : "app") : `<p class="c-line">No apps match.</p>`) +
+          : group(appsAnswer === "remote" ? "On this gateway" : "Apps") +
+            (appStatus ? `<p class="c-line" data-c="apps-status">${esc(appStatus)}</p>` : "") +
+            (appsAnswer === "refused" ? `<p class="c-faint" data-c="apps-reason">Plugin search is unavailable: the gateway is shutting down.</p>` : apps.length ? rows(apps, appsAnswer === "remote" ? "connector" : "app") : `<p class="c-line" data-c="apps-none">${appEmpty}</p>`) +
             group("Skills") +
-            (offline ? `<p class="c-line">Searching skills needs the catalog.</p>` : skillsFailed ? `<p class="c-line">Skills search didn't answer.</p>` : skills.length ? `<ul class="c-rows">${skills.map((s) => `<li class="c-row"><span class="c-row-main">${initial(s.name)}<span class="c-row-text"><span class="c-row-name">${esc(s.name)}</span><span class="c-row-sub">${esc(s.text)}</span></span></span></li>`).join("")}</ul>` : `<p class="c-line">No skills match.</p>`);
-      document.getElementById("c-live").textContent = apps.length || skills.length ? `${apps.length} apps, ${skills.length} skills` : "No apps match";
+            (skillStatus ? `<p class="c-line" data-c="skills-status">${skillStatus}</p>` : skills.length ? `<ul class="c-rows">${skills.map((s) => `<li class="c-row"><span class="c-row-main">${initial(s.name)}<span class="c-row-text"><span class="c-row-name">${esc(s.name)}</span><span class="c-row-sub">${esc(s.text)}</span></span></span></li>`).join("")}</ul>` : `<p class="c-line">No skills match.</p>`);
+      const appWords = appsAnswer === "refused" ? appStatus : `${appStatus ? `${appStatus} ` : ""}${apps.length ? `${apps.length} apps` : appEmpty.replace(/\.$/, "")}`;
+      const skillWords = skillStatus || `${skills.length} skills`;
+      document.getElementById("c-live").textContent = appsAnswer === "ok" && skillsAnswer === "ok" && !apps.length && !skills.length ? `No apps or skills match "${q.value.trim()}"` : `${appWords}, ${skillWords}`;
     });
   }
 

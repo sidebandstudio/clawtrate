@@ -2,6 +2,7 @@
 // through to its outcome, with each destination asserted; every state's words
 // and structure; the access request; the keyboard, phone and theme rules.
 // Run from the repository root:  node docs/design/prototype/tools/checks/connectors.mjs
+import { existsSync } from "node:fs";
 import { chromium, pageUrl } from "./browser.mjs";
 
 const base = pageUrl("connectors.html") + "?chrome=0";
@@ -70,7 +71,7 @@ const STATES = [
   ["screen=browse-loading", ["Search across apps and skills", "Prototype: the catalog"]],
   ["screen=browse-loading&slow=1", ["Still loading. The gateway is asking the catalog."]],
   ["screen=browse-offline", ["The catalog can't be reached from the gateway.", "You can still see and manage what's on this gateway. Apps to add come back when the gateway can reach the catalog.", "Details", "ClawHub is unavailable", "Try again", "Search what's on this gateway", "Categories and recommendations come from the catalog.", "On this gateway", "Tasktide"]],
-  ["screen=browse-retry", ["Asking the catalog… This can take up to 15 seconds."]],
+  ["screen=browse-retry", ["Asking the catalog… This can take a moment."]],
   ["screen=browse-error", ["Couldn't load the catalog.", "Try again"]],
   ["screen=browse-category&cat=finance", ["Finance", "Ledgerkin"]],
   ["screen=app&id=quillnote", ["Quillnote", "by quillnote-labs", "What it adds", "quillnote, a tool server that signs in with OAuth", "Daily notes, a skill", "About", "Version 2.4.1", "Add"]],
@@ -276,29 +277,45 @@ for (const [query, words] of STATES) {
 }
 
 // Part 2: the walks, clicked through, each destination asserted -----------------------------------
-async function walk(name, start, stepsList, finalWords = []) {
-  const p = await open(start);
-  let ok = true;
-  let where = start;
-  for (const [action, expect] of stepsList) {
-    try {
-      await action(p);
-    } catch (e) {
-      ok = false;
-      where = `${await screenOf(p)}: ${e.message.split("\n")[0]}`;
-      break;
+// Every walk runs at 1440 and at 390. On the one-pane layout a step that needs the section list
+// goes Back to it first, as a person would.
+async function walk(name, start, stepsList, finalWords = [], { widths = [1440, 390] } = {}) {
+  for (const width of widths) {
+    const narrow = width < 688;
+    const p = await open(start, { width, height: narrow ? 844 : 900 });
+    let ok = true;
+    let where = start;
+    for (const [action, expect] of stepsList) {
+      try {
+        if (narrow) p.setDefaultTimeout(1200);
+        try {
+          await action(p);
+        } catch (e) {
+          const back = p.locator(".c-to-nav:visible");
+          if (!narrow || !(await back.count())) throw e;
+          await back.first().click();
+          await at(p, "nav");
+          p.setDefaultTimeout(4000);
+          await action(p);
+        }
+        p.setDefaultTimeout(4000);
+      } catch (e) {
+        ok = false;
+        where = `${await screenOf(p)}: ${e.message.split("\n")[0]}`;
+        break;
+      }
+      if (expect && !(await at(p, expect))) {
+        ok = false;
+        where = `${await screenOf(p)} (expected ${expect})`;
+        break;
+      }
+      await p.waitForTimeout(40);
+      where = expect || where;
     }
-    if (expect && !(await at(p, expect))) {
-      ok = false;
-      where = `${await screenOf(p)} (expected ${expect})`;
-      break;
-    }
-    await p.waitForTimeout(40);
-    where = expect || where;
+    const lack = ok ? missing(await text(p), finalWords) : "";
+    check(`walk${narrow ? " at 390" : ""}: ${name}`, ok && !lack && p.errors.length === 0, ok ? [lack, ...p.errors].filter(Boolean).join(" | ") : `stopped at ${where}`);
+    await p.close();
   }
-  const lack = ok ? missing(await text(p), finalWords) : "";
-  check(`walk: ${name}`, ok && !lack && p.errors.length === 0, ok ? [lack, ...p.errors].filter(Boolean).join(" | ") : `stopped at ${where}`);
-  await p.close();
 }
 
 await walk("Connect apps, add a connector, sign in, signed in", "screen=home", [
@@ -427,6 +444,86 @@ await walk("the gateway refuses the catalog, try again", "screen=browse-loading"
 await walk("search across apps and skills", "screen=browse", [[typeIn("#c-q", "weekly")]], ["Skills", "Weekly review"]);
 await walk("search with no match", "screen=browse", [[typeIn("#c-q", "zzzz")]], ['No apps or skills match "zzzz".']);
 await walk("search when skills search fails: never No match for skills", "screen=browse&skills=fail", [[typeIn("#c-q", "zzzz")]], ["Skills search didn't answer.", "No apps match."]);
+// Change 10: each search source has its own outcome, in the text and in the announcement.
+{
+  const searchIn = async (q, query, size) => {
+    const p = await open(q, size);
+    await p.fill("#c-q", query);
+    await p.waitForTimeout(60);
+    return p;
+  };
+  const live = (p) => p.evaluate(() => document.getElementById("c-live").textContent);
+  for (const [size, label] of [[{ width: 1440, height: 900 }, "1440"], [{ width: 390, height: 844 }, "390"]]) {
+    let p = await searchIn("screen=browse&apps=remote", "tide", size);
+    let t = await text(p);
+    check(`${label}: a search with remoteError keeps the gateway's matching row and says the catalog didn't answer`, t.includes("The catalog didn't answer this search.") && (await p.locator('#c-results .c-row[data-app="tasktide"]').count()) === 1 && !t.includes("No apps match") && (await live(p)).startsWith("The catalog didn't answer this search."), await live(p));
+    await p.close();
+    p = await searchIn("screen=browse&apps=remote", "zzzz", size);
+    t = await text(p);
+    check(`${label}: an empty local result set is "No installed apps match on this gateway", never No match`, t.includes("The catalog didn't answer this search.") && t.includes("No installed apps match on this gateway.") && !t.includes("No apps match") && !t.includes("No apps or skills match") && (await live(p)).includes("The catalog didn't answer this search.") && (await live(p)).includes("No installed apps match on this gateway"), await live(p));
+    await p.close();
+    p = await searchIn("screen=browse&apps=refused", "tide", size);
+    t = await text(p);
+    check(`${label}: the app search refused: Couldn't search for apps. with its reason`, t.includes("Couldn't search for apps.") && t.includes("Plugin search is unavailable: the gateway is shutting down.") && !t.includes("No apps match") && (await live(p)).startsWith("Couldn't search for apps."), await live(p));
+    await p.close();
+    p = await searchIn("screen=browse&skills=fail", "tide", size);
+    t = await text(p);
+    check(`${label}: only Skills failed: the apps answer, Skills says so, and so does the announcement`, (await p.locator('#c-results .c-row[data-app="tasktide"]').count()) === 1 && t.includes("Skills search didn't answer.") && !t.includes("No skills match") && (await live(p)).endsWith("Skills search didn't answer."), await live(p));
+    await p.close();
+    p = await searchIn("screen=browse-offline", "zzzz", size);
+    t = await text(p);
+    check(`${label}: the catalog unreachable and nothing local matches`, t.includes("No installed apps match on this gateway.") && !t.includes("No apps match") && (await live(p)).includes("The catalog didn't answer this search."), await live(p));
+    await p.close();
+    p = await searchIn("screen=browse", "tide", size);
+    await p.keyboard.press("Escape");
+    await p.waitForTimeout(60);
+    check(`${label}: Escape clears the search first`, (await screenOf(p)) === "browse" && (await p.inputValue("#c-q")) === "" && (await p.locator(".c-chips").isVisible()));
+    await p.keyboard.press("Escape");
+    check(`${label}: then Escape closes the window`, await at(p, "home"));
+    await p.close();
+    p = await searchIn("screen=installed", "tide", size);
+    check(`${label}: On this gateway searches its own rows`, (await p.locator(".c-section-body .c-row:not([hidden])").count()) === 2 && !(await text(p)).includes("Quillnote"));
+    await p.fill("#c-q", "quillnote");
+    await p.waitForTimeout(60);
+    check(`${label}: an app that isn't installed is not found there`, (await p.locator(".c-section-body .c-row:not([hidden])").count()) === 0 && (await p.locator("#c-none").isVisible()) && (await live(p)) === "No installed apps match on this gateway");
+    await p.close();
+  }
+}
+await walk("a catalog page's detail lookup fails, then Try again", "screen=browse", [[row("Quillnote"), "app"], [link("Fails"), "app"], [link("Try again"), "app"]], ["What it adds", "Workspace, a setting (required)"]);
+{
+  const f = await open("screen=app&id=quillnote&detail=fail");
+  check("a detail refusal: its own note and Try again, and no Add", (await text(f)).includes("Couldn't load this app's details.") && (await f.getByRole("link", { name: "Try again" }).count()) === 1 && (await f.getByRole("link", { name: "Add", exact: true }).count()) === 0);
+  await f.close();
+  const q = await open("screen=app&id=quillnote");
+  const qt = await text(q);
+  check("details: required settings, verification and security as reported; no Show all for a short readme", qt.includes("Workspace, a setting (required)") && qt.includes("Default notebook, a setting") && !qt.includes("Default notebook, a setting (required)") && qt.includes("Verification: Verified publisher") && qt.includes("Security: No findings in the latest scan") && (await q.locator('[data-c="show-all"]').count()) === 0);
+  await q.close();
+  const m = await open("screen=app&id=mapwhistle");
+  check("Show all only for a readme longer than twelve lines", (await m.locator('[data-c="show-all"]').count()) === 1 && (await text(m, ".c-section-body > .c-readme")).includes("line 12.") && !(await text(m, ".c-section-body > .c-readme")).includes("line 13."));
+  await m.close();
+  const c = await open("screen=connector&id=tasktide");
+  const href = await c.locator('[data-c="bot-settings"]').getAttribute("href");
+  check("the link to bot settings is a real local page", href === "controls.html" && existsSync(new URL(href, pageUrl("connectors.html")).pathname));
+  await c.close();
+}
+// The picker: unshown without a featured answer, and seen only once it opens.
+{
+  const ctx = await b.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await ctx.newPage();
+  const seen = () => p.evaluate(() => sessionStorage.getItem("ct-connectors-picker-seen"));
+  await p.goto(`${base}&theme=light&screen=home`);
+  await p.getByRole("link", { name: "No featured answer", exact: true }).click();
+  await p.waitForTimeout(60);
+  check("first run with no featured answer leaves the picker unshown and not seen", (await p.locator(".c-picker").count()) === 0 && (await seen()) === null);
+  await p.goto(`${base}&theme=light&screen=home`);
+  await p.getByRole("link", { name: "What do you use every day?", exact: true }).click();
+  await p.waitForTimeout(60);
+  check("a later start with a featured answer offers it, and marks it seen when it opens", (await p.locator(".c-picker").count()) === 1 && (await seen()) === "true");
+  await ctx.close();
+  const n = await open("screen=home", { width: 390, height: 844 });
+  check("at 390 the first-run picker trigger isn't shown (desktop only, F-004)", !(await n.getByRole("link", { name: "What do you use every day?" }).isVisible()));
+  await n.close();
+}
 // Change 8: the removal receipt says only what a fresh plugins.list confirms.
 {
   const state = (p, id) => p.locator(`[data-c="removal"] li[data-plugin="${id}"]`).textContent();
@@ -774,7 +871,7 @@ await walk("what do you use every day: tick, then Browse leads with them", "scre
   [tick("Quillnote")],
   [tick("Calendrop")],
   [link("Next"), "browse"],
-], ["You picked", "Quillnote", "Calendrop"]);
+], ["You picked", "Quillnote", "Calendrop"], { widths: [1440] });
 await walk("what do you use every day: search, then skip", "screen=picker", [[typeIn("#c-q", "tune")], [link("Skip"), "home"]]);
 {
   const p = await open("screen=picker");

@@ -8,13 +8,13 @@ One rule sits above the rest: **a connector's page says what the gateway reporte
 
 Five facts from the research shape the design:
 
-- **The catalog is ClawHub's.** Categories, Recommended, search and everything that can be added come from ClawHub, fetched by the gateway. When the gateway cannot reach it, the catalog shows only what is already on the gateway, and a full-catalog request takes about 14 seconds to say so (R§2).
+- **The catalog is ClawHub's.** Categories, Recommended, search and everything that can be added come from ClawHub, fetched by the gateway. When the gateway cannot reach it, the catalog shows only what is already on the gateway: the overview can return installed plugins with `remoteError`, and featured and category requests have their own outcome (R§2).
 - **Adding a connector installs code on the gateway's machine.** It downloads a package, installs its dependencies there and runs it inside the gateway. It can apply changes to the running gateway. Use the reply's `restartRequired` and warnings. It needs admin, and the gateway can stop first with an install-policy warning (R§3).
 - **A tool server's tools show only in the gateway's tool listing for a task, as of when it was read.** A save is confirmed by reading the gateway's settings back; a listing names what the gateway has discovered for one task, not a run, a time of use or every bot (R§5).
 - **A sign-in from a page needs a connection that comes from a browser.** Both apps reach the gateway through their host as the same client, with no browser origin, and Clawtrate does not present itself as a browser; so both give the gateway's own sign-in steps instead, and the gateway keeps the tokens (R§7).
 - **What the gateway keeps, it does not encrypt.** A header's value is kept by the gateway in its settings file, and a sign-in's tokens in its state, not encrypted there; a removed server's sign-in stays (R§6).
 
-The prototype walks every path to its outcome: `prototype/connectors.html`, with the state in the address (`prototype/README.md`). The styles are in `prototype/css/connectors.css`, the behaviour in `prototype/js/connectors.js`, and `prototype/tools/checks/connectors.mjs` clicks through every walk and asserts each state's words and structure.
+The prototype walks the states named here: `prototype/connectors.html`, with the state in the address (`prototype/README.md`). The styles are in `prototype/css/connectors.css`, the behaviour in `prototype/js/connectors.js`, and `prototype/tools/checks/connectors.mjs` clicks through every walk and asserts each state's words and structure.
 
 ## Contents
 
@@ -170,7 +170,7 @@ Choosing a row opens its page (section 6); "Add" goes straight to the confirmati
 
 **Search** asks `browse {query}` and `skills.search {query}` as the person types, after 300 ms without a key. Results come in two groups, "Apps" and "Skills". A skill row has the initial, the skill's name and description, and opens the skill in its own page, which is not designed here (section 20). The chips and Recommended are hidden while a query is in the field.
 
-- **Each group says which source answered.** When `browse` comes back with `remoteError`, its rows are the gateway's own, under "On this gateway", and the group says "The catalog didn't answer this search." When `skills.search` fails, the Skills group says "Skills search didn't answer." A source that failed never reads "No match".
+- **Each group says which source answered.** The overview can return installed plugins with `remoteError`. Featured and category requests have their own outcome. Show those that answered. An empty fallback is "No installed apps match on this gateway" only when the gateway returned a local result set for that search. Keep "The catalog didn't answer this search." as the app source's status, including in announcements. If the RPC itself refused, show "Couldn't search for apps." with its reason. A successful empty app or skill reply may show its own "No match" line. When `skills.search` fails, the Skills group says "Skills search didn't answer."
 - "No apps or skills match "<query>"." only when both answered and both are empty; "No apps match." or "No skills match." for one group whose source answered.
 
 **More.** When the gateway returns `nextCursor`, "Show more" at the foot of the list asks the next page.
@@ -183,14 +183,15 @@ When `browse` comes back with `remoteError`, or `categories` and `featured` fail
 - No chips and no Recommended: "Categories and recommendations come from the catalog." in the place of the chips.
 - The rows the gateway returned, under "On this gateway", each with its state pill. None has "Add".
 - The search field reads "Search what's on this gateway". A search lists the gateway's own rows that match; the Skills group says "Searching skills needs the catalog."
-- The window does not ask again by itself. "Try again" asks once more; it takes as long as the first time ("Asking the catalog… This can take up to 15 seconds.").
+- The window does not ask again by itself. "Try again" asks once more; it takes as long as the first time ("Asking the catalog… This can take a moment.").
 
 ## 6. Add
 
 **A catalog page.** Choosing a row opens its page in the section, with Back. It shows the initial at 56 px, the name (20/500), "by <author>", "Official" when `catalog.official`, and the summary; then, from `plugins.catalog.get` (R§2):
 
 - "What it adds": its servers (`mcpServers`, with "signs in with OAuth" where `auth: "oauth"`), its skills by name, and the settings it needs (`configuration`, marked "required").
-- "About": the readme as plain text (the first 12 lines, "Show all" for the rest), its version, and the verification and security summary as given.
+- "About": the readme as plain text (the first 12 lines, with "Show all" only for a readme longer than twelve lines), its version, and the verification and security fields as given, when reported.
+- A remote detail lookup (`plugins.catalog.get`) can fail separately: the page then says "**Couldn't load this app's details.**" and the gateway's message, with "Try again", and has no Add.
 - At the foot, "Add" (primary), or the access bar below admin.
 
 Everything the catalog and a plugin give (a name, a summary, an author, the readme) is text, escaped, never markup: the readme is shown as plain text, not rendered Markdown. So an address in it, and the catalog's `repositoryUrl`, `documentationUrl`, `author.imageUrl` and the like, are text that is never fetched or opened (`docs/decisions.md`, "Addresses a gateway hands the client", its last row). A connector's resources, pictures and app views (`mcp.app.*`) never load by themselves. Render gateway strings with text insertion or context-appropriate escaping in every position, including names, headings, row and control labels, metadata, settings fields, tool results and notices. Values used in attributes and local navigation parameters are encoded for that context. Only the controls and addresses classified in the address decision can open a destination.
@@ -444,10 +445,11 @@ The sign-in lines are for an OAuth entry only. The commands render the name from
 
 On a gateway the person already runs, first run ends with the app open and read-only (`setup.md` §7). The question comes once after that, on the first gateway this device connects to, as a dialog over the app, and never again on this device.
 
-- Title "What do you use every day?", the search field "Search apps", and a grid of twelve tiles: the catalog's featured apps (`browse {intent: "featured"}`), each an initial and a name, a checkbox each. "Skip" and "Next".
+- Title "What do you use every day?", the search field "Search apps", and up to twelve featured apps: the catalog's featured apps (`browse {intent: "featured"}`), each an initial and a name, a checkbox each. "Skip" and "Next".
 - The line under the title: "Pick the apps you use. Nothing is connected now; they come first in Connect apps."
 - Ticking keeps the choice on this device only. "Next" closes the dialog and the ticked apps lead Browse as "You picked" (section 4). Nothing is written to the gateway, and the read-only connection is enough.
 - **When the catalog can't be reached**, or the featured list is empty, the question is not asked: there would be nothing true to pick from. It is asked on a later start when the catalog answers. Connect apps stays in the rail.
+- Mark it seen when the dialog actually opens. Keep Next/Skip on this device. With an empty/unavailable featured answer, leave the picker unshown.
 - The row is desktop only (F-004); the iPhone does not ask it.
 
 What the tiles cannot do: shape which bots are suggested, as Grok Bot's do. Clawtrate suggests no bots (F-005 creates one only when there are none).
@@ -459,7 +461,7 @@ What the tiles cannot do: shape which bots are suggested, as Grok Bot's do. Claw
 - **iPhone (F-380)**: from the avatar menu, "Connect apps" opens the same sheet, titled "Plugins" on Browse, with "Search plugins", the category chips, "Featured" for Recommended, and rows with "Added" or "Add". Add a custom connector is desktop only (F-221, F-381); a server's page is read-only on the iPhone and says "Change it from Clawtrate on your computer."
 - **Themes**: every surface is a token; nothing is drawn in a fixed colour.
 - **Read-only**: everything reads; the actions' places hold the access bar. When the gateway's settings are read-only, every page says so and holds no write and no request (section 4).
-- **Keyboard**: everything is reachable in reading order; the chip row and the sign-in radio group have one tab stop each.
+- **Keyboard**: everything is reachable in reading order; the chip row and the sign-in radio group have one tab stop each. Escape clears an active search before it closes the window.
 - **Screen readers**: a row's name is "<name>, <state or Add>, <summary>"; the initial is decorative. The live region's words are in section 2.
 - **Reduced motion**: the loading rows do not shimmer; the waiting dot does not pulse.
 

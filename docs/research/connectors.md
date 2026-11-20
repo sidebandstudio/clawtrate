@@ -77,7 +77,7 @@ On the read-only device, `catalog` in the probe:
 | `plugins.search`, `skills.search` | `UNAVAILABLE`, the fetch error. |
 | `plugins.install` on this device | `FORBIDDEN`, "missing scope: operator.admin". |
 
-What follows for the design: without ClawHub there are no categories, no recommended list, no search beyond the gateway's own plugins, no skills search and nothing to add; what the gateway has stays listed and manageable. A full-catalog call takes about 14 s to say so, the bundled list under a second.
+What follows for the design: without ClawHub there are no categories, no recommended list, no search beyond the gateway's own plugins, no skills search and nothing to add; what the gateway has stays listed and manageable. A full-catalog call took about 14 s to say so here, an observed retry duration and not a deadline the RPC promises; the bundled list took under a second. Featured and category requests have their own outcome. `browse {query}` returned a matching local row with `remoteError`, while the separate `plugins.search` and `skills.search` RPCs failed: a failed search is not one outcome.
 
 ## 3. Adding a connector
 
