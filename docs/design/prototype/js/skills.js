@@ -82,7 +82,8 @@
     learned: {
       juniper: [
         { name: "trail-checklist", description: "Use when planning a weekend walk, to check the weather, the route and what to pack.", files: ["SKILL.md"], live: true, versions: [] },
-        { name: "rest-stops", description: "Use when a walk is longer than three hours.", files: ["SKILL.md"], live: true, versions: [] },
+        // A live skill with a snapshot the workshop kept before a patch: listed with the archive, not archived.
+        { name: "rest-stops", description: "Use when a walk is longer than three hours.", files: ["SKILL.md"], live: true, versions: [{ id: "20261119T141200000Z-patch", at: "2:12 PM" }] },
       ],
     },
     changes: {
@@ -191,6 +192,8 @@
   if (listParam === "none") G.lists[selected] = [];
   if (listParam === "unknown") G.lists[selected] = [gw("trail").name, "s_old_route_9b1c2d3e4f5a6b7c8d9e"];
   if (p("learned") === "empty") G.learned.juniper = [];
+  if (p("learned") === "nolive")
+    for (const l of G.learned.juniper) (l.live = false), l.versions.unshift({ id: "20261119T145906550Z-archive", at: "3:10 PM" });
   if (p("learned") === "archived") {
     G.learned.juniper[0].live = false;
     G.learned.juniper[0].versions = [{ id: "20261119T145906550Z-archive", at: "3:10 PM" }];
@@ -207,7 +210,7 @@
     page: p("skill") || null, // null, a skill's id, or "new"
     read: null, // the page's last read of the skill
     draft: null,
-    mode: { save: p("save"), remove: p("remove"), share: p("share"), enable: p("enable"), task: p("taskw"), cfg: p("cfg"), card: p("cardw"), cardread: p("cardread") },
+    mode: { save: p("save"), remove: p("remove"), share: p("share"), enable: p("enable"), task: p("taskw"), cfg: p("cfg"), card: p("cardw"), cardread: p("cardread"), learned: p("learnedw") },
     pending: null, // the word of a write waiting for its answer or its read: "Saving…"
     status: null, // what the last write's read showed
     compare: null, // {theirs}
@@ -218,7 +221,7 @@
     listNote: null,
     listPending: false,
     learnedOpen: p("item") || null,
-    learnedNote: null,
+    learnedNote: null, // {bot, html}: a workshop write's result, shown only in its own bot's view
     learnedPending: null,
   };
   const takeMode = (kind) => {
@@ -1048,6 +1051,14 @@
     return `${what} by ${who}${c.task ? ` in ${c.task}` : ""}, ${c.at}`;
   };
 
+  // A snapshot, labelled by the action the workshop kept it for (its id ends with that action).
+  const snapshotLine = (v) => {
+    const action = v.id.slice(v.id.indexOf("-") + 1);
+    return action === "archive" ? `Archived ${v.at}` : `${{ patch: "Kept before a patch", write_file: "Kept before a file was written", restore: "Kept before a restore" }[action] || "Kept"}, ${v.at}`;
+  };
+  const noteFor = (bot) => (K.learnedNote?.bot === bot ? K.learnedNote.html : "");
+  const workshopIdle = () => !K.learnedPending && online();
+
   function learnedHtml(bot) {
     const name = esc(botName(bot));
     const all = G.learned[bot] || [];
@@ -1056,14 +1067,21 @@
     let html = `<h4 class="b-group">What ${name} learned</h4><p class="b-hint" style="margin-top:0">Skills saved for ${name} on the gateway, by ${name} or by the gateway's review. They bypass the filter above; the gateway still gives one only when what it needs is there.</p>`;
     html += live.length
       ? `<ul class="k-rows">${live.map((l) => `<li><button type="button" class="k-row" data-k-learned="${esc(l.name)}" data-bs="learned"><span class="k-row-main"><span class="k-row-name mono">${esc(l.name)}</span><span class="k-row-when">${esc(l.description)}</span><small class="k-from">${esc(changeLine(bot, l.name))}</small></span>${icon("chevron")}</button></li>`).join("")}</ul>`
-      : `<div class="work-empty"><span class="empty-mark">${icon("list")}</span><h4>Nothing learned yet</h4><p>When a skill is saved for ${name}, it shows here.</p></div>`;
+      : archived.length
+        ? `<p class="work-note">No live learned skills.</p>`
+        : `<div class="work-empty"><span class="empty-mark">${icon("list")}</span><h4>Nothing learned yet</h4><p>When a skill is saved for ${name}, it shows here.</p></div>`;
     if (archived.length)
-      html += `<p class="k-subgroup">Archived</p><dl class="facts">${archived
-        .map((l) => `<div class="b-row"><span class="b-row-main"><span class="mono">${esc(l.name)}</span><small>${l.versions.map((v) => `Archived ${esc(v.at)}`).join(" · ")}${l.live ? " · restored since" : ""}</small></span>${isAdmin() && !l.live ? button("Restore", `data-k="restore" data-value="${esc(l.name)}" data-size="sm"${K.learnedPending ? " disabled" : ""}`) : ""}</div>`)
+      html += `<p class="k-subgroup">Saved versions</p><dl class="facts">${archived
+        .map(
+          (l) =>
+            `<div class="b-row" data-k-archived="${esc(l.name)}"><span class="b-row-main"><span class="mono">${esc(l.name)}</span><small>${esc([l.live ? "Live" : "Archived", ...l.versions.map(snapshotLine)].join(" · "))}</small></span>${
+              isAdmin() && !l.live ? button("Restore latest saved version", `data-k="restore" data-value="${esc(l.name)}" data-size="sm"${workshopIdle() ? "" : " disabled"}`) : ""
+            }</div>`,
+        )
         .join("")}</dl>`;
-    if (K.learnedPending) html += pendingLine(K.learnedPending);
-    if (K.learnedNote) html += K.learnedNote;
-    html += `<dl class="facts" style="margin-top:12px">${fact("Learning on its own", G.mode === "auto" ? "On" : "Off")}</dl><p class="b-hint">The gateway's setting. Its documentation says the gateway can save and update skills after long work and archives ones unused for 30 days. Each change shows here.</p>`;
+    if (K.learnedPending?.bot === bot) html += pendingLine(K.learnedPending.word);
+    html += noteFor(bot);
+    html += `<dl class="facts" style="margin-top:12px">${fact("Learning on its own", G.mode === "auto" ? "On" : "Off")}</dl><p class="b-hint">The gateway's documentation says background review can save or update skills and archive idle ones. This page shows up to 50 recent changes.</p>`;
     return html;
   }
 
@@ -1076,11 +1094,49 @@
     html += `<p class="k-label">Its text, as the gateway keeps it</p><pre class="k-plain">${esc(l.text)}</pre>`;
     html += `<dl class="facts">${fact("Files", l.files.map((f) => `<span class="mono">${esc(f)}</span>`).join(", "))}</dl>`;
     html += `<h4 class="b-group">Changes</h4><ul class="k-changes">${changes.map((c) => `<li>${esc(`${{ create: "Saved", archive: "Archived", restore: "Restored" }[c.action] || "Changed"} by ${c.actor === "agent" ? botName(bot) : c.actor === "review" ? "the gateway's review" : "a person"}${c.task ? ` in ${c.task}` : ""}, ${c.at}`)}</li>`).join("")}</ul>`;
-    html += `<p class="b-hint">There is no editor for a learned skill: only the bot's own tool changes it.</p>`;
-    if (K.learnedPending) html += pendingLine(K.learnedPending);
-    if (K.learnedNote) html += K.learnedNote;
-    if (isAdmin() && l.live) html += `<div class="b-actions" style="margin-top:12px">${button("Archive…", `data-k="archive" data-size="sm" data-tone="danger"${K.learnedPending ? " disabled" : ""}`, "quiet")}</div>`;
+    html += `<p class="b-hint">Clawtrate can read learned instructions here. Editing them is unavailable.</p>`;
+    if (K.learnedPending?.bot === bot) html += pendingLine(K.learnedPending.word);
+    html += noteFor(bot);
+    if (isAdmin() && l.live) html += `<div class="b-actions" style="margin-top:12px">${button("Archive…", `data-k="archive" data-size="sm" data-tone="danger"${workshopIdle() ? "" : " disabled"}`, "quiet")}</div>`;
     return html;
+  }
+
+  // An archive or restore, captured with its bot, skill and action; the result is said from the
+  // next skills.workshop.list, and only in that bot's view (section 10.2).
+  function workshopWrite(sub) {
+    sent.push({ method: `skills.workshop.${sub.kind}`, agentId: sub.bot, name: sub.name });
+    const mode = takeMode("learned");
+    K.learnedPending = { bot: sub.bot, word: sub.kind === "archive" ? "Archiving…" : "Restoring…" };
+    K.learnedNote = null;
+    rerenderTab();
+    later(ANSWER, () => {
+      const l = (G.learned[sub.bot] || []).find((x) => x.name === sub.name);
+      let answer = { ok: true };
+      if (mode === "refused") answer = { error: sub.kind === "archive" ? `Skill "${sub.name}" is not live.` : `Skill "${sub.name}" has no saved versions to restore.` };
+      else if (sub.kind === "archive") {
+        l.live = false;
+        l.versions.unshift({ id: "20261119T150206000Z-archive", at: clock() });
+        G.changes[sub.bot].unshift({ skill: l.name, action: "archive", actor: "user", at: l.versions[0].at });
+      } else {
+        l.live = true;
+        G.changes[sub.bot].unshift({ skill: l.name, action: "restore", actor: "user", at: clock() });
+      }
+      if (mode === "lost") answer = null;
+      later(READ, () => {
+        K.learnedPending = null;
+        const read = mode === "readfail" ? null : (G.learned[sub.bot] || []).find((x) => x.name === sub.name);
+        const found = read && (read.live ? `Reading again, ${esc(sub.name)} is live for ${esc(botName(sub.bot))}.` : `Reading again, ${esc(sub.name)} is archived.`);
+        const wanted = read && (sub.kind === "archive" ? !read.live : read.live);
+        let html;
+        if (!read) html = `<p class="b-field-error" role="status">${answer?.error ? `The gateway answered: ${esc(answer.error)} ` : answer ? "" : "Couldn't tell whether the change reached the gateway. "}Couldn't read ${esc(botName(sub.bot))}'s learned skills again.</p>`;
+        else if (answer?.error) html = `<div role="status"><p class="b-field-error">The gateway answered: ${esc(answer.error)}</p><p class="b-hint">${found}</p></div>`;
+        else html = `<p class="b-hint" role="status">${answer ? "" : "Couldn't tell whether the change reached the gateway. "}${found}</p>`;
+        K.learnedNote = { bot: sub.bot, html };
+        if (sub.kind === "archive" && wanted && BS.S.view === "learned") BS.S.view = "skills";
+        rerenderTab();
+        announce(!read ? "Couldn't read the learned skills again." : answer?.error ? (sub.kind === "archive" ? "Not archived" : "Not restored") : !answer ? "Couldn't tell whether it changed" : wanted ? (sub.kind === "archive" ? "Archived" : "Restored") : "Not changed");
+      });
+    });
   }
 
   CT.botsPageViews = Object.assign(CT.botsPageViews || {}, { skills: skillsView, learned: learnedView });
@@ -1394,45 +1450,20 @@
       case "list-drop":
         K.listDraft.names = K.listDraft.names.filter((n) => n !== value);
         return rerenderTab();
-      case "archive": {
-        const l = (G.learned[bot] || []).find((x) => x.name === K.learnedOpen) || G.learned[bot][0];
+      case "archive":
+      case "restore": {
+        // Checked again at dispatch: admin, connected, nothing pending.
+        if (!isAdmin() || !workshopIdle()) return;
+        const kind = t.dataset.k;
+        const name = kind === "archive" ? ((G.learned[bot] || []).find((x) => x.name === K.learnedOpen) || G.learned[bot][0]).name : value;
+        const run = () => workshopWrite({ bot, name, kind });
+        if (kind === "restore") return run();
         return D.confirmBox({
-          title: `Archive ${esc(l.name)}?`,
-          text: `${esc(botName(bot))} stops being given it. The gateway keeps it, and you can restore it.`,
+          title: `Archive ${esc(name)}?`,
+          text: "The gateway will move this learned skill into its archive. You can restore it later.",
           action: "danger",
           label: "Archive",
-          run: () => {
-            K.learnedPending = "Archiving…";
-            rerenderTab();
-            later(ANSWER, () => {
-              l.live = false;
-              l.versions.push({ id: "20261119T150206000Z-archive", at: clock() });
-              G.changes[bot].unshift({ skill: l.name, action: "archive", actor: "user", at: l.versions.at(-1).at });
-              later(READ, () => {
-                K.learnedPending = null;
-                BS.S.view = "skills";
-                const archived = !l.live;
-                K.learnedNote = `<p class="b-hint" role="status">${archived ? `Archived. Reading again, ${esc(l.name)} is in Archived.` : "Reading again, it is still live."}</p>`;
-                rerenderTab();
-                announce("Archived");
-              });
-            });
-          },
-        });
-      }
-      case "restore": {
-        const l = (G.learned[bot] || []).find((x) => x.name === value);
-        K.learnedPending = "Restoring…";
-        rerenderTab();
-        return later(ANSWER, () => {
-          l.live = true;
-          G.changes[bot].unshift({ skill: l.name, action: "restore", actor: "user", at: clock() });
-          later(READ, () => {
-            K.learnedPending = null;
-            K.learnedNote = `<p class="b-hint" role="status">Restored. Reading again, ${esc(l.name)} is live for ${esc(botName(bot))}.</p>`;
-            rerenderTab();
-            announce("Restored");
-          });
+          run,
         });
       }
       // The cards
