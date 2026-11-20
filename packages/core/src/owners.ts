@@ -383,6 +383,16 @@ export function ownerClassFields(): Record<string, string[]> {
   return Object.fromEntries(Object.entries(fields).map(([name, set]) => [name, [...set].sort()]));
 }
 
+/** The two strings in the desktop updater's private preference store. */
+export const UPDATE_PREFERENCE_OWNERS: Record<string, Owner> = {
+  selectedTrack: { max: 1, each: JSON.stringify("nightly").length, row: "updatePreferences" },
+  lastCheckedAt: {
+    max: 1,
+    each: JSON.stringify("2000-01-01T00:00:00.000Z").length,
+    row: "updatePreferences",
+  },
+};
+
 /** JSON characters each registry row adds to the host's worst case, with `viewers` bridge sessions. */
 export function ownerRows(viewers: number): Record<string, number> {
   const rows: Record<string, number> = {};
@@ -396,5 +406,6 @@ export function ownerRows(viewers: number): Record<string, number> {
   add(VIEWER_OWNERS, viewers);
   add(ATTACHMENT_OWNERS, 1);
   add(SAVE_OWNERS, 1);
+  add(UPDATE_PREFERENCE_OWNERS, 1);
   return rows;
 }

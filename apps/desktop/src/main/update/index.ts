@@ -1,7 +1,4 @@
-// The update engine for the update screens (#69). Nothing imports it yet: a
-// build of the app makes no request to an update host. docs/decisions.md,
-// "Updates and release signing", says what it checks and what it does not.
-
+// Main-process update feed and download primitives.
 export {
   UpdateEngine,
   DEFAULT_LIMITS,

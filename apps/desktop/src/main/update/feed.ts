@@ -2,6 +2,7 @@
 // by field. docs/decisions.md, "Updates and release signing", gives the format.
 // Only the checked values leave this file; any other field is ignored.
 
+import type { UpdateTrack } from "@clawtrate/core";
 import { readable, type LoopbackHttpForTests } from "./address.ts";
 import { parseVersion, versionTrack, type Version } from "./version.ts";
 
@@ -64,7 +65,7 @@ export function parseFeed(
   feedUrl: URL,
   key: FileKey | null,
   loopback?: LoopbackHttpForTests,
-  track: import("@clawtrate/core").UpdateTrack = "stable",
+  track: UpdateTrack = "stable",
 ): FeedRead {
   let raw: unknown;
   try {

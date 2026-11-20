@@ -3,6 +3,7 @@
 // reports typed states for the update screens and installs nothing.
 // docs/decisions.md, "Updates and release signing", has its rules.
 
+import type { UpdateTrack } from "@clawtrate/core";
 import { createHash } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir, rename, rm } from "node:fs/promises";
@@ -100,7 +101,7 @@ export const DEFAULT_LIMITS: Limits = {
 
 export interface UpdateEngineOptions {
   /** The feed's address. The production constructor passes the one fixed at build time. */
-  readonly track?: import("@clawtrate/core").UpdateTrack;
+  readonly track?: UpdateTrack;
   readonly onFeedRead?: () => void;
   readonly feedAddress: string | null;
   /** The build's own release date, for F-010. The production constructor passes the build's. */
@@ -134,6 +135,7 @@ class DownloadFailed extends Error {
 }
 
 export class UpdateEngine {
+  private transfer: Transfer | null = null;
   private current: UpdateState = { kind: "idle" };
   private found: Found | null = null;
   private busy: Promise<UpdateState> | null = null;
@@ -182,11 +184,17 @@ export class UpdateEngine {
     return this.exclusive(() => this.runDownload());
   }
 
+  /** Stop the request and let its normal cleanup finish before reusing the folder. */
+  cancel(): void {
+    this.transfer?.stop("unreachable");
+  }
+
   private exclusive(work: () => Promise<UpdateState>): Promise<UpdateState> {
     if (this.busy) return this.busy;
     // Publish the shared promise before work synchronously reports its first state.
     const { promise, resolve } = Promise.withResolvers<UpdateState>();
     const run = promise.finally(() => {
+      this.transfer = null;
       this.busy = null;
     });
     this.busy = run;
@@ -219,7 +227,10 @@ export class UpdateEngine {
     }
     this.report({ kind: "checking" });
     const { maxFeedBytes, feedTimeoutMs, idleTimeoutMs } = this.limits;
-    const transfer = new Transfer(feedTimeoutMs, Math.min(idleTimeoutMs, feedTimeoutMs));
+    const transfer = (this.transfer = new Transfer(
+      feedTimeoutMs,
+      Math.min(idleTimeoutMs, feedTimeoutMs),
+    ));
     let text: string;
     try {
       const response = await open(address.url, transfer, maxFeedBytes, this.userAgent);
@@ -261,7 +272,10 @@ export class UpdateEngine {
       this.report({ kind: "downloading", version, releaseDate, received, total: file.size });
 
     progress(0);
-    const transfer = new Transfer(this.limits.downloadTimeoutMs, this.limits.idleTimeoutMs);
+    const transfer = (this.transfer = new Transfer(
+      this.limits.downloadTimeoutMs,
+      this.limits.idleTimeoutMs,
+    ));
     const hash = createHash("sha512");
     let received = 0;
     let reported = 0;

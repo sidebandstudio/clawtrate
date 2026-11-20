@@ -1,0 +1,230 @@
+import type { DesktopUpdateSnapshot } from "@clawtrate/core";
+import { createFileStore } from "@clawtrate/core/node";
+import { existsSync, mkdirSync, writeFileSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { UpdateEngine } from "../../src/main/update/engine.ts";
+import { DesktopUpdateService } from "../../src/main/update/service.ts";
+import { bytes, feedFor, feedServer, json, payload, tempDir, type FeedServer } from "./harness.ts";
+
+let server: FeedServer;
+let dir: ReturnType<typeof tempDir>;
+let updates: string;
+const snapshots: DesktopUpdateSnapshot[] = [];
+const fixture = payload(4000);
+const nightly = "1.1.0-nightly.20261101.9";
+function document(version: string, track: string) {
+  return feedFor(
+    server.origin,
+    version,
+    { size: fixture.body.length, sha512: fixture.sha512 },
+    { track },
+  );
+}
+beforeEach(async () => {
+  server = await feedServer();
+  dir = tempDir();
+  updates = join(dir.path, "updates");
+  snapshots.length = 0;
+  server.route("/stable", json(document("1.1.0", "stable")));
+  server.route("/nightly", json(document(nightly, "nightly")));
+  server.route("/files/app.zip", bytes(fixture.body));
+});
+afterEach(async () => {
+  await server.close();
+  dir.remove();
+});
+const store = () => createFileStore(join(dir.path, "preferences.json"));
+const start = (overrides: Partial<Parameters<typeof DesktopUpdateService.start>[0]> = {}) =>
+  DesktopUpdateService.start({
+    packaged: true,
+    version: "1.0.0",
+    platform: "darwin",
+    arch: "arm64",
+    downloadDir: updates,
+    releaseDate: null,
+    store: store(),
+    changed: (s) => snapshots.push(s),
+    feeds: { stable: server.origin + "/stable", nightly: server.origin + "/nightly" },
+    loopbackHttpForTests: { port: server.port },
+    ...overrides,
+  });
+async function offer(service: DesktopUpdateService) {
+  const { state } = await service.check();
+  if (state.kind !== "offered") throw Error(JSON.stringify(state));
+  return state.offerId;
+}
+it("removes old files and makes zero requests at launch, on get, and on choosing a track", async () => {
+  mkdirSync(updates);
+  writeFileSync(join(updates, "old.partial"), "old");
+  const service = await start();
+  expect(existsSync(updates)).toBe(false);
+  expect(service.get()).toMatchObject({
+    runningTrack: "stable",
+    selectedTrack: "stable",
+    lastCheckedAt: null,
+    state: { kind: "not-checked" },
+  });
+  await service.chooseTrack("nightly");
+  expect(server.requests).toEqual([]);
+  const id = await offer(service);
+  expect(await service.download(id)).toMatchObject({
+    state: { kind: "verified", version: nightly, size: fixture.body.length },
+  });
+  expect(readdirSync(updates)).toHaveLength(1);
+  expect(server.requests).toEqual(["/nightly", "/files/app.zip"]);
+  const checked = service.get().lastCheckedAt;
+  expect(checked).toMatch(/Z$/);
+  expect(JSON.stringify(snapshots)).not.toMatch(/https?:|app\.zip|\.partial|sha512|"path"/);
+  expect(service.get().tracks).toEqual(
+    ["stable", "nightly"].map((track) => ({ track, source: "127.0.0.1" })),
+  );
+  expect((await start()).get()).toMatchObject({
+    runningTrack: "stable",
+    selectedTrack: "nightly",
+    lastCheckedAt: checked,
+    state: { kind: "not-checked" },
+  });
+  expect(existsSync(updates)).toBe(false);
+});
+it("drops the old identity and verified bytes when switching tracks", async () => {
+  const service = await start();
+  const old = await offer(service);
+  await service.chooseTrack("nightly");
+  const current = await offer(service);
+  await service.download(old);
+  expect(service.get().state).toMatchObject({ kind: "offered", offerId: current });
+  await service.download(current);
+  await service.chooseTrack("stable");
+  expect(existsSync(updates)).toBe(false);
+  expect(server.requests).toEqual(["/stable", "/nightly", "/files/app.zip"]);
+});
+it.each(["check", "download"] as const)(
+  "discards an outstanding %s and refuses overlapping requests",
+  async (stage) => {
+    const service = await start();
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    server.route(stage === "check" ? "/stable" : "/files/app.zip", async (req, res) => {
+      entered.resolve();
+      await resume.promise;
+      (stage === "check" ? json(document("1.1.0", "stable")) : bytes(fixture.body))(req, res);
+    });
+    const id = stage === "download" ? await offer(service) : "old";
+    const pending = stage === "check" ? service.check() : service.download(id);
+    await entered.promise;
+    await Promise.all([service.check(), service.download(id)]);
+    await service.chooseTrack("nightly");
+    resume.resolve();
+    await pending;
+    expect(service.get()).toMatchObject({
+      selectedTrack: "nightly",
+      state: { kind: "not-checked" },
+    });
+    expect(existsSync(updates)).toBe(false);
+    expect(server.requests).toEqual(
+      stage === "check" ? ["/stable"] : ["/stable", "/files/app.zip"],
+    );
+  },
+);
+it("refuses a feed for another track and records only completed reads", async () => {
+  const service = await start();
+  server.route("/stable", (_req, res) => res.destroy());
+  expect((await service.check()).lastCheckedAt).toBeNull();
+  for (const [version, track] of [
+    [nightly, "nightly"],
+    [nightly, "stable"],
+  ] as const) {
+    server.route("/stable", json(document(version, track)));
+    expect(await service.check()).toMatchObject({
+      lastCheckedAt: expect.stringMatching(/Z$/),
+      state: { kind: "failed", reason: "wrong-track" },
+    });
+  }
+});
+it("keeps the previous track when saving fails and checks it next", async () => {
+  const prefs = store();
+  vi.spyOn(prefs, "set").mockRejectedValueOnce(Error("disk full"));
+  const service = await start({ store: prefs });
+  expect(await service.chooseTrack("nightly")).toMatchObject({
+    selectedTrack: "stable",
+    state: { kind: "failed", stage: "preferences", reason: "write-failed" },
+  });
+  expect(server.requests).toEqual([]);
+  await offer(service);
+  expect(server.requests).toEqual(["/stable"]);
+});
+it("reports the running version when the selected track offers an older build", async () => {
+  const service = await start({ version: "2.0.0-nightly.20261102.1" });
+  expect(service.get().selectedTrack).toBe("nightly");
+  await service.chooseTrack("stable");
+  expect(await service.check()).toMatchObject({
+    runningVersion: "2.0.0-nightly.20261102.1",
+    state: { kind: "nothing-newer" },
+  });
+});
+it("describes a single source, development copies and invalid running versions", async () => {
+  const single = await start({ feeds: { stable: server.origin + "/stable", nightly: null } });
+  expect(single.get().tracks).toHaveLength(1);
+  expect((await single.chooseTrack("nightly")).selectedTrack).toBe("stable");
+  expect((await (await start({ packaged: false })).check()).state).toMatchObject({
+    reason: "development-build",
+  });
+  expect(await (await start({ version: "bad" })).check()).toMatchObject({
+    runningTrack: null,
+    runningVersion: null,
+    state: { reason: "invalid-version" },
+  });
+  expect(server.requests).toEqual([]);
+});
+
+it.each(["check", "download"] as const)(
+  "ignores a completed %s whose result arrives after a switch",
+  async (operation) => {
+    const service = await start();
+    const id = operation === "download" ? await offer(service) : null;
+    const completed = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const original = UpdateEngine.prototype[operation];
+    const delayed = vi
+      .spyOn(UpdateEngine.prototype, operation)
+      .mockImplementationOnce(async function (this: UpdateEngine) {
+        const result = await original.call(this);
+        completed.resolve();
+        await release.promise;
+        return result;
+      });
+    try {
+      const pending = id ? service.download(id) : service.check();
+      await completed.promise;
+      if (id) expect(readdirSync(updates)).toHaveLength(1);
+      const change = service.chooseTrack("nightly");
+      await vi.waitFor(() => expect(service.get().selectedTrack).toBe("nightly"));
+      release.resolve();
+      await Promise.all([pending, change]);
+      expect(service.get().state.kind).toBe("not-checked");
+      expect(existsSync(updates)).toBe(false);
+    } finally {
+      release.resolve();
+      delayed.mockRestore();
+    }
+  },
+);
+
+it("a failed file-store write cannot slip into a later successful save", async () => {
+  const prefs = store();
+  const service = await start({ store: prefs });
+  await service.chooseTrack("nightly");
+  const path = join(dir.path, "preferences.json");
+  renameSync(path, path + ".saved");
+  mkdirSync(path);
+  expect(await service.chooseTrack("stable")).toMatchObject({
+    selectedTrack: "nightly",
+    state: { reason: "write-failed" },
+  });
+  expect(await prefs.get("selectedTrack")).toBe("nightly");
+  rmSync(path, { recursive: true });
+  renameSync(path + ".saved", path);
+  await service.check();
+  expect((await start()).get().selectedTrack).toBe("nightly");
+});

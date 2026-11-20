@@ -238,6 +238,16 @@ describe("the feed the release writes", () => {
     dir = undefined;
   });
 
+  it("labels a generated nightly feed from the validated package version", () => {
+    dir = mkdtempSync(join(tmpdir(), "clawtrate-feed-"));
+    const options = {
+      dir,
+      folder: "https://updates.example/nightly",
+      releaseDate: "2026-11-01T00:00:00Z",
+    };
+    expect(makeFeed({ ...options, version: "1.0.0-nightly.20261101.1" }).track).toBe("nightly");
+    expect(() => makeFeed({ ...options, version: "1.0.0-alpha.1" })).toThrow(/version/);
+  });
   it("names each artifact with its size and SHA-512, and the engine reads it back", () => {
     dir = mkdtempSync(join(tmpdir(), "clawtrate-feed-"));
     const zip = Buffer.from("a macOS zip");

@@ -44,9 +44,10 @@ export function createFileStore(path: string): KeyValueStore {
   };
   const persist = (mutate: (data: Record<string, string>) => void) => {
     const run = queue.then(async () => {
-      const data = await load();
+      const data = { ...(await load()) };
       mutate(data);
       await writePrivateFile(path, `${JSON.stringify(data, null, 2)}\n`);
+      cache = data;
     });
     queue = run.catch(() => {});
     return run;
