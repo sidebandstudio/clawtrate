@@ -221,3 +221,23 @@ it("F-519: a claim whose write commits but cannot be read back stays consumed", 
   expect(countReply(() => unavailable)).toBe(false);
   expect(countReply(() => store)).toBe(false);
 });
+
+it("F-519: a queued send counts on its own run, and a steer does not add another reply", () => {
+  const watch = new InvitationReplies();
+  const count = vi.fn(() => false);
+  watch.sent("task", "mine");
+  watch.sent("task", "steer");
+  watch.sent("task", "queued");
+  const show = (runs: Run[]) => watch.observe({ task: task(runs) }, "task", () => true, count);
+  const queued = make({ id: "queued", messageId: "queued", state: "queued", bound: false });
+  show([make({ state: "running" }), queued]);
+  expect(count).toHaveBeenCalledTimes(0);
+  show([make(), queued]);
+  expect(count).toHaveBeenCalledTimes(1);
+  show([
+    make(),
+    make({ id: "second", messageId: "queued" }),
+    make({ id: "steer", messageId: "steer", origin: "history" }),
+  ]);
+  expect(count).toHaveBeenCalledTimes(2);
+});
