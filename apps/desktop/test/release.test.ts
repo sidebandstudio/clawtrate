@@ -261,3 +261,15 @@ describe("the feed the release writes", () => {
     });
   });
 });
+
+it("accepts the example release feed in the decision", () => {
+  const decisions = readFileSync(join(APP, "../../docs/decisions.md"), "utf8");
+  const section = decisions.split("## Updates and release signing")[1]!;
+  const example = section.match(/```json\s+([\s\S]*?)```/)![1]!;
+  const result = parseFeed(
+    example,
+    new URL("https://updates.example/clawtrate/feed.json"),
+    "mac-arm64",
+  );
+  expect(result).toMatchObject({ ok: true, feed: { file: { size: expect.any(Number) } } });
+});

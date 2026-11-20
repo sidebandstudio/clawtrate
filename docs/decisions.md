@@ -229,20 +229,14 @@ The release side of the updater (issue #68): the feed, what is verified before a
     "files": {
       "mac-arm64": {
         "url": "https://updates.example/clawtrate/Clawtrate-0.2.0-mac-arm64.zip",
-        "size": 123456789,
-        "sha512": "<base64>"
-      },
-      "mac-x64": { "url": "…", "size": 0, "sha512": "…" },
-      "win-x64": {
-        "url": "https://updates.example/clawtrate/Clawtrate-0.2.0-win-x64.exe",
-        "size": 0,
-        "sha512": "…"
+        "size": 21,
+        "sha512": "d/PXtFfUwaIXGZVkl0V6/BiLoriUAcWJNit6KD0cRzUHkPhQl0a2vkZZzpFaI/Ptrhun0lKbq/DXp0Yf9W9nlw=="
       }
     }
   }
   ```
 
-  A file is the build's own artifact: the macOS `.zip` and the Windows NSIS installer. `node packaging/feed.ts <address of the folder>` in `apps/desktop` writes `dist/update-feed.json` from the artifacts in `dist`, hashing them; it uploads nothing. The owner publishes the feed and the files on one HTTPS host of their choosing. `version` is `MAJOR.MINOR.PATCH` and nothing else; `releaseDate` is an ISO time in UTC. Any other field is ignored and never shown; anything missing, mistyped or out of range makes the whole feed one failure, `malformed-feed`.
+  The supported file keys are `mac-arm64`, `mac-x64` and `win-x64`. A file is the build's own artifact: the macOS `.zip` and the Windows NSIS installer. `node packaging/feed.ts <address of the folder>` in `apps/desktop` writes `dist/update-feed.json` from the artifacts in `dist`, hashing them; it uploads nothing. The owner publishes the feed and the files on one HTTPS host of their choosing. `version` is `MAJOR.MINOR.PATCH` and nothing else; `releaseDate` is an ISO time in UTC. Any other field is ignored and never shown; anything missing, mistyped or out of range makes the whole feed one failure, `malformed-feed`.
 
 - **How a build finds it.** Whoever builds the app sets `CLAWTRATE_UPDATE_FEED_URL`. Electron Vite substitutes that constant wherever the build includes the engine. The current app omits the engine. The build requires HTTPS without credentials and rejects the parsed hostnames `localhost`, names ending in `.localhost`, `::1`, and names starting with `127.`. It does no DNS or connection-time address filtering. It accepts HTTPS addresses on private networks. A missing feed address or a placeholder host ending in `.example` gives `not-configured`. The production constructor gets its address from the build alone.
 - **The build's own release date** is the second constant: `SOURCE_DATE_EPOCH` (seconds) when set at build time, otherwise the time of the build. F-010's "more than 14 days old" is checked by the production engine with `updateRequired(now)`: a newer version must exist, and the build's own date, not the feed's, must be more than 14 days before `now`. A build without the constant (a unit test) is never "required". The owner should give the build and `packaging/feed.ts` the same `SOURCE_DATE_EPOCH`.
