@@ -224,7 +224,10 @@ export function Editor({
           now,
         ),
   );
-  const [key] = useState(newKey);
+  // The gateway treats a second add with the same key as an edit of the first, so a
+  // retry after a check that found nothing gets a new key: that save may still land,
+  // and its key must not overwrite what it became since.
+  const key = useRef(newKey());
   const [save, setSave] = useState<Save>({ status: "idle" });
   /** The gateway said it has no such routine. */
   const [gone, setGone] = useState(false);
@@ -364,7 +367,7 @@ export function Editor({
         : bridge.invoke({
             type: "createRoutine",
             input: { ...fields, botId: draft.botId },
-            key,
+            key: key.current,
             gateway,
           });
     void request
@@ -384,7 +387,7 @@ export function Editor({
     at({ status: "checking" });
     try {
       if (mode.mode === "new") {
-        const found = await bridge.invoke({ type: "findCreatedRoutine", key });
+        const found = await bridge.invoke({ type: "findCreatedRoutine", key: key.current });
         if (id !== attempt.current) return;
         if (!found) return at({ status: "missing" });
         if (changedFields(sent, fieldsOf(found)).length === 0) return onSaved(found, true);
@@ -464,7 +467,8 @@ export function Editor({
           ) : c.status === "missing" ? (
             <>
               <strong>The gateway has no routine from this form yet.</strong> The save may still
-              arrive. Saving again can&apos;t make a second one.
+              arrive. Saving again makes a new routine, so if the first save arrives too, there will
+              be two.
             </>
           ) : (
             <>
@@ -503,7 +507,10 @@ export function Editor({
               className="button"
               data-size="sm"
               data-variant="quiet"
-              onClick={() => submit()}
+              onClick={() => {
+                key.current = newKey();
+                submit();
+              }}
             >
               Save again
             </button>

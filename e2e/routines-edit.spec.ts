@@ -110,6 +110,14 @@ type Reply = (value?: unknown, error?: string) => void;
 let omitFromCache: string | null = null;
 let heldCommand: { type: string; forward: boolean; ready: (reply: Reply) => void } | null = null;
 const unanswered = { status: "unknown", error: "The gateway didn't answer." };
+// One command held back from the gateway and answered as unanswered; `land` sends
+// it on later, as a write whose reply was lost might arrive, and its reply is dropped.
+let lateCommand: { type: string; land?: () => void } | null = null;
+function holdLate(type: "createRoutine"): { land: () => void } {
+  const late: { type: string; land?: () => void } = { type };
+  lateCommand = late;
+  return { land: () => late.land?.() };
+}
 
 function holdCommand(
   type: "updateRoutine" | "removeRoutine" | "readRoutine",
@@ -144,8 +152,19 @@ test.beforeAll(async ({ browser }) => {
   await page.routeWebSocket(/\/bridge$/, (ws) => {
     const server = ws.connectToServer();
     let hold: { id: string; ready: (reply: Reply) => void } | null = null;
+    const dropped = new Set<string>();
     ws.onMessage((message) => {
       const request = JSON.parse(String(message)) as { id: string; command?: { type: string } };
+      const late = lateCommand;
+      if (late && request.command?.type === late.type) {
+        lateCommand = null;
+        late.land = () => {
+          dropped.add(request.id);
+          server.send(message);
+        };
+        ws.send(JSON.stringify({ type: "result", id: request.id, ok: true, value: unanswered }));
+        return;
+      }
       const command = heldCommand;
       if (command && request.command?.type === command.type) {
         heldCommand = null;
@@ -179,6 +198,7 @@ test.beforeAll(async ({ browser }) => {
         ws.send(JSON.stringify(response));
         return;
       }
+      if (response.type === "result" && response.id && dropped.delete(response.id)) return;
       if (hold && response.type === "result" && response.id === hold.id) {
         hold.ready((value = response.value) => ws.send(JSON.stringify({ ...response, value })));
         hold = null;
@@ -278,6 +298,37 @@ test("F-189 F-354: a routine made in the form is on the gateway as written, and 
     expect((await get(job.id)).state?.lastRunAtMs).toBeUndefined();
     expect((await get(job.id)).state!.nextRunAtMs!).toBeGreaterThan(Date.now() + 60_000);
   });
+});
+
+test("F-189: saving again after a create went unanswered never overwrites what landed late and was changed", async () => {
+  const name = `Landed late ${STAMP}`;
+  await openRoutines();
+  await view().getByTestId("new-routine").click();
+  await editor().getByLabel("Name").fill(name);
+  await editor().getByLabel("Instruction").fill("#text");
+  const late = holdLate("createRoutine");
+  await save().click();
+  const unknown = editor().getByTestId("editor-unknown");
+  await unknown.getByRole("button", { name: "Check now" }).click();
+  await expect(unknown).toContainText("The gateway has no routine from this form yet.");
+  await expect(unknown).toContainText("if the first save arrives too, there will be two");
+  // The first create arrives after all, and another client changes it.
+  late.land();
+  await expect.poll(async () => (await byName(name))?.id ?? null).not.toBeNull();
+  const first = (await byName(name))!;
+  await call("cron.update", {
+    id: first.id,
+    patch: { payload: { kind: "agentTurn", message: "#steps" } },
+  });
+  await unknown.getByRole("button", { name: "Save again" }).click();
+  await expect(editor()).toHaveCount(0, { timeout: 15_000 });
+  // The other client's change stands; saving again made a routine of its own.
+  expect((await get(first.id)).payload).toMatchObject({ kind: "agentTurn", message: "#steps" });
+  const { jobs } = await call<{ jobs: Job[] }>("cron.list", { includeDisabled: true, limit: 200 });
+  const named = jobs.filter((each) => each.name === name);
+  for (const each of named) made.add(each.id);
+  expect(named).toHaveLength(2);
+  expect(new Set(named.map((each) => each.declarationKey)).size).toBe(2);
 });
 
 test("F-189: a refused save says the gateway's reason and keeps what was typed", async () => {
