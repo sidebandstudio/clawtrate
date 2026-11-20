@@ -53,7 +53,7 @@
     saved: { model: "dev-1", effort: "low" },
     held: null,
     shown: params.get("tmodel") === "refused" ? "Couldn't change the effort: thinkingLevel \"high\" is not supported for acme/dev-lite (use off|ultra)." : null,
-    lines: params.get("tchange") === "0" ? [] : [{ text: "Model changed to acme/dev-2 · from the next turn", title: "Was acme/dev-1 · Low. Changed at 5:34 PM on this device." }],
+    lines: params.get("tchange") === "0" ? [] : [{ text: "Model changed to acme/dev-2 · from the next turn", title: "Last read acme/dev-1 · Low. Changed at 5:34 PM on this device." }],
     runModel: "acme/dev-2",
   };
   if (S.state === "held") S.held = { model: "dev-2", effort: "high" };
@@ -166,7 +166,7 @@
       const parts = [];
       if (change.model !== S.saved.model) parts.push(`Model changed to ${PROVIDER}/${change.model}`);
       if (change.effort !== S.saved.effort) parts.push(parts.length ? `effort to ${word(change.effort)}` : `Effort changed to ${word(change.effort)}`);
-      if (parts.length) S.lines.push({ text: `${parts.join(", ")} · from the next turn`, title: `Was ${PROVIDER}/${S.saved.model} · ${word(S.saved.effort)}. Changed at 5:44 PM on this device.` });
+      if (parts.length) S.lines.push({ text: `${parts.join(", ")} · from the next turn`, title: `Last read ${PROVIDER}/${S.saved.model} · ${word(S.saved.effort)}. Changed at 5:44 PM on this device.` });
       S.saved = change;
       S.held = null;
       S.state = "set";

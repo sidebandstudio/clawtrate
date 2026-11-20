@@ -1597,7 +1597,7 @@ Words: an effort is "Off", "Minimal", "Low", "Medium", "High", "Ultra" or the ga
 
 **Retried when the gateway says so.** A patch sent as a turn ends can meet the gateway still settling that turn; it answers `UNAVAILABLE`, marked retryable ("Session patch failed unexpectedly. Retry the request."). Such an answer is sent again, up to five times with a growing pause, while the connection holds; any other answer is final.
 
-**After it.** Accepted: the event line is posted for the fields the answer's `entry` and `resolved` show changed, and the task's row and its list are read again; an answer that shows neither posts the not-confirmed line below and reads the task again. Refused: the chip and the selects show what the gateway has, the Details line gives the gateway's reason, and an event line says it was refused. Lost connection: a held change stays held and is saved once the connection is back and nothing runs; a save whose answer never came is not confirmed: the not-confirmed line, "Couldn't confirm the change", and the task's row is read again so the chip shows what the gateway has.
+**After it.** Accepted: the event line is posted for the fields the answer's `entry` and `resolved` show changed, and the task's row and its list are read again; a field the answer does not show is said as not confirmed, and only a field the patch sent: an effort the app only expected is never said as unconfirmed. A model written alone can bring the task another level it inherits: when the answer's full `entry` has no level of its own, the row takes none and takes `resolved.thinkingLevel` as the level it inherits, so the chip shows it at once, and the line names it ("effort to Off") only when the answer gives it and it differs from what was read before. Refused: the chip and the selects show what the gateway has, the Details line gives the gateway's reason, and an event line says it was refused. Lost connection: a held change stays held and is saved once the connection is back and nothing runs; a save whose answer never came is not confirmed: the not-confirmed line, "Couldn't confirm the change", and the task's row is read again so the chip shows what the gateway has.
 
 ### 25.4 The event line
 
@@ -1610,9 +1610,9 @@ A centred event line (`visual-language.md` §8) where the change was saved: afte
 | Both                          | "Model changed to acme/dev-2, effort to Low · from the next turn"                                                     |
 | The effort followed the model | "Model changed to acme/dev-lite, effort to Off · from the next turn", tooltip adds "acme/dev-lite doesn't offer High" |
 | Refused                       | A 14 px warning mark, then "Couldn't change the model to acme/dev-2: <the gateway's reason>"                          |
-| Not confirmed                 | A 14 px warning mark, then "Couldn't confirm the change of the model to acme/dev-2. Reading the task again."          |
+| Not confirmed                 | A 14 px warning mark, then "Couldn't confirm the change of the model to acme/dev-2."                                  |
 
-Its tooltip, and the line's accessible name, add what it was and when: "Was acme/dev-1 · Low. Changed at 5:42 PM on this device."
+Its tooltip, and the line's accessible name, add what was last read and when: "Last read acme/dev-1 · Low. Changed at 5:42 PM on this device."; a line not confirmed ends "Change unconfirmed at 5:42 PM on this device."
 
 - The gateway records no change, so the line is the app's record of its own change. The app keeps it on the device that made it, and shows it there live and after a reload or a restart. A change made on another device or by another client shows in the chip, the Details and the next turn's record, and has no line here.
 - The line is placed by the gateway's own times: after the end of the turn it followed, before the first message after it.

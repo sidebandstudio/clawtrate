@@ -250,7 +250,7 @@ export function taskModelLine(event: TaskModelEvent, word: (level: string) => st
       : event.effort
         ? `the effort to ${word(event.effort)}`
         : "the change";
-    return `Couldn't confirm the change of ${what}. Reading the task again.`;
+    return `Couldn't confirm the change of ${what}.`;
   }
   if (event.outcome === "refused") {
     const what = event.model
@@ -608,9 +608,9 @@ export class TaskModelsEngine {
       const wasModel = task.model ?? null;
       const wasEffort = rowEffort(task);
       const effort = desired.effort && desired.effort !== wasEffort ? desired.effort : null;
+      // The task's level is one the new model doesn't offer: a level after it followed the model.
       const followed =
         change.model !== null &&
-        effort !== null &&
         wasEffort !== null &&
         !(catalogEntry(view.models, change.model)?.levels.includes(wasEffort) ?? true);
       const params: RawRecord = { key };
@@ -680,20 +680,37 @@ export class TaskModelsEngine {
         const answeredLevels = [entry?.thinkingLevel, resolved?.thinkingLevel].filter(
           (level): level is string => typeof level === "string",
         );
+        // The full entry with no level of its own: the task asks for none, and uses the one resolved.
+        const inherited =
+          entry !== null && typeof entry.thinkingLevel !== "string"
+            ? typeof resolved?.thinkingLevel === "string"
+              ? resolved.thinkingLevel
+              : null
+            : null;
         const fields: RawRecord = {};
         if (typeof resolved?.model === "string") fields.model = resolved.model;
         if (typeof resolved?.modelProvider === "string")
           fields.modelProvider = resolved.modelProvider;
         if (typeof entry?.thinkingLevel === "string") fields.thinkingLevel = entry.thinkingLevel;
+        else if (entry !== null) fields.thinkingLevel = null;
+        if (inherited !== null) fields.thinkingDefault = inherited;
         if (typeof entry?.sessionId === "string") fields.sessionId = entry.sessionId;
         this.ctx.applyRow(key, fields);
+        // An effort sent is confirmed by the answer; one not sent is named only when the answer
+        // shows the model's change brought the task another level.
         const confirmed: TaskModelChoice = {
           model: change.model && answeredModel === change.model ? change.model : null,
-          effort: effort && answeredLevels.includes(effort) ? effort : null,
+          effort: change.effort
+            ? answeredLevels.includes(change.effort)
+              ? change.effort
+              : null
+            : change.model && answeredModel === change.model && inherited && inherited !== wasEffort
+              ? inherited
+              : null,
         };
         const missing: TaskModelChoice = {
           model: change.model && !confirmed.model ? change.model : null,
-          effort: effort && !confirmed.effort ? effort : null,
+          effort: change.effort && !confirmed.effort ? change.effort : null,
         };
         if (confirmed.model || confirmed.effort) lines.push(event("changed", confirmed, null));
         if (missing.model || missing.effort) lines.push(event("unconfirmed", missing, null));
@@ -710,7 +727,7 @@ export class TaskModelsEngine {
         } else {
           // No answer: whether it landed is not known; the read below shows what the gateway has.
           this.ctx.log(`the change of ${key}'s model was not confirmed: ${reason}`);
-          lines.push(event("unconfirmed", { model: change.model, effort }, null));
+          lines.push(event("unconfirmed", { model: change.model, effort: change.effort }, null));
           outcome = "unconfirmed";
         }
       }

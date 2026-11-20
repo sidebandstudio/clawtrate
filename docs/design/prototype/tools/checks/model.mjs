@@ -64,7 +64,7 @@ check("25.4 a saved change posts an event line, and the effort follows the model
 }));
 check("25.2 the chip shows the saved values and focus is back on it", await p.evaluate(() => document.getElementById("t-chip").textContent.includes("dev-lite") && document.activeElement.id === "t-chip"));
 check("25.2 the change is announced", await p.evaluate(() => document.getElementById("b-announce").textContent === "Model changed for this task"));
-check("25.4 the line's name says what it was and when", await p.evaluate(() => document.querySelector(".t-event:last-of-type").getAttribute("aria-label").includes("Was acme/dev-1 · Low.")));
+check("25.4 the line's name says what it was and when", await p.evaluate(() => document.querySelector(".t-event:last-of-type").getAttribute("aria-label").includes("Last read acme/dev-1 · Low.")));
 await p.close();
 
 // Held during a run ------------------------------------------------------------------------------

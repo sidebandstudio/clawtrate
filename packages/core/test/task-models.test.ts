@@ -428,7 +428,7 @@ describe("a task's model and effort", () => {
     );
     expect(r.view().events.map((each) => each.outcome)).toEqual(["unconfirmed"]);
     expect(taskModelLine(r.view().events[0]!, word)).toBe(
-      "Couldn't confirm the change of the model to acme/dev-2 and the effort to High. Reading the task again.",
+      "Couldn't confirm the change of the model to acme/dev-2 and the effort to High.",
     );
     expect(r.state.refreshed).toBe(1);
   });
@@ -824,6 +824,73 @@ describe("the client around a task's model", () => {
     await until(() => client.state.tasksByBot.otto?.[0]?.effort === undefined);
     expect(client.state.tasksByBot.otto?.[0]?.effortDefault).toBe("low");
     client.stop();
+  });
+
+  /** A task whose row inherits High, and a model-only change answered as 2026.10.6 answers it. */
+  function inheritedHigh(answerLevel: string | null) {
+    const gateway = gatewayWithTask();
+    const high = { ...row, thinkingDefault: "high" };
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: [high], hasMore: false },
+    });
+    gateway.handlers["sessions.list"] = () => ({ sessions: [high], hasMore: false });
+    gateway.handlers["sessions.patch"] = () => ({
+      ok: true,
+      // The full entry, with no level of its own; the level the task now uses is resolved's.
+      entry: { sessionId: "session-1", modelProvider: "acme", model: "dev-lite" },
+      resolved: {
+        modelProvider: "acme",
+        model: "dev-lite",
+        ...(answerLevel ? { thinkingLevel: answerLevel } : {}),
+      },
+    });
+    return gateway;
+  }
+
+  it("F-043: a model-only reply with a new effective effort updates the chip's row", async () => {
+    const { client, gateway } = await openTask({ gateway: inheritedHigh("off") });
+    await until(() => client.state.taskModels[KEY]?.catalog === "ready");
+    await until(() => client.state.tasksByBot.otto?.[0]?.effortDefault === "high");
+    // The list is not read again before the chip is drawn.
+    gateway.handlers["sessions.list"] = () => new Promise(() => {});
+    await expect(client.setTaskModel(KEY, "acme/dev-lite", null)).resolves.toBe("saved");
+    expect(gateway.calls("sessions.patch")[0]).not.toHaveProperty("thinkingLevel");
+    const task = client.state.tasksByBot.otto?.[0];
+    expect(task).toMatchObject({ model: "acme/dev-lite", effortDefault: "off" });
+    expect(task?.effort).toBeUndefined();
+    expect(shownChoice(task, client.state.taskModels[KEY])).toMatchObject({
+      model: "acme/dev-lite",
+      effort: "off",
+    });
+    client.stop();
+  });
+
+  it("F-043: when changing a model establishes the inherited effort, its line follows the next authoritative task row", async () => {
+    const gateway = inheritedHigh("off");
+    const { client } = await openTask({ gateway });
+    await until(() => client.state.taskModels[KEY]?.catalog === "ready");
+    await until(() => client.state.tasksByBot.otto?.[0]?.effortDefault === "high");
+    // The list read after the save: the task on dev-lite, inheriting Off.
+    const after = { ...row, model: "dev-lite", thinkingDefault: "off" };
+    gateway.handlers["sessions.list"] = () => ({ sessions: [after], hasMore: false });
+    await client.setTaskModel(KEY, "acme/dev-lite", null);
+    await until(() => client.state.tasksByBot.otto?.[0]?.model === "acme/dev-lite");
+    const line = client.state.taskModels[KEY]!.events.at(-1)!;
+    expect(taskModelLine(line, word)).toBe(
+      "Model changed to acme/dev-lite, effort to Off · from the next turn",
+    );
+    expect(line.effort).toBe(client.state.tasksByBot.otto?.[0]?.effortDefault);
+    client.stop();
+
+    // An answer that does not say which level the task now uses: the line names the model alone.
+    const quiet = await openTask({ gateway: inheritedHigh(null) });
+    await until(() => quiet.client.state.taskModels[KEY]?.catalog === "ready");
+    await until(() => quiet.client.state.tasksByBot.otto?.[0]?.effortDefault === "high");
+    await quiet.client.setTaskModel(KEY, "acme/dev-lite", null);
+    const only = quiet.client.state.taskModels[KEY]!.events.at(-1)!;
+    expect([only.outcome, only.model, only.effort]).toEqual(["changed", "acme/dev-lite", null]);
+    quiet.client.stop();
   });
 
   it("F-044: a turn this app starts sends no effort of its own and keeps no record of one", async () => {

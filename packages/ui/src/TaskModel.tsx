@@ -392,7 +392,7 @@ export function TaskModelDetails({
 /** The words of a line's tooltip and name: what it was, and when (25.4). */
 function lineDetail(event: TaskModelEvent): string {
   const was = event.wasModel
-    ? `Was ${event.wasModel}${event.wasEffort ? ` · ${levelWord(event.wasEffort)}` : ""}.`
+    ? `Last read ${event.wasModel}${event.wasEffort ? ` · ${levelWord(event.wasEffort)}` : ""}.`
     : "";
   const followed =
     event.followed && event.model && event.wasEffort
@@ -402,7 +402,7 @@ function lineDetail(event: TaskModelEvent): string {
     event.outcome === "refused"
       ? `Refused at ${clock(event.at)}.`
       : event.outcome === "unconfirmed"
-        ? `Sent at ${clock(event.at)} from this device; the gateway's answer did not show it.`
+        ? `Change unconfirmed at ${clock(event.at)} on this device.`
         : `Changed at ${clock(event.at)} on this device.`;
   return `${followed}${was} ${when}`.trim();
 }
