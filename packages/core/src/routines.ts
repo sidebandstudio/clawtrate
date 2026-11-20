@@ -631,6 +631,12 @@ export class RoutinesEngine {
   private loading: Promise<void> | null = null;
   /** The connection a write was sent on: its answer is applied only while this holds. */
   private epoch = 0;
+  /**
+   * The connection the shown list was read on. A row's Pause, Run now and
+   * Delete name only the routine's id, so after a reconnect, possibly to
+   * another gateway at the same address, they wait for this connection's list.
+   */
+  private listedEpoch = 0;
   private readonly updates = new Set<{ id: string; removed: boolean }>();
 
   private readonly ctx: RoutinesContext;
@@ -680,6 +686,7 @@ export class RoutinesEngine {
         this.schedule(RETRY_MS);
         return;
       }
+      this.listedEpoch = this.epoch;
       this.ctx.update((state) => ({
         ...state,
         status: "loaded",
@@ -847,6 +854,11 @@ export class RoutinesEngine {
     return this.ctx.admin() ? null : "admin";
   }
 
+  /** A row read on an earlier connection: its id may name another gateway's routine now. */
+  private unlisted(): "gateway" | null {
+    return this.listedEpoch === this.epoch ? null : "gateway";
+  }
+
   /** The gateway's own view of a routine, put in the list while the connection that read it holds. */
   private keep(routine: Routine, epoch: number): void {
     if (epoch !== this.epoch) return;
@@ -933,9 +945,14 @@ export class RoutinesEngine {
   ): Promise<{ routine: Routine | null; revision: string | null } | null> {
     try {
       const job = await this.ctx.request("cron.get", { id });
+      const routine = parseRoutine(job);
+      // Only the gateway's not-found says a routine is gone: an answer Clawtrate
+      // can't read, or one for another job, says nothing about this one.
+      if (!routine || routine.id !== id)
+        throw new Error("The gateway's answer for this routine couldn't be read.");
       const revision = asRecord(job)?.configRevision;
       return {
-        routine: parseRoutine(job),
+        routine,
         revision: typeof revision === "string" && revision !== "" ? revision : null,
       };
     } catch (error) {
@@ -1003,6 +1020,8 @@ export class RoutinesEngine {
         text: current.textCut ? original.text : edit.text,
       };
       const patch = patchOf(original, fields, current.payload);
+      if (changedFields(original, fields).includes("schedule") && !patch.schedule)
+        return { status: "refused", error: "Clawtrate can't write this schedule." };
       if (Object.keys(patch).length === 0) return { status: "saved", routine: current };
       blocked = this.blocked(owner, gateway);
       if (blocked) return { status: "not-sent", reason: blocked };
@@ -1046,25 +1065,33 @@ export class RoutinesEngine {
     enabled: boolean,
     owner: object | null = null,
   ): Promise<RoutineWrite> {
-    const blocked = this.blocked(owner);
+    const blocked = this.blocked(owner) ?? this.unlisted();
     if (blocked) return { status: "not-sent", reason: blocked };
     const epoch = this.epoch;
+    if (this.updates.size >= MAX_ROUTINE_UPDATES)
+      return { status: "refused", error: "Too many routine changes are in flight." };
+    // Registered as an update, so a removal confirmed meanwhile is not undone by this reply.
+    const pending = { id, removed: false };
+    this.updates.add(pending);
     try {
       const routine = answeredJob(
         await this.ctx.request("cron.update", { id, patch: { enabled } }),
       );
+      if (pending.removed) return { status: "deleted" };
       if (!routine || routine.enabled !== enabled)
         return { status: "unknown", error: "The gateway answered, but doesn't show the change." };
       this.keep(routine, epoch);
       return { status: "saved", routine };
     } catch (error) {
-      return this.failed(error);
+      return pending.removed ? { status: "deleted" } : this.failed(error);
+    } finally {
+      this.updates.delete(pending);
     }
   }
 
   /** Run it once now (`cron.run {mode: "force"}`), paused or not; it stays as it was. */
   async runNow(id: string, owner: object | null = null): Promise<RoutineRunNow> {
-    const blocked = this.blocked(owner);
+    const blocked = this.blocked(owner) ?? this.unlisted();
     if (blocked) return { status: "not-sent", reason: blocked };
     try {
       const result = asRecord(await this.ctx.request("cron.run", { id, mode: "force" }));
@@ -1089,10 +1116,12 @@ export class RoutinesEngine {
    * answer leaves the row while its outcome is checked.
    */
   async remove(id: string, owner: object | null = null): Promise<RoutineRemove> {
-    const blocked = this.blocked(owner);
+    const blocked = this.blocked(owner) ?? this.unlisted();
     if (blocked) return { status: "not-sent", reason: blocked };
     const epoch = this.epoch;
     const drop = () => {
+      // A write still in flight for it must not put it back when it answers.
+      for (const update of this.updates) if (update.id === id) update.removed = true;
       if (epoch === this.epoch && this.loading) this.invalidated = true;
       if (epoch === this.epoch)
         this.ctx.update((state) => ({

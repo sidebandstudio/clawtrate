@@ -956,17 +956,21 @@ describe("F-189: creating a routine", () => {
       {
         "cron.add": (params) => ({
           created: true,
-          job: job(params.schedule as Record<string, unknown>),
+          job: job({ name: params.name, schedule: params.schedule, payload: params.payload }),
         }),
       },
       initialRoutinesState,
       ADMIN,
     );
-    await routines.create({ ...anchored, botId: "marlow" }, "draft-1");
+    expect(await routines.create({ ...anchored, botId: "marlow" }, "draft-1")).toMatchObject({
+      status: "saved",
+    });
     expect(requests[0]!.params).toMatchObject({
       schedule: { kind: "every", everyMs: 3_600_000, anchorMs: 60_000 },
     });
-    await routines.create({ ...staggered, botId: "marlow" }, "draft-2");
+    expect(await routines.create({ ...staggered, botId: "marlow" }, "draft-2")).toMatchObject({
+      status: "saved",
+    });
     expect(requests[1]!.params).toMatchObject({
       schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York", staggerMs: 5 },
     });
@@ -1222,6 +1226,80 @@ describe("F-189: changing a routine", () => {
     expect(requests.find((request) => request.method === "cron.update")?.params).toMatchObject({
       expectedConfigRevision: "r1",
     });
+  });
+
+  it("F-350 F-351 F-352: after a reconnect, a row's pause, run and delete send nothing until this connection's list is read", async () => {
+    const { routines, requests } = engine(
+      {
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => ({ jobs: [once], hasMore: false }),
+        "cron.update": () => ({ ...once, enabled: false }),
+      },
+      { ...initialRoutinesState, status: "loaded", routines: [expected] },
+      ADMIN,
+    );
+    // The connection drops and another comes back at the address: the rows shown are the old one's.
+    routines.onClose();
+    expect(await routines.setEnabled(JOB, false)).toEqual({
+      status: "not-sent",
+      reason: "gateway",
+    });
+    expect(await routines.runNow(JOB)).toEqual({ status: "not-sent", reason: "gateway" });
+    expect(await routines.remove(JOB)).toEqual({ status: "not-sent", reason: "gateway" });
+    expect(requests).toEqual([]);
+    await routines.load();
+    expect(await routines.setEnabled(JOB, false)).toMatchObject({ status: "saved" });
+  });
+
+  it("F-350: a pause that answers after the routine's removal was confirmed does not bring it back", async () => {
+    const reply = Promise.withResolvers<unknown>();
+    const sent = Promise.withResolvers<void>();
+    const { routines, state } = engine(
+      {
+        "cron.update": () => {
+          sent.resolve();
+          return reply.promise;
+        },
+        "cron.remove": () => ({ ok: true, removed: true }),
+      },
+      { ...initialRoutinesState, status: "loaded", routines: [expected] },
+      ADMIN,
+    );
+    const pausing = routines.setEnabled(JOB, false);
+    await sent.promise;
+    expect(await routines.remove(JOB)).toEqual({ status: "removed" });
+    reply.resolve({ ...once, enabled: false });
+    expect(await pausing).toEqual({ status: "deleted" });
+    expect(state().routines).toEqual([]);
+  });
+
+  it("F-189: an answer for the routine that can't be read is not taken to mean it was deleted", async () => {
+    for (const answer of ["unexpected", { ...once, id: "another-routine" }]) {
+      const { routines } = engine({ "cron.get": () => answer }, initialRoutinesState, ADMIN);
+      await expect(routines.readOne(JOB)).rejects.toThrow(/couldn't be read/u);
+    }
+  });
+
+  it("F-189: a schedule change Clawtrate can't write is refused, not saved as a change to nothing", async () => {
+    const { routines, requests } = engine({ "cron.get": () => once }, initialRoutinesState, ADMIN);
+    const result = await routines.update(
+      JOB,
+      original,
+      {
+        ...original,
+        schedule: {
+          kind: "at",
+          at: "2035-01-02T09:00:00",
+          expr: null,
+          tz: null,
+          everyMs: null,
+          name: null,
+        },
+      },
+      expected,
+    );
+    expect(result).toEqual({ status: "refused", error: "Clawtrate can't write this schedule." });
+    expect(requests.map((request) => request.method)).toEqual(["cron.get"]);
   });
 
   it("does not restore a removed routine when its in-flight save answers", async () => {
