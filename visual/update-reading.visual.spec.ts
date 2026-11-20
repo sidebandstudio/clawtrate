@@ -16,8 +16,9 @@ type Probe = {
     state: DesktopUpdateState,
     pending?: UpdateTrack | null,
     selected?: UpdateTrack,
+    issue?: DesktopUpdateSnapshot["preferenceIssue"],
   ) => void;
-  finish: (revision: number, state: DesktopUpdateState) => void;
+  finish: (action: string, revision: number, state: DesktopUpdateState) => void;
   read: () => void;
   mutations: number;
 };
@@ -38,7 +39,7 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
         Object.defineProperty(window, "clawtrateFixture", { configurable: true, value: bridge });
         const listeners = new Set<(s: DesktopUpdateSnapshot) => void>();
         const first = Promise.withResolvers<DesktopUpdateSnapshot>();
-        let command = Promise.withResolvers<DesktopUpdateReply>();
+        const commands = new Map<string, (reply: DesktopUpdateReply) => void>();
         const s: DesktopUpdateSnapshot = {
           revision: 0,
           runningVersion: "1.0.0",
@@ -58,19 +59,26 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
           active: 0,
           commands: [],
           mutations: 0,
-          emit: (revision, state, pendingTrack = null, selectedTrack = "stable") => {
-            for (const fn of listeners) fn({ ...s, revision, state, pendingTrack, selectedTrack });
+          emit: (
+            revision,
+            state,
+            pendingTrack = null,
+            selectedTrack = "stable",
+            preferenceIssue = null,
+          ) => {
+            for (const fn of listeners)
+              fn({ ...s, revision, state, pendingTrack, selectedTrack, preferenceIssue });
           },
           read: () => first.resolve({ ...s, revision: 3 }),
-          finish: (revision, state) => {
-            command.resolve({ outcome: "accepted", snapshot: { ...s, revision, state } });
-            command = Promise.withResolvers();
+          finish: (action, revision, state) => {
+            commands.get(action)!({ outcome: "accepted", snapshot: { ...s, revision, state } });
+            commands.delete(action);
           },
         };
         window.updateProbe = probe;
         function send(action: string) {
           probe.commands.push(action);
-          return command.promise;
+          return new Promise<DesktopUpdateReply>((resolve) => commands.set(action, resolve));
         }
         bridge.desktopUpdates = {
           get: () => first.promise,
@@ -102,7 +110,7 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
       offerId: "B",
       releaseDate: "2026-11-02",
     });
-    window.updateProbe.finish(4, {
+    window.updateProbe.finish("check stable", 4, {
       kind: "offered",
       version: "1.1.0",
       offerId: "A",
@@ -156,35 +164,66 @@ test("F-231 F-030: Settings and the sidebar keep the latest revision across reop
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("radio", { name: "Nightly" })).toBeFocused();
   await expect(page.locator(".update-result dd")).toHaveText("Not checked yet.");
+  await expect(status).toHaveText("Changing the update track…");
   await page.evaluate(() => window.updateProbe.emit(8, { kind: "not-checked" }, "nightly"));
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("Space");
   await expect(radio).toBeChecked();
-  // Another caller can start a new choice before this window receives its old reply.
+  const line = page.locator(".update-result dd");
+  await page.evaluate(() => window.updateProbe.emit(9, { kind: "not-checked" }, null, "nightly"));
+  await expect(page.getByRole("radio", { name: "Nightly" })).toBeChecked();
+  await expect(status).toHaveText("Not checked yet.");
+  await expect(page.locator(".updates-section")).not.toContainText("Saving");
+  const check = page.getByRole("button", { name: "Check for Updates" });
+  await expect(check).toBeVisible();
+  await expect(check).toHaveAccessibleDescription(
+    "Checks nightly.example for a newer build, only when you choose to.",
+  );
+  await radio.click();
+  await expect(status).toHaveText("Changing the update track…");
+  await page.evaluate(() =>
+    window.updateProbe.finish("choose nightly", 8, { kind: "not-checked" }),
+  );
+  await expect(status).toHaveText("Changing the update track…");
+  await expect(check).toHaveCount(0);
+  await radio.press("Space");
   await page.evaluate(() =>
     window.updateProbe.emit(10, { kind: "not-checked" }, "stable", "nightly"),
   );
   await expect(status).toHaveText("Saving Stable as the update track…");
+  await page.evaluate(() =>
+    window.updateProbe.emit(11, { kind: "not-checked" }, null, "nightly", "track-not-saved"),
+  );
   await expect(page.getByRole("radio", { name: "Nightly" })).toBeChecked();
-  await page.evaluate(() => window.updateProbe.finish(9, { kind: "not-checked" }));
-  await expect(status).toHaveText("Saving Stable as the update track…");
+  await expect(line).toHaveText("Not checked yet.");
+  await expect(page.locator(".update-result p").first()).toHaveText(
+    "Couldn't save the track. Nightly is still selected.",
+  );
+  await expect(check).toBeVisible();
+  await expect(status).not.toContainText("Saving");
+  await expect(page.getByRole("button", { name: "Download", exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Open Updates" })).toHaveCount(0);
   expect(await page.evaluate(() => window.updateProbe.commands)).toEqual([
     "check stable",
     "download B",
     "choose nightly",
+    "choose stable",
   ]);
   expect(await page.evaluate(() => window.updateProbe.active)).toBe(1);
-  await page.evaluate(() => window.updateProbe.emit(11, { kind: "not-checked" }));
+  await page.evaluate(() => window.updateProbe.emit(12, { kind: "not-checked" }));
   await page.keyboard.press("ControlOrMeta+,");
   await page.getByRole("button", { name: "Check for Updates" }).click();
-  await page.evaluate(() => window.updateProbe.emit(12, { kind: "checking" }));
+  await page.evaluate(() => window.updateProbe.emit(13, { kind: "checking" }));
   await page.keyboard.press("Escape");
   const entry = page.getByRole("button", { name: "Open Updates" });
   await expect(entry).toHaveCount(0);
   await page.evaluate(() =>
-    window.updateProbe.finish(13, { kind: "failed", stage: "check", reason: "timed-out" }),
+    window.updateProbe.finish("check stable", 14, {
+      kind: "failed",
+      stage: "check",
+      reason: "timed-out",
+    }),
   );
   await entry.click();
   await expect(page.locator(".update-result dd")).toHaveText("Couldn't check for updates.");

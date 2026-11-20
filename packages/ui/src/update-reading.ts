@@ -28,6 +28,7 @@ const failure = {
 export class UpdateReading {
   private value: Reading = { snapshot: null, localChoice: null, working: false, message: null };
   private listeners = new Set<() => void>();
+  private choice: Extract<Command, { kind: "choose" }> | null = null;
   private work: Command | null = null;
   private readonly host: DesktopUpdates;
   constructor(host: DesktopUpdates) {
@@ -46,8 +47,19 @@ export class UpdateReading {
   }
   private accept = (next: DesktopUpdateSnapshot) => {
     if (next.revision <= (this.value.snapshot?.revision ?? -1)) return;
+    if (
+      this.choice &&
+      (next.pendingTrack === this.choice.track ||
+        (next.pendingTrack === null && next.selectedTrack === this.choice.track))
+    )
+      this.choice = null;
     if (next.pendingTrack) this.work = null;
-    this.set({ snapshot: next, message: null, working: this.work !== null });
+    this.set({
+      snapshot: next,
+      localChoice: this.choice?.track ?? null,
+      message: null,
+      working: this.work !== null,
+    });
   };
   connect = () => {
     let live = true;
@@ -72,6 +84,7 @@ export class UpdateReading {
     if (choosing) {
       if (command.track === snapshot.selectedTrack) return;
       this.work = null;
+      this.choice = command;
       this.set({ localChoice: command.track, working: false, message: null });
     } else {
       if (this.work) return;
@@ -94,7 +107,7 @@ export class UpdateReading {
       this.accept(reply.snapshot);
       const current = this.value.snapshot!;
       if (
-        (!choosing && this.work !== command) ||
+        (choosing ? this.choice : this.work) !== command ||
         current.revision !== reply.snapshot.revision ||
         current.pendingTrack ||
         current.preferenceIssue ||
@@ -111,13 +124,15 @@ export class UpdateReading {
       } else if (reply.outcome === "invalid") this.set({ message: failure[command.kind] });
     } catch {
       if (
-        (choosing || this.work === command) &&
+        (choosing ? this.choice : this.work) === command &&
         snapshot.revision === this.value.snapshot?.revision
       )
         this.set({ message: failure[command.kind] });
     } finally {
-      if (choosing) this.set({ localChoice: null });
-      else if (this.work === command) {
+      if (choosing && this.choice === command) {
+        this.choice = null;
+        this.set({ localChoice: null });
+      } else if (this.work === command) {
         this.work = null;
         this.set({ working: false });
       }

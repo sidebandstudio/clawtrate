@@ -142,7 +142,11 @@ export function Updates({
   const state = s.state;
   const downloading = !pending && state.kind === "downloading";
   const notice = preferenceLine(s);
-  const saving = pending && `Saving ${names[pending]} as the update track…`;
+  const saving = s.pendingTrack
+    ? `Saving ${names[s.pendingTrack]} as the update track…`
+    : pending
+      ? "Changing the update track…"
+      : null;
   const announcement = downloading
     ? `Downloading Clawtrate ${state.version}… ${Math.floor((10 * state.received) / state.expected) * 10}%`
     : line;
