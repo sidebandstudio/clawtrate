@@ -1,6 +1,9 @@
+import { spawn, type SpawnOptions } from "node:child_process";
+import { PassThrough } from "node:stream";
+import { fstatSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { linkSync } from "node:fs";
+import { linkSync, watch } from "node:fs";
 import { macInstaller } from "../../src/main/mac-install.ts";
 import type { UpdateInstaller } from "../../src/main/update/install.ts";
 import type { DesktopUpdateReply, DesktopUpdateSnapshot } from "@clawtrate/core";
@@ -15,10 +18,22 @@ import { UpdateEngine } from "../../src/main/update/engine.ts";
 import { DesktopUpdateService } from "../../src/main/update/service.ts";
 import { bytes, feedFor, feedServer, json, payload, tempDir, type FeedServer } from "./harness.ts";
 
-import { rename } from "node:fs/promises";
+vi.mock(import("node:child_process"), async (original) => {
+  const cp = { ...(await original()) };
+  vi.spyOn(cp, "spawn");
+  return cp;
+});
+vi.mock(import("node:fs"), async (original) => {
+  const fs = { ...(await original()) };
+  vi.spyOn(fs, "watch");
+  return fs;
+});
+
+import type * as FileSystem from "node:fs/promises";
+import { open, rename } from "node:fs/promises";
 vi.mock(import("node:fs/promises"), async (original) => {
   const actual = await original();
-  return { ...actual, rename: vi.fn(actual.rename) };
+  return { ...actual, rename: vi.fn(actual.rename), open: vi.fn(actual.open) };
 });
 let server: FeedServer;
 let dir: ReturnType<typeof tempDir>;
@@ -874,9 +889,12 @@ it.each(["changed", "replaced", "truncated", "symlink", "hardlink"])(
       if (change === "symlink") symlinkSync(path + ".old", path);
       else writeFileSync(path, fixture.body);
     }
-    expect((await service.restart(id)).snapshot).toMatchObject({
-      state: { kind: "handoff-failed", reason: "artifact-changed" },
-      install: { kind: "unavailable-in-this-build", reason: "artifact-changed" },
+    expect(await service.restart(id)).toMatchObject({
+      outcome: "stale",
+      snapshot: {
+        state: { kind: "failed", stage: "download", reason: "artifact-changed" },
+        install: { kind: "unavailable-in-this-build", reason: "artifact-changed" },
+      },
     });
     expect(installer.launch).not.toHaveBeenCalled();
     expect(await store().get("attempt")).toBeNull();
@@ -1286,6 +1304,116 @@ it.skipIf(process.platform === "win32")(
       }
     } finally {
       vi.doUnmock("electron");
+    }
+  },
+);
+
+it("a watch error during inspection prevents the first eligible event", async () => {
+  const installer = installStandIn();
+  installer.inspect = async () => {
+    const watcher = vi.mocked(watch).mock.results.at(-1)!.value;
+    watcher.emit("error", Error("watch stopped"));
+    return null;
+  };
+  const service = await start({ installer });
+  const id = await offer(service);
+  expect((await service.download(id)).snapshot.state).toMatchObject({
+    kind: "failed",
+    reason: "artifact-changed",
+  });
+  expect(snapshots.some((s) => s.install.kind === "restart-available")).toBe(false);
+  expect((await service.restart(id)).outcome).toBe("stale");
+});
+
+it.skipIf(process.platform === "win32")(
+  "quit during Mac Download aborts native inspection and closes its archive and scratch",
+  async () => {
+    const old = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    Object.defineProperty(process, "resourcesPath", {
+      value: "/fixture/Contents/Resources",
+      configurable: true,
+    });
+    const child = () =>
+      Object.assign(new EventEmitter(), { stdout: new PassThrough(), kill: vi.fn() });
+    const inspector = child();
+    const entered = Promise.withResolvers<{ scratch: string; fd: number; signal: AbortSignal }>();
+    vi.mocked(spawn)
+      .mockImplementationOnce(() => {
+        const classification = child();
+        queueMicrotask(() => {
+          classification.stdout.end("ok");
+          classification.emit("close", 0);
+        });
+        return classification as unknown as ReturnType<typeof spawn>;
+      })
+      .mockImplementationOnce((_command, args, options) => {
+        const controls = options as SpawnOptions;
+        entered.resolve({
+          scratch: args[0]!,
+          fd: (controls.stdio as number[])[3]!,
+          signal: controls.signal!,
+        });
+        return inspector as unknown as ReturnType<typeof spawn>;
+      });
+    try {
+      const service = await start({ installer: macInstaller("arm64") });
+      const id = await offer(service);
+      const pending = service.download(id);
+      const { scratch, fd, signal } = await entered.promise;
+      try {
+        service.shutdown();
+        expect(signal.aborted).toBe(true);
+        inspector.emit("error", Error("aborted"));
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(existsSync(scratch)).toBe(true);
+        expect(fstatSync(fd).isFile()).toBe(true);
+      } finally {
+        inspector.emit("close", null, "SIGKILL");
+        await pending;
+      }
+      expect(existsSync(scratch)).toBe(false);
+      expect(() => fstatSync(fd)).toThrow();
+      expect((await pending).outcome).toBe("superseded");
+    } finally {
+      if (old) Object.defineProperty(process, "resourcesPath", old);
+      else Reflect.deleteProperty(process, "resourcesPath");
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "a full scratch disk leaves the download verified and refuses Restart with inspection-failed",
+  async () => {
+    const fs = await vi.importActual<typeof FileSystem>("node:fs/promises");
+    const full = vi.fn(async () => {
+      throw Object.assign(Error("full"), { code: "ENOSPC" });
+    });
+    vi.mocked(open).mockImplementation(async (...args) => {
+      const fd = await fs.open(...args);
+      if (String(args[0]).includes("/.hold-") && args[1] === "wx") fd.writeFile = full;
+      return fd;
+    });
+    try {
+      const inspect = vi.fn(async () => null);
+      const service = await start({ installer: macInstaller("arm64", inspect) });
+      const id = await offer(service);
+      expect((await service.download(id)).snapshot).toMatchObject({
+        state: { kind: "verified", offerId: id },
+        install: { kind: "unavailable-in-this-build", reason: "inspection-failed" },
+      });
+      expect(full).toHaveBeenCalled();
+      expect(inspect).not.toHaveBeenCalled();
+      const files = readdirSync(join(updates, id));
+      expect(files).toHaveLength(1);
+      expect(
+        createHash("sha512")
+          .update(readFileSync(join(updates, id, files[0]!)))
+          .digest("base64"),
+      ).toBe(fixture.sha512);
+      expect((await service.restart(id)).outcome).toBe("invalid");
+      service.shutdown();
+    } finally {
+      vi.mocked(open).mockImplementation(fs.open);
     }
   },
 );

@@ -12,7 +12,9 @@ function stamp(path: string) {
 export function watchUpdateFile(path: string, changed: () => void) {
   const original = stamp(path);
   if (!original) throw Error("Changed file");
+  let usable = true;
   const current = () => {
+    if (!usable) return false;
     try {
       return original === stamp(path);
     } catch {
@@ -22,6 +24,18 @@ export function watchUpdateFile(path: string, changed: () => void) {
   const watcher = watch(dirname(path), { persistent: false }, () => {
     if (!current()) changed();
   });
-  watcher.on("error", changed);
-  return { current, close: () => watcher.close() };
+  const invalidate = () => {
+    if (!usable) return;
+    usable = false;
+    changed();
+  };
+  watcher.on("error", invalidate);
+  watcher.on("close", invalidate);
+  return {
+    current,
+    close: () => {
+      usable = false;
+      watcher.close();
+    },
+  };
 }

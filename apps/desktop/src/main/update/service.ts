@@ -485,7 +485,7 @@ export class DesktopUpdateService {
   }
 
   async restart(id: unknown): Promise<DesktopUpdateReply> {
-    const { state, selectedTrack, install, runningVersion } = this.snapshot;
+    const { state, selectedTrack, install, runningVersion } = this.get();
     const engine = this.engine;
     const installer = this.options.installer;
     if (this.closed || typeof id !== "string" || !id) return this.reply("invalid");

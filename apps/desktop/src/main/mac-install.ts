@@ -8,47 +8,69 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { AddressInfo } from "node:net";
 import { APP_ID } from "./identity.ts";
-import { holdMacArchive, type HeldMacArchive } from "./mac-archive.ts";
+import { ChangedMacArchive, holdMacArchive, type HeldMacArchive } from "./mac-archive.ts";
 import type { UpdateInstaller } from "./update/install.ts";
+
+async function runInspector(
+  args: string[],
+  signal: AbortSignal,
+  archive?: HeldMacArchive,
+): Promise<UpdateInstallRefusal | null> {
+  signal.throwIfAborted();
+  const reason = await new Promise<string>((resolve) => {
+    const child = spawn(
+      join(process.resourcesPath, "..", "Helpers", "ClawtrateUpdateInspection"),
+      args,
+      {
+        env: { PATH: "/usr/bin:/bin" },
+        stdio: ["ignore", "pipe", "ignore", ...(archive ? [archive.file.fd] : [])],
+        signal,
+        timeout: 120000,
+        killSignal: "SIGKILL",
+      },
+    );
+    let output = "";
+    let failed = false;
+    child.stdout!.on("data", (data: Buffer) => {
+      if (failed) return;
+      if (output.length + data.length > 128) {
+        failed = true;
+        child.kill("SIGKILL");
+      } else output += data.toString("utf8");
+    });
+    // An abort emits error before the inherited descriptors close.
+    child.on("error", () => {
+      failed = true;
+    });
+    child.once("close", (code) =>
+      resolve(!failed && !signal.aborted && code === 0 ? output.trim() : "inspection-failed"),
+    );
+  });
+  switch (reason) {
+    case "ok":
+      return null;
+    case "build-not-signed":
+    case "running-signature-untrusted":
+    case "mac-archive":
+    case "mac-bundle-identifier":
+    case "mac-architecture":
+    case "installer-version":
+    case "mac-designated-requirement":
+      return reason;
+    default:
+      return "inspection-failed";
+  }
+}
 
 async function inspectBundle(
   archive: HeldMacArchive,
   arch: string,
+  signal: AbortSignal,
 ): Promise<UpdateInstallRefusal | null> {
+  signal.throwIfAborted();
   const scratch = await mkdtemp(join(dirname(archive.proof.path), ".inspect-"));
   try {
-    const reason = await new Promise<string>((resolve, reject) => {
-      const child = spawn(
-        join(process.resourcesPath, "..", "Helpers", "ClawtrateUpdateInspection"),
-        [scratch, APP_ID, archive.proof.version, arch],
-        {
-          env: { PATH: "/usr/bin:/bin" },
-          stdio: ["ignore", "pipe", "ignore", archive.file.fd],
-          timeout: 120000,
-          killSignal: "SIGKILL",
-        },
-      );
-      let output = "";
-      child.stdout!.on("data", (data: Buffer) => {
-        output += data.toString("utf8");
-        if (output.length > 128) child.kill("SIGKILL");
-      });
-      child.once("error", reject);
-      child.once("close", (code) => resolve(code === 0 ? output.trim() : "inspection-failed"));
-    });
-    switch (reason) {
-      case "ok":
-        return null;
-      case "running-signature-untrusted":
-      case "mac-archive":
-      case "mac-bundle-identifier":
-      case "mac-architecture":
-      case "installer-version":
-      case "mac-designated-requirement":
-        return reason;
-      default:
-        return "inspection-failed";
-    }
+    return await runInspector([scratch, APP_ID, archive.proof.version, arch], signal, archive);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -61,15 +83,13 @@ type Stage = (
   submitted: () => void,
 ) => Promise<void>;
 
-const observedUpdaters = new WeakSet<object>();
+// Native errors can still arrive after the operation ends.
+const ignoreLateError = () => {};
 const stageWithElectron: Stage = async (url, signal, handed, submitted) => {
   const { autoUpdater } = await import("electron");
   signal.throwIfAborted();
-  if (!observedUpdaters.has(autoUpdater)) {
-    // Native errors can still arrive after the operation ends.
-    autoUpdater.on("error", () => {});
-    observedUpdaters.add(autoUpdater);
-  }
+  if (!autoUpdater.listeners("error").includes(ignoreLateError))
+    autoUpdater.on("error", ignoreLateError);
   await new Promise<void>((resolve, reject) => {
     let finished = false;
     let checking = false;
@@ -190,31 +210,47 @@ export async function serveMacArchive(
 
 export function macInstaller(
   arch: string,
-  inspect = inspectBundle,
+  inspect?: typeof inspectBundle,
   stage = stageWithElectron,
   deadlineMs = 120000,
 ): UpdateInstaller {
   let kept: HeldMacArchive | undefined;
-  let generation = 0;
+  let inspection: AbortController | undefined;
+  let unsigned = false;
   function retire() {
-    generation++;
+    inspection?.abort();
+    inspection = undefined;
     if (kept) void kept.file.close().catch(() => {});
     kept = undefined;
   }
   return {
-    unavailable: null,
+    get unavailable() {
+      return unsigned ? ("build-not-signed" as const) : null;
+    },
     completesOnQuit: true,
     retire,
     async inspect(file) {
       if (kept?.proof.offerId === file.offerId && kept.proof.identity === file.identity)
         return null;
       retire();
-      const current = generation;
-      const held = await holdMacArchive(file).catch(() => null);
-      if (!held) return "artifact-changed";
+      inspection = new AbortController();
+      const { signal } = inspection;
+      if (!inspect) {
+        // The signature-only invocation receives neither a descriptor nor a scratch path.
+        const refusal = await runInspector(["--running-signature", APP_ID], signal);
+        if (signal.aborted) return "artifact-changed";
+        if (refusal === "build-not-signed") unsigned = true;
+        if (refusal) return refusal;
+      }
+      let held: HeldMacArchive;
       try {
-        const reason = await inspect(held, arch);
-        if (reason || current !== generation) return reason ?? "artifact-changed";
+        held = await holdMacArchive(file, signal);
+      } catch (error) {
+        return error instanceof ChangedMacArchive ? "artifact-changed" : "inspection-failed";
+      }
+      try {
+        const reason = await (inspect ?? inspectBundle)(held, arch, signal);
+        if (reason || signal.aborted) return reason ?? "artifact-changed";
         kept = held;
         return null;
       } finally {
