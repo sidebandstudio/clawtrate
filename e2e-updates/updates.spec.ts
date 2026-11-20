@@ -552,7 +552,7 @@ for (const mode of ["mac", "mac-unconfirmed", "manual"] as const) {
       await restart.click();
       const dialog = page.getByRole("alertdialog", { name: "Restart to update?" });
       await expect(dialog).toContainText(
-        "Clawtrate will close and start again to update to version 1.1.0.",
+        "Restart asks Clawtrate to install version 1.1.0 and reopen.",
       );
       const mac =
         "macOS installs the update when Clawtrate next quits, also if the restart does not complete.";
