@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { linkSync } from "node:fs";
 import { macInstaller } from "../../src/main/mac-install.ts";
@@ -836,10 +837,10 @@ it.each(["build-not-signed", "no-installer-path"] as const)(
 );
 
 it.each([
-  "authenticode-trust",
-  "publisher-mismatch",
+  "running-signature-untrusted",
+  "mac-archive",
   "mac-designated-requirement",
-  "installation-context",
+  "installer-version",
 ] as const)(
   "matching bytes alone cannot offer Restart when inspection reports %s",
   async (reason) => {
@@ -1008,7 +1009,7 @@ it("F-231: one explicit Restart records the attempt before one stand-in handoff 
 
 it.each([
   "attempt-not-saved",
-  "publisher-mismatch",
+  "mac-designated-requirement",
   "installer-failed",
   "artifact-changed",
 ] as const)("reports %s without quitting or retrying", async (reason) => {
@@ -1019,7 +1020,7 @@ it.each([
   const id = await offer(service);
   await service.download(id);
   if (reason === "attempt-not-saved") vi.spyOn(prefs, "set").mockRejectedValueOnce(Error("write"));
-  if (reason === "publisher-mismatch") installer.inspect = async () => reason;
+  if (reason === "mac-designated-requirement") installer.inspect = async () => reason;
   if (reason === "installer-failed" || reason === "artifact-changed")
     installer.launch = vi.fn(async () => reason);
   expect((await service.restart(id)).snapshot).toMatchObject({
@@ -1149,15 +1150,15 @@ it.each([{ selectedTrack: 42 }, { lastCheck: false }])(
   },
 );
 
-it("keeps the handoff visible through actual exit and leaves a blocked quit recoverable", async () => {
+it("keeps the handoff visible through actual exit after a definite launch failure", async () => {
   const installer = installStandIn();
-  installer.launch = async () => "quit-blocked";
+  installer.launch = async () => "installer-failed";
   const service = await start({ installer });
   const id = await offer(service);
   await service.download(id);
   expect((await service.restart(id)).snapshot.state).toMatchObject({
     kind: "handoff-failed",
-    reason: "quit-blocked",
+    reason: "installer-failed",
   });
   const next = await offer(service);
   await service.download(next);
@@ -1238,3 +1239,53 @@ it("records a storage-blocked check separately from a startup storage notice", a
   });
   expect(server.requests).toEqual(["/stable"]);
 });
+it.skipIf(process.platform === "win32")(
+  "a native refusal cannot publish handed-to-system before update-downloaded",
+  async () => {
+    const updater = Object.assign(new EventEmitter(), {
+      setFeedURL: vi.fn(),
+      checkForUpdates: vi.fn(),
+      quitAndInstall: vi.fn(),
+    });
+    vi.doMock("electron", () => ({ autoUpdater: updater }));
+    try {
+      for (const scenario of ["feed-error", "throw", "deadline", "ready"] as const) {
+        updater.setFeedURL.mockImplementation(() => {
+          if (scenario === "feed-error") updater.emit("error", Error("refused"));
+        });
+        updater.checkForUpdates.mockClear().mockImplementation(() => {
+          if (scenario === "throw") throw Error("refused");
+          if (scenario === "ready") updater.emit("update-downloaded");
+        });
+        updater.quitAndInstall.mockImplementation(() => {
+          updater.emit("error", Error("late"));
+        });
+        const installer = macInstaller("arm64", async () => null, undefined, 100);
+        const states: string[] = [];
+        const service = await start({ installer, changed: (s) => states.push(s.state.kind) });
+        const id = await offer(service);
+        await service.download(id);
+        const result = (await service.restart(id)).snapshot.state;
+        if (scenario === "feed-error") {
+          expect(updater.checkForUpdates).not.toHaveBeenCalled();
+          expect(result).toMatchObject({ kind: "handoff-failed", reason: "installer-failed" });
+        } else {
+          expect(result).toEqual({
+            kind: scenario === "ready" ? "handed-to-system" : "handoff-unconfirmed",
+            offerId: id,
+            version: "1.1.0",
+          });
+          expect((await service.restart(id)).outcome).toBe("busy");
+          expect((await service.check("stable", service.get().revision)).outcome).toBe("busy");
+          expect((await service.chooseTrack("nightly")).outcome).toBe("busy");
+          expect((await service.download(id)).outcome).toBe("busy");
+        }
+        expect(states.includes("handed-to-system")).toBe(scenario === "ready");
+        expect(updater.listenerCount("error")).toBe(1);
+        service.shutdown();
+      }
+    } finally {
+      vi.doUnmock("electron");
+    }
+  },
+);

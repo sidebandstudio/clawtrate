@@ -78,4 +78,4 @@ pnpm brand:icons
 
 To change the logo, replace that one file and run both commands. A unit test fails if the generated icons are older than the logo. The interface's accent color is taken from the mark and defined in `packages/ui/src/styles/tokens.css`.
 
-For the Windows signing trial, set `CLAWTRATE_WINDOWS_UPDATE_CERT_SHA256` to the 64 hexadecimal digits of the SHA-256 fingerprint of the signing certificate’s DER bytes. The packager embeds the pin only when Windows signing is configured. Use the same publisher on the installed app and its successor. The update check requires a trusted cached certificate chain on the trial machine. Signed Windows builds keep Restart unavailable pending the installed sharing and in-place upgrade trial.
+The installed updater trial must establish cache-only trust using the actual signing leaf. Signed Windows builds keep Restart unavailable pending the installed sharing and in-place upgrade trial.

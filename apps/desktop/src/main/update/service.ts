@@ -66,6 +66,7 @@ export class DesktopUpdateService {
   private fileWatch: ReturnType<typeof watchUpdateFile> | null = null;
   private switching = false;
   private closed = false;
+  private nativeSubmitted = false;
   private readonly shutdownSignal = new AbortController();
   private readonly options: UpdateServiceOptions;
   private snapshot: DesktopUpdateSnapshot;
@@ -185,8 +186,7 @@ export class DesktopUpdateService {
       this.snapshot.state.kind === "preparing" ||
       this.snapshot.state.kind === "handing-off" ||
       this.snapshot.state.kind === "handed-to-system" ||
-      (this.snapshot.state.kind === "handoff-failed" &&
-        this.snapshot.state.reason === "handoff-unconfirmed")
+      this.snapshot.state.kind === "handoff-unconfirmed"
     );
   }
 
@@ -254,7 +254,12 @@ export class DesktopUpdateService {
       revision: this.snapshot.revision + 1,
       install: idleCapability(this.options.installer),
       pendingTrack: null,
-      state: this.restarting ? this.snapshot.state : { kind: "not-checked" },
+      state:
+        this.snapshot.state.kind === "handing-off" && this.nativeSubmitted
+          ? { ...this.snapshot.state, kind: "handoff-unconfirmed" }
+          : this.restarting
+            ? this.snapshot.state
+            : { kind: "not-checked" },
     };
   }
 
@@ -529,18 +534,29 @@ export class DesktopUpdateService {
     if (!this.fileWatch?.current()) return fail("artifact-changed");
     let handed = false;
     const reason = await installer
-      .launch(file, this.shutdownSignal.signal, () => {
-        if (!this.closed && !handed && installer.completesOnQuit) {
-          handed = true;
-          this.publish({ kind: "handed-to-system", version, offerId: id });
-        }
-      })
+      .launch(
+        file,
+        this.shutdownSignal.signal,
+        () => {
+          if (!this.closed && !handed && installer.completesOnQuit) {
+            handed = true;
+            this.publish({ kind: "handed-to-system", version, offerId: id });
+          }
+        },
+        () => {
+          this.nativeSubmitted = true;
+        },
+      )
       .catch(() => "installer-failed" as const);
     if (this.closed) return this.reply("superseded");
     this.retireFile();
     if (handed) return this.reply("accepted");
+    if (this.nativeSubmitted) {
+      this.publish({ kind: "handoff-unconfirmed", version, offerId: id });
+      return this.reply("accepted");
+    }
     if (reason) return fail(reason);
-    if (!installer.requestsQuit) this.options.quitAfterLaunch?.();
+    this.options.quitAfterLaunch?.();
     return this.reply("accepted");
   }
 }

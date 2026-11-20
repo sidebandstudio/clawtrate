@@ -54,17 +54,31 @@ async function inspectBundle(
   }
 }
 
-type Stage = (url: string, signal: AbortSignal, handed: () => void) => Promise<void>;
+type Stage = (
+  url: string,
+  signal: AbortSignal,
+  handed: () => void,
+  submitted: () => void,
+) => Promise<void>;
 
-const stageWithElectron: Stage = async (url, signal, handed) => {
+const observedUpdaters = new WeakSet<object>();
+const stageWithElectron: Stage = async (url, signal, handed, submitted) => {
   const { autoUpdater } = await import("electron");
   signal.throwIfAborted();
-  autoUpdater.setFeedURL({ url, serverType: "default" });
+  if (!observedUpdaters.has(autoUpdater)) {
+    // Native errors can still arrive after the operation ends.
+    autoUpdater.on("error", () => {});
+    observedUpdaters.add(autoUpdater);
+  }
   await new Promise<void>((resolve, reject) => {
+    let finished = false;
+    let checking = false;
     const abort = () => finish(() => reject(signal.reason));
     const failed = () => finish(() => reject(Error("System updater stopped")));
-    const ready = () =>
+    const ready = () => {
+      if (!checking) return;
       finish(() => {
+        handed();
         try {
           autoUpdater.quitAndInstall();
           resolve();
@@ -72,27 +86,26 @@ const stageWithElectron: Stage = async (url, signal, handed) => {
           reject(error);
         }
       });
+    };
     function finish(done: () => void) {
+      if (finished) return;
+      finished = true;
       signal.removeEventListener("abort", abort);
       autoUpdater.off("error", failed);
       autoUpdater.off("update-not-available", failed);
       autoUpdater.off("update-downloaded", ready);
       done();
     }
-    autoUpdater.once("error", failed);
-    autoUpdater.once("update-not-available", failed);
-    autoUpdater.once("update-downloaded", ready);
+    autoUpdater.on("error", failed);
+    autoUpdater.on("update-not-available", failed);
+    autoUpdater.on("update-downloaded", ready);
     signal.addEventListener("abort", abort, { once: true });
-    // Electron can report an asynchronous native error after the local deadline.
-    autoUpdater.on("error", () => {});
     try {
-      signal.throwIfAborted();
-      try {
-        autoUpdater.checkForUpdates();
-      } finally {
-        // From this call onward, even an error cannot recall the native handoff.
-        handed();
-      }
+      autoUpdater.setFeedURL({ url, serverType: "default" });
+      if (finished) return;
+      checking = true;
+      submitted();
+      autoUpdater.checkForUpdates();
     } catch (error) {
       finish(() => reject(error));
     }
@@ -105,6 +118,7 @@ export async function serveMacArchive(
   stage: Stage,
   handed: () => void,
   deadlineMs = 120000,
+  submitted = () => {},
 ) {
   const prefix = "/" + randomUUID();
   let feedRead = false,
@@ -161,7 +175,10 @@ export async function serveMacArchive(
       stopped.promise,
     ]);
     host = "127.0.0.1:" + (listener.address() as AddressInfo).port;
-    await Promise.race([stage("http://" + host + prefix + "/feed", stop, handed), stopped.promise]);
+    await Promise.race([
+      stage("http://" + host + prefix + "/feed", stop, handed, submitted),
+      stopped.promise,
+    ]);
   } finally {
     clearTimeout(timer);
     stop.removeEventListener("abort", abort);
@@ -175,6 +192,7 @@ export function macInstaller(
   arch: string,
   inspect = inspectBundle,
   stage = stageWithElectron,
+  deadlineMs = 120000,
 ): UpdateInstaller {
   let kept: HeldMacArchive | undefined;
   let generation = 0;
@@ -203,7 +221,7 @@ export function macInstaller(
         if (kept !== held) await held.file.close();
       }
     },
-    async launch(file, signal, handed) {
+    async launch(file, signal, handed, submitted) {
       if (
         !kept ||
         kept.proof.offerId !== file.offerId ||
@@ -214,7 +232,7 @@ export function macInstaller(
       const archive = kept;
       kept = undefined;
       try {
-        await serveMacArchive(archive, signal, stage, handed);
+        await serveMacArchive(archive, signal, stage, handed, deadlineMs, submitted);
         return null;
       } finally {
         await archive.file.close();
