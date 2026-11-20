@@ -10,7 +10,7 @@ import {
   type RefObject,
 } from "react";
 import { useBridge, useClawtrateState } from "../bridge.tsx";
-import { invitationReplies } from "./invitation.ts";
+import { useInvitationReplies } from "../bridge.tsx";
 import "./star.css";
 
 type NoticeState = "ask" | "busy" | "success" | "failure" | "open-error";
@@ -63,10 +63,6 @@ function rendered(run: Run): boolean {
   return !!document.querySelector(`[data-reply-run="${CSS.escape(run.id)}"]`);
 }
 
-const subscribe = (notify: () => void) => {
-  invitationReplies.addEventListener("change", notify);
-  return () => invitationReplies.removeEventListener("change", notify);
-};
 export function StarNotice({
   taskKey,
   field,
@@ -80,7 +76,11 @@ export function StarNotice({
 }) {
   const bridge = useBridge();
   const { transcripts } = useClawtrateState();
-  const revision = useSyncExternalStore(subscribe, () => invitationReplies.revision);
+  const invitationReplies = useInvitationReplies();
+  const revision = useSyncExternalStore(
+    invitationReplies.subscribe,
+    () => invitationReplies.revision,
+  );
   const scene = useContext(StarScene);
   const [notice, setNotice] = useState<NoticeState | null>(scene);
   const mounted = useRef(false);
@@ -103,7 +103,7 @@ export function StarNotice({
     )
       setNotice("ask");
     mounted.current = true;
-  }, [active, covered, field, revision, taskKey, transcripts]);
+  }, [active, covered, field, invitationReplies, revision, taskKey, transcripts]);
   useEffect(() => {
     if (notice !== "success" || scene === "success") return;
     const timer = window.setTimeout(() => setNotice(null), 5000);

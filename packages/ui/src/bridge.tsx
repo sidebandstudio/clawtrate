@@ -3,9 +3,21 @@ import {
   createContext,
   useCallback,
   useContext,
+  useMemo,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+
+import { InvitationReplies, canCountReply } from "./support/invitation.ts";
+import { rosterScope } from "./roster.ts";
+
+const RepliesContext = createContext<InvitationReplies | null>(null);
+
+export function useInvitationReplies() {
+  const replies = useContext(RepliesContext);
+  if (!replies) throw new Error("useInvitationReplies needs a BridgeProvider");
+  return replies;
+}
 
 const BridgeContext = createContext<ClawtrateBridge | null>(null);
 
@@ -16,7 +28,23 @@ export function BridgeProvider({
   bridge: ClawtrateBridge;
   children: ReactNode;
 }) {
-  return <BridgeContext.Provider value={bridge}>{children}</BridgeContext.Provider>;
+  const scope = useSyncExternalStore(
+    useCallback((listener) => bridge.subscribe(listener), [bridge]),
+    () => {
+      const { connection } = bridge.getState();
+      return connection.status === "connected" ? rosterScope(connection) : null;
+    },
+  );
+  // A late send acknowledgement closes over the tracker of the gateway it went to.
+  const replies = useMemo(
+    () => new InvitationReplies(scope ? canCountReply : () => false),
+    [scope, bridge],
+  );
+  return (
+    <BridgeContext.Provider value={bridge}>
+      <RepliesContext.Provider value={replies}>{children}</RepliesContext.Provider>
+    </BridgeContext.Provider>
+  );
 }
 
 export function useBridge(): ClawtrateBridge {

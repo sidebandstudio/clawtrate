@@ -111,3 +111,74 @@ it("F-519: returning to a task cannot claim a reply that completed in the backgr
   watch.observe(transcripts, "task", () => true, count);
   expect(count).not.toHaveBeenCalled();
 });
+
+it.each(["reconciled", "retried"])("F-519: a %s reply never invites early or twice", (kind) => {
+  const store = storage();
+  const watch = new InvitationReplies();
+  let finished = 0;
+  let shown = 0;
+  function see(run: Run) {
+    const show = watch.observe(
+      { task: task([run]) },
+      "task",
+      () => true,
+      () => countReply(() => store),
+    );
+    if (show) shown++;
+    expect(Number(store.getItem())).toBeLessThanOrEqual(finished);
+    expect(shown).toBeLessThanOrEqual(1);
+    if (finished < 6) expect(shown).toBe(0);
+  }
+  function reply(id: string) {
+    watch.sent("task", id);
+    finished++;
+    see(make({ id, messageId: id }));
+  }
+  for (let i = 0; i < 5; i++) reply(String(i));
+  watch.sent("task", "original");
+  if (kind === "reconciled") {
+    see(make({ id: "original", messageId: "original", bound: false, state: "running" }));
+  } else {
+    see(make({ id: "original", messageId: "original", state: "failed" }));
+  }
+  finished++;
+  const confirmed = make({ id: "confirmed", messageId: kind === "retried" ? "original" : null });
+  see(confirmed);
+  see(confirmed);
+  reply("next");
+  reply("last");
+  expect(shown).toBe(1);
+});
+
+it("F-519: concurrent preview tabs can each claim six once", () => {
+  const store = storage();
+  store.setItem("", "5");
+  const interleaved = {
+    ...store,
+    setItem: (key: string, value: string) => {
+      expect(countReply(() => store)).toBe(true);
+      store.setItem(key, value);
+    },
+  };
+  expect(countReply(() => interleaved)).toBe(true);
+  expect(countReply(() => store)).toBe(false);
+  expect(countReply(() => interleaved)).toBe(false);
+});
+
+it("F-519: a consumed preference stops collecting sends, including pending acknowledgements", () => {
+  let collect = true;
+  const watch = new InvitationReplies(() => collect);
+  watch.sent("task", "mine");
+  collect = false;
+  watch.sent("task", "next");
+  expect(watch.revision).toBe(1);
+  collect = true;
+  expect(
+    watch.observe(
+      { task: task([make()]) },
+      "task",
+      () => true,
+      () => true,
+    ),
+  ).toBe(false);
+});

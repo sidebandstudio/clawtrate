@@ -10,7 +10,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { invitationReplies } from "./support/invitation.ts";
+import { useInvitationReplies } from "./bridge.tsx";
 import { StarNotice } from "./support/StarNotice.tsx";
 import { useBridge } from "./bridge.tsx";
 import { ArrowUpIcon, ChevronIcon, CloseIcon, FileIcon, PlusIcon } from "./icons.tsx";
@@ -126,6 +126,7 @@ export function Composer({
   onAnnounce: (text: string) => void;
   focusRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
+  const invitationReplies = useInvitationReplies();
   const bridge = useBridge();
   // A draft belongs to one task on one gateway.
   const draftKey = `${gateway ?? ""}|${taskKey}`;
@@ -247,7 +248,20 @@ export function Composer({
         submitting.current = false;
       }
     },
-    [canSend, text, files, bridge, bot.id, taskKey, draftKey, setText, onAnnounce, onNotice, view],
+    [
+      canSend,
+      text,
+      files,
+      bridge,
+      invitationReplies,
+      bot.id,
+      taskKey,
+      draftKey,
+      setText,
+      onAnnounce,
+      onNotice,
+      view,
+    ],
   );
 
   const stop = useCallback(

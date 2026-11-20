@@ -2,7 +2,16 @@ import { MAX_TRACKED_TASKS, MAX_OUTBOX, type Run, type Transcript } from "@clawt
 
 const KEY = "clawtrate.star-invitation";
 
-/** Six is both the saturated reply count and the claim that the notice was shown. */
+export function canCountReply(): boolean {
+  try {
+    const raw = localStorage.getItem(KEY);
+    return raw === null || /^[0-5]$/.test(raw);
+  } catch {
+    return false;
+  }
+}
+
+/** Six consumes the invitation before display. */
 export function countReply(
   storage: () => Pick<Storage, "getItem" | "setItem"> = () => localStorage,
 ): boolean {
@@ -24,7 +33,22 @@ type Send = { key: string; messageId: string; runId: string | null };
 export class InvitationReplies extends EventTarget {
   private pending: Send[] = [];
   revision = 0;
+  private readonly canCollect: () => boolean;
+  constructor(canCollect: () => boolean = () => true) {
+    super();
+    this.canCollect = canCollect;
+  }
+  subscribe = (notify: () => void) => {
+    this.addEventListener("change", notify);
+    return () => this.removeEventListener("change", notify);
+  };
+  private collecting() {
+    if (this.canCollect()) return true;
+    this.pending = [];
+    return false;
+  }
   sent(key: string, messageId: string) {
+    if (!this.collecting()) return;
     // Only unresolved acknowledgments. Old entries may lose their task on a reconnect.
     if (this.pending.some((send) => send.key === key && send.messageId === messageId)) return;
     this.pending = [
@@ -42,6 +66,7 @@ export class InvitationReplies extends EventTarget {
     count = countReply,
     blocked = false,
   ): boolean {
+    if (!this.pending.length || !this.collecting()) return false;
     let show = false;
     this.pending = this.pending.filter((send) => {
       const transcript = transcripts[send.key];
@@ -71,8 +96,7 @@ export class InvitationReplies extends EventTarget {
       }
       return false;
     });
+    if (show) this.pending = [];
     return show;
   }
 }
-
-export const invitationReplies = new InvitationReplies();

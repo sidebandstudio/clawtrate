@@ -12,7 +12,7 @@ import {
   type Transcript,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { invitationReplies } from "./support/invitation.ts";
+import { useInvitationReplies } from "./bridge.tsx";
 import { useBridge } from "./bridge.tsx";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
 import { endingOf } from "./live.ts";
@@ -181,6 +181,7 @@ export function RunEnding({
   transcript: Transcript;
   taskKey: string;
 }) {
+  const invitationReplies = useInvitationReplies();
   const bridge = useBridge();
   const [dismissed, setDismissed] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
