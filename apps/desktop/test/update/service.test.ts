@@ -808,3 +808,26 @@ it("refuses an old same-track revision or a malformed revision without replacing
   expect(service.get()).toEqual(current);
   expect(server.requests).toEqual([]);
 });
+
+it("records a storage-blocked check separately from a startup storage notice", async () => {
+  const parent = join(dir.path, "profile");
+  const downloadDir = join(parent, "updates");
+  const startup = await start({ downloadDir });
+  expect(startup.get()).toMatchObject({
+    state: { kind: "not-checked" },
+    preferenceIssue: "update-folder-unavailable",
+  });
+  mkdirSync(parent, { mode: 0o700 });
+  const service = await start({ downloadDir });
+  await offer(service);
+  const before = service.get();
+  expect(before.lastCheck?.track).toBe("stable");
+  rmSync(parent, { recursive: true });
+  const reply = await service.check("stable", before.revision);
+  expect(reply.snapshot).toMatchObject({
+    state: { kind: "failed", stage: "check", reason: "write-failed" },
+    preferenceIssue: "update-folder-unavailable",
+    lastCheck: before.lastCheck,
+  });
+  expect(server.requests).toEqual(["/stable"]);
+});

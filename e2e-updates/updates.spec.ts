@@ -3,11 +3,21 @@
 import { expect, test as base, type Browser, type Page } from "@playwright/test";
 import { once } from "node:events";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, realpathSync, symlinkSync, rmSync, writeFileSync, cpSync } from "node:fs";
+import {
+  chmodSync,
+  statSync,
+  mkdtempSync,
+  realpathSync,
+  symlinkSync,
+  rmSync,
+  writeFileSync,
+  cpSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { join } from "node:path";
+import { sidebarGateway } from "../apps/desktop/test/update/sidebar-gateway.ts";
 import { feedFor, feedServer, json, payload } from "../apps/desktop/test/update/harness.ts";
 import { fileKeyFor, FILE_EXTENSION } from "../apps/desktop/src/main/update/feed.ts";
 import { appEnv, debuggingPort } from "../e2e-packaged/desktop-driver.ts";
@@ -401,3 +411,44 @@ test("F-231: an older Check on the same track preserves the verified download", 
   ).toEqual(verified.snapshot);
   expect(server.requests).toEqual(["/stable", filePath]);
 });
+
+if (process.platform !== "win32")
+  test("F-231 F-030: a storage-blocked check opens from the sidebar and retries the chosen feed", async ({
+    desktopApp,
+  }) => {
+    const { page, profile, server } = desktopApp;
+    const gateway = await sidebarGateway();
+    const mode = statSync(profile).mode & 0o777;
+    try {
+      await page.getByPlaceholder("Gateway address").fill(gateway.url);
+      await page.getByRole("button", { name: "Connect a gateway", exact: true }).click();
+      await expect(page.locator(".rail")).toBeVisible();
+      const entry = page.getByRole("button", { name: "Open Updates" });
+      await expect(entry).toHaveCount(0);
+      await page.keyboard.press("ControlOrMeta+,");
+      await page.getByRole("button", { name: "Updates", exact: true }).click();
+      chmodSync(profile, 0o770);
+      await page.getByRole("button", { name: "Check for Updates" }).click();
+      const line = page.locator(".update-result dd");
+      const notice = page
+        .locator(".update-result")
+        .getByText("Couldn't prepare update storage on this device.", { exact: true });
+      await expect(line).toHaveText("Couldn't check for updates.");
+      await expect(notice).toBeVisible();
+      const retry = page.getByRole("button", { name: "Try again" });
+      await expect(retry).toBeVisible();
+      await page.keyboard.press("Escape");
+      await entry.click();
+      await expect(line).toHaveText("Couldn't check for updates.");
+      await expect(notice).toBeVisible();
+      expect(server.requests).toEqual([]);
+      chmodSync(profile, mode);
+      await retry.click();
+      await expect(line).toContainText("is offered by the update source.");
+      await expect(notice).toHaveCount(0);
+      expect(server.requests).toEqual(["/stable"]);
+    } finally {
+      chmodSync(profile, mode);
+      await gateway.close();
+    }
+  });

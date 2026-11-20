@@ -253,7 +253,7 @@ export class DesktopUpdateService {
       } catch {
         if (this.engine === engine) {
           this.snapshot = { ...this.snapshot, preferenceIssue: "update-folder-unavailable" };
-          this.publish({ kind: "not-checked" });
+          this.publish(failed("write-failed"));
         }
         return;
       }
