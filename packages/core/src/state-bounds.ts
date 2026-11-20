@@ -119,6 +119,15 @@ import {
   type SetupLook,
   type SetupState,
 } from "./setup.ts";
+import {
+  MAX_CHECKIN_KEPT,
+  MAX_CHECKIN_PROMPT_CHARS,
+  type CheckInDefaults,
+  type CheckInJob,
+  type CheckInSave,
+  type CheckInSetting,
+  type CheckInsState,
+} from "./check-ins.ts";
 import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
 import type {
   Bot,
@@ -1016,6 +1025,47 @@ const setup = object<SetupState>()({
   failure: object<SetupFailure>()({ kind: ENUM, exitCode: NUMBER, port: NUMBER, reason: ENUM }),
 });
 
+// Check-ins (check-ins.ts): one job and one setting per bot, the default and the one save under way.
+const checkInJob = object<CheckInJob>()({
+  botId: ID,
+  enabled: FLAG,
+  everyMs: NUMBER,
+  nextRunAtMs: NUMBER,
+});
+// A prompt code unit can take six characters when escaped in JSON.
+const checkInPrompt = text(6 * MAX_CHECKIN_PROMPT_CHARS + 2);
+const checkInSetting = object<CheckInSetting>()({
+  botId: ID,
+  every: NAME,
+  prompt: checkInPrompt,
+  promptCut: FLAG,
+});
+const checkInDefaults = object<CheckInDefaults>()({
+  inherited: list(MAX_CHECKIN_KEPT + 1, ID),
+  inheritedCut: FLAG,
+  every: NAME,
+  everyCut: FLAG,
+  prompt: checkInPrompt,
+  promptCut: FLAG,
+});
+const checkInSave = object<CheckInSave>()({
+  id: ID,
+  botId: ID,
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+});
+export const CHECK_INS: Bound = object<CheckInsState>()({
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  gatewayId: ID,
+  scheduler: FLAG,
+  readBotIds: list(MAX_BOTS, ID),
+  jobs: list(MAX_BOTS, checkInJob),
+  settings: list(MAX_BOTS, checkInSetting),
+  defaults: checkInDefaults,
+  save: checkInSave,
+});
+
 // Routines (routines.ts): the list only; runs and their conversations are never kept.
 const routineSchedule = object<RoutineSchedule>()({
   kind: ENUM,
@@ -1076,6 +1126,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   retention: retentionAlarm,
   sidebar,
   setup,
+  checkIns: CHECK_INS,
   turnLimitMinutes: NUMBER,
   usage: USAGE,
 });

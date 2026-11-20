@@ -14,6 +14,7 @@
 //   &tab=files             the Work pane's tab
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
 //   ?setup=first           the desktop's first screen and a state of setup (setup.ts)
+//   &checkins=off, &scheduler=off, &cisave=fail …    check-ins (check-ins.ts)
 //   &routines=running, &routines=many …            routines (routines.ts)
 //   &usage=…, &budget=…, &plimit=…, &uview=usage     usage and budgets (usage.ts)
 
@@ -25,6 +26,7 @@ import { CARD_TASKS, isCardScene } from "./cards.ts";
 import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
 import { accountParams } from "./accounts.ts";
+import { checkInParams } from "./check-ins.ts";
 import { releaseRoutineReads, routineParams } from "./routines.ts";
 import { usageParams } from "./usage.ts";
 import { fixtureUpdates } from "./updates.ts";
@@ -85,6 +87,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   files: fileParams(params),
   accounts: accountParams(params),
   setup: params.get("setup"),
+  checkIns: checkInParams(params),
   routines: routineParams(params),
   usage: usageParams(params),
   machines: machineParams(params),
