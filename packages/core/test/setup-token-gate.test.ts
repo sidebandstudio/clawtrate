@@ -13,6 +13,7 @@ import {
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol";
 import {
   FakeGateway,
+  GatewayError,
   gatedStorage,
   helloOk,
   memoryStorage,
@@ -207,7 +208,13 @@ describe("the setup connection's token gate", () => {
     await client.start();
     await client.connectWithSetupCode({ url: URL, bootstrapToken: CODE, expiresAtMs: LATER() });
     await until(() => client.state.connection.status === "pairing");
-    expect(client.state.connection.pairing?.requestId).toBe("e5eb4aa8-175f-40f1-bc7a-8f15cfc40942");
+    // This device, the scopes it asked for and the pending-devices instruction: no request field.
+    expect(client.state.connection.pairing).toMatchObject({
+      requestId: "",
+      deviceId: "device-1",
+      requestedScopes: ["operator.read"],
+      approveCommand: "openclaw devices list",
+    });
     expect(storage.data.has(tokenKey(URL))).toBe(false);
     approved = true;
     await client.retryNow();
@@ -428,5 +435,236 @@ describe("the setup connection's endpoint check", () => {
     expect(gateway.sockets).toHaveLength(1);
     expect(storage.data.has(tokenKey(URL))).toBe(false);
     client.stop();
+  });
+});
+
+describe("what a setup connection publishes", () => {
+  const BOOT = "fixture-bootstrap-ZZqv8Lw0eXk2Rj9TaNf5Hc1UbYm7Pd4Gs";
+  const NEW_TOKEN = "fixture-device-token-QQ3v8Lw0eXk2Rj9TaNf5Hc1";
+  const forms = (secret: string) => [
+    secret,
+    encodeURIComponent(secret),
+    (globalThis as unknown as { btoa(text: string): string }).btoa(secret),
+    JSON.stringify(secret).slice(1, -1),
+  ];
+
+  /** A setup connection to a gateway whose replies echo the code; everything published, as text. */
+  async function echoed(
+    configure: (gateway: FakeGateway) => void,
+    settle: (client: ClawtrateClient) => boolean,
+  ) {
+    const gateway = new FakeGateway();
+    configure(gateway);
+    const storage = memoryStorage();
+    const logs: string[] = [];
+    const snapshots: string[] = [];
+    const client = new ClawtrateClient(
+      { ...testHost(gateway, storage), log: (_level, line) => void logs.push(line) },
+      FAST,
+    );
+    client.store.subscribe((state) => snapshots.push(JSON.stringify(state)));
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: BOOT, expiresAtMs: LATER() });
+    await until(() => settle(client));
+    await sleep(30);
+    client.stop();
+    const published = [...snapshots, JSON.stringify(client.state), ...logs].join("\n");
+    return { published, storage, client };
+  }
+  const refusal = (error: Record<string, unknown>) => (gateway: FakeGateway) => {
+    gateway.connectReply = () => ({ ok: false, error: error as never });
+  };
+  const failed = (client: ClawtrateClient) => client.state.connection.status === "error";
+
+  const cases: Array<
+    [string, (gateway: FakeGateway) => void, (client: ClawtrateClient) => boolean]
+  > = [
+    ["its outer code", refusal({ code: BOOT, message: "refused" }), failed],
+    [
+      "its inner code",
+      refusal({ code: "INVALID_REQUEST", message: "refused", details: { code: BOOT } }),
+      failed,
+    ],
+    ["its message", refusal({ code: "INVALID_REQUEST", message: `bad ${BOOT}` }), failed],
+    [
+      "its hint",
+      refusal({ code: "INVALID_REQUEST", message: "refused", details: { remediationHint: BOOT } }),
+      failed,
+    ],
+    [
+      "a pairing's fields",
+      refusal({
+        code: "NOT_PAIRED",
+        message: BOOT,
+        details: {
+          code: "PAIRING_REQUIRED",
+          requestId: BOOT,
+          deviceId: BOOT,
+          requestedScopes: [BOOT],
+          remediationHint: BOOT,
+        },
+      }),
+      (client) => client.state.connection.status === "pairing",
+    ],
+    [
+      "a terminal pairing",
+      refusal({
+        code: "NOT_PAIRED",
+        message: BOOT,
+        details: { code: "PAIRING_REQUIRED", requestId: BOOT, recommendedNextStep: BOOT },
+      }),
+      (client) => client.state.connection.status === "pairing",
+    ],
+    [
+      "a close reason",
+      (gateway) => {
+        gateway.connectReply = () => {
+          for (const socket of gateway.sockets) socket.close(1008, BOOT);
+          return { ok: false, error: { code: "INVALID_REQUEST", message: "closed" } };
+        };
+      },
+      failed,
+    ],
+  ];
+  for (const [name, configure, settle] of cases) {
+    it(`F-494: a setup refusal that echoes the code in ${name} publishes it nowhere`, async () => {
+      const { published, storage } = await echoed(configure, settle);
+      for (const form of forms(BOOT)) expect(published).not.toContain(form);
+      expect([...storage.data.keys()].filter((key) => key.startsWith("deviceToken:"))).toEqual([]);
+    });
+  }
+
+  it("F-494: a setup pairing shows this device and the scopes it asked for, whatever the gateway's request says", async () => {
+    const { client } = await echoed(
+      refusal({
+        code: "NOT_PAIRED",
+        message: "pairing",
+        details: {
+          code: "PAIRING_REQUIRED",
+          requestId: "e5eb4aa8-175f-40f1-bc7a-8f15cfc40942",
+          deviceId: "another-device",
+          requestedScopes: ["operator.admin"],
+        },
+      }),
+      (c) => c.state.connection.status === "pairing",
+    );
+    expect(client.state.connection.pairing).toMatchObject({
+      requestId: "",
+      deviceId: "device-1",
+      requestedScopes: ["operator.read"],
+    });
+  });
+
+  it("F-494: a refusal that arrives for a setup connection already replaced changes nothing of the new one", async () => {
+    const gateway = new FakeGateway();
+    const OTHER = "ws://127.0.0.1:19960";
+    const holder: { client?: ClawtrateClient } = {};
+    gateway.connectReply = (_params, url) => {
+      if (url === URL) {
+        // The person chose another gateway while the setup connection was being refused.
+        void holder.client!.connect({ url: OTHER, token: "typed-token" });
+        return {
+          ok: false,
+          error: { code: "INVALID_REQUEST", message: BOOT, details: { code: "X" } },
+        };
+      }
+      return { ok: true, payload: helloOk(["operator.read"], "device-token") };
+    };
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), FAST);
+    holder.client = client;
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: BOOT, expiresAtMs: LATER() });
+    await until(() => client.state.connection.status === "connected");
+    await sleep(50);
+    expect(client.state.connection.gatewayUrl).toBe(OTHER);
+    expect(client.state.connection.error).toBeNull();
+    expect(JSON.stringify(client.state)).not.toContain("SETUP_CONNECT_REFUSED");
+    client.stop();
+  });
+
+  it("F-494: a refused setup connection publishes a fixed code, never the gateway's", async () => {
+    const { client } = await echoed(
+      refusal({ code: "INVALID_REQUEST", message: "x", details: { code: "SOMETHING_ELSE" } }),
+      failed,
+    );
+    expect(client.state.connection.error).toEqual({
+      code: "SETUP_CONNECT_REFUSED",
+      message: "The gateway refused the setup connection.",
+      hint: null,
+    });
+  });
+
+  for (const mismatch of [false, true]) {
+    it(`F-494: a hello whose version echoes the code publishes no version${mismatch ? ", on another protocol" : ""}`, async () => {
+      const { published, client } = await echoed(
+        (gateway) => {
+          const hello = helloOk(["operator.read"], NEW_TOKEN);
+          gateway.connectReply = () => ({
+            ok: true,
+            payload: {
+              ...hello,
+              protocol: hello.protocol + Number(mismatch),
+              server: { ...hello.server, version: BOOT },
+            },
+          });
+        },
+        (c) => c.state.connection.status === (mismatch ? "error" : "connected"),
+      );
+      for (const form of forms(BOOT)) expect(published).not.toContain(form);
+      expect(client.state.connection.serverVersion).toBeNull();
+    });
+  }
+
+  it("F-494: the first read of bots after a setup hello, failing with the code or the new token in its text, publishes fixed words", async () => {
+    const { published, storage, client } = await echoed(
+      (gateway) => {
+        gateway.connectReply = () => ({ ok: true, payload: helloOk(["operator.read"], NEW_TOKEN) });
+        gateway.handlers["agents.list"] = () => {
+          throw new GatewayError({ code: BOOT, message: `${BOOT} ${NEW_TOKEN}` });
+        };
+      },
+      (c) => c.state.discovery.status === "error",
+    );
+    for (const secret of [BOOT, NEW_TOKEN])
+      for (const form of forms(secret)) expect(published).not.toContain(form);
+    expect(client.state.discovery.error).toBe("Could not load your bots.");
+    // Exactly the approved device token is kept, in its own place in storage.
+    const kept = [...storage.data.entries()].filter(([, value]) => value.includes(NEW_TOKEN));
+    expect(kept.map(([key]) => key)).toEqual([tokenKey(URL)]);
+    expect(JSON.parse(kept[0]![1])).toMatchObject({
+      token: NEW_TOKEN,
+      heldScopes: ["operator.read"],
+    });
+  });
+
+  it("F-494: a replacement token on the setup connection's later reconnect is taken out of gateway text too", async () => {
+    const ROTATED = "fixture-rotated-token-RR3v8Lw0eXk2Rj9TaNf5Hc";
+    const gateway = new FakeGateway();
+    let hellos = 0;
+    gateway.connectReply = () => {
+      hellos += 1;
+      return { ok: true, payload: helloOk(["operator.read"], hellos === 1 ? NEW_TOKEN : ROTATED) };
+    };
+    const storage = memoryStorage();
+    const logs: string[] = [];
+    const snapshots: string[] = [];
+    const client = new ClawtrateClient(
+      { ...testHost(gateway, storage), log: (_level, line) => void logs.push(line) },
+      FAST,
+    );
+    client.store.subscribe((state) => snapshots.push(JSON.stringify(state)));
+    await client.start();
+    await client.connectWithSetupCode({ url: URL, bootstrapToken: BOOT, expiresAtMs: LATER() });
+    await until(() => client.state.discovery.status === "ready");
+    gateway.handlers["agents.list"] = () => {
+      throw new GatewayError({ code: "X", message: `bad ${ROTATED}` });
+    };
+    gateway.dropAll();
+    await until(() => hellos === 2 && client.state.discovery.status !== "loading", 6000);
+    await sleep(50);
+    client.stop();
+    const published = [...snapshots, ...logs].join("\n");
+    expect(published).not.toContain(ROTATED);
+    expect(published).not.toContain(BOOT);
   });
 });

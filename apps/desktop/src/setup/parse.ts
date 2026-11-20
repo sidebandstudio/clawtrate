@@ -259,6 +259,13 @@ export function parseSetupCode(stdout: string, url: string, now: number): SetupC
   const expires = payload?.expiresAtMs;
   if (payload?.url !== url) return null;
   if (typeof token !== "string" || !BOOTSTRAP_TOKEN.test(token)) return null;
-  if (typeof expires !== "number" || !Number.isFinite(expires) || expires <= now) return null;
+  // A code made on this computer lives ten minutes: anything else is not one of them.
+  if (
+    typeof expires !== "number" ||
+    !Number.isSafeInteger(expires) ||
+    expires <= now ||
+    expires > now + 600_000
+  )
+    return null;
   return { url, bootstrapToken: token, expiresAtMs: expires };
 }

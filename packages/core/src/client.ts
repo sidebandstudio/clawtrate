@@ -91,7 +91,7 @@ import {
   type TaskFileList,
   type WorkspacePage,
 } from "./files.ts";
-import type { ApprovalInstructions, ClawtrateHost } from "./host.ts";
+import type { ApprovalInstructions, ClawtrateHost, WebSocketLike } from "./host.ts";
 import {
   asRecord,
   botIdFromSessionKey,
@@ -524,6 +524,27 @@ type StagedDeviceToken = { deviceId: string; role: string; token: string; scopes
 export const SETUP_GRANT_REFUSED = "SETUP_GRANT_REFUSED";
 /** A setup connection's endpoint no longer passed the host's check before a socket was opened. */
 export const SETUP_ENDPOINT_CHANGED = "SETUP_ENDPOINT_CHANGED";
+/** Any refusal of a setup connection but the few the setup screens name. A code of the client's own. */
+export const SETUP_CONNECT_REFUSED = "SETUP_CONNECT_REFUSED";
+/** The gateway codes a setup connection publishes as they are; any other is `SETUP_CONNECT_REFUSED`. */
+const SETUP_CODES = new Set(["AUTH_BOOTSTRAP_TOKEN_INVALID", "PAIRING_REQUIRED"]);
+/** A gateway version as a setup screen may show it: a date version, nothing else. */
+const setupVersion = (value: unknown): string | null =>
+  typeof value === "string" && /^\d{4}\.\d{1,2}\.\d{1,3}$/.test(value) ? value : null;
+
+/**
+ * A short digest of a pairing request id, so that a setup connection can tell
+ * the request it saw ended without keeping the id itself (FNV-1a).
+ */
+function digest(text: string): string {
+  if (text === "") return "";
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
 
 /**
  * What a setup connection's hello granted: `read` only for this protocol, the
@@ -650,6 +671,12 @@ export function validateGatewayUrl(raw: string): string {
 }
 
 export function defaultApprovalInstructions(_url: string, requestId: string): ApprovalInstructions {
+  // Without a request id (a setup connection keeps none), the gateway's pending-devices list.
+  if (requestId === "")
+    return {
+      command: "openclaw devices list",
+      note: "The gateway's owner approves this device from the pending requests it lists, on the machine where the gateway runs.",
+    };
   return {
     command: `openclaw devices approve ${requestId}`,
     note: "The gateway's owner runs this on the machine where the gateway runs.",
@@ -744,6 +771,14 @@ export class ClawtrateClient {
    * socket until the first hello: the listener the host found is still there.
    */
   private setupCheck: { url: string; check: () => boolean } | null = null;
+  /**
+   * A connection the host's setup opened, from its first socket through its
+   * first hello and the first read of bots and tasks after it, whether it
+   * redeems a code or reuses this device's token. While it lasts the client
+   * publishes only typed outcomes: fixed codes and words, never the gateway's
+   * own codes, text, request fields or version.
+   */
+  private setupIntent: { url: string } | null = null;
   /**
    * The setup connection whose first device token is staged here until its
    * grant is checked (`setupGrant`): written only for the operator role with
@@ -1044,6 +1079,7 @@ export class ClawtrateClient {
     if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
     this.setupCode = null;
     this.setupCheck = null;
+    this.setupIntent = null;
     this.settings = { url, token };
     this.pairingSeen = null;
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
@@ -1069,6 +1105,7 @@ export class ClawtrateClient {
     this.settings = { url, token: null };
     this.pairingSeen = null;
     this.setupCheck = setup.check ? { url, check: setup.check } : null;
+    this.setupIntent = { url };
     this.setupCode = {
       url,
       bootstrapToken: options.bootstrapToken,
@@ -1106,6 +1143,7 @@ export class ClawtrateClient {
     this.close();
     this.setupCode = null;
     this.setupCheck = null;
+    this.setupIntent = null;
     this.settings = null;
     this.pairingSeen = null;
     this.rows = new Map();
@@ -4758,7 +4796,14 @@ export class ClawtrateClient {
         this.attemptGreeted = false;
         // An attempt is under way: no retry is waiting any more.
         if (this.state.connection.retryAt !== null) this.setConnection({ retryAt: null });
-        const socket = this.host.createWebSocket(settings.url);
+        let socket: WebSocketLike;
+        try {
+          socket = this.host.createWebSocket(settings.url);
+        } catch (error) {
+          // A setup socket that couldn't start is a terminal path: its code goes.
+          if (this.isSetup(settings.url)) this.dropSetupCredentials();
+          throw error;
+        }
         socket.onopen = () => handlers.open();
         socket.onmessage = (event) => handlers.message(String(event.data));
         socket.onclose = (event) => handlers.close(event.code, event.reason);
@@ -4826,6 +4871,8 @@ export class ClawtrateClient {
             this.refuseSetupGrant();
             return;
           }
+          // The token stays a credential to take out of gateway text after its staging ends.
+          this.heldToken = staged.token;
           await this.writeToken(settings.url, staged.deviceId, staged.role, {
             token: staged.token,
             grantedScopes: [...staged.scopes],
@@ -4854,7 +4901,9 @@ export class ClawtrateClient {
             status: "error",
             retryAt: null,
             protocol: hello.protocol,
-            serverVersion: hello.server.version,
+            serverVersion: this.isSetup(settings.url)
+              ? setupVersion(hello.server.version)
+              : hello.server.version,
             error: {
               code: "PROTOCOL_MISMATCH",
               message: protocolMessage(protocol),
@@ -4994,6 +5043,8 @@ export class ClawtrateClient {
 
   private close(): void {
     this.generation += 1;
+    // The replaced or stopped socket's credential is no longer needed to take it out of text.
+    this.heldToken = null;
     this.accounts.onClose();
     this.usage.onClose();
     this.protocol?.stop();
@@ -5037,11 +5088,15 @@ export class ClawtrateClient {
     tokenStore: GatewayBrowserDeviceTokenStore,
     generation: number,
   ) {
+    // A failure of an older connection says nothing about this one.
+    if (generation !== this.generation)
+      return { closeCode: 1000, closeReason: "superseded", stop: true };
     const details = asRecord(error.details) ?? {};
-    const code = typeof details.code === "string" ? details.code : error.gatewayCode;
-    // A setup connection keeps its code only while the gateway waits for its owner's approval.
-    const setup = this.tokenGate?.generation === generation;
-    // A setup connection publishes fixed words only, never the gateway's text.
+    const raw = typeof details.code === "string" ? details.code : error.gatewayCode;
+    // A setup connection publishes typed outcomes only: the few codes its screens name,
+    // fixed words, and nothing else the gateway sent.
+    const setup = this.isSetup(url);
+    const code = setup ? (SETUP_CODES.has(raw) ? raw : SETUP_CONNECT_REFUSED) : raw;
     const hint =
       !setup && typeof details.remediationHint === "string" ? details.remediationHint : null;
     const message = setup
@@ -5049,10 +5104,12 @@ export class ClawtrateClient {
         ? "The one-time code didn't work."
         : "The gateway refused the setup connection."
       : error.message;
-    if (setup && code !== "PAIRING_REQUIRED") this.setupCode = null;
+    // A setup connection keeps its code only while the gateway waits for its owner's approval.
+    if (setup && code !== "PAIRING_REQUIRED") this.dropSetupCredentials();
 
     const mismatch = protocolMismatch(details);
     if (mismatch) {
+      if (setup) this.dropSetupCredentials();
       this.setConnection({
         status: "error",
         pairing: null,
@@ -5070,9 +5127,12 @@ export class ClawtrateClient {
     if (code === "PAIRING_REQUIRED") {
       const requestId = typeof details.requestId === "string" ? details.requestId : "";
       // The request this client was waiting on is gone: the gateway's owner
-      // rejected it, or it expired. Stop, and let the user ask again.
-      if (pairingEnded(this.pairingSeen, requestId)) {
+      // rejected it, or it expired. Stop, and let the user ask again. A setup
+      // connection keeps only a digest of the id.
+      const seen = setup ? digest(requestId) : requestId;
+      if (pairingEnded(this.pairingSeen, seen)) {
         this.pairingSeen = null;
+        if (setup) this.dropSetupCredentials();
         this.setConnection({
           status: "error",
           pairing: null,
@@ -5081,20 +5141,24 @@ export class ClawtrateClient {
         });
         return { closeCode: 1000, closeReason: "pairing request ended", stop: true };
       }
-      if (requestId) this.pairingSeen = requestId;
-      const scopes = Array.isArray(details.requestedScopes)
-        ? details.requestedScopes.filter((s): s is string => typeof s === "string")
-        : [...REQUESTED_SCOPES];
+      if (requestId) this.pairingSeen = seen;
+      // A setup connection shows this device, the scopes it asked for and the gateway's
+      // pending-devices instruction, never the request's own fields.
+      const scopes = setup
+        ? [...this.state.connection.requestedScopes]
+        : Array.isArray(details.requestedScopes)
+          ? details.requestedScopes.filter((s): s is string => typeof s === "string")
+          : [...REQUESTED_SCOPES];
       const instructions = (this.host.approvalInstructions ?? defaultApprovalInstructions)(
         url,
-        requestId,
+        setup ? "" : requestId,
       );
       this.setConnection({
         status: "pairing",
         error: null,
         pairing: {
-          requestId,
-          deviceId: typeof details.deviceId === "string" ? details.deviceId : deviceId,
+          requestId: setup ? "" : requestId,
+          deviceId: !setup && typeof details.deviceId === "string" ? details.deviceId : deviceId,
           message: hint ?? "Approve this device from the gateway's pending pairing requests.",
           approveCommand: instructions.command,
           approveNote: instructions.note,
@@ -5105,6 +5169,7 @@ export class ClawtrateClient {
       // and connect as soon as an operator approves it.
       const nextStep = details.recommendedNextStep;
       const terminal = nextStep !== undefined && nextStep !== "wait_then_retry";
+      if (terminal && setup) this.dropSetupCredentials();
       return {
         closeCode: 1000,
         closeReason: "awaiting pairing approval",
@@ -5161,7 +5226,9 @@ export class ClawtrateClient {
     };
     this.setConnection({
       status: "connected",
-      serverVersion: hello.server.version,
+      serverVersion: this.isSetup(this.settings?.url)
+        ? setupVersion(hello.server.version)
+        : hello.server.version,
       protocol: hello.protocol,
       scopes,
       canWrite,
@@ -5281,9 +5348,19 @@ export class ClawtrateClient {
     void this.loadWaitingQuestions(generation);
     void this.loadWaitingApprovals(generation);
 
-    if (failures.length > 0) {
+    // The setup connection's first read of bots and tasks ends its setup: after it, the
+    // connection is the saved gateway's own.
+    const setup = this.isSetup(this.settings?.url);
+    if (setup) this.setupIntent = null;
+    if (failures.length > 0 && setup) {
+      this.log("error", "discovery failed on the setup connection");
+      this.setDiscovery({ status: "error", error: "Could not load your bots." });
+    } else if (failures.length > 0) {
       this.log("error", `discovery failed: ${failures.join("; ")}`);
-      this.setDiscovery({ status: "error", error: `Could not load ${failures.join("; ")}` });
+      this.setDiscovery({
+        status: "error",
+        error: this.scrub(`Could not load ${failures.join("; ")}`),
+      });
     } else {
       this.setDiscovery({
         status: "ready",
@@ -6168,6 +6245,17 @@ export class ClawtrateClient {
     this.store.update((state) => ({ ...state, connection: { ...state.connection, ...scrubbed } }));
   }
 
+  /** Whether the connection to `url` is the host's setup connection. */
+  private isSetup(url: string | undefined): boolean {
+    return url !== undefined && this.setupIntent?.url === url;
+  }
+
+  /** Every terminal path of a setup connection: its code and any staged reply go. */
+  private dropSetupCredentials(): void {
+    this.setupCode = null;
+    if (this.tokenGate) this.tokenGate.staged = null;
+  }
+
   /** The credentials this client holds now: a setup code, a staged or typed token. */
   private secrets(): string[] {
     return [
@@ -6284,6 +6372,8 @@ export class ClawtrateClient {
           gate.staged = { deviceId, role, token, scopes: [...scopes] };
           return;
         }
+        // A replacement token is this socket's credential now: taken out of gateway text too.
+        this.heldToken = token;
         const existing = await this.loadToken(url, deviceId, role);
         if (!current()) return;
         const held = existing?.heldScopes ?? [...READ_SCOPES];

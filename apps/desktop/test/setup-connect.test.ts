@@ -827,6 +827,22 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     h.client.stop();
   });
 
+  it("F-492 F-494: a code that claims to live longer than ten minutes is not one made here, and nothing connects", async () => {
+    const h = harness({
+      replies: {
+        [`qr --json --voice-node --url ${URL}`]: {
+          stdout: qrJson(URL, CODE, Date.now() + 11 * 60_000),
+        },
+      },
+    });
+    await h.client.start();
+    await h.setup.look();
+    await h.setup.connect();
+    expect(h.setup.current.failure?.kind).toBe("code-failed");
+    expect(h.gateway.sockets).toHaveLength(0);
+    h.client.stop();
+  });
+
   it("F-492 F-494: a code that timed out or went over its limit is not read, even well shaped, and nothing connects", async () => {
     for (const late of [{ timedOut: true }, { tooLarge: true }, { failed: true }]) {
       const h = harness({
