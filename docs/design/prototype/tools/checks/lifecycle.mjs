@@ -684,7 +684,7 @@ await p.close();
 
 p = await open("access=read");
 check("F-265 a read-only connection has no + menu", !(await p.evaluate(() => document.querySelector("#new-button")?.offsetParent)));
-await click(p, '[data-action="gateway-menu"]');
+await p.locator('[data-action="gateway-menu"]:visible').first().click();
 await p.waitForTimeout(60);
 check("F-265 the gateway menu has Import a bot… at the read tier", (await text(p, "#gateway-menu")).includes("Import a bot…"));
 await clickText(p, "#gateway-menu", "Import a bot…");
