@@ -2047,6 +2047,40 @@ describe("every kind of sign-in, and every stage (F-474)", () => {
   });
 });
 
+describe("disconnecting an account (F-477)", () => {
+  it("F-477: logout without a confirming read never announces a disconnect", async () => {
+    // The gateway takes the request and still lists the account.
+    {
+      const { client, fake, accounts } = await accountsClient();
+      fake.gateway.handlers["models.authLogout"] = () => ({ ok: true });
+      expect(await client.disconnectAccount("acme:home")).toEqual({ removed: false });
+      expect(accounts().write).toMatchObject({ what: "disconnect", status: "unverified" });
+      expect(accounts().write?.error).toMatch(/still list/);
+      client.stop();
+    }
+    // The gateway takes it, and the read after it fails.
+    {
+      const { client, fake, accounts } = await accountsClient();
+      const logout = fake.gateway.handlers["models.authLogout"]!;
+      fake.gateway.handlers["models.authLogout"] = (params) => {
+        const answer = logout(params);
+        fake.failStatusFor = "otto";
+        return answer;
+      };
+      expect(await client.disconnectAccount("acme:home")).toEqual({ removed: false });
+      expect(accounts().write).toMatchObject({ what: "disconnect", status: "unverified" });
+      client.stop();
+    }
+    // Removed only when the read after it no longer lists it.
+    {
+      const { client, accounts } = await accountsClient();
+      expect(await client.disconnectAccount("acme:home")).toEqual({ removed: true });
+      expect(accounts().write).toMatchObject({ what: "disconnect", status: "saved" });
+      client.stop();
+    }
+  });
+});
+
 describe("changing a bot's account (F-473)", () => {
   const TASK = "agent:otto:main";
   const entry = (fake: AccountsGateway, botId: string) =>

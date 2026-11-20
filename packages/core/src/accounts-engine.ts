@@ -1195,7 +1195,12 @@ export class AccountsEngine {
   }
 
   /** Remove an account (`models.authLogout`), from the store that keeps it. */
-  async disconnect(profileId: string): Promise<void> {
+  /**
+   * Ask the gateway to remove an account (`models.authLogout`). Its answer is
+   * a request taken, not a removal: `removed` only when the read after it no
+   * longer lists the account; otherwise the write stays unverified.
+   */
+  async disconnect(profileId: string): Promise<{ removed: boolean }> {
     this.requireAdmin("Disconnecting an account");
     const account = this.ctx.get().accounts.find((a) => a.id === profileId);
     if (!account) throw new Error("That account is no longer on the gateway.");
@@ -1212,13 +1217,6 @@ export class AccountsEngine {
         profileIds: [profileId],
         agentId: account.keptBy ?? this.signInTarget(null),
       });
-      this.setWrite({
-        what: "disconnect",
-        target: profileId,
-        status: "saved",
-        error: null,
-        at: this.ctx.now(),
-      });
     } catch (error) {
       this.setWrite({
         what: "disconnect",
@@ -1230,6 +1228,20 @@ export class AccountsEngine {
       throw error;
     }
     await this.load();
+    const read = this.ctx.get();
+    const removed = read.status === "ready" && !read.accounts.some((a) => a.id === profileId);
+    this.setWrite({
+      what: "disconnect",
+      target: profileId,
+      status: removed ? "saved" : "unverified",
+      error: removed
+        ? null
+        : read.status !== "ready"
+          ? "The gateway took the request, but reading its accounts afterwards failed."
+          : "The gateway took the request, but its accounts still list this account.",
+      at: this.ctx.now(),
+    });
+    return { removed };
   }
 
   // Bots ---------------------------------------------------------------------------------

@@ -157,7 +157,9 @@ export function usedBy(
     .filter(
       (binding) =>
         (binding.mode === "account" && binding.account === accountId) ||
-        (binding.account === null && (binding.order?.ids.includes(accountId) ?? false)),
+        (binding.account === null &&
+          binding.order?.stored === true &&
+          binding.order.ids.includes(accountId)),
     )
     .map((binding) => ({
       bot: bots.find((bot) => bot.id === binding.botId),
@@ -193,7 +195,7 @@ export function accountLine(
         ? "Which bots can use it isn't clear"
         : users.length > 0
           ? users.join(", ")
-          : "No bot names it",
+          : "No listed bot names it.",
   };
 }
 

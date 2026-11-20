@@ -447,6 +447,21 @@ test("F-477: a read that fails after one that listed the accounts is said beside
   expect((await sent(page)).some((each) => each.type === "refreshAccounts")).toBe(true);
 });
 
+test("F-477: account details show the last-read time after a refresh fails", async ({ page }) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=admin&accounts=stale`, "light");
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Accounts", exact: true }).click();
+  await settings.getByRole("button", { name: /^OpenAI · Work, / }).click();
+  await expect(settings.getByTestId("account-facts")).toBeVisible();
+  const stale = settings.getByTestId("accounts-stale");
+  await expect(stale).toContainText(
+    /^Couldn't read the gateway's accounts again\. .* These are from the last read, at \d{1,2}:\d{2}/,
+  );
+  await stale.getByRole("button", { name: "Try again" }).click();
+  expect((await sent(page)).some((each) => each.type === "refreshAccounts")).toBe(true);
+});
+
 test("F-477: an empty list says what was read", async ({ page }) => {
   await openFixture(page, `scene=main&${OTTO_DISK}&access=admin&accounts=none`, "light");
   await page.keyboard.press("ControlOrMeta+,");
@@ -454,9 +469,7 @@ test("F-477: an empty list says what was read", async ({ page }) => {
   await settings.getByRole("button", { name: "Accounts", exact: true }).click();
   await expect(settings.getByRole("heading", { name: "No accounts listed" })).toBeVisible();
   await expect(
-    settings.getByText(
-      "The gateway lists no sign-ins or saved keys for its bots. A key set only in its settings or environment is not listed as an account.",
-    ),
+    settings.getByText("The gateway listed no sign-in or saved key profiles in this read."),
   ).toBeVisible();
 });
 
@@ -487,12 +500,14 @@ test("F-476: Disconnect asks first, with focus on Cancel; Escape closes the conf
   const settings = page.getByRole("dialog", { name: "Settings" });
   await settings.getByRole("button", { name: "Accounts", exact: true }).click();
   await settings.getByRole("button", { name: /^OpenAI · Work, / }).click();
-  await expect(settings.getByTestId("account-facts")).toContainText("Used byMarlow, Otto (locked)");
-  await settings.getByRole("button", { name: "Disconnect…" }).click();
-  const confirm = page.getByRole("alertdialog", { name: "Disconnect OpenAI · Work?" });
-  await expect(confirm).toHaveAccessibleDescription(
-    "Marlow and Otto name it in their settings. Your gateway removes the sign-in, and decides what those bots run on after it.",
+  await expect(settings.getByTestId("account-facts")).toContainText(
+    "Named in bot settingsMarlow, Otto (locked)",
   );
+  await settings.getByRole("button", { name: "Disconnect…" }).click();
+  const confirm = page.getByRole("alertdialog", {
+    name: "Ask the gateway to disconnect OpenAI · Work?",
+  });
+  await expect(confirm).toHaveAccessibleDescription("Last read from bot settings. Marlow, Otto");
   await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(confirm).toHaveCount(0);

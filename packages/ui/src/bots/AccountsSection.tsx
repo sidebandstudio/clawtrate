@@ -140,6 +140,26 @@ export function useAccountsSection({
     };
   }
 
+  // What is shown is the last read's: a failed read since is said, with its time and Try again,
+  // on the list and on an account's page alike.
+  const staleNote = accounts.status === "error" && accounts.accounts.length > 0 && (
+    <Note tone="warn" testId="accounts-stale">
+      <p>
+        <b>Couldn't read the gateway's accounts again.</b> {accounts.error} These are from the last
+        read{accounts.readAt !== null ? `, at ${clock(accounts.readAt)}` : ""}.
+      </p>
+      <div className="b-actions">
+        <button
+          type="button"
+          className="button"
+          data-size="sm"
+          onClick={() => void bridge.send({ type: "refreshAccounts" })}
+        >
+          Try again
+        </button>
+      </div>
+    </Note>
+  );
   const account =
     page.page === "account" ? accounts.accounts.find((each) => each.id === page.id) : undefined;
   if (page.page === "account" && account) {
@@ -179,6 +199,7 @@ export function useAccountsSection({
     };
     const body = (
       <>
+        {staleNote}
         <dl className="facts" data-testid="account-facts">
           <div>
             <dt>Provider</dt>
@@ -272,7 +293,7 @@ export function useAccountsSection({
             </dd>
           </div>
           <div>
-            <dt>Used by</dt>
+            <dt>Named in bot settings</dt>
             <dd>
               {account.keptBy
                 ? `Only ${keeper} can use it`
@@ -288,7 +309,7 @@ export function useAccountsSection({
                               : each.bot.name,
                         )
                         .join(", ")
-                    : "No bot's settings name it"}
+                    : "No listed bot names it."}
             </dd>
           </div>
           <div>
@@ -332,7 +353,8 @@ export function useAccountsSection({
               </span>
             )}
             <span className="spacer" />
-            {account.logoutSupported && (
+            {/* With copies the views can't tell apart, a request could remove the wrong one. */}
+            {account.logoutSupported && !account.unclear && (
               <button
                 type="button"
                 className="button"
@@ -348,13 +370,20 @@ export function useAccountsSection({
         )}
         {confirm && (
           <Confirm
-            title={`Disconnect ${accountName(confirm, accounts)}?`}
+            title={`Ask the gateway to disconnect ${accountName(confirm, accounts)}?`}
             text={(() => {
-              // Only what the views establish: the bots whose settings name it.
+              // Only what the last read establishes: the bots whose settings name it.
               const names = users.map((each) => each.bot.name);
-              return names.length > 0
-                ? `${names.join(" and ")} ${names.length === 1 ? "names" : "name"} it in ${names.length === 1 ? "its" : "their"} settings. Your gateway removes the sign-in, and decides what ${names.length === 1 ? "that bot runs" : "those bots run"} on after it.`
-                : "No bot's settings name it. Your gateway removes the sign-in.";
+              return (
+                <>
+                  <span className="b-group" style={{ display: "block" }}>
+                    Last read from bot settings.
+                  </span>
+                  <span style={{ display: "block" }}>
+                    {names.length > 0 ? names.join(", ") : "No listed bot names it."}
+                  </span>
+                </>
+              );
             })()}
             action="Disconnect"
             busy={busy}
@@ -365,8 +394,13 @@ export function useAccountsSection({
               void bridge
                 .invoke({ type: "disconnectAccount", profileId: target.id })
                 .then(
-                  () => {
-                    announce(`Disconnected ${accountName(target, accounts)}`);
+                  ({ removed }) => {
+                    // A removal only once the read after the request no longer lists it.
+                    announce(
+                      removed
+                        ? `Disconnected ${accountName(target, accounts)}`
+                        : "Disconnect request sent. Check the refreshed accounts.",
+                    );
                     setConfirm(null);
                     go({ page: "list" });
                   },
@@ -396,7 +430,7 @@ export function useAccountsSection({
     <>
       <div className="b-headrow">
         <p className="b-lead" style={{ margin: 0 }}>
-          The accounts your gateway keeps. Clawtrate never sees a password or keeps a sign-in.
+          Accounts listed by your gateway.
         </p>
         {admin && accounts.accounts.length > 0 && (
           <button
@@ -409,25 +443,7 @@ export function useAccountsSection({
           </button>
         )}
       </div>
-      {accounts.status === "error" && accounts.accounts.length > 0 && (
-        // The rows below are the last read's: the failure is said, with its time and Try again.
-        <Note tone="warn" testId="accounts-stale">
-          <p>
-            <b>Couldn't read the gateway's accounts again.</b> {accounts.error} These are from the
-            last read{accounts.readAt !== null ? `, at ${clock(accounts.readAt)}` : ""}.
-          </p>
-          <div className="b-actions">
-            <button
-              type="button"
-              className="button"
-              data-size="sm"
-              onClick={() => void bridge.send({ type: "refreshAccounts" })}
-            >
-              Try again
-            </button>
-          </div>
-        </Note>
-      )}
+      {staleNote}
       {loading && accounts.accounts.length === 0 ? (
         <div aria-busy="true" aria-label="Loading accounts" style={{ marginTop: 16 }}>
           <div className="skeleton" style={{ height: 58, width: "100%" }} />
@@ -486,10 +502,7 @@ export function useAccountsSection({
             <LockIcon />
           </span>
           <h4>No accounts listed</h4>
-          <p>
-            The gateway lists no sign-ins or saved keys for its bots. A key set only in its settings
-            or environment is not listed as an account.
-          </p>
+          <p>The gateway listed no sign-in or saved key profiles in this read.</p>
           {admin && (
             <div style={{ marginTop: 12 }}>
               <button

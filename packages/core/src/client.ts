@@ -4097,7 +4097,7 @@ export class ClawtrateClient {
     return this.accounts.setLabel(profileId, label);
   }
 
-  disconnectAccount(profileId: string): Promise<void> {
+  disconnectAccount(profileId: string): Promise<{ removed: boolean }> {
     return this.accounts.disconnect(profileId);
   }
 

@@ -320,50 +320,52 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "sendMe
                                         ? { dismissed: boolean }
                                         : C extends { type: "saveApiKey" }
                                           ? { profileId: string | null; warning: string | null }
-                                          : C extends { type: "changeBotAccount" }
-                                            ? AccountChangeResult
-                                            : C extends { type: "createBot" | "finishBot" }
-                                              ? { botId: string; missing: MissingStep[] }
-                                              : C extends { type: "newTask" | "newMainTask" }
-                                                ? { key: string }
-                                                : C extends { type: "archiveTask" }
-                                                  ? ArchiveResult
-                                                  : C extends { type: "listArchived" }
-                                                    ? ArchivedList
-                                                    : C extends { type: "readComposerMenu" }
-                                                      ? MenuRow[]
-                                                      : C extends { type: "readUsage" }
-                                                        ? UsageReport | UsageBusy
-                                                        : C extends { type: "listRoutines" }
-                                                          ? BudgetRoutine[]
-                                                          : C extends { type: "readPlacement" }
-                                                            ? BotPlacement
-                                                            : C extends { type: "readMachines" }
-                                                              ? MachinesView
-                                                              : C extends {
-                                                                    type: "setCommandMachine";
-                                                                  }
-                                                                ? ConfigSave
+                                          : C extends { type: "disconnectAccount" }
+                                            ? { removed: boolean }
+                                            : C extends { type: "changeBotAccount" }
+                                              ? AccountChangeResult
+                                              : C extends { type: "createBot" | "finishBot" }
+                                                ? { botId: string; missing: MissingStep[] }
+                                                : C extends { type: "newTask" | "newMainTask" }
+                                                  ? { key: string }
+                                                  : C extends { type: "archiveTask" }
+                                                    ? ArchiveResult
+                                                    : C extends { type: "listArchived" }
+                                                      ? ArchivedList
+                                                      : C extends { type: "readComposerMenu" }
+                                                        ? MenuRow[]
+                                                        : C extends { type: "readUsage" }
+                                                          ? UsageReport | UsageBusy
+                                                          : C extends { type: "listRoutines" }
+                                                            ? BudgetRoutine[]
+                                                            : C extends { type: "readPlacement" }
+                                                              ? BotPlacement
+                                                              : C extends { type: "readMachines" }
+                                                                ? MachinesView
                                                                 : C extends {
-                                                                      type: "setBotWorkspace";
+                                                                      type: "setCommandMachine";
                                                                     }
-                                                                  ? {
-                                                                      workspace: string | null;
-                                                                      asTyped: boolean;
-                                                                    }
+                                                                  ? ConfigSave
                                                                   : C extends {
-                                                                        type: "setMachineDefaults";
+                                                                        type: "setBotWorkspace";
                                                                       }
-                                                                    ? ApprovalsFile
+                                                                    ? {
+                                                                        workspace: string | null;
+                                                                        asTyped: boolean;
+                                                                      }
                                                                     : C extends {
-                                                                          type: "listMemory";
+                                                                          type: "setMachineDefaults";
                                                                         }
-                                                                      ? MemoryList
+                                                                      ? ApprovalsFile
                                                                       : C extends {
-                                                                            type: "readMemory";
+                                                                            type: "listMemory";
                                                                           }
-                                                                        ? MemoryDocument
-                                                                        : void;
+                                                                        ? MemoryList
+                                                                        : C extends {
+                                                                              type: "readMemory";
+                                                                            }
+                                                                          ? MemoryDocument
+                                                                          : void;
 
 export type HostInfo = {
   kind: "desktop" | "web";

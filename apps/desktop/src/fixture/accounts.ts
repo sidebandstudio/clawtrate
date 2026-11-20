@@ -1046,7 +1046,7 @@ export function accountCommand(
           b.account === command.profileId ? { ...b, accountMissing: true } : b,
         ),
       }));
-      return Promise.resolve();
+      return Promise.resolve({ removed: true });
     case "createBot": {
       const name = command.name.trim() || "New bot";
       put((a) => ({

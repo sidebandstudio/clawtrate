@@ -683,20 +683,13 @@ export function BotSettings({
       );
     page.push(changeButton(binding.suffixLost ? "Choose an account" : "Bind to an account", true));
   } else if (word === "no-account") {
-    // An account still on the gateway, but in another bot's own store, is that bot's.
-    const kept = accounts.accounts.find((each) => each.id === binding.account);
-    const keeper =
-      kept?.keptBy && kept.keptBy !== bot.id
-        ? (bots.find((each) => each.id === kept.keptBy)?.name ?? kept.keptBy)
-        : null;
+    // Only what the read shows: this bot's view does not list the account its settings name.
+    const listed = accounts.accounts.find((each) => each.id === binding.account);
     page.push(
       <Note key="s" tone="warn">
         <p>
-          <b>No account.</b>{" "}
-          {keeper
-            ? `${name}'s account, ${accountName(kept!, accounts)}, is kept by ${keeper} only, so ${name} can't use it.`
-            : `${name}'s account was disconnected.`}{" "}
-          Clawtrate won't start {name} until you choose one.
+          <b>No account.</b> The gateway's list does not show{" "}
+          {listed ? accountName(listed, accounts) : binding.account} for {name}.
         </p>
       </Note>,
       changeButton("Choose an account", true),
