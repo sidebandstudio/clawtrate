@@ -128,8 +128,9 @@ export class AccountsGateway {
   /** Refuse the next `wizard.cancel`: the gateway is saving. */
   refuseCancel = false;
   /**
-   * Decline the next `wizard.cancel` as the gateway does once it has locked a
-   * sign-in to save it: a success answer that the sign-in is still running.
+   * Decline the next `wizard.cancel` with a success answer that the sign-in is
+   * still running, and no more: as the gateway does once it has locked a
+   * sign-in to save it, and also when the sign-in's input has closed.
    */
   declineCancel = false;
   /** Fail `models.authStatus` for this bot. */

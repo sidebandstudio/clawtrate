@@ -968,6 +968,7 @@ const signIn = object<SignInState>()({
   byKey: FLAG,
   known: list(MAX_ACCOUNTS, ID),
   cancelUnknown: FLAG,
+  cancelDeclined: FLAG,
 });
 const botCreation = object<BotCreationState>()({
   name: NAME,

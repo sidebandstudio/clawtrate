@@ -34,6 +34,9 @@ import {
   REFUSED_PAGE,
 } from "./words.ts";
 
+/** The gateway's answer to a cancel it declined, `{status: "running"}`, and no more. */
+const CANCEL_DECLINED = "The gateway declined to cancel. It still reports the sign-in as running.";
+
 /** A label step left before Done, kept until the app quits so it comes back (section 6). */
 const LABEL_KEPT = "connect-label";
 /**
@@ -862,6 +865,10 @@ export function useConnect({
     const step = current.step;
     const saving = current.saving ? (
       <p className="b-hint">Too late to cancel: the gateway is saving the sign-in.</p>
+    ) : current.cancelDeclined ? (
+      <p className="b-hint" data-testid="cancel-declined">
+        {CANCEL_DECLINED}
+      </p>
     ) : null;
     if (step.type === "note") {
       // A note with a page: the gateway's own words, shown as a note. How the provider finishes
@@ -1141,13 +1148,25 @@ export function useConnect({
 
   // A cancel the gateway declined is said wherever one can be declined: the waiting view says it
   // in place; every other stage of a sign-in still going says it here, after a code or a key too.
-  if (current && isSignInActive(current) && current.saving && current.stage !== "waiting") {
+  // Saving only when the gateway said so; a bare decline says only that it still runs.
+  if (
+    current &&
+    isSignInActive(current) &&
+    (current.saving || current.cancelDeclined) &&
+    current.stage !== "waiting"
+  ) {
     body = (
       <>
         {body}
-        <p className="b-hint" data-testid="too-late">
-          Too late to cancel: the gateway is saving the sign-in.
-        </p>
+        {current.saving ? (
+          <p className="b-hint" data-testid="too-late">
+            Too late to cancel: the gateway is saving the sign-in.
+          </p>
+        ) : (
+          <p className="b-hint" data-testid="cancel-declined">
+            {CANCEL_DECLINED}
+          </p>
+        )}
       </>
     );
   }

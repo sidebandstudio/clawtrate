@@ -734,6 +734,7 @@ export function accountCommand(
         byKey: false,
         known: [],
         cancelUnknown: false,
+        cancelDeclined: false,
       };
       put((a) => ({ ...a, signIn: base }));
       const stage = params.signin ?? "waiting";
@@ -928,7 +929,8 @@ export function accountCommand(
       // signin=saving: the gateway declines the cancel; it is saving.
       if (accounts().signIn?.saving) return Promise.resolve({ cancelled: false });
       if (params.signin === "decline-checking") {
-        signIn({ saving: true });
+        // `{status: "running"}` and no more: declined, not said to be saving.
+        signIn({ cancelDeclined: true });
         return Promise.resolve({ cancelled: false });
       }
       // signin=cancel-unknown: the gateway's answer to the cancel says nothing.
@@ -990,6 +992,7 @@ export function accountCommand(
             byKey: true,
             known: [],
             cancelUnknown: false,
+            cancelDeclined: false,
           },
         }));
         later(300, () => signIn({ stage: "failed", error: "xAI refused the key." }));

@@ -1269,10 +1269,13 @@ test("F-474: a cancel the gateway declines after a code was entered is said ther
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText(/Finishing the sign-in with OpenAI/)).toBeVisible();
   await newBot(page).getByRole("button", { name: "Cancel", exact: true }).click();
-  await expect(page.getByTestId("too-late")).toHaveText(
-    "Too late to cancel: the gateway is saving the sign-in.",
+  // A bare `running` answer: declined, never said to be saving, and Cancel can be tried again.
+  await expect(page.getByTestId("cancel-declined")).toHaveText(
+    "The gateway declined to cancel. It still reports the sign-in as running.",
   );
-  await expect(newBot(page).getByRole("button", { name: "Saving…" })).toBeDisabled();
+  await expect(page.getByTestId("too-late")).toHaveCount(0);
+  await expect(newBot(page).getByRole("button", { name: "Saving…" })).toHaveCount(0);
+  await expect(newBot(page).getByRole("button", { name: "Cancel", exact: true })).toBeEnabled();
 });
 
 test("F-474: too late to cancel: Cancel reads Saving…, disabled, and Back keeps the sign-in while the gateway saves", async ({

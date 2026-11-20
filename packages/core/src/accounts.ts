@@ -352,6 +352,8 @@ export type SignInState = {
   known: string[];
   /** A cancel was asked for and the gateway's answer did not say whether it took. */
   cancelUnknown: boolean;
+  /** The gateway declined a cancel and still reports the sign-in as running, saying no more. */
+  cancelDeclined: boolean;
 };
 
 /**

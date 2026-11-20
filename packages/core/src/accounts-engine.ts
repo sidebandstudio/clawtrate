@@ -470,6 +470,7 @@ export class AccountsEngine {
         byKey: method.flow === "key",
         known: [],
         cancelUnknown: false,
+        cancelDeclined: false,
       },
       null,
       false,
@@ -844,7 +845,7 @@ export class AccountsEngine {
   async cancelSignIn(): Promise<{ cancelled: boolean }> {
     const signIn = this.ctx.get().signIn;
     if (!signIn || !isActive(signIn)) return { cancelled: signIn?.stage === "cancelled" };
-    this.setSignIn(signIn.id, { cancelling: true, cancelUnknown: false });
+    this.setSignIn(signIn.id, { cancelling: true, cancelUnknown: false, cancelDeclined: false });
     let answer: RawRecord | null = null;
     let failure: unknown = null;
     try {
@@ -860,12 +861,15 @@ export class AccountsEngine {
       return { cancelled: true };
     }
     const words = failure ? errorText(failure) : String(answer?.error ?? answer?.status ?? "");
-    // Saving when the gateway says so: a refusal in those words, or its answer to a cancel it
-    // declined, the sign-in still `running`. The gateway declines a cancel on a live sign-in only
-    // once it has locked it to save (docs/decisions.md). Anything else is not known.
-    const declined = !failure && answer?.status === "running" && answer.error === undefined;
-    if (declined || (isRefusal(failure) && /\bsav(e|ing)\b/i.test(words))) {
+    // Saving only when the gateway says so in words: a refusal, or its declining answer. A bare
+    // `running` answer says only that it declined: the installed wizard also declines a cancel
+    // when its input has closed (docs/decisions.md). Anything else is not known.
+    const saysSaving = /\bsav(e|ing)\b/i.test(words);
+    const running = !failure && answer?.status === "running";
+    if (saysSaving && (isRefusal(failure) || running)) {
       this.setSignIn(signIn.id, { cancelling: false, saving: true });
+    } else if (running) {
+      this.setSignIn(signIn.id, { cancelling: false, cancelDeclined: true });
     } else {
       this.setSignIn(signIn.id, {
         cancelling: false,
@@ -1109,6 +1113,7 @@ export class AccountsEngine {
             byKey: true,
             known: [],
             cancelUnknown: false,
+            cancelDeclined: false,
           },
           key,
           true,

@@ -2174,16 +2174,19 @@ describe("every kind of sign-in, and every stage (F-474)", () => {
     client.stop();
   });
 
-  it("F-474: a cancel the gateway declines while the sign-in runs is too late to cancel: it is saving", async () => {
+  it("F-474: a running cancel reply reports what the gateway said without inferring saving", async () => {
     const { client, fake, accounts } = await accountsClient();
     await client.startSignIn(CHOICES.device, null);
+    // `{status: "running"}` and no more: the gateway declined; it did not say it is saving.
     fake.declineCancel = true;
     expect(await client.cancelSignIn()).toEqual({ cancelled: false });
     expect(accounts().signIn).toMatchObject({
       stage: "waiting",
-      saving: true,
+      saving: false,
+      cancelDeclined: true,
       cancelUnknown: false,
     });
+    // Cancel can be asked again; the sign-in goes on and ends as the gateway says.
     fake.answerDevice();
     await until(() => accounts().signIn?.stage === "several");
     expect(accounts().signIn?.saving).toBe(false);

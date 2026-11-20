@@ -320,14 +320,14 @@ describe("the sign-in plugin's requests", () => {
   });
 
   /** The scripted side of the callback model: a page with its state, then the exchange. */
-  async function callbackSide(extra: Record<string, unknown> = {}) {
+  async function callbackSide(
+    extra: Record<string, unknown> = {},
+    authorizeUrl = "http://127.0.0.1:9/a?state=s2",
+  ) {
     return serve((body) => {
       const fields = JSON.parse(body || "{}") as Record<string, unknown>;
       if (fields.code === undefined)
-        return {
-          status: 200,
-          body: JSON.stringify({ state: "s2", authorizeUrl: "http://127.0.0.1:9/a?state=s2" }),
-        };
+        return { status: 200, body: JSON.stringify({ state: "s2", authorizeUrl }) };
       return {
         status: 200,
         body: JSON.stringify({
@@ -377,47 +377,55 @@ describe("the sign-in plugin's requests", () => {
     }
   });
 
-  it("the callback model, on a connection with a browser origin the gateway accepts: the gateway's own callback, and an http page refused as the gateway refuses it", async () => {
-    const scripted = await callbackSide();
-    const { method } = await registered(`${scripted.url}/scripted/signin`);
+  // The callback model tests the gateway authorize interface. The stand-in's HTTP page is
+  // refused on that branch.
+  it("callback model passes the gateway callback to authorize and propagates its HTTP-page refusal", async () => {
+    const callback = "https://gateway.example/oauth/provider/callback";
     // What the gateway's `authorize` does (provider-browser-auth): its own callback path on the
     // accepted origin, and only an https authorization page with no user info.
+    const seen: Array<{ state: string; page: URL }> = [];
     const authorize = async (params: {
       state: string;
       buildAuthorizationUrl: (redirect: string) => string;
     }) => {
-      const page = new URL(
-        params.buildAuthorizationUrl("https://gateway.example/oauth/provider/callback"),
-      );
+      const page = new URL(params.buildAuthorizationUrl(callback));
       if (page.protocol !== "https:" || page.username || page.password)
         throw new Error("Provider sign-in requires an HTTPS authorization URL.");
+      seen.push({ state: params.state, page });
       return { code: "c2" };
     };
+    // The stand-in's own page is http: refused, and nothing is opened or pasted.
+    const scripted = await callbackSide();
     const opened: string[] = [];
     await expect(
-      method("callback").run({
+      (await registered(`${scripted.url}/scripted/signin`)).method("callback").run({
         oauth: { authorize },
         openUrl: async (url: string) => void opened.push(url),
         prompter: {},
       }),
     ).rejects.toThrow(/requires an HTTPS authorization URL/);
-    // Nothing is opened and nothing is pasted: the gateway decides.
     expect(opened).toEqual([]);
-    const pages: string[] = [];
-    await method("callback").run({
-      oauth: {
-        authorize: async (params: { buildAuthorizationUrl: (redirect: string) => string }) => {
-          pages.push(
-            params.buildAuthorizationUrl("https://gateway.example/oauth/provider/callback"),
-          );
-          return { code: "c2" };
-        },
-      },
-      openUrl: async () => undefined,
-      prompter: {},
-    });
-    expect(new URL(pages[0]!).searchParams.get("redirect_uri")).toBe(
-      "https://gateway.example/oauth/provider/callback",
+    expect(seen).toEqual([]);
+    // An https fixture page: the same authorize takes it, with the sign-in's state and the
+    // callback the gateway chose, and the method exchanges the code it returns.
+    const fixture = await callbackSide({}, "https://signin.example/authorize?state=s2");
+    const result = await (
+      await registered(`${fixture.url}/scripted/signin`)
+    )
+      .method("callback")
+      .run({
+        oauth: { authorize },
+        openUrl: async (url: string) => void opened.push(url),
+        prompter: {},
+      });
+    expect(opened).toEqual([]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.state).toBe("s2");
+    expect(seen[0]!.page.origin).toBe("https://signin.example");
+    expect(seen[0]!.page.searchParams.get("redirect_uri")).toBe(callback);
+    expect(JSON.parse(fixture.received[1]!)).toMatchObject({ code: "c2" });
+    expect((result as { profiles: Array<{ profileId: string }> }).profiles[0]?.profileId).toBe(
+      "acme:back",
     );
   });
 });
