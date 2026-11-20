@@ -164,67 +164,70 @@ The conversation's polite live region speaks for voice, and only for these: "Lis
 
 ## 3. The two buttons in the composer
 
-The built row is, in order: "Attach files" (+), the field, "How to send" (only while a run is on and the field has text), "Stopping…", Stop (while a run can be stopped), Send. The two buttons go after "How to send" and before "Stopping…" and Stop, so Stop and Send keep their place at the end of the row. They are the row's own round icon buttons (`icon-button`), quiet, the size of their neighbours; on touch, where those are 40 px, each has a 44 px hit area.
+The built row is, in order: "Attach files" (+), the field, "How to send" (only while a run is on and the field has text), "Stopping…", Stop (while a run can be stopped), Send (`Composer.tsx`). The two buttons go after "How to send" and before "Stopping…" and Stop, so Stop and Send keep their place at the end of the row. They are the row's own round icon buttons (`icon-button`), quiet, the size of their neighbours; on touch, where those are 40 px, each has a 44 px hit area.
 
-| Button                    | Label                                      | Shown                                                                                                                          | States                                                                                                                                                              |
-| ------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Microphone                | "Start dictation" (⌘D, Ctrl+D off the Mac) | Always, in the composer                                                                                                        | Ready; Listening (filled `--danger`, "Stop dictation"); Disabled with a reason (during a call; no route; no microphone; a page over plain http)                     |
-| Voice chat (the waveform) | "Start voice chat"                         | Only while the composer is empty: no text, no attachment, no "/" or "@" chip (F-254); typing hides it, clearing shows it again | Ready; "In a voice chat" while this task's bot is on a call (pressed; it moves focus to the call band); Disabled with a reason (not set up; a page over plain http) |
+| Button | Label | Shown | States |
+|---|---|---|---|
+| Microphone | Desktop: "Start voice input" (⌘D, Ctrl+D off the Mac); iPhone: "Start dictation" | Always, in the composer | Ready; Listening (filled `--danger`, "Stop voice input" or "Stop dictation"); Disabled with a reason (during a call; a page over plain http) |
+| Voice chat (the waveform) | "Start voice chat" | Only while the built `hasContent` is false: no text, no attachment (pending or refused), no "/" or "@" chip (F-254). While dictating, it stays shown as long as only words not yet final exist | Ready; "In a voice chat" while this task's bot is on a call (pressed; it moves focus to the call band); Disabled with a reason (not set up; a page over plain http; an earlier session may still be open, section 8) |
 
-A disabled button keeps focus and its reason as its description (`aria-description`, as the built Send does), so a keyboard or screen reader user hears why. "Not set up" and "Can't tell" come from `talk.catalog` (section 5). Both are shown during a run: a call or dictation does not depend on whether the bot is working.
+A disabled button keeps focus and its reason as its description (`aria-description`, as the built Send does), so a keyboard or screen reader user hears why. Pressing the waveform while dictating stops dictation first, then checks again that no final words entered the draft before it starts anything. Both buttons are shown during a run.
 
-**Keys.** ⌘D starts and stops dictation while the composer is reachable (the built `reachable()`) and no dialog is open. Held for more than 400 ms it is hold to talk: dictation stops when the key is released. Pressing and holding the microphone button does the same; on touch this is the microphone's own press, apart from Send's long press, which opens the send sheet as built. Escape in the field stops dictation and keeps the text; with a "/" or "@" menu open, Escape closes the menu first, as built. In a browser, ⌘D and Ctrl+D bookmark the page; the web preview asks for them and the button always works. Voice chat has no shortcut. ⌘D is taken by nothing in the app (research §9; the built window keys are ⌘., ⌘↵, ⌘I and ⌘L).
+**Keys.** ⌘D starts and stops dictation when the composer is reachable (the built `reachable()`, with its `command()` key) and no dialog is open; key repeats and keys pressed while an input method is composing are ignored. Held for more than 400 ms it is hold to talk: dictation stops when either key is released, whichever goes first, and when the window loses focus. Pressing and holding the microphone button does the same; a hold also ends when the pointer is cancelled or loses capture, when the task changes and when the composer goes away, and it stops exactly the dictation it started. On touch, the microphone's press is apart from Send's long press, which opens the send sheet as built. Escape in the field closes an open "/" or "@" menu first, through the built handler; otherwise it stops dictation and keeps the text. In the web preview ⌘D and Ctrl+D stay the browser's bookmark keys, and the button is the way to dictate. Voice chat has no shortcut. ⌘D is taken by nothing in the app (research §9; the built window keys are ⌘., ⌘↵, ⌘I and ⌘L).
 
-**Stop is the composer's.** Stop and ⌘. stop the bot's run, as built, during a call too; they neither end the call nor mute it. "Stop now" dictated and sent during a run is Stop, as when it is typed (the built `isStopNow`).
+**Stop is the composer's.** Stop and ⌘. stop the bot's run, as built, during a call too; they neither end the call nor mute it. "Stop now" dictated and sent during a run is Stop under the same conditions as when it is typed (the built `isStopNow`, with its own guards).
 
 ### Where the built composer would have to change
 
-| Change                                                                                                                                    | In `Composer.tsx` today                                                     | Why                                                       |
-| ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------- |
-| Two buttons in the row, after "How to send" and before "Stopping…" and Stop                                                               | The row ends: How to send, Stopping…, Stop, Send                            | Section 3                                                 |
-| A voice state and its actions as props: the catalog's answer, this device's call, dictation                                               | The props have no voice                                                     | The buttons' states                                       |
-| Dictated words go in at the caret through `setText`, which writes the draft, without `watchCaret`: dictated text opens no "/" or "@" menu | Text changes only from typing, pasting and the menus                        | Section 4                                                 |
-| A dictation line under the row (`.dictation-line`) for "Listening", where the words go and the words not yet final                        | The field is a plain `textarea`, which cannot colour part of its text       | Section 4: words not yet final are never put in the field |
-| ⌘D and its key-up in the window-wide key handler, under its `command()` and `reachable()` guards                                          | The handler has ⌘., ⌘↵, ⌘I and ⌘L                                           | Hold to talk                                              |
-| `sendAs` stops dictation first; what is in the field is sent, and words not yet final are dropped                                         | `sendAs` sends the field                                                    | Section 4                                                 |
-| Dictation's failures are notices on the shelf (`onNotice`, with "Try again" and "Dismiss")                                                | Built: the shelf already shows notices with a title, a reason and Try again | No new surface                                            |
+| Change | In `Composer.tsx` today | Why |
+|---|---|---|
+| Two buttons in the row, after "How to send" and before "Stopping…" and Stop | The row ends: How to send, Stopping…, Stop, Send | Section 3 |
+| A voice state and its actions as props: the catalog's answer, this device's call, dictation | The props have no voice | The buttons' states |
+| The waveform's rule is the built `hasContent` | It already decides Send | F-254 |
+| Final words edit the current selection of the current task's draft, after any edit made since, through `setText`, without `watchCaret`; files and chips are kept | Text changes only from typing, pasting and the menus | Section 4 |
+| A dictation line under the row (`.dictation-line`) for "Listening", where the words go and the words not yet final | The field is a plain `textarea`, which cannot colour part of its text | Section 4: words not yet final are never put in the field |
+| ⌘D and its key-ups in the window-wide key handler, under its `command()` and `reachable()` guards; nothing in the web preview | The handler has ⌘., ⌘↵, ⌘I and ⌘L | Hold to talk |
+| The microphone button and a lifecycle subscription stop dictation when a draft is handed to send; later results of that dictation are dropped | `sendAs` sends the field | The send path itself stays the composer's (#18): any change to `sendAs` or to the key dispatch is made with #18 |
+| Dictation's failures are notices on the shelf (`onNotice`, with "Try again" and "Dismiss") | Built: the shelf already shows notices with a title, a reason and Try again | No new surface |
 
-Nothing else of the composer changes: its layout, the menus, the send modes, the shelf, drafts and attachments stay as built. The call band lives in `Conversation.tsx`, directly above the composer and under the usage notes (`UsageNotes`), and is not part of the composer.
+Nothing else of the composer changes: its layout, the menus, the send modes, the shelf, drafts, attachments and a failed send's restoration stay as built. The call band lives in `Conversation.tsx`, directly above the composer and under the usage notes (`UsageNotes`), and is not part of the composer.
 
 ## 4. Dictation
 
 ### Choosing the route
 
-The first press opens the consent sheet for dictation, which lists the routes this device has, each a choice row with its sentence (section 2):
+The first press opens the consent sheet for dictation, which lists the routes this device has, each a choice row (one tab stop; arrows, Home, End and Space) with its sentence in full (section 2):
 
-| Device                                                  | Routes listed                                                                                                                                 |
-| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Mac, with a language the recognizer supports on its own | "On this Mac" and "Through Home gateway" (when the gateway's transcription is ready)                                                          |
-| Mac, without one                                        | "Through Home gateway" only, with "On this Mac isn't available for English (United States): this Mac can't recognize it without the network." |
-| Windows                                                 | "Through Home gateway" only, with "Windows has no speech recognition Clawtrate can use without sending your voice to Microsoft."              |
-| iPhone                                                  | "On this iPhone", and "Through Home gateway"                                                                                                  |
-| Neither available                                       | The sheet says "Dictation isn't available here" with the reasons, and offers only "Close". The button is then disabled with the same reason.  |
+| Device | Routes listed |
+|---|---|
+| Mac, with a language the recognizer supports on its own | "On this Mac" and "Through Home gateway" (when the gateway's transcription is ready) |
+| Mac, without one | "Through Home gateway" only, with "On this Mac isn't available for English (United States): this Mac can't recognize it without the network." |
+| Windows | "Through Home gateway" only, with "Windows has no speech recognition Clawtrate can use without sending your voice to Microsoft." |
+| iPhone | "On this iPhone", and "Through Home gateway" |
+| Neither available | The sheet says "Dictation isn't available here" with the reasons, and offers only "Close". |
 
-The choice is kept (section 2) and changed in Settings › Voice.
+The chosen route is kept (section 2) and can be changed in Settings › Voice; that choice is not consent, and each route's destination is accepted on its own.
 
 ### Listening
 
-- The button turns `--danger` with "Stop dictation". The dictation line under the composer's row says "Listening · Microphone on", then where the words go ("On this Mac" or "Through Home gateway").
-- Words not yet final are shown only in the dictation line, after "Not final yet:", in `--text-faint`. Final words go into the field at the caret, through the composer's own `setText`, and take the draft's colour. The built field is a plain `textarea`, so nothing in it is ever a guess. On the gateway route partial and final words are `transcript.delta` and `transcript.done` (research §3); on the device, the recognizer's partial and final results.
-- The text is the draft's: editable, unsent, kept with the draft as typed text is (`writeDraft`, per gateway and task). Dictation never sends, and dictated text opens no "/" or "@" menu.
-- Stopping: the button, ⌘D, Escape, releasing the held key, sending the message (dictation stops, the final words are sent with the rest, and words not yet final are dropped), leaving the task, closing the window, the app going to the background on the iPhone. The region says "Dictation stopped. The text is in your message."
-- The gateway route closes its session with `talk.session.close` when dictation stops, and the gateway closes it anyway when the connection ends or after 30 minutes (research §5). A session that ends while listening keeps the words already in the draft, and the shelf shows the notice "Dictation stopped." with "Home gateway ended it." Dictation is not started again by itself.
+- Dictation uses the route chosen now. The button turns `--danger`. The dictation line under the composer's row says "Listening · Microphone on", then where the words go ("On this Mac" or "Through Home gateway"). On the gateway route it says "Connecting to Home gateway…" until that transcription session's `ready`, and no audio is sent before it.
+- Words not yet final are shown only in the dictation line, after "Not final yet:", in `--text-faint`. Final words edit the current selection in the current task's draft, after every edit typed since, through the composer's own `setText`, and the caret moves after them. The built field is a plain `textarea`, so nothing in it is ever a guess. On the gateway route the final words are `transcript.done` with text; partial words and empty control envelopes are never put in the draft (research §3). On the device, the recognizer's final results.
+- The text is the draft's: editable, unsent, kept with the draft as typed text is (`writeDraft`, per gateway and task). Dictation never sends, and dictated text opens no "/" or "@" menu. Files and chips are left as they are.
+- **Stopping**: the button, ⌘D, Escape, releasing a held key, the cases in section 3, leaving the task, closing the window, the app going to the background on the iPhone. The region says "Dictation stopped. The text is in your message." when final words went in, and "Dictation stopped." when none did. A result that arrives for another task, or for a dictation already stopped by a task change, is dropped.
+- **The gateway route on an ordinary stop** closes its session once (`talk.session.close`) and, while the gateway drains it (up to five seconds), still takes that session's final words into the same draft.
+- **Sending** hands the draft over as built: what is in the field then is sent, and any later result of that dictation is dropped. A failed send follows the built shelf and restores the draft.
+- **A lost connection** on the gateway route stops dictation and keeps the words already in the draft; the shelf says "Dictation stopped." with "Gateway connection lost.", or "Home gateway ended it." only when the gateway's own close event arrived. Dictation never starts again by itself.
 
 ### When dictation can't start
 
 What is known before pressing disables the button with its reason; what is learnt by trying is a notice on the composer's shelf (the built `onNotice`: a title, a reason, "Try again" where trying again can help, and "Dismiss").
 
-| Cause                                                                 | Where                | The words                                                                        | Rests on                                                                                                                                |
-| --------------------------------------------------------------------- | -------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| The gateway's transcription isn't set up, and the device has no route | The button, disabled | "Dictation through Home gateway isn't set up on the gateway."                    | `talk.catalog` `transcription.ready: false`; create answers `UNAVAILABLE` "No realtime transcription provider registered" (research §1) |
-| Not connected (gateway route)                                         | The button, disabled | "Not connected to Home gateway."                                                 | The connection's state                                                                                                                  |
-| The gateway refused                                                   | A notice             | "Couldn't start dictation." and the gateway's message, as text, with "Try again" | The create's error, `MISSING_SCOPE` among them                                                                                          |
-| The microphone refused, or none                                       | A notice             | Section 2's words, with "Try again"                                              | research §4                                                                                                                             |
+| Cause | Where | The words | Rests on |
+|---|---|---|---|
+| No route this device can use | The consent sheet | "Dictation isn't available here", with the reasons | research §3 |
+| The gateway refused | A notice | "Couldn't start dictation." and the gateway's message, as text, with "Try again" | The create's error, `MISSING_SCOPE` among them |
+| The microphone refused, or none | A notice | "Microphone not allowed." with the platform's words (section 2), or "No microphone found.", with "Try again" | research §4 |
+| Speech recognition refused (Apple route) | A notice | "Speech recognition not allowed." with the platform's words, and "Try again" | research §3 |
 
 ## 5. Starting a voice chat
 
