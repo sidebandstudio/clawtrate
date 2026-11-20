@@ -3,6 +3,7 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -181,4 +182,13 @@ it("F-521: an ambiguous config location fails before launching a different accou
   const cli = script(`printf ran > "${log}"\n${success}`);
   expect(await starRepository(cli)).toBe(false);
   expect(existsSync(log)).toBe(false);
+});
+
+it("F-521: a local link is resolved before the following parent component", async () => {
+  mkdirSync(join(dir, "nested", "child"), { recursive: true });
+  const correct = join(dir, "nested", "program");
+  writeFileSync(correct, "#!/bin/sh\n" + success, { mode: 0o700 });
+  symlinkSync(join(dir, "nested", "child"), join(dir, "redirect"));
+  symlinkSync("redirect/../program", gh);
+  expect(await starRepository(findGitHubCli([gh]))).toBe(true);
 });

@@ -7,7 +7,7 @@ import {
   statSync,
   type BigIntStats,
 } from "node:fs";
-import { dirname, join, parse, resolve, sep, win32 } from "node:path";
+import { dirname, isAbsolute, join, parse, sep, win32 } from "node:path";
 
 export function installLocations(platform = process.platform, env = process.env): string[] {
   if (platform === "darwin")
@@ -34,22 +34,46 @@ function localPath(path: string): boolean {
       /^[a-z]:\\/i.test(path) &&
       parse(path).root.toLowerCase() === parse(process.env.SystemRoot ?? "").root.toLowerCase()
     );
-  return path.startsWith("/") && !/^\/(?:\/|(?:Volumes|Network|net|automount)(?:\/|$))/.test(path);
+  return (
+    path.startsWith("/") &&
+    !/^\/(?:\/|(?:(?:System\/Volumes\/Data\/)?(?:Volumes|Network|net|automount)|private\/(?:Network|net|automount))(?:\/|$))/i.test(
+      path,
+    )
+  );
 }
 
-// Inspect links before following them, including links in the parent directories.
-function canonicalFile(path: string, links = 0): string | null {
-  if (!localPath(path) || links > 40) return null;
+// Walk each link before taking the next component, including ".." in a link target.
+function canonicalFile(path: string): string | null {
+  if (!localPath(path)) return null;
   const { root } = parse(path);
-  const parts = path.slice(root.length).split(sep).filter(Boolean);
+  let parts = path.slice(root.length).split(sep);
   let current = root;
-  for (const [i, part] of parts.entries()) {
-    current = join(current, part);
-    if (lstatSync(current).isSymbolicLink()) {
-      const target = readlinkSync(current);
-      if (target.startsWith("//") || target.startsWith("\\\\")) return null;
-      return canonicalFile(resolve(dirname(current), target, ...parts.slice(i + 1)), links + 1);
+  let links = 0;
+  while (parts.length) {
+    const part = parts.shift()!;
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      current = dirname(current);
+      continue;
     }
+    current = join(current, part);
+    if (!localPath(current)) return null;
+    if (!lstatSync(current).isSymbolicLink()) continue;
+    if (++links > 40) return null;
+    const target = readlinkSync(current);
+    if (
+      target.startsWith("//") ||
+      target.startsWith("\\\\") ||
+      (process.platform === "win32" && /^[a-z]:(?!\\)/i.test(target))
+    )
+      return null;
+    current = dirname(current);
+    if (isAbsolute(target)) {
+      if (!localPath(target)) return null;
+      current = parse(target).root;
+    }
+    const targetParts = target.slice(parse(target).root.length).split(sep);
+    parts = [...targetParts, ...parts];
   }
   return current;
 }
