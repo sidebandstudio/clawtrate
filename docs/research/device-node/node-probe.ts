@@ -705,6 +705,8 @@ async function roleCredential() {
   say("X as a node with only its operator token:", "conn" in bare ? { hello: bare.conn.hello } : { code: (bare.refused.details as Record<string, unknown>)?.code });
   const writer = await operator("writer", ["read", "write"]);
   say("setupCode at read and write:", await tryCall(writer, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false }).then((r) => ({ ok: r.ok, error: r.error })));
+  const noUrl = await tryCall(admin, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false });
+  say("setupCode at admin with no publicUrl:", { ok: noUrl.ok, error: noUrl.error, code: noUrl.code });
   const minted = await tryCall(admin, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false, publicUrl: url });
   const m = (minted.result ?? {}) as Record<string, unknown>;
   say("setupCode at admin:", minted.ok ? { keys: Object.keys(m), access: m.access, auth: m.auth, expiresInS: Math.round((Number(m.expiresAtMs) - Date.now()) / 1000) } : minted);
@@ -760,6 +762,22 @@ async function roleCredential() {
   const nAgain = await node("N-own-key", n, { shared: false });
   say("(b) reconnect with its node device token only:", "conn" in nAgain ? { hello: nAgain.conn.hello } : { code: (nAgain.refused.details as Record<string, unknown>)?.code });
   if ("conn" in nAgain) await nAgain.conn.close();
+  // Stop and remove: the node's pairing is removed while it is stopped; then its saved token is tried.
+  const mk = identity();
+  const fifth = await tryCall(admin, "device.pair.setupCode", { bootstrapProfile: "node", includeQr: false, publicUrl: url });
+  const token5 = String(JSON.parse(Buffer.from(String((fifth.result as Record<string, unknown>).setupCode), "base64url").toString("utf8")).bootstrapToken);
+  secrets.push(token5);
+  const mFirst = await node("M-remove", mk, { bootstrap: token5 });
+  if ("conn" in mFirst) await mFirst.conn.close();
+  const mBack = await node("M-remove", mk, { shared: false });
+  say("(c) stopped, then reconnected on its saved node token:", "conn" in mBack ? { hello: mBack.conn.hello } : { code: (mBack.refused.details as Record<string, unknown>)?.code });
+  if ("conn" in mBack) await mBack.conn.close();
+  say("(c) admin removes the stopped node:", await tryCall(admin, "node.pair.remove", { nodeId: mk.deviceId }).then((r) => ({ ok: r.ok, error: r.error })));
+  say("(c) node.describe after removal:", await tryCall(admin, "node.describe", { nodeId: mk.deviceId }).then((r) => (r.ok ? "listed" : r.error)));
+  say("(c) on the gateway after removal:", devicesList().filter((d) => d.deviceId === short(mk.deviceId)));
+  const mAfter = await node("M-remove", mk, { shared: false });
+  say("(c) its saved node token after removal:", "conn" in mAfter ? { hello: mAfter.conn.hello } : { code: (mAfter.refused.details as Record<string, unknown>)?.code });
+  if ("conn" in mAfter) await mAfter.conn.close();
   const rv = await tryCall(admin, "device.token.revoke", { deviceId: n.deviceId, role: "node" });
   say("(b) admin revokes its node token:", { ok: rv.ok, error: rv.error });
   const nAfter = await node("N-own-key", n, { shared: false });

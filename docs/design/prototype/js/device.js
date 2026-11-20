@@ -31,7 +31,7 @@
   const TITLE = P ? "This iPhone" : "This Mac";
 
   // Kept from one state to the next; everything else is per state.
-  const KEEP = ["theme", "width", "motion", "chrome", "access", "link", "app", "own", "local", "prior", "allowed", "off", "devname", "taskname", "to", "note", "task", "from", "dev", "msg"];
+  const KEEP = ["theme", "width", "motion", "chrome", "access", "link", "app", "own", "local", "prior", "allowed", "off", "devname", "taskname", "to", "note", "task", "from", "dev", "msg", "omit"];
   const go = (to, extra = {}) => {
     const next = new URLSearchParams();
     for (const key of KEEP) if (params.get(key) !== null) next.set(key, params.get(key));
@@ -169,7 +169,7 @@
     return defaults[id] || "undecided";
   }
   // What the gateway listed for an app: listed or notlisted.
-  const gatewayOf = (id) => (OWN_APPS.includes(id) ? (id === chosen && params.get("own") === "listed" ? "listed" : "notlisted") : "listed");
+  const gatewayOf = (id) => (list("omit").includes(id) ? "notlisted" : OWN_APPS.includes(id) ? (id === chosen && params.get("own") === "listed" ? "listed" : "notlisted") : "listed");
 
   const without = (key, id) => list(key).filter((x) => x !== id).join(",") || null;
   const withId = (key, id) => [...new Set([...list(key), id])].join(",");
@@ -264,7 +264,7 @@
       state ||
       (phone
         ? `<p class="d-state" data-tone="ok">Connected while Clawtrate is open.<small>The gateway last saw it at 5:31 PM (connect).</small></p>`
-        : `<p class="d-state" data-tone="ok">Connected as a device for bots since 5:31 PM.</p>`);
+        : `<p class="d-state" data-tone="ok" data-facts>This host's node socket has a hello.<small>The gateway listed ${esc(MAC)} (bots) as connected at 5:31 PM.</small></p>`);
     return (
       `<div class="d-switch-row"><h4>Let bots use this ${what}</h4>${sw(true, go(phone ? "phone-stop" : "mac-stop"), `Let bots use this ${what}`)}` +
       `<p>Bots, and other devices connected to the gateway with write access, can send this ${what} requests for the apps you allow below. Clawtrate asks you before an app's first use.</p></div>` +
@@ -304,34 +304,59 @@
       `<p class="s-host-caption">The app's own dialog, not part of the page (a stand-in for the native dialog)</p>` +
       `<div class="s-host-body"><img src="${logo}" alt="" width="40" height="40" /><div>` +
       `<h2 id="s-host-title" tabindex="-1">Let bots on ${GATEWAY} use this ${what}?</h2><div id="s-host-detail" class="s-host-detail">` +
-      `<p>Clawtrate asks the gateway for a one-time sign-in for this ${what} as a device for bots, and uses it at once. Because you hold admin access, the gateway pairs it without asking anyone else.</p>` +
+      `<p>Clawtrate will ask the connected gateway for a one-time sign-in for this ${what} as a device for bots. The next screen shows what the gateway listed.</p>` +
       `<p>It offers ${apps}. Clawtrate asks you before an app's first use; once you allow an app, later requests for it are answered without asking, until you turn it off.</p></div>` +
       `</div></div><div class="s-host-buttons"><a class="button" data-size="sm" href="${go(phone ? "phone-off" : "mac-off")}" data-host-cancel>Cancel</a>` +
       `<a class="button" data-variant="primary" data-size="sm" href="${go(phone ? "phone-steps" : "mac-steps")}" data-host-confirm>Let bots use this ${what}</a></div></div></div>`
     );
   };
 
+  // Turning on: each step's done mark follows its own simulated read (`at`); `fail` picks what a read showed.
   function stepsPage(phone) {
     const what = phone ? "iPhone" : "Mac";
+    const here = phone ? "phone-steps" : "mac-steps";
     const fail = params.get("fail");
-    const s1 = fail === "code" ? "failed" : "done";
-    const s2 = fail === "code" ? "waiting" : fail === "pair" ? "failed" : "done";
-    const s3 = fail === "code" || fail === "pair" ? "waiting" : fail === "extra" ? "failed" : "running";
+    const at = Number(params.get("at") || 0);
+    const failedAt = { code: 1, codeother: 1, hello: 2, pair: 2, read: 3, pending: 3, extra: 3 }[fail] || 0;
+    const state = (n) => (failedAt === n ? "failed" : failedAt ? (n < failedAt ? "done" : "waiting") : at >= n ? "done" : at + 1 === n ? "running" : "waiting");
+    const retry = (label = "Try again") => `<div class="d-actions">${act(label, go(here, { fail: null, at: null }), { variant: "primary", attrs: "data-retry" })}</div>`;
+    const declared = phone ? ["calendar.events", "contacts.search", "location.get", "reminders.list"] : ["location.get", "contacts.search", "calendar.events", "reminders.list"];
     const after =
       fail === "code"
-        ? note("danger", `The gateway didn't give this ${what} a device sign-in: it needs admin access.`, "The switch is off.")
-        : fail === "pair"
-          ? note("danger", `The gateway didn't pair this ${what} with the code.`, "Its reason: <code>PAIRING_REQUIRED (role-upgrade)</code>.") +
-            `<div class="d-actions">${act("Try again", go(phone ? "phone-steps" : "mac-steps", { fail: null }), { variant: "primary", attrs: "data-retry" })}</div>`
-          : fail === "extra"
-            ? note("danger", `The gateway lists commands this ${what} doesn't offer. Clawtrate disconnected it.`, "Listed: <code>system.run</code>.")
-            : proto(link("The read-back agrees", go(phone ? "phone-on" : "mac-on", { said: `This ${what} can be used by bots` })), link("The read-back lists an extra command", go(phone ? "phone-steps" : "mac-steps", { fail: "extra" })), link("The code doesn't pair it", go(phone ? "phone-steps" : "mac-steps", { fail: "pair" })));
+        ? note("danger", `The gateway didn't give this ${what} a device sign-in: it needs admin access.`, "")
+        : fail === "codeother"
+          ? note("danger", `Couldn't get this ${what}'s device sign-in.`, "The gateway said: <code>pairing setup needs a gateway address it can reach</code>.") + retry()
+          : fail === "hello"
+            ? note("danger", `This ${what} stopped trying to connect. The gateway pairing couldn't be confirmed.`, "") + retry()
+            : fail === "pair"
+              ? note("danger", `The gateway didn't pair this ${what} with the code.`, "Its reason: <code>PAIRING_REQUIRED (role-upgrade)</code>.") + retry()
+              : fail === "read"
+                ? note("danger", "Couldn't read what the gateway lists.", `Requests to this ${what} wait until it is read.`) + retry("Check again")
+                : fail === "pending"
+                  ? note("warn", `This ${what}'s commands wait for approval.`, `Pending: <code>${declared[2]}</code>, <code>${declared[3]}</code>.`) +
+                    `<div class="d-actions">${act("Approve its commands", go(here, { fail: null, at: "2" }), { variant: "primary", attrs: "data-approve-own" })}</div>`
+                  : fail === "extra"
+                    ? note("danger", `The gateway lists commands this ${what} doesn't offer. Clawtrate disconnected it.`, "Listed: <code>system.run</code>.")
+                    : at === 0
+                      ? proto(link("The gateway answers with a node code", go(here, { at: "1" })), link("Answer: needs admin", go(here, { fail: "code" })), link("Answer: another refusal", go(here, { fail: "codeother" })))
+                      : at === 1
+                        ? proto(link("The node's hello arrives", go(here, { at: "2" })), link("No hello", go(here, { fail: "hello" })), link("The code doesn't pair it", go(here, { fail: "pair" })))
+                        : params.get("subset") === "1"
+                          ? note("warn", `The gateway listed some of this ${what}'s commands.`, `Not listed: <code>${declared[3]}</code>.`) +
+                            `<div class="d-actions">${act("Finish", go(phone ? "phone-on" : "mac-on", { omit: "reminders", said: `The gateway listed ${phone ? PHONE : MAC} (bots) as connected at 5:31 PM.` }), { variant: "primary", attrs: "data-finish" })}</div>`
+                          : proto(
+                              link("The read-back agrees", go(phone ? "phone-on" : "mac-on", { said: `The gateway listed ${phone ? PHONE : MAC} (bots) as connected at 5:31 PM.` })),
+                              link("It lists a strict subset", go(here, { at: "2", subset: "1" })),
+                              link("It can't be read", go(here, { fail: "read" })),
+                              link("The commands wait for approval", go(here, { fail: "pending" })),
+                              link("It lists an extra command", go(here, { fail: "extra" })),
+                            );
     return (
-      `<div class="d-switch-row"><h4>Let bots use this ${what}</h4>${sw(fail ? false : true, "", `Let bots use this ${what}`, true)}<p>Turning on. Each step is done only when the gateway's answer shows it.</p></div>` +
+      `<div class="d-switch-row"><h4>Let bots use this ${what}</h4>${sw(false, "", `Let bots use this ${what}`, true)}<p>Turning on. Each step is done only when the gateway's answer shows it.</p></div>` +
       steps([
-        [`Getting this ${what}'s device sign-in`, s1, s1 === "done" ? "The gateway answered with a code for the node role only." : ""],
-        ["Connecting as a device for bots", s2, s2 === "done" ? "Its hello says role node." : ""],
-        ["Reading back what the gateway lists", s3, s3 === "running" ? "Waiting for paired, approved, connected, and commands this " + what + " declared." : ""],
+        [`Getting this ${what}'s device sign-in`, state(1), state(1) === "done" ? "The gateway answered with a usable code for the node role only, for this gateway's address." : ""],
+        ["Connecting as a device for bots", state(2), state(2) === "done" ? "Its hello says role node." : ""],
+        ["Reading back what the gateway lists", state(3), state(3) === "running" ? `Waiting for paired, approved, connected, and commands this ${what} declared.` : ""],
       ]) +
       after
     );

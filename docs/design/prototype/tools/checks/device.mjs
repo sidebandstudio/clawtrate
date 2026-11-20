@@ -97,19 +97,54 @@ await p.close();
 p = await open("screen=phone-off&access=read", phone);
 check("below admin on the iPhone: the switch is unavailable too", (await p.locator(".b-switch").getAttribute("aria-disabled")) === "true");
 await p.close();
-await walk("turning on with admin: the host's dialog, three read-backs, on", "screen=mac-off", [
-  [sw, "mac-confirm", ["Let bots on devbox use this Mac?", "one-time sign-in", "Because you hold admin access, the gateway pairs it without asking anyone else.", "location.get", "calendar.events"]],
-  [click("[data-host-confirm]"), "mac-steps", ["Getting this Mac's device sign-in", "a code for the node role only", "Connecting as a device for bots", "Its hello says role node.", "Reading back what the gateway lists"]],
-  [link("The read-back agrees"), "mac-on", ["Connected as a device for bots since 5:31 PM."]],
+const stepStates = (p) => p.evaluate(() => [...document.querySelectorAll(".s-steps li")].map((li) => li.dataset.state).join(","));
+const switchOff = (p) => p.evaluate(() => document.querySelector(".b-switch").getAttribute("aria-checked") === "false");
+for (const [dev, start, steps, onWords] of [
+  ["Mac", "mac-off", "mac-steps", ["This host's node socket has a hello.", "The gateway listed Studio Mac (bots) as connected at 5:31 PM."]],
+  ["iPhone", "phone-off", "phone-steps", []],
+]) {
+  await walk(`turning on the ${dev} with admin: the dialog, each done mark after its own read, on`, `screen=${start}`, [
+    [sw, start.replace("off", "confirm"), [`Let bots on devbox use this ${dev}?`, `Clawtrate will ask the connected gateway for a one-time sign-in for this ${dev} as a device for bots. The next screen shows what the gateway listed.`]],
+    [click("[data-host-confirm]"), steps],
+    [async (p) => check(`${dev}, connecting: the switch is not checked, and only the first read is running`, (await switchOff(p)) && (await stepStates(p)) === "running,waiting,waiting"), null],
+    [link("The gateway answers with a node code"), steps, ["The gateway answered with a usable code for the node role only, for this gateway's address."]],
+    [async (p) => check(`${dev}: after the code's read, step 1 done and step 2 running`, (await switchOff(p)) && (await stepStates(p)) === "done,running,waiting"), null],
+    [link("The node's hello arrives"), steps, ["Its hello says role node."]],
+    [async (p) => check(`${dev}: after the hello, step 2 done and step 3 running`, (await switchOff(p)) && (await stepStates(p)) === "done,done,running"), null],
+    [link("The read-back agrees"), start.replace("off", "on"), onWords],
+  ], dev === "iPhone" ? phone : {});
+}
+p = await open("screen=mac-confirm");
+check("the host's dialog makes no promise about the gateway's pairing before its read", !(await text(p)).includes("pairs it without asking anyone else"));
+await p.close();
+p = await open("screen=mac-steps&fail=code");
+check("a missing-admin answer: only it says admin is needed; the switch stays off", (await text(p)).includes("The gateway didn't give this Mac a device sign-in: it needs admin access.") && (await switchOff(p)));
+await p.close();
+p = await open("screen=mac-steps&fail=codeother");
+check("any other code failure: couldn't get the sign-in, with the gateway's reason as text, and no admin claim", !missing(await text(p), ["Couldn't get this Mac's device sign-in.", "pairing setup needs a gateway address it can reach"]) && !(await text(p)).includes("needs admin access") && (await switchOff(p)) && (await p.locator("[data-retry]").count()) === 1);
+await p.close();
+p = await open("screen=mac-steps&fail=hello");
+check("a lost hello: the attempt is closed, pairing unconfirmed, Try again", (await text(p)).includes("This Mac stopped trying to connect. The gateway pairing couldn't be confirmed.") && (await p.locator("[data-retry]").count()) === 1 && (await stepStates(p)) === "done,failed,waiting");
+await p.close();
+p = await open("screen=mac-steps&fail=read");
+check("an unavailable first read: couldn't read, Check again, not on", (await text(p)).includes("Couldn't read what the gateway lists.") && (await p.getByRole("button", { name: "Check again" }).count()) === 1 && (await stepStates(p)) === "done,done,failed");
+await p.close();
+p = await open("screen=mac-steps&fail=pending");
+check("a pending command request shows only the pending commands", await p.evaluate(() => {
+  const n = document.querySelector(".b-note").textContent;
+  return n.includes("calendar.events") && n.includes("reminders.list") && !n.includes("location.get") && !n.includes("contacts.search");
+}));
+await p.close();
+await walk("a strict subset: the omission named, then finished with that subset", "screen=mac-steps&at=2", [
+  [link("It lists a strict subset"), "mac-steps", ["The gateway listed some of this Mac's commands.", "Not listed: reminders.list."]],
+  [click("[data-finish]"), "mac-on"],
+  [async (p) => check("after a subset: Reminders reads Not listed, the others Listed", (await row(p, "reminders").getAttribute("data-gateway")) === "notlisted" && (await row(p, "calendar").getAttribute("data-gateway")) === "listed"), null],
 ]);
 p = await open("screen=mac-confirm");
 check("the host's dialog never says the gateway's owner approves", !/owner approves/.test(await text(p)));
 check("the host's dialog says Allow is ongoing before any app is used", (await text(p)).includes("Clawtrate asks you before an app's first use; once you allow an app, later requests for it are answered without asking, until you turn it off."));
 await p.close();
-await walk("turning on the iPhone: its own dialog, steps, on, then Stop", "screen=phone-off", [
-  [sw, "phone-confirm", ["Let bots on devbox use this iPhone?"]],
-  [click("[data-host-confirm]"), "phone-steps"],
-  [link("The read-back agrees"), "phone-on", ["Connected while Clawtrate is open."]],
+await walk("the iPhone on, then Stop", "screen=phone-on", [
   [sw, "phone-stop", ["Stop letting bots use this iPhone?"]],
   [click("[data-stop]"), "phone-stopped", ["Stopped on this iPhone."]],
 ], phone);
