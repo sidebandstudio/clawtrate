@@ -105,8 +105,11 @@ async function openTask(page: Page, bot: string, task: string) {
     timeout: 20_000,
   });
   // The heading shows while the history is still being read, and a count taken then misses
-  // the task's earlier turns. The read takes seconds on a loaded machine.
-  await expect(page.getByLabel("Loading conversation")).toHaveCount(0, { timeout: 20_000 });
+  // the task's earlier turns; live runs can show before the read ends, too. The read takes
+  // seconds on a loaded machine.
+  await expect(page.getByTestId("transcript")).toHaveAttribute("data-status", "ready", {
+    timeout: 20_000,
+  });
 }
 
 /**
