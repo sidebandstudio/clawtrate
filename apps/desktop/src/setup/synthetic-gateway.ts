@@ -20,6 +20,8 @@ export type SyntheticGateway = {
   port: number;
   /** A one-time code for this gateway: the stand-in's `qr` answer, kept in this process only. */
   mint(now: number): { url: string; bootstrapToken: string; expiresAtMs: number };
+  /** Whether this server still listens, on 127.0.0.1 at `port`: its own socket, asked directly. */
+  ownsListener(port: number): boolean;
   close(): Promise<void>;
 };
 
@@ -126,6 +128,16 @@ export async function startSyntheticGateway(): Promise<SyntheticGateway> {
       const expiresAtMs = now + SYNTHETIC_CODE_MS;
       codes.set(bootstrapToken, expiresAtMs);
       return { url, bootstrapToken, expiresAtMs };
+    },
+    ownsListener(expected) {
+      const address = server.address();
+      return (
+        address !== null &&
+        typeof address === "object" &&
+        address.address === "127.0.0.1" &&
+        address.port === port &&
+        expected === port
+      );
     },
     close: () =>
       new Promise<void>((resolve) => {

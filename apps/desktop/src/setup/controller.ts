@@ -164,15 +164,26 @@ export class SetupController implements SetupHost {
       if (attempt === this.attempt && this.state.phase === "looking")
         this.publish({ ...this.state, slow: true });
     }, SLOW_LOOK_MS);
+    let refusal: SetupRefusedError | null = null;
     const report = await lookHere(opened.world, opened.run, {
       identify: opened.identify,
+      ...(opened.assertActive ? { checkActive: opened.assertActive } : {}),
       onStep: (step) => {
         if (attempt === this.attempt && this.state.phase === "looking")
           this.publish({ ...this.state, step });
       },
       cancelled: () => attempt !== this.attempt,
-    }).catch(() => null);
+    }).catch((error: unknown) => {
+      // A sandbox that stopped passing mid-look is a refusal, not an answer of the wrong shape.
+      if (error instanceof SetupRefusedError) refusal = error;
+      return null;
+    });
     if (attempt !== this.attempt) return;
+    if (refusal) {
+      this.clearSlow();
+      this.refused(refusal);
+      return;
+    }
     this.clearSlow();
     if (!report) {
       this.publish({
@@ -199,6 +210,13 @@ export class SetupController implements SetupHost {
       ? await this.options.client.deviceAccess(report.found.url).catch(() => "new" as const)
       : null;
     if (attempt !== this.attempt) return;
+    try {
+      opened.assertActive?.();
+    } catch (error) {
+      this.found = null;
+      this.refused(error);
+      return;
+    }
     this.publish({
       ...initialSetupState,
       phase: "found",
@@ -309,12 +327,39 @@ export class SetupController implements SetupHost {
       return;
     }
     this.publish({ ...this.state, phase: "connecting", step: 0, failure: null });
+    try {
+      await this.connectOpened(attempt, opened, found, expired);
+    } catch (error) {
+      // A sandbox that stopped passing: refused in fixed words, and setup's own connection closed.
+      if (!(error instanceof SetupRefusedError)) throw error;
+      if (attempt === this.attempt) {
+        this.stopWatching();
+        void this.closeOwned();
+        this.refused(error);
+      }
+    }
+  }
+
+  /** Connect after the dialog, on an opened world: throws `SetupRefusedError`. */
+  private async connectOpened(
+    attempt: number,
+    opened: Opened,
+    found: FoundGateway,
+    expired: () => boolean,
+  ): Promise<void> {
     const client = this.options.client;
+    const changedNow = () => {
+      if (attempt === this.attempt) this.fail({ kind: "changed" });
+    };
+    // After the dialog: the same listener, before anything else.
+    if (!this.sameListener(opened, found)) return changedNow();
     await this.letGo();
     // A setup cancelled while the earlier connection was let go starts nothing more.
     if (attempt !== this.attempt) return;
+    if (!this.sameListener(opened, found)) return changedNow();
     const paired = await client.hasDeviceToken(found.url);
     if (attempt !== this.attempt) return;
+    if (!this.sameListener(opened, found)) return changedNow();
     // The facts are read again after every wait that can be long, and the consent's two
     // minutes hold on every branch: anything other than what the dialog named, and nothing runs.
     const changed = async () => !(await this.unchanged(opened, found)) || expired();
@@ -323,8 +368,19 @@ export class SetupController implements SetupHost {
       return;
     }
     if (attempt !== this.attempt) return;
-    // Every socket the client opens for this, retries included, finds the same listener first.
-    const listening = () => this.sameListener(opened, found);
+    // Every socket the client opens for this, retries included, finds the same listener first;
+    // a sandbox that stopped passing then is refused, and the client opens nothing.
+    const listening = () => {
+      try {
+        return this.sameListener(opened, found);
+      } catch (error) {
+        if (attempt === this.attempt) {
+          this.stopWatching();
+          this.refused(error);
+        }
+        return false;
+      }
+    };
     if (paired) {
       // A saved pairing for this address: reused, asking for read alone (§7).
       this.publish({ ...this.state, step: 1 });
@@ -359,8 +415,22 @@ export class SetupController implements SetupHost {
     await client.connectWithSetupCode(code, { check: listening });
   }
 
-  /** The same process, by PID and start time, still listens where the look found the gateway. */
+  /**
+   * The same process, by PID and start time, still listens where the look
+   * found the gateway; in a sandbox, the description still passes (it throws
+   * the refusal otherwise) and the host's own synthetic gateway still owns
+   * the listener at exactly that endpoint.
+   */
   private sameListener(opened: Opened, found: FoundGateway): boolean {
+    opened.assertActive?.();
+    if (
+      opened.world.kind === "sandbox" &&
+      (found.listener.pid !== process.pid ||
+        found.url !== `ws://127.0.0.1:${found.port}` ||
+        !opened.world.portAllowed(found.port) ||
+        !opened.ownsListener?.(found.port))
+    )
+      return false;
     const now = opened.identify(found.listener.pid);
     return now.state === "alive" && now.identity === found.listener.started;
   }

@@ -711,11 +711,13 @@ describe("the sandbox: a run's description, its folder and its proven instance",
         env: {},
       },
     ]);
-    // The description, the instance's marker and this checkout's run record: nothing else is read.
+    // The description, the instance's marker, this checkout's run record, and the description
+    // again once the run is proven: nothing else is read.
     expect(s.files.reads).toEqual([
       s.file,
       join(s.mine.stateDir, MARKER_FILE),
       join(s.checkout, "tools/dev-gateway/.run/instances/su1-test/state.json"),
+      s.file,
     ]);
     expect(s.processes.asked).toEqual([fake.GATEWAY_PID]);
     // A development instance's port is never one Connect may use.

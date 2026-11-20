@@ -466,6 +466,8 @@ export type StandInOptions = {
   prove: () => RunProof;
   /** The pairing scenario's gateway, started on its first use. */
   gateway: () => Promise<SyntheticGateway>;
+  /** Throws the refusal once the description no longer is the one this run validated. */
+  assertActive?: () => void;
   /** The host's log: fixed lines only. */
   log?: (line: string) => void;
   now?: () => number;
@@ -483,7 +485,10 @@ export function standIn(options: StandInOptions): RunProgram {
   const version =
     description.scenario === "untested-version" ? UNTESTED_VERSION : TESTED_OPENCLAW_VERSION;
   const now = options.now ?? Date.now;
+  const active = options.assertActive ?? (() => {});
   return async (request) => {
+    // A description gone or changed refuses, in fixed words, before any answer.
+    active();
     const args = request.args;
     if (
       request.program !== STAND_IN_PROGRAM ||
@@ -496,15 +501,13 @@ export function standIn(options: StandInOptions): RunProgram {
     if (command === "--version") return answer(`OpenClaw ${version}\n`);
     if (command === "config get gateway.auth.mode --json") return answer('"token"\n');
     if (command === "gateway status --json") {
-      let proof: RunProof;
-      try {
-        proof = options.prove();
-      } catch {
-        return refusal();
-      }
+      // A run that stops proving refuses, in fixed words: never a quiet failed answer.
+      const proof = options.prove();
       if (description.scenario === "pairing") {
         const gateway = await options.gateway();
-        // The synthetic gateway listens in this process.
+        active();
+        // The synthetic gateway listens in this process, while its own socket says so.
+        if (!gateway.ownsListener(gateway.port)) return refusal();
         return answer(
           statusJson({
             ...proof,
@@ -522,7 +525,8 @@ export function standIn(options: StandInOptions): RunProgram {
     }
     if (description.scenario === "pairing" && args[2] === "qr" && args.length === 7) {
       const gateway = await options.gateway();
-      if (args[6] !== gateway.url) return refusal();
+      active();
+      if (args[6] !== gateway.url || !gateway.ownsListener(gateway.port)) return refusal();
       const code = gateway.mint(now());
       options.log?.("[setup] The stand-in made a one-time code for the synthetic gateway.");
       return answer(
@@ -568,8 +572,19 @@ export function sandboxWorld(
   };
 }
 
-/** What the look and Connect run against, and how they identify a listening process. */
-export type Opened = { world: LookWorld; run: RunProgram; identify: Identify };
+/**
+ * What the look and Connect run against, and how they identify a listening
+ * process. A sandbox also says, at every step, whether its description still
+ * is the one the run validated (`assertActive` throws the refusal) and, for
+ * the pairing scenario, whether its synthetic gateway still owns the listener.
+ */
+export type Opened = {
+  world: LookWorld;
+  run: RunProgram;
+  identify: Identify;
+  assertActive?: () => void;
+  ownsListener?: (port: number) => boolean;
+};
 
 /**
  * Opens a validated sandbox for one look or one Connect: the description
@@ -577,6 +592,8 @@ export type Opened = { world: LookWorld; run: RunProgram; identify: Identify };
  */
 export function sandboxOpener(options: {
   file: string;
+  /** The description as the launch validated it at startup: what every later check compares to. */
+  sandbox?: ValidatedSandbox;
   platform: NodeJS.Platform;
   context: SandboxContext & ProofContext;
   startGateway: () => Promise<SyntheticGateway>;
@@ -584,21 +601,44 @@ export function sandboxOpener(options: {
 }): { open: () => Promise<Opened | SetupRefusedError>; close: () => Promise<void> } {
   let gateway: Promise<SyntheticGateway> | null = null;
   const pairingGateway = () => (gateway ??= options.startGateway());
+  let baseline: ValidatedSandbox | null = options.sandbox ?? null;
+  // Once the description is seen gone or changed, this run refuses from then on, whatever
+  // is put at that path later.
+  let invalid: SetupRefusedError | null = null;
+  const assertActive = () => {
+    if (invalid) throw invalid;
+    try {
+      const current = validateSandbox(options.file, options.context);
+      if (baseline === null) baseline = current;
+      const a = baseline.description;
+      const b = current.description;
+      if (a.instance !== b.instance || a.run !== b.run || a.scenario !== b.scenario)
+        throw new SetupRefusedError("file");
+    } catch (error) {
+      invalid = error instanceof SetupRefusedError ? error : new SetupRefusedError("file");
+      throw invalid;
+    }
+  };
   const open = async (): Promise<Opened | SetupRefusedError> => {
     try {
-      const sandbox = validateSandbox(options.file, options.context);
+      assertActive();
+      const sandbox = baseline!;
       const prove = () => proveRun(sandbox.description, options.context);
       const proof = prove();
       const pairing = sandbox.description.scenario === "pairing";
-      const port = pairing ? (await pairingGateway()).port : null;
+      const server = pairing ? await pairingGateway() : null;
+      assertActive();
       return {
-        world: sandboxWorld(sandbox, options.platform, proof, port),
+        world: sandboxWorld(sandbox, options.platform, proof, server?.port ?? null),
         identify: options.context.identify ?? processIdentity,
+        assertActive,
+        ...(server ? { ownsListener: (port: number) => server.ownsListener(port) } : {}),
         run: standIn({
           sandbox,
           platform: options.platform,
           prove,
           gateway: pairingGateway,
+          assertActive,
           ...(options.log ? { log: options.log } : {}),
         }),
       };

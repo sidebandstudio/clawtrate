@@ -134,13 +134,15 @@ async function findProgram(world: LookWorld): Promise<string | null> {
 }
 
 /** Other profiles' state folders in the home folder, by name only: folders, never opened. */
-async function otherProfiles(world: LookWorld): Promise<string[]> {
+async function otherProfiles(world: LookWorld, active: () => void): Promise<string[]> {
   let entries: string[];
   try {
     entries = await readdir(world.home);
   } catch {
     return [];
   }
+  // Nothing more is looked at once the sandbox no longer passes.
+  active();
   const known = new Set(world.profiles.flatMap((profile) => [profile.name, "clawtrate"]));
   const names: string[] = [];
   for (const entry of entries) {
@@ -168,6 +170,11 @@ export type LookOptions = {
   cancelled?: () => boolean;
   /** A process's start time, to identify a gateway's listener; `ps` by default. */
   identify?: Identify;
+  /**
+   * A sandbox's check that its description still is the one the run validated:
+   * throws the refusal. Asked before the file checks and after every wait.
+   */
+  checkActive?: () => void;
 };
 
 /** Whether a program couldn't be started at all: spawn failed, or the system said it can't run it. */
@@ -182,6 +189,8 @@ export async function lookHere(
   const cancelled = options.cancelled ?? (() => false);
   options.onStep?.(0);
   if (world.platform === "win32") return { look: { ...empty, outcome: "windows" }, found: null };
+  const active = options.checkActive ?? (() => {});
+  active();
 
   // Every file check of the look is started now, under one deadline, before any program runs.
   const files = Date.now() + FILE_CHECK_MS;
@@ -200,12 +209,13 @@ export async function lookHere(
     files,
   );
   presence.catch(() => {});
-  const folderNames = withDeadline(otherProfiles(world), files).catch(() => [] as string[]);
+  const folderNames = withDeadline(otherProfiles(world, active), files).catch(() => [] as string[]);
   let program: string | null;
   try {
     program = world.installed
       ? world.installed.program
       : await withDeadline(findProgram(world), files);
+    active();
     if (!program) {
       // A sandbox answers from its scenario: no file is checked.
       const setUp = world.installed
@@ -216,6 +226,7 @@ export async function lookHere(
               files,
             )
           ).some(Boolean);
+      active();
       return {
         look: { ...empty, outcome: setUp ? "program-missing" : "not-found" },
         found: null,
@@ -243,6 +254,7 @@ export async function lookHere(
   if (!first) return { look: { ...empty, outcome: "not-found" }, found: null };
   const versionRun = await runFor(first, ["--version"], LIMITS.version);
   if (cancelled()) return null;
+  active();
   if (couldNotRun(versionRun)) return { look: { ...empty, outcome: "cant-run" }, found: null };
   if (versionRun.timedOut) return { look: cantTell("timeout"), found: null };
   const programVersion = versionRun.exitCode === 0 ? parseVersionLine(versionRun.stdout) : null;
@@ -252,6 +264,7 @@ export async function lookHere(
   let considered: LookProfile[];
   try {
     const present = await presence;
+    active();
     considered = world.profiles.filter((_, index) => present[index]);
   } catch (error) {
     if (error instanceof FileCheckTimeout) return { look: cantTell("timeout"), found: null };
@@ -282,12 +295,14 @@ export async function lookHere(
   );
   const deepRun = await deep;
   if (cancelled()) return null;
+  active();
   const services =
     deepRun && deepRun.exitCode === 0 ? (parseExtraServices(deepRun.stdout) ?? []) : [];
   // A required program that couldn't start is its own result.
   if (looks.some((look) => look.kind === "cant-run"))
     return { look: { ...empty, outcome: "cant-run" }, found: null };
   const folders = await folderNames;
+  active();
   const others = [...services.map((label) => `service ${label}`), ...folders].slice(
     0,
     MAX_LOOK_OTHERS,
@@ -298,6 +313,7 @@ export async function lookHere(
   const shared = new Set(ports.filter((port, index) => ports.indexOf(port) !== index));
   const identify = options.identify ?? processIdentity;
   const programIdentity = world.installed ? "stand-in" : await fileIdentity(program);
+  active();
   const results = considered.map((profile, index) => {
     const look = looks[index]!;
     if (look.kind === "status" && shared.has(look.status.port))

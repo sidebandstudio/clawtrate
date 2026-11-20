@@ -4801,27 +4801,13 @@ export class ClawtrateClient {
           }
           throw new GatewayNotAllowedError(settings.url);
         }
-        // A setup connection opens no socket once its endpoint stops passing the host's check.
-        const setupCheck = this.setupCheck;
-        if (setupCheck?.url === settings.url && !setupCheck.check()) {
-          this.setupCheck = null;
-          this.setupCode = null;
-          if (generation === this.generation) {
-            this.setConnection({
-              status: "error",
-              retryAt: null,
-              error: {
-                code: SETUP_ENDPOINT_CHANGED,
-                message: "The gateway on this computer changed, so Clawtrate didn't connect.",
-                hint: null,
-              },
-            });
-          }
-          throw new Error("the setup connection's endpoint changed");
-        }
         this.attemptGreeted = false;
         // An attempt is under way: no retry is waiting any more.
         if (this.state.connection.retryAt !== null) this.setConnection({ retryAt: null });
+        // A setup connection opens no socket once its endpoint stops passing the host's check,
+        // asked last, with nothing run between it and the socket.
+        if (this.setupEndpointFails(settings.url, generation))
+          throw new Error("the setup connection's endpoint changed");
         let socket: WebSocketLike;
         try {
           socket = this.host.createWebSocket(settings.url);
@@ -4843,6 +4829,11 @@ export class ClawtrateClient {
       createRequestId: () => this.randomId(),
       buildConnectPlan: async ({ nonce, challengeTs }) => {
         const token = await this.loadToken(settings.url, identity.deviceId, "operator");
+        // After the wait for the token: the setup endpoint still passes, or nothing is signed.
+        if (this.setupEndpointFails(settings.url, generation)) {
+          this.close();
+          throw new Error("the setup connection's endpoint changed");
+        }
         this.heldToken = token?.token ?? null;
         const setup = this.isSetup(settings.url);
         // A setup reuse whose token is gone sends nothing: the person consents again.
@@ -4880,6 +4871,11 @@ export class ClawtrateClient {
           nonce,
           challengeTs: challengeTs ?? null,
         });
+        // After the wait for the signature: the setup endpoint still passes, or nothing is sent.
+        if (this.setupEndpointFails(settings.url, generation)) {
+          this.close();
+          throw new Error("the setup connection's endpoint changed");
+        }
         // The signed payload covers these scopes, so check them before sending.
         if (plan.scopes.join(",") !== requested.join(",")) {
           throw new Error(`refusing to request scopes ${plan.scopes.join(", ")}`);
@@ -4913,6 +4909,11 @@ export class ClawtrateClient {
           const staged = gate.staged;
           if (setupGrant(hello) !== "read" || staged === null || staged.role !== "operator") {
             this.refuseSetupGrant();
+            return;
+          }
+          // Still the setup's endpoint, or no token is kept.
+          if (this.setupEndpointFails(settings.url, generation)) {
+            this.close();
             return;
           }
           // The token stays a credential to take out of gateway text after its staging ends.
@@ -6291,6 +6292,29 @@ export class ClawtrateClient {
   private setConnection(patch: Partial<ConnectionState>): void {
     const scrubbed = this.scrubConnection(patch);
     this.store.update((state) => ({ ...state, connection: { ...state.connection, ...scrubbed } }));
+  }
+
+  /**
+   * Whether the host's check of the setup connection to `url` fails now. Once
+   * it has failed it keeps failing for that connection: its code and staged
+   * reply go, and the connection ends in `SETUP_ENDPOINT_CHANGED`.
+   */
+  private setupEndpointFails(url: string, generation: number): boolean {
+    const setupCheck = this.setupCheck;
+    if (setupCheck?.url !== url || setupCheck.check()) return false;
+    this.setupCheck = { url, check: () => false };
+    this.dropSetupCredentials();
+    if (generation === this.generation)
+      this.setConnection({
+        status: "error",
+        retryAt: null,
+        error: {
+          code: SETUP_ENDPOINT_CHANGED,
+          message: "The gateway on this computer changed, so Clawtrate didn't connect.",
+          hint: null,
+        },
+      });
+    return true;
   }
 
   /** Whether the connection to `url` is the host's setup connection. */

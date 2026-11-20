@@ -12,6 +12,7 @@ import {
 } from "../src/client.ts";
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol";
 import {
+  deferred,
   FakeGateway,
   GatewayError,
   gatedStorage,
@@ -361,6 +362,79 @@ describe("what a setup connection publishes, whatever the gateway sends", () => 
 });
 
 describe("the setup connection's endpoint check", () => {
+  it("S7: retries stop when the setup listener or description no longer passes", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "NOT_PAIRED",
+        message: "device pairing required",
+        details: { code: "PAIRING_REQUIRED", requestId: "e5eb4aa8-175f-40f1-bc7a-8f15cfc40942" },
+      },
+    });
+    const active = { passes: true };
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connectWithSetupCode(
+      { url: URL, bootstrapToken: CODE, expiresAtMs: LATER() },
+      { check: () => active.passes },
+    );
+    await until(() => client.state.connection.status === "pairing");
+    expect(gateway.sockets).toHaveLength(1);
+    active.passes = false;
+    // The pairing's own retry, then the person's.
+    await sleep(3_500);
+    await client.retryNow();
+    await sleep(100);
+    expect(gateway.sockets).toHaveLength(1);
+    expect(client.state.connection.error?.code).toBe(SETUP_ENDPOINT_CHANGED);
+    expect([...storage.data.keys()].filter((key) => key.startsWith("deviceToken:"))).toEqual([]);
+    client.stop();
+  }, 10_000);
+
+  it("S8: removing the description during signing sends no setup credentials", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const active = { passes: true };
+    const signing = deferred<string>();
+    const storage = memoryStorage();
+    const host = testHost(gateway, storage);
+    let signs = 0;
+    const client = new ClawtrateClient(
+      {
+        ...host,
+        signer: {
+          ...host.signer,
+          sign: () => {
+            signs += 1;
+            // The description goes while this device signs the connect.
+            active.passes = false;
+            return signing.promise;
+          },
+        },
+      },
+      FAST,
+    );
+    await client.start();
+    await client.connectWithSetupCode(
+      { url: URL, bootstrapToken: CODE, expiresAtMs: LATER() },
+      { check: () => active.passes },
+    );
+    await until(() => signs === 1);
+    signing.resolve("signature");
+    await until(() => client.state.connection.status === "error");
+    await sleep(100);
+    expect(gateway.connects).toEqual([]);
+    expect(client.state.connection.error?.code).toBe(SETUP_ENDPOINT_CHANGED);
+    expect([...storage.data.keys()].filter((key) => key.startsWith("deviceToken:"))).toEqual([]);
+    expect(everywhere(client, storage)).not.toContain(CODE);
+    client.stop();
+  });
+
   it("F-492: a setup connection opens no socket when the host's check of its listener fails, and sends no code", async () => {
     const gateway = gatewayGranting({
       role: "operator",

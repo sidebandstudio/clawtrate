@@ -7,6 +7,7 @@
 import type * as ChildProcess from "node:child_process";
 import type * as Http from "node:http";
 import type * as Net from "node:net";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ProgramRequest } from "../src/setup/programs.ts";
@@ -74,6 +75,7 @@ const { isLookCommand } = await import("../src/setup/programs.ts");
 const { sandboxOpener, STAND_IN_PROGRAM, UNTESTED_VERSION } =
   await import("../src/setup/sandbox.ts");
 const { SetupRefusedError } = await import("../src/setup/world.ts");
+const { startSyntheticGateway } = await import("../src/setup/synthetic-gateway.ts");
 const fake = await import("./fixtures/sandbox.ts");
 
 const PROFILE = "clawtrate-dev-su1-test";
@@ -96,6 +98,7 @@ function sandbox(scenario?: Scenario) {
   const processes = fake.identities(new Set([fake.GATEWAY_PID, fake.START_PID, process.pid]));
   const minted: string[] = [];
   let started = 0;
+  const listening = { open: true };
   const gateway: SyntheticGateway = {
     url: "ws://127.0.0.1:19980",
     port: 19980,
@@ -107,6 +110,7 @@ function sandbox(scenario?: Scenario) {
         expiresAtMs: now + 60_000,
       };
     },
+    ownsListener: (port) => listening.open && port === 19980,
     close: async () => {},
   };
   const opener = sandboxOpener({
@@ -124,7 +128,7 @@ function sandbox(scenario?: Scenario) {
       return gateway;
     },
   });
-  return { at, run, file, root, processes, opener, minted, started: () => started };
+  return { at, run, file, root, processes, opener, minted, listening, started: () => started };
 }
 
 async function openOrThrow(opener: ReturnType<typeof sandbox>["opener"]) {
@@ -216,7 +220,7 @@ describe("the stand-in for openclaw", () => {
     );
     expect(stopped.rpc).toEqual({ ok: false, url: `ws://127.0.0.1:${s.run.port}` });
     expect(stopped.port.status).toBe("free");
-    // Another run's marker in the instance's folder: no answer at all.
+    // Another run's marker in the instance's folder: a refusal in fixed words, no answer.
     fake.instance({
       home: s.at.home,
       checkout: s.at.checkout,
@@ -224,8 +228,8 @@ describe("the stand-in for openclaw", () => {
       run: fake.runId("e"),
       record: null,
     });
-    expect((await run(ask(["--profile", PROFILE, "gateway", "status", "--json"]))).exitCode).toBe(
-      2,
+    await expect(run(ask(["--profile", PROFILE, "gateway", "status", "--json"]))).rejects.toThrow(
+      SetupRefusedError,
     );
   });
 
@@ -366,5 +370,145 @@ describe("a sandboxed setup, from the look to Connect", () => {
     expect(c.minted).toEqual(["code"]);
     await until(() => c.gateway.connects.length > 0);
     c.client.stop();
+  });
+
+  it("S8: removing a description while Connect waits stops before mint and socket", async () => {
+    const c = controller("pairing");
+    try {
+      await c.setup.look();
+      vi.spyOn(c.client, "hasDeviceToken").mockImplementationOnce(async () => {
+        rmSync(c.file);
+        return false;
+      });
+      await c.setup.connect();
+      expect({
+        failure: c.setup.current.failure,
+        minted: c.minted,
+        sockets: c.gateway.sockets.length,
+      }).toMatchObject({ failure: { kind: "refused", reason: "file" }, minted: [], sockets: 0 });
+      // Once refused, the same description put back at that path doesn't bring the run back.
+      writeFileSync(
+        c.file,
+        JSON.stringify({ instance: c.run.name, run: c.run.run, scenario: "pairing" }),
+        {
+          mode: 0o600,
+        },
+      );
+      await c.setup.look();
+      expect(c.setup.current.failure).toMatchObject({ kind: "refused", reason: "file" });
+    } finally {
+      c.client.stop();
+    }
+  });
+
+  it("S7: a pairing listener closed while the host process lives opens no socket", async () => {
+    const s = sandbox("pairing");
+    const server = await startSyntheticGateway();
+    const gateway = new FakeGateway();
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()));
+    const opener = sandboxOpener({
+      file: s.file,
+      platform: "darwin",
+      context: { ...s.at, platform: "darwin", identify: s.processes.identify },
+      startGateway: async () => server,
+    });
+    const setup = new SetupController({
+      client,
+      open: opener.open,
+      stopPrograms: () => {},
+      confirm: async () => {
+        await server.close();
+        return true;
+      },
+    });
+    try {
+      await setup.look();
+      expect(setup.current.look?.outcome).toBe("running");
+      await setup.connect();
+      expect(gateway.sockets).toHaveLength(0);
+      expect(setup.current.failure?.kind).toBe("changed");
+    } finally {
+      client.stop();
+      await opener.close();
+    }
+  });
+
+  it("a description removed during the look is refused, not an answer of the wrong shape", async () => {
+    const c = controller();
+    vi.spyOn(c.client, "deviceAccess").mockImplementationOnce(async () => {
+      rmSync(c.file);
+      return "new";
+    });
+    await c.setup.look();
+    expect(c.setup.current.failure).toMatchObject({ kind: "refused", reason: "file" });
+    c.client.stop();
+  });
+
+  it("a pairing listener gone just before the socket opens no socket: the client's check asks the server itself", async () => {
+    const c = controller("pairing");
+    const redeem = c.client.connectWithSetupCode.bind(c.client);
+    vi.spyOn(c.client, "connectWithSetupCode").mockImplementationOnce(async (code, setup) => {
+      // Everything was checked; the listener goes as the code is handed over.
+      c.listening.open = false;
+      await redeem(code, setup);
+    });
+    await c.setup.look();
+    await c.setup.connect();
+    await until(() => c.setup.current.phase === "failed");
+    expect(c.minted).toEqual(["code"]);
+    expect(c.gateway.sockets).toHaveLength(0);
+    c.client.stop();
+  });
+
+  it("the pairing scenario's status and code say nothing once its server no longer listens", async () => {
+    const s = sandbox("pairing");
+    const { run } = await openOrThrow(s.opener);
+    s.listening.open = false;
+    expect((await run(ask(["--profile", PROFILE, "gateway", "status", "--json"]))).exitCode).toBe(
+      2,
+    );
+    expect(
+      (
+        await run(
+          ask([
+            "--profile",
+            PROFILE,
+            "qr",
+            "--json",
+            "--voice-node",
+            "--url",
+            "ws://127.0.0.1:19980",
+          ]),
+        )
+      ).exitCode,
+    ).toBe(2);
+    expect(s.minted).toEqual([]);
+  });
+
+  it("a description removed while the look runs ends the look as a refusal", async () => {
+    const s = sandbox();
+    const client = new ClawtrateClient(testHost(new FakeGateway(), memoryStorage()));
+    const setup = new SetupController({
+      client,
+      open: async () => {
+        const opened = await s.opener.open();
+        if (opened instanceof SetupRefusedError) return opened;
+        return {
+          ...opened,
+          run: async (request) => {
+            if (request.args.includes("--version")) rmSync(s.file);
+            return opened.run(request);
+          },
+        };
+      },
+      stopPrograms: () => {},
+      confirm: null,
+    });
+    await setup.look();
+    expect(setup.current).toMatchObject({
+      phase: "failed",
+      failure: { kind: "refused", reason: "file" },
+    });
+    client.stop();
   });
 });
