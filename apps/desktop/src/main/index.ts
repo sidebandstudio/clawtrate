@@ -25,6 +25,8 @@ import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
+import { startDesktopUpdates } from "./update/build-info.ts";
+import { createUpdatePreferenceStore } from "./update/preferences.ts";
 import { windowsAppUserModelId } from "./identity.ts";
 import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
 import {
@@ -347,6 +349,24 @@ async function main(): Promise<void> {
     resume: SETUP.kind === "production",
   });
   const { client, info, policy } = runtime;
+  const userDir = app.getPath("userData");
+  const updates = await startDesktopUpdates({
+    version: app.getVersion(),
+    packaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+    downloadDir: join(userDir, "updates"),
+    store: createUpdatePreferenceStore(join(userDir, "update-preferences.json")),
+    changed(snapshot) {
+      if (window && !window.isDestroyed())
+        window.webContents.send("clawtrate:update:changed", snapshot);
+    },
+  });
+  app.on("before-quit", () => updates.shutdown());
+  ipcMain.handle("clawtrate:update:get", () => updates.get());
+  ipcMain.handle("clawtrate:update:check", (_event, track: unknown) => updates.check(track));
+  ipcMain.handle("clawtrate:update:track", (_event, track: unknown) => updates.chooseTrack(track));
+  ipcMain.handle("clawtrate:update:download", (_event, id: unknown) => updates.download(id));
   // Setup on this computer. A development build and every automated run look only in a sandbox.
   const opener = setupOpener();
   closeSetup = opener.close;

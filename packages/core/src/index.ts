@@ -82,3 +82,5 @@ export {
   type SendMode,
   type SendOptions,
 } from "./client.ts";
+export type * from "./desktop-updates.ts";
+export { noDesktopUpdates } from "./no-desktop-updates.ts";

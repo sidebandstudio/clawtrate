@@ -2,6 +2,7 @@
 // the renderer. The host owns the gateway connection; the renderer receives state
 // snapshots and sends commands. Transport is IPC in Electron and a WebSocket on the web.
 
+import type { DesktopUpdates } from "./desktop-updates.ts";
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   type AttachmentInfo,
@@ -342,6 +343,7 @@ export type HostInfo = {
 
 /** Renderer-side view of the bridge, implemented over IPC or a WebSocket. */
 export type ClawtrateBridge = {
+  readonly desktopUpdates: DesktopUpdates;
   info: HostInfo;
   getState(): ClawtrateState;
   subscribe(listener: (state: ClawtrateState) => void): () => void;

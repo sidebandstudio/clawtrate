@@ -22,6 +22,7 @@ import {
   type BridgeCommand,
   type BridgeResultFor,
   type ClawtrateBridge,
+  noDesktopUpdates,
   type ClawtrateState,
   type ConnectionState,
   type HostInfo,
@@ -848,6 +849,7 @@ export function createFixtureBridge(
   }
 
   return {
+    desktopUpdates: noDesktopUpdates,
     info: setupName
       ? setupInfo(FIXTURE_INFO, setupName)
       : name === "access-pinned"
