@@ -10,7 +10,14 @@ export async function prepareUpdateDirectory(root: string, offerId: string) {
     await prepare(root, offerId);
   } catch (error) {
     if (error instanceof Error) {
-      const detail = "stderr" in error && error.stderr ? String(error.stderr) : error.message;
+      const detail = JSON.stringify({
+        message: error.message.split("\n")[0],
+        code: "code" in error ? error.code : undefined,
+        signal: "signal" in error ? error.signal : undefined,
+        killed: "killed" in error ? error.killed : undefined,
+        stdout: "stdout" in error ? String(error.stdout).slice(0, 1024) : undefined,
+        stderr: "stderr" in error ? String(error.stderr).slice(0, 1024) : undefined,
+      });
       writeFileSync(join(dirname(root), "folder-error.txt"), detail);
     }
     throw error;
