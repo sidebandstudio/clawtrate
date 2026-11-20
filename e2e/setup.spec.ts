@@ -105,6 +105,8 @@ async function launch(
       options.sandbox ??
       writeSandbox({
         instance: SETUP,
+        // The run this file started the instance with, from its own record.
+        run: record.instances[0]!.runId,
         parent: dir,
         ...(options.scenario ? { scenario: options.scenario } : {}),
       }).file;
@@ -230,7 +232,7 @@ test("an automated launch without a sandbox is refused, loudly, and looks at not
 
 test("a description that names a program is refused before anything is read or run", async () => {
   const dir = folder("refused");
-  const sandbox = writeSandbox({ instance: SETUP, parent: dir });
+  const sandbox = writeSandbox({ instance: SETUP, run: record.instances[0]!.runId, parent: dir });
   const file = JSON.parse(readFileSync(sandbox.file, "utf8")) as Record<string, string>;
   writeFileSync(sandbox.file, JSON.stringify({ ...file, openclaw: "/usr/local/bin/openclaw" }));
   const launched = await launch({ sandbox: sandbox.file });
@@ -338,7 +340,7 @@ test("F-515: another version is named, offers Advanced, and runs nothing for the
 
 test("F-516: another profile is named and not connected to", async () => {
   const dir = folder("others");
-  const sandbox = writeSandbox({ instance: SETUP, parent: dir });
+  const sandbox = writeSandbox({ instance: SETUP, run: record.instances[0]!.runId, parent: dir });
   mkdirSync(join(sandbox.home, ".openclaw-work"));
   const launched = await launch({ sandbox: sandbox.file });
   await thisComputer(launched.page).click();
