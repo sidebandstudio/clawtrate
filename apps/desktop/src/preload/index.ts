@@ -42,6 +42,10 @@ const api: DesktopHostApi = {
     get: () => ipcRenderer.invoke("clawtrate:update:get"),
     check: (track) => invokeUpdateTrack("clawtrate:update:check", track),
     chooseTrack: (track) => invokeUpdateTrack("clawtrate:update:track", track),
+    restart: (id) =>
+      typeof id === "string"
+        ? ipcRenderer.invoke("clawtrate:update:restart", id)
+        : ipcRenderer.invoke("clawtrate:update:restart"),
     download: (id) =>
       typeof id === "string"
         ? ipcRenderer.invoke("clawtrate:update:download", id)

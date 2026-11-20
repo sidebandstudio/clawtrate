@@ -94,7 +94,8 @@ export class DesktopUpdateService {
       state: unavailable(options, version ? options.version : null, selectedTrack) ?? {
         kind: "not-checked",
       },
-      install: { kind: "unavailable-in-this-build" },
+      install: { kind: "unavailable-in-this-build", reason: "no-verified-download" },
+      lastAttempt: null,
     });
   }
 

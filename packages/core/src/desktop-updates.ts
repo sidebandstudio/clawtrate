@@ -21,7 +21,37 @@ export type DesktopUpdateFailure =
   | "hash-mismatch"
   | "write-failed";
 
+export type UpdateInstallRefusal =
+  | "no-verified-download"
+  | "build-not-signed"
+  | "no-installer-path"
+  | "artifact-changed"
+  | "mac-designated-requirement"
+  | "authenticode-trust"
+  | "publisher-mismatch"
+  | "installation-context";
+
+export type UpdateInstallCapability =
+  | { kind: "unavailable-in-this-build"; reason: UpdateInstallRefusal }
+  | { kind: "restart-available"; offerId: string };
+
+/** Set only from a prior handoff record and the running version on this launch. */
+export interface UpdateAttemptOutcome {
+  kind: "target-running" | "old-version-running" | "unconfirmed";
+  target: string;
+  track: UpdateTrack;
+  from: string;
+  running: string | null;
+}
+
 export type DesktopUpdateState =
+  | { kind: "preparing"; offerId: string; version: string }
+  | { kind: "handing-off"; offerId: string; version: string }
+  | {
+      kind: "handoff-failed";
+      version: string;
+      reason: UpdateInstallRefusal | "attempt-not-saved" | "installer-failed";
+    }
   | { kind: "not-checked" }
   | { kind: "checking" }
   | { kind: "nothing-newer" }
@@ -58,7 +88,8 @@ export interface DesktopUpdateSnapshot {
     | "update-folder-unavailable"
     | null;
   state: DesktopUpdateState;
-  install: { kind: "unavailable-in-this-build" };
+  install: UpdateInstallCapability;
+  lastAttempt: UpdateAttemptOutcome | null;
 }
 
 export type DesktopUpdateOutcome = "accepted" | "busy" | "stale" | "invalid" | "superseded";
@@ -75,4 +106,6 @@ export interface DesktopUpdates {
   chooseTrack(track: UpdateTrack): Promise<DesktopUpdateReply>;
   /** A stale or unknown identity leaves the current snapshot alone. */
   download(offerId: string): Promise<DesktopUpdateReply>;
+  /** Explicitly restart into the verified offer the person saw. */
+  restart(offerId: string): Promise<DesktopUpdateReply>;
 }
