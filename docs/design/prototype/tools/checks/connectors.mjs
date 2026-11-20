@@ -92,14 +92,14 @@ const STATES = [
   ["screen=connector&id=calendrop&auth=requires-authorization", ["Needs sign-in again."]],
   ["screen=connector&id=calendrop&auth=pending-authorization", ["Sign-in pending."]],
   ["screen=connector&id=calendrop&auth=none", ["Sign-in status not reported."]],
-  ["screen=connector&id=ledgerkin", ["Turned off. Its tools aren't offered to any bot.", "Turn on", "The gateway reports sign-ins only while Ledgerkin is turned on."]],
+  ["screen=connector&id=ledgerkin", ["Turned off.", "Turn on", "The gateway reports sign-ins only while Ledgerkin is turned on."]],
   ["screen=connector&id=postlark", ["Needs setup. Open Settings on the gateway to finish setup.", "The gateway reports missing: Account address."]],
   ["screen=connector&id=boxwharf", ["Not working: boxwharf-sync: the token store couldn't be read"]],
-  ["screen=connector&id=linkpeek", ["Comes with OpenClaw", "Added. Not loaded yet: it loads when a bot first needs it.", "Comes with OpenClaw, so it can be turned off but not removed."]],
+  ["screen=connector&id=linkpeek", ["Comes with OpenClaw", "Added. The gateway reports it is not loaded.", "Comes with OpenClaw, so it can be turned off but not removed."]],
   ["screen=connector&id=tasktide&access=read", ["Read-only.", "Changing connectors needs admin access.", "Request admin access"]],
-  ["screen=turnoff-confirm&id=tasktide", ["Turn off Tasktide?", "The gateway stops offering its tools. Its settings and any saved sign-ins stay."]],
-  ["screen=remove-confirm&id=tasktide", ["Remove Tasktide from the gateway?", "The package @tasktide/tasktide, with: Tasktide, Tasktide sync.", "Goes", "the package's files on the gateway's machine", "its settings on the gateway", "its tools", "Stays", "any saved sign-ins, kept by the gateway in its state, not encrypted there", "a note on the gateway that Tasktide is off, so nothing turns it back on by itself"]],
-  ["screen=removed&id=tasktide", ["Removed Tasktide.", "No longer installed: Tasktide, Tasktide sync."]],
+  ["screen=turnoff-confirm&id=tasktide", ["Turn off Tasktide?", "Its settings and any saved sign-ins stay."]],
+  ["screen=remove-confirm&id=tasktide", ["Remove Tasktide from the gateway?", "The package @tasktide/tasktide, with: Tasktide, Tasktide reminders.", "Goes", "the package's files on the gateway's machine", "its settings on the gateway", "its tools", "Stays", "Any saved MCP sign-ins in gateway state. The gateway stores these unencrypted.", "The gateway keeps an off marker for the removed plugin."]],
+  ["screen=removed&id=tasktide", ["Removed Tasktide.", "Tasktide: No longer installed", "Tasktide reminders: No longer installed"]],
   ["screen=removed-unconfirmed&id=tasktide", ["Couldn't confirm the removal.", "Check again"]],
   ["screen=browse&readonly=1", ["This gateway's settings are read-only.", "Plugins and tool servers can't be changed here."]],
   ["screen=connector&id=tasktide&readonly=1", ["This gateway's settings are read-only."]],
@@ -397,7 +397,48 @@ await walk("the gateway refuses the catalog, try again", "screen=browse-loading"
 await walk("search across apps and skills", "screen=browse", [[typeIn("#c-q", "weekly")]], ["Skills", "Weekly review"]);
 await walk("search with no match", "screen=browse", [[typeIn("#c-q", "zzzz")]], ['No apps or skills match "zzzz".']);
 await walk("search when skills search fails: never No match for skills", "screen=browse&skills=fail", [[typeIn("#c-q", "zzzz")]], ["Skills search didn't answer.", "No apps match."]);
-await walk("removal: the read fails", "screen=remove-confirm&id=tasktide", [[link("The read fails"), "removed-unconfirmed"], [link("Check again"), "removed"]], ["No longer installed"]);
+// Change 8: the removal receipt says only what a fresh plugins.list confirms.
+{
+  const state = (p, id) => p.locator(`[data-c="removal"] li[data-plugin="${id}"]`).textContent();
+  const cases = [
+    ["Leaves it out", { tasktide: "No longer installed", "tasktide-reminders": "No longer installed" }, true],
+    ["Lists it with installed: false", { tasktide: "No longer installed", "tasktide-reminders": "No longer installed" }, true],
+    ["Still lists it installed", { tasktide: "Still installed", "tasktide-reminders": "Still installed" }, false],
+    ["One gone, one still installed", { tasktide: "No longer installed", "tasktide-reminders": "Still installed" }, false],
+  ];
+  for (const [answer, want, done] of cases) {
+    const p = await open("screen=remove-confirm&id=tasktide");
+    await inConfirm("Remove")(p);
+    await at(p, "remove-reading");
+    await link(answer)(p);
+    await at(p, "removed");
+    const got = { tasktide: await state(p, "tasktide"), "tasktide-reminders": await state(p, "tasktide-reminders") };
+    const t = await text(p);
+    const ok = Object.entries(want).every(([id, w]) => got[id].endsWith(`: ${w}`)) && t.includes("Removed Tasktide.") === done && t.includes("The list confirms installed status. It gives no separate read-back of files, settings or credentials.") && !/files (are|were) (gone|deleted)|its files: (gone|deleted)/i.test(t) && (await p.locator('.c-goes li[data-mark="done"]').count()) === 0;
+    check(`removal, the list ${answer}: each named plugin's installed state, no file receipt`, ok, JSON.stringify(got));
+    await p.close();
+  }
+  const u = await open("screen=remove-confirm&id=calendrop");
+  check("unknown package membership: the confirmation says so", (await text(u, ".c-confirm")).includes("The gateway removes the package that owns Calendrop, and any other plugins in it."));
+  await inConfirm("Remove")(u);
+  await at(u, "remove-reading");
+  await link("Leaves it out")(u);
+  await at(u, "removed");
+  check("unknown package membership: Other affected plugins weren't confirmed.", (await text(u)).includes("Other affected plugins weren't confirmed.") && (await text(u)).includes("Calendrop: No longer installed"));
+  await u.close();
+  const f = await open("screen=remove-reading&id=tasktide");
+  await link("The read fails")(f);
+  await at(f, "removed-unconfirmed");
+  await link("Check again")(f);
+  await at(f, "remove-reading");
+  await link("The read fails")(f);
+  check("Check again repeats the read, and it can fail again", (await at(f, "removed-unconfirmed")) && (await text(f)).includes("Couldn't confirm the removal."));
+  await f.close();
+  const l = await open("screen=connector&id=ledgerkin");
+  check("removable is the gateway's, apart from origin: no Remove, and no Comes with OpenClaw", (await l.getByRole("link", { name: "Remove…" }).count()) === 0 && !(await text(l)).includes("Comes with OpenClaw"));
+  await l.close();
+}
+
 const chip = (name) => (p) => p.getByRole("radio", { name, exact: true }).click();
 await walk("Show more asks the next page", "screen=browse", [[link("Show more"), "browse"]], ["Mapwhistle", "Tunebarrow"]);
 await walk("a category chip", "screen=browse", [[chip("Finance"), "browse-category"], [chip("All"), "browse"]], ["All apps"]);
@@ -415,7 +456,7 @@ await walk("turn off while the gateway is busy, then try again", "screen=turnoff
   check("and open in place", await p.locator('.c-fold .c-row-main[aria-label^="Linkpeek,"]').isVisible());
   await p.close();
 }
-await walk("remove a connector", "screen=installed", [[row("Tasktide"), "connector"], [link("Remove…"), "remove-confirm"], [link("Remove"), "removed"], [link("Back to the list"), "installed"]]);
+await walk("remove a connector", "screen=installed", [[row("Tasktide"), "connector"], [link("Remove…"), "remove-confirm"], [link("Remove"), "remove-reading"], [link("Leaves it out"), "removed"], [link("Back to the list"), "installed"]]);
 await walk("add another account to a tool server", "screen=server&id=notes-work", [[link("Add another account"), "add-server"]]);
 for (const [width, label] of [[1440, "desktop"], [390, "phone"]]) {
   const p = await open("screen=server&id=notes-work", { width, height: width === 390 ? 844 : 900 });

@@ -46,10 +46,11 @@
   ];
   const APPS = [
     { id: "quillnote", name: "Quillnote", summary: "Notes and notebooks your bots can read and add to.", author: "quillnote-labs", cats: ["productivity"], featured: true, version: "2.4.1", release: "2.4.1", local: "install", install: { source: "clawhub", packageName: "@quillnote-labs/quillnote" }, servers: [["quillnote", true]], skills: ["Daily notes"], host: "auth.quillnote.example", readme: "Quillnote keeps notes in notebooks. With this connector a bot can search your notes, read a page and add one.\nIt signs in to your Quillnote account with OAuth; the gateway keeps the sign-in." },
-    { id: "tasktide", name: "Tasktide", summary: "Tasks, due dates and lists.", author: "tasktide", official: true, cats: ["productivity"], featured: true, version: "1.9.0", local: "enabled", servers: [["tasktide", true]], auth: "authorized", host: "auth.tasktide.example" },
+    { id: "tasktide", name: "Tasktide", summary: "Tasks, due dates and lists.", author: "tasktide", package: "@tasktide/tasktide", official: true, cats: ["productivity"], featured: true, version: "1.9.0", local: "enabled", servers: [["tasktide", true]], auth: "authorized", host: "auth.tasktide.example" },
     { id: "calendrop", name: "Calendrop", summary: "Calendars and free time.", author: "calendrop", cats: ["productivity"], featured: true, version: "3.0.2", local: "enabled", servers: [["calendrop", true], ["calendrop-rooms", true], ["calendrop-files", true]], mcpAuth: [{ serverName: "calendrop", state: "unauthenticated" }, { serverName: "calendrop-rooms", state: "authorized" }], host: "auth.calendrop.example" },
+    { id: "tasktide-reminders", name: "Tasktide reminders", summary: "Reminders for Tasktide's due dates.", author: "tasktide", package: "@tasktide/tasktide", cats: ["productivity"], version: "1.9.0", local: "enabled" },
     { id: "chartwick", name: "Chartwick", summary: "Dashboards and charts from your sheets.", author: "chartwick", official: true, cats: ["productivity"], version: "0.8.0", local: "install", install: { source: "official", pluginId: "chartwick" }, servers: [["chartwick", false]] },
-    { id: "ledgerkin", name: "Ledgerkin", summary: "Invoices and expenses, read-only.", author: "ledgerkin", cats: ["finance"], version: "1.2.0", local: "disabled", servers: [["ledgerkin", true]] },
+    { id: "ledgerkin", name: "Ledgerkin", summary: "Invoices and expenses, read-only.", author: "ledgerkin", removable: false, cats: ["finance"], version: "1.2.0", local: "disabled", servers: [["ledgerkin", true]] },
     { id: "boxwharf", name: "Boxwharf", summary: "Files and shared folders.", author: "boxwharf", cats: ["files"], featured: true, version: "2.1.0", local: "error", error: "boxwharf-sync: the token store couldn't be read" },
     { id: "postlark", name: "Postlark", summary: "Mail: read, draft and file messages.", author: "postlark", cats: ["mail"], version: "1.0.4", local: "needs-setup", missing: ["Account address"] },
     { id: "docklet", name: "Docklet", summary: "Docs and wikis.", author: "docklet", cats: ["productivity"], version: "0.3.0", local: "unavailable" },
@@ -96,6 +97,8 @@
     if (!packageName) return null;
     return { source: "clawhub", packageName, ...(a.release ? { version: a.release } : {}) };
   };
+  // The plugins plugins.list shows with the same package, when it establishes one (section 14).
+  const members = (a) => (a.package ? APPS.filter((m) => m.package === a.package) : null);
   const addable = (a) => a.local === "install" && Boolean(installRequest(a));
   const requestLine = (r) => `<p class="c-faint mono" data-c="request">plugins.install ${esc(JSON.stringify(r))}</p>`;
   // The page's own memory for one operation: the untouched form, the reviewed draft and what was saved.
@@ -282,11 +285,11 @@
 
   const connectorState = (a) => {
     const off = params.get("now") === "off" || (a.local === "disabled" && params.get("now") !== "on");
-    if (off) return ["Turned off. Its tools aren't offered to any bot.", [admin ? link("Turn on", "connector", { id: a.id, now: "on", said: "on" }) : ""]];
+    if (off) return ["Turned off.", [admin ? link("Turn on", "connector", { id: a.id, now: "on", said: "on" }) : ""]];
     if (params.get("after") === "partial") return [`Not working: ${a.id}: the module could not be loaded.`, [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
     if (a.local === "needs-setup") return [`Needs setup. Open Settings on the gateway to finish setup.${a.missing?.length ? ` The gateway reports missing: ${a.missing.join(", ")}.` : ""}`, []];
     if (a.local === "error") return [`Not working: ${a.error}`, [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
-    if (a.bundled) return ["Added. Not loaded yet: it loads when a bot first needs it.", [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
+    if (a.bundled) return ["Added. The gateway reports it is not loaded.", [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
     return ["Added", [admin ? link("Turn off", "turnoff-confirm", { id: a.id }) : ""]];
   };
   const accountRow = (a) => {
@@ -317,7 +320,7 @@
     const a = app(params.get("id") || "tasktide");
     const [state, actions] = connectorState(a);
     const said = params.get("said");
-    const removable = !a.bundled;
+    const removable = a.removable ?? !a.bundled;
     return {
       title: a.name,
       back: go("installed"),
@@ -643,7 +646,7 @@
         windowHtml(connectorPage()) +
         confirm(
           `Turn off ${a.name}?`,
-          `<p>The gateway stops offering its tools. Its settings and any saved sign-ins stay.</p>`,
+          `<p>Its settings and any saved sign-ins stay.</p>`,
           [link("Cancel", "connector", { id: a.id }, { variant: "quiet" }), link("Turn off", "connector", params.get("busy") ? { id: a.id, busy: "1" } : { id: a.id, now: "off", said: "off" }, { variant: "primary" })],
           proto("the gateway is", [link("Busy with another change", "turnoff-confirm", { id: a.id, busy: "1" }, { variant: "quiet" })]),
         )
@@ -651,24 +654,50 @@
     },
     "remove-confirm": () => {
       const a = app(params.get("id") || "tasktide");
+      const known = members(a);
       return (
         windowHtml(connectorPage()) +
         confirm(
           `Remove ${a.name} from the gateway?`,
-          `<p data-c="package">The package <span class="mono">@${esc(a.author)}/${esc(a.id)}</span>, with: ${esc(a.name)}, ${esc(a.name)} sync.</p>` +
-            goes(["the package's files on the gateway's machine", "its settings on the gateway", "its tools"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", `a note on the gateway that ${a.name} is off, so nothing turns it back on by itself`]),
-          [link("Cancel", "connector", { id: a.id }, { variant: "quiet" }), link("Remove", "removed", { id: a.id }, { variant: "primary" })],
-          proto("the read-back", [link("The read fails", "removed-unconfirmed", { id: a.id }, { variant: "quiet" })]),
+          `<p data-c="package">${known ? `The package <span class="mono">${esc(a.package)}</span>, with: ${esc(known.map((m) => m.name).join(", "))}.` : esc(`The gateway removes the package that owns ${a.name}, and any other plugins in it.`)}</p>` +
+            goes(["the package's files on the gateway's machine", "its settings on the gateway", "its tools"], ["Any saved MCP sign-ins in gateway state. The gateway stores these unencrypted.", "The gateway keeps an off marker for the removed plugin."]),
+          [link("Cancel", "connector", { id: a.id }, { variant: "quiet" }), link("Remove", "remove-reading", { id: a.id }, { variant: "primary" })],
         )
       );
     },
+    // The fresh plugins.list after plugins.uninstall; Check again comes back here and can fail again.
+    "remove-reading": () => {
+      const a = app(params.get("id") || "tasktide");
+      const out = (label, value) => link(label, value === "fails" ? "removed-unconfirmed" : "removed", { id: a.id, out: value === "fails" ? null : value }, { variant: "quiet" });
+      return windowHtml({
+        title: a.name,
+        back: go("installed"),
+        body:
+          `<p class="c-state" aria-busy="true">Reading the gateway's plugin list…</p>` +
+          proto("the fresh list", [out("Leaves it out", "gone"), out("Lists it with installed: false", "official"), out("Still lists it installed", "still"), ...((members(a) || []).length > 1 ? [out("One gone, one still installed", "mixed")] : []), out("The read fails", "fails")]),
+      });
+    },
     removed: () => {
       const a = app(params.get("id") || "tasktide");
-      return windowHtml({ title: a.name, back: go("installed"), body: result("", "check", `Removed ${a.name}.`, esc(`No longer installed: ${a.name}, ${a.name} sync. The gateway's list shows each with installed: false.`)) + goes(["the package's files", "its settings", "its tools"], ["any saved sign-ins, kept by the gateway in its state, not encrypted there", "the note that it is off"], "done") + `<div class="c-actions">${link("Back to the list", "installed")}</div>` });
+      const out = params.get("out") || "gone";
+      const named = members(a) || [a];
+      const still = (m, i) => out === "still" || (out === "mixed" && i > 0);
+      const lines = named.map((m, i) => `<li data-plugin="${esc(m.id)}"><span class="mono">${esc(m.name)}</span>: ${still(m, i) ? "Still installed" : "No longer installed"}</li>`).join("");
+      const allGone = named.every((m, i) => !still(m, i));
+      return windowHtml({
+        title: a.name,
+        back: go("installed"),
+        body:
+          (allGone ? result("", "check", `Removed ${a.name}.`, "") : "") +
+          `<ul class="c-list" data-c="removal">${lines}</ul>` +
+          (members(a) ? "" : `<p class="c-line">Other affected plugins weren't confirmed.</p>`) +
+          `<p class="c-line">The list confirms installed status. It gives no separate read-back of files, settings or credentials.</p>` +
+          `<div class="c-actions">${link("Back to the list", "installed")}</div>`,
+      });
     },
     "removed-unconfirmed": () => {
       const a = app(params.get("id") || "tasktide");
-      return windowHtml({ title: a.name, back: go("connector", { id: a.id }), body: note("warn", "Couldn't confirm the removal.", "The gateway's plugin list couldn't be read.", `<div class="c-actions">${link("Check again", "removed", { id: a.id })}</div>`) });
+      return windowHtml({ title: a.name, back: go("connector", { id: a.id }), body: note("warn", "Couldn't confirm the removal.", "The gateway's plugin list couldn't be read.", `<div class="c-actions">${link("Check again", "remove-reading", { id: a.id })}</div>`) });
     },
     server: () => windowHtml(serverPage()),
     "server-remove-confirm": () => {
