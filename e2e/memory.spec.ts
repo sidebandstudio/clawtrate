@@ -120,7 +120,9 @@ test("F-212: edits a root item after an explicit admin request", async ({ page }
   expect(await askMemory()).toBe(revised);
 });
 
-test("F-377: adds root memory and a separate Markdown note", async ({ page }) => {
+test("F-377: adds root memory; note writes wait on the plugin's recorded review", async ({
+  page,
+}) => {
   const memory = await openMemory(page);
   await memory.getByRole("button", { name: "Add memory" }).click();
   await memory.getByLabel("Memory text").fill(added);
@@ -132,17 +134,47 @@ test("F-377: adds root memory and a separate Markdown note", async ({ page }) =>
   expect(await askMemory()).toContain(added);
 
   await memory.getByRole("button", { name: "Add memory" }).click();
-  await memory.getByLabel("Save in").selectOption("note");
-  await memory.getByLabel("Note filename").fill("release.md");
-  await memory.getByLabel("Memory text").fill("Separate release notes.");
-  await memory.getByRole("button", { name: "Save memory" }).click();
-  await memory.getByRole("button", { name: "memory/release.md" }).click();
-  await expect(memory.getByText("Separate release notes.", { exact: true })).toBeVisible();
-  const note = await gateway.request("clawtrate-memory.read", {
+  const saveIn = memory.getByLabel("Save in");
+  await expect(saveIn).toBeVisible();
+  await expect(saveIn.locator("option")).toHaveCount(2);
+  await expect(
+    memory.getByText(
+      "Notes are read-only here until the memory plugin's security review is recorded.",
+    ),
+  ).toBeVisible();
+  await memory.getByRole("button", { name: "Cancel" }).click();
+});
+
+test("F-377: About you stays a destination for an empty file while note writes are held", async ({
+  page,
+}) => {
+  const user = await gateway.request<{ file: { hash?: string } }>("agents.files.get", {
     agentId,
-    path: "memory/release.md",
+    name: "USER.md",
   });
-  expect(note).toMatchObject({ content: "Separate release notes.", loadedIntoNewTasks: false });
+  await gateway.request("agents.files.set", {
+    agentId,
+    name: "USER.md",
+    content: "",
+    ...(user.file.hash ? { expectedHash: user.file.hash } : { expectedMissing: true }),
+  });
+  const memory = await openMemory(page);
+  await expect(memory.getByText("No text stored in USER.md.")).toBeVisible();
+  await memory.getByRole("button", { name: "Add memory" }).click();
+  await memory.getByLabel("Save in").selectOption("USER.md");
+  await memory.getByLabel("Memory text").fill("Prefers plain summaries on Friday.");
+  await memory.getByRole("button", { name: "Save memory" }).click();
+  await expect(
+    memory.getByRole("listitem").filter({ hasText: "Prefers plain summaries on Friday." }),
+  ).toBeVisible({ timeout: 15_000 });
+  expect(
+    (
+      await gateway.request<{ file: { content: string } }>("agents.files.get", {
+        agentId,
+        name: "USER.md",
+      })
+    ).file.content,
+  ).toContain("Prefers plain summaries on Friday.");
 });
 
 test("F-375: confirms deletion and removes an item from the bot's next new private task", async ({
@@ -159,18 +191,6 @@ test("F-375: confirms deletion and removes an item from the bot's next new priva
   await confirm.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(item).toHaveCount(0);
   expect(await askMemory()).toBe(revised);
-
-  await memory.getByRole("button", { name: "memory/release.md" }).click();
-  await memory
-    .getByRole("listitem")
-    .filter({ hasText: "Separate release notes." })
-    .getByRole("button", { name: "Delete", exact: true })
-    .click();
-  await confirm.getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(memory.getByRole("button", { name: "memory/release.md" })).toHaveCount(0);
-  await expect(
-    gateway.request("clawtrate-memory.read", { agentId, path: "memory/release.md" }),
-  ).rejects.toThrow(/does not exist/);
 });
 
 test("F-216: a bot replies to the ordinary memory question with the memory it received", async ({
@@ -210,4 +230,35 @@ test("F-212: a concurrent write keeps the gateway's revision and leaves the draf
   await expect(memory.getByRole("alert")).toBeVisible();
   await expect(editor).toHaveValue("My unsaved draft.");
   expect((await root()).content).toBe(newer);
+});
+
+test("F-211: a root file that fails its first load stands alone beside itself", async ({
+  page,
+}) => {
+  // The gateway refuses nothing here: the read's own size limit fails this file alone.
+  const { hash } = await root();
+  await gateway.request("agents.files.set", {
+    agentId,
+    name,
+    content: "x".repeat(262_145),
+    expectedHash: hash,
+  });
+  const memory = await openMemory(page);
+  const alert = memory.getByRole("alert");
+  await expect(alert).toContainText("MEMORY.md", { timeout: 15_000 });
+  await expect(alert).toContainText("too large");
+  // The other root file and the notes list stayed usable.
+  await expect(
+    memory.getByRole("listitem").filter({ hasText: "Prefers plain summaries" }),
+  ).toBeVisible();
+  await expect(memory.getByRole("heading", { name: "Notes" })).toBeVisible();
+  await expect(memory.getByText("No notes.")).toBeVisible();
+  await expect(memory.getByRole("button", { name: "Add memory" })).toBeVisible();
+  const { hash: restoredHash } = await root();
+  await gateway.request("agents.files.set", {
+    agentId,
+    name,
+    content: revised,
+    expectedHash: restoredHash,
+  });
 });
