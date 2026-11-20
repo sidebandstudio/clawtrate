@@ -290,3 +290,36 @@ test.describe("a task's model at phone width", () => {
     await expect(effort).toHaveAccessibleName("Effort: High");
   });
 });
+
+test.describe("a bot's model and effort in its settings", () => {
+  test.use(contextFor(SIZES[0]!, "light"));
+  const settings = (more = "") =>
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound${more}`;
+  const line = (page: Page) => page.locator("#b-model-line");
+  const choose = async (page: Page, select: "model-select" | "effort-select", name: string) => {
+    await page.getByTestId(select).click();
+    await page.getByRole("menuitemradio", { name, exact: true }).click();
+  };
+
+  test("F-043: Bot Settings names the changed effort only after read-back confirms it", async ({
+    page,
+  }) => {
+    await openFixture(page, settings("&botsave=slow"), "light");
+    await choose(page, "effort-select", "High");
+    await expect(page.getByTestId("work-announcer")).toHaveText("Effort saved");
+    await choose(page, "model-select", "gpt-5.5-mini");
+    // On its way: the line does not say the effort changed.
+    await expect(line(page)).not.toContainText("Effort is now");
+    await expect(page.getByTestId("work-announcer")).toHaveText("Model saved");
+    await expect(line(page)).toHaveText("Effort is now Low: gpt-5.5-mini doesn't offer High.");
+
+    // A change of model the gateway took and could not be read after: no effort is named.
+    await openFixture(page, settings("&botsave=unread"), "light");
+    await choose(page, "model-select", "gpt-5.5-mini");
+    await expect(page.getByTestId("work-announcer")).toHaveText("Couldn't confirm the change");
+    await expect(line(page)).toHaveText(
+      "Couldn't confirm the change. Showing the last settings read.",
+    );
+    await expect(page.getByTestId("model-select")).toHaveAccessibleName("Model: gpt-5.5");
+  });
+});

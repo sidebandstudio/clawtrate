@@ -33,6 +33,7 @@ import {
   type GatewayAccount,
   type LockEvidence,
   type SignInState,
+  UNCONFIRMED_BOT_WRITE,
 } from "@clawtrate/core";
 
 export type AccountParams = {
@@ -53,6 +54,11 @@ export type AccountParams = {
   keyfails: boolean;
   /** A key saved directly whose read afterwards fails; Check again reads it. */
   keyread: boolean;
+  /**
+   * A bot's model saved from its settings: "slow" answers after 1.2 s; "unread"
+   * takes a change of model and fails the read after it, so it is unconfirmed.
+   */
+  botsave: "slow" | "unread" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -72,6 +78,10 @@ export function accountParams(params: URLSearchParams): AccountParams {
     defacct: params.get("defacct") === "1",
     keyfails: params.get("keyfails") === "1",
     keyread: params.get("keyread") === "fail",
+    botsave:
+      params.get("botsave") === "slow" || params.get("botsave") === "unread"
+        ? (params.get("botsave") as "slow" | "unread")
+        : null,
     labels:
       params.get("labels") === "none" || params.get("labels") === "same"
         ? (params.get("labels") as "none" | "same")
@@ -93,6 +103,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   labels: null,
   keyfails: false,
   keyread: false,
+  botsave: null,
 };
 
 const MINUTE = 60_000;
@@ -1079,32 +1090,61 @@ export function accountCommand(
       return Promise.resolve();
     case "changeBotAccount":
     case "setBotModel": {
-      put((a) => ({
-        ...a,
-        bindings: a.bindings.map((b) => {
-          if (b.botId !== command.botId) return b;
-          const accountId = command.type === "changeBotAccount" ? command.account : b.account;
-          const provider = command.type === "changeBotAccount" ? command.provider : b.provider!;
-          const ref = `${provider}/${command.model}${accountId ? `@${accountId}` : ""}`;
-          const next = bound(b.botId, ref, command.effort ?? b.effort ?? "medium", Date.now(), {
-            order: b.order,
-          });
-          // The order the gateway keeps is not changed by a change of account.
-          const ids = b.order?.ids ?? [];
-          const status: LockEvidence["status"] =
-            !accountId || ids.length === 0
-              ? "none"
-              : ids.length === 1 && ids[0] === accountId
-                ? "matched"
-                : ids.includes(accountId)
-                  ? "multi"
-                  : ids.length === 1
-                    ? "other"
-                    : "none";
-          return { ...next, evidence: { ...b.evidence, status, checkedAt: Date.now() } };
+      const before = accounts().bindings.find((b) => b.botId === command.botId);
+      if (
+        params.botsave === "unread" &&
+        command.type === "setBotModel" &&
+        command.model !== before?.model
+      ) {
+        // The gateway took it; the read after it failed. The bot keeps what was last read.
+        put((a) => ({
+          ...a,
+          write: {
+            what: "model",
+            target: command.botId,
+            status: "unverified",
+            error: UNCONFIRMED_BOT_WRITE,
+            at: Date.now(),
+          },
+        }));
+        return Promise.resolve("unverified");
+      }
+      const apply = () =>
+        put((a) => ({
+          ...a,
+          bindings: a.bindings.map((b) => {
+            if (b.botId !== command.botId) return b;
+            const accountId = command.type === "changeBotAccount" ? command.account : b.account;
+            const provider = command.type === "changeBotAccount" ? command.provider : b.provider!;
+            const ref = `${provider}/${command.model}${accountId ? `@${accountId}` : ""}`;
+            const next = bound(b.botId, ref, command.effort ?? b.effort ?? "medium", Date.now(), {
+              order: b.order,
+            });
+            // The order the gateway keeps is not changed by a change of account.
+            const ids = b.order?.ids ?? [];
+            const status: LockEvidence["status"] =
+              !accountId || ids.length === 0
+                ? "none"
+                : ids.length === 1 && ids[0] === accountId
+                  ? "matched"
+                  : ids.includes(accountId)
+                    ? "multi"
+                    : ids.length === 1
+                      ? "other"
+                      : "none";
+            return { ...next, evidence: { ...b.evidence, status, checkedAt: Date.now() } };
+          }),
+        }));
+      if (params.botsave !== "slow") {
+        apply();
+        return Promise.resolve("saved");
+      }
+      return new Promise((resolve) =>
+        later(1_200, () => {
+          apply();
+          resolve("saved");
         }),
-      }));
-      return Promise.resolve("saved");
+      );
     }
     case "removeBotFallbacks":
       put((a) => ({

@@ -8,6 +8,7 @@ import {
   accountWord,
   lockCommand,
   retainedOrder,
+  UNCONFIRMED_BOT_WRITE,
   unlockCommand,
   type AccountsState,
   type Bot,
@@ -17,6 +18,24 @@ import {
   type Transcript,
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+
+/** A save the gateway took whose read back doesn't show it (section 9). */
+const UNSHOWN =
+  "The gateway took the change, and its settings read back don't show it yet. Shown is what was last read.";
+
+/**
+ * The words for a save that came back unconfirmed: the engine's own when the
+ * read after the write failed, else that the read back doesn't show it.
+ */
+function unconfirmedWords(accounts: AccountsState, botId: string, what: "model" | "account") {
+  const write = accounts.write;
+  return write?.what === what &&
+    write.target === botId &&
+    write.status === "unverified" &&
+    write.error === UNCONFIRMED_BOT_WRITE
+    ? UNCONFIRMED_BOT_WRITE
+    : UNSHOWN;
+}
 import { useBridge } from "../bridge.tsx";
 import {
   BackIcon,
@@ -347,7 +366,7 @@ export function BotSettings({
         ? accounts.botCatalog.models
         : null;
     const listed = taskCatalog ? { ...accounts, models: taskCatalog } : accounts;
-    const saveModel = async (nextModel: string, nextEffort: string | null) => {
+    const saveModel = async (nextModel: string, nextEffort: string | null, note?: string) => {
       setError(null);
       try {
         const outcome = await bridge.invoke({
@@ -357,11 +376,15 @@ export function BotSettings({
           effort: nextEffort,
         });
         // Saved only once the bot, read back, shows it; otherwise the page keeps what it last read.
-        if (outcome === "saved") announce(nextModel !== model ? "Model saved" : "Effort saved");
-        else {
-          setError(
-            "The gateway took the change, and its settings read back don't show it yet. Shown is what was last read.",
-          );
+        if (outcome === "saved") {
+          announce(nextModel !== model ? "Model saved" : "Effort saved");
+          // The effort that followed the model is named only once the read back shows it.
+          if (note) {
+            setEffortNote(note);
+            setTimeout(() => setEffortNote(null), 4000);
+          }
+        } else {
+          setError(UNSHOWN);
           announce("Couldn't confirm the change");
         }
       } catch (failure) {
@@ -419,19 +442,19 @@ export function BotSettings({
                     modelsOf(listed, provider).find((m) => m.id === next)?.levels ?? [];
                   const was = binding.effort;
                   const effort = firstEffort(listed, provider, next, was);
-                  if (was && levels.length > 0 && !levels.includes(was) && effort) {
-                    setEffortNote(
-                      `Effort is now ${levelWord(effort)}: ${next} doesn't offer ${levelWord(was)}.`,
-                    );
-                    setTimeout(() => setEffortNote(null), 4000);
-                  }
-                  void saveModel(next, effort);
+                  void saveModel(
+                    next,
+                    effort,
+                    was && levels.length > 0 && !levels.includes(was) && effort
+                      ? `Effort is now ${levelWord(effort)}: ${next} doesn't offer ${levelWord(was)}.`
+                      : undefined,
+                  );
                 }}
                 onEffort={(effort) => void saveModel(model, effort)}
               />
             </div>
             <p className="b-hint" id="b-model-line">
-              {error ??
+              {(error === UNSHOWN ? unconfirmedWords(accounts, bot.id, "model") : error) ??
                 effortNote ??
                 (taskCatalog
                   ? `The models ${label} offers, as the gateway lists them for ${name}'s latest task.`
@@ -542,9 +565,7 @@ export function BotSettings({
         });
         if (outcome !== "saved") {
           // The gateway took it and the read after it doesn't show it: nothing is claimed.
-          setError(
-            "The gateway took the change, and its settings read back don't show it yet. Shown is what was last read.",
-          );
+          setError(UNSHOWN);
           announce("Couldn't confirm the change");
           return;
         }
@@ -654,7 +675,7 @@ export function BotSettings({
         )}
         {error && (
           <p className="b-field-error" role="alert">
-            {error}
+            {error === UNSHOWN ? unconfirmedWords(accounts, bot.id, "account") : error}
           </p>
         )}
         <div className="b-actions" style={{ marginTop: 16 }}>

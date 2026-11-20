@@ -941,6 +941,46 @@ describe("a bot's model and effort", () => {
     client.stop();
   });
 
+  it("F-042 F-043: a bot config write acknowledged before its read fails is unconfirmed", async () => {
+    const { AccountsGateway, accountsClient } = await import("./accounts-fake.ts");
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const prior = accounts().bindings.find((b) => b.botId === "otto")!;
+    // The gateway takes the write; the read made to see its revision applied fails.
+    const get = fake.gateway.handlers["config.get"]!;
+    const patch = fake.gateway.handlers["config.patch"]!;
+    let taken = false;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      taken = true;
+      return patch(params);
+    };
+    fake.gateway.handlers["config.get"] = (params) => {
+      if (taken) throw new GatewayError({ code: "UNAVAILABLE", message: "reloading" });
+      return get(params);
+    };
+    await expect(client.setBotModel("otto", "dev-2", "high")).resolves.toBe("unverified");
+    expect(accounts().bindings.find((b) => b.botId === "otto")).toEqual(prior);
+    expect(accounts().write).toMatchObject({
+      what: "model",
+      status: "unverified",
+      error: "Couldn't confirm the change. Showing the last settings read.",
+    });
+    // A change of account the same way: not a failed save either.
+    taken = false;
+    await expect(client.changeBotAccount("otto", "acme:home", "acme", "dev-1", null)).resolves.toBe(
+      "unverified",
+    );
+    expect(accounts().write).toMatchObject({ what: "account", status: "unverified" });
+    // An error before the gateway takes the write is a failed save.
+    taken = false;
+    fake.gateway.handlers["config.patch"] = () => {
+      throw new GatewayError({ code: "INVALID_REQUEST", message: "config changed" });
+    };
+    await expect(client.setBotModel("otto", "dev-2", null)).rejects.toThrow("config changed");
+    expect(accounts().write).toMatchObject({ what: "model", status: "failed" });
+    client.stop();
+  });
+
   it("F-042 F-043: while the read after a bot's write is unavailable the last values read stay, and the change is not confirmed", async () => {
     const { AccountsGateway, accountsClient } = await import("./accounts-fake.ts");
     const fake = new AccountsGateway();

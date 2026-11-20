@@ -95,6 +95,20 @@ export class BotChangedError extends Error {
   }
 }
 
+/**
+ * The gateway answered the config write, and a read after it, made to see the
+ * new revision applied, failed: the change was taken and is not confirmed.
+ */
+export class WriteUnconfirmedError extends Error {
+  constructor(cause: unknown) {
+    super(errorText(cause));
+    this.name = "WriteUnconfirmedError";
+  }
+}
+
+/** A bot write the gateway took whose read afterwards failed: what the person is told. */
+export const UNCONFIRMED_BOT_WRITE = "Couldn't confirm the change. Showing the last settings read.";
+
 export class AdminNeededError extends Error {
   constructor(what: string) {
     super(`${what} needs admin access.`);
@@ -425,6 +439,18 @@ export class AccountsEngine {
       at: this.ctx.now(),
     });
     return status;
+  }
+
+  /** A write the gateway took and could not be read after: the bot keeps what was last read. */
+  private unconfirmedWrite(what: "account" | "model", botId: string): "unverified" {
+    this.setWrite({
+      what,
+      target: botId,
+      status: "unverified",
+      error: UNCONFIRMED_BOT_WRITE,
+      at: this.ctx.now(),
+    });
+    return "unverified";
   }
 
   private patchBinding(
@@ -1062,17 +1088,22 @@ export class AccountsEngine {
       ...(baseHash ? { baseHash } : {}),
       ...(replacePaths.length > 0 ? { replacePaths } : {}),
     });
+    // The gateway took the write: from here a failure is a read failing, not the write.
     // A gateway that reports no revisions has nothing to wait for.
     if (before?.configRevisionHash === undefined) return;
     const started = this.ctx.now();
-    // At most 20 seconds, and at most 100 reads whatever the clock says.
-    for (let reads = 0; reads < 100 && this.ctx.now() - started < 20_000; reads += 1) {
-      const now = asRecord(await this.ctx.request("config.get", {}));
-      const revised = now?.configRevisionHash !== before.configRevisionHash;
-      if (revised && now?.appliedConfigHash === now?.configRevisionHash) return;
-      // A patch that changed nothing leaves the revision as it was.
-      if (!revised && (this.ctx.now() - started > 3_000 || reads >= 15)) return;
-      await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
+    try {
+      // At most 20 seconds, and at most 100 reads whatever the clock says.
+      for (let reads = 0; reads < 100 && this.ctx.now() - started < 20_000; reads += 1) {
+        const now = asRecord(await this.ctx.request("config.get", {}));
+        const revised = now?.configRevisionHash !== before.configRevisionHash;
+        if (revised && now?.appliedConfigHash === now?.configRevisionHash) return;
+        // A patch that changed nothing leaves the revision as it was.
+        if (!revised && (this.ctx.now() - started > 3_000 || reads >= 15)) return;
+        await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
+      }
+    } catch (error) {
+      throw new WriteUnconfirmedError(error);
     }
   }
 
@@ -1441,7 +1472,10 @@ export class AccountsEngine {
       ]);
       this.unwritten.delete(botId);
     } catch (error) {
+      // Taken by the gateway: it landed, and only its confirmation is missing.
+      if (error instanceof WriteUnconfirmedError) this.unwritten.delete(botId);
       if (!creating) throw error;
+      if (error instanceof WriteUnconfirmedError) return;
       // The bot exists; its Account page offers the write again (bots.md section 3).
       this.unwritten.add(botId);
       if (this.unwritten.size > MAX_ACCOUNTS)
@@ -1477,6 +1511,13 @@ export class AccountsEngine {
       await this.writeModel(botId, { provider, model, account }, effort, false);
       await this.recordIntent(botId, account ? { mode: "account", account } : { mode: "gateway" });
     } catch (error) {
+      if (error instanceof WriteUnconfirmedError) {
+        await this.recordIntent(
+          botId,
+          account ? { mode: "account", account } : { mode: "gateway" },
+        );
+        return this.unconfirmedWrite("account", botId);
+      }
       this.setWrite({
         what: "account",
         target: botId,
@@ -1557,6 +1598,10 @@ export class AccountsEngine {
       );
       this.unwritten.delete(botId);
     } catch (error) {
+      if (error instanceof WriteUnconfirmedError) {
+        this.unwritten.delete(botId);
+        return this.unconfirmedWrite("model", botId);
+      }
       this.setWrite({
         what: "model",
         target: botId,
