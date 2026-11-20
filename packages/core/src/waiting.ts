@@ -24,7 +24,11 @@
 
 import { jsonTextLength } from "./bounds.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
-import { classifyLifecycleTerminal, type TaskActivity } from "./runs.ts";
+import {
+  classifyLifecycleTerminal,
+  isDefinitiveLifecycleError,
+  type TaskActivity,
+} from "./runs.ts";
 
 export const MAX_WAITING_SESSIONS = 64;
 export const MAX_WAITING_MARKERS = 8;
@@ -35,15 +39,19 @@ const MARKER_PREFIX_CHARS = 13;
 /** JSON characters one kept marker can take: its id, and its kind, run id and time. */
 export const WAITING_MARKER_CHARS =
   MAX_WAITING_ID_CHARS + MARKER_PREFIX_CHARS + MAX_WAITING_ID_CHARS + 64;
-/** JSON characters one entry of the latest-run map can take: its key, run id, time and flag. */
+/** JSON characters one entry of the latest-run map can take: its key, run id, time and flags. */
 export const WAITING_RUN_CHARS = 2 * MAX_WAITING_ID_CHARS + 96;
 /** JSON characters one held task can take: its key, a waiting kind and two times. */
 export const WAITING_HELD_CHARS = MAX_WAITING_ID_CHARS + 96;
 
 export type WaitingKind = "approval" | "question";
 
-/** One marker: what is pending, of which run, since when. */
-type Marker = { kind: WaitingKind; runId: string | null; since: number };
+/**
+ * One marker: what is pending, of which run, since when. A recorded marker
+ * comes from the request's own scoped record and stays until its resolution;
+ * a lifecycle-only one can end with its run.
+ */
+type Marker = { kind: WaitingKind; runId: string | null; since: number; recorded?: boolean };
 
 /** What a task waits on, as the rail says it: the earliest marker. */
 export type Waiting = { kind: WaitingKind; since: number };
@@ -98,12 +106,7 @@ export class WaitingIndex {
   /** Session key to its markers by id, in the order tasks began waiting. */
   private readonly sessions = new Map<string, Map<string, Marker>>();
   /** Each task's latest run as the events report it: its id, when, and whether it was stopped. */
-  private readonly runs = new Map<
-    string,
-    { runId: string; at: number; stopped: boolean; stopSeq: number }
-  >();
-  /** Counts the run ends seen as stopped, in the order they arrived: each task keeps its latest. */
-  private stops = 0;
+  private readonly runs = new Map<string, { runId: string; at: number; stopped: boolean }>();
   /** Tasks whose runs the engine holds, as those runs describe them; they win over the events. */
   private readonly held = new Map<string, HeldTask>();
 
@@ -119,7 +122,8 @@ export class WaitingIndex {
       this.sessions.set(key, markers);
       cap(this.sessions, MAX_WAITING_SESSIONS);
     }
-    if (markers.has(id)) return false;
+    const previous = markers.get(id);
+    if (previous && (!marker.recorded || previous.recorded)) return false;
     markers.set(id, marker);
     cap(markers, MAX_WAITING_MARKERS);
     return true;
@@ -140,15 +144,16 @@ export class WaitingIndex {
   onAgent(payload: RawRecord, at: number): boolean {
     const key = str(payload.sessionKey);
     const runId = str(payload.runId);
-    if (!key || !runId || payload.stream !== "lifecycle") return false;
+    if (!key || !runId) return false;
     const data = asRecord(payload.data) ?? {};
+    if (payload.stream !== "lifecycle") return false;
     const ts = time(payload.ts, at);
     switch (data.phase) {
       case "start": {
         const latest = this.runs.get(key);
         if (latest?.runId === runId) return false;
         this.runs.delete(key);
-        this.runs.set(key, { runId, at: ts, stopped: false, stopSeq: latest?.stopSeq ?? 0 });
+        this.runs.set(key, { runId, at: ts, stopped: false });
         cap(this.runs, MAX_WAITING_SESSIONS);
         return latest?.stopped === true;
       }
@@ -158,26 +163,28 @@ export class WaitingIndex {
       }
       case "approval-resolved": {
         const id = str(data.approvalId) ?? str(data.id);
-        return this.remove(key, (markerId, marker) =>
-          id ? markerId === `approval:${id}` : marker.kind === "approval" && marker.runId === runId,
+        return this.remove(
+          key,
+          (markerId, marker) =>
+            !marker.recorded &&
+            (id
+              ? markerId === `approval:${id}`
+              : marker.kind === "approval" && marker.runId === runId),
         );
       }
       case "end":
       case "error": {
+        // An attempt that failed and is retried ends nothing: the run, and what it waits on, go on.
+        if (data.phase === "error" && !isDefinitiveLifecycleError(data)) return false;
         // The run is over: nothing of it waits any more.
-        const changed = this.remove(key, (_, marker) => marker.runId === runId);
+        const changed = this.remove(key, (_, marker) => !marker.recorded && marker.runId === runId);
         const latest = this.runs.get(key);
         // An older run's end, arriving after a newer run started, says nothing of the task.
         if (latest && latest.runId !== runId) return changed;
         const reason = classifyLifecycleTerminal(data.phase, data);
         const stopped = reason === "aborted" || reason === "cancelled";
         this.runs.delete(key);
-        this.runs.set(key, {
-          runId,
-          at: ts,
-          stopped,
-          stopSeq: stopped ? (this.stops += 1) : (latest?.stopSeq ?? 0),
-        });
+        this.runs.set(key, { runId, at: ts, stopped });
         cap(this.runs, MAX_WAITING_SESSIONS);
         return changed || stopped || latest?.stopped === true;
       }
@@ -195,6 +202,7 @@ export class WaitingIndex {
       kind: "question",
       runId: str(payload.runId),
       since: time(payload.createdAtMs, at),
+      recorded: true,
     });
   }
 
@@ -225,6 +233,7 @@ export class WaitingIndex {
       kind: "approval",
       runId: str(approval.runId),
       since: approval.createdAt ?? at,
+      recorded: true,
     });
   }
 
@@ -235,6 +244,34 @@ export class WaitingIndex {
     let changed = false;
     for (const key of [...this.sessions.keys()])
       changed = this.remove(key, (markerId) => markerId === `approval:${approval}`) || changed;
+    return changed;
+  }
+
+  /** The marker ids of the approval waits kept from requests' own records. */
+  recordedApprovals(): Set<string> {
+    const ids = new Set<string>();
+    for (const markers of this.sessions.values()) {
+      for (const [markerId, marker] of markers)
+        if (marker.recorded && marker.kind === "approval") ids.add(markerId);
+    }
+    return ids;
+  }
+
+  /**
+   * Every approval list read at a connect: a recorded wait held before the
+   * reads began (`before`) that none of them lists is over. One added since
+   * stays.
+   */
+  dropUnlisted(before: ReadonlySet<string>, listed: ReadonlySet<string>): boolean {
+    let changed = false;
+    for (const key of [...this.sessions.keys()]) {
+      changed =
+        this.remove(
+          key,
+          (markerId, marker) =>
+            marker.recorded === true && before.has(markerId) && !listed.has(markerId),
+        ) || changed;
+    }
     return changed;
   }
 
@@ -256,7 +293,7 @@ export class WaitingIndex {
    */
   settle(key: string, updatedAt: number | null): boolean {
     if (updatedAt === null) return false;
-    return this.remove(key, (_, marker) => marker.since <= updatedAt);
+    return this.remove(key, (_, marker) => !marker.recorded && marker.since <= updatedAt);
   }
 
   /** The engine holds this task's runs: they describe it. Returns whether that changed anything. */
@@ -284,23 +321,15 @@ export class WaitingIndex {
   /** What a task waits on: its held runs' word, else the earliest marker, a question over an approval when equal. */
   waitingFor(key: string): Waiting | null {
     const held = this.held.get(key);
-    if (held) return held.waiting;
+    if (held?.waiting) return held.waiting;
     const markers = this.sessions.get(key);
     if (!markers || markers.size === 0) return null;
     let first: Marker | null = null;
     for (const marker of markers.values()) {
+      if (held && !marker.recorded) continue;
       if (!first || marker.since < first.since) first = marker;
     }
     return first && { kind: first.kind, since: first.since };
-  }
-
-  /**
-   * A mark that moves each time a run of the task is seen to end as stopped, on the
-   * evidence of that run's own end event: read before and after an action to learn
-   * whether a run was stopped meanwhile.
-   */
-  stopMark(key: string): number {
-    return this.runs.get(key)?.stopSeq ?? 0;
   }
 
   /** The latest run the events reported for a task, by id; null when none was seen. */

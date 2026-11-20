@@ -212,13 +212,11 @@ function execRecord(now: number, request: Record<string, unknown> = {}) {
       runId: CARD_RUN,
       toolCallId: "call_mv",
       allowedDecisions: ["allow-once", "allow-always", "deny"],
-      commandAnalysis: {
-        commandCount: 1,
-        nestedCommandCount: 0,
-        riskKinds: ["filesystem-move"],
-        warningLines: ["This can't be undone"],
-      },
-      warningText: "Moves a folder outside Otto's own workspace.",
+      // What OpenClaw 2026.10.6 attaches to a node request like this one: an argv analysis
+      // with no risk in it, and one of the exec tool's own warnings for a node host.
+      commandAnalysis: { commandCount: 1, nestedCommandCount: 0, riskKinds: [], warningLines: [] },
+      warningText:
+        "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
       ...request,
     },
     createdAtMs: now - 2 * MINUTE,

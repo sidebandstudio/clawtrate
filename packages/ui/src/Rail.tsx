@@ -160,13 +160,31 @@ function MoreButton({ label, onOpen }: { label: string; onOpen: (trigger: HTMLEl
 /** How a task's state ends its row's accessible name (conversation.md, section 20). */
 const SPOKEN: Record<RunState, string> = {
   working: ", working",
-  waiting: ", needs you",
+  waiting: ", waiting",
   blocked: ", blocked",
   failed: ", last run failed",
   "done-with-failures": ", done with failures",
   stopped: ", stopped",
   queued: ", queued",
 };
+
+/**
+ * The status a task's name ends with when its row shows no mark (F-057): done
+ * when its latest run finished, stopped when it was stopped (its mark goes once
+ * the task is opened, its state does not), idle otherwise. The unread dot adds
+ * ", unread".
+ */
+export function restingWords(task: Pick<Task, "status">): string {
+  switch (task.status) {
+    case "done":
+    case "done-with-failures":
+      return ", done";
+    case "stopped":
+      return ", stopped";
+    default:
+      return ", idle";
+  }
+}
 
 /** What a bot's rows can do: set only when the connection writes. */
 type TaskActions = {
@@ -229,7 +247,7 @@ function TaskRows({
         const spoken =
           task.title +
           (task.pinned ? ", pinned" : "") +
-          (state ? SPOKEN[state] : unread ? ", unread" : "");
+          (state ? SPOKEN[state] : restingWords(task) + (unread ? ", unread" : ""));
         if (actions?.renaming === task.key) {
           return (
             <li key={task.key}>
@@ -367,10 +385,10 @@ export function waitingWords(tasks: Task[]): string | null {
   if (waiting.length === 0) return null;
   const first = waiting.reduce((a, b) => ((b.waitingSince ?? 0) < (a.waitingSince ?? 0) ? b : a));
   return first.waitingFor === "question"
-    ? "Waiting for you: a question"
+    ? "Waiting for an answer"
     : first.waitingFor === "approval"
-      ? "Waiting for you: approve a command"
-      : "Waiting for you";
+      ? "Waiting for an approval"
+      : "Waiting";
 }
 
 /** Drop the separators a menu would start or end with, or show twice in a row. */
@@ -599,25 +617,19 @@ export function Rail({
     const remaining = tasks.filter((other) => other.key !== task.key);
     const next = neighbour(tasks, task.key);
     const act = async (stop: boolean) => {
-      const { stoppedRun } = await bridge.invoke({ type: "archiveTask", key: task.key, stop });
+      await bridge.invoke({ type: "archiveTask", key: task.key, stop });
       setAnnouncement(`Archived ${task.title}.`);
-      // The gateway's archive ends anything running in the task: a run that had just started,
-      // seen to end as stopped on its own end event, is said here, with the way back.
-      if (stoppedRun)
-        runner.tell({
-          tone: "info",
-          text: "Archived. A run that had just started was stopped.",
-          action: {
-            label: "Restore",
-            onSelect: () => restore({ key: task.key, title: task.title, botId: bot.id }),
-          },
-        });
       await afterRemoval(bot, task, remaining, next);
     };
     const askStop = () =>
       setDialog({
         title: `Stop and archive “${task.title}”?`,
-        body: <p>{bot.name} is still working on this task. Archiving it stops its run first.</p>,
+        body: (
+          <p>
+            {bot.name} is still working on this task. Clawtrate will ask the gateway to stop the run
+            before archiving.
+          </p>
+        ),
         confirm: { label: "Stop and archive" },
         onConfirm: () => act(true),
         returnTo: trigger,

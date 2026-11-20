@@ -72,6 +72,38 @@ function expect(condition: unknown, message: string): asserts condition {
   if (!condition) throw new CheckFailure(message);
 }
 
+/**
+ * A command's output streamed while it ran: at least two updates, the first a
+ * proper prefix of the whole output, each holding the one before, at least one
+ * longer than the one before, and every one received before the command's
+ * result (`seq`, this connection's order). Output held back and sent whole, or only at the end, fails it.
+ */
+export function checkStreamedOutput(
+  updates: readonly GatewayEvent[],
+  texts: readonly string[],
+  result: GatewayEvent,
+  output: string,
+): void {
+  expect(texts.length >= 2, `the command's output arrived in updates (${texts.length})`);
+  const first = texts[0]!;
+  expect(
+    first.length > 0 && first.length < output.length && output.startsWith(first),
+    "the first update holds part of the output, not all of it",
+  );
+  for (let i = 1; i < texts.length; i += 1) {
+    expect(texts[i]!.startsWith(texts[i - 1]!), "each update holds the output so far");
+  }
+  expect(
+    texts.some((text, i) => i > 0 && text.length > texts[i - 1]!.length),
+    "a later update holds more of the output than the one before",
+  );
+  expect(
+    // By the order this connection received them: two events can share a millisecond.
+    updates.every((e) => e.seq < result.seq),
+    "every update came before the command's result",
+  );
+}
+
 /** JSON with object keys in sorted order, so equal values compare equal whatever their key order. */
 function canonical(value: unknown): string {
   return JSON.stringify(value, (_key, v: unknown) =>
@@ -3270,6 +3302,62 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         }),
       ]);
       view.expectEnd("final", scriptedFinalText("#sleep 1"));
+    },
+  },
+  {
+    name: "a shell command that prints as it goes, with the gateway's warning, approved once",
+    covers: ["#count"],
+    run: async (h) => {
+      const key = await h.session(SHELL_BOT, "count");
+      const view = await h.start("approvals", key, "#count");
+      const approval = await approvalFor(h, view);
+      // Inline code has no reusable rule: the gateway offers allow once and deny only.
+      checkApprovalRequest(approval, view, SHELL_COMMANDS.count, ["allow-once", "deny"]);
+      const request = rec(approval.request);
+      same(request.ask, "on-miss", "the approval's ask");
+      same(request.unavailableDecisions, ["allow-always"], "unavailableDecisions");
+      same(
+        rec(request.commandAnalysis).warningLines,
+        ["Contains inline-eval: perl -e"],
+        "the gateway's warning about the command",
+      );
+      await h
+        .op("approvals")
+        .request("exec.approval.resolve", { id: approval.id, decision: "allow-once" });
+      await h.wait(view);
+      // The output streams while the command runs: updates that grow, each before the result.
+      const output = "Step 1 of 4\nStep 2 of 4\nStep 3 of 4\nStep 4 of 4";
+      const updates = view.tool("update", "exec");
+      const texts = updates.map((e) =>
+        String(rec((rec(view.data(e).partialResult).content as JsonRecord[])?.[0]).text ?? ""),
+      );
+      expect(texts[0]?.startsWith("Step 1 of 4"), "the first update holds the first line");
+      checkStreamedOutput(updates, texts, view.tool("result", "exec")[0]!, output);
+      const deltas = view.agent("command_output").filter((e) => view.data(e).phase === "delta");
+      expect(deltas.length >= 2, "command_output deltas while it ran");
+      const result = view.result("exec");
+      same(
+        [result.isError, result.details.status, result.details.exitCode, result.text],
+        [false, "completed", 0, output],
+        "the exec result",
+      );
+      view.expectCalls([
+        execCall(scriptedArgs("#count", "exec", SHELL_BOT) as JsonRecord, {
+          isError: false,
+          content: [output],
+          details: {
+            status: "completed",
+            exitCode: 0,
+            exitSignal: null,
+            exitReason: "exit",
+            durationMs: isNumberAtLeast(3000),
+            aggregated: output,
+            noOutputTimedOut: false,
+          },
+          title: `Exec ${SHELL_COMMANDS.count} (in .)`,
+        }),
+      ]);
+      view.expectEnd("final", scriptedFinalText("#count"));
     },
   },
   {

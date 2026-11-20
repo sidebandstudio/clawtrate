@@ -31,7 +31,6 @@ import {
   applyApprovalResolved,
   APPROVAL_KINDS,
   decisionText,
-  expireApprovals,
   attemptsOf,
   attemptsSettled,
   decisionRefusal,
@@ -144,6 +143,7 @@ import {
   finishRun,
   isActive,
   cachedSize,
+  isDefinitiveLifecycleError,
   isTerminal,
   markUnconfirmed,
   parkAfterStop,
@@ -209,9 +209,11 @@ import {
   MAX_LISTED_TASKS,
   MAX_MESSAGE_JSON_CHARS,
   MAX_OUTBOX,
+  MAX_LIFECYCLE_RECORDS,
   MAX_PENDING_APPROVAL_COUNT,
   MAX_REACTIONS_PER_MESSAGE,
   MAX_RUN_TEXT_CHARS,
+  MAX_SETTLED_APPROVAL_COUNT,
   MAX_TASK_LINE_CHARS,
   MAX_TRACKED_TASKS as TRACKED_TASKS,
   MAX_UNROUTED,
@@ -337,6 +339,15 @@ export const MAX_OPENED_READS = 16;
  * make it actionable again. The oldest give way; switching gateways clears them.
  */
 export const MAX_APPROVAL_OUTCOMES = 512;
+/**
+ * Tasks let go whose settled approval cards are kept, so a task read again from
+ * history shows each where it was, linked to its action, with the request and
+ * what settled it in its Raw: the gateway's lists hold only pending requests and
+ * its history keeps no approval record. Each keeps at most a task's own number
+ * of settled cards (`MAX_SETTLED_APPROVAL_COUNT`); the oldest task gives way,
+ * and switching gateways clears them.
+ */
+export const MAX_KEPT_APPROVAL_TASKS = 16;
 /**
  * Approvals whose attempts are kept apart from any task: those with a decision
  * on its way, an unknown outcome or a read-back on its way. Past it, a
@@ -683,6 +694,35 @@ function withLive(transcript: Transcript): Transcript {
   return same ? transcript : { ...transcript, live };
 }
 
+/** A kept frame that reports an error: a chat error, or a lifecycle error, retried or not. */
+const ERROR_FRAME = /^(chat \(error\)|agent \(lifecycle error(, attempt retried)?\))$/;
+/** A kept frame that ended its run. */
+const END_FRAME = /^(agent \(lifecycle end\)|chat \((aborted|final)\))$/;
+
+/**
+ * A run whose end was read from history rows (`endFromRows`), with no event of
+ * its own received here, keeps for its run line's Raw the last history row
+ * correlated with it, labelled as such (F-094). A run that has events of its
+ * own keeps those.
+ */
+function withHistoryRows(runs: Run[], messages: unknown, received: unknown): Run[] {
+  if (!Array.isArray(messages) || !Array.isArray(received) || messages.length === 0) return runs;
+  return runs.map((run) => {
+    if (!isTerminal(run.state) || !run.endFromRows || (run.lifecycle?.length ?? 0) > 0) return run;
+    let last: unknown = undefined;
+    for (const [index, message] of messages.entries()) {
+      const meta = asRecord(asRecord(message)?.__openclaw);
+      if (meta?.runId === run.id) last = received[index];
+    }
+    return last === undefined
+      ? run
+      : {
+          ...run,
+          lifecycle: [{ via: "chat.history (the run's last correlated row)", record: last }],
+        };
+  });
+}
+
 export class ClawtrateClient {
   /**
    * The state, brought within its bounds (`state-bounds.ts`) every time it is
@@ -824,6 +864,8 @@ export class ClawtrateClient {
   private readonly checkingSlots = new Set<string>();
   /** What the gateway reported about approvals, by id, newest last (`MAX_APPROVAL_OUTCOMES`). */
   private readonly approvalOutcomes = new Map<string, ApprovalResolution>();
+  /** Settled approval cards of tasks let go, by task, newest last (`MAX_KEPT_APPROVAL_TASKS`). */
+  private readonly keptApprovals = new Map<string, ApprovalCard[]>();
   /**
    * Each unsettled approval's attempts, by id, kept for as long as anything is
    * outstanding whether or not a task shows it (`MAX_APPROVAL_ATTEMPTS`). Every
@@ -1121,6 +1163,7 @@ export class ClawtrateClient {
       this.request("sessions.messages.unsubscribe", { key }).catch(() => {});
     }
     this.keepLinkedRuns(key);
+    this.keepSettledApprovals(key);
     this.store.update((state) => {
       const transcripts = { ...state.transcripts };
       delete transcripts[key];
@@ -1149,6 +1192,35 @@ export class ClawtrateClient {
       ...activity,
       runs: [...activity.runs.filter((run) => !linked.has(run.id)), ...kept],
     }));
+  }
+
+  /**
+   * The gateway confirmed the task deleted: the settled cards kept for it go,
+   * and an open copy of the task keeps none to be kept when it is let go.
+   */
+  private dropSettledApprovals(key: string): void {
+    this.keptApprovals.delete(key);
+    if (this.state.transcripts[key]?.approvals.some((card) => card.status !== "pending"))
+      this.updateActivity(key, (activity) => ({
+        ...activity,
+        approvals: activity.approvals.filter((card) => card.status === "pending"),
+      }));
+  }
+
+  /**
+   * A task let go keeps its settled approval cards, as settled: none of them can
+   * be answered again, and a pending one is the gateway's lists' to give back.
+   */
+  private keepSettledApprovals(key: string): void {
+    const settled = (this.state.transcripts[key]?.approvals ?? [])
+      .filter((card) => card.status !== "pending")
+      .slice(-MAX_SETTLED_APPROVAL_COUNT);
+    this.keptApprovals.delete(key);
+    if (settled.length === 0) return;
+    this.keptApprovals.set(key, settled);
+    while (this.keptApprovals.size > MAX_KEPT_APPROVAL_TASKS) {
+      this.keptApprovals.delete(this.keptApprovals.keys().next().value as string);
+    }
   }
 
   /** How many viewers hold a transcript open. */
@@ -2516,7 +2588,11 @@ export class ClawtrateClient {
     key: string,
     approvalId: string,
     decision: ApprovalDecision,
-    options: { expiresInDays?: number | null; owner?: object; shownDigest?: string | null } = {},
+    options: {
+      expiresInDays?: number | null;
+      owner?: object;
+      shownDigest?: string | null;
+    } = {},
   ): Promise<void> {
     const approval = this.state.transcripts[key]?.approvals.find((each) => each.id === approvalId);
     if (!approval || approval.status !== "pending")
@@ -2815,8 +2891,9 @@ export class ClawtrateClient {
     if (known.lossy) void this.lookUpOutcome(known.id);
     this.approvalOutcomes.delete(known.id);
     this.approvalOutcomes.set(known.id, known);
-    // Settled: nothing about it is outstanding any more.
+    // Settled: nothing about it is outstanding any more, and its task no longer waits on it.
     this.approvalAttempts.delete(known.id);
+    if (this.waiting.onApprovalResolved(known.id)) this.publishTasks();
     while (this.approvalOutcomes.size > MAX_APPROVAL_OUTCOMES) {
       this.approvalOutcomes.delete(this.approvalOutcomes.keys().next().value as string);
     }
@@ -2826,6 +2903,12 @@ export class ClawtrateClient {
         this.updateActivity(transcript.sessionKey, (activity) =>
           applyApprovalResolved(activity, known),
         );
+      }
+    }
+    for (const [key, approvals] of this.keptApprovals) {
+      if (approvals.some((approval) => approval.id === known.id)) {
+        const updated = applyApprovalResolved({ ...emptyActivity, approvals }, known);
+        this.keptApprovals.set(key, updated.approvals);
       }
     }
     // A settled approval makes room for one that was waiting.
@@ -3105,6 +3188,13 @@ export class ClawtrateClient {
         pendingBefore,
       );
     });
+    // A request this list no longer holds no longer waits on the rail either.
+    let unmarked = false;
+    for (const approval of this.state.transcripts[key]?.approvals ?? []) {
+      if (approval.inferred && approval.status !== "pending" && pendingNow.has(approval.id))
+        unmarked = this.waiting.onApprovalResolved(approval.id) || unmarked;
+    }
+    if (unmarked) this.publishTasks();
     this.lookUpInferred(key, pendingNow);
     // Another list may have been refused for the scope meanwhile: this one cannot be kept current then.
     this.setApprovalSource(key, source.kind, this.holds(APPROVALS_SCOPE) ? "ready" : "unavailable");
@@ -3143,15 +3233,21 @@ export class ClawtrateClient {
     }
   }
 
-  /** Expire pending approvals at their `expiresAt`, then re-read the lists to confirm. */
+  /** At a pending approval's `expiresAt`, read the gateway's outcome for it; the card stays pending until one arrives. */
   private scheduleApprovalExpiry(key: string): void {
     const transcript = this.state.transcripts[key];
     const existing = this.expiryTimers.get(key);
     if (existing) clearTimeout(existing);
     this.expiryTimers.delete(key);
+    const now = this.now();
     const next = Math.min(
       ...(transcript?.approvals ?? [])
-        .filter((approval) => approval.status === "pending" && approval.expiresAt !== null)
+        .filter(
+          (approval) =>
+            approval.status === "pending" &&
+            approval.expiresAt !== null &&
+            approval.expiresAt > now,
+        )
         .map((approval) => approval.expiresAt!),
     );
     if (!Number.isFinite(next)) return;
@@ -3160,13 +3256,19 @@ export class ClawtrateClient {
       setTimeout(
         () => {
           this.expiryTimers.delete(key);
-          const pendingNow = this.pendingApprovalIds(key);
-          this.updateActivity(key, (activity) => expireApprovals(activity, this.now()));
-          this.lookUpInferred(key, pendingNow);
-          void this.backfillApprovals(key, this.generation);
+          for (const approval of this.state.transcripts[key]?.approvals ?? []) {
+            if (
+              approval.status === "pending" &&
+              approval.expiresAt !== null &&
+              approval.expiresAt <= this.now()
+            )
+              void this.lookUpOutcome(approval.id);
+          }
+          // The next deadline, whatever these reads say: a request still held changes nothing.
+          this.scheduleApprovalExpiry(key);
         },
         // setTimeout fires at once past 2^31-1 ms; re-check at that horizon instead.
-        Math.min(MAX_TIMER_MS, Math.max(0, next - this.now())),
+        Math.min(MAX_TIMER_MS, Math.max(0, next - now)),
       ),
     );
   }
@@ -4782,6 +4884,7 @@ export class ClawtrateClient {
     }
     this.creationWaiters.clear();
     this.approvalOutcomes.clear();
+    this.keptApprovals.clear();
     this.waiting.clear();
     this.unrouted.clear();
     this.recipients.clear();
@@ -5185,6 +5288,7 @@ export class ClawtrateClient {
     if (isSessionRemoval(payload)) {
       this.cancelAllQueued(key);
       this.retireForeign(key);
+      this.dropSettledApprovals(key);
       if (this.rows.delete(key)) this.publishTasks();
       return;
     }
@@ -5247,8 +5351,15 @@ export class ClawtrateClient {
     // The task holds them now: none is kept twice, and no copy left here goes stale while the
     // task's own events update the task. Letting the task go keeps what another task links to.
     this.foreign.delete(sessionKey);
-    if (waiting.length === 0) return empty;
-    return { ...empty, runs: waiting };
+    // Its settled approval cards come back as they were; each finds its action once history
+    // rebuilds the run (`normalizeApprovals`).
+    const approvals = this.keptApprovals.get(key) ?? [];
+    this.keptApprovals.delete(key);
+    return {
+      ...empty,
+      ...(waiting.length > 0 ? { runs: waiting } : {}),
+      ...(approvals.length > 0 ? { approvals } : {}),
+    };
   }
 
   private emptyTranscript(key: string): Transcript {
@@ -5402,12 +5513,16 @@ export class ClawtrateClient {
           .filter((message) => message.status === "sending" || message.status === "awaiting-access")
           .map((message) => message.id),
       );
-      const runs = settleUnboundStops(
-        settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx, busy),
-        inFlightId,
-        historyIds,
-        awaitingAnswer,
-        ctx,
+      const runs = withHistoryRows(
+        settleUnboundStops(
+          settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx, busy),
+          inFlightId,
+          historyIds,
+          awaitingAnswer,
+          ctx,
+        ),
+        messages,
+        history?.messages,
       );
       // A Stop asked before the gateway named its run: the run in flight under the send's id
       // is that run, named now, and is stopped; so is one settled earlier with no known outcome.
@@ -5428,7 +5543,7 @@ export class ClawtrateClient {
           this.dropAttachments(message.id);
       }
       const activity = markUnconfirmed(reconciled);
-      const items = mapHistory(messages);
+      const items = mapHistory(messages, history?.messages);
       const rebuilt: Transcript = {
         ...current,
         ...retainActivity(
@@ -5498,7 +5613,14 @@ export class ClawtrateClient {
     // Only tasks this client follows keep a stream baseline: the text, never the message.
     const projected = this.streams.project(payload);
     const text = payload.state === "delta" ? projected : null;
+    // A chat frame that ends the run (an error, an abort, a final reply) is kept when the engine
+    // took it: on a Stop it is often the event behind the stop, before the lifecycle end.
+    const ends =
+      payload.state === "error" || payload.state === "aborted" || payload.state === "final";
+    const before = ends ? this.runShape(key, runId) : null;
     this.updateActivity(key, (activity, ctx) => applyChatEvent(activity, payload, text, ctx));
+    if (ends && this.runShape(key, runId) !== before)
+      this.noteLifecycle(key, runId, `chat (${String(payload.state)})`, payload);
     // final, aborted or error: the durable transcript now owns the text.
     if (payload.state !== "delta" && payload.state !== "status") this.scheduleHistory(key);
   }
@@ -5535,11 +5657,71 @@ export class ClawtrateClient {
       this.updateForeign(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
       return;
     }
+    const before = this.runShape(key, payload.runId);
     this.updateActivity(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
-    const phase = asRecord(payload.data)?.phase;
+    const data = asRecord(payload.data);
+    const phase = data?.phase;
+    if (
+      payload.stream === "lifecycle" &&
+      (phase === "start" || phase === "waiting-approval" || phase === "end" || phase === "error") &&
+      // Only a frame the engine took: one it rejected (an older one, a repeat) is not behind a line.
+      this.runShape(key, payload.runId) !== before
+    ) {
+      const retried = phase === "error" && data && !isDefinitiveLifecycleError(data);
+      this.noteLifecycle(
+        key,
+        payload.runId,
+        retried ? "agent (lifecycle error, attempt retried)" : `agent (lifecycle ${String(phase)})`,
+        payload,
+      );
+    }
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);
     }
+  }
+
+  /**
+   * Keep an event that started or ended a run with the run, as received, for
+   * the run line's, the turn error's and the turn notes' Raw (F-094): its
+   * start, its wait for an approval, and its end, the latest of each kind. No
+   * error frame is kept, and a failed run keeps no frame that ended it: that
+   * event is in no snapshot, only in the host's Raw table (F-301). A run the
+   * event names that this task does not hold keeps nothing.
+   */
+  /** What an event can change of a run, to tell whether the engine took it; null with no run. */
+  private runShape(key: string, runId: string): string | null {
+    const transcript = this.state.transcripts[key];
+    const run = transcript && findRun(transcript, runId);
+    if (!run) return null;
+    return JSON.stringify([
+      run.state,
+      run.endedAt,
+      run.reportedStartAt,
+      run.pendingCards.length,
+      run.attemptErrors.length,
+      run.error?.message ?? null,
+    ]);
+  }
+
+  private noteLifecycle(key: string, runId: string, via: string, record: RawRecord): void {
+    this.updateActivity(key, (activity) => {
+      const run = findRun(activity, runId);
+      if (!run) return activity;
+      // An error event is in no snapshot (F-301): what failed a run is kept only in the host's
+      // Raw table and read when Raw is opened. So no error frame is kept here, and a failed run
+      // keeps no frame that ended it; its start and its wait stay.
+      const failed = run.state === "failed";
+      const excluded = (each: string) => ERROR_FRAME.test(each) || (failed && END_FRAME.test(each));
+      const kept = (run.lifecycle ?? []).filter((each) => each.via !== via && !excluded(each.via));
+      if (excluded(via) && kept.length === (run.lifecycle ?? []).length) return activity;
+      const lifecycle = (excluded(via) ? kept : [...kept, { via, record }]).slice(
+        -MAX_LIFECYCLE_RECORDS,
+      );
+      return {
+        ...activity,
+        runs: activity.runs.map((each) => (each === run ? { ...run, lifecycle } : each)),
+      };
+    });
   }
 
   private handleEvent(event: EventFrame, generation: number): void {
@@ -5613,7 +5795,10 @@ export class ClawtrateClient {
             : event.event === "plugin.approval.requested"
               ? parsePluginApproval(event.payload)
               : parseSystemAgentApproval(event.payload);
-        if (card) this.routeApproval(admitApproval(card));
+        if (card) {
+          if (this.restoreWait(card)) this.publishTasks();
+          this.routeApproval(admitApproval(card));
+        }
         return;
       }
       case "exec.approval.resolved":
@@ -5690,7 +5875,6 @@ export class ClawtrateClient {
       },
       now: () => this.now(),
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-      stopMark: (key) => this.waiting.stopMark(key),
       stopRuns: async (key) => {
         const runs = this.state.transcripts[key]?.runs ?? [];
         await Promise.all(
@@ -5886,6 +6070,11 @@ export class ClawtrateClient {
   private async loadWaitingApprovals(generation: number): Promise<void> {
     if (!this.holds(APPROVALS_SCOPE)) return;
     let changed = false;
+    // The recorded waits before these reads, and what they list: when every list answered, a
+    // wait held before that none lists was settled while this client was away.
+    const before = this.waiting.recordedApprovals();
+    const listed = new Set<string>();
+    let complete = true;
     for (const source of APPROVAL_SOURCES) {
       try {
         const value = await this.request(source.method, {});
@@ -5898,14 +6087,23 @@ export class ClawtrateClient {
             : [];
         for (const item of items) {
           const card = source.parse(item);
-          if (card?.status === "pending")
-            changed = this.waiting.restoreApproval(card, this.now()) || changed;
+          if (card?.status !== "pending") continue;
+          listed.add(`approval:${card.id}`);
+          changed = this.restoreWait(card) || changed;
         }
       } catch (error) {
+        complete = false;
         this.log("warn", `${source.method} failed: ${errorMessage(error)}`);
       }
     }
+    if (complete) changed = this.waiting.dropUnlisted(before, listed) || changed;
     if (changed) this.publishTasks();
+  }
+
+  /** A pending request's task waits on it, unless the gateway already reported its outcome. */
+  private restoreWait(card: ApprovalCard): boolean {
+    if (this.approvalOutcomes.has(capId(card.id, MAX_ID_CHARS))) return false;
+    return this.waiting.restoreApproval(card, this.now());
   }
 
   /** The questions pending at a connect, for the rail's waiting state (needs `operator.questions`). */

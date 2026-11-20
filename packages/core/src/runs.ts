@@ -470,6 +470,15 @@ export type Run = {
   /** Errors of attempts the gateway retried, newest last, at most `MAX_ATTEMPT_ERRORS`. */
   attemptErrors: string[];
   /**
+   * The events that started and ended the run, as received on the live stream
+   * (`agent` lifecycle `start`, `waiting-approval` and `end`, and a `chat` `aborted` or
+   * `final`), for the run line's and the turn error's Raw. Never an error frame: what failed a
+   * run is read from the host's Raw table (`readRunRaw`, F-301), so a failed run keeps only its
+   * start and wait here. Absent for a run known only from history, which keeps no such event.
+   * Each is cut to its bound.
+   */
+  lifecycle?: Array<{ via: string; record: unknown }>;
+  /**
    * Steps dropped to keep the task within `MAX_STEPS_PER_TASK`, older
    * finished ones first, then the oldest open ones. The gateway's transcript
    * still holds them; their raw payloads are no longer kept here.

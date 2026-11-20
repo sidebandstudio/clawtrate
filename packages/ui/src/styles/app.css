@@ -2838,6 +2838,11 @@ textarea {
   color: var(--warn);
 }
 
+/* A latest run that finished with failed actions, until its task is opened (F-295). */
+.bot-preview[data-tone="danger"] {
+  color: var(--danger);
+}
+
 /* A refused action, or one waiting for the gateway's owner, above the footer. */
 .rail-notice {
   display: flex;

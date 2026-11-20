@@ -770,7 +770,15 @@ export function RunLine({ run }: { run: Run }) {
   const ctx = useContext(ActionEnvContext)?.ctx;
   const line = isTerminal(run.state) ? runLineOf(run, calls, ctx, drawn?.account) : null;
   if (!line) return null;
-  return <RunLineView runId={run.id} line={line} model={run.model} />;
+  return (
+    <RunLineView
+      runId={run.id}
+      line={line}
+      model={run.model}
+      lifecycle={run.lifecycle ?? null}
+      failure={run.error?.raw ?? null}
+    />
+  );
 }
 
 /** The calls of a run, for the status line's phrase. */

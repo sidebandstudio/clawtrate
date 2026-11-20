@@ -255,9 +255,9 @@ test("F-474: a pasted code is a password field, cleared as it is sent", async ({
   expect(await page.content()).not.toContain("made-up-code-0001");
   // The label step: another OpenAI account exists, so a label is required.
   await expect(page.getByRole("textbox", { name: "Label" })).toBeFocused();
-  await expect(page.getByRole("button", { name: "Done" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Done", exact: true })).toBeDisabled();
   await page.getByRole("textbox", { name: "Label" }).fill("Studio");
-  await page.getByRole("button", { name: "Done" }).click();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
   // Back on the Account step, the new account chosen.
   await expect(page.getByRole("radio", { name: /^OpenAI · Studio/ })).toHaveAttribute(
     "aria-checked",
@@ -686,7 +686,7 @@ test("F-474: where the gateway keeps sign-ins per bot, a bot connects an account
   const start = (await sent(page)).find((each) => each.type === "startSignIn");
   expect(start).toMatchObject({ botId: "otto" });
   await page.getByRole("textbox", { name: "Label" }).fill("Side");
-  await page.getByRole("button", { name: "Done" }).click();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
   // Back on the choice, with the new account chosen, kept by Otto.
   await expect(page.getByRole("heading", { name: "Change account", level: 3 })).toBeVisible();
   await expect(

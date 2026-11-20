@@ -44,8 +44,6 @@ export type TaskActionContext = {
    * it before and after its own check, and sends nothing if it moved.
    */
   runMark: (key: string) => string;
-  /** Moves each time a run of the task is seen to end as stopped (`WaitingIndex.stopMark`). */
-  stopMark: (key: string) => number;
   /**
    * The engine's own Stop (`ClawtrateClient.stopRun`) for each run of the task it
    * follows that is running or waiting. Answers how many of its runs are now
@@ -56,10 +54,7 @@ export type TaskActionContext = {
   runsActive: (key: string) => boolean;
 };
 
-/** How long an archive waits for the end of a run that started while its request was out. */
-export const ARCHIVE_STOP_WAIT_MS = 3_000;
-
-/** What an archive did beyond archiving: a run that had just started was stopped by it. */
+/** What an archive did beyond archiving. The archive reply carries no per-request stop receipt. */
 export type ArchiveResult = { stoppedRun: boolean };
 
 /** An archived task, as the Archived group shows it. */
@@ -371,18 +366,9 @@ export async function archiveTask(
     // would stop it, so nothing is sent and the person is asked.
     throw new ActiveRunError();
   }
-  if (row?.archived === true) return { stoppedRun: false };
-  const sent = { run: ctx.runMark(key), stop: ctx.stopMark(key) };
-  await call(ctx, "sessions.patch", archiveParams(key, sessionIdOf(row, key), true));
-  if (options.stop) return { stoppedRun: false };
-  // The gateway's archive ends anything running in the task (its drain), and has no guard
-  // against a run that starts while the request is out. When a run started meanwhile, its own
-  // end event says whether the archive stopped it; that end comes with or just after the answer.
-  if (ctx.stopMark(key) === sent.stop && ctx.runMark(key) !== sent.run) {
-    const deadline = ctx.now() + ARCHIVE_STOP_WAIT_MS;
-    while (ctx.stopMark(key) === sent.stop && ctx.now() < deadline) await ctx.sleep(STOP_POLL_MS);
-  }
-  return { stoppedRun: ctx.stopMark(key) !== sent.stop };
+  if (row?.archived !== true)
+    await call(ctx, "sessions.patch", archiveParams(key, sessionIdOf(row, key), true));
+  return { stoppedRun: false };
 }
 
 export async function restoreTask(ctx: TaskActionContext, key: string): Promise<void> {

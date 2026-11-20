@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createCodingAgent, SEND_MESSAGE_TEXT, THREAD_URL_BASE } from "../src/coding-agent-mcp.ts";
 import {
+  checkStreamedOutput,
   createHarness,
   RunView,
   runCheck,
@@ -104,6 +105,7 @@ describe("shell commands", () => {
       SHELL_COMMANDS.list,
       SHELL_COMMANDS.print,
       SHELL_COMMANDS.missing,
+      SHELL_COMMANDS.count,
       ...[5, 20, 120].map(SHELL_COMMANDS.sleep),
     ]);
     const all = SCENARIOS.flatMap((s) => shellSteps(s.name)).flatMap((step) =>
@@ -115,7 +117,7 @@ describe("shell commands", () => {
       arguments: { command: "sleep 120" },
     });
     expect(SHELL_SCENARIOS.sort()).toEqual(
-      ["approve", "approve-once", "exit-code", "exec-timeout", "sleep"].sort(),
+      ["approve", "approve-once", "count", "exit-code", "exec-timeout", "sleep"].sort(),
     );
   });
 
@@ -676,5 +678,58 @@ describe("the stopped stream's partial text and the queue-only schema exception"
       /agent error does not match the protocol schema/,
     );
     expect(() => viewOf([gap, here], 0).validate()).not.toThrow();
+  });
+});
+
+describe("the streamed-output check", () => {
+  const output = "Step 1 of 4\nStep 2 of 4\nStep 3 of 4\nStep 4 of 4";
+  const event = (seq: number, at: number) => ({ at, seq, event: "agent", payload: {} });
+  const lines = (n: number) => output.split("\n").slice(0, n).join("\n");
+
+  it("passes output that grows while the command runs", () => {
+    expect(() =>
+      checkStreamedOutput(
+        [event(1, 100), event(2, 200), event(3, 300)],
+        [lines(1), lines(2), lines(4)],
+        event(4, 400),
+        output,
+      ),
+    ).not.toThrow();
+  });
+
+  it("fails output held back and sent whole: snapshots that never grow, or a first one already complete", () => {
+    expect(() =>
+      checkStreamedOutput([event(1, 100), event(2, 200)], [output, output], event(3, 300), output),
+    ).toThrow(/part of the output/);
+    expect(() =>
+      checkStreamedOutput(
+        [event(1, 100), event(2, 200)],
+        [lines(2), lines(2)],
+        event(3, 300),
+        output,
+      ),
+    ).toThrow(/holds more of the output/);
+  });
+
+  it("orders by receipt, not by clock: an update and the result in the same millisecond pass", () => {
+    expect(() =>
+      checkStreamedOutput(
+        [event(1, 100), event(2, 300)],
+        [lines(1), lines(2)],
+        event(3, 300),
+        output,
+      ),
+    ).not.toThrow();
+  });
+
+  it("fails an update received after the command's result", () => {
+    expect(() =>
+      checkStreamedOutput(
+        [event(1, 100), event(3, 300)],
+        [lines(1), lines(2)],
+        event(2, 200),
+        output,
+      ),
+    ).toThrow(/before the command's result/);
   });
 });

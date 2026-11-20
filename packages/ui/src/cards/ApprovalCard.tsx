@@ -13,6 +13,7 @@ import { useCardEnv, useMinuteClock } from "./context.tsx";
 import {
   allowLabel,
   approvalLine,
+  policyLine,
   approvalView,
   decisionPhase,
   expiryLine,
@@ -125,6 +126,7 @@ function FullRequest({
   onToggle?: (open: boolean) => void;
 }) {
   const rows = view.rows.filter((row) => !row.list && !(whole && row.label === "Folder"));
+  const policy = policyLine(card);
   return (
     <details
       className="request-full"
@@ -169,6 +171,7 @@ function FullRequest({
           </p>
         )}
         <Fields rows={rows} />
+        {policy && <p className="request-why">{policy}</p>}
       </div>
     </details>
   );
@@ -202,7 +205,8 @@ export function ApprovalCardView({ card, domId }: { card: Approval; domId: strin
   };
 
   if (card.status !== "pending") {
-    const outcome = resolvedView(card, env.bots, env.bot, run);
+    const step = card.stepId ? run?.steps.find((each) => each.id === card.stepId) : undefined;
+    const outcome = resolvedView(card, step);
     const when = card.resolvedAt ?? card.expiresAt;
     return (
       <details
@@ -233,6 +237,7 @@ export function ApprovalCardView({ card, domId }: { card: Approval; domId: strin
             {outcome.sentence}
             {outcome.winner ? ` ${outcome.winner}` : ""}
           </p>
+          {outcome.then && <p data-testid="approval-then">{outcome.then}</p>}
           {outcome.saved && <p>{outcome.saved}</p>}
           <FullRequest view={view} card={card} whole={null} open />
           <CardFoot disclosure={raw} raw={approvalRaw(card)} />
@@ -458,6 +463,9 @@ function PendingApproval({
   const failureOrSending = phase !== "choose";
   const failed = phase === "unknown" || retrying;
   const formShown = formOpen && view.always;
+  const warningCut = card.cut?.some(
+    (path) => path === "exec.warningText" || path === "exec.commandAnalysis",
+  );
 
   return (
     <section
@@ -502,9 +510,12 @@ function PendingApproval({
           ))}
         </ul>
       )}
+      {warningCut && (
+        <p className="request-asker">Some gateway warning text could not be shown in full.</p>
+      )}
       {card.runEnded && (
         <p className="request-ended">
-          {name}'s run has ended. This request is still open, and you can still answer it.
+          {name}'s run has ended. The last gateway record shows this request pending.
         </p>
       )}
       <FullRequest view={view} card={card} whole={whole} open={fullOpen} onToggle={setFullOpen} />

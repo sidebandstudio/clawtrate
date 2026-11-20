@@ -25,7 +25,14 @@ import { Avatar, Presence } from "./Avatar.tsx";
 import { CardScope, CardSlot, focusPending, oldestPending, TrailingCards } from "./cards/index.ts";
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
 import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
-import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTurn.tsx";
+import {
+  IncompleteCaption,
+  OutgoingBubble,
+  RunEnding,
+  RunNoteRaw,
+  RunReply,
+  SystemLine,
+} from "./LiveTurn.tsx";
 import { ActionScope, ItemFeed, RunFeed, RunLine, showAction } from "./actions/index.ts";
 import { LeavingStatusLine, StatusLine } from "./StatusLine.tsx";
 import { FindBar } from "./Find.tsx";
@@ -350,9 +357,7 @@ function TranscriptView({
     rows.push(
       <CardSlot key={item.id} item={item}>
         {item.role === "system" ? (
-          <p className="event-line" data-side="center">
-            {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
-          </p>
+          <SystemLine item={item} />
         ) : live.echoes.has(item.id) ? null : (
           <Turn item={item} incomplete={live.incomplete.has(item.id)} />
         )}
@@ -649,15 +654,18 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
       foot.push(
         <div className="turn-note" data-testid="read-only-wait" key={`wait-${active.id}`}>
           <span className="glyph" data-state="blocked" aria-hidden="true" />
-          <p>
-            {bot.name} is waiting for an approval or an answer. This device can't see it on a
-            read-only connection.{" "}
-            {options.onRequestAccess && (
-              <button type="button" className="link-button" onClick={options.onRequestAccess}>
-                Request access
-              </button>
-            )}
-          </p>
+          <div className="turn-note-body">
+            <p>
+              {bot.name} is waiting for an approval or an answer. This device can't see it on a
+              read-only connection.{" "}
+              {options.onRequestAccess && (
+                <button type="button" className="link-button" onClick={options.onRequestAccess}>
+                  Request access
+                </button>
+              )}
+            </p>
+            <RunNoteRaw run={active} />
+          </div>
         </div>,
       );
     }
@@ -712,8 +720,7 @@ function needsYouOf(bot: Bot, transcript: Transcript | undefined, interactive: b
 function lifecycleWords(bot: Bot, run: Run | undefined, last: Run | undefined): string | null {
   if (run) {
     if (run.state === "stopping") return "Stopping";
-    if (run.state === "waiting" || run.pendingCards.length > 0)
-      return `${bot.name} is waiting for you`;
+    if (run.state === "waiting" || run.pendingCards.length > 0) return `${bot.name} is waiting`;
     return `${bot.name} is working`;
   }
   // An ending nothing established is not announced as one.

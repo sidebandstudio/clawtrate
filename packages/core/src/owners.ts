@@ -33,6 +33,7 @@ import {
   MAX_APPROVAL_ATTEMPTS,
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
+  MAX_KEPT_APPROVAL_TASKS,
   MAX_OUTCOME_LOOKUPS,
   MAX_SPAWN_LINKS,
   MAX_STREAMS_PER_TASK,
@@ -56,6 +57,7 @@ import {
   WAITING_RUN_CHARS,
 } from "./waiting.ts";
 import {
+  APPROVAL,
   APPROVAL_ATTEMPTS,
   MAX_BOTS,
   APPROVAL_OUTCOME,
@@ -66,6 +68,7 @@ import {
   MAX_OUTBOX,
   MAX_PENDING_APPROVAL_COUNT,
   MAX_RUN_LIST,
+  MAX_SETTLED_APPROVAL_COUNT,
   MAX_RUN_TEXT_CHARS,
   MAX_STEPS_PER_TASK,
   MAX_TRACKED_TASKS,
@@ -194,6 +197,18 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: ID + worstCase(APPROVAL_OUTCOME),
     row: "approvalOutcomes",
     opaque: "`APPROVAL_OUTCOME`",
+  },
+  // Settled approval cards of tasks let go, each task's own number at most, until it is opened again.
+  keptApprovals: {
+    max: MAX_KEPT_APPROVAL_TASKS,
+    each: ID + MAX_SETTLED_APPROVAL_COUNT * worstCase(APPROVAL),
+    row: "keptApprovals",
+  },
+  "keptApprovals.*": {
+    max: MAX_SETTLED_APPROVAL_COUNT,
+    each: worstCase(APPROVAL),
+    row: null,
+    opaque: "`APPROVAL`",
   },
   // The same objects as the state's `unroutedApprovals`: only the keys are more.
   unrouted: { max: MAX_UNROUTED, each: ID, row: "bookkeeping", opaque: "`APPROVAL`" },

@@ -321,6 +321,12 @@ const preamble = object<Preamble>()({
   ended: FLAG,
   beforeCall: ID,
 });
+/** The events that started, paused and ended a run: its start, its wait, its lifecycle end, and the chat frame that ended it; never an error frame (F-301). */
+export const MAX_LIFECYCLE_RECORDS = 4;
+const lifecycleRecord = object<{ via: string; record: unknown }>()({
+  via: NAME,
+  record: json(MAX_RECORD_CHARS),
+});
 export const RUN: Bound = flagged<Run>()({
   id: ID,
   bound: FLAG,
@@ -349,6 +355,7 @@ export const RUN: Bound = flagged<Run>()({
   ending: runEnding,
   outcomeKnown: FLAG,
   attemptErrors: list(MAX_ATTEMPT_ERROR_COUNT, text(MAX_ATTEMPT_ERROR_CHARS)),
+  lifecycle: list(MAX_LIFECYCLE_RECORDS, lifecycleRecord),
   omittedSteps: NUMBER,
   omittedTools: NUMBER,
   omittedToolsAtEnd: NUMBER,
@@ -534,6 +541,7 @@ const item = flagged<TranscriptItem>()({
   blocks: list(MAX_BLOCKS_PER_ITEM, block, { pool: "blocks" }),
   model: NAME,
   truncated: FLAG,
+  raw: json(MAX_RECORD_CHARS),
   messageId: ID,
   replyTo: object<ReplyReference>()({
     id: ID,

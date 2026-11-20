@@ -1133,8 +1133,8 @@ function inferredResolution(
 }
 
 /**
- * Pending approvals past their `expiresAt` expire. The gateway does not run
- * them. This is an inference: the gateway's own outcome, if it differs, wins.
+ * Pending approvals past their `expiresAt` expire. This is an inference: the
+ * gateway's own outcome, if it differs, wins.
  */
 export function expireApprovals(activity: TaskActivity, now: number): TaskActivity {
   let next = activity;
@@ -1185,9 +1185,10 @@ export function settleUnlistedApprovals(
  * - The run's state is left to the run's own lifecycle events. A pending
  *   approval does not prove its run is blocked: exec can return an
  *   `approval-pending` result and wait for the decision on its own.
- * - An approval is never settled because its run ended. It stays pending until
- *   the gateway resolves it, it expires, or a reload no longer lists it;
- *   `runEnded` says it outlived its run. To withdraw it, deny it.
+ * - An approval is never settled because its run ended, and Clawtrate never
+ *   answers one by itself. It stays pending until the gateway resolves it, it
+ *   expires, or a reload no longer lists it; `runEnded` says it outlived an
+ *   end of its run the engine accepted (not a stand-in, `outcomeKnown`).
  */
 export function normalizeApprovals(
   activity: TaskActivity,
@@ -1196,7 +1197,7 @@ export function normalizeApprovals(
    * messaged bot's, when the caller follows it. Without it, such an
    * approval's `runEnded` is left as it was.
    */
-  otherRun?: (runId: string) => { state: RunState } | undefined,
+  otherRun?: (runId: string) => { state: RunState; outcomeKnown?: boolean } | undefined,
 ): TaskActivity {
   if (activity.approvals.length === 0) return activity;
   let runs = activity.runs;
@@ -1207,13 +1208,14 @@ export function normalizeApprovals(
     const linked =
       run && stepId && run.steps.some((step) => step.id === stepId) ? stepId : approval.stepId;
     const elsewhere = !run && approval.runId ? otherRun?.(approval.runId) : undefined;
+    // Only an end the engine accepted for that run: never a stand-in it inferred (`outcomeKnown`).
     const runEnded =
       approval.status !== "pending"
         ? false
         : run
           ? run.outcomeKnown && isTerminal(run.state)
           : elsewhere
-            ? isTerminal(elsewhere.state)
+            ? isTerminal(elsewhere.state) && elsewhere.outcomeKnown !== false
             : approval.runEnded;
     const next =
       linked !== approval.stepId || runEnded !== approval.runEnded

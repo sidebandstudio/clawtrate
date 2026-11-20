@@ -61,7 +61,7 @@ test("F-012 F-054: on a writing connection a round + sits at the top right besid
   // Selected, first under Otto, and the composer has focus.
   await expect(page.locator(".title-pill-task")).toHaveText("New task");
   await expect(tasksOf(page, "Otto").first()).toHaveAttribute("aria-current", "true");
-  await expect(tasksOf(page, "Otto").first()).toHaveAccessibleName("New task");
+  await expect(tasksOf(page, "Otto").first()).toHaveAccessibleName("New task, idle");
   await expect(page.locator(".composer-input")).toBeFocused();
   expect(await sent(page, "newTask")).toEqual([{ type: "newTask", botId: "otto", label: null }]);
 });
@@ -149,7 +149,7 @@ test("F-022: a refused unread change leaves the rail and the badge as the gatewa
     "Couldn't mark it unread. The gateway refused the change.",
   );
   await expect(taskRow(page, "Certificate renewal")).toHaveAccessibleName(
-    "Certificate renewal warning",
+    "Certificate renewal warning, done",
   );
   expect(await badge()).toBe(before);
   await taskMenu(page, "Weekly backup check");
@@ -269,7 +269,7 @@ test("Archive: a task that starts working as Archive goes out gets the Stop and 
   await expect(taskRow(page, "Certificate renewal")).toHaveCount(0);
 });
 
-test("Archive: when the archive stopped a run that had just started, the notice says so, with Restore", async ({
+test("Archive: when a run had just started as the archive went out, it says Archived and offers Restore in the Archived group, and claims no stop", async ({
   page,
 }) => {
   await openFixture(page, `scene=rail-write&${OTTO}`, "light");
@@ -278,10 +278,14 @@ test("Archive: when the archive stopped a run that had just started, the notice 
   );
   await taskMenu(page, "Certificate renewal");
   await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
-  const notice = page.getByTestId("rail-notice");
-  await expect(notice).toContainText("Archived. A run that had just started was stopped.");
-  await expect(notice).toHaveAttribute("role", "status");
-  await notice.getByRole("button", { name: "Restore" }).click();
+  await expect(
+    page.getByRole("status").filter({ hasText: /^Archived Certificate renewal/ }),
+  ).toHaveCount(1);
+  await expect(page.getByTestId("rail-notice")).toHaveCount(0);
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
+  const archived = page.getByRole("list", { name: "Otto's archived tasks" });
+  await archived.getByTestId("archived-task").filter({ hasText: "Certificate renewal" }).click();
+  await page.getByRole("menuitem", { name: "Restore" }).click();
   await expect(taskRow(page, "Certificate renewal")).toBeVisible();
   // An archive that met no run says nothing more.
   await taskMenu(page, "Router firmware");
@@ -498,7 +502,9 @@ test("F-277: a task whose run is active asks Stop and archive or Cancel; Cancel 
   await taskMenu(page, "Rotate the logs");
   await page.getByRole("menuitem", { name: "Stop and archive…" }).click();
   const dialog = page.getByRole("dialog", { name: /Stop and archive/ });
-  await expect(dialog).toContainText("Archiving it stops its run first.");
+  await expect(dialog).toContainText(
+    "Clawtrate will ask the gateway to stop the run before archiving.",
+  );
   await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
@@ -597,13 +603,13 @@ test("F-022: Mark as unread and Mark as read in a task's menu, sent to the host;
   await taskMenu(page, "Certificate renewal");
   await page.getByRole("menuitem", { name: "Mark as unread" }).click();
   await expect(taskRow(page, "Certificate renewal")).toHaveAccessibleName(
-    "Certificate renewal warning, unread",
+    "Certificate renewal warning, done, unread",
   );
   await expect(taskRow(page, "Certificate renewal")).toBeFocused();
   await taskMenu(page, "Certificate renewal");
   await page.getByRole("menuitem", { name: "Mark as read" }).click();
   await expect(taskRow(page, "Certificate renewal")).toHaveAccessibleName(
-    "Certificate renewal warning",
+    "Certificate renewal warning, done",
   );
   expect(await sent(page, "markTask")).toEqual(
     expect.arrayContaining([
@@ -681,8 +687,8 @@ test("F-021 F-057: a waiting bot says what it waits for in the warning colour, i
 }) => {
   await openFixture(page, `scene=rail-waiting&${OTTO}`, "light");
   const marlow = bot(page, "Marlow");
-  await expect(marlow.locator(".bot-preview")).toHaveText("Waiting for you: approve a command");
-  await expect(marlow).toHaveAccessibleName(/^Marlow, waiting for you/);
+  await expect(marlow.locator(".bot-preview")).toHaveText("Waiting for an approval");
+  await expect(marlow).toHaveAccessibleName(/^Marlow, waiting(,|$)/);
   await expect(marlow.locator(".presence")).toHaveAttribute("data-state", "waiting");
   await expect(marlow.locator(".presence > .glyph")).toHaveAttribute("data-state", "waiting");
   const warn = await page.evaluate(() => {
@@ -696,7 +702,7 @@ test("F-021 F-057: a waiting bot says what it waits for in the warning colour, i
   );
   // Since it began waiting, not its latest activity.
   await expect(marlow.locator(".bot-time")).toHaveText("5:34 PM");
-  await expect(bot(page, "Pip").locator(".bot-preview")).toHaveText("Waiting for you: a question");
+  await expect(bot(page, "Pip").locator(".bot-preview")).toHaveText("Waiting for an answer");
 
   await bot(page, "Pip").focus();
   await page.keyboard.press("ArrowRight");
@@ -706,7 +712,7 @@ test("F-021 F-057: a waiting bot says what it waits for in the warning colour, i
     "data-state",
     "stopped",
   );
-  await expect(pip.filter({ hasText: "Birthday" })).toHaveAccessibleName(/, needs you$/);
+  await expect(pip.filter({ hasText: "Birthday" })).toHaveAccessibleName(/, waiting$/);
   // A queued run: its own hollow ring and word; the bot's avatar counts it as idle.
   await bot(page, "Quartermaster").focus();
   await page.keyboard.press("ArrowRight");
@@ -745,7 +751,7 @@ test("F-021 F-057: a waiting bot says what it waits for in the warning colour, i
       };
     });
   });
-  await expect(marlow.locator(".bot-preview")).not.toContainText("Waiting for you");
+  await expect(marlow.locator(".bot-preview")).not.toContainText("Waiting");
   await expect(marlow.locator(".presence")).toHaveAttribute("data-state", "idle");
 });
 

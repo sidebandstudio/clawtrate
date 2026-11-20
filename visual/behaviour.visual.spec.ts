@@ -548,7 +548,7 @@ test.describe("focus across the phone's two panes", () => {
     await expect(page.locator(".conversation")).toBeHidden();
     expect(await focused(page)).toMatchObject({
       tag: "BUTTON",
-      text: "Disk almost full on the media box",
+      text: "Disk almost full on the media box, done",
       visible: true,
     });
 

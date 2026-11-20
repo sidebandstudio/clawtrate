@@ -628,15 +628,15 @@ test("F-022: a new reply marks a task unread on both devices; a Mark as unread f
   while (Date.now() < until) expect((await describe(task.key))?.unread).toBe(true);
 });
 
-test("F-021: a question from a run puts its bot in Waiting for you: a question until it is answered", async () => {
+test("F-021: a question from a run puts its bot in Waiting for an answer until it is answered", async () => {
   const task = await ownTask("pip", "Pip", "Ask me");
   await sendInTask(page, task.title, "#ask");
   const pip = botRow(page, "Pip").first();
-  await expect(pip.locator(".bot-preview")).toHaveText("Waiting for you: a question", {
+  await expect(pip.locator(".bot-preview")).toHaveText("Waiting for an answer", {
     timeout: 30_000,
   });
-  await expect(pip).toHaveAccessibleName(/^Pip, waiting for you/);
-  await expect(taskRow(page, task.title)).toHaveAccessibleName(/, needs you$/);
+  await expect(pip).toHaveAccessibleName(/^Pip, waiting(,|$)/);
+  await expect(taskRow(page, task.title)).toHaveAccessibleName(/, waiting$/);
   // Answered (dismissed) on the gateway by another client: nothing is pending, the state clears.
   const pending = await gatewayCall<{ questions: Array<{ id: string; sessionKey?: string }> }>(
     "question.list",
@@ -645,7 +645,7 @@ test("F-021: a question from a run puts its bot in Waiting for you: a question u
   const question = pending.questions.find((each) => each.sessionKey === task.key);
   expect(question, "the run's question is pending on the gateway").toBeTruthy();
   await gatewayCall("question.resolve", { id: question!.id, cancel: true });
-  await expect(pip).not.toHaveAccessibleName(/waiting for you/, { timeout: 30_000 });
+  await expect(pip).not.toHaveAccessibleName(/^Pip, waiting(,|$)/, { timeout: 30_000 });
 });
 
 test("F-014 F-016: a bot's pin and its section are kept on the gateway for the user: they survive a reload and the second device shows them", async () => {
@@ -683,25 +683,25 @@ test("F-014 F-016: a bot's pin and its section are kept on the gateway for the u
   await second.keyboard.press("Escape");
 });
 
-test("F-021 F-057: while a bot's run waits for an approval its row says Waiting for you on both devices; stopped, the state clears and the task says stopped where it was not open", async () => {
+test("F-021 F-057: while a bot's run waits for an approval its row says waiting on both devices; stopped, the state clears and the task says stopped where it was not open", async () => {
   const task = await ownTask("otto", "Otto", "Wait for me");
   await taskRow(page, task.title).click();
   await page.getByTestId("composer-input").fill("#approve");
   await page.getByTestId("composer-input").press("Enter");
   for (const on of [page, second]) {
     const otto = botRow(on, "Otto").first();
-    await expect(otto).toHaveAccessibleName(/^Otto, waiting for you/, { timeout: 30_000 });
+    await expect(otto).toHaveAccessibleName(/^Otto, waiting(,|$)/, { timeout: 30_000 });
     await expect(otto.locator(".presence")).toHaveAttribute("data-state", "waiting");
   }
   await expect(botRow(second, "Otto").first().locator(".bot-preview")).toHaveText(
-    "Waiting for you: approve a command",
+    "Waiting for an approval",
   );
-  await expect(taskRow(second, task.title)).toHaveAccessibleName(/, needs you$/);
+  await expect(taskRow(second, task.title)).toHaveAccessibleName(/, waiting$/);
   await shot(second, "waiting-light-1440");
   // Stopped: nothing is pending, and the state clears everywhere.
   await gatewayCall("chat.abort", { sessionKey: task.key });
   for (const on of [page, second]) {
-    await expect(botRow(on, "Otto").first()).not.toHaveAccessibleName(/waiting for you/, {
+    await expect(botRow(on, "Otto").first()).not.toHaveAccessibleName(/^Otto, waiting(,|$)/, {
       timeout: 30_000,
     });
   }
@@ -711,6 +711,10 @@ test("F-021 F-057: while a bot's run waits for an approval its row says Waiting 
     "data-state",
     "stopped",
   );
+  // The second connection never had a card for the originating device's run.
+  await taskRow(second, task.title).click();
+  await expect(second.getByTestId("transcript")).toBeVisible({ timeout: 20_000 });
+  await expect(second.getByTestId("approval-card")).toHaveCount(0);
 });
 
 /** A paired admin connection of this spec's own, for making and removing its bots. */
@@ -893,7 +897,7 @@ test("a read-only connection offers none of the task actions on a real gateway",
 test("F-021: a device opened again while its run waits for an approval shows the bot waiting, until nothing is pending", async () => {
   const task = await ownTask("otto", "Otto", "Wait across a restart");
   await sendInTask(page, task.title, "#approve");
-  await expect(botRow(page, "Otto").first()).toHaveAccessibleName(/^Otto, waiting for you/, {
+  await expect(botRow(page, "Otto").first()).toHaveAccessibleName(/^Otto, waiting(,|$)/, {
     timeout: 30_000,
   });
   // The same device, quit and opened again: a new host on the same data folder.
@@ -904,14 +908,14 @@ test("F-021: a device opened again while its run waits for an approval shows the
   hosts[0] = { child: started.host, url: await started.url, data: before.data };
   await page.goto(hosts[0].url);
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
-  await expect(botRow(page, "Otto").first()).toHaveAccessibleName(/^Otto, waiting for you/, {
+  await expect(botRow(page, "Otto").first()).toHaveAccessibleName(/^Otto, waiting(,|$)/, {
     timeout: 30_000,
   });
   await expect(botRow(page, "Otto").first().locator(".bot-preview")).toHaveText(
-    "Waiting for you: approve a command",
+    "Waiting for an approval",
   );
   await gatewayCall("chat.abort", { sessionKey: task.key });
-  await expect(botRow(page, "Otto").first()).not.toHaveAccessibleName(/waiting for you/, {
+  await expect(botRow(page, "Otto").first()).not.toHaveAccessibleName(/^Otto, waiting(,|$)/, {
     timeout: 30_000,
   });
 });

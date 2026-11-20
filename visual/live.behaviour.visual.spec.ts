@@ -827,7 +827,7 @@ test.describe("Stop", () => {
     page,
   }) => {
     await open(page, "run-stopped");
-    await expect(page.getByTestId("stop-note")).toHaveText(
+    await expect(page.getByTestId("stop-note").locator("p")).toHaveText(
       "Stopped after 40s. Completed actions are not undone.",
     );
     await open(page, "run-stopped-elsewhere");
@@ -911,7 +911,7 @@ test.describe("Stop", () => {
 
   test("F-419: a run that completed before Stop took effect says so", async ({ page }) => {
     await open(page, "run-finished-before-stop");
-    await expect(page.getByTestId("stop-note")).toHaveText(
+    await expect(page.getByTestId("stop-note").locator("p")).toHaveText(
       "Finished before Stop took effect. The turn completed normally.",
     );
     await expect(page.getByTestId("incomplete")).toHaveCount(0);

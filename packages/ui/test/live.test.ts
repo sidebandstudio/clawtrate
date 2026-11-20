@@ -7,6 +7,7 @@ import {
   initialState,
   INTERACTIVE_SCOPES,
   newRun,
+  parseExecApproval,
   READ_SCOPES,
   type ConnectionState,
   type OutgoingMessage,
@@ -50,6 +51,15 @@ function transcript(runs: Run[], change: Partial<Transcript> = {}): Transcript {
     ...change,
   };
 }
+
+/** A pending exec approval of the given run, as the gateway's request records it. */
+const ownApproval = (runId: string) =>
+  parseExecApproval({
+    id: "a-1",
+    request: { command: "ls", runId },
+    createdAtMs: NOW,
+    expiresAtMs: NOW + 60_000,
+  })!;
 
 const run = (change: Partial<Run> = {}): Run =>
   newRun(
@@ -180,12 +190,23 @@ describe("the status line", () => {
       pendingCards: [{ id: "a-1", kind: "approval", since: NOW }],
       steps: [step("read", { path: "a.log" })],
     });
+    // A bare lifecycle wait: this transcript holds no request of the run's to answer.
     expect(statusLineFor(waiting, transcript([waiting]), live)).toMatchObject({
       state: "waiting",
       badge: "waiting",
-      phrase: "Waiting for you",
+      phrase: "Waiting for an answer",
       tone: "warn",
     });
+    // The run's own scoped approval is here: it is the person's to answer.
+    const card = parseExecApproval({
+      id: "a-1",
+      request: { command: "ls", runId: waiting.id },
+      createdAtMs: NOW,
+      expiresAtMs: NOW + 60_000,
+    })!;
+    expect(
+      statusLineFor(waiting, transcript([waiting], { approvals: [card] }), live),
+    ).toMatchObject({ state: "waiting", phrase: "Waiting for you" });
     const asked = run();
     expect(
       statusLineFor(asked, transcript([asked], { questions: [question()] }), live).phrase,
@@ -479,9 +500,11 @@ describe("F-468: what the transition tables leave on screen", () => {
     ],
     [
       "with only an approval pending, plain Enter steers and the status line waits for you",
-      transcript([
-        run({ state: "waiting", pendingCards: [{ id: "a-1", kind: "approval", since: NOW }] }),
-      ]),
+      transcript(
+        [run({ state: "waiting", pendingCards: [{ id: "a-1", kind: "approval", since: NOW }] })],
+        // The run's own request is here to answer (F-057: otherwise the line says only waiting).
+        { approvals: [ownApproval("run-1")] },
+      ),
       (t) => {
         expect(composerFor(t, otto)).toMatchObject({ mode: "steer", modeWord: "Steer" });
         expect(statusLineFor(currentRun(t)!, t, live)).toMatchObject({
@@ -580,7 +603,10 @@ describe("the status line while the gateway retries (F-082)", () => {
       retry: { attempt: 2, of: 5, reason: "rate_limit" },
       pendingCards: [{ id: "a-1", kind: "approval", since: NOW }],
     });
-    expect(statusLineFor(waiting, transcript([waiting]), live).phrase).toBe("Waiting for you");
+    expect(
+      statusLineFor(waiting, transcript([waiting], { approvals: [ownApproval(waiting.id)] }), live)
+        .phrase,
+    ).toBe("Waiting for you");
   });
 
   it("F-082: only a rate limit is called one; a retry for any other reason the gateway names is said plainly", () => {

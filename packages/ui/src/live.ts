@@ -124,7 +124,14 @@ export function statusLineFor(
     view = {
       state: "waiting",
       badge: "waiting",
-      phrase: "Waiting for you",
+      // "Waiting for you" only where this transcript holds the run's own request to answer.
+      phrase:
+        transcript.approvals.some((card) => card.status === "pending" && card.runId === run.id) ||
+        transcript.questions.some(
+          (card) => card.status === "pending" && card.ordinary && card.runId === run.id,
+        )
+          ? "Waiting for you"
+          : "Waiting for an answer",
       tone: "warn",
       startedAt: null,
       callId: null,

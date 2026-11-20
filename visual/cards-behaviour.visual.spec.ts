@@ -63,7 +63,9 @@ test.describe("approval cards", () => {
       "Run mv /srv/media/transcode-cache /srv/scratch/transcode-cache on media-box.",
     );
     await expect(card.locator(".request-summary b")).toHaveText("media-box");
-    await expect(card.locator(".request-warnings li")).toHaveText(["This can't be undone"]);
+    await expect(card.locator(".request-warnings li")).toHaveText([
+      "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+    ]);
     const actions = card.locator('.request-actions[data-row="main"] button');
     await expect(actions).toHaveText(["Allow once", "Always allow…", "Deny"]);
     // A refusal is always called Deny; there is no Skip or Not now.
@@ -73,6 +75,47 @@ test.describe("approval cards", () => {
     await expect(approvalCard(page).locator('.request-actions[data-row="main"] button')).toHaveText(
       ["Allow", "Deny"],
     );
+  });
+
+  test("F-171: a warning field the client cut is said to be cut under the warnings; a whole one is not", async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=approval-pending", "light");
+    const card = approvalCard(page);
+    const notice = card.getByText("Some gateway warning text could not be shown in full.");
+    // The gateway's warning, whole: only its own line, and no notice.
+    await expect(card.locator(".request-warnings li")).toHaveText([
+      "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
+    ]);
+    await expect(notice).toHaveCount(0);
+    // A 2,048-character warning and a second line, as the client keeps them: the first line
+    // shortened to the field's bound, the second dropped, and the field's path marked cut.
+    await page.evaluate((kept) => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (change: (state: Record<string, unknown>) => Record<string, unknown>) => void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const transcripts = state.transcripts as Record<string, Record<string, unknown>>;
+        const key = "agent:otto:transcode-cache";
+        const t = transcripts[key]!;
+        const approvals = (t.approvals as Array<Record<string, unknown>>).map((each, index) =>
+          index !== 0
+            ? each
+            : {
+                ...each,
+                cut: ["exec.warningText"],
+                exec: { ...(each.exec as Record<string, unknown>), warningText: kept },
+              },
+        );
+        return { ...state, transcripts: { ...transcripts, [key]: { ...t, approvals } } };
+      });
+    }, "A".repeat(2_046));
+    await expect(card.locator(".request-warnings li")).toHaveText(["A".repeat(2_046)]);
+    await expect(notice).toBeVisible();
   });
 
   test("F-163: keyboard order is Show full request, Allow once, Always allow…, Deny, Raw", async ({
@@ -155,12 +198,7 @@ test.describe("approval cards", () => {
     );
     await expect(card.locator(".command-line code")).toHaveCSS("font-family", /Mono/);
     await expect(card.getByRole("button", { name: "Copy command" })).toBeVisible();
-    await expect(card.locator(".request-inset dt")).toHaveText([
-      "Runs on",
-      "Folder",
-      "Asked by",
-      "Warning",
-    ]);
+    await expect(card.locator(".request-inset dt")).toHaveText(["Runs on", "Folder", "Asked by"]);
     await expect(card.locator(".request-full > summary .when-open")).toBeVisible();
     await expect(card.locator(".request-full > summary .when-open")).toHaveText(
       "Hide full request",
@@ -195,9 +233,9 @@ test.describe("approval cards", () => {
     await expect(card).toHaveAttribute("data-state", "allowed");
     await expect(page.locator(":focus")).toHaveText(/Allowed once/);
     await card.locator("summary").first().click();
-    await expect(
-      card.getByText("Allowed once. The command can run now. Otto will ask again next time."),
-    ).toBeVisible();
+    await expect(card.locator(".request-resolved-body > p").first()).toHaveText(
+      /^Allowed once( by .+)? at \d+:\d\d [AP]M\.$/,
+    );
     expect(await sent(page)).toContainEqual({
       type: "resolveApproval",
       key: "agent:otto:transcode-cache",
@@ -222,7 +260,7 @@ test.describe("approval cards", () => {
     expect((await sent(page)).map((command) => command.decision)).toEqual(["deny"]);
   });
 
-  test("F-165: Deny sends deny, the buttons go, and the card says the command was not run", async ({
+  test("F-165: Deny sends deny, the buttons go, and the card says it was denied and when", async ({
     page,
   }) => {
     await openFixture(page, "scene=approval-pending", "light");
@@ -232,7 +270,9 @@ test.describe("approval cards", () => {
     await expect(card.locator(".tag")).toHaveText("Denied");
     await expect(card.getByRole("button", { name: /Allow|Deny/ })).toHaveCount(0);
     await card.locator("summary").first().click();
-    await expect(card.getByText("Denied. The command was not run.")).toBeVisible();
+    await expect(card.locator(".request-resolved-body > p").first()).toHaveText(
+      /^Denied( by .+)? at \d+:\d\d [AP]M\.$/,
+    );
     expect((await sent(page)).at(-1)).toMatchObject({ decision: "deny" });
   });
 
@@ -254,7 +294,7 @@ test.describe("approval cards", () => {
     ]);
     await expect(form.locator("dd").last()).toHaveText("Otto");
     await expect(form.locator(".standing-outcome")).toHaveText(
-      "The gateway will add this to media-box's allowlist, so Otto is not asked again for commands it matches. The gateway decides what that covers; it can be wider than this exact command.",
+      "This asks the gateway to keep an approval for future matching requests.",
     );
     await expect(form.getByLabel("Number of days")).toHaveCount(0);
     await expect(form.getByRole("button", { name: "Allow and save" })).toBeFocused();
@@ -270,7 +310,7 @@ test.describe("approval cards", () => {
     await card.locator("summary").first().click();
     await expect(
       card.getByText(
-        "Added to media-box's allowlist. The gateway decides what it covers. Seeing that list needs admin access.",
+        "This asked the gateway to keep a rule for requests like this one. Whether it kept one is not confirmed here.",
       ),
     ).toBeVisible();
     expect((await sent(page)).at(-1)).toMatchObject({
@@ -287,7 +327,7 @@ test.describe("approval cards", () => {
     const form = card.getByRole("group", { name: "Always allow" });
     await expect(form.locator("dt").last()).toHaveText("For");
     await expect(form.locator(".standing-outcome")).toHaveText(
-      "The routine Weekly cleanup may run this command without asking.",
+      "This asks the gateway to keep an approval for future matching requests.",
     );
     const days = form.getByLabel("Number of days");
     // It starts from the lifetime the gateway gives the grant (`scope.expiresInDays`).
@@ -483,39 +523,41 @@ test.describe("approval cards", () => {
     ]);
   });
 
-  test("F-168: a pending card says when it expires; an expired one says the command was not run", async ({
+  test("F-168: a pending card says the deadline the gateway recorded; an expired one says the gateway recorded it expired", async ({
     page,
   }) => {
     await openFixture(page, "scene=approval-pending", "light");
     await expect(approvalCard(page).locator(".request-foot")).toHaveText(
-      "Expires in 28 minutes; the command is not run if it does.",
+      /^Expires at \d+:\d\d [AP]M, in 28 minutes\.$/,
     );
     await openFixture(page, "scene=approval-expired", "light");
     const card = approvalCard(page);
     await expect(card.locator(".tag")).toHaveText("Expired");
     await card.locator("summary").first().click();
     await expect(card.locator(".request-resolved-body > p").first()).toHaveText(
-      /^Expired at \d+:\d\d [AP]M without an answer\. The command was not run\.$/,
+      /^The gateway recorded it as expired at \d+:\d\d [AP]M, with no answer\.$/,
     );
   });
 
-  test("F-169 F-418: Stop's cancellation, a closed request, and one still open after its run ended say exactly that", async ({
+  test("F-169 F-418: the gateway's cancellation, a closed request, and one still open after its run ended say exactly that", async ({
     page,
   }) => {
     await openFixture(page, "scene=approval-cancelled", "light");
     await expect(approvalCard(page).locator(".tag")).toHaveText("Cancelled");
     await approvalCard(page).locator("summary").first().click();
-    await expect(
-      approvalCard(page).getByText(
-        "You stopped the run before answering. The command was not run.",
-      ),
-    ).toBeVisible();
+    await expect(approvalCard(page).locator(".request-resolved-body > p").first()).toHaveText(
+      /^The gateway cancelled it at \d+:\d\d [AP]M, when its run was stopped\.$/,
+    );
     await openFixture(page, "scene=approval-closed-ended", "light");
-    await expect(approvalCard(page).locator(".tag")).toHaveText("Closed: the run ended");
+    await expect(approvalCard(page).locator(".tag")).toHaveText("Closed");
+    await approvalCard(page).locator("summary").first().click();
+    await expect(approvalCard(page).locator(".request-resolved-body > p").first()).toHaveText(
+      "The gateway closed it without saying how.",
+    );
     await openFixture(page, "scene=approval-run-ended", "light");
     await expect(
       approvalCard(page).getByText(
-        "Otto's run has ended. This request is still open, and you can still answer it.",
+        "Otto's run has ended. The last gateway record shows this request pending.",
       ),
     ).toBeVisible();
     await expect(approvalCard(page).getByRole("button", { name: "Allow once" })).toBeVisible();

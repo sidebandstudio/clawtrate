@@ -16,7 +16,9 @@ import {
   type FoldLine,
   type FeedMember,
   type ReadingContext,
+  type RunErrorRaw,
   type RunLine,
+  type RunRawRead,
   type Step,
   type StepRaw,
   type Thought,
@@ -44,6 +46,7 @@ import {
   useRawDisclosure,
 } from "../cards/parts.tsx";
 import type { RawContent } from "../cards/raw.ts";
+import { useBridge } from "../bridge.tsx";
 import type { StepRawState } from "../cards/useCards.ts";
 import { useStepHandover } from "../cards/context.tsx";
 import { ChevronIcon, FileIcon } from "../icons.tsx";
@@ -865,12 +868,29 @@ export function RunLineView({
   runId,
   line,
   model,
+  lifecycle = null,
+  failure = null,
 }: {
   runId: string;
   line: RunLine;
   model: string | null;
+  /** The events that started and ended the run, as received; null when only history knows it. */
+  lifecycle?: Array<{ via: string; record: unknown }> | null;
+  /** What the host kept of the event that failed the run (F-301), read when Raw opens. */
+  failure?: RunErrorRaw | null;
 }) {
   const env = useActionEnv();
+  const bridge = useBridge();
+  const raw = useRawDisclosure();
+  const [failureRead, setFailureRead] = useState<RunRawRead | null>(null);
+  // Read as the failed turn's card reads it: when Raw is opened, never into the state.
+  useEffect(() => {
+    if (!raw.open || !failure || failureRead) return;
+    void bridge.invoke({ type: "readRunRaw", key: env.taskKey, runId }).then(
+      (read) => setFailureRead(read ?? { status: "not-kept", holds: null }),
+      () => setFailureRead({ status: "not-kept", holds: failure.holds }),
+    );
+  }, [raw.open, failure, failureRead, bridge, env.taskKey, runId]);
   const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.run(runId), false);
   const record = `${model ?? actionWords.RUN_LINE.modelNotReported} · ${actionWords.RUN_LINE.effort(env.effort)}`;
   return (
@@ -913,6 +933,69 @@ export function RunLineView({
         <span className="mono">{runId}</span>
         <CopyButton what="run id" text={runId} />
       </p>
+      <div className="card raw-host">
+        <CardFoot
+          disclosure={raw}
+          raw={runRaw(runId, lifecycle, failure ? failureRead : undefined)}
+        />
+      </div>
     </details>
   );
+}
+
+/** What a failed run's Raw read holds, in words: exactly that, and as received (F-301). */
+export const RAW_HOLDS: Record<RunErrorRaw["holds"], string> = {
+  "chat-event": "The chat event that ended the turn, as received",
+  "lifecycle-data": "The data of the agent lifecycle event that ended the turn, as received",
+  "send-answer": "The gateway's answer to the send that started the turn, as received",
+};
+
+/**
+ * The run line's Raw: what was received about the run's start and end, each
+ * labelled with where it came from. A frame the engine did not take is never
+ * here; a run read from history shows a received history row for it; where
+ * none is retained, it says so. The event that failed a run is never kept with
+ * it (F-301): `failure` is that event as read from the host when Raw opened
+ * (null while it is read), and absent when the run did not fail.
+ */
+export function runRaw(
+  runId: string,
+  lifecycle: Array<{ via: string; record: unknown }> | null,
+  failure?: RunRawRead | null,
+): RawContent {
+  const events = (lifecycle ?? [])
+    .filter((each) => each.record !== null && each.record !== undefined)
+    .map(
+      (each) =>
+        [
+          each.via.startsWith("chat.history")
+            ? "A received history row for this run (chat.history)"
+            : `The event, as the gateway sent it (${each.via})`,
+          each.record,
+        ] as [string, unknown],
+    );
+  const notes: string[] = [];
+  if ((!lifecycle || lifecycle.length === 0) && failure?.status !== "available") {
+    notes.push("This view has no retained start or end record for the run.");
+  } else if (events.length < (lifecycle?.length ?? 0)) {
+    notes.push("An event was too long for this app to keep as received.");
+  }
+  if (failure?.status === "available") events.push([RAW_HOLDS[failure.holds], failure.payload]);
+  else if (failure === null) notes.push("Reading what ended the turn…");
+  else if (failure?.status === "too-large")
+    notes.push(
+      `${RAW_HOLDS[failure.holds]} was too large to keep here: ${failure.chars.toLocaleString("en-US")} characters, past the ${failure.limit.toLocaleString("en-US")} Clawtrate keeps.`,
+    );
+  else if (failure?.status === "not-kept")
+    notes.push(
+      failure.holds
+        ? `${RAW_HOLDS[failure.holds]} is no longer kept here.`
+        : "Clawtrate kept nothing the gateway sent for this failure.",
+    );
+  return {
+    state: "loaded",
+    events,
+    ids: [{ label: "Run", value: runId }],
+    ...(notes.length ? { notes } : {}),
+  };
 }

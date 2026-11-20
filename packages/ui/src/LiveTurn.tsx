@@ -9,13 +9,14 @@ import {
   type Bot,
   type OutgoingMessage,
   type Run,
-  type RunErrorRaw,
   type RunRawRead,
   type Transcript,
+  type TranscriptItem,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { RAW_HOLDS, runRaw } from "./actions/ActionCards.tsx";
 import { useBridge, useClawtrateState } from "./bridge.tsx";
-import { useAnnounce } from "./cards/parts.tsx";
+import { CardFoot, RawView, useAnnounce, useRawDisclosure } from "./cards/parts.tsx";
 import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
 import { endingOf } from "./live.ts";
@@ -244,6 +245,7 @@ export function RunEnding({
   const moved = useRef(false);
   const lineRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const rawDisclosure = useRawDisclosure();
   useEffect(() => {
     if (!moved.current) return;
     moved.current = false;
@@ -260,7 +262,7 @@ export function RunEnding({
     return (
       <div className="turn-note" data-testid="stop-note" data-run={run.id}>
         <span className="glyph" data-state="stopped" aria-hidden="true" />
-        <div>
+        <div className="turn-note-body">
           {ending.timeouts !== null ? (
             <p>
               <b>Stopped after {ending.timeouts} tool calls in a row timed out.</b> The machine{" "}
@@ -291,6 +293,9 @@ export function RunEnding({
               ))}
             </ul>
           )}
+          <RawHost>
+            <CardFoot disclosure={rawDisclosure} raw={runRaw(run.id, run.lifecycle ?? null)} />
+          </RawHost>
         </div>
       </div>
     );
@@ -299,9 +304,14 @@ export function RunEnding({
     return (
       <div className="turn-note" data-testid="stop-note" data-run={run.id}>
         <span className="glyph" data-state="stopped" aria-hidden="true" />
-        <p>
-          <b>Stop requested.</b> The gateway has not confirmed that the turn stopped.
-        </p>
+        <div className="turn-note-body">
+          <p>
+            <b>Stop requested.</b> The gateway has not confirmed that the turn stopped.
+          </p>
+          <RawHost>
+            <CardFoot disclosure={rawDisclosure} raw={runRaw(run.id, run.lifecycle ?? null)} />
+          </RawHost>
+        </div>
       </div>
     );
   }
@@ -309,9 +319,14 @@ export function RunEnding({
     return (
       <div className="turn-note" data-testid="stop-note" data-run={run.id}>
         <span className="glyph" data-state="done" aria-hidden="true" />
-        <p>
-          <b>Finished before Stop took effect.</b> The turn completed normally.
-        </p>
+        <div className="turn-note-body">
+          <p>
+            <b>Finished before Stop took effect.</b> The turn completed normally.
+          </p>
+          <RawHost>
+            <CardFoot disclosure={rawDisclosure} raw={runRaw(run.id, run.lifecycle ?? null)} />
+          </RawHost>
+        </div>
       </div>
     );
   }
@@ -403,65 +418,66 @@ export function RunEnding({
           Couldn't send it again: {retryError}
         </p>
       )}
-      {(text || requestId || raw) && (
-        <div className="turn-error-actions">
-          {text && (
-            <button
-              type="button"
-              className="button"
-              data-size="sm"
-              onClick={() => {
-                setRetryError(null);
-                // The engine still holds the message: its words and files go again together.
-                // Otherwise only history has it, and history gives the words alone. A reply
-                // goes again as a reply to the same message.
-                const held = transcript.outbox.some((message) => message.id === run.messageId);
-                const parent = messageReplyOf(run, transcript);
-                const again = held
-                  ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: run.messageId! })
-                  : bridge.invoke({
-                      type: "sendMessage",
-                      key: taskKey,
-                      text,
-                      mode: "auto",
-                      attachmentIds: [],
-                      ...(parent ? { replyToId: parent } : {}),
-                    });
-                void again.catch((error: unknown) =>
-                  setRetryError(error instanceof Error ? error.message : String(error)),
-                );
-              }}
-            >
-              Try again
-            </button>
-          )}
-          {requestId && (
-            <button
-              type="button"
-              className="button"
-              data-size="sm"
-              data-variant="quiet"
-              onClick={() => void copyRequest()}
-            >
-              Copy request ID
-            </button>
-          )}
-          {(requestId || raw) && (
-            <button
-              type="button"
-              className="button"
-              data-size="sm"
-              data-variant="quiet"
-              aria-expanded={rawOpen}
-              onClick={() => showRaw(!rawOpen)}
-            >
-              Raw
-            </button>
-          )}
-        </div>
-      )}
+      <div className="turn-error-actions">
+        {text && (
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            onClick={() => {
+              setRetryError(null);
+              // The engine still holds the message: its words and files go again together.
+              // Otherwise only history has it, and history gives the words alone. A reply
+              // goes again as a reply to the same message.
+              const held = transcript.outbox.some((message) => message.id === run.messageId);
+              const parent = messageReplyOf(run, transcript);
+              const again = held
+                ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: run.messageId! })
+                : bridge.invoke({
+                    type: "sendMessage",
+                    key: taskKey,
+                    text,
+                    mode: "auto",
+                    attachmentIds: [],
+                    ...(parent ? { replyToId: parent } : {}),
+                  });
+              void again.catch((error: unknown) =>
+                setRetryError(error instanceof Error ? error.message : String(error)),
+              );
+            }}
+          >
+            Try again
+          </button>
+        )}
+        {requestId && (
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            data-variant="quiet"
+            onClick={() => void copyRequest()}
+          >
+            Copy request ID
+          </button>
+        )}
+        <button
+          type="button"
+          className="button"
+          data-size="sm"
+          data-variant="quiet"
+          aria-expanded={rawOpen}
+          onClick={() => showRaw(!rawOpen)}
+        >
+          Raw
+        </button>
+      </div>
       {rawOpen && (
-        <div className="raw-panel turn-error-raw" data-testid="turn-error-raw">
+        <div
+          className="raw-panel turn-error-raw"
+          data-testid="turn-error-raw"
+          role="region"
+          aria-label="What the gateway sent"
+        >
           {requestId && (
             <>
               <p className="code-label">Request ID</p>
@@ -470,19 +486,77 @@ export function RunEnding({
               </pre>
             </>
           )}
-          <RunRawView read={raw ? rawRead : { status: "not-kept", holds: null }} />
+          {(requestId || raw) && (
+            <RunRawView read={raw ? rawRead : { status: "not-kept", holds: null }} />
+          )}
+          {/* The frames the engine kept for the run's end (F-094), after what was read (F-301). */}
+          <RawView raw={turnErrorRaw(run)} />
         </div>
       )}
     </div>
   );
 }
 
-/** What a failed run's Raw holds, in words: exactly that, and as received. */
-const RAW_HOLDS: Record<RunErrorRaw["holds"], string> = {
-  "chat-event": "The chat event that ended the turn, as received",
-  "lifecycle-data": "The data of the agent lifecycle event that ended the turn, as received",
-  "send-answer": "The gateway's answer to the send that started the turn, as received",
-};
+/** The kept frames that end a run; a retried attempt's error ends nothing. */
+const ENDED_BY = /^(agent \(lifecycle (end|error)\)|chat \((error|aborted|final)\))$/;
+
+/** A failed turn's Raw: the event that ended it, as the gateway sent it, else what started it. */
+function turnErrorRaw(run: Run) {
+  const ended = (run.lifecycle ?? []).filter((each) => ENDED_BY.test(each.via));
+  return runRaw(run.id, ended.length > 0 ? ended : (run.lifecycle ?? null));
+}
+
+/**
+ * A line the gateway wrote itself in the task's history (a turn it started or
+ * resumed, a compaction, a reset), with Raw: the history row as it sent it (F-094).
+ */
+export function SystemLine({ item }: { item: TranscriptItem }) {
+  const raw = useRawDisclosure();
+  return (
+    <div className="event-row" data-side="center">
+      <p className="event-line" data-side="center">
+        {item.blocks.map((block) => (block.kind === "text" ? block.text : "")).join(" ")}
+      </p>
+      <RawHost>
+        <CardFoot
+          disclosure={raw}
+          raw={{
+            state: "loaded",
+            events:
+              item.raw !== null && item.raw !== undefined
+                ? [["The history row, as the gateway sent it (chat.history)", item.raw]]
+                : [],
+            ids: [{ label: "Item", value: item.id }],
+            ...(item.raw === null
+              ? { notes: ["The row was too long for this app to keep as received."] }
+              : {}),
+            ...(item.raw === undefined
+              ? { notes: ["This line has no row of the gateway's behind it."] }
+              : {}),
+          }}
+        />
+      </RawHost>
+    </div>
+  );
+}
+
+/** Raw for a note about a run (F-094): the events that started, paused and ended it. */
+export function RunNoteRaw({ run }: { run: Run }) {
+  const raw = useRawDisclosure();
+  return (
+    <RawHost>
+      <CardFoot disclosure={raw} raw={runRaw(run.id, run.lifecycle ?? null)} />
+    </RawHost>
+  );
+}
+
+/**
+ * Raw beside a note or a line rather than in a card: the card's own styles for
+ * Raw apply, without a card's surface.
+ */
+export function RawHost({ children }: { children: ReactNode }) {
+  return <div className="card raw-host">{children}</div>;
+}
 
 /** A failed run's Raw, once read (F-301): what it holds, or why it is not here. */
 function RunRawView({ read }: { read: RunRawRead | null }) {

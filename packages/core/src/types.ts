@@ -139,9 +139,9 @@ export type TaskStatus =
   | "failed"
   | "idle"
   /**
-   * The next three come from run events (a pending approval or question, an
-   * unreachable machine, a failed step in a finished run) that a read-only
-   * connection does not receive yet; the mapping never produces them today.
+   * The next three come from run events, not from the gateway's row
+   * (`waiting.ts`): a pending approval or question. The engine produces no
+   * blocked or done-with-failures status today.
    */
   | "waiting"
   | "blocked"
@@ -245,6 +245,11 @@ export type TranscriptItem = {
    * read whole, is a prefix of what the gateway stored.
    */
   truncated?: boolean;
+  /**
+   * For a `system` item, the history row it stands for, as the gateway sent it,
+   * for its line's Raw (F-094); null when it was too long to keep.
+   */
+  raw?: unknown;
   /**
    * The gateway's id of the row whose text this item shows (`__openclaw.id`; for a bot's turn,
    * its last row with text): what a reaction or a reply to it names. Absent when the row has none.
