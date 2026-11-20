@@ -633,7 +633,7 @@
     let list = VAULT.slice();
     if (S.added)
       list = list
-        .concat([{ name: S.newName || "PRICE_TRACKER_KEY", kind: S.vkind, hosts: S.vkind === "env" ? [] : ["api.example.com"], updated: "Nov 19", refs: [] }])
+        .concat([{ name: S.newName || "PRICE_TRACKER_KEY", kind: S.addedOther ? "secret" : S.vkind, hosts: S.addedOther ? ["api.example.net"] : S.vkind === "env" ? [] : ["api.example.com"], updated: "Nov 19", refs: [] }])
         .sort((a, b) => a.name.localeCompare(b.name));
     if (S.removed) list = list.filter((e) => e.name !== S.item);
     return list;
@@ -642,7 +642,8 @@
   function vaultSection() {
     if (S.access !== "admin") return settings(accessBar("Seeing the Vault needs admin access. The gateway shows its secret store to admin connections only.", "admin"), "Vault");
     const v = S.v;
-    if (["item", "remove", "removing", "replace", "stilllisted", "removeunknown"].includes(v)) return settings(itemPage(), "Vault");
+    // An item's page reads the selected name from the current list; a name that's gone shows the list.
+    if (["item", "remove", "removing", "replace", "stilllisted", "removeunknown"].includes(v) && vaultEntries().some((e) => e.name === S.item)) return settings(itemPage(), "Vault");
     let html = `<div class="b-note">${icon("lock")}<div><p>Values this gateway keeps for its bots and settings. Protected values are never listed. Environment values are returned to callers that can list them, and supplied to commands.</p></div></div>`;
     html += `<div class="d-vhead">${button("New item", 'data-d="v-new"')}</div>`;
     const nm = S.newName || "PRICE_TRACKER_KEY";
@@ -651,12 +652,15 @@
       savedrefresh: ["accent", "Saved in the Vault. The gateway couldn't refresh settings that use it."],
       listedonly: ["warn", "This name and its settings are listed. Clawtrate couldn't confirm which value was saved."],
       notlisted: ["warn", "Couldn't confirm the save. The name isn't listed."],
+      listedother: ["warn", "The name is listed with different settings. Clawtrate couldn't confirm the save."],
+      saveunread: ["warn", "Couldn't confirm the save. The Vault couldn't be read."],
       removed: ["accent", "Removed from the Vault."],
       removedrefresh: ["accent", "Removed from the Vault. The gateway couldn't refresh settings that used it."],
       removednoreply: ["warn", `${S.item} is no longer listed in the Vault.`],
     }[v];
-    if (said) html += `<p class="d-say" data-tone="${said[0]}">${said[1]}${["saved", "savedrefresh", "listedonly"].includes(v) ? ` <code>${esc(nm)}</code>` : ""}</p>`;
-    if (v === "loading") html += `<div class="d-vlist" aria-busy="true"><div class="d-skel"></div><div class="d-skel"></div><div class="d-skel"></div></div>`;
+    if (said) html += `<p class="d-say" data-tone="${said[0]}">${said[1]}${["saved", "savedrefresh", "listedonly", "listedother"].includes(v) ? ` <code>${esc(nm)}</code>` : ""}</p>`;
+    if (v === "saveunread") html += `<div class="b-actions">${button("Try again", 'data-d="v-retry" data-size="sm"')}</div>`;
+    else if (v === "loading") html += `<div class="d-vlist" aria-busy="true"><div class="d-skel"></div><div class="d-skel"></div><div class="d-skel"></div></div>`;
     else if (v === "error") html += `<div class="b-note" data-tone="danger">${icon("warning")}<div><p>Couldn't read the Vault.</p><div class="b-actions">${button("Try again", 'data-d="v-retry" data-size="sm"')}</div></div></div>`;
     else if (v === "empty") html += `<p class="d-hint">No secrets yet. A bot can ask for one in a conversation, or add one here.</p>`;
     else
@@ -680,7 +684,7 @@
   }
 
   function itemPage() {
-    const e = VAULT.find((x) => x.name === S.item) || VAULT[2];
+    const e = vaultEntries().find((x) => x.name === S.item);
     let html = `<p class="d-sentence"><button type="button" class="link-button" data-d="v-back">${icon("back")} All secrets</button></p>`;
     html += `<h4 class="d-group"><code>${e.name}</code></h4>`;
     html +=
@@ -690,7 +694,7 @@
     html += `<p class="d-sentence">${PLAIN}</p>`;
     if (e.kind === "env") html += `<p class="d-say" data-tone="warn">${ENV_WORDS} Clawtrate does not show it.</p>`;
     html +=
-      `<div class="b-note">${icon("eye")}<div><p><b>How it can be used.</b> Settings can use this value through its reference. When the gateway's egress proxy is enabled, it can substitute the value in supported requests to these hosts from commands on the gateway's machine. Any bot offered the Secrets tool sees its name and hosts and can remove it. The gateway doesn't limit an item to chosen bots.</p>` +
+      `<div class="b-note">${icon("eye")}<div><p><b>How it can be used.</b> Settings can use this value through its reference.${e.kind === "secret" ? " When the gateway's egress proxy is enabled, it can substitute the value in supported requests to these hosts from commands on the gateway's machine." : ""} The bot's Secrets tool lists the name and can remove the entry where the gateway grants it access.${e.kind === "env" ? " The bot's Secrets tool can list this value." : ""} The gateway doesn't limit an item to chosen bots.</p>` +
       `<p class="b-faint">Offered the Secrets tool: ${SECRET_TOOL_BOTS}, as each was last offered, Nov 19.</p></div></div>`;
     if (S.v === "stilllisted") html += `<p class="d-say" data-tone="danger">${e.name} is still listed. ${button("Try again", 'data-d="v-remove-yes" data-size="sm"')}</p>`;
     if (S.v === "removeunknown") html += `<p class="d-say" data-tone="warn">Couldn't confirm the removal. The Vault couldn't be read. ${button("Check", 'data-d="v-remove-check" data-size="sm"')}</p>`;
@@ -703,7 +707,8 @@
     if (S.view !== "vault") return "";
     if (["new", "replace", "failed", "vsaving"].includes(v)) {
       const replace = v === "replace" || (["vsaving", "failed"].includes(v) && S.replacing);
-      const entry = replace ? VAULT.find((x) => x.name === S.item) || VAULT[2] : null;
+      const entry = replace ? vaultEntries().find((x) => x.name === S.item) : null;
+      if (replace && !entry) return "";
       const kind = entry ? entry.kind : S.vkind;
       const name = replace ? S.item : S.newName || "";
       const fieldLabel = kind === "env" ? "Environment value" : "Secret value";
@@ -723,7 +728,8 @@
       );
     }
     if (v === "remove" || v === "removing") {
-      const e = VAULT.find((x) => x.name === S.item) || VAULT[2];
+      const e = vaultEntries().find((x) => x.name === S.item);
+      if (!e) return "";
       return (
         `<div class="b-dialog-shim"><dialog class="b-dialog d-dialog" data-kind="confirm" role="alertdialog" open aria-labelledby="rm-title" aria-describedby="rm-text" data-testid="remove-dialog">` +
         `<div class="b-head"><h2 id="rm-title">Remove ${e.name}?</h2></div>` +
@@ -835,8 +841,8 @@
   // What a removal says follows the selected read-back: the delete's answer and a fresh list.
   function removalReadBack() {
     const a = S.vanswer;
-    if (a === "lostlisted") return go({ v: "stilllisted" }, "Still listed");
-    if (a === "refused") return go({ v: "removeunknown" }, "Couldn't confirm the removal");
+    if (a === "lostlisted" || a === "lostother") return go({ v: "stilllisted" }, "Still listed");
+    if (a === "refused" || a === "lostunread") return go({ v: "removeunknown" }, "Couldn't confirm the removal");
     if (a === "lostnot") return go({ v: "removednoreply", removed: true }, "No longer listed");
     if (a === "refresh") return go({ v: "removedrefresh", removed: true }, "Removed from the Vault");
     go({ v: "removed", removed: true }, "Removed from the Vault");
@@ -974,6 +980,8 @@
           if (a === "refused") return go({ v: "failed" }, "Couldn't save");
           if (a === "lostnot") return go({ v: "notlisted" }, "Couldn't confirm the save");
           if (a === "lostlisted") return go({ v: "listedonly", added: !S.replacing }, "Listed; the value isn't confirmed");
+          if (a === "lostother") return go({ v: "listedother", added: !S.replacing, addedOther: !S.replacing }, "Listed with other settings");
+          if (a === "lostunread") return go({ v: "saveunread" }, "Couldn't confirm the save");
           if (a === "refresh") return go({ v: "savedrefresh", added: !S.replacing }, "Saved");
           go({ v: "saved", added: !S.replacing }, "Saved");
         });
@@ -1036,6 +1044,8 @@
         ["refresh", "Saved, refresh failed"],
         ["lostlisted", "Lost answer, listed"],
         ["lostnot", "Lost answer, not listed"],
+        ["lostother", "Lost answer, listed with other settings"],
+        ["lostunread", "Lost answer, Vault unreadable"],
         ["refused", "Refused"],
       ]) +
       sel("Tool result", "tool", [

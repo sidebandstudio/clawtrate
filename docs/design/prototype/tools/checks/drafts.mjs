@@ -115,7 +115,7 @@ const states = [
   ["view=vault&v=empty", ["No secrets yet."]],
   ["view=vault&v=error", ["Couldn't read the Vault.", "Try again"]],
   ["view=vault&v=item", ["store · default · STORE_API_KEY", PLAIN, "How it can be used.", "Settings can use this value through its reference. When the gateway's egress proxy is enabled, it can substitute the value in supported requests to these hosts from commands on the gateway's machine.", "The gateway doesn't limit an item to chosen bots.", "Offered the Secrets tool: Otto, Pip and Marlow", "Replace…", "Remove…"]],
-  ["view=vault&v=envitem", ["BUILD_REGION", "Environment value", "The gateway returns this value to callers that can list it, and supplies it to commands.", "Clawtrate does not show it."]],
+  ["view=vault&v=envitem", ["BUILD_REGION", "Environment value", "The gateway returns this value to callers that can list it, and supplies it to commands.", "Clawtrate does not show it.", "The bot's Secrets tool can list this value."]],
   ["view=vault&v=new", ["New item", "Kind", "Protected", "Environment value", "Secret value", PLAIN, "Allowed hosts", "Save"]],
   ["view=vault&v=newenv", ["Environment value", "The gateway returns this value to callers that can list it, and supplies it to commands."]],
   ["view=vault&v=replace", ["Replace STORE_API_KEY", "STORE_API_KEY exists. Saving replaces its value and hosts.", PLAIN]],
@@ -123,6 +123,8 @@ const states = [
   ["view=vault&v=savedrefresh", ["Saved in the Vault. The gateway couldn't refresh settings that use it."]],
   ["view=vault&v=listedonly", ["This name and its settings are listed. Clawtrate couldn't confirm which value was saved."]],
   ["view=vault&v=notlisted", ["Couldn't confirm the save. The name isn't listed."]],
+  ["view=vault&v=listedother", ["The name is listed with different settings. Clawtrate couldn't confirm the save."]],
+  ["view=vault&v=saveunread", ["Couldn't confirm the save. The Vault couldn't be read."]],
   ["view=vault&v=failed", ["Couldn't save"]],
   ["view=vault&v=remove", ["Remove STORE_API_KEY?", "These settings refer to this name: plugins.entries.price-tracker.config.apiKey. A running process may still have the value.", "Removal leaves the value in the database. The gateway's cleanup can purge the deleted row after 30 days."]],
   ["view=vault&v=removed", ["Removed from the Vault."]],
@@ -412,7 +414,27 @@ await vaultSave("acknowledged → Saved in the Vault", "ack", ["Saved in the Vau
 await vaultSave("saved, refresh failed", "refresh", ["Saved in the Vault. The gateway couldn't refresh settings that use it."]);
 await vaultSave("lost answer, listed → value not confirmed", "lostlisted", ["This name and its settings are listed. Clawtrate couldn't confirm which value was saved."]);
 await vaultSave("lost answer, not listed", "lostnot", ["Couldn't confirm the save. The name isn't listed."]);
+await vaultSave("lost answer, listed with other settings", "lostother", ["The name is listed with different settings. Clawtrate couldn't confirm the save."]);
+await vaultSave("lost answer, the Vault unreadable", "lostunread", ["Couldn't confirm the save. The Vault couldn't be read."]);
 await vaultSave("refused", "refused", ["Couldn't save"]);
+p = await open("view=vault&v=envitem");
+check("an environment value's page has no egress sentence", !(await text(p)).includes("egress proxy"));
+await p.close();
+p = await open("view=vault&v=item");
+check("a protected value's page keeps the egress sentence and the Secrets tool's reach", (await text(p)).includes("When the gateway's egress proxy is enabled") && (await text(p)).includes("The bot's Secrets tool lists the name and can remove the entry where the gateway grants it access."));
+await p.close();
+p = await open("view=vault", { chrome: "1" });
+await click(p, '[data-d="v-new"]');
+await p.fill("#v-name", "PRICE_TRACKER_KEY");
+await p.fill("#secret-value", VALUE);
+await click(p, '[data-d="v-save"]');
+await waitText(p, ["Saved in the Vault."]);
+await click(p, '[data-item="PRICE_TRACKER_KEY"]');
+check(
+  "walk: Vault: the newly saved name opens its own item page",
+  (await text(p)).includes("store · default · PRICE_TRACKER_KEY") && !(await text(p)).includes("STORE_API_KEY"),
+);
+await p.close();
 await vaultSave("Replace → Saved in the Vault", "ack", ["Saved in the Vault.", "STORE_API_KEY"], { query: "view=vault&v=item", replace: true });
 p = await walk("Vault: a bad name is refused", "view=vault", [tap('[data-d="v-new"]'), (pg) => pg.fill("#v-name", "price tracker"), tap('[data-d="v-save"]')], ["Use letters, digits and _"]);
 await p.close();
@@ -491,7 +513,7 @@ p = await b.newPage();
 await p.goto(pageUrl("gallery.html") + "?chrome=1&section=drafts");
 await p.waitForTimeout(100);
 const links = await p.evaluate(() => [...document.querySelectorAll('#drafts a[href^="drafts.html"]')].map((a) => a.getAttribute("href")));
-check("gallery: the Drafts and the Vault section links to every state", links.length === 93, String(links.length));
+check("gallery: the Drafts and the Vault section links to every state", links.length === 95, String(links.length));
 check("gallery: the section says draft examples use a proposed plugin", (await text(p, "#drafts")).includes(PROPOSED));
 check("the prototype bar links to the drafts page", await p.evaluate(() => [...document.querySelectorAll("#proto-bar a")].some((a) => a.getAttribute("href") === "drafts.html")));
 await p.close();

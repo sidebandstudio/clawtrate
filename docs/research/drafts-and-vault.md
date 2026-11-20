@@ -171,8 +171,7 @@ Live, `secrets`, run from the probe client (admin and questions) in a task of Pi
 
 ## 7. What the app keeps of a secret
 
-- A secret typed into Clawtrate leaves in one request frame: `question.resolve` with the value at `answers.answers.<questionId>[0]` (section 4), or `secrets.store.set` with `value` (section 5).
-- The answers to both carried no value back, and neither did any event the client received, `chat.history`, `secrets.store.list` or `question.list`'s resolved record, which keeps `"stored"` (section 4). So a snapshot, a log, a Raw view or a draft built only from what the gateway sends back cannot contain it; what the app itself writes is the design's to forbid.
+- The submit frame carries the value. The measured protected value did not come back in the reply, events, history or listing. Environment values can come back in a store listing or a bot's Secrets tool result.
 
 ## 8. What could not be proven here
 
