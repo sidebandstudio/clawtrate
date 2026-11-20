@@ -79,7 +79,7 @@ type Save =
   | { status: "idle" }
   | { status: "saving" }
   | { status: "refused"; error: string }
-  | { status: "not-sent"; reason: "admin" | "offline" }
+  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" }
   /** `sent` is what this save asked for, compared with what a check finds. */
   | { status: "unknown"; error: string; sent: RoutineFields; check: Check }
   | { status: "conflict"; current: Routine };
@@ -396,12 +396,21 @@ export function Editor({
         </p>
       </Note>,
     );
-  if (save.status === "not-sent" && save.reason === "offline")
+  if (save.status === "not-sent" && (save.reason === "offline" || save.reason === "gateway"))
     notes.push(
       <Note tone="warn" key="offline" testId="editor-offline">
         <p role="alert">
-          <strong>Not saved.</strong> Clawtrate isn&apos;t connected to the gateway, so nothing was
-          sent.
+          {save.reason === "offline" ? (
+            <>
+              <strong>Not saved.</strong> Clawtrate isn&apos;t connected to the gateway, so nothing
+              was sent.
+            </>
+          ) : (
+            <>
+              <strong>Not saved.</strong> The gateway hasn&apos;t confirmed its identity yet, so
+              nothing was sent.
+            </>
+          )}
         </p>
       </Note>,
     );

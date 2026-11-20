@@ -247,6 +247,13 @@ test.describe("1440", () => {
     );
     await openPage(page, "Inbox tidy-up");
     await expect(view(page).getByRole("button", { name: "Run once now" })).toBeVisible();
+    // A reply that only takes the request is said queued; running is said when the run is seen.
+    await openPage(page, "Morning digest", `${ADMIN}&run=held`);
+    await view(page).getByRole("button", { name: "Run now" }).click();
+    await expect(page.getByTestId("b-announcer")).toHaveText("Queued Morning digest");
+    await expect(page.getByTestId("b-announcer")).toHaveText("Running Morning digest", {
+      timeout: 10_000,
+    });
   });
 
   test("F-352: delete asks first, says what it loses, and the routine leaves the list; a failure keeps the dialog", async ({

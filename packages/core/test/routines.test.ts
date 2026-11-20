@@ -74,7 +74,13 @@ const runEntry = (runAtMs: number, extra: Record<string, unknown> = {}) => ({
 function engine(
   handlers: Record<string, (params: Record<string, unknown>) => unknown>,
   start: RoutinesState = initialRoutinesState,
-  access: { admin: boolean; connected: boolean } = { admin: false, connected: true },
+  access: {
+    admin: boolean;
+    connected: boolean;
+    /** The connection's confirmed gateway identity; null means not read yet. */
+    identity?: string | null;
+    withdrawn?: (owner: object) => boolean;
+  } = { admin: false, connected: true },
 ) {
   let state: RoutinesState = start;
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -99,6 +105,8 @@ function engine(
     },
     connected: () => access.connected,
     admin: () => access.admin,
+    identity: () => (access.identity === undefined ? "gateway-1" : access.identity),
+    withdrawn: access.withdrawn ?? (() => false),
   });
   return { routines, requests, state: () => state };
 }
@@ -146,6 +154,34 @@ describe("F-191: the routine list", () => {
       ),
     ).toMatchObject({ payload: "systemEvent", text: "Stretch break", target: "main" });
     expect(parseRoutine(heartbeat)).toBeNull();
+  });
+
+  it("offers a copy after a deletion only when recovery can write the job again (F-189)", () => {
+    expect(parseRoutine(job())?.canRecreate).toBe(true);
+    const oneShot = job({
+      schedule: { kind: "at", at: "2035-01-01T14:00:00.000Z" },
+      deleteAfterRun: true,
+      state: {},
+    });
+    expect(parseRoutine(oneShot)?.canRecreate).toBe(true);
+    // A paused routine must not come back running: cron.add takes no enabled.
+    expect(parseRoutine(job({ enabled: false }))?.canRecreate).toBe(false);
+    // The form writes wakeMode now alone.
+    expect(parseRoutine(job({ wakeMode: "next-heartbeat" }))?.canRecreate).toBe(false);
+    // Pacing fields are dropped by the form's schedule.
+    expect(
+      parseRoutine(job({ schedule: { kind: "every", everyMs: 3_600_000, anchorMs: 60_000 } }))
+        ?.canRecreate,
+    ).toBe(false);
+    expect(
+      parseRoutine(
+        job({
+          schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York", staggerMs: 5 },
+        }),
+      )?.canRecreate,
+    ).toBe(false);
+    // The gateway defaults a new one-shot to deleting itself.
+    expect(parseRoutine({ ...oneShot, deleteAfterRun: false })?.canRecreate).toBe(false);
   });
 
   it("keeps the error when a read fails", async () => {
@@ -835,6 +871,18 @@ describe("F-189: creating a routine", () => {
     expect(state().routines.map((r) => r.id)).toEqual([JOB]);
   });
 
+  it("sends nothing before the gateway's identity is confirmed, so a draft cannot reach a replacement gateway", async () => {
+    const { routines, requests } = engine({ "cron.add": () => job() }, initialRoutinesState, {
+      ...ADMIN,
+      identity: null,
+    });
+    expect(await routines.create(input, "draft-1")).toMatchObject({
+      status: "not-sent",
+      reason: "gateway",
+    });
+    expect(requests).toEqual([]);
+  });
+
   it("says why the gateway refused, and an answer that never came is unknown, not saved", async () => {
     const bad = engine(
       {
@@ -941,6 +989,25 @@ describe("F-189: changing a routine", () => {
       method: "cron.update",
       params: { id: JOB, patch: { name: "New year note" } },
     });
+  });
+
+  it("writes nothing for a viewer that went away while its read was on its way", async () => {
+    let gone = false;
+    const { routines, requests } = engine(
+      {
+        "cron.get": () => {
+          // The initiating viewer was disposed while the gateway was asked.
+          gone = true;
+          return once;
+        },
+      },
+      initialRoutinesState,
+      { ...ADMIN, withdrawn: () => gone },
+    );
+    expect(
+      await routines.update(JOB, original, { ...original, name: "Mine" }, expected, {}),
+    ).toMatchObject({ status: "not-sent", reason: "offline" });
+    expect(requests.map((r) => r.method)).toEqual(["cron.get"]);
   });
 
   it("writes nothing when another client changed it since the editor opened, and gives back the new version", async () => {
@@ -1151,6 +1218,24 @@ describe("F-350 F-351 F-352: pause, run now and delete", () => {
       ADMIN,
     );
     expect(await gone.routines.remove(JOB)).toEqual({ status: "removed" });
+  });
+
+  it("F-352: an answer that does not say removed leaves the routine listed", async () => {
+    const { routines, state } = engine(
+      {
+        "cron.list": () => ({ jobs: [job()], hasMore: false }),
+        "cron.status": () => ({ enabled: true }),
+        "cron.remove": () => ({ ok: true }),
+      },
+      initialRoutinesState,
+      ADMIN,
+    );
+    await routines.load();
+    expect(await routines.remove(JOB)).toMatchObject({
+      status: "unknown",
+      error: "The gateway answered, but didn't remove it.",
+    });
+    expect(state().routines.map((r) => r.id)).toEqual([JOB]);
   });
 
   it("F-349: reads the gateway's hooks from its config, with admin", async () => {

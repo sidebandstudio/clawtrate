@@ -506,10 +506,17 @@ test("F-189: a script opens as locked text and renames without changing its payl
 });
 
 test("F-189: deleting a conditional, custom-payload or routed routine keeps the draft without offering an incomplete copy", async () => {
+  const at = "2036-01-01T09:00:00Z";
   const variants = [
     { trigger: { script: "json({ fire: false });" } },
     { payload: { kind: "agentTurn", message: "#text", timeoutSeconds: 30 } },
     { delivery: { mode: "none", failureDestination: { mode: "announce", channel: "last" } } },
+    // A copy would run again (cron.add takes no enabled), wake differently,
+    // lose its stagger, or delete itself after one run.
+    { enabled: false },
+    { wakeMode: "next-heartbeat" },
+    { schedule: { kind: "cron", expr: "0 8 * * 1-5", tz: "America/New_York", staggerMs: 30_000 } },
+    { schedule: { kind: "at", at }, deleteAfterRun: false },
   ];
   for (const [index, variant] of variants.entries()) {
     const job = await add({ ...scriptedRoutine(`Recovery ${index} ${STAMP}`), ...variant });

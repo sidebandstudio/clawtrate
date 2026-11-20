@@ -46,7 +46,7 @@ export type RoutineParams = {
   calendar?: "fail" | "partial" | null;
   save?: "refused" | "noanswer" | "conflict" | null;
   pause?: "fail" | null;
-  run?: "already" | "fail" | null;
+  run?: "already" | "fail" | "held" | null;
   remove?: "fail" | null;
   hooks?: boolean;
 };
@@ -75,7 +75,7 @@ export function routineParams(params: URLSearchParams): RoutineParams {
     calendar: calendar === "fail" || calendar === "partial" ? calendar : null,
     save: oneOf(params.get("save"), ["refused", "noanswer", "conflict"] as const),
     pause: oneOf(params.get("pause"), ["fail"] as const),
-    run: oneOf(params.get("run"), ["already", "fail"] as const),
+    run: oneOf(params.get("run"), ["already", "fail", "held"] as const),
     remove: oneOf(params.get("delete"), ["fail"] as const),
     hooks: params.get("hooks") === "on",
   };
@@ -568,6 +568,16 @@ export function routineCommand(
           status: "refused",
           error: `Automation not found: ${routine.id}. List automations and retry with a current job id.`,
         }));
+      if (params.run === "held")
+        return later(300, () => {
+          // The gateway took the request; the run itself starts later, so the
+          // view first says the routine is queued, then running.
+          setTimeout(() => {
+            const held = kept(routine.id);
+            if (held) replace({ ...held, runningAt: Date.now() });
+          }, 800);
+          return { status: "started", runId: `manual:${routine.id}:${Date.now()}:1` };
+        });
       return later(300, () => {
         replace({ ...routine, runningAt: Date.now() });
         setTimeout(() => {

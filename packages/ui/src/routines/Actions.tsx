@@ -39,7 +39,7 @@ function assign<T>(all: Record<string, T>, id: string, value: T | null): Record<
 }
 
 /** What the admin actions are doing now, by routine. */
-export function useRoutineActions(announce: (text: string) => void) {
+export function useRoutineActions(announce: (text: string) => void, routines: Routine[]) {
   const bridge = useBridge();
   /** A switch turned and not yet confirmed: the value it shows meanwhile. */
   const [pending, setPending] = useState<Record<string, boolean>>({});
@@ -47,6 +47,19 @@ export function useRoutineActions(announce: (text: string) => void) {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [runs, setRuns] = useState<Record<string, RunNote>>({});
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  /**
+   * Run-now replies that only mean the gateway took the request: "Running" is
+   * said when the run is seen on the routine, not on the reply alone.
+   */
+  const queued = useRef(new Set<string>());
+  useEffect(() => {
+    for (const id of queued.current) {
+      const routine = routines.find((each) => each.id === id);
+      if (!routine) continue;
+      queued.current.delete(id);
+      if (routine.runningAt !== null) announce(`Running ${routine.name}`);
+    }
+  }, [routines, announce]);
   useEffect(() => {
     const all = timers.current;
     return () => all.forEach((timer) => clearTimeout(timer));
@@ -98,7 +111,8 @@ export function useRoutineActions(announce: (text: string) => void) {
       }
       if (result.status === "started") {
         putRun(routine.id, null);
-        announce(`Running ${routine.name}`);
+        queued.current.add(routine.id);
+        announce(`Queued ${routine.name}`);
         return;
       }
       putRun(

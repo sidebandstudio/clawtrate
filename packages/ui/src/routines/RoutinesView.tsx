@@ -881,7 +881,7 @@ export function RoutinesView({
   const admin = canAdmin(state.connection, info);
   const granted = useGranted(state.connection);
   const [announcer, announce] = useAnnouncer();
-  const actions = useRoutineActions(announce);
+  const actions = useRoutineActions(announce, store.routines);
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [deleting, setDeleting] = useState<Routine | null>(null);
   const [menu, setMenu] = useState<{ routine: Routine; x: number; y: number } | null>(null);

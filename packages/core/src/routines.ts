@@ -233,6 +233,15 @@ export function parseRoutine(value: unknown): Routine | null {
       text.length === fullText.length &&
       target === "isolated" &&
       !gated &&
+      // A copy is made with `cron.add` and the form's fields alone, so a job
+      // carrying anything the form cannot write again (a pause, a wake mode
+      // other than now, schedule pacing, a one-shot that does not delete
+      // itself) is offered no copy that would run differently (F-189).
+      job.enabled !== false &&
+      (job.wakeMode == null || job.wakeMode === "now") &&
+      asRecord(job.schedule)?.anchorMs == null &&
+      asRecord(job.schedule)?.staggerMs == null &&
+      (schedule.kind !== "at" || job.deleteAfterRun !== false) &&
       wireSchedule(schedule) !== null &&
       Object.keys(payload).every(
         (key) => key === "kind" || key === "message" || key === "toolsAllow",
@@ -406,6 +415,13 @@ export type RoutinesContext = {
   connected(): boolean;
   /** The connection holds `operator.admin`. */
   admin(): boolean;
+  /**
+   * The connection's confirmed gateway identity, or null until it is read: a
+   * write waits for it, so a draft never reaches a gateway it was not made on.
+   */
+  identity(): string | null;
+  /** The viewer that asked has gone away (`client.withdraw`). */
+  withdrawn(owner: object): boolean;
 };
 
 /** What the editor writes, and what it compares with a fresh read before writing. */
@@ -425,8 +441,11 @@ export type RoutineRevision = RoutineFields & { updatedAt: number | null };
 /** How a write ended. Only `saved` says the gateway shows the change. */
 export type RoutineWrite =
   | { status: "saved"; routine: Routine }
-  /** Nothing was sent: this connection has no admin access, or no connection. */
-  | { status: "not-sent"; reason: "admin" | "offline" }
+  /**
+   * Nothing was sent: this connection has no admin access, no connection, no
+   * confirmed gateway identity yet, or the viewer that asked has gone away.
+   */
+  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" }
   | { status: "refused"; error: string }
   /** Sent, with no answer that settles it: it may or may not have landed. */
   | { status: "unknown"; error: string }
@@ -437,13 +456,13 @@ export type RoutineWrite =
 export type RoutineRunNow =
   | { status: "started"; runId: string | null }
   | { status: "already-running" }
-  | { status: "not-sent"; reason: "admin" | "offline" }
+  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" }
   | { status: "refused"; error: string }
   | { status: "unknown"; error: string };
 
 export type RoutineRemove =
   | { status: "removed" }
-  | { status: "not-sent"; reason: "admin" | "offline" }
+  | { status: "not-sent"; reason: "admin" | "offline" | "gateway" }
   | { status: "refused"; error: string }
   | { status: "unknown"; error: string };
 
@@ -781,9 +800,15 @@ export class RoutinesEngine {
     this.ctx.update(() => initialRoutinesState);
   }
 
-  /** Why a write cannot be sent now, or null: checked just before each request. */
-  private blocked(): "admin" | "offline" | null {
+  /**
+   * Why a write cannot be sent now, or null: checked just before each request.
+   * A withdrawn viewer's write is refused as unsent, too: its reply has no
+   * reader, and nothing of it may reach the gateway.
+   */
+  private blocked(owner: object | null = null): "admin" | "offline" | "gateway" | null {
     if (!this.ctx.connected()) return "offline";
+    if (this.ctx.identity() === null) return "gateway";
+    if (owner !== null && this.ctx.withdrawn(owner)) return "offline";
     return this.ctx.admin() ? null : "admin";
   }
 
@@ -815,8 +840,8 @@ export class RoutinesEngine {
    * treats a second add with the same declaration key as the same routine, so
    * trying again after an answer that never came cannot make two.
    */
-  async create(input: NewRoutine, key: string): Promise<RoutineWrite> {
-    const blocked = this.blocked();
+  async create(input: NewRoutine, key: string, owner: object | null = null): Promise<RoutineWrite> {
+    const blocked = this.blocked(owner);
     if (blocked) return { status: "not-sent", reason: blocked };
     if (input.target !== "isolated")
       return { status: "refused", error: "New routines run in an isolated conversation." };
@@ -883,8 +908,9 @@ export class RoutinesEngine {
     original: RoutineFields,
     edit: RoutineFields,
     expected: RoutineRevision,
+    owner: object | null = null,
   ): Promise<RoutineWrite> {
-    let blocked = this.blocked();
+    let blocked = this.blocked(owner);
     if (blocked) return { status: "not-sent", reason: blocked };
     if (this.updates.size >= MAX_ROUTINE_UPDATES)
       return { status: "refused", error: "Too many routine changes are in flight." };
@@ -914,7 +940,7 @@ export class RoutinesEngine {
       };
       const patch = patchOf(original, fields, current.payload);
       if (Object.keys(patch).length === 0) return { status: "saved", routine: current };
-      blocked = this.blocked();
+      blocked = this.blocked(owner);
       if (blocked) return { status: "not-sent", reason: blocked };
       if (epoch !== this.epoch) return { status: "not-sent", reason: "offline" };
       try {
@@ -937,8 +963,12 @@ export class RoutinesEngine {
   }
 
   /** Pause or resume (`cron.update {enabled}`). */
-  async setEnabled(id: string, enabled: boolean): Promise<RoutineWrite> {
-    const blocked = this.blocked();
+  async setEnabled(
+    id: string,
+    enabled: boolean,
+    owner: object | null = null,
+  ): Promise<RoutineWrite> {
+    const blocked = this.blocked(owner);
     if (blocked) return { status: "not-sent", reason: blocked };
     const epoch = this.epoch;
     try {
@@ -955,8 +985,8 @@ export class RoutinesEngine {
   }
 
   /** Run it once now (`cron.run {mode: "force"}`), paused or not; it stays as it was. */
-  async runNow(id: string): Promise<RoutineRunNow> {
-    const blocked = this.blocked();
+  async runNow(id: string, owner: object | null = null): Promise<RoutineRunNow> {
+    const blocked = this.blocked(owner);
     if (blocked) return { status: "not-sent", reason: blocked };
     try {
       const result = asRecord(await this.ctx.request("cron.run", { id, mode: "force" }));
@@ -975,9 +1005,13 @@ export class RoutinesEngine {
     }
   }
 
-  /** Delete it (`cron.remove`). One the gateway no longer has counts as removed. */
-  async remove(id: string): Promise<RoutineRemove> {
-    const blocked = this.blocked();
+  /**
+   * Delete it (`cron.remove`). The reply's `removed: true`, or the gateway's
+   * established not-found refusal, is what takes it off the list: any other
+   * answer leaves the row while its outcome is checked.
+   */
+  async remove(id: string, owner: object | null = null): Promise<RoutineRemove> {
+    const blocked = this.blocked(owner);
     if (blocked) return { status: "not-sent", reason: blocked };
     const epoch = this.epoch;
     const drop = () => {
@@ -990,7 +1024,7 @@ export class RoutinesEngine {
     };
     try {
       const result = asRecord(await this.ctx.request("cron.remove", { id }));
-      if (result?.removed === false)
+      if (result?.removed !== true)
         return { status: "unknown", error: "The gateway answered, but didn't remove it." };
       return drop();
     } catch (error) {

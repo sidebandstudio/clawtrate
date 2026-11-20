@@ -1353,19 +1353,25 @@ class ViewerSession implements BridgeSession {
           }),
         );
       case "createRoutine":
-        return client.createRoutine(command.input, command.key);
+        return client.createRoutine(command.input, command.key, owner);
       case "findCreatedRoutine":
         return client.findCreatedRoutine(command.key);
       case "readRoutine":
         return client.readRoutine(command.id);
       case "updateRoutine":
-        return client.updateRoutine(command.id, command.original, command.edit, command.expected);
+        return client.updateRoutine(
+          command.id,
+          command.original,
+          command.edit,
+          command.expected,
+          owner,
+        );
       case "setRoutineEnabled":
-        return client.setRoutineEnabled(command.id, command.enabled);
+        return client.setRoutineEnabled(command.id, command.enabled, owner);
       case "runRoutineNow":
-        return client.runRoutineNow(command.id);
+        return client.runRoutineNow(command.id, owner);
       case "removeRoutine":
-        return client.removeRoutine(command.id);
+        return client.removeRoutine(command.id, owner);
       case "readGatewayHooks":
         return client.readGatewayHooks();
       case "refreshAccounts":
