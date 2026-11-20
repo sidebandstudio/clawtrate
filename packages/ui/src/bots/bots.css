@@ -1033,6 +1033,17 @@ button.b-open > .icon {
   padding: var(--space-6);
 }
 
+.b-confirm[data-details] {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  min-height: 0;
+}
+
+#b-confirm-details {
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
 .b-confirm h2 {
   margin: 0 0 8px;
   font-size: var(--text-lg);

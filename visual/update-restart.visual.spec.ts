@@ -1,4 +1,5 @@
-import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
+import type { ClawtrateState } from "@clawtrate/core";
+import { MAX_TRACKED_TASKS, MAX_OUTBOX, MAX_NAME_CHARS } from "../packages/core/src/state-bounds.ts";import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { expect, test } from "@playwright/test";
 import { contextFor, openFixture, settle, showList, SIZES, OTTO_DISK } from "./fixture.ts";
 
@@ -92,3 +93,53 @@ test("F-231: a retired offer closes its confirmation without restarting", async 
   await expect(result).toContainText("Not checked yet.");
   await expect(result).toBeFocused();
 });
+
+for (const size of SIZES.filter((s) => s.name === "1440" || s.phone))
+  for (const height of [720, 820]) {
+    test.describe(`${size.name} × ${height}`, () => {
+      test.use(contextFor({ ...size, height }, "light"));
+      test("F-231: a full outbox keeps the restart terms and both buttons in view", async ({ page }) => {
+        await openFixture(page, `scene=stopped-not-sent&${OTTO_DISK}&updates=ready`, "light");
+        await showList(page);
+        await page.evaluate(({ tasks, messages, nameLength }) => {
+          const fixture = (window as unknown as {
+            clawtrateFixture: { setState: (change: (s: ClawtrateState) => ClawtrateState) => void }
+          }).clawtrateFixture;
+          fixture.setState(s => {
+            const task = s.tasksByBot.otto!.find(t => t.key === "agent:otto:disk-space")!;
+            const transcript = s.transcripts[task.key]!;
+            const all = Array.from({ length: tasks }, (_, i) => ({ ...task, key: task.key + i }));
+            return {
+              ...s,
+              bots: s.bots.map(bot => bot.id === "otto" ? { ...bot, name: "W".repeat(nameLength) } : bot),
+              tasksByBot: { ...s.tasksByBot, otto: all },
+              transcripts: Object.fromEntries(all.map(t => [t.key, { ...transcript,
+                outbox: Array.from({ length: messages }, (_, i) => ({
+                  ...transcript.outbox[0]!, id: t.key + "-" + i,
+                  status: i % 2 ? "unknown" : "not-sent", leftAt: i % 2 ? 1 : null,
+                })),
+              }])),
+            };
+          });
+        }, {tasks: MAX_TRACKED_TASKS, messages: MAX_OUTBOX, nameLength: MAX_NAME_CHARS});
+        await page.getByRole("button", { name: "Open Updates" }).click();
+        await page.getByRole("button", { name: "Restart to Update" }).click();
+        const dialog = page.getByRole("alertdialog");
+        const count = MAX_TRACKED_TASKS * MAX_OUTBOX / 2;
+        const description = dialog.locator("#b-confirm-details");
+        await expect(description).toHaveText(new RegExp(`^${count} messages .*Runs on the gateway keep going\\. ${count} messages .*The gateway may still have them\\.$`));
+        await expect(dialog.getByRole("button", {name: "Cancel"})).toBeFocused();
+        const fixed = () => dialog.evaluate(el => {
+          const card = el.getBoundingClientRect();
+          return [el.querySelector("h2")!, el.querySelector("#b-confirm-text")!, ...el.querySelectorAll("button")].map(item => {
+            const rect = item.getBoundingClientRect();
+            return rect.top >= Math.max(card.top, 0) && rect.bottom <= Math.min(innerHeight, card.bottom) && el.scrollTop === 0;
+          });
+        });
+        expect(await fixed()).toEqual([true,true,true,true]);
+        await expect(dialog).toHaveScreenshot(`restart-full-outbox-${size.name}-${height}.png`);
+        await description.evaluate(el => { el.scrollTop = el.scrollHeight; });
+        expect(await fixed()).toEqual([true,true,true,true]);
+      });
+    });
+  }

@@ -359,7 +359,8 @@ export function Updates({
           fallbackFocus={result}
           title="Restart to update?"
           action="Restart"
-          text={`Clawtrate will close and start again to update to version ${state.version}.${capability.completesOnQuit ? " macOS installs the update when Clawtrate next quits, also if the restart does not complete." : ""}${waitingMessages ? " " + waitingMessages : ""}`}
+          text={`Clawtrate will close and start again to update to version ${state.version}.${capability.completesOnQuit ? " macOS installs the update when Clawtrate next quits, also if the restart does not complete." : ""}`}
+          details={waitingMessages}
           onCancel={() => setConfirmId(null)}
           onAction={() => {
             setConfirmId(null);

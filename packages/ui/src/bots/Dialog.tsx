@@ -101,6 +101,7 @@ export function Dialog({
 export function Confirm({
   title,
   text,
+  details,
   action,
   onAction,
   onCancel,
@@ -109,6 +110,7 @@ export function Confirm({
 }: {
   title: string;
   text: ReactNode;
+  details?: string;
   action: string;
   onAction: () => void;
   onCancel: () => void;
@@ -120,14 +122,15 @@ export function Confirm({
       fallbackFocus={fallbackFocus}
       kind="confirm"
       labelledBy="b-confirm-title"
-      describedBy="b-confirm-text"
+      describedBy={details ? "b-confirm-text b-confirm-details" : "b-confirm-text"}
       onClose={onCancel}
       role="alertdialog"
       testId="confirm"
     >
-      <div className="b-confirm">
+      <div className="b-confirm" data-details={details ? true : undefined}>
         <h2 id="b-confirm-title">{title}</h2>
         <p id="b-confirm-text">{text}</p>
+        {details && <p id="b-confirm-details" tabIndex={0}>{details}</p>}
         <div className="b-actions">
           <button
             type="button"

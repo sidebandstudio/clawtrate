@@ -56,20 +56,25 @@ export function attemptLine(attempt: DesktopUpdateSnapshot["lastAttempt"]) {
 export function restartWaitingMessages(
   state: Pick<ClawtrateState, "transcripts" | "tasksByBot" | "bots">,
 ) {
-  const warnings: string[] = [];
+  let sent = 0;
+  let unsent = 0;
+  let recipient: string | null | undefined;
   for (const [key, transcript] of Object.entries(state.transcripts)) {
     const pending = transcript.outbox.filter(
       (m) => !["cancelled", "failed", "handled"].includes(m.status),
     );
     if (!pending.length) continue;
     const bot = state.bots.find((bot) => state.tasksByBot[bot.id]?.some((t) => t.key === key));
-    const to = bot ? " to " + bot.name : "";
-    const unsent = pending.filter(
-      (m) =>
-        ["held", "queued", "not-sent", "awaiting-access"].includes(m.status) ||
-        (m.status === "sending" && m.leftAt === null),
-    ).length;
-    const sent = pending.length - unsent;
+    if (recipient === undefined) recipient = bot?.name ?? null;
+    else if (bot?.name !== recipient) recipient = null;
+    for (const message of pending) {
+      if (["held", "queued", "not-sent", "awaiting-access"].includes(message.status) ||
+          (message.status === "sending" && message.leftAt === null)) unsent++;
+      else sent++;
+    }
+  }
+  const to = recipient ? " to " + recipient : "";
+  const warnings: string[] = [];
     if (unsent)
       warnings.push(
         unsent === 1
@@ -82,6 +87,5 @@ export function restartWaitingMessages(
           ? `1 message${to} was sent to the gateway and isn't confirmed yet. Restarting stops following it. The gateway may still have it.`
           : `${sent} messages${to} were sent to the gateway and aren't confirmed yet. Restarting stops following them. The gateway may still have them.`,
       );
-  }
   return warnings.join(" ");
 }
