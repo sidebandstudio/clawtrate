@@ -94,7 +94,7 @@ printf 'HTTP/2.0 204 No Content\\r\\n'
     if ("refusal" in endpoint) throw new Error(endpoint.refusal);
     await page.getByPlaceholder("Gateway address").fill(endpoint.url);
     await page.getByPlaceholder("Token, for the first pairing only").fill(endpoint.token);
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await page.getByRole("button", { name: "Connect a gateway", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible();
     const approve = () =>
       expect
