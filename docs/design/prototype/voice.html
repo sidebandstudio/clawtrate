@@ -39,7 +39,7 @@
                 <div class="gateway-pill">
                   <span class="status-dot" data-status="connected" id="gateway-dot"></span>
                   <span class="gateway-pill-text">
-                    <strong>Home gateway</strong>
+                    <strong id="gateway-name">Home gateway</strong>
                     <span id="gateway-state">Connected</span>
                   </span>
                 </div>
@@ -69,9 +69,10 @@
           <p class="visually-hidden" id="live" aria-live="polite" data-testid="live"></p>
           <dialog class="b-dialog" id="consent-dialog" data-kind="confirm" aria-labelledby="consent-title"></dialog>
           <dialog class="b-dialog" id="confirm-dialog" data-kind="confirm" aria-labelledby="confirm-title"></dialog>
+          <dialog class="b-dialog" id="call-settings-dialog" data-kind="confirm" aria-labelledby="call-settings-title"></dialog>
           <dialog class="b-dialog" id="settings-dialog" data-kind="settings" aria-labelledby="settings-title"></dialog>
           <!-- Prototype chrome: a picture of the system's microphone prompt. Not product code. -->
-          <div class="v-os-layer" id="os-layer" hidden></div>
+          <dialog class="v-os-layer" id="os-layer" aria-label="Picture of a system prompt"></dialog>
         </div>
       </div>
     </main>

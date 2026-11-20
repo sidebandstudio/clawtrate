@@ -397,16 +397,15 @@
 
 /* Prototype chrome: a picture of the system's microphone prompt. */
 .v-os-layer {
-  position: absolute;
   top: 64px;
-  left: 50%;
-  z-index: 50;
+  margin: 0 auto;
   width: min(300px, calc(100% - 32px));
   padding: var(--space-4);
+  border: 0;
   border-radius: var(--radius-md);
   background: var(--bg-raised);
+  color: var(--text);
   box-shadow: var(--shadow-pop);
-  transform: translateX(-50%);
   font-size: var(--text-md);
 }
 
@@ -441,4 +440,86 @@
   inset: calc((40px - var(--tap-min)) / 2);
   border-radius: 50%;
   content: "";
+}
+
+/* The band's second row: the microphone mark, then the actions. At phone width
+   the mark takes its own row and the four actions share the next one. */
+.call-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.call-row .call-actions {
+  flex: 1;
+  margin-top: 0;
+}
+
+[data-width="phone"] .call-row .call-mic,
+[data-input="touch"] .call-row .call-mic {
+  flex-basis: 100%;
+}
+
+[data-width="phone"] .call-row .call-actions .button,
+[data-input="touch"] .call-row .call-actions .button {
+  padding-inline: 10px;
+}
+
+/* The call, wherever its bot and task are listed. */
+.v-task-call {
+  flex: none;
+  color: var(--danger);
+  font-size: var(--text-xs, 12px);
+}
+
+.v-elsewhere {
+  text-align: center;
+}
+
+/* Where the voice goes, named in full. */
+.v-dest {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 var(--space-2);
+}
+
+.v-dest div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+}
+
+.v-dest dt {
+  color: var(--text-muted);
+}
+
+.v-dest dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The call's settings dialog. */
+.v-call-settings .v-group h4 {
+  margin-bottom: 6px;
+}
+
+.v-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px var(--space-2);
+}
+
+[data-input="touch"] .v-select {
+  min-height: var(--tap-min);
+}
+
+.task:has(.v-task-call) {
+  flex-wrap: wrap;
+}
+
+.task .v-task-call {
+  flex-basis: 100%;
 }
