@@ -254,11 +254,15 @@ On the iPhone, and in a desktop window narrower than 688 px, the search button a
 
 - **The top.** The field as a pill, 44 px, with "Search" as its placeholder and focus on opening, and "Cancel" (a quiet button) to its right, 12 px from the edges.
 - **The scope bar** under it: six segments, All, Messages, Bots, Group Chats, Files, Routines, in a row that scrolls sideways when it does not fit. All is chosen first. The bar is a tab list; the results under it are its panel.
-- **All** shows every group in section 5's order, 3 rows each, then "See all 25 messages", which chooses that group's scope. **Messages** shows Tasks, Messages and Links. **Bots**, **Files** and **Routines** show their group. Settings shows only in All.
+- **All** shows every group in section 5's order, 3 rows each, then "See all 25 messages", which chooses that group's scope. **Messages** shows Tasks, Messages and Links. **Bots**, **Files** and **Routines** show their group. Settings shows only in All, and since it has no scope of its own, All shows every Settings row.
+- **A scope asks only for what it shows.** All asks every gateway source; Messages asks the message search (Tasks and Links are the device's own); Files asks files; Routines asks routines; Bots and Group Chats ask nothing. Choosing another scope asks the sources it shows for the current text, if they were not asked yet.
+- **A link row has an "Open link" option** under it, a touch target of its own, under the same address rule as ⇧↵ (section 9). Its name says where it opens: "Open <address> in your browser", on the iPhone "Open <address> outside Clawtrate". The row itself goes to the message.
+- **Files on the iPhone are names only**: it has no reader, so a file row says "File previews are available on desktop." and opens nothing.
 - **Group Chats** shows one line: "Group chats aren't part of Clawtrate yet." It is true, and it keeps the scope's place for when they are.
 - Rows are at touch sizes: 56 px or more, 32 px avatars, 17 px first lines. Coverage lines, partial and failed states, "Search each bot for more" and every line of section 9 are the same, except where a link opens: the iPhone says ‘Opens outside Clawtrate’. Desktop and web preview say ‘Opens in your browser’, the narrow desktop window included.
-- **Opening.** On the iPhone a result pushes its place onto the stack (Home, Search, then the chat or the file); Back returns to Search with the query, the scope, the results and the scroll position as they were. Cancel clears the query and returns to Home. In the narrow desktop window, opening closes the search screen and shows the one-pane detail; Back to bots returns to the list, and search opens empty again.
-- The keyboard's return key reads "Search" and hides the keyboard; the gateway was already asked on the pause.
+- **Opening.** On the iPhone a result pushes its place onto the stack (Home, Search, then the chat); Back returns to Search with the query, the scope, the results and the chosen scope's scroll position as they were. Cancel clears the query and returns to Home. In the narrow desktop window, opening closes the search screen and shows the one-pane detail; Back to bots returns to the list, and search opens empty again.
+- The software keyboard's return key reads "Search", hides the keyboard and opens nothing; the gateway was already asked on the pause. A hardware keyboard's Enter opens the active result, as on the desktop.
+- Scroll and focus survive a group filling in: the list keeps its position, and a focused scope stays focused.
 
 ## 12. Keyboard and screen reader
 
@@ -266,16 +270,16 @@ On the iPhone, and in a desktop window narrower than 688 px, the search button a
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | Up, Down               | Move the active row through every option, across groups; they stop at the first and last                            |
 | Page Up, Page Down     | The first option of the previous or next group                                                                      |
-| Enter                  | Opens the active row (section 9), or does what an action row says                                                   |
-| ⇧Enter                 | On a link row, the link confirmation; elsewhere nothing                                                             |
-| Escape                 | Closes the palette and returns focus to what had it before; with the link confirmation open, closes that first      |
-| ⌘K, Ctrl+K             | Selects the field's text                                                                                            |
+| Enter                  | Opens the active row (section 9), or does what an action row says; on the iPhone's software keyboard, hides the keyboard |
+| ⇧Enter                 | On a link row whose address can be handed over, the handoff (section 9); anywhere else, action rows included, nothing |
+| Escape                 | The top dialog: with the link confirmation open, closes it and returns focus to the field; otherwise closes the palette and returns focus to what had it before |
+| ⌘K, Ctrl+K             | Selects the field's text; with the link confirmation open, focus stays in the confirmation                          |
 | Home, End, Left, Right | Stay with the field's text                                                                                          |
-| Tab                    | Stays in the palette: on the desktop the field is its one stop; on the phone, the field, Cancel, then the scope bar |
+| Tab                    | Stays in the top dialog: the confirmation's two buttons; on the desktop the field is the palette's one stop; on the phone, the field, Cancel, then the scope bar |
 
 On the phone's scope bar, Left and Right move between scopes and choose them, Home and End go to the ends.
 
-**Roles.** The palette is a `dialog` with `aria-modal` and the name "Search". The field is a `combobox` with `aria-expanded`, `aria-controls` naming the list, `aria-autocomplete="list"` and `aria-activedescendant` naming the active row; focus never leaves the field on the desktop. The list is a `listbox`; each group is a `group` named by its heading, whose coverage line is its description (`aria-describedby`). Rows and action rows are `option`s. "What search looks in" is not a listbox: it is a list of text.
+**Roles.** The palette is a `dialog` with `aria-modal` and the name "Search", and everything behind it is inert while it is open. The field is a `combobox` named "Search" with `aria-expanded`, `aria-controls` naming the list, `aria-autocomplete="list"` and `aria-activedescendant` naming the active row; focus never leaves the field on the desktop. The list is a `listbox`; each group is a `group` named by its heading, whose coverage line is its description (`aria-describedby`). Rows and action rows are `option`s. "What search looks in" is not a listbox: it is a list of text. On the phone the scope bar is a `tablist` and the results its `tabpanel`, labelled by the chosen tab. The link confirmation is an `alertdialog` over the palette.
 
 **Names.** A row's name says what it is and where it leads: "Bot Otto, Operations"; "Task Weekly backup check, Otto, 2:14 PM"; "Message in Disk almost full on the media box, from you, Nov 16: Yes, clear the transcode cache."; "File notes/disk-2026-11-16.md, Otto"; "Link energy.example/heat-pumps/sizing, in Heat pump vs. gas furnace. Shift+Enter opens it in your browser."; "Routine Weekday tide digest, Pip, off. Opens Pip."; "Setting Accounts". A row that cannot open adds its line from section 9.
 
