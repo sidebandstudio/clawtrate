@@ -301,7 +301,7 @@ async function captureHostState(
       file,
       JSON.stringify({ reading, requests: server.requests, rendererRequests }, null, 2),
     );
-    info.attach("host-state", { path: file, contentType: "application/json" });
+    await info.attach("host-state", { path: file, contentType: "application/json" });
   } catch {
     // The failure under diagnosis still outranks the diagnostics.
   }
