@@ -1314,18 +1314,21 @@ test.describe("a bot-to-bot message as an action card on a real gateway", () => 
         ["messaged", true],
         ["list", false],
       ]);
-      // The message's words appear once for each card and nowhere else in the run.
-      // Each message is in its own card, and in no other element of the transcript.
+      // Each message is in its own card, and in no other element of the transcript: not in the
+      // other Messaged card either.
       for (const [i, text] of [
         "Could you look over the plan?",
         "And the route for Saturday?",
       ].entries()) {
         await expect(messaged.nth(i)).toContainText(text);
-        const elsewhere = await column.evaluate((element, text) => {
-          const copy = element.cloneNode(true) as HTMLElement;
-          for (const each of copy.querySelectorAll(".card.messaged")) each.remove();
-          return copy.textContent?.split(text).length ?? 1;
-        }, text);
+        const elsewhere = await column.evaluate(
+          (element, [text, owner]) => {
+            const copy = element.cloneNode(true) as HTMLElement;
+            copy.querySelectorAll(".card.messaged")[owner]?.remove();
+            return copy.textContent?.split(text).length ?? 1;
+          },
+          [text, i] as const,
+        );
         expect(elsewhere - 1, text).toBe(0);
       }
     };
