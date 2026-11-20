@@ -5299,9 +5299,11 @@ export class ClawtrateClient {
         if (generation === this.generation) {
           // A read asked later, after a bot was created, may have answered first.
           const newest = this.newestBots(botsIssued);
+          // Only a read that found the identity writes it: an older refresh whose
+          // read failed must not clear what a newer one on this connection confirmed.
           this.store.update((state) => ({
             ...state,
-            connection: { ...state.connection, gatewayId: id },
+            ...(id === null ? {} : { connection: { ...state.connection, gatewayId: id } }),
             ...(newest ? { bots: mapAgents(result) } : {}),
           }));
         }
