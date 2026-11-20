@@ -31,3 +31,29 @@ it("accepts a Windows short directory name only when every differing entry ident
   folders.set(short, 20n);
   await expect(compare()).rejects.toThrow(/Linked/);
 });
+
+it("checks case-only aliases, parent identity and UNC roots", async () => {
+  const compare = async (path: string, canonical: string, different?: string, linked?: string) => {
+    const inspected: string[] = [];
+    await checkWindowsDirectorySpelling(path, canonical, async (name) => {
+      inspected.push(name);
+      return {
+        dev: 1n,
+        ino: name === different ? 2n : 1n,
+        isDirectory: () => true,
+        isSymbolicLink: () => name === linked,
+      };
+    });
+    return inspected;
+  };
+  const long = "C:\\Profiles\\Example",
+    alias = "C:\\Profiles\\EXAMPLE";
+  expect(await compare(alias, long)).toEqual([alias, long]);
+  await expect(compare(alias, long, alias)).rejects.toThrow(/Linked/);
+  await expect(compare(alias, long, undefined, alias)).rejects.toThrow(/Linked/);
+  await expect(compare("C:\\Profiles\\EXAMPL~1\\", long)).resolves.toBeDefined();
+  await expect(compare("C:\\Other\\EXAMPL~1", long, "C:\\Other")).rejects.toThrow(/Linked/);
+  const unc = "\\\\server\\share\\folder";
+  await expect(compare(unc.toUpperCase(), unc)).resolves.toBeDefined();
+  await expect(compare("\\\\server\\other\\folder", unc)).rejects.toThrow(/roots/);
+});

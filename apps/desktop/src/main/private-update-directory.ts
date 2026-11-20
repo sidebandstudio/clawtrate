@@ -16,7 +16,9 @@ export async function checkWindowsDirectorySpelling(
   canonical: string,
   inspect: (path: string) => Promise<DirectoryIdentity> = (path) => lstat(path, { bigint: true }),
 ): Promise<void> {
-  while (path.toLowerCase() !== canonical.toLowerCase()) {
+  path = win32.resolve(path);
+  canonical = win32.resolve(canonical);
+  while (path !== canonical) {
     const [entry, actual] = await Promise.all([inspect(path), inspect(canonical)]);
     if (
       !entry.isDirectory() ||
@@ -30,8 +32,15 @@ export async function checkWindowsDirectorySpelling(
       throw Error("Linked update directory");
     const parent = win32.dirname(path);
     const canonicalParent = win32.dirname(canonical);
-    if (parent === path || canonicalParent === canonical)
+    if (parent === path || canonicalParent === canonical) {
+      if (
+        parent === path &&
+        canonicalParent === canonical &&
+        path.toLowerCase() === canonical.toLowerCase()
+      )
+        return;
       throw Error("Different update directory roots");
+    }
     path = parent;
     canonical = canonicalParent;
   }
