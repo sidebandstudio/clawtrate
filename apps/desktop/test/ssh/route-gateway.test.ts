@@ -55,7 +55,9 @@ function openclawHere(): string | null {
   const path = found.stdout.trim();
   if (found.status !== 0 || !path) return null;
   const version = spawnSync(path, ["--version"], { encoding: "utf8" });
-  return version.status === 0 && /^OpenClaw 2026\.10\.6\b/.test(version.stdout.trim()) ? path : null;
+  return version.status === 0 && /^OpenClaw 2026\.10\.6\b/.test(version.stdout.trim())
+    ? path
+    : null;
 }
 
 const sshd = sshdAvailability();
@@ -109,7 +111,12 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
   const devices = () =>
     parseJsonOutput<{
       pending?: Array<{ deviceId?: string }>;
-      paired?: Array<{ deviceId?: string; scopes?: string[]; approvedVia?: string; roles?: string[] }>;
+      paired?: Array<{
+        deviceId?: string;
+        scopes?: string[];
+        approvedVia?: string;
+        roles?: string[];
+      }>;
     }>(openInstance(INSTANCE).runner.runSync(["devices", "list", "--json"]).stdout);
 
   beforeAll(async () => {
@@ -124,7 +131,12 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
     cli("start", "--run-id", runId, "--instance", INSTANCE, "--default-local-pairing", "--no-seed");
     const listed = JSON.parse(
       execFileSync(process.execPath, [CLI, "list", "--json"], { cwd: ROOT, encoding: "utf8" }),
-    ) as Array<{ name: string | null; gatewayPort: number | null; gatewayPid: number | null; gatewayRunning: boolean }>;
+    ) as Array<{
+      name: string | null;
+      gatewayPort: number | null;
+      gatewayPid: number | null;
+      gatewayRunning: boolean;
+    }>;
     const mine = listed.find((row) => row.name === INSTANCE);
     if (!mine?.gatewayRunning || !mine.gatewayPort || !mine.gatewayPid)
       throw new Error(`instance ${INSTANCE} is not running`);
@@ -138,7 +150,10 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
     // The stand-in: the instance's facts for the LOOK, the real program for the code.
     const stub = installStubOpenclaw(t.home);
     stub.setVersion("OpenClaw 2026.10.6 (fe06181)\n");
-    stub.setStatus("default", statusJson({ port: gatewayPort, home: t.home, pid: mine.gatewayPid }));
+    stub.setStatus(
+      "default",
+      statusJson({ port: gatewayPort, home: t.home, pid: mine.gatewayPid }),
+    );
     stub.setCodeScript(
       "default",
       [
@@ -219,7 +234,10 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
       `Pair this device read-only with the default gateway on ${t.world.localUser}@127.0.0.1?`,
     ]);
     // Exactly read, approved by the gateway without anyone approving it.
-    expect(client.state.connection).toMatchObject({ status: "connected", scopes: ["operator.read"] });
+    expect(client.state.connection).toMatchObject({
+      status: "connected",
+      scopes: ["operator.read"],
+    });
     const deviceId = client.state.connection.deviceId!;
     const mine = (devices().paired ?? []).filter((device) => device.deviceId === deviceId);
     expect(mine).toHaveLength(1);
@@ -238,7 +256,11 @@ describe.skipIf(skip !== null)(title, { timeout: 180_000 }, () => {
         const path = join(dir, name);
         const info = statSync(path);
         if (info.isDirectory()) walk(path);
-        else if (info.isFile() && info.size < 8 * 1024 * 1024 && readFileSync(path, "utf8").includes(token))
+        else if (
+          info.isFile() &&
+          info.size < 8 * 1024 * 1024 &&
+          readFileSync(path, "utf8").includes(token)
+        )
           holding.push(path);
       }
     };

@@ -172,7 +172,7 @@ export function installStubOpenclaw(home: string): {
       "#!/bin/sh",
       'd="$HOME/.openclaw/stub"',
       'printf \'%s\\n\' "$*" >> "$d/calls"',
-      'p=default',
+      "p=default",
       'if [ "${1:-}" = --profile ] && [ "${2:-}" = clawtrate ]; then p=clawtrate; shift 2; fi',
       'case "$p $*" in',
       '  "default --version") cat "$d/version" ;;',

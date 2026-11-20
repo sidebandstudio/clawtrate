@@ -20,6 +20,12 @@ if (
   process.stderr.write("mint-code: only the CODE script's command\n");
   process.exit(2);
 }
-const result = openInstance(instance).runner.runSync(["qr", "--json", "--voice-node", "--url", url]);
+const result = openInstance(instance).runner.runSync([
+  "qr",
+  "--json",
+  "--voice-node",
+  "--url",
+  url,
+]);
 process.stdout.write(result.stdout);
 process.exit(result.status ?? 1);

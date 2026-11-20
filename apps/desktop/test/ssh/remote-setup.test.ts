@@ -377,7 +377,10 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
     expect(h.fake.sockets.at(-1)!.url).toBe(`ws://127.0.0.1:${local}`);
     expect(connect.scopes).toEqual(["operator.read"]);
     expect(connect.auth?.bootstrapToken).toBe(BOOTSTRAP);
-    expect(h.client.state.connection).toMatchObject({ status: "connected", scopes: ["operator.read"] });
+    expect(h.client.state.connection).toMatchObject({
+      status: "connected",
+      scopes: ["operator.read"],
+    });
     // The device token is in the route store, under the route, and nowhere else.
     const routes = readFileSync(h.routes.path, "utf8");
     expect(routes).toContain(DEVICE_TOKEN);
@@ -430,11 +433,16 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
     });
     await sshd.dropSessions();
     await until(() => phases.includes("restoring"), 15_000);
-    await until(() => h.client.state.setup?.route?.phase === "up" && phases.includes("restored"), 30_000);
+    await until(
+      () => h.client.state.setup?.route?.phase === "up" && phases.includes("restored"),
+      30_000,
+    );
     expect(phases).toEqual(["up", "restoring", "restored", "up"]);
     await until(() => h.client.state.connection.status === "connected", 10_000);
     // Back over the route's own token, through the new forward, and only there.
-    const connect = h.fake.connects.at(-1) as { auth?: { bootstrapToken?: string; deviceToken?: string } };
+    const connect = h.fake.connects.at(-1) as {
+      auth?: { bootstrapToken?: string; deviceToken?: string };
+    };
     expect(connect.auth?.bootstrapToken).toBeUndefined();
     expect(JSON.stringify(connect.auth)).toContain(DEVICE_TOKEN);
     expect(h.fake.sockets.length).toBeGreaterThan(sockets);
@@ -479,7 +487,12 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
       "default",
       statusJson({ port: gateway.port, home: t.home, running: false, rpcOk: false }),
     );
-    const status = statusJson({ port: gateway.port, home: t.home, running: false, rpcOk: false }) as {
+    const status = statusJson({
+      port: gateway.port,
+      home: t.home,
+      running: false,
+      rpcOk: false,
+    }) as {
       port: { listeners: unknown[] };
     };
     status.port.listeners = [];
@@ -489,7 +502,10 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
       expect(h.setup().look).toMatchObject({ outcome: "stopped", profile: "default" });
       const calls = stub.calls().length;
       await h.remote.start();
-      expect(h.questions.at(-1)).toMatchObject({ message: "Start OpenClaw on devbox?", confirm: "Start" });
+      expect(h.questions.at(-1)).toMatchObject({
+        message: "Start OpenClaw on devbox?",
+        confirm: "Start",
+      });
       expect(stub.calls().slice(calls)).not.toContain("gateway start");
       start = true;
       // The gateway answers once started.
@@ -512,7 +528,9 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
     }
     // Unticked, nothing is stopped.
     stopIt = false;
-    const g = host({ answer: (question) => ({ confirmed: true, checked: question.checkbox ? stopIt : false }) });
+    const g = host({
+      answer: (question) => ({ confirmed: true, checked: question.checkbox ? stopIt : false }),
+    });
     await lookOnDevbox(g);
     await g.remote.connect();
     await until(() => g.setup().phase === "done", 30_000);
@@ -547,7 +565,10 @@ describe.skipIf(!availability.ok)(title, { timeout: 90_000 }, () => {
           join(synthetic, "data", "ssh"),
           () => {
             makes += 1;
-            return new SshTransport({ ...t.world, appDir: join(synthetic, "data", "ssh") }, { spawn });
+            return new SshTransport(
+              { ...t.world, appDir: join(synthetic, "data", "ssh") },
+              { spawn },
+            );
           },
           { root: synthetic },
         );

@@ -115,7 +115,12 @@ export function establishPrivateDir(
 export function afterPrivacyCheck<T>(
   dir: string,
   make: () => T,
-  options: { uid?: number | null; platform?: NodeJS.Platform; root?: string; log?: (line: string) => void } = {},
+  options: {
+    uid?: number | null;
+    platform?: NodeJS.Platform;
+    root?: string;
+    log?: (line: string) => void;
+  } = {},
 ): T | { refused: "app-files-unsafe" } {
   const verdict = establishPrivateDir(dir, options);
   if (!verdict.ok) {
