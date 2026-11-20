@@ -34,6 +34,7 @@ Every document in the repository, by what you want to do.
 - [Bots](design/bots.md): creating a bot on an account, connecting accounts, a bot's settings and the optional T3 Code integration.
 - [Controls](design/controls.md): what each bot may do and who enforces it, saved approvals, activity, memory, where a bot runs, usage and warning budgets.
 - [Setting up](design/setup.md): the first run, where OpenClaw runs and what Clawtrate found there, connecting on this computer or over SSH, installing OpenClaw, setup codes and approvals.
+- [Settings](design/settings.md): Settings as a whole, several gateways, Appearance, spelling and hardware acceleration, Updates and "Update required", Compact and the low-disk note.
 - [Prototype](design/prototype/README.md): static pages that show the design working.
 
 ## Research
@@ -44,6 +45,8 @@ Every document in the repository, by what you want to do.
 - [The setup flow](research/setup-flow.md): first pairing, setup codes, the gateway's identity, installing and removing OpenClaw, SSH from a shipped app, and Tailscale, from OpenClaw's source and live runs.
 - `research/setup-flow/`: the probe behind the setup flow note.
 - [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
+- [Settings](research/settings.md): what several gateways, removing one, updates, Compact, the disk figures, spelling and hardware acceleration rest on, from OpenClaw's source, Electron's documentation and live runs.
+- `research/settings/`: the probe behind the Settings note.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
 ## Writing docs

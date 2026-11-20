@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: settings</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/conversation.css" />
+    <link rel="stylesheet" href="css/bots.css" />
+    <link rel="stylesheet" href="css/controls.css" />
+    <link rel="stylesheet" href="css/settings.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/icons.js"></script>
+    <script src="js/prototype.js"></script>
+    <script src="js/settings.js" defer></script>
+    <script src="js/app.js" defer></script>
+    <script src="js/bots.js" defer></script>
+    <script src="js/bot-settings.js" defer></script>
+    <script src="js/t3.js" defer></script>
+    <script src="js/controls.js" defer></script>
+    <script src="js/controls-memory.js" defer></script>
+    <script src="js/controls-usage.js" defer></script>
+  </head>
+  <body>
+    <header class="proto-bar" id="proto-bar"></header>
+    <main class="proto-stage">
+      <div class="proto-frame">
+        <!-- This page is controls.html with what docs/design/settings.md adds:
+             several gateways in the gateway menu and in Settings, Appearance,
+             System and Updates in Settings, Update required, Compact in the
+             Work pane's Details tab, and the low-disk note. js/settings.js
+             fills them. -->
+        <!-- The markup below follows the shell's own structure: .shell holds the
+             rail and .main-pane; .main-pane holds the status strip, the
+             conversation, the drawer scrim and the Work pane. js/app.js fills
+             the parts that depend on what is selected. -->
+        <div class="app" id="root">
+          <div class="shell" data-panel="closed" data-view="detail">
+            <nav class="rail" aria-label="Bots">
+              <div class="rail-top">
+                <button type="button" class="icon-button rail-status" data-action="gateway-menu" aria-haspopup="menu" aria-expanded="false">
+                  <i data-icon="settings"></i>
+                  <span class="status-dot" data-status="connected"></span>
+                </button>
+                <button type="button" class="icon-button" data-action="search" aria-label="Search" title="Search (⌘K)">
+                  <i data-icon="search"></i>
+                </button>
+                <button type="button" class="icon-button" id="new-button" data-action="new-menu" aria-haspopup="menu" aria-expanded="false" aria-label="New" title="New">
+                  <i data-icon="plus"></i>
+                </button>
+              </div>
+
+              <ul class="bot-list" id="bot-list" data-testid="bot-list"></ul>
+
+              <div class="rail-footer">
+                <button type="button" class="gateway-pill" data-action="gateway-menu" aria-haspopup="menu" aria-expanded="false">
+                  <span class="status-dot" data-status="connected"></span>
+                  <span class="gateway-pill-text">
+                    <strong>Home gateway</strong>
+                    <span id="gateway-state">Connected</span>
+                  </span>
+                </button>
+              </div>
+
+              <ul class="menu gateway-menu" id="gateway-menu" role="menu" aria-label="Gateway" hidden>
+                <li class="menu-head" role="presentation">
+                  <strong>Home gateway</strong>
+                  <span id="gateway-menu-state">Connected · gateway.local</span>
+                </li>
+                <li class="menu-rule" role="separator"></li>
+                <li class="menu-label" role="presentation">Gateways</li>
+                <li role="none" id="s-menu-gateways"></li>
+                <li role="none"><button type="button" class="menu-item" role="menuitem" data-s="add">Add gateway…</button></li>
+                <li class="menu-rule" role="separator"></li>
+                <li class="menu-label" role="presentation">Theme</li>
+                <li role="none"><button type="button" class="menu-item" role="menuitemradio" data-theme-choice="system" aria-checked="false">Follow system<span class="glyph" data-state="check"></span></button></li>
+                <li role="none"><button type="button" class="menu-item" role="menuitemradio" data-theme-choice="light" aria-checked="false">Light<span class="glyph" data-state="check"></span></button></li>
+                <li role="none"><button type="button" class="menu-item" role="menuitemradio" data-theme-choice="dark" aria-checked="false">Dark<span class="glyph" data-state="check"></span></button></li>
+                <li class="menu-rule" role="separator"></li>
+                <li role="none"><button type="button" class="menu-item" role="menuitem" data-action="b-settings">Settings<kbd>⌘,</kbd></button></li>
+                <li role="none"><button type="button" class="menu-item" role="menuitem" data-tone="danger" data-action="disconnect">Disconnect</button></li>
+              </ul>
+            </nav>
+
+            <div class="main-pane">
+              <section class="conversation" aria-label="Conversation">
+                <!-- The status strip is rendered inside the conversation, so it is
+                     centred on the conversation whether or not Work is docked. -->
+                <div class="status-strip" id="status-strip" role="status" data-testid="status-strip" hidden></div>
+                <header class="conversation-header">
+                  <div class="header-side">
+                    <button type="button" class="icon-button back-button" data-action="back" aria-label="Back to bots">
+                      <i data-icon="back"></i>
+                    </button>
+                  </div>
+                  <button type="button" class="title-pill" id="title-pill" data-action="panel"></button>
+                  <div class="header-side" data-side="end">
+                    <button type="button" class="icon-button" id="panel-button" data-action="panel" aria-pressed="false" aria-label="Show work panel" title="Work panel (⌘\)">
+                      <i data-icon="panel"></i>
+                    </button>
+                  </div>
+                </header>
+
+                <div class="transcript-wrap">
+                  <div class="transcript" id="transcript" tabindex="0" data-testid="transcript"></div>
+                  <button type="button" class="jump-latest" id="jump-latest" data-action="jump" hidden>
+                    Jump to latest <i data-icon="arrow-down"></i>
+                  </button>
+                </div>
+
+                <footer class="composer" id="composer"></footer>
+              </section>
+
+              <button type="button" class="drawer-scrim" data-action="panel-close" aria-label="Close work panel" tabindex="-1"></button>
+
+              <aside class="work-panel" id="work-panel" aria-label="Work" data-testid="work-panel">
+                <button type="button" class="icon-button work-close" data-action="panel-close" aria-label="Close work panel">
+                  <i data-icon="x"></i>
+                </button>
+                <div class="work-hero" id="work-hero"></div>
+                <div class="tabs" role="tablist" aria-label="Work">
+                  <button type="button" class="tab" role="tab" id="tab-details" aria-controls="panel-details" aria-selected="true" data-tab="details">Details</button>
+                  <button type="button" class="tab" role="tab" id="tab-files" aria-controls="panel-files" aria-selected="false" tabindex="-1" data-tab="files">Files</button>
+                  <button type="button" class="tab" role="tab" id="tab-computer" aria-controls="panel-computer" aria-selected="false" tabindex="-1" data-tab="computer">Computer</button>
+                  <button type="button" class="tab" role="tab" id="tab-settings" aria-controls="panel-settings" aria-selected="false" tabindex="-1" data-tab="settings">Settings</button>
+                </div>
+                <div class="work-sections">
+                  <div role="tabpanel" id="panel-details" aria-labelledby="tab-details" tabindex="0"></div>
+                  <div role="tabpanel" id="panel-files" aria-labelledby="tab-files" tabindex="0" hidden>
+                    <div class="work-empty">
+                      <span class="empty-mark"><i data-icon="file"></i></span>
+                      <h4>No files yet</h4>
+                      <p id="files-empty"></p>
+                    </div>
+                  </div>
+                  <div role="tabpanel" id="panel-computer" aria-labelledby="tab-computer" tabindex="0" hidden>
+                    <div class="work-empty">
+                      <span class="empty-mark"><i data-icon="screen"></i></span>
+                      <h4>No screen to show</h4>
+                      <p id="computer-empty"></p>
+                    </div>
+                  </div>
+                  <div role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" tabindex="0" hidden></div>
+                </div>
+              </aside>
+            </div>
+          </div>
+          <div class="rail-tooltip" id="rail-tooltip" role="tooltip" data-testid="rail-tooltip" hidden></div>
+          <!-- One menu element serves the "+" button and a bot's context menu. -->
+          <ul class="menu rail-menu" id="rail-menu" role="menu" hidden></ul>
+          <dialog class="b-dialog" id="create-dialog" aria-labelledby="create-title"></dialog>
+          <dialog class="b-dialog" id="settings-dialog" data-kind="settings" aria-labelledby="settings-title"></dialog>
+          <dialog class="b-dialog" id="confirm-dialog" data-kind="confirm" role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-text"></dialog>
+          <!-- Prototype stand-in for the setup flow, which runs here in the app (setup.md). -->
+          <dialog class="b-dialog" id="s-stand" data-kind="confirm" aria-labelledby="s-stand-title"></dialog>
+          <div class="b-announce visually-hidden" id="b-announce" role="status" aria-live="polite"></div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>
