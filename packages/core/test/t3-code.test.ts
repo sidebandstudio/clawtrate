@@ -1071,6 +1071,17 @@ describe("a reload keeps a call in a thread only on the stored result's own attr
     // History keeps no tool server or tool: the map and a matching shape do not make it T3 Code's.
     expect(t3(fromHistory("t3_thread_read", args, read).alone)).toBeNull();
   });
+
+  it("F-132 F-313: a call of a run read from history that is still in flight is T3 Code's by the map, before any result", () => {
+    // A host that did not start the run knows it from history; until a result is stored, the
+    // gateway's name map is the evidence before the result (11.1).
+    const open = {
+      ...live("t3_thread_wait", { threadId: THREAD }, null, { open: true }),
+      fromHistory: true,
+    };
+    expect(t3(open)?.tool).toBe("t3_thread_wait");
+    expect(t3(open)?.state).toBe("started");
+  });
 });
 
 it("F-313: an unreturned call can link to the named thread card later in the column", () => {

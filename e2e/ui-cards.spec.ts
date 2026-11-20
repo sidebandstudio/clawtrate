@@ -946,6 +946,35 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     const run = await clients.plain.send(t.key, directive);
     return { ...t, runId: String(run.runId) };
   };
+  /**
+   * A run of Juniper's started by the host's own device, in a task of its own: its results reach
+   * the host live, with the tool server and tool that made them. A run another client starts
+   * reaches the host only through history, which keeps neither (11.4), so its calls are cards
+   * of their own once they end.
+   */
+  const hosted = async (slug: string, directive: string) => {
+    const { title, key } = await hostTask("main", slug, directive);
+    await clients.plain.request("sessions.messages.subscribe", { key });
+    const first = await clients.plain.waitFor(
+      `${slug}'s first call`,
+      (e) => {
+        const p = e.payload as { sessionKey?: string; stream?: string; data?: { kind?: string } };
+        return p.sessionKey === key && p.stream === "item" && p.data?.kind === "tool";
+      },
+      60_000,
+    );
+    return { title, key, runId: String((first.payload as { runId: string }).runId) };
+  };
+  /** A call's item start, which every client following the session receives. */
+  const itemStart = (runId: string, tool: string) =>
+    clients.plain.waitFor(
+      `${tool} start in ${runId}`,
+      (e) => {
+        const p = e.payload as { runId?: string; stream?: string; data?: { name?: string } };
+        return p.runId === runId && p.stream === "item" && p.data?.name === `t3code__${tool}`;
+      },
+      60_000,
+    );
   /** The run's tool events on the test client, by phase and tool. */
   const toolEvent = (runId: string, phase: string, tool: string) =>
     clients.plain.waitFor(
@@ -1025,9 +1054,9 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
 
   test("F-132 F-134 F-313: a thread launched and waited on, live: the wait's line closes up into the thread's card, which reads Call made, each status on its own item", async () => {
     test.setTimeout(180_000);
-    const t = await called("t3-live", "#t3-start #t3-wait");
+    const t = await hosted("T3 live", "#t3-start #t3-wait");
     // Open while the wait runs: its line, and the card's Checking, as the gateway's events say.
-    await toolEvent(t.runId, "start", "t3_thread_wait");
+    await itemStart(t.runId, "t3_thread_wait");
     await openTask(page, "Juniper", t.title);
     const [launch, wait] = callIds(t.runId);
     const line = page.locator(`.card.action[data-call="${wait}"]`);
@@ -1178,16 +1207,19 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
     await ownRaw(page, [wait!]);
   });
 
-  test("F-134: a slow run waited on briefly, then asked to stop: the stop's item reads Stop requested, and the wait says it ended first", async () => {
+  test("F-134: a slow run waited on briefly, then asked to stop: the stop's item says a stop was asked for, and the wait says it ended first", async () => {
     test.setTimeout(120_000);
-    const t = await called("t3-interrupt", "#t3-start #t3-wait-short #t3-stop");
+    const t = await hosted("T3 interrupt", "#t3-start #t3-wait-short #t3-stop");
+    // Open while the run goes on: its results reach this page live.
+    await openTask(page, "Juniper", t.title);
     await clients.plain.terminal(t.runId);
     const [, wait, stop] = callIds(t.runId);
-    await openTask(page, "Juniper", t.title);
     // Three calls reported a status: Call made, each status on its own item.
     await expect(word(page)).toHaveText("Call made");
     const c = await openCard(page);
-    await expect(c.locator(`[data-item-call="${stop}"]`)).toContainText("Stop requested");
+    await expect(c.locator(`[data-item-call="${stop}"]`)).toContainText(
+      "A stop was asked for. That is not proof that T3 Code stopped.",
+    );
     await expect(c.locator(`[data-item-call="${wait}"]`)).toContainText(
       "The wait ended before the run finished",
     );
@@ -1196,10 +1228,10 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
 
   test("F-314 F-313: a follow-up T3 Code refuses is Failed on its own call, with T3 Code's code; its thread's launch is not in the record", async () => {
     test.setTimeout(120_000);
-    const t = await called("t3-refused", "#t3-refused");
+    const t = await hosted("T3 refused", "#t3-refused");
+    await openTask(page, "Juniper", t.title);
     await clients.plain.terminal(t.runId);
     const [send] = callIds(t.runId);
-    await openTask(page, "Juniper", t.title);
     // Its result names no thread, so it joins none: a card of its own, saying what was asked,
     // that it failed and T3 Code's reason. No thread is said to exist before the record.
     const check = async () => {
@@ -1223,9 +1255,9 @@ test.describe("T3 Code thread cards on a real gateway, with the scripted T3 Code
   });
 
   test("F-313: T3 Code's listings are lines of their own that fold, never a thread's card", async () => {
-    const t = await called("t3-list", "#t3-list");
-    await clients.plain.terminal(t.runId);
+    const t = await hosted("T3 list", "#t3-list");
     await openTask(page, "Juniper", t.title);
+    await clients.plain.terminal(t.runId);
     await expect(card(page, "t3-card")).toHaveCount(0);
     const fold = page.locator(".card.action[data-fold]");
     await expect(fold).toHaveAttribute("data-fold", "2");
