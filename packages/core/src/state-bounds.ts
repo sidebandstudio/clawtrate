@@ -124,7 +124,9 @@ import {
 import {
   MAX_LOOK_OTHER_CHARS,
   MAX_LOOK_OTHERS,
+  type InstallFailure,
   type SetupFailure,
+  type SetupInstall,
   type SetupLook,
   type SetupState,
 } from "./setup.ts";
@@ -1109,6 +1111,17 @@ const setup = object<SetupState>()({
   slow: FLAG,
   look: setupLook,
   failure: object<SetupFailure>()({ kind: ENUM, exitCode: NUMBER, port: NUMBER, reason: ENUM }),
+  install: object<SetupInstall>()({
+    step: NUMBER,
+    nodeChecked: FLAG,
+    failure: object<InstallFailure>()({
+      kind: ENUM,
+      step: NUMBER,
+      exitCode: NUMBER,
+      classification: ENUM,
+      retry: FLAG,
+    }),
+  }),
 });
 
 /** Every part of the state but the transcripts, and the transcripts as one map. */

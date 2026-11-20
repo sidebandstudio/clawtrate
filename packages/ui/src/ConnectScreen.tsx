@@ -519,6 +519,8 @@ export function ConnectScreen({
     (setup.phase === "confirming" ||
       setup.phase === "connecting" ||
       setup.phase === "failed" ||
+      setup.phase === "installing" ||
+      setup.phase === "install-failed" ||
       (setup.phase === "done" && connection.status !== "connected"));
   const noGateway = connection.status === "idle" && connection.gatewayUrl === null;
   const showSetup =

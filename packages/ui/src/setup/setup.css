@@ -155,6 +155,12 @@
   color: var(--danger);
 }
 
+.s-step-detail {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
 .s-step-time {
   font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
@@ -226,6 +232,11 @@
 
 .s-found .facts {
   width: 100%;
+  text-align: left;
+}
+
+.s-facts {
+  margin: var(--space-4) 0 0;
   text-align: left;
 }
 

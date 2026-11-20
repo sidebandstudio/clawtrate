@@ -110,7 +110,62 @@ export type SetupPhase =
   | "connecting"
   /** Connected through setup: the app takes over. */
   | "done"
-  | "failed";
+  | "failed"
+  /** Setting OpenClaw up on this computer (§10): the steps run. */
+  | "installing"
+  /** A step of setting OpenClaw up failed, or the install couldn't start. */
+  | "install-failed";
+
+/** The pinned Node.js that setting up installs beside OpenClaw (§10). */
+export const INSTALL_NODE_VERSION = "24.22.1";
+
+/**
+ * Why setting OpenClaw up failed (§10), each in fixed copy: something named
+ * `clawtrate` was there already; a download; a fingerprint; the installer's
+ * exit; its Node.js step; onboarding; the status wait; or the facts changed
+ * between the look and the host's dialog.
+ */
+export type InstallFailureKind =
+  | "exists"
+  | "download"
+  | "fingerprint"
+  | "installer"
+  | "node-not-checked"
+  | "onboard"
+  | "not-answering"
+  | "changed";
+
+/** Onboarding's failure class, as its JSON names it, or the service it couldn't install. */
+export type OnboardClassification =
+  | "auth-mismatch"
+  | "module-missing"
+  | "service-missing"
+  | "service-stopped"
+  | "startup-blocked"
+  | "not-listening"
+  | "systemd-user-unavailable";
+
+export type InstallFailure = {
+  kind: InstallFailureKind;
+  /** The step that failed, from 0; -1 when the install stopped before its first step. */
+  step: number;
+  exitCode: number | null;
+  classification: OnboardClassification | null;
+  /**
+   * Whether "Try again" is offered: the attempt never reached onboarding and
+   * the host removed, and checked it removed, everything it had made.
+   */
+  retry: boolean;
+};
+
+/** Where setting OpenClaw up stands (§10). */
+export type SetupInstall = {
+  /** The step under way, from 0; 4 once every step is done. */
+  step: number;
+  /** The installer reported that it used the checked Node.js. */
+  nodeChecked: boolean;
+  failure: InstallFailure | null;
+};
 
 export type SetupState = {
   phase: SetupPhase;
@@ -120,6 +175,8 @@ export type SetupState = {
   slow: boolean;
   look: SetupLook | null;
   failure: SetupFailure | null;
+  /** Setting OpenClaw up, while it runs or after it failed; absent otherwise. */
+  install?: SetupInstall | null;
 };
 
 export const initialSetupState: SetupState = {
@@ -145,12 +202,19 @@ export type SetupHost = {
    * dialog and runs nothing unless that dialog's answer is yes.
    */
   connect(): Promise<void>;
+  /**
+   * Ask the host to set OpenClaw up on this computer, after a look found
+   * nothing, or to try again after a failed attempt. The host shows its own
+   * dialog and downloads and runs nothing unless that dialog's answer is yes.
+   */
+  install(): Promise<void>;
   /** Back to the first screen. */
   reset(): void;
 };
 
 /**
  * Whether the screens of setup are offered, and which: `look` runs on the
- * host's computer, `pair` needs a native dialog of the host's.
+ * host's computer, `pair` needs a native dialog of the host's, `install` is
+ * a person's app on macOS or glibc Linux that may set OpenClaw up (§10).
  */
-export type SetupOffer = { look: boolean; pair: boolean; platform: string };
+export type SetupOffer = { look: boolean; pair: boolean; platform: string; install?: boolean };

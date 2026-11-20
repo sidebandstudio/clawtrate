@@ -37,6 +37,9 @@ import {
   type HostRuntime,
 } from "../host/runtime.ts";
 import { SetupController } from "../setup/controller.ts";
+import { computerPlace, Installer } from "../setup/install.ts";
+import { installTarget, PINS, runsOnGlibc } from "../setup/install-pins.ts";
+import { InstallRunner } from "../setup/install-runner.ts";
 import { ProgramRunner } from "../setup/programs.ts";
 import { resolveSetupLaunch, sandboxOpener, type Opened } from "../setup/sandbox.ts";
 import { startSyntheticGateway } from "../setup/synthetic-gateway.ts";
@@ -88,6 +91,8 @@ let runtime: HostRuntime | null = null;
 let window: BrowserWindow | null = null;
 /** The programs setup started, ended by PID when the app quits. */
 const programs = new ProgramRunner();
+/** The programs an install started, ended by PID when the app quits. */
+const installPrograms = new InstallRunner();
 let closeSetup: () => Promise<void> = async () => {};
 
 /** Whether a command-line switch was given, to Chromium or to the app. */
@@ -182,6 +187,36 @@ function setupOpener(): {
     }),
     close,
   };
+}
+
+/**
+ * A new installer for each attempt (docs/design/setup.md §10), offered only
+ * to a person's packaged app that nothing automates, on macOS or glibc
+ * Linux. Every development build and automated run gets none: it never
+ * downloads or runs OpenClaw's installer.
+ */
+function setupInstaller(): (() => Installer) | null {
+  if (SETUP.kind !== "production") return null;
+  const platform = process.platform;
+  if (platform !== "darwin" && platform !== "linux") return null;
+  const target = installTarget(platform, process.arch, platform === "linux" && runsOnGlibc());
+  const home = accountHome();
+  if (!target || !home) return null;
+  return () =>
+    new Installer({
+      place: computerPlace({
+        home,
+        appData: app.getPath("userData"),
+        platform,
+        target,
+        env: process.env,
+      }),
+      pins: PINS,
+      run: (request, check) => installPrograms.run(request, check),
+      personsApp: true,
+      accountHome: home,
+      log: (line) => console.log(line),
+    });
 }
 
 /** The host's own confirmation (docs/design/setup.md §2): a native dialog, never the page. */
@@ -389,6 +424,7 @@ async function main(): Promise<void> {
   ipcMain.handle("clawtrate:update:download", (_event, id: unknown) => updates.download(id));
   // Setup on this computer. A development build and every automated run look only in a sandbox.
   const opener = setupOpener();
+  const installer = setupInstaller();
   closeSetup = opener.close;
   const setup = new SetupController({
     client,
@@ -396,9 +432,10 @@ async function main(): Promise<void> {
     stopPrograms: () => programs.stopAll(),
     confirm: confirmNatively,
     log: (line) => console.log(line),
+    installer,
   });
   policy.setup = setup;
-  info.setup = { look: true, pair: true, platform: process.platform };
+  info.setup = { look: true, pair: true, platform: process.platform, install: installer !== null };
 
   ipcMain.handle("clawtrate:hello", (): { info: HostInfo; state: ClawtrateState } => ({
     info,
@@ -485,6 +522,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   programs.stopAll();
+  installPrograms.stopAll();
   void closeSetup();
   runtime?.client.stop();
 });

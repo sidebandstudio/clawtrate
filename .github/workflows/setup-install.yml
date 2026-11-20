@@ -1,0 +1,63 @@
+name: Setup install
+
+# A real install of OpenClaw through Clawtrate's own host code (docs/design/setup.md §10, §19).
+# It never runs on a developer's computer: it runs only on GitHub's hosted runners, which are
+# discarded after each job, and the script refuses anywhere else. A decoy default OpenClaw home
+# stands for a person's own OpenClaw and must come through unchanged.
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/src/setup/install*.ts"
+      - "apps/desktop/src/setup/controller.ts"
+      - "apps/desktop/src/setup/look.ts"
+      - "apps/desktop/src/setup/parse.ts"
+      - "apps/desktop/src/setup/programs.ts"
+      - "apps/desktop/src/setup/world.ts"
+      - "apps/desktop/test/hosted/**"
+      - "packages/core/src/setup.ts"
+      - ".github/workflows/setup-install.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: setup-install-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15 is Apple silicon (arm64); ubuntu-24.04 is x64 with glibc.
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: A decoy default OpenClaw home
+        run: |
+          test ! -e "$HOME/.openclaw"
+          test ! -e "$HOME/.openclaw-clawtrate"
+          mkdir -p "$HOME/.openclaw"
+          printf 'the person'"'"'s own\n' > "$HOME/.openclaw/keep-me"
+      - name: User services on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo loginctl enable-linger "$USER"
+          for _ in $(seq 30); do test -S "/run/user/$(id -u)/bus" && break; sleep 1; done
+          test -S "/run/user/$(id -u)/bus"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      - name: Install, look, connect read-only, uninstall, and check nothing is left
+        run: node apps/desktop/test/hosted/real-install.ts

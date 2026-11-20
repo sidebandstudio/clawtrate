@@ -8,6 +8,8 @@ import {
   type BridgeCommand,
   type ClawtrateState,
   type HostInfo,
+  type InstallFailure,
+  type SetupInstall,
   type SetupLook,
   type SetupState,
 } from "@clawtrate/core";
@@ -36,6 +38,41 @@ const failed = (kind: NonNullable<SetupState["failure"]>["kind"], extra = {}): S
   phase: "failed",
   look: running,
   failure: { kind, exitCode: null, port: null, reason: null, ...extra },
+});
+
+const notFound: SetupLook = {
+  ...running,
+  outcome: "not-found",
+  version: null,
+  profile: null,
+  listens: null,
+  service: null,
+  port: null,
+  access: null,
+};
+
+/** Setting OpenClaw up (§10), at a step, after a look found nothing. */
+const installing = (install: Partial<SetupInstall>): SetupState => ({
+  ...initialSetupState,
+  phase: "installing",
+  look: notFound,
+  install: { step: 0, nodeChecked: false, failure: null, ...install },
+});
+
+/** A failed install, at the step that failed. */
+const installFailed = (
+  kind: InstallFailure["kind"],
+  step: number,
+  extra: Partial<InstallFailure> = {},
+): SetupState => ({
+  ...initialSetupState,
+  phase: "install-failed",
+  look: notFound,
+  install: {
+    step: Math.max(step, 0),
+    nodeChecked: step > 1,
+    failure: { kind, step, exitCode: null, classification: null, retry: false, ...extra },
+  },
 });
 
 /** Every setup state the fixture shows, by the name used in `?setup=`. */
@@ -93,6 +130,23 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "cant-tell-not-set-up": looked({ outcome: "cant-tell", reason: "not-set-up" }),
   "cant-tell-no-answer": looked({ outcome: "cant-tell", reason: "no-answer" }),
   "code-failed-shape": failed("code-failed", { exitCode: 0 }),
+  installing: installing({}),
+  "installing-node": installing({ step: 1, nodeChecked: true }),
+  "installing-gateway": installing({ step: 2, nodeChecked: true }),
+  "installing-check": installing({ step: 3, nodeChecked: true }),
+  "install-download": installFailed("download", 0, { retry: true }),
+  "install-fingerprint": installFailed("fingerprint", 0, { retry: true }),
+  "install-installer": installFailed("installer", 1, { exitCode: 1, retry: true }),
+  "install-node": installFailed("node-not-checked", 1, { retry: true }),
+  "install-onboard": installFailed("onboard", 2, {
+    exitCode: 1,
+    classification: "systemd-user-unavailable",
+  }),
+  "install-not-answering": installFailed("not-answering", 3),
+  "install-exists": installFailed("exists", -1),
+  "install-changed": installFailed("changed", -1),
+  /** The gateway Clawtrate set up, found by the look that follows the install. */
+  "found-installed": looked({ profile: "clawtrate", port: 52114 }),
 };
 
 export function isSetupState(name: string | null): name is string {
@@ -105,7 +159,12 @@ export function setupInfo(info: HostInfo, name: string): HostInfo {
     ...info,
     kind: "desktop",
     devGateway: null,
-    setup: { look: true, pair: true, platform: name === "windows" ? "win32" : "darwin" },
+    setup: {
+      look: true,
+      pair: true,
+      platform: name === "windows" ? "win32" : "darwin",
+      install: name !== "windows",
+    },
   };
 }
 
@@ -167,6 +226,20 @@ export function setupCommand(
           return;
         }
         set({ ...connected(), setup: { ...current(), phase: "done" } });
+      });
+      return true;
+    }
+    case "setupInstall": {
+      // As the host runs it after its dialog: the four steps, then the look finds the gateway.
+      setup(installing({}));
+      const at = (ms: number, install: Partial<SetupInstall>) =>
+        later(ms, () => current().phase === "installing" && setup(installing(install)));
+      at(300, { step: 1 });
+      at(500, { step: 1, nodeChecked: true });
+      at(700, { step: 2, nodeChecked: true });
+      at(900, { step: 3, nodeChecked: true });
+      later(1100, () => {
+        if (current().phase === "installing") setup(SETUP_STATES["found-installed"]!);
       });
       return true;
     }

@@ -6,13 +6,19 @@
 import type {
   ConnectionState,
   HostInfo,
+  InstallFailure,
   LookService,
+  OnboardClassification,
   SetupFailureKind,
   SetupLook,
   SetupRefusal,
   SetupState,
 } from "@clawtrate/core";
-import { OLDEST_OPENCLAW_VERSION, TESTED_OPENCLAW_VERSION } from "@clawtrate/core";
+import {
+  INSTALL_NODE_VERSION,
+  OLDEST_OPENCLAW_VERSION,
+  TESTED_OPENCLAW_VERSION,
+} from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import logoUrl from "../assets/logo-mark.png";
 import { useCommand } from "../bridge.tsx";
@@ -60,7 +66,18 @@ const Mark = () => <img className="s-mark" src={logoUrl} alt="" width={44} heigh
 type StepState = "waiting" | "running" | "done" | "failed";
 
 /** The step list (§2 "New components"), with the elapsed time on a step running past 10 s. */
-function Steps({ steps, current, failed }: { steps: string[]; current: number; failed?: boolean }) {
+function Steps({
+  steps,
+  current,
+  failed,
+  details,
+}: {
+  steps: string[];
+  current: number;
+  failed?: boolean;
+  /** A line under a step, such as what the installer reported. */
+  details?: Array<string | null>;
+}) {
   // Seconds on the running step, counted from when it started.
   const [timed, setTimed] = useState({ step: current, seconds: 0 });
   if (timed.step !== current) setTimed({ step: current, seconds: 0 });
@@ -88,7 +105,10 @@ function Steps({ steps, current, failed }: { steps: string[]; current: number; f
             <span className="s-step-mark" aria-hidden="true">
               {state === "done" ? <CheckIcon /> : state === "failed" ? <CloseIcon /> : null}
             </span>
-            <span>{text}</span>
+            <span>
+              {text}
+              {details?.[index] && <span className="s-step-detail">{details[index]}</span>}
+            </span>
             <span className="s-step-time">
               {state === "running" && elapsed >= 10 ? `${elapsed} s` : ""}
             </span>
@@ -298,12 +318,15 @@ function LookResult({
   offer,
   onAdvanced,
   onAnother,
+  onInstall,
   confirming,
 }: {
   look: SetupLook;
   offer: NonNullable<HostInfo["setup"]>;
   onAdvanced: () => void;
   onAnother: () => void;
+  /** Opens "Set up OpenClaw on this computer", where the host offers it. */
+  onInstall?: () => void;
   confirming: boolean;
 }) {
   const send = useCommand();
@@ -449,6 +472,15 @@ function LookResult({
         </Found>
       );
     case "not-found":
+      if (offer.install && onInstall)
+        return (
+          <Found mark={<PlusIcon />} heading="Clawtrate didn't find OpenClaw here">
+            <Actions>
+              <Primary onClick={onInstall}>Set up OpenClaw here</Primary>
+              <Quiet onClick={onAnother}>It runs on another computer</Quiet>
+            </Actions>
+          </Found>
+        );
       return (
         <Found mark={<PlusIcon />} heading="Clawtrate didn't find OpenClaw here">
           <Lede>
@@ -567,9 +599,209 @@ const REFUSED: Record<SetupRefusal, string> = {
 };
 const LOOK_STEPS = ["Finding OpenClaw", "Checking its version", "Asking the gateway"];
 
+/** Setting OpenClaw up (§10): the steps, in the host's order. */
+const INSTALL_STEPS = [
+  `Download and check OpenClaw ${TESTED_OPENCLAW_VERSION}`,
+  "Install Node.js and OpenClaw",
+  "Set up the gateway",
+  "Start and check",
+];
+
+/** Onboarding's failure classes in words (§6, "Start OpenClaw"; §10). */
+const CLASSIFICATION: Record<OnboardClassification, string> = {
+  "service-missing": "The service isn't installed.",
+  "startup-blocked": "The gateway reported a problem when starting.",
+  "not-listening": "Nothing is listening yet.",
+  "service-stopped": "The service is installed but stopped.",
+  "auth-mismatch": "The gateway's sign-in settings don't match.",
+  "module-missing": "Part of OpenClaw's program is missing.",
+  "systemd-user-unavailable": "This session can't run a systemd user service.",
+};
+
+/** Each install failure's cause, in fixed copy. */
+function installCause(failure: InstallFailure): string {
+  switch (failure.kind) {
+    case "exists":
+      return "Clawtrate won't change it.";
+    case "download":
+      return "The download didn't finish.";
+    case "fingerprint":
+      return "A download didn't match the fingerprint built into Clawtrate, so nothing was installed.";
+    case "installer":
+      return failure.exitCode === null
+        ? "The installer stopped."
+        : `The installer stopped (exit ${failure.exitCode}).`;
+    case "node-not-checked":
+      return "The installer didn't use the checked Node.js.";
+    case "onboard":
+      return failure.classification
+        ? CLASSIFICATION[failure.classification]
+        : failure.exitCode === null || failure.exitCode === 0
+          ? "OpenClaw's setup didn't report a gateway Clawtrate can use."
+          : `OpenClaw's setup stopped (exit ${failure.exitCode}).`;
+    case "not-answering":
+      return "The gateway didn't answer after it was set up.";
+    case "changed":
+      return "Look again.";
+  }
+}
+
+/** The typed record of a failed step (§10): the step, the error category, the exit code. */
+const CATEGORY: Record<InstallFailure["kind"], string> = {
+  exists: "Already set up",
+  download: "Download",
+  fingerprint: "Fingerprint",
+  installer: "Installer",
+  "node-not-checked": "Node.js not checked",
+  onboard: "Gateway setup",
+  "not-answering": "No answer",
+  changed: "Changed",
+};
+
+/** "Set up OpenClaw on this computer" (§10, F-501): what, where, checked and then, before anything runs. */
+function InstallReview({
+  platform,
+  confirming,
+  onCancel,
+}: {
+  platform: string;
+  confirming: boolean;
+  onCancel: () => void;
+}) {
+  const send = useCommand();
+  const facts: Array<[string, string]> = [
+    [
+      "What",
+      `OpenClaw ${TESTED_OPENCLAW_VERSION}, the version this Clawtrate is tested with, with its own copy of Node.js ${INSTALL_NODE_VERSION}`,
+    ],
+    [
+      "Where",
+      "Clawtrate puts OpenClaw's program and gateway data in its own folders and adds a user service. npm can also write its cache and OpenClaw can write service logs.",
+    ],
+    [
+      "Checked",
+      "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.",
+    ],
+    [
+      "Then",
+      platform === "linux"
+        ? "A gateway that listens on this computer only, as a systemd user service that starts with your session, with no AI provider yet. You sign in to one when you make your first bot."
+        : "A gateway that listens on this computer only, as a LaunchAgent that starts when you log in, with no AI provider yet. You sign in to one when you make your first bot.",
+    ],
+  ];
+  return (
+    <>
+      <Back onBack={onCancel} />
+      <Mark />
+      <Title id="setup-title">Set up OpenClaw on this computer</Title>
+      <dl className="facts s-facts" data-testid="setup-install-facts">
+        {facts.map(([label, value]) => (
+          <div key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <Hint>Nothing is asked for: no account and no model key.</Hint>
+      <Hint>
+        OpenClaw keeps running if you remove Clawtrate. Removing this gateway in Settings can also
+        stop it; removing OpenClaw isn't offered in this version.
+      </Hint>
+      <Actions>
+        <button
+          type="button"
+          className="button"
+          data-variant="primary"
+          data-size="lg"
+          aria-disabled={confirming || undefined}
+          onClick={() => {
+            if (!confirming) void send({ type: "setupInstall" });
+          }}
+        >
+          Set up OpenClaw…
+        </button>
+        <Quiet onClick={onCancel}>Cancel</Quiet>
+      </Actions>
+    </>
+  );
+}
+
+/** "Setting up OpenClaw" (§10, F-502): the steps, and a failed step with its cause and record. */
+function Installing({ setup, onBack }: { setup: SetupState; onBack: () => void }) {
+  const send = useCommand();
+  const install = setup.install ?? { step: 0, nodeChecked: false, failure: null };
+  const failure = setup.phase === "install-failed" ? install.failure : null;
+  const current = failure ? failure.step : install.step;
+  const details = [null, install.nodeChecked ? `Node.js ${INSTALL_NODE_VERSION}, checked` : null];
+  let lead = "";
+  if (failure?.kind === "exists")
+    lead = "Something named clawtrate is already set up on this computer.";
+  else if (failure?.kind === "changed") lead = "This changed since you looked.";
+  else if (failure) lead = `${INSTALL_STEPS[failure.step] ?? INSTALL_STEPS[0]} failed.`;
+  const reachedOnboarding = failure !== null && failure.step >= 2;
+  return (
+    <>
+      {failure && <Back onBack={onBack} />}
+      <Mark />
+      <Title id="setup-title">Setting up OpenClaw</Title>
+      <Steps steps={INSTALL_STEPS} current={current} failed={!!failure} details={details} />
+      {failure && (
+        <>
+          <Note tone="danger" lead={lead}>
+            {installCause(failure)}
+            {failure.retry
+              ? " Clawtrate removed what this attempt had installed."
+              : reachedOnboarding
+                ? " Clawtrate can't remove a gateway it began to set up in this version, so trying again isn't offered."
+                : ""}
+          </Note>
+          {failure.kind !== "exists" && failure.kind !== "changed" && (
+            <details className="b-disclosure s-disclosure" data-testid="setup-install-details">
+              <summary>Show details</summary>
+              <div className="b-disclosure-body">
+                <dl className="facts">
+                  <div>
+                    <dt>Step</dt>
+                    <dd>{INSTALL_STEPS[failure.step] ?? "Before the first step"}</dd>
+                  </div>
+                  <div>
+                    <dt>Error</dt>
+                    <dd>
+                      {failure.classification
+                        ? `${CATEGORY[failure.kind]}: ${failure.classification}`
+                        : CATEGORY[failure.kind]}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Exit code</dt>
+                    <dd>{failure.exitCode === null ? "None" : String(failure.exitCode)}</dd>
+                  </div>
+                </dl>
+              </div>
+            </details>
+          )}
+          <Actions>
+            {failure.retry && (
+              <Primary onClick={() => void send({ type: "setupInstall" })}>Try again</Primary>
+            )}
+            {failure.kind === "changed" ? (
+              <Primary onClick={() => void send({ type: "setupLook" })}>Look again</Primary>
+            ) : (
+              !failure.retry && <Primary onClick={onBack}>Back</Primary>
+            )}
+          </Actions>
+        </>
+      )}
+    </>
+  );
+}
+
 /** A screen's identity, so that a new one takes focus and is announced. */
-function screenKey(view: SetupView, setup: SetupState): string {
+function screenKey(view: SetupView, setup: SetupState, reviewing: boolean): string {
   if (view !== "here") return view;
+  if (setup.phase === "installing" || setup.phase === "install-failed")
+    return `${setup.phase}:${setup.install?.failure?.kind ?? ""}`;
+  if (reviewing) return "install-review";
   return `${setup.phase}:${setup.look?.outcome ?? ""}:${setup.failure?.kind ?? ""}`;
 }
 
@@ -590,7 +822,15 @@ export function SetupFlow({
   const offer = info.setup!;
   const root = useRef<HTMLDivElement>(null);
   const [announced, setAnnounced] = useState("");
-  const key = screenKey(view, setup);
+  // "Set up OpenClaw on this computer": the page's own screen before the host's dialog (§10).
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const reviewing =
+    reviewOpen &&
+    view === "here" &&
+    (setup.phase === "found" || setup.phase === "confirming") &&
+    setup.look?.outcome === "not-found";
+  if (reviewOpen && !reviewing && setup.phase !== "confirming") setReviewOpen(false);
+  const key = screenKey(view, setup, reviewing);
   const shown = useRef<string | null>(null);
   useEffect(() => {
     const first = shown.current === null;
@@ -624,7 +864,13 @@ export function SetupFlow({
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Escape" || view === "first") return;
     event.preventDefault();
-    if (view === "here" && (setup.phase === "connecting" || setup.phase === "failed"))
+    // An install runs to its end: cancelling one isn't offered in this version (§10).
+    if (view === "here" && setup.phase === "installing") return;
+    if (reviewing) setReviewOpen(false);
+    else if (
+      view === "here" &&
+      (setup.phase === "connecting" || setup.phase === "failed" || setup.phase === "install-failed")
+    )
       backFromConnect();
     else toFirst();
   };
@@ -648,6 +894,16 @@ export function SetupFlow({
           <Primary onClick={advanced}>Use Advanced</Primary>
         </Actions>
       </>
+    );
+  } else if (setup.phase === "installing" || setup.phase === "install-failed") {
+    body = <Installing setup={setup} onBack={backFromConnect} />;
+  } else if (reviewing) {
+    body = (
+      <InstallReview
+        platform={offer.platform}
+        confirming={setup.phase === "confirming"}
+        onCancel={() => setReviewOpen(false)}
+      />
     );
   } else if (setup.phase === "looking" || setup.phase === "idle") {
     body = (
@@ -733,6 +989,7 @@ export function SetupFlow({
           offer={offer}
           onAdvanced={advanced}
           onAnother={another}
+          {...(offer.install ? { onInstall: () => setReviewOpen(true) } : {})}
           confirming={setup.phase === "confirming"}
         />
         <Others others={look.others} onAdvanced={advanced} />

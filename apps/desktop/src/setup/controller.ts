@@ -17,6 +17,7 @@ import {
 } from "@clawtrate/core";
 import { fileIdentity, LIMITS, lookHere, type FoundGateway } from "./look.ts";
 import { parseAuthMode, parseSetupCode, parseStatus } from "./parse.ts";
+import type { InstallOutcome, Installer } from "./install.ts";
 import type { ProgramResult } from "./programs.ts";
 import type { Opened } from "./sandbox.ts";
 import { guardPort, programPath, SetupRefusedError } from "./world.ts";
@@ -50,6 +51,20 @@ export type SetupControllerOptions = {
   /** The host's log: fixed lines only, never a program's output or a credential. */
   log?: (line: string) => void;
   now?: () => number;
+  /**
+   * A new installer for each attempt to set OpenClaw up (`install.ts`), or
+   * null where this host doesn't set OpenClaw up: every development or
+   * automated run, Windows, musl Linux and the web preview.
+   */
+  installer?: (() => Installer) | null;
+};
+
+/** The host's dialog before setting OpenClaw up (§2, §10): the dependency sentence, word for word. */
+export const INSTALL_CONFIRMATION: Confirmation = {
+  message: "Set up OpenClaw on this computer?",
+  detail:
+    "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions.",
+  confirm: "Set up OpenClaw",
 };
 
 /**
@@ -226,6 +241,17 @@ export class SetupController implements SetupHost {
 
   cancel(): void {
     const phase = this.state.phase;
+    // Cancelling an install isn't offered in this version (§10): it runs to its end.
+    if (phase === "installing") return;
+    if (phase === "install-failed") {
+      this.attempt += 1;
+      this.publish(
+        this.state.look
+          ? { ...initialSetupState, phase: "found", look: this.state.look }
+          : initialSetupState,
+      );
+      return;
+    }
     this.attempt += 1;
     this.clearSlow();
     this.options.stopPrograms();
@@ -250,6 +276,7 @@ export class SetupController implements SetupHost {
   }
 
   reset(): void {
+    if (this.state.phase === "installing") return;
     this.attempt += 1;
     this.clearSlow();
     this.stopWatching();
@@ -257,6 +284,93 @@ export class SetupController implements SetupHost {
     this.found = null;
     void this.closeOwned();
     this.publish(initialSetupState);
+  }
+
+  /**
+   * Sets OpenClaw up on this computer (§10): offered after a look found
+   * nothing, or after an attempt that failed before onboarding and was
+   * removed. Nothing is downloaded or run until the host's dialog says yes;
+   * the prepared operation expires as Connect's does. When every step is
+   * done the look runs again, and finds the `clawtrate` gateway.
+   */
+  async install(): Promise<void> {
+    const { phase, look, install } = this.state;
+    const retry = phase === "install-failed" && install?.failure?.retry === true;
+    if (!retry && !(phase === "found" && look?.outcome === "not-found"))
+      throw new Error("There is nothing to set up here. Look again.");
+    const make = this.options.installer;
+    const confirm = this.options.confirm;
+    if (!make || !confirm) throw new Error("This host doesn't set OpenClaw up.");
+    const attempt = (this.attempt += 1);
+    const at = this.now();
+    const before = this.state;
+    if (!retry) this.publish({ ...this.state, phase: "confirming", failure: null });
+    let yes: boolean;
+    try {
+      yes = await confirm(INSTALL_CONFIRMATION);
+    } catch {
+      yes = false;
+    }
+    if (attempt !== this.attempt) return;
+    if (!yes) {
+      // Nothing was downloaded or run.
+      this.publish(before);
+      return;
+    }
+    const start = { step: 0, nodeChecked: false, failure: null };
+    if (this.now() - at > OPERATION_LIFETIME_MS) {
+      this.publish({
+        ...initialSetupState,
+        look,
+        phase: "install-failed",
+        install: {
+          ...start,
+          failure: {
+            kind: "changed",
+            step: -1,
+            exitCode: null,
+            classification: null,
+            retry: false,
+          },
+        },
+      });
+      return;
+    }
+    this.publish({ ...initialSetupState, look, phase: "installing", install: start });
+    let outcome: InstallOutcome;
+    try {
+      outcome = await make().run((progress) => {
+        if (attempt === this.attempt) this.publish({ ...this.state, install: progress });
+      });
+    } catch (error) {
+      this.log(
+        error instanceof Error && error.name === "InstallRefusedError"
+          ? error.message
+          : "setting OpenClaw up stopped",
+      );
+      outcome = {
+        ok: false,
+        failure: {
+          kind: "installer",
+          step: this.state.install?.step ?? 0,
+          exitCode: null,
+          classification: null,
+          retry: false,
+        },
+      };
+    }
+    if (attempt !== this.attempt) return;
+    if (!outcome.ok) {
+      this.log(`setting OpenClaw up failed: ${outcome.failure.kind}`);
+      this.publish({
+        ...this.state,
+        phase: "install-failed",
+        install: { ...(this.state.install ?? start), failure: outcome.failure },
+      });
+      return;
+    }
+    // The look finds what was set up, and Connect pairs with it as with any gateway found (§7).
+    await this.look();
   }
 
   /**
