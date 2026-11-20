@@ -59,6 +59,12 @@
   const taskTitle = (id) => (MARLOW.find((m) => m[0] === id) || [])[1] || app?.bots.flatMap((b) => b.tasks).find((t) => t.id === id)?.title || id;
   const botOf = (task) => app?.bots.find((b) => b.tasks.some((t) => t.id === task)) || app?.bots.find((b) => b.id === "marlow");
 
+  // An address with a user name and password, built at run time: the decision on addresses never lists or opens one.
+  const invalidLink = new URL("https://trails.example/private");
+  invalidLink.username = "user";
+  invalidLink.password = "secret";
+  const userinfoAddress = invalidLink.href;
+
   // Every occurrence. kind page|image|audio|video|file|link. src: which read holds it (artifacts, history, uploads).
   // by: "person" where a history row of the person's establishes it. hist: 2 for a row on the second history page.
   const ITEMS = [
@@ -68,7 +74,7 @@
     { id: "i4", task: "m2", kind: "audio", title: "trail-chime.wav", type: "WAV audio", size: "31 KB", time: "5:31 PM", day: 0, seq: 4, src: "artifacts" },
     { id: "p1", task: "m2", kind: "page", title: "Trail guide", doc: "trail-guide", time: "5:33 PM", day: 0, seq: 8, again: true, src: "history" },
     { id: "k1", task: "m2", kind: "link", title: "https://trails.example/conditions", href: "https://trails.example/conditions", time: "5:34 PM", day: 0, seq: 10, src: "history" },
-    { id: "kx1", task: "m2", kind: "link", title: "private notes", href: "https://user:secret@trails.example/private", time: "5:34 PM", day: 0, seq: 10, src: "history" },
+    { id: "kx1", task: "m2", kind: "link", title: "private notes", href: userinfoAddress, time: "5:34 PM", day: 0, seq: 10, src: "history" },
     { id: "kx2", task: "m2", kind: "link", title: "trails.example/no-scheme", href: "trails.example/no-scheme", time: "5:34 PM", day: 0, seq: 10, src: "history" },
     { id: "i5", task: "m2", kind: "file", title: "trail-report.md", type: "Markdown", size: "149 B", time: "5:36 PM", day: 0, seq: 14, src: "artifacts" },
     { id: "p2", task: "m2", kind: "page", title: "Trail guide", doc: "trail-guide", time: "5:37 PM", day: 0, seq: 18, src: "history" },
@@ -129,7 +135,7 @@
         `<div class="chart" id="chart">Elevation chart</div><img id="pixel" src="data:image/png;base64,${PNG}" alt="Trail marker"><img id="remote" src="https://cdn.example/map.png" alt="Map of the routes">` +
         `<img id="badtype" src="data:image/svg+xml;base64,PHN2Zy8+" alt="Badge">` +
         `<details><summary>Getting there</summary><p>Park at the north lot; the first bus is at 7:10. <a href="https://maps.example/ridge">Map of the ridge</a>, ` +
-        `<a href="http://localhost:8080/admin">the hut's booking page</a>, <a href="https://user:secret@trails.example/private">private notes</a>, <a href="/relative">the route file</a>.</p></details>` +
+        `<a href="http://localhost:8080/admin">the hut's booking page</a>, <a href="${userinfoAddress}">private notes</a>, <a href="/relative">the route file</a>.</p></details>` +
         `<iframe src="https://trails.example/embed"></iframe><meta http-equiv="refresh" content="0;url=https://trails.example/">` +
         `<script>document.getElementById('dry').onchange=()=>{fetch('https://trails.example/track?dry=1')}</script>` +
         `<script>new Chart(document.getElementById('chart'))</script></body></html>`,

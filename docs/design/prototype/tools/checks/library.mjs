@@ -76,6 +76,7 @@ check("Media: pictures, recordings and videos", await q(p, () => [...document.qu
 await p.click('[data-lib-filter="links"]');
 check("Links: only links", await q(p, () => [...document.querySelectorAll(".lib-row")].every((r) => r.dataset.kind === "link")));
 check("R2 an address with a user name and password, or without a scheme, is no link: not listed", await q(p, () => !document.querySelector('.lib-row[data-item="kx1"], .lib-row[data-item="kx2"]')));
+check("E10 the address with a user name and password is built at run time and still carries both", await q(p, () => { const u = new URL(window.CT.library.ITEMS.find((x) => x.id === "kx1").href); return u.username === "user" && u.password === "secret" && u.host === "trails.example"; }));
 await p.click('[data-lib-filter="files"]');
 check("Files: only files", await q(p, () => [...document.querySelectorAll(".lib-row")].every((r) => r.dataset.kind === "file")));
 await p.click('[data-lib-filter="pinned"]');
