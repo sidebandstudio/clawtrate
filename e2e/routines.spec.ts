@@ -235,7 +235,7 @@ test("F-024: started marks the routine and its bot as working, and finished clea
   await view().getByRole("button", { name: "Back to routines" }).click();
   await page.getByTestId("routine-task").filter({ hasText: name }).click();
   await expect(view().getByRole("heading", { name })).toBeVisible();
-  await expect(view().getByRole("status")).toHaveText("Running…");
+  await expect(view().getByTestId("run-starting")).toHaveText("Running…");
   await started;
   await expect(view().getByTestId("run-view")).toBeVisible({ timeout: 30_000 });
   await expect(botRow("Otto").first()).not.toContainText(`Running ${name}`);

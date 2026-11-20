@@ -1019,7 +1019,7 @@ export function RoutinesView({
                 onOpenTask={onOpenTask}
               />
             ) : running ? (
-              <p className="r-hint" role="status">
+              <p className="r-hint" role="status" data-testid="run-starting">
                 Running…
               </p>
             ) : found.status === "error" ? (
