@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -112,7 +113,7 @@ async function openTask(page: Page, bot: string, task: string) {
  * repeated check never meets an earlier run's task.
  */
 async function gatewayTask(botId: string, label: string): Promise<{ key: string; title: string }> {
-  const suffix = Math.random().toString(16).slice(2, 6);
+  const suffix = randomBytes(4).toString("hex");
   const title = `${label} ${suffix}`;
   const key = `agent:${botId}:check-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${suffix}`;
   await gatewayCall("sessions.create", { key, agentId: botId, label: title });
