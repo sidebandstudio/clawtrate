@@ -10,6 +10,8 @@ pnpm e2e         # end-to-end tests against a development gateway of their own
 pnpm visual      # screenshots and behaviour of the fixture mode; the baselines are macOS ones
 ```
 
+The memory plugin tests in `pnpm test` require OpenClaw 2026.10.6. Install it globally or set `OPENCLAW_PACKAGE_DIR` to the directory of that installed package.
+
 The unit tests include the SSH transport's, some against an `sshd` they start themselves ([The SSH transport's tests](ssh.md)).
 
 CI runs lint, typecheck and the unit tests on Linux, `pnpm e2e` on Linux with OpenClaw 2026.10.6 from npm, split by file across three runners, `pnpm visual` on every core and an unsigned `pnpm package:mac` on macOS 15, and on Windows Server 2025 an unsigned `pnpm package:win`, a silent install, a check of the Start menu shortcut, `pnpm check:packaged` against the installed app, and a silent uninstall that must leave nothing the installer made. A pull request that changes only documentation (`docs/`, the Markdown files at the top level, the issue and pull request templates) runs the Linux `check` job alone.
