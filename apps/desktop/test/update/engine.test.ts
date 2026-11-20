@@ -82,6 +82,31 @@ describe("the update engine against a local feed", () => {
     expect(readFileSync(path).equals(file.body)).toBe(true);
   });
 
+  it("verifies the file even if a progress observer throws", async () => {
+    const file = payload(2_500_000);
+    server.route(
+      "/feed.json",
+      json(feedFor(server.origin, "0.2.0", { size: file.body.length, sha512: file.sha512 })),
+    );
+    server.route("/files/app.zip", bytes(file.body));
+    let threwDuringTransfer = false;
+    const { engine } = engineFor(server, dir.path, {
+      onState(state) {
+        if (state.kind === "downloading" && state.received > 0 && state.received < state.total) {
+          threwDuringTransfer = true;
+          throw new Error("progress observer closed");
+        }
+        if (state.kind === "ready") return Promise.reject(new Error("observer closed"));
+      },
+    });
+    await engine.check();
+    const ready = await engine.download();
+    expect(threwDuringTransfer).toBe(true);
+    expect(ready.kind).toBe("ready");
+    expect(engine.state).toBe(ready);
+    if (ready.kind === "ready") expect(readFileSync(ready.path).equals(file.body)).toBe(true);
+  });
+
   it("deletes a tampered download of the right size and reports hash-mismatch", async () => {
     const file = payload();
     const tampered = Buffer.from(file.body);

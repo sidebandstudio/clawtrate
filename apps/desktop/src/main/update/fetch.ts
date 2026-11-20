@@ -39,8 +39,12 @@ export class Transfer {
     this.touch();
   }
 
-  stop(cause: FetchCause): void {
+  recordCause(cause: FetchCause): void {
     this.stoppedFor ??= cause;
+  }
+
+  stop(cause: FetchCause): void {
+    this.recordCause(cause);
     this.done();
     this.controller.abort();
   }
