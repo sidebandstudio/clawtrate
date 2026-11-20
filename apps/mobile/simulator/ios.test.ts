@@ -1307,7 +1307,17 @@ describe("the iOS app", () => {
       ]);
       const pin = await heightOf("pin-name-pip", LONG_PIN);
       expect(pin).toBeGreaterThan(1.8 * (await heightOf("pin-name-marlow", "Mo")));
-      await steps("long-row-largest", [scrollTo({ id: "bot-name-otto" }, "DOWN")]);
+      // The long name may be taller than the screen: in view in part is enough to read it.
+      await steps("long-row-largest", [
+        {
+          scrollUntilVisible: {
+            element: { id: "bot-name-otto" },
+            direction: "DOWN",
+            timeout: 30_000,
+            visibilityPercentage: 10,
+          },
+        },
+      ]);
       const name = await heightOf("bot-name-otto", LONG_BOT);
       await steps("long-control-row", [scrollTo({ id: "bot-name-main" }, "DOWN")]);
       expect(name).toBeGreaterThan(1.8 * (await heightOf("bot-name-main", "Jo")));
