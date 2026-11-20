@@ -782,16 +782,20 @@
     modal(was);
     const field = document.getElementById("secret-value");
     if (field && S.view === "secret") {
-      field.addEventListener("input", () => {
+      // Save follows the field in front of the person: a render keeps what was typed, and Escape clears both.
+      const follow = () => {
         S.value = field.value;
         const button = root.querySelector('[data-d="s-save"]');
-        if (button) button.disabled = !S.value;
-      });
+        if (button && !field.disabled) button.disabled = !field.value;
+      };
+      if (!field.disabled) field.value = S.value;
+      follow();
+      field.addEventListener("input", follow);
       field.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && S.value) save();
+        if (e.key === "Enter" && field.value) save();
         if (e.key === "Escape") {
           field.value = "";
-          S.value = "";
+          follow();
         }
       });
     }
@@ -890,6 +894,7 @@
   }
 
   function save() {
+    if (!document.getElementById("secret-value")?.value) return;
     go({ s: "saving" });
     later(() => {
       clearSecret();

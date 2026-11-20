@@ -666,6 +666,20 @@ await click(p, '[data-d="v-back"]');
 check("Vault: a removed name stays removed after another row opens", (await p.locator('[data-item="STORE_API_KEY"]').count()) === 0 && (await p.locator('[data-item="BUILD_REGION"]').count()) === 1);
 await p.close();
 
+// Save is enabled exactly when the field in front of the person has a value.
+p = await open("view=secret", { chrome: "1" });
+const saveMatchesField = () => p.evaluate(() => document.querySelector('[data-d="s-save"]').disabled === (document.getElementById("secret-value").value === ""));
+await p.fill("#secret-value", VALUE);
+await p.press("#secret-value", "Escape");
+const afterEscape = await saveMatchesField();
+await p.fill("#secret-value", VALUE);
+await click(p, '[data-d="raw"]');
+const afterRaw = await saveMatchesField();
+await click(p, '[data-host="api.example.com"]');
+const afterHost = await saveMatchesField();
+check("secret: Save is enabled only while the field has a value, after Escape, Raw and a host change", afterEscape && afterRaw && afterHost, JSON.stringify({ afterEscape, afterRaw, afterHost }));
+await p.close();
+
 await b.close();
 console.log(out.join("\n"));
 console.log(`${out.filter((l) => l.startsWith("ok")).length} ok, ${failed} failed`);
