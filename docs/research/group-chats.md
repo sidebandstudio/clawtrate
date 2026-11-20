@@ -83,7 +83,7 @@ history agent:marlow:…: [{"role":"user","timestamp":…578844,…},{"role":"as
   Otto assistant rows: [{"timestamp":…908758,"agentId":null}]
   ```
 
-  Juniper finished eight seconds before Otto, yet Otto's saved reply sorts first. So the order saved messages take on a reload can differ from the order a person saw them finish. Assistant rows carry no `agentId`: the task a row comes from names its bot.
+  Juniper finished eight seconds before Otto, yet Otto's saved reply sorts first. So the order saved messages take on a reload can differ from the order a person saw them finish. Assistant rows carry no `agentId`: the session identity is in the requested task and the history envelope (`sessionKey`, `sessionInfo`), not in the rows, and each task's history returns its own transcript positions (`__openclaw.seq`). So the task a row comes from names its bot, and the order within one task is its transcript position; the gateway gives no order between two tasks' rows with the same time.
 - **The replies end in any order.** Marlow's run ended first here although its send went last.
 - **The copies can be joined.** The run id is the `idempotencyKey` sent (`grp-f9762d4a-…` above), and the user row keeps it: in the `reply` run, `"idempotencyKey":"4c25e9d6-38e2-4803-aa66-d61d6e67b580:user"` for run `4c25e9d6-38e2-4803-aa66-d61d6e67b580`. The schema allows any non-empty string (`ChatSendParams.idempotencyKey`, `minLength: 1`). A client that builds each copy's key from one group-send id and the bot can show one message once, after a reload and on another device of the person, from history alone.
 
