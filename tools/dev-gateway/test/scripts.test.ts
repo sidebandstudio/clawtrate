@@ -51,6 +51,50 @@ describe("planReply", () => {
     expect(JSON.stringify(plan)).toContain("something new");
   });
 
+  it("answers the memory question with the memory the task received, through an internal heading", () => {
+    const plan = planReply(
+      [
+        {
+          role: "system",
+          content:
+            "## /state/workspaces/otto/USER.md\nPrefers weekly summaries.\n## /state/workspaces/otto/MEMORY.md\nKeep a weekly release log.\n\n## Preferred days\nFridays.\n## /state/workspaces/otto/AGENTS.md\nOther rules.",
+        },
+        { role: "user", content: "[Mon 09:00] What do you remember about me?" },
+      ],
+      ALL_TOOLS,
+    );
+    const text = plan.find((step) => step.kind === "text");
+    expect(text).toMatchObject({
+      kind: "text",
+      text: "Keep a weekly release log.\n\n## Preferred days\nFridays.",
+    });
+  });
+
+  it("F-216: the last workspace file ends before the gateway's dynamic instructions", () => {
+    const memory = "Keep a weekly release log.\n\n## Preferred days\nFridays.";
+    const prompt = [
+      "<!-- openclaw:attempt:STABLE -->",
+      "## /workspace/MEMORY.md",
+      "",
+      memory,
+      "",
+      "<!-- /openclaw:attempt:STABLE -->",
+      "<!-- openclaw:attempt:DYNAMIC -->",
+      "## Temporal Context",
+      "Current date: 2026-11-20",
+      "<!-- /openclaw:attempt:DYNAMIC -->",
+    ].join("\n");
+    expect(
+      planReply(
+        [
+          { role: "system", content: prompt },
+          { role: "user", content: "What do you remember about me?" },
+        ],
+        ALL_TOOLS,
+      ),
+    ).toEqual([{ kind: "text", text: memory }]);
+  });
+
   it("gives every scripted prompt a unique text", () => {
     const prompts = SEED_BOTS.flatMap((bot) =>
       bot.tasks.flatMap((task) => task.turns.map((t) => t.prompt)),

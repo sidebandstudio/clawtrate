@@ -1,6 +1,7 @@
 // The gateway connection and the state it projects. Built on the official
 // browser-safe protocol client, with transport, storage and signing injected.
 
+import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   GatewayBrowserDeviceAuthLifecycle,
@@ -4270,6 +4271,37 @@ export class ClawtrateClient {
     } finally {
       this.fileReads -= 1;
     }
+  }
+
+  listMemory(botId: string) {
+    return this.wholeRead(() =>
+      listMemory((method, params) => this.request(method, params), botId),
+    );
+  }
+
+  readMemory(botId: string, path: string) {
+    return this.wholeRead(() =>
+      readMemory((method, params) => this.request(method, params), botId, path),
+    );
+  }
+
+  async writeMemory(
+    botId: string,
+    path: string,
+    gatewayId: string | null,
+    expectedHash: string | null,
+    content: string | null,
+  ) {
+    if (this.options.readOnly || !this.state.connection.canAdmin)
+      throw new Error("Changing memory requires admin access.");
+    await writeMemory(
+      (method, params) => this.request(method, params),
+      botId,
+      path,
+      gatewayId,
+      expectedHash,
+      content,
+    );
   }
 
   /** A task's files and the folder it works in, read now (`sessions.files.list`, `sessions.describe`). */

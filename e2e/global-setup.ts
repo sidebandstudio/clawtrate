@@ -240,7 +240,10 @@ export default async function globalSetup() {
       if (cleaned) return reject(new Error("the run was interrupted"));
       child = spawn(process.execPath, [CLI, ...args, "--instance", instance], {
         cwd: ROOT,
-        env: cliEnv(),
+        env: {
+          ...cliEnv(),
+          ...(args.includes("clawtrate-memory") ? { FS_SAFE_NATIVE_MODE: "require" } : {}),
+        },
         stdio: ["ignore", "inherit", "inherit"],
       });
       child.once("error", reject);
@@ -294,7 +297,7 @@ export default async function globalSetup() {
     await startInstance(sentinel, "--no-seed");
     process.env.CLAWTRATE_E2E_OTHERS = JSON.stringify(runningOthers([name], [sentinel]));
     // Every start is a fresh, seeded gateway.
-    await startInstance(name);
+    await startInstance(name, "--with-plugin", "clawtrate-memory");
     // It also has a paired machine (`--with-node`), for Settings, Machines and "Where a bot runs".
     await startInstance(
       accounts,

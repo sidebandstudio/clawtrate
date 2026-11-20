@@ -66,6 +66,7 @@ import {
   withComputerRuns,
   type ComputerParams,
 } from "./computer.ts";
+import { memoryCommands } from "./memory.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 
 export const FIXTURE_INFO: HostInfo = {
@@ -592,7 +593,18 @@ export function createFixtureBridge(
   const railRace = { archive: false };
   const railCommand = railCommands(now, railRefused, railRace);
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
+  const memory = memoryCommands(now);
   async function apply(command: BridgeCommand): Promise<unknown> {
+    if (
+      command.type === "listMemory" ||
+      command.type === "readMemory" ||
+      command.type === "writeMemory"
+    ) {
+      sent.push(command);
+      if (command.type === "writeMemory" && !state.connection.canAdmin)
+        throw new Error("Changing memory requires admin access.");
+      return memory(command);
+    }
     const routine = routineCommand(command, () => state, now, routineParams);
     if (routine) {
       sent.push(command);
