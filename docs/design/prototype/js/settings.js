@@ -70,6 +70,8 @@
     disk: p("disk"),
     diskClosed: false,
   };
+  // route=advanced: Studio gateway is saved at an address without verified TLS, so its token isn't sent by itself.
+  if (p("route") === "advanced") Object.assign(GW.studio, { route: "ws://198.51.100.20", kind: "advanced" });
   const gw = (id) => GW[id];
   const inUseName = () => (S.inUse ? gw(S.inUse).name : "No gateway");
   const others = () => S.order.filter((id) => id !== S.inUse);
@@ -217,14 +219,14 @@
       holder.insertAdjacentHTML("afterend", items);
       holder.hidden = true;
       const name = inUseName();
-      const state = { connected: "Connected", connecting: "Connecting…", confirming: "Confirming…", unconfirmed: "Not confirmed", changed: "A different gateway answered", unreachable: "Can't reach the gateway", none: "Not connected", adding: "Adding a gateway", refused: "Can't use it" }[S.conn];
-      const between = ["connecting", "confirming", "unconfirmed", "changed", "unreachable"].includes(S.conn) && S.target;
+      const state = { connected: "Connected", reconnect: "Waiting for you to reconnect", connecting: "Connecting…", confirming: "Confirming…", unconfirmed: "Not confirmed", changed: "A different gateway answered", unreachable: "Can't reach the gateway", none: "Not connected", adding: "Adding a gateway", refused: "Can't use it" }[S.conn];
+      const between = ["reconnect", "connecting", "confirming", "unconfirmed", "changed", "unreachable"].includes(S.conn) && S.target;
       $(".gateway-pill strong").textContent = between ? gw(S.target).name : name;
       $("#gateway-state").textContent = state;
       $("#gateway-menu .menu-head strong").textContent = between ? gw(S.target).name : name;
       $("#gateway-menu-state").textContent = S.inUse ? `${state} · ${gw(S.inUse).route}` : state;
       $$('[data-action="gateway-menu"]').forEach((b) => b.setAttribute("aria-label", `${between ? gw(S.target).name : name}, ${state.toLowerCase().replace("…", "")}. Open the gateway menu.`));
-      $$(".rail .status-dot").forEach((dot) => (dot.dataset.status = { connected: "connected", connecting: "connecting", confirming: "connecting", unconfirmed: "error", changed: "error", unreachable: "error", none: "disconnected", adding: "disconnected", refused: "error" }[S.conn]));
+      $$(".rail .status-dot").forEach((dot) => (dot.dataset.status = { connected: "connected", reconnect: "disconnected", connecting: "connecting", confirming: "connecting", unconfirmed: "error", changed: "error", unreachable: "error", none: "disconnected", adding: "disconnected", refused: "error" }[S.conn]));
     }
     const closeGatewayMenu = () => {
       if (!$("#gateway-menu").hidden) $(".gateway-pill").click();
@@ -260,12 +262,23 @@
     let timer = null;
     const HOME_ACCESS = D.B.access;
     const HOME_ACCOUNTS = D.accounts().slice();
-    function connectTo(id, then, { returning = false } = {}) {
+    function connectTo(id, then, { returning = false, reconnected = false } = {}) {
       clearTimeout(timer);
       S.target = id;
-      S.conn = "connecting";
       if (S.inUse) S.last = S.inUse;
       S.inUse = null;
+      // An address without verified TLS: nothing credential-bearing is opened until the person reconnects.
+      if (gw(id).kind === "advanced" && !reconnected) {
+        S.conn = "reconnect";
+        S.reconnect = () => connectTo(id, then, { returning, reconnected: true });
+        showEmpty(`Reconnect to ${esc(gw(id).route)}`, "This address has no verified TLS, so Clawtrate waits for you before it sends this route's token.");
+        $("#new-button").hidden = true;
+        strip(`Reconnect to ${esc(gw(id).route)}`, "", `<button type="button" data-s="reconnect">Reconnect</button>`);
+        renderMenu();
+        rs();
+        return;
+      }
+      S.conn = "connecting";
       showEmpty("Loading bots", "Loading this gateway's bots.", true);
       $("#new-button").hidden = true;
       strip(`Connecting to ${esc(gw(id).name)}`);
@@ -295,7 +308,7 @@
     }
     function identityCheck(id, then) {
       S.conn = "confirming";
-      showEmpty(`Confirming this is ${esc(gw(id).name)}…`, "Nothing is loaded or sent until it is confirmed.", true);
+      showEmpty(`Confirming this is ${esc(gw(id).name)}…`, "Bots, tasks and actions stay hidden during this check.", true);
       $("#new-button").hidden = true;
       renderMenu();
       rs();
@@ -303,7 +316,7 @@
       timer = setTimeout(() => {
         if (id === "studio" && SWITCH_ID === "unread" && !S.idRetried) {
           S.conn = "unconfirmed";
-          showEmpty(`Can't confirm this is ${esc(gw(id).name)}`, "Nothing is loaded or sent.");
+          showEmpty(`Can't confirm this is ${esc(gw(id).name)}`, "Bots, tasks and actions stay hidden during this check.");
           strip(`Clawtrate can't confirm this is ${esc(gw(id).name)}`, "", `<button type="button" data-s="retry-identity">Retry</button>`, "danger");
           renderMenu();
           rs();
@@ -639,6 +652,8 @@
             ? `${esc(g.route)} · ${S.conn === "refused" ? "Can't use it" : "In use"}`
             : id === S.target && S.conn === "connecting"
               ? `${esc(g.route)} · Switching`
+              : id === S.target && S.conn === "reconnect"
+                ? `${esc(g.route)} · Waiting for you to reconnect`
               : id === S.target && S.conn === "unreachable"
                 ? `${esc(g.route)} · <span data-tone="danger">Can't reach it</span>`
                 : id === S.target && S.conn === "confirming"
@@ -674,7 +689,7 @@
         `<dl class="facts" data-testid="gateway-page"><div><dt>Route</dt><dd>${esc(g.route)}</dd></div><div><dt>Last used</dt><dd>${esc(g.last === "Just now" ? "Just now" : g.last)}</dd></div>` +
         `<div><dt>This device there</dt><dd>Last paired here · ${esc(g.last === "Just now" ? "Just now" : g.last)}</dd></div>` +
         `<div><dt>Identity</dt><dd class="mono">${g.identity ? esc(g.identity) : "Not read"}</dd></div></dl>` +
-        (S.changed === g.id ? note(`<p>A different gateway answered at this address. Clawtrate disconnected and dropped this route's token; nothing of ${esc(g.name)} was shown or sent there. Remove it, or add the gateway that answers as a new one.</p>`, "warn") : "") +
+        (S.changed === g.id ? note(`<p>A different gateway ID answered. Clawtrate closed the connection and dropped this route's token from this device. Remove this saved entry, or add the gateway that answers as a new one.</p>`, "warn") : "") +
         `<p class="b-hint">What Clawtrate recorded at its last connection. Nothing is read from a gateway that isn't in use.</p>` +
         `<div class="b-actions" style="margin-top:16px">${button(`Switch to ${esc(g.name)}`, `data-s="switch" data-gw="${g.id}" data-size="sm"`, "primary")}` +
         `<span class="spacer"></span>${button("Remove…", `data-s="remove" data-gw="${g.id}" data-size="sm" data-tone="danger"`, "quiet")}</div>`;
@@ -971,6 +986,8 @@
           return $("[data-s-step]", stand)?.focus();
         case "retry-return":
           return S.retryReturn?.();
+        case "reconnect":
+          return S.reconnect?.();
         case "retry-identity":
           S.idRetried = true;
           return identityCheck(S.target || "studio", () => announce(`Switched to ${gw(S.inUse).name}`));

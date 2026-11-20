@@ -156,7 +156,7 @@ const SWITCHED = 1700; // connecting, then the identity check
   check("walk: switch: the strip says Connecting to Studio gateway", strip.includes("Connecting to Studio gateway"), strip);
   check("walk: switch: no confirmation without a message waiting", !(await p.evaluate(() => document.querySelector("#confirm-dialog").open)));
   await p.waitForTimeout(1000);
-  check("walk: switch: while the identity is checked, an empty rail and nothing to send or create", (await rail(p)).includes("Confirming this is Studio gateway…") && (await p.locator("#composer").isHidden()) && (await p.locator("#new-button").isHidden()));
+  check("walk: switch: while the identity is checked, an empty rail and nothing to send or create", (await rail(p)).includes("Confirming this is Studio gateway…") && (await rail(p)).includes("Bots, tasks and actions stay hidden during this check.") && (await p.locator("#composer").isHidden()) && (await p.locator("#new-button").isHidden()));
   await p.waitForTimeout(800);
   const after = await rail(p);
   check("walk: switch: Studio's bots only", after.includes("Marlow") && after.includes("Pip") && !after.includes("Otto") && !after.includes("Juniper"), after);
@@ -220,7 +220,7 @@ const SWITCHED = 1700; // connecting, then the identity check
   check("walk: switch, a changed identity: announced", (await announced(p)) === "This address now leads to a different gateway");
   await click(p, '#status-strip [data-s="review-id"]', 200);
   const t = await text(p, settings);
-  check("walk: switch, a changed identity, Review: the gateway's page says what happened, with Remove", t.includes("A different gateway answered at this address. Clawtrate disconnected and dropped this route's token") && t.includes("Remove…"), t.slice(0, 200));
+  check("walk: switch, a changed identity, Review: the gateway's page says what happened, with Remove", t.includes("A different gateway ID answered. Clawtrate closed the connection and dropped this route's token from this device. Remove this saved entry, or add the gateway that answers as a new one.") && !t.includes("nothing of Studio gateway was shown or sent") && t.includes("Remove…"), t.slice(0, 200));
   await p.close();
 }
 {
@@ -228,7 +228,7 @@ const SWITCHED = 1700; // connecting, then the identity check
   await click(p, ".gateway-pill");
   await click(p, '#gateway-menu [data-gw="studio"]', SWITCHED);
   const [ok, miss] = await has(p, "#status-strip", ["Clawtrate can't confirm this is Studio gateway", "Retry"]);
-  check("walk: switch, an identity that can't be read: out of use, with Retry", ok && !/Marlow/.test(await rail(p)) && (await p.locator("#composer").isHidden()), miss);
+  check("walk: switch, an identity that can't be read: out of use, with Retry", ok && !/Marlow/.test(await rail(p)) && (await rail(p)).includes("Bots, tasks and actions stay hidden during this check.") && (await p.locator("#composer").isHidden()) && (await p.locator("#new-button").isHidden()), miss);
   await click(p, '#status-strip [data-s="retry-identity"]', 800);
   check("walk: switch, an identity that can't be read, Retry: confirmed, Studio in use", (await rail(p)).includes("Marlow") && (await announced(p)) === "Switched to Studio gateway");
   await p.close();
@@ -237,7 +237,19 @@ const SWITCHED = 1700; // connecting, then the identity check
   const p = await open("switchid=pending");
   await click(p, ".gateway-pill");
   await click(p, '#gateway-menu [data-gw="studio"]', 2500);
-  check("walk: switch, the identity unresolved: actions withheld for as long as it lasts", (await rail(p)).includes("Confirming this is Studio gateway…") && (await p.locator("#composer").isHidden()) && (await p.locator("#new-button").isHidden()) && (await p.locator("#title-pill").isHidden()));
+  check("walk: switch, the identity unresolved: actions withheld for as long as it lasts", (await rail(p)).includes("Confirming this is Studio gateway…") && (await rail(p)).includes("Bots, tasks and actions stay hidden during this check.") && !(await rail(p)).includes("Nothing is loaded or sent") && (await p.locator("#composer").isHidden()) && (await p.locator("#new-button").isHidden()) && (await p.locator("#title-pill").isHidden()));
+  await p.close();
+}
+{
+  const p = await open("route=advanced");
+  await click(p, ".gateway-pill");
+  await click(p, '#gateway-menu [data-gw="studio"]', SWITCHED);
+  const [ok, miss] = await has(p, "#status-strip", ["Reconnect to ws://198.51.100.20", "Reconnect"]);
+  check("walk: switch to an address without verified TLS: stops at the reconnect prompt", ok && !(await rail(p)).includes("Confirming this is Studio gateway…") && !/Marlow|Otto/.test(await rail(p)) && (await p.locator("#composer").isHidden()), miss);
+  await click(p, '#status-strip [data-s="reconnect"]', 1100);
+  check("walk: switch to an address without verified TLS, Reconnect: then the identity check", (await rail(p)).includes("Confirming this is Studio gateway…") && (await p.locator("#composer").isHidden()));
+  await p.waitForTimeout(700);
+  check("walk: switch to an address without verified TLS, Reconnect: Studio in use after the check", (await rail(p)).includes("Marlow") && (await announced(p)) === "Switched to Studio gateway");
   await p.close();
 }
 
