@@ -312,8 +312,13 @@ export async function windowsInstall(
         const line = pending.slice(0, newline).trimEnd();
         pending = pending.slice(newline + 1);
         if (line === "waiting" && authorized && !signal?.aborted) {
-          requestQuit?.();
+          const quit = requestQuit;
           requestQuit = undefined;
+          try {
+            quit?.();
+          } catch {
+            /* The owner will report the bounded exit failure. */
+          }
         }
         const fields = line.split(" ");
         if (checked || fields[0] !== "proof") continue;
@@ -340,6 +345,8 @@ export async function windowsInstall(
     switch (result) {
       case "ok":
         return checked && !signal?.aborted ? null : failure;
+      case "installer-failed":
+        return "installer-failed" as const;
       case "authenticode-trust":
       case "quit-blocked":
       case "no-installer-path":
@@ -351,7 +358,7 @@ export async function windowsInstall(
       case "installation-context":
         return result as UpdateInstallRefusal;
       default:
-        return failure;
+        return authorized ? ("handoff-unconfirmed" as const) : failure;
     }
   } catch {
     return authorized ? ("handoff-unconfirmed" as const) : failure;

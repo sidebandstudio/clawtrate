@@ -148,3 +148,18 @@ it("refuses a coexisting per-user registration at another location before a mach
   expect(await pending).toBe("installation-context");
   expect(native.end).not.toHaveBeenCalled();
 });
+
+it.each([
+  ["installer-failed", "installer-failed"],
+  ["", "handoff-unconfirmed"],
+] as const)(
+  "distinguishes a definite native failure from a missing final acknowledgement (%s)",
+  async (reply, reason) => {
+    const native = nativeStandIn();
+    const pending = windowsInstall(file, pin, true);
+    native.stdout.emit("data", proof.join(" ") + "\n");
+    expect(native.end).toHaveBeenCalledWith("launch\n");
+    native.finish(reply);
+    expect(await pending).toBe(reason);
+  },
+);
