@@ -83,10 +83,11 @@ export function artifactEntries(
     const { url } = artifact.place;
     entries.push({
       kind: "item",
-      label: "Open in your browser",
-      // The whole address, shown beside the choice before anything leaves the app.
+      label: "Open in your browser…",
+      // Through its pane, which shows the whole address, that it leaves the app and that what
+      // is there may have changed, before its own Open in your browser.
       note: url,
-      onSelect: () => openInBrowser(url),
+      onSelect: () => api.openInPane(artifact),
     });
   }
   if (can && artifact.kind === "image")

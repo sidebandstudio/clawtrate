@@ -4,7 +4,7 @@
 // chat", the task's items newest first, from the same list as the cards.
 
 import { MAX_ARTIFACT_BYTES, type Artifact, type ArtifactRecord } from "@clawtrate/core";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useBridge } from "../bridge.tsx";
 import { clockTime, stampTime } from "../format.ts";
 import {
@@ -274,7 +274,7 @@ export function ArtifactReader({
         >
           {shown === "preview" ? (
             <div className="reader-preview">
-              <Markdown text={ready.text} />
+              <Markdown text={ready.text} link={DisclosedLink} />
             </div>
           ) : (
             <CodeView text={ready.text} wrap={false} />
@@ -569,5 +569,34 @@ export function SentInChat({ onOpen }: { onOpen: (artifact: Artifact) => void })
         <p className="files-note">{api.list.omitted} more items didn't fit here.</p>
       )}
     </section>
+  );
+}
+
+/**
+ * A link in a file a bot handed over: its words and its whole canonical
+ * address in the control, which opens that address in the browser. An address
+ * that is not an absolute `http:` or `https:` one, or that carries a user name
+ * or password, stays text.
+ */
+function DisclosedLink({ href, children }: { href: string | undefined; children: ReactNode }) {
+  let address: string | null = null;
+  try {
+    const url = new URL(href ?? "");
+    if ((url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password)
+      address = url.toString();
+  } catch {
+    address = null;
+  }
+  if (!address) return <span>{children}</span>;
+  const target = address;
+  return (
+    <button
+      type="button"
+      className="md-link"
+      data-testid="disclosed-link"
+      onClick={() => openInBrowser(target)}
+    >
+      {children} <span className="md-link-address">{target}</span>
+    </button>
   );
 }

@@ -125,6 +125,43 @@ test.describe("cards and the pane", () => {
     expect(away).toEqual([]);
   });
 
+  test("F-307: artifact Markdown and menu links disclose their destination before the browser opens", async ({
+    page,
+  }) => {
+    const away = offsite(page);
+    await answerAway(page);
+    await openFixture(page, `${ARTIFACTS}&reportlinks=on`, "light");
+    await openCard(page, "borrowing-report.md");
+    const preview = page.locator(".reader-preview");
+    await expect(preview).toContainText("Library conditions");
+    // No direct anchor: the control holds the words and the whole address.
+    await expect(preview.locator("a")).toHaveCount(0);
+    const link = preview.getByRole("button", {
+      name: "Library conditions https://library.example/conditions",
+    });
+    await expect(link).toBeVisible();
+    // A relative address is not a link: its words stay text.
+    await expect(preview.getByRole("button")).toHaveCount(1);
+    await expect(preview).toContainText("my notes");
+    const [popup] = await Promise.all([page.waitForEvent("popup"), link.click()]);
+    expect(popup.url()).toBe("https://library.example/conditions");
+    await popup.close();
+
+    // The outside file's menu opens its pane, which shows the address, before anything leaves.
+    await page.getByRole("button", { name: "Back to this task's files" }).click();
+    await page.getByRole("button", { name: "Close work panel" }).first().click();
+    const faq = card(page, "lending-faq.pdf");
+    await faq.scrollIntoViewIfNeeded();
+    await faq.getByRole("button", { name: /^lending-faq\.pdf/ }).click({ button: "right" });
+    const pages = page.context().pages().length;
+    await page.getByRole("menuitem", { name: "Open in your browser…" }).click();
+    await expect(page.getByTestId("artifact-address")).toHaveText(
+      "https://help.library.example/lending-faq.pdf",
+    );
+    expect(page.context().pages()).toHaveLength(pages);
+    expect(away).toEqual([]);
+  });
+
   test("F-307: an item with no content says so with no Download; one the device can't draw offers Download", async ({
     page,
   }) => {

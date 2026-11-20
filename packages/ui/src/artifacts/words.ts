@@ -130,7 +130,8 @@ export function trailingLink(text: string): LinkTarget | null {
   try {
     const url = new URL(found.url);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    const host = url.hostname.replace(/^www\./, "");
+    // The exact host, a written "www." included: the Preview control names it as written.
+    const host = url.hostname;
     const address = `${host}${url.pathname === "/" ? "" : url.pathname}`;
     return { url: url.toString(), text: found.text || address, host };
   } catch {

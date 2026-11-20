@@ -35,6 +35,8 @@ export type ArtifactParams = {
   brokenPictures: boolean;
   /** The zip's size is not reported, and its read is refused as too large (`sizes=unknown`). */
   unknownSizes: boolean;
+  /** The report names a link by its words alone, and a relative one (`reportlinks=on`). */
+  reportLinks: boolean;
 };
 
 export function artifactParams(params: URLSearchParams): ArtifactParams {
@@ -46,6 +48,7 @@ export function artifactParams(params: URLSearchParams): ArtifactParams {
     linkPreview: params.get("linkpreview") !== "none",
     brokenPictures: params.get("artifactbytes") === "broken",
     unknownSizes: params.get("sizes") === "unknown",
+    reportLinks: params.get("reportlinks") === "on",
   };
 }
 
@@ -341,6 +344,12 @@ export function artifactAnswers(params: ArtifactParams) {
   const items = fixtureItems().map((item) => {
     if (params.brokenPictures && item.artifact.kind === "image" && item.bytes)
       return { ...item, bytes: utf8Bytes("These bytes are not a picture.") };
+    if (params.reportLinks && item.artifact.title === "borrowing-report.md") {
+      const bytes = utf8Bytes(
+        "# Borrowing e-books\n\nSee [Library conditions](https://library.example/conditions) and [my notes](notes.md).\n",
+      );
+      return { ...item, bytes, artifact: { ...item.artifact, size: bytes.length } };
+    }
     if (params.unknownSizes && item.artifact.title === "app-screens.zip")
       return { ...item, artifact: { ...item.artifact, size: null } };
     return item;

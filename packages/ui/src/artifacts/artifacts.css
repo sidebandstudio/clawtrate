@@ -772,3 +772,21 @@ button.artifact-main:hover {
   overflow-wrap: anywhere;
   user-select: text;
 }
+
+/* A link in a handed-over file: its words, then its whole address, as one control. */
+.md-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-align: start;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.md-link-address {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
