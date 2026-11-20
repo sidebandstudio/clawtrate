@@ -235,7 +235,9 @@ it("rechecks the saved candidate from the command line and preserves the feed on
       signing: key === "win-x64" ? "unsigned" : "ad hoc",
     });
   expect(check()).toBe(0);
-  expect(lines.at(-1)).toContain("stable 0.2.0 complete and consistent");
+  expect(lines.at(-1)).toContain(
+    "stable 0.2.0 complete and consistent\nThis plan does not establish that the files may be published; signing, notarization and updating in place are verified by the owner on each system, as the runbook says.",
+  );
   expect(read("release-plan.json")).toMatchObject({
     issues: [],
     verdict: "complete and consistent",

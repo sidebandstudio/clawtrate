@@ -47,7 +47,7 @@ function json(path: string) {
 }
 
 const ownerChecks =
-  "This plan does not establish that the files may be published. Signing, notarization and updating in place are verified by the owner on each system, as the runbook says.";
+  "This plan does not establish that the files may be published; signing, notarization and updating in place are verified by the owner on each system, as the runbook says.";
 export function plan(candidate: Candidate) {
   const { dir, track, version, commit, buildDate, feedUrl } = candidate;
   const parsed = parseVersion(version);
@@ -94,7 +94,9 @@ export function plan(candidate: Candidate) {
     }
   }
   const comparison = compared.length
-    ? "Compared with the supplied " + compared.join(" and ") + " feed."
+    ? "Compared with the supplied " +
+      compared.join(" and ") +
+      (compared.length === 1 ? " feed." : " feeds.")
     : "The version was not compared with any published release.";
 
   const allowed = new Set(["update-feed.json", "release-plan.json"]);
@@ -249,7 +251,7 @@ export function runPlan(args: string[], print = console.log) {
     );
     return record.issues.length ? 1 : 0;
   } catch {
-    console.error("Could not read the candidate or write a fresh record.");
+    console.error("Candidate refused. Could not inspect the files or write a fresh record.");
     return 1;
   }
 }
