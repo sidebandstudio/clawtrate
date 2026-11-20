@@ -286,6 +286,9 @@
     return "";
   }
 
+  // The last confirmed copy is bound to the gateway, the task's session and the verified document id.
+  const copyKey = (x) => `home-gateway|${x.task}|${sessionOf(x.task)}|${x.doc}`;
+
   // The gateway's answer to canvas.document.view, counted.
   const LIMIT = 5 * 1024 * 1024; // 5 MiB of UTF-8, for drawing and for export alike
   const bytesOf = (s) => new TextEncoder().encode(s).length;
@@ -294,7 +297,7 @@
     if (failed) return { error: "Canvas widget unavailable; reload the chat or ask the agent to recreate it." };
     const html = PAGES[x.doc].html;
     if (large || bytesOf(html) > LIMIT) return { large: true };
-    L.pageCache[x.doc] = html;
+    L.pageCache[copyKey(x)] = html;
     return { html };
   }
 
@@ -831,7 +834,9 @@
     // Before this platform's zero-request check passes, nothing is read, parsed or drawn; Export reads when chosen.
     if (gateClosed())
       return setState("unavailable", `<div class="page-state" role="status"><p><strong>Clawtrate can't show pages here yet.</strong></p><p>You can export this page as a file${canWrite() ? `, or ask ${name} about it in the chat` : ""}.</p></div>`);
-    let html = L.pageCache[x.doc];
+    // Connected, each opening reads the entrypoint again; offline, only the last confirmed copy for this occurrence.
+    let html = lost() ? L.pageCache[copyKey(x)] : undefined;
+    const fromCopy = Boolean(html);
     if (!html) {
       if (lost()) return setState("offline", `<div class="page-state" role="alert"><p><strong>Couldn't reach the gateway. Try again when it's back.</strong></p></div>`);
       const got = readPage(x, { failed: loadFails, large: params.get("pageload") === "large" });
@@ -865,6 +870,7 @@
     if (framed.scripts) parts.push(`Shown without its ${framed.scripts} script${framed.scripts === 1 ? "" : "s"}. Parts that need them don't work here.`);
     if (framed.links.length) parts.push("Links aren't followed here.");
     parts.push("Checkboxes, menus and folded sections change only this view.");
+    if (fromCopy) parts.unshift("Offline · showing the copy last read in this session.");
     note.innerHTML =
       `<span id="page-note-text">${parts.join(" ")}</span>` +
       (framed.links.length ? `<button type="button" class="link-button" data-pv="links" aria-haspopup="menu" aria-expanded="false">Links (${framed.links.length})</button>` : "");

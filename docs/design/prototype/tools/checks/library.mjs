@@ -143,14 +143,20 @@ await p.click('[data-lib-filter="pages"]');
 await p.click('[data-lib-open="p2"]');
 await p.waitForTimeout(450);
 await p.keyboard.press("Escape");
+await q(p, () => (window.CT.library.PAGES["trail-guide"].html = window.CT.library.PAGES["trail-guide"].html.replace("<h1>Trail guide</h1>", "<h1>Trail guide, revised</h1>")));
+await p.click('[data-lib-open="p2"]');
+await p.waitForTimeout(450);
+check("E9 reopened while connected, the Page is read again: two reads, and the gateway's new HTML drawn", (await counters(p)).reads === 2 && (await pageFrame(p).evaluate(() => document.querySelector("h1").textContent)) === "Trail guide, revised" && !(await text(p, "#page-note-text")).includes("Offline"));
+await p.keyboard.press("Escape");
 await q(p, () => window.app.setConnection("offline"));
 await p.click('[data-lib-open="p2"]');
 await p.waitForTimeout(450);
-check("R3 offline, a Page read earlier opens from the device: no second read", (await q(p, () => Boolean(document.querySelector(".page-frame")))) && (await counters(p)).reads === 1);
+check("R3 offline, a Page read earlier opens from the device: no further read", (await q(p, () => Boolean(document.querySelector(".page-frame")))) && (await counters(p)).reads === 2);
+check("E9 …labelled as the copy last read in this session, the last confirmed one", (await text(p, "#page-note-text")).startsWith("Offline · showing the copy last read in this session.") && (await pageFrame(p).evaluate(() => document.querySelector("h1").textContent)) === "Trail guide, revised");
 await p.keyboard.press("Escape");
 await p.click('[data-lib-open="p3"]');
 await p.waitForTimeout(450);
-check("R3 offline, a Page not read yet: Couldn't reach the gateway, nothing read", (await text(p, ".page-state")) === "Couldn't reach the gateway. Try again when it's back." && (await counters(p)).reads === 1);
+check("R3 offline, a Page not read yet: Couldn't reach the gateway, nothing read", (await text(p, ".page-state")) === "Couldn't reach the gateway. Try again when it's back." && (await counters(p)).reads === 2);
 await p.close();
 
 // Pins ----------------------------------------------------------------------------------------------
