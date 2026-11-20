@@ -155,6 +155,8 @@
     S.consent.add(dictKey("gateway"));
   }
   const hasContent = (task) => Boolean((S.drafts[task] || "").trim() || (S.files[task] || []).length || (S.tokens[task] || []).length);
+  // The built send guard, apart from hasContent: no pending or refused attachment.
+  const canSend = (task) => hasContent(task) && !(S.files[task] || []).some((f) => f.state === "pending" || f.state === "refused");
 
   // Where the audio goes: the full names, shown before the microphone opens (section 2).
   const SENTENCE = {
@@ -413,7 +415,7 @@
         ? `<button type="button" class="icon-button call-button" data-v="call" data-k="call" data-testid="call-button" aria-label="${myCall ? "In a voice chat" : "Start voice chat"}" title="${esc(callWhy || (myCall ? "In a voice chat" : "Start voice chat"))}"${myCall ? ' aria-pressed="true"' : ""}${cr ? ' aria-disabled="true"' : ""}${callWhy ? ` aria-description="${esc(callWhy)}"` : ""}>${WAVE}</button>`
         : "") +
       (running ? `<button type="button" class="icon-button stop-button" data-v="stop-run" data-k="stop" data-testid="stop" aria-label="${esc(`Stop ${b.name}`)}" title="${esc(`Stop ${b.name}`)} (⌘.)"></button>` : "") +
-      `<button type="button" class="icon-button send-button" data-v="send" data-k="send" data-testid="send" aria-label="${running ? "Steer this turn" : "Send"}"${hasContent(t.id) && !refused ? "" : " disabled"}>${icon("arrow-up")}</button>` +
+      `<button type="button" class="icon-button send-button" data-v="send" data-k="send" data-testid="send" aria-label="${running ? "Steer this turn" : "Send"}"${canSend(t.id) ? "" : " disabled"}>${icon("arrow-up")}</button>` +
       `</div></div>` +
       (d
         ? `<div class="dictation-line" data-testid="listening"><span class="mic-mark" data-on="${d.capture}">${esc(d.state === "connecting" ? `Connecting to ${GATEWAY}…` : "Listening")} · ${d.capture ? "Microphone on" : "Microphone off"}</span><span>${esc(d.route === "device" ? `On this ${here()}` : `Through ${GATEWAY}`)}</span><span class="v-partial" data-testid="partial">${d.partial ? `Not final yet: <i>${esc(d.partial)}</i>` : ""}</span></div>`
@@ -775,6 +777,7 @@
 
   function pressMic() {
     if (S.dict) return stopDictation();
+    if (S.draining) return; // a draining dictation is not retired yet: no new capture
     if (micReason()) return;
     const route = S.dictRoute;
     const ok = route && (route === "device" ? deviceRoute() : gatewayRoute()).ok;
@@ -786,7 +789,11 @@
   function startDictation() {
     const task = S.sel.task;
     const route = S.dictRoute;
+    const token = ++S.seq;
+    S.dictAttempt = token;
+    const current = () => S.dictAttempt === token && S.sel.task === task;
     const begin = () => {
+      if (!current()) return; // retired while the system asked
       if (!S.consent.has(dictKey(route))) return openConsent("dict");
       const id = ++S.seq;
       S.notices = S.notices.filter((n) => n.task !== task || !/dictation|microphone|speech/i.test(n.title));
@@ -810,6 +817,7 @@
       focusKey("mic");
     };
     withMicPermission((granted) => {
+      if (!current()) return;
       if (!granted) {
         if (S.mic === "none") notify("No microphone found.", "", startDictation, task);
         else notify("Microphone not allowed.", deniedWords()[0], startDictation, task);
@@ -856,8 +864,16 @@
     }
   }
 
+  // A dictation attempt still waiting for the system: retired, and its sheet closed.
+  function retireAttempt() {
+    if (S.dict) return stopDictation();
+    if (S.dictAttempt && S.os_prompt) hidePrompt();
+    S.dictAttempt = null;
+  }
+
   function stopDictation(why = "") {
     const d = S.dict;
+    S.dictAttempt = null;
     if (!d) return;
     d.capture = false;
     d.partial = "";
@@ -883,10 +899,13 @@
     if (S.call && liveCall(S.call) && S.call.task === task) return focusBand();
     if (S.call && liveCall(S.call)) return askSecond(task);
     if (callReason()) return;
-    if (S.dict) {
-      stopDictation();
-      if (hasContent(task)) return; // final words arrived: the composer is no longer empty
+    if (S.dict) stopDictation();
+    if (S.draining) {
+      // Wait for the drain; its final words may still fill the draft.
+      S.callAfterDrain = task;
+      return render();
     }
+    if (hasContent(task)) return; // final words arrived: the composer is no longer empty
     gateCall(task);
   }
 
@@ -940,6 +959,11 @@
 
   // talk.session.create with the disclosed provider by id; nothing is sent until it is ready.
   function createRelay(c) {
+    if (hasContent(c.task) || S.draining) {
+      // Rechecked immediately before the create: the draft is kept and no call starts.
+      S.call = null;
+      return render();
+    }
     c.state = "creating";
     const relay = { id: null, attempt: c.attempt, gen: S.gen, state: "creating", expiresAt: NOW + 1800, task: c.task };
     S.relays.push(relay);
@@ -1236,6 +1260,7 @@
         }
         if (S.dict && S.dict.route === "gateway") stopDictation("Gateway connection lost.");
         if (S.draining) S.draining = null;
+        S.callAfterDrain = null;
         later(() => ev("hello"), S.helloMs ?? 600);
         break;
       }
@@ -1466,9 +1491,14 @@
       case "historyRead":
         S.historyRead[data.task || S.sel.task] = true;
         break;
-      case "dictClosed":
+      case "dictClosed": {
         S.draining = null;
+        const t = S.callAfterDrain;
+        S.callAfterDrain = null;
+        if (t && !hasContent(t) && S.sel.task === t) gateCall(t);
+        else render();
         return;
+      }
       case "memoAnswer": {
         const m = S.memo;
         if (m.state !== "loading") return;
@@ -1604,6 +1634,9 @@
   function selectTask(task) {
     const { b } = taskOf(task);
     if (S.dict && S.dict.task !== task) stopDictation();
+    else if (S.dictAttempt && S.sel.task !== task) retireAttempt();
+    if (S.draining && S.draining.task !== task) S.draining.frozen = true;
+    S.callAfterDrain = null;
     if (S.memo.state === "loading") S.memo.state = "idle"; // a pending play is dropped
     S.sel = { bot: b.id, task };
     S.view = "detail";
@@ -1843,13 +1876,17 @@
     const c = S.call;
     switch (v) {
       case "mic":
-        if (S.suppressClick) return (S.suppressClick = false);
+        if (S.press && S.press.suppress) {
+          S.press = null; // the click synthesized by that same held press
+          return;
+        }
         return pressMic();
       case "call":
         return pressCall();
       case "send": {
         const t = S.sel.task;
-        // The built handoff: what is in the field now is sent; later results of this dictation are dropped.
+        if (!canSend(t)) return; // the built preflight refused: nothing is handed off, dictation goes on
+        // The committed handoff: what is in the field now is sent; later results of this dictation are dropped.
         if (S.dict && S.dict.task === t) {
           S.dict.frozen = true;
           stopDictation();
@@ -2084,36 +2121,44 @@
     if (S.dict) return stopDictation();
     pressMic();
     clearTimeout(S.holdTimer);
-    S.holdTimer = setTimeout(() => (S.holding = Boolean(S.dict)), 400);
+    S.holdTimer = setTimeout(() => (S.holding = Boolean(S.dict || S.dictAttempt)), 400);
   });
   document.addEventListener("keyup", (event) => {
-    // Releasing either key ends a hold, whichever goes first.
+    // Releasing either key ends a hold, whichever goes first, and retires its attempt.
     if (!["d", "D", "Meta", "Control"].includes(event.key)) return;
     clearTimeout(S.holdTimer);
-    if (S.holding && S.dict) stopDictation();
+    if (S.holding) retireAttempt();
     S.holding = false;
   });
-  window.addEventListener("blur", () => {
-    if (S.holding && S.dict) stopDictation();
-    S.holding = false;
-  });
-  // Press and hold the microphone button: the same; a cancelled gesture stops its capture.
+  // Press and hold the microphone button: the same. One attempt-bound cleanup for every way a hold ends.
   document.addEventListener("pointerdown", (event) => {
     const el = event.target.closest('[data-v="mic"]');
     if (!el || el.getAttribute("aria-disabled") === "true" || S.dict) return;
-    S.pressTimer = setTimeout(() => {
-      S.suppressClick = true;
+    const press = { held: false, suppress: false };
+    S.press = press;
+    press.timer = setTimeout(() => {
+      if (S.press !== press) return;
+      press.held = true;
+      press.suppress = true; // the click that ends this press is not a new tap
       pressMic();
-      S.holding = Boolean(S.dict);
     }, 400);
   });
-  const endHold = () => {
-    clearTimeout(S.pressTimer);
-    if (S.holding && S.dict) stopDictation();
-    S.holding = false;
+  const endPress = (kind) => {
+    const press = S.press;
+    if (!press) return;
+    clearTimeout(press.timer);
+    if (press.held) retireAttempt();
+    // A cancelled press leaves no click to swallow; a release leaves exactly one.
+    if (kind !== "up" || !press.held) S.press = null;
   };
-  document.addEventListener("pointerup", endHold);
-  document.addEventListener("pointercancel", endHold);
+  document.addEventListener("pointerup", () => endPress("up"));
+  document.addEventListener("pointercancel", () => endPress("cancel"));
+  document.addEventListener("lostpointercapture", () => endPress("cancel"), true);
+  window.addEventListener("blur", () => {
+    endPress("cancel");
+    if (S.holding) retireAttempt();
+    S.holding = false;
+  });
 
   $("#consent-dialog").addEventListener("cancel", (e) => (e.preventDefault(), closeConsent(false)));
   $("#confirm-dialog").addEventListener("cancel", (e) => (e.preventDefault(), $("#confirm-dialog").close(), S.secondOpener?.focus()));

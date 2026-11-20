@@ -587,6 +587,9 @@ check("6 iPhone: Start dictation", (await q(p, () => document.querySelector('[da
 await p.close();
 p = await open("run=running");
 check("6 during a run, the buttons come before Stop and Send", (await rowLabels(p)) === "Attach files|Steer Otto|Start voice input|Start voice chat|Stop Otto|Steer this turn");
+await p.fill(".composer-input", "faster");
+await wait(p, 40);
+check("6 mode button before microphone with a running draft", (await rowLabels(p)) === "Attach files|Steer Otto|How to send: Steer|Start voice input|Stop Otto|Steer this turn");
 await p.close();
 for (const q2 of ["files=pending", "files=refused", "token=slash", "token=mention"]) {
   p = await open(q2);
@@ -631,6 +634,27 @@ await p.keyboard.press("Escape");
 check("6 Escape closes the picker first", await q(p, () => !document.querySelector('[data-testid="composer-menu"]') && Boolean(window.voice.S.dict)));
 await p.keyboard.press("Escape");
 check("6 …then stops dictation", await q(p, () => !window.voice.S.dict));
+await p.close();
+
+p = await open("auto=0&seen=1&route=gateway");
+await click(p, '[data-v="mic"]');
+await ev(p, "dictCreate", { sessionId: "ts1", provider: "openai-transcribe" });
+await ev(p, "dictReady", { sessionId: "ts1" });
+await ev(p, "dictPartial", { text: "late" });
+await click(p, '[data-v="call"]');
+check("6 while dictation drains, the waveform waits: no capture, no create", await q(p, () => !window.voice.S.io.creates.some((x) => x.kind === "realtime") && !window.voice.S.call));
+await ev(p, "dictFinal", { text: "Late words." });
+await ev(p, "dictClosed");
+check("6 a late drained final prevents call create", (await p.locator(".composer-input").inputValue()).includes("Late") && !(await io(p)).creates.some((x) => x.kind === "realtime"));
+check("6 drained final text prevents call create", (await p.locator(".composer-input").inputValue()).includes("Late") && !(await io(p)).creates.some((x) => x.kind === "realtime"));
+await p.close();
+p = await open("auto=0&seen=1&route=gateway");
+await click(p, '[data-v="mic"]');
+await ev(p, "dictCreate", { sessionId: "ts1", provider: "openai-transcribe" });
+await ev(p, "dictReady", { sessionId: "ts1" });
+await click(p, '[data-v="call"]');
+await ev(p, "dictClosed");
+check("6 …a drain with no final words: the call starts after it, through the gate", (await io(p)).creates.filter((x) => x.kind === "realtime").length === 1);
 await p.close();
 
 p = await open("auto=0&seen=1&route=device");
@@ -678,6 +702,13 @@ await ev(p, "drop");
 check("6 a lost connection keeps the draft and says so", await q(p, () => document.querySelector(".composer-input").value === "Kept." && document.querySelector('[data-testid="notice"]').textContent.includes("Gateway connection lost.")));
 await p.close();
 
+p = await open("auto=0&seen=1&route=device&files=pending");
+await p.fill(".composer-input", "With a file");
+await click(p, '[data-v="mic"]');
+await click(p, '[data-v="send"]');
+check("6 a failed preflight (a file still uploading) hands nothing off and leaves dictation running", await q(p, () => Boolean(window.voice.S.dict) && window.voice.S.sent.length === 0 && document.querySelector(".composer-input").value === "With a file"));
+await p.close();
+
 p = await open("auto=0&draft=Keep%20me");
 await q(p, () => (window.voice.S.flags.sendFail = true));
 await click(p, '[data-v="send"]');
@@ -695,6 +726,17 @@ await wait(p, 40);
 check("6 …releasing the modifier first ends the hold", await q(p, () => !window.voice.S.dict));
 await p.keyboard.up("d");
 await p.close();
+for (const how of ["lostpointercapture", "pointerup"]) {
+  p = await open("auto=0&seen=1&route=device&mic=prompt");
+  await p.dispatchEvent('[data-v="mic"]', "pointerdown");
+  await wait(p, 480);
+  const sheet = await q(p, () => document.querySelector("#os-layer").open);
+  await p.dispatchEvent('[data-v="mic"]', how);
+  await q(p, () => document.querySelector('#os-layer [data-v="os-allow"]')?.click());
+  await wait(p, 60);
+  check(`6 lost capture or release during the permission sheet cannot open or retain capture (${how})`, sheet && (await q(p, () => !window.voice.S.dict && window.voice.S.io.micOpens === 0)));
+  await p.close();
+}
 p = await open("auto=0&seen=1&route=device");
 await p.dispatchEvent('[data-v="mic"]', "pointerdown");
 await wait(p, 480);
@@ -702,6 +744,8 @@ check("6 a press held on the microphone: dictating", await q(p, () => Boolean(wi
 await p.dispatchEvent('[data-v="mic"]', "pointercancel");
 await wait(p, 40);
 check("6 …a cancelled pointer stops it", await q(p, () => !window.voice.S.dict));
+await click(p, '[data-v="mic"]');
+check("6 a fresh tap after pointercancel starts its own dictation", await q(p, () => Boolean(window.voice.S.dict)));
 await p.close();
 p = await open("auto=0&seen=1&route=device&os=web");
 await p.focus(".composer-input");
