@@ -1260,9 +1260,11 @@
         case "download":
           return download();
         case "refusal-retry":
-          // A new handshake. The refusal stays until one succeeds.
+          // A new handshake. The refusal stays until one succeeds. It shares the switches' timer, so a switch
+          // or Add started meanwhile drops it.
           strip(`Connecting to ${esc(gw("home").name)}`);
-          return setTimeout(() => {
+          clearTimeout(timer);
+          timer = setTimeout(() => {
             if (S.retryOk) {
               // The new handshake succeeded; Home is in use only after its identity check.
               S.lastTry = false;
@@ -1275,6 +1277,7 @@
               announce(`Still can't use ${gw("home").name}`);
             }
           }, 600);
+          return;
         case "refusal-update":
           return D.openSettings($(".gateway-pill"), "updates");
         case "refusal-gateways":

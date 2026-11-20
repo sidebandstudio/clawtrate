@@ -804,6 +804,16 @@ for (const [next, words] of [["failcheck", "Couldn't check for updates."], ["", 
   await p.close();
 }
 
+{
+  // CodeRabbit 7: a refusal's retry still under way is dropped when the person switches gateways.
+  const p = await open("required=client&retryok=1&switchid=pending");
+  await click(p, '[data-testid="refusal"] [data-s="refusal-retry"]', 100);
+  await click(p, ".gateway-pill");
+  await click(p, '#gateway-menu [data-gw="studio"]', 3000);
+  check("walk: switch during a refusal's retry: Home doesn't take over from the gateway chosen", (await rail(p)).includes("Confirming this is Studio gateway…") && !(await rail(p)).includes("Otto") && !(await footer(p)).includes("Home gateway") && (await announced(p)) !== "Connected to Home gateway", `${await rail(p)} | ${await footer(p)} | ${await announced(p)}`);
+  await p.close();
+}
+
 // Part 8: Compact (section 13) --------------------------------------------------------------------------------
 
 const J1 = "bot=juniper&task=j1&panel=open&tab=details";
