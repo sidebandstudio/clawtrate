@@ -64,6 +64,7 @@
     // An installer result (issue #69): true, this build can install what it downloads; false, one rules it out; null, unknown.
     install: { 1: true, 0: false }[p("install")] ?? null,
     compact: p("compact") || "none",
+    readNo: 0, // which read of the task's history is shown
     reply: p("reply") || "done",
     foldOpen: false,
     replyOpen: false,
@@ -87,35 +88,62 @@
   ];
   const earlierTurns = () => EARLIER.map(([q, a]) => turn("user", bubble("user", esc(q))) + turn("assistant", bubble("assistant", esc(a)))).join("");
   const REPLY = {
+    skipped: "⚙️ Compaction skipped: nothing compactable in this session yet",
     failed: "⚙️ Compaction failed: Compaction safeguard could not summarize the session: Summarization failed for 15 messages • Context 9.7k/128k (8%)",
     stopped: "⚙️ Compaction failed: Compaction safeguard could not summarize the session • Context 9.9k/128k (8%) ⚠️ Your in-flight request was aborted by compaction — please resend it.",
   };
-  // The line says what the gateway reported and no more: a fold only on a compaction marker
-  // matched to this send, sizes only when the marker carries them.
+  // This send's idempotency key and its run ID, supplied apart: the injected notice is matched by the key, the
+  // compaction marker by `__openclaw.runId`.
+  const SEND = { idempotencyKey: "c7a2-compact-41", runId: "c7a2-compact-41" };
+  const notice = () => ({ role: "assistant", model: "gateway-injected", idempotencyKey: SEND.idempotencyKey });
+  const marker = (runId, sizes) => ({ role: "system", __openclaw: { kind: "compaction", ...(runId ? { runId } : {}), ...(sizes ? { tokensBefore: sizes[0], tokensAfter: sizes[1] } : {}) } });
+  // What each read of the task's history returns, in order; Refresh history reads the next one.
+  const READS = {
+    done: [[notice(), marker(SEND.runId, [9700, 2100])]],
+    nosizes: [[notice(), marker(SEND.runId)]],
+    unlinked: [[notice(), marker("b19e-compact-12", [9700, 2100])]],
+    unconfirmed: [[], [notice(), marker(SEND.runId, [9700, 2100])]],
+  };
+  function readOutcome(rows) {
+    const n = rows.find((r) => r.model === "gateway-injected" && r.idempotencyKey === SEND.idempotencyKey);
+    if (!n) return { kind: "unconfirmed" };
+    const m = rows.find((r) => r.__openclaw?.kind === "compaction" && r.__openclaw.runId === SEND.runId);
+    if (!m) return { kind: "reported" };
+    const { tokensBefore: before, tokensAfter: after } = m.__openclaw;
+    return { kind: "fold", sizes: before != null && after != null ? [before, after] : null };
+  }
+  const outcome = () => (READS[S.compact] ? readOutcome(READS[S.compact][Math.min(S.readNo, READS[S.compact].length - 1)]) : null);
+  const kTokens = (n) => `${(n / 1000).toFixed(1)}k`;
+  // The line says what the gateway reported and no more: a fold only on a compaction marker linked to this
+  // send, sizes only when the marker carries both.
   function compactHtml() {
     const c = S.compact;
     const stamp = `<div class="stamp">Today 5:24 PM</div>`;
     const running = c === "running" || c === "stopped" ? turn("user", bubble("user", "Compare the running costs over ten years.")) : "";
     const replyToggle = `<button type="button" class="s-compacted-toggle" data-s="reply" aria-expanded="${S.replyOpen}" aria-controls="s-reply">${icon("chevron")}Show the gateway's reply</button>`;
-    if (c === "done" || c === "nosizes")
+    const refresh = `<button type="button" class="s-compacted-toggle" data-s="refresh-history">Refresh history</button>`;
+    const o = outcome();
+    if (o?.kind === "reported")
+      return stamp + earlierTurns() + `<div class="s-compacted" data-testid="compact-line"><div class="s-compacted-line"><span class="event-line">The gateway reported a compaction.</span>${refresh}</div></div>`;
+    if (o?.kind === "fold")
       return (
         stamp +
-        `<div class="s-compacted" data-testid="compacted"><div class="s-compacted-line"><span class="event-line">${c === "done" ? "The gateway reported a compaction · 9.7k → 2.1k tokens" : "The gateway reported a compaction."}</span>` +
+        `<div class="s-compacted" data-testid="compacted"><div class="s-compacted-line"><span class="event-line">${o.sizes ? `The gateway reported a compaction · ${kTokens(o.sizes[0])} → ${kTokens(o.sizes[1])} tokens` : "The gateway reported a compaction."}</span>` +
         `<button type="button" class="s-compacted-toggle" data-s="fold" aria-expanded="${S.foldOpen}" aria-controls="s-fold-j1">${icon("chevron")}3 earlier turns</button></div>` +
         `<div class="s-compacted-turns" id="s-fold-j1"${S.foldOpen ? "" : " hidden"}>${earlierTurns()}` +
         `<p class="s-compacted-foot">These are earlier turns in this transcript. The gateway reported a compaction here.</p></div></div>`
       );
     const line = {
       compacting: `<div class="event-line" data-testid="compact-line"><span class="status-dot" data-status="connecting"></span> Compacting Juniper's context…</div>`,
-      skipped: `<div class="event-line" data-testid="compact-line">Nothing to compact yet.</div>`,
-      unconfirmed: `<div class="s-compacted" data-testid="compact-line"><div class="s-compacted-line"><span class="event-line">Clawtrate hasn't confirmed compaction.</span>` +
-        `<button type="button" class="s-compacted-toggle" data-s="refresh-history">Refresh history</button></div></div>`,
+      skipped: `<div class="s-compacted" data-testid="compact-line"><div class="s-compacted-line"><span class="event-line">The gateway skipped compaction.</span>${replyToggle}</div>` +
+        `<p class="s-reply" id="s-reply"${S.replyOpen ? "" : " hidden"}>${esc(REPLY.skipped)}</p></div>`,
+      unconfirmed: `<div class="s-compacted" data-testid="compact-line"><div class="s-compacted-line"><span class="event-line">Clawtrate hasn't confirmed compaction.</span>${refresh}</div></div>`,
       failed: `<div class="s-compacted" data-testid="compact-line"><div class="s-compacted-line"><span class="event-line">The gateway reported that compaction failed.</span>${replyToggle}</div>` +
         `<p class="s-reply" id="s-reply"${S.replyOpen ? "" : " hidden"}>${esc(REPLY.failed)}</p></div>`,
       stopped: `<div class="s-compacted" data-testid="compact-line"><div class="s-compacted-line"><span class="event-line">The gateway reported that compaction failed.</span>${replyToggle}</div>` +
         `<p class="s-warn-line">The gateway stopped the run that was going. Send that message again.</p>` +
         `<p class="s-reply" id="s-reply"${S.replyOpen ? "" : " hidden"}>${esc(REPLY.stopped)}</p></div>`,
-    }[c];
+    }[o?.kind === "unconfirmed" ? "unconfirmed" : c];
     return stamp + earlierTurns() + running + (line || "");
   }
   let j1 = null;
@@ -997,21 +1025,32 @@
       const t = app.bots.find((b) => b.id === app.model.selectedBot)?.tasks.find((x) => x.id === app.model.selectedTask);
       if (!t) return;
       if (t !== j1) {
-        t.html = (t.html ?? "") + `<div class="event-line" data-testid="compact-line">Nothing to compact yet.</div>`;
+        t.html =
+          (t.html ?? "") +
+          `<div class="s-compacted" data-testid="compact-line"><div class="s-compacted-line"><span class="event-line">The gateway skipped compaction.</span>` +
+          `<button type="button" class="s-compacted-toggle" data-s="reply" aria-expanded="false" aria-controls="s-reply-${t.id}">${icon("chevron")}Show the gateway's reply</button></div>` +
+          `<p class="s-reply" id="s-reply-${t.id}" hidden>${esc(REPLY.skipped)}</p></div>`;
         rerenderTask();
-        announce("Nothing to compact yet");
+        announce("The gateway skipped compaction");
         return;
       }
       S.compact = "compacting";
       j1.html = compactHtml();
       rerenderTask();
       setTimeout(() => {
-        S.compact = ["done", "nosizes", "skipped", "failed", "stopped", "unconfirmed"].includes(S.reply) ? S.reply : "done";
+        S.compact = ["done", "nosizes", "unlinked", "skipped", "failed", "stopped", "unconfirmed"].includes(S.reply) ? S.reply : "done";
+        S.readNo = 0;
         S.foldOpen = false;
         j1.html = compactHtml();
         rerenderTask();
-        announce({ done: "The gateway reported a compaction", nosizes: "The gateway reported a compaction", skipped: "Nothing to compact yet", failed: "The gateway reported that compaction failed", stopped: "The gateway reported that compaction failed", unconfirmed: "Compaction not confirmed" }[S.compact]);
+        announce(compactWords());
       }, 1200);
+    }
+
+    function compactWords() {
+      const o = outcome();
+      if (o) return o.kind === "unconfirmed" ? "Compaction not confirmed" : "The gateway reported a compaction";
+      return { skipped: "The gateway skipped compaction", failed: "The gateway reported that compaction failed", stopped: "The gateway reported that compaction failed" }[S.compact];
     }
 
     // Typing /compact is the same thing as the button, under the same rule.
@@ -1186,11 +1225,11 @@
         case "compact":
           return compact();
         case "refresh-history":
-          // A fresh read of the task's history; the prototype's next read finds the marker.
-          S.compact = "done";
+          // A fresh read of the task's history: the fixture's next read, matched again by key and run ID.
+          S.readNo += 1;
           j1.html = compactHtml();
           rerenderTask();
-          return announce("The gateway reported a compaction");
+          return announce(compactWords());
         case "after-access":
           return setTimeout(rerenderTask, 60);
         case "fold": {
@@ -1200,12 +1239,17 @@
           j1.html = compactHtml();
           return;
         }
-        case "reply":
-          S.replyOpen = !S.replyOpen;
-          el.setAttribute("aria-expanded", String(S.replyOpen));
-          $("#s-reply").hidden = !S.replyOpen;
-          j1.html = compactHtml();
+        case "reply": {
+          const box = el.closest(".s-compacted").querySelector(".s-reply");
+          const show = el.getAttribute("aria-expanded") !== "true";
+          el.setAttribute("aria-expanded", String(show));
+          box.hidden = !show;
+          if (box.id === "s-reply") {
+            S.replyOpen = show;
+            j1.html = compactHtml();
+          }
           return;
+        }
         case "disk-computer":
           app.setPanel(true);
           return app.setTab("computer");

@@ -760,7 +760,20 @@ async function compactReply(name, reply, words) {
   check("Compact, failed: the reply opens as text", (await p.locator("#s-reply").isVisible()) && (await text(p, "#s-reply")).includes("Compaction failed"));
   await p.close();
 }
-await (await compactReply("nothing to compact", "skipped", ["Nothing to compact yet."])).close();
+{
+  const p = await compactReply("the gateway skipped it", "skipped", ["The gateway skipped compaction.", "Show the gateway's reply"]);
+  check("Compact, skipped: announced", (await announced(p)) === "The gateway skipped compaction" && !(await text(p, "#transcript")).includes("Nothing to compact yet"));
+  await press(p, "button", "Show the gateway's reply");
+  check("Compact, skipped: the reply opens as text", (await p.locator("#s-reply").isVisible()) && (await text(p, "#s-reply")).includes("Compaction skipped"));
+  await p.close();
+}
+{
+  const p = await compactReply("a success notice with a marker not linked to this send", "unlinked", ["The gateway reported a compaction.", "Refresh history"]);
+  check("Compact, an unlinked marker: no fold, no sizes", (await p.locator('[data-testid="compacted"]').count()) === 0 && !/3 earlier turns|→/.test(await text(p, "#transcript")) && (await announced(p)) === "The gateway reported a compaction");
+  await press(p, "button", "Refresh history", 200);
+  check("Compact, an unlinked marker, Refresh history: still no fold", (await p.locator('[data-testid="compacted"]').count()) === 0 && (await text(p, "#transcript")).includes("The gateway reported a compaction."));
+  await p.close();
+}
 await (await compactReply("a run was stopped", "stopped", ["The gateway reported that compaction failed.", "The gateway stopped the run that was going. Send that message again."])).close();
 {
   const p = await compactReply("a marker without sizes", "nosizes", ["The gateway reported a compaction.", "3 earlier turns"]);
@@ -771,7 +784,7 @@ await (await compactReply("a run was stopped", "stopped", ["The gateway reported
   const p = await compactReply("no outcome matched to the send", "unconfirmed", ["Clawtrate hasn't confirmed compaction.", "Refresh history"]);
   check("Compact, no matching outcome: no fold", (await p.locator('[data-testid="compacted"]').count()) === 0);
   await press(p, "button", "Refresh history", 200);
-  check("walk: Compact, Refresh history: the marker read, then the fold", (await p.locator('[data-testid="compacted"]').count()) === 1);
+  check("walk: Compact, Refresh history: the next read adds a marker with this send's run ID, then the fold", (await p.locator('[data-testid="compacted"]').count()) === 1 && (await text(p, '[data-testid="compacted"]')).includes("9.7k → 2.1k tokens") && (await announced(p)) === "The gateway reported a compaction");
   await p.close();
 }
 {
