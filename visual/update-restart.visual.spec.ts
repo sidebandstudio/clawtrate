@@ -73,3 +73,21 @@ for (const [scene, warning] of [
     await expect(page.getByRole("alertdialog")).toContainText(warning);
   });
 }
+
+test("F-231: a retired offer closes its confirmation without restarting", async ({ page }) => {
+  await openFixture(page, "scene=main&updates=ready", "light");
+  await page.getByRole("button", { name: "Open Updates" }).click();
+  await page.getByRole("button", { name: "Restart to Update" }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.evaluate(() => {
+    const host = window as unknown as {
+      clawtrateFixture: { desktopUpdates: import("@clawtrate/core").DesktopUpdates };
+    };
+    return host.clawtrateFixture.desktopUpdates.chooseTrack("nightly");
+  });
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
+  const result = page.getByRole("group", { name: "Update status" });
+  await expect(result).toContainText("Not checked yet.");
+  await expect(result).toBeFocused();
+});
