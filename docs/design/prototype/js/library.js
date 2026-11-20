@@ -310,6 +310,8 @@
       if (task === "m6") Object.assign(s, { artifacts: "failed", history: "failed" });
       if (task === "m8") s.artifacts = "failed";
     }
+    if (params.get("src") === "history-failed" && task === "m2") s.history = "failed"; // the phone's conversation: its history didn't answer
+    if (params.get("src") === "history-only" && ["m3", "m7"].includes(task)) s.history = "limit"; // capped histories, nothing failed
     return s;
   }
   const failedSource = (task) => Object.values(sources(task)).includes("failed");
@@ -344,7 +346,9 @@
   }
   // The iPhone's conversation: the bot's items, the person's links where their row was read, and the image listing's entries.
   function conversationItems(t) {
-    return ITEMS.filter((x) => x.task === t.id && (x.kind !== "link" || canonical(x.href)) && (listed(x) || x.by === "person"));
+    // The person's links need their history row; the image listing's entries need the item read.
+    const answered = (x) => (x.src === "history" ? sources(x.task).history !== "failed" : sources(x.task).artifacts !== "failed");
+    return ITEMS.filter((x) => x.task === t.id && (x.kind !== "link" || canonical(x.href)) && (listed(x) || (x.by === "person" && answered(x))));
   }
 
   // A time of day as minutes, for the order inside a day; a date alone sorts by its day.
@@ -402,10 +406,12 @@
     );
   }
 
+  // A task counts as read in full only when both its reads completed: a failed source, a capped history or a
+  // truncated row leaves it out, and the rows its answering sources gave stay listed.
   function coverage(b, tasks, conv) {
-    const failed = conv ? [] : tasks.read.filter(failedSource);
-    const incomplete = (conv ? tasks.read : tasks.read).filter(incompleteHistory);
-    return { failed, incomplete, confirmed: tasks.read.length - failed.length };
+    const failed = tasks.read.filter(failedSource);
+    const incomplete = tasks.read.filter(incompleteHistory);
+    return { failed, incomplete, confirmed: tasks.read.filter((id) => !failedSource(id) && !incompleteHistory(id)).length };
   }
 
   function freshness(b, tasks, conv, cov) {
@@ -414,8 +420,8 @@
     let words;
     if (lost()) words = "Can't reach the gateway · showing what was read at 5:41 PM";
     else if (conv) words = "In this conversation · checked 5:41 PM";
-    else if (cov.confirmed === tasks.all.length) words = `Looked in all ${tasks.all.length} of ${name}'s tasks · checked 5:41 PM`;
-    else words = `Looked in ${cov.confirmed} of ${name}'s ${tasks.all.length} tasks · checked 5:41 PM`;
+    else if (cov.confirmed === tasks.all.length) words = `Read all ${tasks.all.length} of ${name}'s tasks in full · checked 5:41 PM`;
+    else words = `Read ${cov.confirmed} of ${name}'s ${tasks.all.length} tasks in full · checked 5:41 PM`;
     return (
       `<div class="files-fresh" role="status" id="lib-fresh"><span>${words}</span>` +
       (lost() ? "" : `<button type="button" class="icon-button" data-variant="quiet" data-lib="refresh" aria-label="Refresh the library" title="Refresh">${icon("retry")}</button>`) +
@@ -453,7 +459,9 @@
   function notes(b, tasks, conv, cov) {
     let html = "";
     if (cov.failed.length)
-      html += `<p class="lib-failed" role="alert">${icon("warning")}<span>Couldn't fully read ${cov.failed.length} task${cov.failed.length === 1 ? "" : "s"}.</span><button type="button" class="button" data-size="sm" data-lib="retry">Try again</button></p>`;
+      html += conv
+        ? `<p class="lib-failed" role="alert">${icon("warning")}<span>Couldn't fully read this conversation.</span>${lost() ? "" : `<button type="button" class="button" data-size="sm" data-lib="retry">Try Again</button>`}</p>`
+        : `<p class="lib-failed" role="alert">${icon("warning")}<span>Couldn't fully read ${cov.failed.length} task${cov.failed.length === 1 ? "" : "s"}.</span>${lost() ? "" : `<button type="button" class="button" data-size="sm" data-lib="retry">Try again</button>`}</p>`;
     if (cov.incomplete.length) html += `<p class="lib-group-note" id="lib-incomplete">Older messages or some message content weren't read${conv ? "" : ` in ${cov.incomplete.length} task${cov.incomplete.length === 1 ? "" : "s"}`}.</p>`;
     if (conv) html += `<p class="lib-group-note" id="lib-uploads">Some uploads may be missing.</p>`;
     if (L.uncertain) html += `<p class="lib-failed" role="status">${icon("warning")}<span>${esc(L.uncertain)}</span></p>`;
@@ -506,7 +514,7 @@
       }
     }
     const foot =
-      !conv && !["loading", "error"].includes(L.lib) && tasks.read.length < tasks.all.length && L.filter !== "pinned"
+      !conv && !lost() && !["loading", "error"].includes(L.lib) && tasks.read.length < tasks.all.length && L.filter !== "pinned"
         ? `<button type="button" class="button lib-look" data-size="sm" data-lib="look">Look in ${Math.min(10, tasks.all.length - tasks.read.length)} more tasks</button>`
         : "";
     const access = !view && !sheet ? accessSection("library") : "";
@@ -519,8 +527,11 @@
     const partial = cov.failed.length || cov.incomplete.length;
     if (!what)
       return `<div class="work-empty"><span class="empty-mark">${icon("tasks")}</span><h4>Nothing found</h4><p>Pages, pictures, files and links ${esc(b.name)} sends appear here.</p></div>`;
+    const mark = `<span class="empty-mark">${icon(kindIcon({ pages: "page", media: "image", links: "link", files: "file" }[L.filter]))}</span>`;
+    // On iPhone the person's uploads may be missing, so media found there is only ever what the item reads gave.
+    if (conv && L.filter === "media") return `<div class="work-empty">${mark}<h4>No media in the items read.</h4></div>`;
     const where = partial ? "in the messages read" : conv ? "in this conversation" : "in the tasks searched";
-    return `<div class="work-empty"><span class="empty-mark">${icon(kindIcon({ pages: "page", media: "image", links: "link", files: "file" }[L.filter]))}</span><h4>No ${what} ${where}.</h4></div>`;
+    return `<div class="work-empty">${mark}<h4>No ${what} ${where}.</h4></div>`;
   }
 
   // A pin as kept: an occurrence id, or a fixture naming what a read found for it.
@@ -1367,13 +1378,14 @@
       return ($(`[data-lib-more="${g}"]`) || $$(`.lib-group[data-group="${g}"] [data-lib-open]`)[before])?.focus();
     }
     const action = t.closest("[data-lib]")?.dataset.lib;
+    if (lost() && ["look", "retry", "refresh"].includes(action)) return; // these come back when the gateway does
     if (action === "look") {
       const b = app.bots.find((x) => x.id === app.model.selectedBot);
       L.read += 10;
       const tasks = readTasks(b);
       const cov = coverage(b, tasks, false);
       rerender();
-      CT.announce(`Looked in ${cov.confirmed} of ${b.name}'s ${tasks.all.length} tasks`);
+      CT.announce(`Read ${cov.confirmed} of ${b.name}'s ${tasks.all.length} tasks in full`);
       return $("#lib-fresh button")?.focus();
     }
     if (action === "retry" || action === "refresh") {
