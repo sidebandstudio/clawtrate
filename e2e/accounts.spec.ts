@@ -999,7 +999,10 @@ test("F-490: a bot whose model on the gateway lists fallbacks, or lost its accou
   // The account suffix removed on the gateway, where Clawtrate set one: reported as such,
   // not as "Gateway chooses".
   await patchConfig({ agents: { entries: { second: { model: { primary: "acme/dev-1" } } } } });
-  await settings.getByRole("button", { name: "Check now" }).click();
+  // The page's own read may show it first, and the button goes as it lands; otherwise Check
+  // now reads it. What follows checks the result either way.
+  const check = settings.getByRole("button", { name: "Check now" });
+  if (await check.isVisible()) await check.click({ timeout: 10_000 }).catch(() => {});
   await expect(
     settings.getByText("The model in the gateway's settings for Second has no account suffix."),
   ).toBeVisible({ timeout: 30_000 });
@@ -1049,9 +1052,10 @@ test("F-476 F-490: an account only another bot keeps is no account for this bot,
   });
   try {
     const settings = await accountPage();
-    // The read after the patch may already show it; otherwise Check now reads it.
+    // The page's own read may show it first, and the button goes as it lands; otherwise Check
+    // now reads it. What follows checks the result either way.
     const check = settings.getByRole("button", { name: "Check now" });
-    if (await check.isVisible()) await check.click();
+    if (await check.isVisible()) await check.click({ timeout: 10_000 }).catch(() => {});
     await expect(
       settings.getByText("No account. The gateway's list does not show Acme · Studio for Second.", {
         exact: false,
