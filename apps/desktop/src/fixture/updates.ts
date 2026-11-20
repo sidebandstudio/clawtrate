@@ -8,7 +8,14 @@ import {
 
 /** A fixed host reading for the screenshot fixture. No transfer or clock runs here. */
 export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
-  const version = "0.2.0";
+  const runningTrack = params.get("buildTrack") === "nightly" ? "nightly" : "stable";
+  const runningVersion = runningTrack === "nightly" ? "0.1.0-nightly.20261115.1" : "0.1.0";
+  const selection = params.get("track") ?? runningTrack;
+  const selectedTrack =
+    params.get("tracks") === "one" ? runningTrack : selection === "nightly" ? "nightly" : "stable";
+  const versionFor = (track: UpdateTrack | null) =>
+    track === "nightly" ? "0.2.0-nightly.20261116.1" : "0.2.0";
+  const version = versionFor(selectedTrack);
   const offer = { version, releaseDate: "2026-11-01T00:00:00Z", offerId: "fixture-offer" };
   const states = {
     "not-checked": { kind: "not-checked" },
@@ -27,13 +34,16 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
   const kind = params.get("updates") as keyof typeof states | null;
   if (!kind || !Object.hasOwn(states, kind)) return noDesktopUpdates;
   const tracks: UpdateTrack[] =
-    kind === "no-source" ? [] : params.get("tracks") === "one" ? ["stable"] : ["stable", "nightly"];
+    kind === "no-source"
+      ? []
+      : params.get("tracks") === "one"
+        ? [runningTrack]
+        : ["stable", "nightly"];
   let snapshot: DesktopUpdateSnapshot = {
     state: states[kind],
-    runningVersion: "0.1.0",
-    runningTrack: "stable",
-    selectedTrack:
-      tracks.includes("nightly") && params.get("track") === "nightly" ? "nightly" : "stable",
+    runningVersion,
+    runningTrack,
+    selectedTrack,
     tracks: tracks.map((track) => ({ track, source: track + ".updates.example" })),
     lastCheckedAt: kind === "nothing-newer" ? "2026-11-16T22:41:00Z" : null,
     install: { kind: "unavailable-in-this-build" },
@@ -50,14 +60,14 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    check: async () => publish(states.offered),
+    check: async () => publish({ ...states.offered, version: versionFor(snapshot.selectedTrack) }),
     chooseTrack: async (track) =>
       params.get("save") === "failed"
         ? publish({ kind: "failed", stage: "preferences", reason: "write-failed" })
         : publish(states["not-checked"], track),
     download: async (id) =>
       snapshot.state.kind === "offered" && snapshot.state.offerId === id
-        ? publish(states.verified)
+        ? publish({ ...states.verified, version: snapshot.state.version })
         : snapshot,
   };
 }
