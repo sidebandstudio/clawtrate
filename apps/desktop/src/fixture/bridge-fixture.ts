@@ -495,8 +495,8 @@ export function createFixtureBridge(
   raceArchive(): void;
   /**
    * Hold the fixture's timed scene steps and delayed answers (a decision applied, refused, or read
-   * back; a reconnect answered) until `release`: a test that must see a state lasting only until the
-   * answer comes holds it, looks, then lets the answer through.
+   * back; a reconnect answered; admin access granted) until `release`: a test that must see a state
+   * lasting only until the answer comes holds it, looks, then lets the answer through.
    */
   hold(): void;
   release(): void;
@@ -606,7 +606,7 @@ export function createFixtureBridge(
       sent.push(command);
       return machine;
     }
-    const account = accountCommand(command, () => state, set, accountParams);
+    const account = accountCommand(command, () => state, set, accountParams, deferred);
     if (account) {
       sent.push(command);
       return account;

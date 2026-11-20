@@ -1,0 +1,45 @@
+name: PR AI disclosure
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: pr-ai-disclosure-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+jobs:
+  disclosure:
+    name: PR AI disclosure
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            // Read the current body, including when someone reruns an older check.
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo,
+              pull_number: context.issue.number,
+            });
+            // CodeSmith appends its own footer after the author's last paragraph.
+            const body = (pr.body ?? "").replace(/<!-- codesmith:footer -->[\s\S]*?<!-- \/codesmith:footer -->/g, "");
+            const { data: html } = await github.rest.markdown.render({ text: body || " ", mode: "markdown" });
+            const visible = html.trimEnd().replace(/<\/?code>/g, "").replace(/<br\s*\/?>\n?/g, "\n");
+            const footer = visible.match(/(?:^|\n)<p>([^<>]*)<\/p>$/)?.[1]?.trim();
+            if (footer === "No AI used.") return;
+
+            const placeholder = /^(?:model|harness|none|n\/?a|unknown|unspecified|not specified|tbd|todo)$/i;
+            function named(value) {
+              return /[\p{L}\p{N}]/u.test(value) && !placeholder.test(value) && !/[\[\]]|&(?:lt|gt);/.test(value);
+            }
+            const complete = footer?.split(/\r?\n/).every((line) => {
+              const pair = /^AI:\s*(.+?)\s+via\s+(.+)$/i.exec(line.trim());
+              return pair && named(pair[1].trim()) && named(pair[2].trim());
+            });
+            if (!complete) {
+              core.setFailed("End the PR body with AI: MODEL via HARNESS, one line per contributing pair. If no AI contributed, end with No AI used.");
+            }
