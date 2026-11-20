@@ -193,6 +193,8 @@ test.describe("keyboard and screen reader", () => {
       /^Look at its tasks, Allowed, Not offered: sessions_history \(set on the gateway\)\. Open\.$/,
     );
     await row.click();
+    // The line's heading takes focus on the next frame; a person moves on from there.
+    await expect(page.getByTestId("permission-line").locator("[data-bs-focus]")).toBeFocused();
     const group = page.getByRole("radiogroup", { name: "Otto may:" });
     await expect(group.locator('[tabindex="0"]')).toHaveCount(1);
     await group.getByRole("radio", { name: "Allow", exact: true }).focus();
