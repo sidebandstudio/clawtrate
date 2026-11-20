@@ -143,9 +143,7 @@ it("F-231: names the running and selected tracks and shows choices only with two
   expect(one.html).toContain("This copy is a Stable build.");
   const two = render({ kind: "nothing-newer" }, { selectedTrack: "nightly" });
   expect(two.html).toContain("Update track");
-  expect(two.html).toContain(
-    "No newer Beta build was offered. Clawtrate 1.0.0 is still running.",
-  );
+  expect(two.html).toContain("No newer Beta build was offered. Clawtrate 1.0.0 is still running.");
   expect(two.html).toContain("Checks beta.example for a newer build, only when you choose to.");
   expect(
     render({ kind: "not-checked" }, { tracks: snapshot.tracks.slice(1), selectedTrack: "nightly" })
