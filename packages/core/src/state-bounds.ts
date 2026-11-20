@@ -1035,7 +1035,7 @@ export const ROUTINES: Bound = object<RoutinesState>()({
     ranOnce: FLAG,
     runAt: NUMBER,
   }),
-  stale: FLAG,
+  listedOn: NUMBER,
 });
 
 /** Every part of the state but the transcripts, and the transcripts as one map. */

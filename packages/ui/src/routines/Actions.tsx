@@ -39,7 +39,15 @@ function assign<T>(all: Record<string, T>, id: string, value: T | null): Record<
 }
 
 /** What the admin actions are doing now, by routine. */
-export function useRoutineActions(announce: (text: string) => void, routines: Routine[]) {
+/**
+ * `listedOn` is the list the rows on screen came from: each action sends it,
+ * so one from a row of an earlier connection's list is refused, not sent.
+ */
+export function useRoutineActions(
+  announce: (text: string) => void,
+  routines: Routine[],
+  listedOn: number,
+) {
   const bridge = useBridge();
   /** A switch turned and not yet confirmed: the value it shows meanwhile. */
   const [pending, setPending] = useState<Record<string, boolean>>({});
@@ -75,7 +83,12 @@ export function useRoutineActions(announce: (text: string) => void, routines: Ro
       putNote(routine.id, null);
       const word = enabled ? "resume" : "pause";
       try {
-        const result = await bridge.invoke({ type: "setRoutineEnabled", id: routine.id, enabled });
+        const result = await bridge.invoke({
+          type: "setRoutineEnabled",
+          id: routine.id,
+          enabled,
+          listedOn,
+        });
         if (result.status === "saved")
           announce(`${enabled ? "Resumed" : "Paused"} ${routine.name}`);
         else
@@ -97,7 +110,7 @@ export function useRoutineActions(announce: (text: string) => void, routines: Ro
         putPending(routine.id, null);
       }
     },
-    [bridge, announce],
+    [bridge, announce, listedOn],
   );
 
   const runNow = useCallback(
@@ -105,7 +118,7 @@ export function useRoutineActions(announce: (text: string) => void, routines: Ro
       putRun(routine.id, { status: "starting" });
       let result: RoutineRunNow;
       try {
-        result = await bridge.invoke({ type: "runRoutineNow", id: routine.id });
+        result = await bridge.invoke({ type: "runRoutineNow", id: routine.id, listedOn });
       } catch (error) {
         result = { status: "unknown", error: errorText(error) };
       }
@@ -137,7 +150,7 @@ export function useRoutineActions(announce: (text: string) => void, routines: Ro
         );
       }
     },
-    [bridge, announce],
+    [bridge, announce, listedOn],
   );
 
   return { pending, notes, runs, setEnabled, runNow };
@@ -251,10 +264,13 @@ export function RunNoteLine({ note, paused }: { note: RunNote | undefined; pause
 /** The delete confirmation (F-352): it says what deleting loses, and keeps the reason if it fails. */
 export function DeleteRoutine({
   routine,
+  listedOn,
   onCancel,
   onDeleted,
 }: {
   routine: Routine;
+  /** The list the routine was shown from (`RoutinesState.listedOn`). */
+  listedOn: number;
   onCancel: () => void;
   onDeleted: () => void;
 }) {
@@ -277,7 +293,7 @@ export function DeleteRoutine({
     setStatus("deleting");
     setError(null);
     try {
-      const result = await bridge.invoke({ type: "removeRoutine", id: routine.id });
+      const result = await bridge.invoke({ type: "removeRoutine", id: routine.id, listedOn });
       if (result.status === "removed") return onDeleted();
       if (result.status === "unknown") return setStatus("unknown");
       setError(

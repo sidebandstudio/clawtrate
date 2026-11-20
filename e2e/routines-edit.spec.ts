@@ -222,7 +222,7 @@ test("on the read tier nothing that writes is offered, and a write sent anyway i
   await openPage(job.name);
   await expect(view().getByTestId("routine-actions")).toHaveCount(0);
   // The bridge's own commands are refused below admin as well: nothing reaches the gateway.
-  const answer = (await bridgeCommand({ type: "removeRoutine", id: job.id })) as {
+  const answer = (await bridgeCommand({ type: "removeRoutine", id: job.id, listedOn: 0 })) as {
     value?: unknown;
   };
   expect(JSON.stringify(answer)).toContain('"not-sent"');

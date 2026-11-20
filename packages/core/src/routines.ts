@@ -122,8 +122,12 @@ export type RoutinesState = {
    * one-shot removes itself.
    */
   removed: { id: string; ranOnce: boolean; runAt: number | null } | null;
-  /** The list shown was read on a connection that has since closed; true until this one's is read. */
-  stale: boolean;
+  /**
+   * The connection the list was read on. A row's Pause, Run now and Delete send
+   * it back, and are refused once another connection has begun: the row's id
+   * may name another gateway's routine there.
+   */
+  listedOn: number;
 };
 
 export const initialRoutinesState: RoutinesState = {
@@ -134,7 +138,7 @@ export const initialRoutinesState: RoutinesState = {
   omitted: 0,
   revision: 0,
   removed: null,
-  stale: false,
+  listedOn: 0,
 };
 
 export type RoutineRun = {
@@ -700,7 +704,7 @@ export class RoutinesEngine {
         ...state,
         status: "loaded",
         error: null,
-        stale: false,
+        listedOn: this.epoch,
         ...read,
         revision: (state.revision + 1) % Number.MAX_SAFE_INTEGER,
       }));
@@ -837,7 +841,6 @@ export class RoutinesEngine {
     this.clearRecheck();
     this.lastFinished = null;
     this.epoch += 1;
-    if (!this.ctx.get().stale) this.ctx.update((state) => ({ ...state, stale: true }));
   }
 
   reset(): void {
@@ -865,9 +868,13 @@ export class RoutinesEngine {
     return this.ctx.admin() ? null : "admin";
   }
 
-  /** A row read on an earlier connection: its id may name another gateway's routine now. */
-  private unlisted(): "gateway" | null {
-    return this.listedEpoch === this.epoch ? null : "gateway";
+  /**
+   * A row read on an earlier connection: its id may name another gateway's
+   * routine now. `listedOn` is the list the row came from, as the viewer had it.
+   */
+  private unlisted(listedOn?: number): "gateway" | null {
+    if (this.listedEpoch !== this.epoch) return "gateway";
+    return listedOn === undefined || listedOn === this.epoch ? null : "gateway";
   }
 
   /** The gateway's own view of a routine, put in the list while the connection that read it holds. */
@@ -1074,8 +1081,9 @@ export class RoutinesEngine {
     id: string,
     enabled: boolean,
     owner: object | null = null,
+    listedOn?: number,
   ): Promise<RoutineWrite> {
-    const blocked = this.blocked(owner) ?? this.unlisted();
+    const blocked = this.blocked(owner) ?? this.unlisted(listedOn);
     if (blocked) return { status: "not-sent", reason: blocked };
     const epoch = this.epoch;
     if (this.updates.size >= MAX_ROUTINE_UPDATES)
@@ -1100,8 +1108,8 @@ export class RoutinesEngine {
   }
 
   /** Run it once now (`cron.run {mode: "force"}`), paused or not; it stays as it was. */
-  async runNow(id: string, owner: object | null = null): Promise<RoutineRunNow> {
-    const blocked = this.blocked(owner) ?? this.unlisted();
+  async runNow(id: string, owner: object | null = null, listedOn?: number): Promise<RoutineRunNow> {
+    const blocked = this.blocked(owner) ?? this.unlisted(listedOn);
     if (blocked) return { status: "not-sent", reason: blocked };
     try {
       const result = asRecord(await this.ctx.request("cron.run", { id, mode: "force" }));
@@ -1125,8 +1133,8 @@ export class RoutinesEngine {
    * established not-found refusal, is what takes it off the list: any other
    * answer leaves the row while its outcome is checked.
    */
-  async remove(id: string, owner: object | null = null): Promise<RoutineRemove> {
-    const blocked = this.blocked(owner) ?? this.unlisted();
+  async remove(id: string, owner: object | null = null, listedOn?: number): Promise<RoutineRemove> {
+    const blocked = this.blocked(owner) ?? this.unlisted(listedOn);
     if (blocked) return { status: "not-sent", reason: blocked };
     const epoch = this.epoch;
     const drop = () => {

@@ -394,43 +394,43 @@ test.describe("1440", () => {
     await expect(page.getByTestId("b-announcer")).toHaveText("Deleted Plan the week");
   });
 
-  test("F-192 F-352: a row's menu and a delete confirmation close when the connection is replaced", async ({
+  test("F-192 F-352: a row's menu and a delete confirmation close when another connection's list arrives", async ({
     page,
   }) => {
     await open(page);
-    await row(page, "Morning digest").locator(".r-row-main").click({ button: "right" });
-    await expect(page.getByRole("menu")).toBeVisible();
-    // Another hello at the address: the menu's routine was read on the last connection.
-    await setConnection(page, { connectedAt: Date.now() + 5_000 });
-    await expect(page.getByRole("menu")).toHaveCount(0);
-    await row(page, "Morning digest").locator(".r-row-main").click({ button: "right" });
-    await page.getByRole("menu").getByRole("menuitem", { name: "Delete…" }).click();
-    await expect(page.getByTestId("routine-delete")).toBeVisible();
-    await setConnection(page, { connectedAt: Date.now() + 10_000 });
-    await expect(page.getByTestId("routine-delete")).toHaveCount(0);
-  });
-
-  test("F-192: a menu opened from the old rows after a reconnect closes when the new list is shown", async ({
-    page,
-  }) => {
-    await open(page);
-    const setStale = (stale: boolean) =>
-      page.evaluate((stale) => {
+    const listed = (on: number) =>
+      page.evaluate((on) => {
         const fixture = (
           window as unknown as {
             clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
           }
         ).clawtrateFixture;
-        fixture.setState((state) => ({ ...state, routines: { ...state.routines, stale } }));
-      }, stale);
-    // Another hello at the address: the rows shown are still the last connection's.
+        fixture.setState((state) => ({ ...state, routines: { ...state.routines, listedOn: on } }));
+      }, on);
+    // Another hello at the address: the rows shown are still the last connection's, and a
+    // menu opened from them now still says so in what it sends.
     await setConnection(page, { connectedAt: Date.now() + 5_000 });
-    await setStale(true);
     await row(page, "Morning digest").locator(".r-row-main").click({ button: "right" });
     await expect(page.getByRole("menu")).toBeVisible();
-    // This connection's list is read: the menu from the old rows goes with them.
-    await setStale(false);
+    // This connection's list arrives: the menu from the old rows goes with them.
+    await listed(1);
     await expect(page.getByRole("menu")).toHaveCount(0);
+    await row(page, "Morning digest").locator(".r-row-main").click({ button: "right" });
+    await page.getByRole("menu").getByRole("menuitem", { name: "Delete…" }).click();
+    await expect(page.getByTestId("routine-delete")).toBeVisible();
+    await listed(2);
+    await expect(page.getByTestId("routine-delete")).toHaveCount(0);
+  });
+
+  test("F-350: a row's action sends the list it was shown from", async ({ page }) => {
+    await open(page);
+    await row(page, "Morning digest").getByRole("switch").click();
+    const sent = await page.evaluate(() =>
+      (
+        window as unknown as { clawtrateFixture: { sent: Array<Record<string, unknown>> } }
+      ).clawtrateFixture.sent.find((each) => each.type === "setRoutineEnabled"),
+    );
+    expect(sent).toMatchObject({ type: "setRoutineEnabled", listedOn: 0 });
   });
 
   test("F-192: right-click, Shift+F10 or the Menu key on a routine offers Open, Pause or Resume, Run now, Edit and Delete", async ({

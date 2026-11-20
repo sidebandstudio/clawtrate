@@ -209,9 +209,10 @@ export type BridgeCommand =
       expected: RoutineRevision;
       gateway: string | null;
     }
-  | { type: "setRoutineEnabled"; id: string; enabled: boolean }
-  | { type: "runRoutineNow"; id: string }
-  | { type: "removeRoutine"; id: string }
+  /** `listedOn` is the routines list the row came from (`RoutinesState.listedOn`). */
+  | { type: "setRoutineEnabled"; id: string; enabled: boolean; listedOn: number }
+  | { type: "runRoutineNow"; id: string; listedOn: number }
+  | { type: "removeRoutine"; id: string; listedOn: number }
   | { type: "readGatewayHooks" }
   // Provider accounts (bots.md sections 3 to 11). Writes need admin.
   /** Read the accounts, sign-ins, bindings and catalogue again. */
@@ -843,9 +844,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "setRoutineEnabled",
         id: id(command.id, "routine id"),
         enabled: flag(command.enabled),
+        listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "routines list"),
       };
     case "runRoutineNow":
     case "removeRoutine":
+      return {
+        type: command.type,
+        id: id(command.id, "routine id"),
+        listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "routines list"),
+      };
     case "readRoutine":
       return { type: command.type, id: id(command.id, "routine id") };
     case "readGatewayHooks":
@@ -1442,11 +1449,11 @@ class ViewerSession implements BridgeSession {
           command.gateway,
         );
       case "setRoutineEnabled":
-        return client.setRoutineEnabled(command.id, command.enabled, owner);
+        return client.setRoutineEnabled(command.id, command.enabled, owner, command.listedOn);
       case "runRoutineNow":
-        return client.runRoutineNow(command.id, owner);
+        return client.runRoutineNow(command.id, owner, command.listedOn);
       case "removeRoutine":
-        return client.removeRoutine(command.id, owner);
+        return client.removeRoutine(command.id, owner, command.listedOn);
       case "readGatewayHooks":
         return client.readGatewayHooks();
       case "refreshAccounts":

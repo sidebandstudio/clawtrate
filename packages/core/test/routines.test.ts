@@ -1244,8 +1244,8 @@ describe("F-189: changing a routine", () => {
       ADMIN,
     );
     // The connection drops and another comes back at the address: the rows shown are the old one's.
+    const shownOn = state().listedOn;
     routines.onClose();
-    expect(state().stale).toBe(true);
     expect(await routines.setEnabled(JOB, false)).toEqual({
       status: "not-sent",
       reason: "gateway",
@@ -1254,8 +1254,23 @@ describe("F-189: changing a routine", () => {
     expect(await routines.remove(JOB)).toEqual({ status: "not-sent", reason: "gateway" });
     expect(requests).toEqual([]);
     await routines.load();
-    expect(state().stale).toBe(false);
-    expect(await routines.setEnabled(JOB, false)).toMatchObject({ status: "saved" });
+    expect(state().listedOn).not.toBe(shownOn);
+    // A row still on screen from the old list carries its list: refused, however late it is sent.
+    expect(await routines.setEnabled(JOB, false, null, shownOn)).toEqual({
+      status: "not-sent",
+      reason: "gateway",
+    });
+    expect(await routines.remove(JOB, null, shownOn)).toEqual({
+      status: "not-sent",
+      reason: "gateway",
+    });
+    expect(requests).toEqual([
+      { method: "cron.status", params: {} },
+      expect.objectContaining({ method: "cron.list" }),
+    ]);
+    expect(await routines.setEnabled(JOB, false, null, state().listedOn)).toMatchObject({
+      status: "saved",
+    });
   });
 
   it("F-350: a pause that answers after the routine's removal was confirmed does not bring it back", async () => {

@@ -4091,16 +4091,25 @@ export class ClawtrateClient {
     id: string,
     enabled: boolean,
     owner: object | null = null,
+    listedOn?: number,
   ): Promise<RoutineWrite> {
-    return this.routines.setEnabled(id, enabled, owner);
+    return this.routines.setEnabled(id, enabled, owner, listedOn);
   }
 
-  runRoutineNow(id: string, owner: object | null = null): Promise<RoutineRunNow> {
-    return this.routines.runNow(id, owner);
+  runRoutineNow(
+    id: string,
+    owner: object | null = null,
+    listedOn?: number,
+  ): Promise<RoutineRunNow> {
+    return this.routines.runNow(id, owner, listedOn);
   }
 
-  removeRoutine(id: string, owner: object | null = null): Promise<RoutineRemove> {
-    return this.routines.remove(id, owner);
+  removeRoutine(
+    id: string,
+    owner: object | null = null,
+    listedOn?: number,
+  ): Promise<RoutineRemove> {
+    return this.routines.remove(id, owner, listedOn);
   }
 
   /** The gateway's inbound hooks, read with admin; null below it. */

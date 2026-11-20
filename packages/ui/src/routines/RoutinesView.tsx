@@ -886,7 +886,7 @@ export function RoutinesView({
   const admin = canAdmin(state.connection, info);
   const granted = useGranted(state.connection);
   const [announcer, announce] = useAnnouncer();
-  const actions = useRoutineActions(announce, store.routines);
+  const actions = useRoutineActions(announce, store.routines, store.listedOn);
   const [editor, setEditor] = useState<EditorTarget | null>(null);
   const [deleting, setDeleting] = useState<Routine | null>(null);
   const [menu, setMenu] = useState<{ routine: Routine; x: number; y: number } | null>(null);
@@ -895,19 +895,15 @@ export function RoutinesView({
   const closeEditor = () => setEditor(null);
   // The delete confirmation holds nothing typed: it closes when admin goes.
   if (!admin && deleting) setDeleting(null);
-  // A row's menu and the delete confirmation name a routine by id from the list they
-  // were opened on. A new connection (maybe another gateway at the address) closes them,
-  // and so does the first list read on it: one opened from the old rows in between
-  // must not act on the new list.
-  const [openedOn, setOpenedOn] = useState({
-    at: state.connection.connectedAt,
-    stale: store.stale,
-  });
-  if (openedOn.at !== state.connection.connectedAt || (openedOn.stale && !store.stale)) {
-    setOpenedOn({ at: state.connection.connectedAt, stale: store.stale });
+  // A row's menu and the delete confirmation hold a routine from the list they were
+  // opened on; actions send the list now shown. When another connection's list
+  // arrives they close in this render, so an old row never goes out with the new list.
+  const [openedOn, setOpenedOn] = useState(store.listedOn);
+  if (openedOn !== store.listedOn) {
+    setOpenedOn(store.listedOn);
     setMenu(null);
     setDeleting(null);
-  } else if (openedOn.stale !== store.stale) setOpenedOn({ ...openedOn, stale: store.stale });
+  }
   const live = shown && !deleted ? shown.routine : null;
   const rowEntries = (routine: Routine): MenuEntry[] =>
     routineEntries(
@@ -1212,6 +1208,7 @@ export function RoutinesView({
       {deleting && (
         <DeleteRoutine
           routine={deleting}
+          listedOn={store.listedOn}
           onCancel={() => setDeleting(null)}
           onDeleted={() => {
             announce(`Deleted ${deleting.name}`);
