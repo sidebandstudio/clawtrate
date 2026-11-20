@@ -601,6 +601,17 @@ p = await open(`view=vault&v=removednoreply&item=${encodeURIComponent('<i data-p
 check("an item name from the address is drawn as text in the removal notice", (await p.locator("[data-probe]").count()) === 0 && (await text(p)).includes('<i data-probe="item">X</i> is no longer listed in the Vault.'));
 await p.close();
 
+// One decision at a time: Discard stays shown but can't start a second decision while one is in flight.
+for (const q of ["view=draft", "view=draft&d=edited"]) {
+  p = await open(q, { chrome: "1" });
+  await click(p, '[data-d="send"]');
+  const discard = p.locator('[data-d="discard"]');
+  const held = (await discard.count()) === 1 && (await discard.isDisabled());
+  if (!held) await discard.click().catch(() => {});
+  check(`${q}: while a decision is in flight Discard stays shown and starts no second decision`, held && (await waitText(p, ["Answered"])) && !(await text(p)).includes("Discarded"));
+  await p.close();
+}
+
 await b.close();
 console.log(out.join("\n"));
 console.log(`${out.filter((l) => l.startsWith("ok")).length} ok, ${failed} failed`);

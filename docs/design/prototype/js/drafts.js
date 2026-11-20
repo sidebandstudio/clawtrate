@@ -304,13 +304,15 @@
     else if (st === "refused") actions = button("Try again", 'data-d="send"', "primary") + `<span class="spacer"></span>` + button("Discard", 'data-d="discard"', "quiet");
     else if (editedView)
       actions =
-        button(sending ? "Sending…" : `Send edited ${noun(kind)}`, `data-d="send"${sending ? " disabled" : ""}`, "primary") + `<span class="spacer"></span>` + button("Discard", 'data-d="discard"', "quiet");
+        button(sending ? "Sending…" : `Send edited ${noun(kind)}`, `data-d="send"${sending ? " disabled" : ""}`, "primary") +
+        `<span class="spacer"></span>` +
+        button("Discard", `data-d="discard"${sending ? " disabled" : ""}`, "quiet");
     else
       actions =
         button(sending && S.last === "send" ? "Sending…" : kind === "email" ? "Send email" : "Send message", `data-d="send"${sending ? " disabled" : ""}`, "primary") +
         button("Edit", `data-d="edit"${sending ? " disabled" : ""}`) +
         `<span class="spacer"></span>` +
-        button("Discard", 'data-d="discard"', "quiet");
+        button("Discard", `data-d="discard"${sending ? " disabled" : ""}`, "quiet");
     const full = S.full
       ? `<div class="request-inset d-full"><dl class="d-facts"><dt>Tool</dt><dd><code>${TOOL[kind]}</code></dd><dt>Bot</dt><dd>Otto</dd><dt>Task</dt><dd>Disk almost full on the media box</dd><dt>Asked</dt><dd>5:42 PM, expires 5:52 PM</dd><dt>Held by</dt><dd>Clawtrate's drafts plugin: "Send this draft?"</dd></dl></div>`
         : "";
@@ -355,7 +357,7 @@
       (kind === "email" ? `${filesOf(kind)}<p class="d-hint">From and the attachments stay as Otto set them.</p>` : "") +
       `<p class="d-editnote">Your edit goes to Clawtrate's drafts plugin, for this draft only. Sending it releases Otto's ${noun(kind)} to the plugin, which swaps in your edit. The gateway then asks once more, for the edited ${noun(kind)}, and that answer lets the tool run.</p>` +
       note +
-      `<div class="request-actions">${send}${button("Cancel edit", `data-d="edit-cancel"${busy ? " disabled" : ""}`)}<span class="spacer"></span>${button("Discard", 'data-d="discard"', "quiet")}</div>` +
+      `<div class="request-actions">${send}${button("Cancel edit", `data-d="edit-cancel"${busy ? " disabled" : ""}`)}<span class="spacer"></span>${button("Discard", `data-d="discard"${busy ? " disabled" : ""}`, "quiet")}</div>` +
       `<div class="d-foot">${pluginMark()}</div></section>`
     );
   }
@@ -834,6 +836,8 @@
   }
 
   function decide(which) {
+    // One decision at a time: a second one is refused while the first is in flight.
+    if (S.d === "sending" || S.d === "editsaving") return;
     S.last = which;
     go({ d: "sending" });
     later(() => {
