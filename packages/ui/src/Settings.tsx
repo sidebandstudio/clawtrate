@@ -16,6 +16,8 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
+import { useUsageSection } from "./usage/UsageSection.tsx";
+import { useMachinesSection } from "./machines/Machines.tsx";
 import { Dialog } from "./bots/Dialog.tsx";
 import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
@@ -65,10 +67,12 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = "gateway" | "accounts";
+type Section = "gateway" | "accounts" | "usage" | "machines";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
+  ["usage", "Usage"],
+  ["machines", "Machines"],
 ];
 /** ⌘, opens on the section last shown, Gateway the first time. */
 const SHOWN_LAST = "settings-section";
@@ -189,6 +193,15 @@ export function Settings({
   );
 
   const accountsSection = useAccountsSection({ accounts, bots, connection, info, announce, toNav });
+  const usageSection = useUsageSection({ bots, connection, info, announce, toNav });
+  const machinesSection = useMachinesSection({
+    active: section === "machines",
+    connection,
+    info,
+    bots,
+    announce,
+    toNav,
+  });
 
   const gatewayPane = (
     <>
@@ -321,7 +334,11 @@ export function Settings({
     const view =
       section === "accounts" && accountsSection.view
         ? accountsSection.view
-        : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+        : section === "usage"
+          ? usageSection
+          : section === "machines"
+            ? machinesSection
+            : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">
