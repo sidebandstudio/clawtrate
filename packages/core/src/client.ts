@@ -3518,30 +3518,54 @@ export class ClawtrateClient {
       missing.set(sessionKey, (missing.get(sessionKey) ?? new Set()).add(runId));
     }
     for (const [sessionKey, ids] of missing) {
-      let history: RawRecord | null;
-      try {
-        history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
-      } catch {
-        continue;
-      }
-      if (generation !== this.generation || !this.tracked(key) || this.tracked(sessionKey)) return;
-      const aliases = Object.fromEntries(historyQueuePairs(history?.messages));
-      const { messages, inFlight } = throughRunAliases(
-        history?.messages,
-        asRecord(history?.inFlightRun),
-        aliases,
-      );
-      const found = runsFromHistory(messages, inFlight, {
-        sessionKey,
-        now: this.now(),
-        raw: this.foreignRaw,
-      }).filter((run) => ids.has(run.id));
-      if (found.length === 0) continue;
-      this.updateForeign(sessionKey, (activity) => ({
-        ...activity,
-        runs: [...activity.runs.filter((run) => !ids.has(run.id)), ...found],
-      }));
+      if (generation !== this.generation || !this.tracked(key)) return;
+      await this.readRecipientRuns(sessionKey, ids, generation, key);
     }
+  }
+
+  private async readRecipientRuns(
+    sessionKey: string,
+    ids: Set<string>,
+    generation: number,
+    senderKey?: string,
+  ): Promise<void> {
+    let history: RawRecord | null;
+    try {
+      history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
+    } catch {
+      return;
+    }
+    if (
+      generation !== this.generation ||
+      this.tracked(sessionKey) ||
+      (senderKey !== undefined && !this.tracked(senderKey))
+    )
+      return;
+    const aliases = Object.fromEntries(historyQueuePairs(history?.messages));
+    const { messages, inFlight } = throughRunAliases(
+      history?.messages,
+      asRecord(history?.inFlightRun),
+      aliases,
+    );
+    const ctx = { sessionKey, now: this.now(), raw: this.foreignRaw };
+    const pendingInputs = asRecord(history?.pendingInputs)?.items;
+    const busy = inFlight !== null || (Array.isArray(pendingInputs) && pendingInputs.length > 0);
+    const found = runsFromHistory(messages, inFlight, ctx, { busy }).filter((run) =>
+      ids.has(run.id),
+    );
+    if (found.length === 0) return;
+    this.updateForeign(sessionKey, (activity) => ({
+      ...activity,
+      runs: [
+        ...activity.runs.filter((run) => !ids.has(run.id)),
+        ...mergeHistoryRuns(
+          activity.runs.filter((run) => ids.has(run.id)),
+          found,
+          ctx,
+          busy,
+        ).runs,
+      ],
+    }));
   }
 
   /** Copy the state of every recipient run a task's `sessions_send` results name, where it is known. */
@@ -5212,9 +5236,25 @@ export class ClawtrateClient {
     const row = asRecord(payload);
     const key = typeof row?.sessionKey === "string" ? row.sessionKey : null;
     const runId = typeof row?.runId === "string" ? capId(row.runId, MAX_ID_CHARS) : null;
-    if (!row || !key || !runId || !this.tracked(key)) return;
+    if (!row || !key || !runId) return;
     const clientRunId =
       typeof row.clientRunId === "string" ? capId(row.clientRunId, MAX_ID_CHARS) : null;
+    if (!this.tracked(key)) {
+      if (row.phase !== "end" && row.phase !== "error") return;
+      const sessionKey = capId(key, MAX_ID_CHARS);
+      const activity = this.foreign.get(sessionKey);
+      const ids = new Set(
+        [runId, clientRunId].filter((id): id is string => {
+          if (!id) return false;
+          const run = activity && findRun(activity, id);
+          return run
+            ? !isTerminal(run.state)
+            : [...this.recipients.values()].some((link) => link.runs.has(id));
+        }),
+      );
+      if (ids.size > 0) void this.readRecipientRuns(sessionKey, ids, this.generation);
+      return;
+    }
     if (clientRunId && clientRunId !== runId) {
       this.updateActivity(key, (activity) => registerRunAlias(activity, runId, clientRunId));
     }
