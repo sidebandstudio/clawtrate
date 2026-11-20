@@ -301,7 +301,7 @@
     const line =
       state ||
       (phone
-        ? `<p class="d-state" data-tone="ok">Connected while Clawtrate is open.<small>The gateway last saw it at 5:31 PM (connect).</small></p>`
+        ? `<p class="d-state" data-tone="ok" data-facts>Connected as a device for bots (read 5:31 PM).<small>This iPhone's node socket has a hello, and the gateway listed ${esc(PHONE)} (bots) as connected at 5:31 PM.</small></p>`
         : `<p class="d-state" data-tone="ok" data-facts>This host's node socket has a hello.<small>The gateway listed ${esc(MAC)} (bots) as connected at 5:31 PM.</small></p>`);
     return (
       `<div class="d-switch-row"><h4>Let bots use this ${what}</h4>${sw(true, go(phone ? "phone-stop" : "mac-stop"), `Let bots use this ${what}`)}` +
@@ -686,18 +686,29 @@
     "phone-on": () => settings({ title: "This iPhone", phone: true, body: onPage({ phone: true }) }),
     "phone-stop": () => settings({ title: "This iPhone", phone: true, body: onPage({ phone: true }) }) + stopDialog(true),
     "phone-stopped": () => settings({ title: "This iPhone", phone: true, body: offPage({ phone: true, after: stoppedNote(true) }) }),
-    "phone-back": () =>
-      settings({
+    // Back in the foreground: the gateway read again, and the records this iPhone kept. gap=1: the app was
+    // suspended and the socket closed unobserved, so whether anything was delivered meanwhile is unknown.
+    "phone-back": () => {
+      const gap = params.get("gap") === "1";
+      return settings({
         title: "This iPhone",
         phone: true,
         body:
-          records(true, [
-            { id: "b1", when: "5:41 PM", app: "Location", command: "location.get", named: named("listed"), did: "Didn't run it: Clawtrate wasn't open.", sent: "Sent <code>NOT_OPEN_ON_DEVICE</code>.", ack: "The gateway accepted it." },
-            { id: "b2", when: "5:39 PM", app: "Calendar", command: "calendar.events", named: named("none"), did: "Ran it, before Clawtrate left the foreground.", sent: "Sent the result.", ack: "Clawtrate couldn't confirm the gateway received it." },
-          ]) +
-          `<p class="d-event">Requests made while this iPhone wasn't connected never reached it.</p>` +
-          `<p class="d-state" data-tone="ok">Connected while Clawtrate is open.<small>The gateway last saw it at 5:02 PM (connect).</small></p>`,
-      }),
+          (gap
+            ? `<p class="d-event" data-back>While Clawtrate was suspended, whether requests were delivered to this iPhone, and when the gateway saw its socket close, isn't known. The records show only what this iPhone received.</p>` +
+              `<p class="d-state" data-tone="ok" data-facts>Connected as a device for bots (read 5:46 PM).<small>The gateway last saw the earlier connection at 5:12 PM (disconnect).</small></p>` +
+              records(true, [
+                { id: "b2", when: "5:39 PM", app: "Calendar", command: "calendar.events", named: named("none"), did: "Ran it, before Clawtrate left the foreground.", sent: "Sent the result.", ack: "The gateway accepted it." },
+              ])
+            : `<p class="d-state" data-tone="ok" data-facts>Connected as a device for bots (read 5:46 PM).<small>This iPhone's node socket has a hello, and the gateway listed ${esc(PHONE)} (bots) as connected at 5:46 PM.</small></p>` +
+              records(true, [
+                // The background refusal line, only for a call received while Clawtrate wasn't active.
+                { id: "b1", when: "5:41 PM", app: "Location", command: "location.get", named: named("listed"), did: "Didn't run it: Clawtrate wasn't active on this iPhone.", code: "NOT_OPEN_ON_DEVICE", sentence: `Clawtrate isn't open on ${PHONE}, so no one could be asked.`, ack: "The gateway accepted it." },
+                { id: "b2", when: "5:39 PM", app: "Calendar", command: "calendar.events", named: named("none"), did: "Ran it, before Clawtrate left the foreground.", sent: "Sent the result.", ack: "Clawtrate couldn't confirm the gateway received it." },
+              ])) +
+          proto(link("A request was refused while inactive", go("phone-back", { gap: null })), link("The app was suspended and its socket closed", go("phone-back", { gap: "1" }))),
+      });
+    },
   };
 
   function stopDialog(phone) {
@@ -1093,15 +1104,32 @@
 
   // Siri and Shortcuts ----------------------------------------------------------
 
-  const sys = (title, body, actions = "", after = "") =>
-    `<div class="d-sys" role="dialog" aria-modal="true" aria-labelledby="d-sys-title" data-d-modal><p class="d-sys-caption">Siri or Shortcuts (a stand-in for the phone's own panel)</p>` +
+  const sys = (title, body, actions = "", after = "", caption = "Siri or Shortcuts (a stand-in for the phone's own panel)") =>
+    `<div class="d-sys" role="dialog" aria-modal="true" aria-labelledby="d-sys-title" data-d-modal><p class="d-sys-caption">${caption}</p>` +
     `<h2 id="d-sys-title" tabindex="-1" data-d-title>${title}</h2>${body}${actions ? `<div class="d-actions">${actions}</div>` : ""}${after}</div>`;
   const msg = () => params.get("msg") || "Remind me to water the plants tonight.";
+  // Every system panel can be dismissed: Close (Escape too), and Tab stays inside.
+  const closeSys = () => link("Close", go("siri-closed"), { size: "md", attrs: "data-cancel data-close" });
+  const pendingProof = `<p class="d-proto"><span>Prototype:</span>Not a supported Send Message state until the confirmation is proven on a device.</p>`;
 
   Object.assign(SCREENS, {
-    "siri-locked": () => other() + sys("Clawtrate", `<p>Unlock your iPhone to use Clawtrate.</p>`, "", proto(link("Unlocked", go("siri-confirm")))),
-    "siri-list": () => other() + sys("Clawtrate", `<p>You have four bots: Juniper, Marlow, Otto and Pip.</p><ul><li>Juniper (the primary bot)</li><li>Marlow</li><li>Otto</li><li>Pip</li></ul>`),
-    "siri-list-fail": () => other() + sys("Clawtrate", `<p>Clawtrate couldn't reach the gateway.</p>`),
+    // The system's own unlock prompt, before any Clawtrate content: no bot name, message text, result or send.
+    // action=list|send: unlocking returns to the action the person chose.
+    "siri-locked": () => {
+      const action = params.get("action") === "list" ? "list" : "send";
+      return (
+        other() +
+        sys(
+          "Locked",
+          `<p data-unlock>The system asks for the iPhone to be unlocked. Clawtrate shows nothing until it is.</p>`,
+          act("Cancel", go("siri-closed", { action: null }), { size: "md", attrs: "data-cancel" }),
+          proto(link("Unlocked", go(action === "list" ? "siri-list" : "siri-confirm", { action: null }), { attrs: "data-unlocked" })),
+          "The system's unlock prompt (a stand-in)",
+        )
+      );
+    },
+    "siri-list": () => other() + sys("Clawtrate", `<p>You have four bots: Juniper, Marlow, Otto and Pip.</p><ul><li>Juniper (the primary bot)</li><li>Marlow</li><li>Otto</li><li>Pip</li></ul>`, closeSys()),
+    "siri-list-fail": () => other() + sys("Clawtrate", `<p>Clawtrate couldn't reach the gateway.</p>`, closeSys()),
     "siri-confirm": () =>
       other() +
       sys(
@@ -1111,10 +1139,12 @@
         proto(link("Once the confirmation is proven on a device: Send", down ? go("siri-fail") : go("siri-sent", { said: `Sent to ${BOTS[toBot()]}` }), { attrs: "data-siri-send" })),
       ),
     "siri-handoff": () => SCREENS["share-draft"](),
-    "siri-sent": () => other() + sys("Clawtrate", `<p>Sent to ${BOTS[toBot()]}.</p>`),
+    // Not supported states until the confirmation is proven on a device: drawn for the build after that proof.
+    "siri-sent": () => other() + sys("Clawtrate", `<p>Sent to ${BOTS[toBot()]}.</p>`, closeSys(), pendingProof),
     "siri-fail": () =>
-      other() + sys("Clawtrate", `<p>Clawtrate couldn't send this: it couldn't reach the gateway.</p>`, link("Open in Clawtrate", go("share-draft", { from: "siri" }), { variant: "primary", size: "md" })),
-    "siri-cancelled": () => other() + sys("Clawtrate", `<p>Nothing was sent.</p>`),
+      other() + sys("Clawtrate", `<p>Clawtrate couldn't send this: it couldn't reach the gateway.</p>`, link("Open in Clawtrate", go("share-draft", { from: "siri" }), { variant: "primary", size: "md" }) + closeSys(), pendingProof),
+    "siri-cancelled": () => other() + sys("Clawtrate", `<p>Nothing was sent.</p>`, closeSys()),
+    "siri-closed": () => other() + `<p class="d-event" role="status" data-closed>Closed. Nothing was sent.</p>`,
   });
 
   // Mount -----------------------------------------------------------------------

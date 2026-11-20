@@ -513,8 +513,14 @@ await walk("Remove Messages from the allowlist: the words, each read apart, this
 p = await open("screen=mac-messages-on&own=listed&access=write");
 check("below admin: no Remove from the allowlist", (await p.locator("[data-remove]").count()) === 0);
 await p.close();
-p = await open("screen=phone-back", phone);
-check("back from the background: records of what was refused and run, and what never arrived", !missing(await text(p), ["Didn't run it: Clawtrate wasn't open.", "NOT_OPEN_ON_DEVICE", "Ran it, before Clawtrate left the foreground.", "never reached it"]));
+await walk("back after a refusal received while inactive, then after an unobserved disconnection", "screen=phone-back", [
+  [none, null, ["Connected as a device for bots (read 5:46 PM).", "Didn't run it: Clawtrate wasn't active on this iPhone.", "NOT_OPEN_ON_DEVICE", "Ran it, before Clawtrate left the foreground."]],
+  [async (p) => check("after a received refusal: no claim about what never arrived", !/never reached|isn't known/.test(await text(p))), null],
+  [link("The app was suspended and its socket closed"), "phone-back", ["While Clawtrate was suspended, whether requests were delivered to this iPhone, and when the gateway saw its socket close, isn't known.", "The gateway last saw the earlier connection at 5:12 PM (disconnect)."]],
+  [async (p) => check("after an unobserved disconnection: only what this iPhone received is recorded, and no background refusal is invented", (await p.locator(".d-record").count()) === 1 && !(await text(p)).includes("wasn't active") && !/never reached/.test(await text(p))), null],
+], phone);
+p = await open("screen=phone-on", phone);
+check("This iPhone, on: connected only with the local hello and a positive read, each stated", (await text(p, ".d-state")).includes("Connected as a device for bots (read 5:31 PM).") && (await text(p, ".d-state")).includes("This iPhone's node socket has a hello, and the gateway listed iPhone (bots) as connected at 5:31 PM.") && !(await text(p)).includes("Connected while Clawtrate is open"));
 await p.close();
 
 // 7. A positive read-back for each stage (other devices) -------------------------------------
@@ -680,9 +686,32 @@ await p.close();
 
 // 9. Siri on a locked phone, and the handoff until the confirmation is proven ----------------
 
-p = await open("screen=siri-locked", phone);
-check("locked: asks to unlock and shows no bot name or text", (await text(p)).includes("Unlock your iPhone to use Clawtrate.") && !/Juniper|Marlow|Otto|Pip|water the plants/.test(await text(p, ".d-sys")));
+for (const [action, after, words] of [
+  ["list", "siri-list", "You have four bots"],
+  ["send", "siri-confirm", "Send to Juniper?"],
+]) {
+  await walk(`locked, ${action === "list" ? "List Bots" : "Send Message"}: the system's prompt with no Clawtrate content, then unlock returns to that action`, `screen=siri-locked&action=${action}`, [
+    [async (p) => check(`locked ${action}: no bot name, message text or result before unlock`, (await text(p, ".d-sys-caption")).includes("The system's unlock prompt") && !/Juniper|Marlow|Otto|Pip|water the plants|four bots|Sent/.test(await text(p, ".d-sys")) && (await p.locator(".d-sys [data-cancel]").count()) === 1), null],
+    [click("[data-unlocked]"), after, [words]],
+  ], phone);
+}
+await walk("locked: Cancel closes and sends nothing", "screen=siri-locked&action=send", [[click("[data-cancel]"), "siri-closed", ["Closed. Nothing was sent."]]], phone);
+for (const screen of ["siri-locked", "siri-list", "siri-list-fail", "siri-confirm", "siri-sent", "siri-fail", "siri-cancelled"]) {
+  p = await open(`screen=${screen}`, phone);
+  check(`${screen}: the system panel has Close or Cancel`, (await p.locator(".d-sys [data-cancel]").count()) === 1);
+  await p.close();
+}
+p = await open("screen=siri-list", phone);
+for (let i = 0; i < 6; i += 1) await p.keyboard.press("Tab");
+check("List Bots' result keeps Tab inside", await p.evaluate(() => !!document.activeElement.closest(".d-sys")));
+await p.keyboard.press("Escape");
+check("List Bots' result is dismissed by Escape, sending nothing", (await at(p, "siri-closed")) && (await text(p)).includes("Nothing was sent."));
 await p.close();
+for (const screen of ["siri-sent", "siri-fail"]) {
+  p = await open(`screen=${screen}`, phone);
+  check(`${screen}: marked as not a supported Send Message state before the device proof`, (await text(p, ".d-sys")).includes("Not a supported Send Message state until the confirmation is proven on a device."));
+  await p.close();
+}
 await walk("Send Message: the bot and the exact text first; the shipped path hands off a draft, unsent", "screen=siri-confirm&msg=Exactly%20these%20words.", [
   [none, null, ["Send to Juniper?", "Exactly these words."]],
   [click("[data-siri-handoff]"), "share-draft", ["From Send Message. Nothing has been sent."]],
@@ -748,12 +777,12 @@ const screens = await p.evaluate(() => window.CT.deviceScreens);
 await p.close();
 check("the page lists its states", screens.length >= 45, String(screens.length));
 const banned = /\b(safe|secure|securely|private|protected|Resumed)\b|your own chat|own chats|Otto wants|Otto asked|was told/i;
-for (const [label, width] of [["1440", 1440], ["1100", 1100], ["390", 390]]) {
+for (const [label, width] of [["1440", 1440], ["1100", 1100], ["800", 800], ["390", 390]]) {
   const bad = [];
   const words = [];
   const errors = [];
   for (const screen of screens) {
-    for (const theme of label === "1100" ? ["light"] : ["light", "dark"]) {
+    for (const theme of ["light", "dark"]) {
       const q = await open(`screen=${screen}${label === "390" ? "&width=phone" : "&width=full"}`, { width, height: 844, theme });
       if (!(await q.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1))) bad.push(`${screen}/${theme}`);
       if (theme === "light" && banned.test(await text(q))) words.push(screen);
