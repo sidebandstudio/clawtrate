@@ -301,39 +301,55 @@ check("S2 below admin the editor asks for admin by its bar", (await dlg(p)).incl
 await p.close();
 
 // A picture at an outside address (section 4) -------------------------------------------------------
+// The avatar's state, from a locator that must find one: an empty list fails instead of passing.
 const photoOn = (p, sel) => p.evaluate((x) => [...document.querySelectorAll(x)].map((el) => el.dataset.photo === "true"), sel);
+const drawn = async (p, sel) => {
+  const states = await photoOn(p, sel);
+  return states.length > 0 && states.every((x) => !x);
+};
+const NOLOAD = "Marlow's picture is at https://pictures.example/marlow.png. This app doesn't load pictures from other addresses.";
 p = await open(`bot=marlow&${settings}&outside=1`);
 t = await hero(p);
-check("S4 an https picture: the character is drawn, with the full address and the choice", t.includes("Marlow's picture is at https://pictures.example/marlow.png. Loading it lets whoever runs that address see this device's network address and the time of each request.") && t.includes("Load picture"));
-check("S4 ... nothing outside is loaded before the choice: hero and rail draw the character", (await photoOn(p, '#work-hero .avatar[data-bot="marlow"]')).every((x) => !x) && (await photoOn(p, '#bot-list .avatar[data-bot="marlow"]')).every((x) => !x));
+check("S4 the desktop before both checks pass: the character, the address as text, and no choice", t.includes(NOLOAD) && !t.includes("Load picture") && (await drawn(p, '#work-hero .avatar[data-bot="marlow"]')) && (await drawn(p, '#bot-list .avatar[data-bot="marlow"]')) && !(await p.$('#work-hero .lc-outside a, #work-hero [data-lc="allow-picture"]')));
+await p.close();
+p = await open(`bot=marlow&${settings}&outside=1&pictures=checked`);
+t = await hero(p);
+check("S4 the desktop with both checks passed: the character, with the full address and the choice", t.includes("Marlow's picture is at https://pictures.example/marlow.png. Loading it lets whoever runs that address see this device's network address and the time of each request.") && t.includes("Load picture"));
+check("S4 ... nothing outside is loaded before the choice: hero and rail draw the character", (await drawn(p, '#work-hero .avatar[data-bot="marlow"]')) && (await drawn(p, '#bot-list .avatar[data-bot="marlow"]')));
 await clickText(p, "#work-hero", "Load picture");
 await waitText(p, "#b-announce", "Loading Marlow's picture");
-check("S4 after the choice the picture is drawn in the hero and the rail, and the line goes", (await photoOn(p, '#work-hero .avatar[data-bot="marlow"]')).every((x) => x) && (await photoOn(p, '#bot-list .avatar[data-bot="marlow"]')).every((x) => x) && !(await hero(p)).includes("Load picture") && (await announced(p)) === "Loading Marlow's picture");
+const shownAll = async (sel) => { const s = await photoOn(p, sel); return s.length > 0 && s.every((x) => x); };
+check("S4 after the choice the picture is drawn in the hero and the rail, and the line goes", (await shownAll('#work-hero .avatar[data-bot="marlow"]')) && (await shownAll('#bot-list .avatar[data-bot="marlow"]')) && !(await hero(p)).includes("Load picture") && (await announced(p)) === "Loading Marlow's picture");
 await p.close();
-p = await open(`bot=marlow&${settings}&outside=1&lc=choose`);
-check("S4 the chooser draws the character for an outside picture", (await photoOn(p, '#lc-dialog .avatar[data-bot="marlow"]')).every((x) => !x));
+p = await open(`bot=marlow&${settings}&outside=1&pictures=checked&lc=choose`);
+check("S4 the chooser draws the character for an outside picture", await drawn(p, '#lc-dialog .avatar[data-bot="marlow"]'));
 await p.close();
-for (const [where, q, vp] of [["the web preview", "host=web", undefined], ["the phone", "width=phone", { width: 390, height: 844 }]]) {
-  p = await open(`bot=marlow&${settings}&outside=1&${q}`, vp);
+for (const platform of ["web", "iphone"]) {
+  for (const [width, vp] of [["1440", undefined], ["390", { width: 390, height: 844 }]]) {
+    p = await open(`bot=marlow&${settings}&outside=1&pictures=checked&platform=${platform}${width === "390" ? "&width=phone&view=detail" : ""}`, vp);
+    t = await hero(p);
+    check(`S4 ${platform} at ${width} never loads an outside picture, and says so without a choice`, t.includes(NOLOAD) && !t.includes("Load picture") && (await drawn(p, '#work-hero .avatar[data-bot="marlow"]')));
+    await p.close();
+  }
+}
+for (const kind of ["http", "scheme", "baddata"]) {
+  p = await open(`bot=marlow&${settings}&outside=${kind}&pictures=checked`);
   t = await hero(p);
-  check(`S4 ${where} never loads an outside picture, and says so without a choice`, t.includes("Marlow's picture is at https://pictures.example/marlow.png. This app doesn't load pictures from other addresses.") && !t.includes("Load picture") && (await photoOn(p, '#work-hero .avatar[data-bot="marlow"]')).every((x) => !x));
+  check(`S4 an address the rule refuses (${kind}): plain text, no fetch control`, t.includes("Clawtrate can't load this picture address.") && !t.includes("Load picture") && !(await p.$('#work-hero .lc-outside a, #work-hero .lc-outside button')) && (await drawn(p, '#work-hero .avatar[data-bot="marlow"]')));
   await p.close();
 }
-p = await open(`bot=marlow&${settings}&outside=http`);
-t = await hero(p);
-check("S4 an http picture is never loaded, and says so", t.includes("Marlow's picture is at http://pictures.example/marlow.png, an http address, which Clawtrate doesn't load.") && !t.includes("Load picture"));
-await p.close();
 p = await open(`bot=marlow&${settings}&outside=1&lc=export&delbot=marlow`);
 await waitText(p, "#lc-dialog", "The file will hold exactly this");
 check("S9 an outside picture is left out of a file", (await dlg(p)).includes("PictureLeft out: it's an outside address"));
 await p.close();
 for (const [tool, words] of [
   ["unlisted", "The gateway doesn't list an image tool for Juniper's task."],
-  ["unavailable", "The gateway lists its image tool for Juniper as unavailable: it has nothing to make pictures with."],
-  ["unreadable", "Clawtrate couldn't read which tools the gateway offers Juniper: the gateway didn't answer."],
+  ["unavailable", "The gateway lists its image tool for Juniper as unavailable."],
+  ["unreadable", "Clawtrate couldn't read which tools the gateway offers Juniper."],
 ]) {
   p = await open(`bot=juniper&${settings}&lc=picture&ptab=generate&imagetool=${tool}`);
-  check(`S4 Generate when the tool is ${tool}`, (await dlg(p)).includes(words) && (await p.evaluate(() => [...document.querySelectorAll("#lc-dialog button")].find((x) => x.textContent === "Generate" && !x.dataset.lcTab).disabled)));
+  t = await dlg(p);
+  check(`S4 Generate when the tool is ${tool}`, t.includes(words) && !t.includes("nothing to make pictures with") && !t.includes("didn't answer") && !t.includes("Try again") && (await p.evaluate(() => [...document.querySelectorAll("#lc-dialog button")].find((x) => x.textContent === "Generate" && !x.dataset.lcTab).disabled)));
   await p.close();
 }
 

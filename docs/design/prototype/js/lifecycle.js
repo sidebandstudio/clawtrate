@@ -11,6 +11,8 @@
 //   primfail=1          saving the primary bot fails
 //   ptab=bot|generate|upload   the picture editor's tab
 //   imagetool=1|unknown|unlisted|unavailable|unreadable  offered; no task to ask about; not listed; listed as unavailable; the inventory unreadable
+//   platform=desktop|web|iphone   where the app runs (apart from the frame's width); pictures=checked: the desktop's two checks passed
+//   outside=1|http|scheme|baddata Marlow's picture is at an https address, or one the rule refuses
 //   outside=1|http      Marlow's picture is at an https (or http) address
 //   upload=crop|toolarge|notimage   the Upload tab with a file chosen
 //   picfail=1|dropped   the gateway refuses the picture, or takes it and its list shows none
@@ -64,9 +66,14 @@
   const OUTSIDE = {};
   if (p("outside") === "1") OUTSIDE.marlow = "https://pictures.example/marlow.png";
   if (p("outside") === "http") OUTSIDE.marlow = "http://pictures.example/marlow.png";
+  if (p("outside") === "scheme") OUTSIDE.marlow = "ftp://pictures.example/marlow.png";
+  if (p("outside") === "baddata") OUTSIDE.marlow = "data:image/svg+xml;base64,PHN2Zy8+";
   L.outsidePicture = (id) => OUTSIDE[id] || null;
   // Only the desktop can hold the choice (decisions.md): the web preview and the iPhone never load one.
-  const loadsOutside = () => !(p("host") === "web" || p("width") === "phone" || matchMedia("(max-width: 687px)").matches);
+  // The platform is its own fixture, apart from the frame's width: desktop (the default), web or iphone.
+  // Only the desktop can hold the choice, and only once both of its checks pass (pictures=checked).
+  const PLATFORM = p("platform") || "desktop";
+  const loadsOutside = () => PLATFORM === "desktop" && p("pictures") === "checked";
   L.allowed = {}; // bot id -> the exact address allowed on this device
   const pictureShown = (id) => (OUTSIDE[id] ? L.allowed[id] === OUTSIDE[id] : false);
   // Draw an allowed outside picture wherever the bot's avatar appears; the rest stay the character.
@@ -330,13 +337,13 @@
       const who = esc(nameOf(id));
       const g = {
         excluded: ["Image generation isn't available on this gateway", `The gateway doesn't offer ${who} its image tool: “Denied by tools.deny”, in the gateway's own words.`],
-        unavailable: ["Image generation isn't available on this gateway", `The gateway lists its image tool for ${who} as unavailable: it has nothing to make pictures with.`],
+        unavailable: ["Image generation isn't available on this gateway", `The gateway lists its image tool for ${who} as unavailable.`],
         unlisted: ["Image generation isn't available on this gateway", `The gateway doesn't list an image tool for ${who}'s task.`],
         unknown: ["Not known yet", `The gateway says which tools ${who} is offered for one of its tasks, and ${who} has none yet. Start a task, then look here again.`],
-        unreadable: ["Couldn't read the tools", `Clawtrate couldn't read which tools the gateway offers ${who}: the gateway didn't answer.`],
+        unreadable: ["Couldn't read the tools", `Clawtrate couldn't read which tools the gateway offers ${who}.`],
         offered: ["Generating a picture isn't available in this version", `The gateway lists an image tool for ${who}, which doesn't say a provider is ready, and a picture would come back in ${who}'s task, not to this screen. You can ask ${who} for a picture in a task, then upload it.`],
       }[{ 1: "offered", unknown: "unknown", unlisted: "unlisted", unreadable: "unreadable", unavailable: "unavailable" }[p("imagetool")] || "excluded"];
-      body = `<div class="b-result"><span class="empty-mark">${icon("image")}</span><h3>${g[0]}</h3><p>${g[1]}</p></div>` + (p("imagetool") === "unreadable" ? `<div class="b-actions lc-center-actions">${button("Try again", 'data-lc="tools-reread" data-size="sm"')}</div>` : "");
+      body = `<div class="b-result"><span class="empty-mark">${icon("image")}</span><h3>${g[0]}</h3><p>${g[1]}</p></div>`;
       foot = button("Generate", 'data-size="lg" disabled', "primary");
     } else {
       const up = d.upload;
@@ -422,7 +429,7 @@
           ? loadsOutside()
             ? `<div class="lc-outside" data-lc-outside><p>${esc(b.name)}'s picture is at <span class="mono lc-address">${esc(OUTSIDE[id])}</span>. Loading it lets whoever runs that address see this device's network address and the time of each request.</p>${button("Load picture", 'data-lc="allow-picture" data-size="sm"')}</div>`
             : `<div class="lc-outside" data-lc-outside><p>${esc(b.name)}'s picture is at <span class="mono lc-address">${esc(OUTSIDE[id])}</span>. This app doesn't load pictures from other addresses.</p></div>`
-          : `<div class="lc-outside" data-lc-outside><p>${esc(b.name)}'s picture is at <span class="mono lc-address">${esc(OUTSIDE[id])}</span>, an http address, which Clawtrate doesn't load.</p></div>`
+          : `<div class="lc-outside" data-lc-outside><p>Clawtrate can't load this picture address.</p></div>`
         : "") +
       (E.status === "saving" ? `<p class="b-hint lc-hero-line" role="status">Saving…</p>` : "") +
       (E.error ? `<p class="b-hint lc-hero-line" data-tone="danger" role="alert">${E.error}</p>` : "");
@@ -1504,8 +1511,6 @@
         return savePrimary(L.dialog.pick || primaryId());
       case "open-picture":
         return openDialog("picture", el, { bot: app.model.selectedBot, tab: p("ptab") || "bot", upload: p("upload") || null });
-      case "tools-reread":
-        return announce("Reading the tools again");
       case "browse":
         L.dialog.upload = "crop";
         paint();
