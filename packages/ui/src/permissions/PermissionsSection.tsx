@@ -7,7 +7,6 @@
 // "Revoked" or "Removed" is said only after a read back shows it.
 
 import {
-  MAX_GRANTS_LISTED,
   type ActivityCause,
   type ActivityPage,
   type ActivityRow,
@@ -738,9 +737,7 @@ function SavedPart({
             </p>
           )}
           {grants.status === "ready" && grants.more && (
-            <p className="b-hint">
-              The gateway lists more grants than the {MAX_GRANTS_LISTED} shown here.
-            </p>
+            <p className="b-hint">The gateway lists more grants than are shown here.</p>
           )}
           <h4 className="b-group">The gateway machine's allowlist</h4>
           {allowlist.status === "failed" ? (

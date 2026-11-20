@@ -1140,6 +1140,72 @@ describe("F-178 F-324: every answer fits its result frame once serialized", () =
     expect(JSON.stringify(removed).length).toBeLessThan(FRAME);
   }, 60_000);
 
+  it("a Saved approvals answer with both lists at their longest fits the host's frame, rows leaving from the end and counted", async () => {
+    const word = (size: number) => '\\"'.repeat(size);
+    // Distinct ids of the longest kept escaped length (511 of 512), and a bot id of 128.
+    const longId = (i: number) => String(i).padStart(3, "0") + "\\".repeat(254);
+    const bot = "a".repeat(MAX_PERMISSION_NAME);
+    const grants = Array.from({ length: MAX_GRANTS_LISTED }, (_, i) =>
+      grant({
+        grantId: longId(i),
+        cronJobId: longId(i),
+        agentId: bot,
+        cronJobName: word(32),
+        command: word(128),
+        cwd: word(128),
+        expiresAtMs: 1,
+        revokedAtMs: 1,
+        lastUsedAtMs: 1,
+        useCount: 10,
+      }),
+    );
+    const entries = Array.from({ length: MAX_ALLOWLIST_LISTED }, (_, i) => ({
+      id: longId(i),
+      pattern: word(128),
+      argPattern: word(64),
+      commandText: word(64),
+      lastUsedAt: 1,
+    }));
+    const read = (grantList: unknown[], entryList: unknown[]) =>
+      readSavedApprovals(
+        fake({
+          "exec.approval.grants.list": () => ({ grants: grantList }),
+          "exec.approvals.get": () => ({
+            path: "p",
+            exists: true,
+            hash: "revision",
+            file: { version: 1, agents: { [bot]: { allowlist: entryList } } },
+          }),
+        }).ctx,
+        { canApprove: true, canAdmin: true },
+      );
+    const value = await read(grants, entries);
+    if (value.grants.status !== "ready" || value.allowlist.status !== "ready")
+      throw new Error("not ready");
+    expect(JSON.stringify({ type: "result", id: 1, ok: true, value }).length).toBeLessThanOrEqual(
+      MAX_RESULT_CHARS,
+    );
+    // Every entry is shown or counted, and what is shown is whole and in the file's order.
+    expect(value.allowlist.omitted).toBeGreaterThan(0);
+    expect(value.allowlist.items.length + value.allowlist.omitted).toBe(MAX_ALLOWLIST_LISTED);
+    value.allowlist.items.forEach((each, i) => expect(each.entryId).toBe(longId(i)));
+    value.grants.items.forEach((each, i) => expect(each.grantId).toBe(longId(i)));
+    if (value.grants.items.length < MAX_GRANTS_LISTED) expect(value.grants.more).toBe(true);
+    // The revision and digest stay the whole file's.
+    expect(value.allowlist).toMatchObject({ hash: "revision" });
+    // With the UUIDs the gateway makes, every one of the 140 rows is shown.
+    const uuid = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
+    const normal = await read(
+      grants.map((each, i) => ({ ...each, grantId: uuid(i), cronJobId: uuid(i) })),
+      entries.map((each, i) => ({ ...each, id: uuid(i) })),
+    );
+    if (normal.grants.status !== "ready" || normal.allowlist.status !== "ready")
+      throw new Error("not ready");
+    expect(normal.grants.items).toHaveLength(MAX_GRANTS_LISTED);
+    expect(normal.allowlist.items).toHaveLength(MAX_ALLOWLIST_LISTED);
+    expect(normal.allowlist.omitted).toBe(0);
+  }, 60_000);
+
   it("an Activity page, joined to records and rules full of escapes", async () => {
     const page = await readActivity(
       fake({

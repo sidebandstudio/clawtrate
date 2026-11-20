@@ -122,7 +122,7 @@ const SCENES: Scene[] = [
     name: "F-178-saved-more",
     query: `${ADMIN}&saved=more`,
     ready: permissions("Saved approvals", (page) =>
-      expect(page.getByText(/lists more grants than the 80 shown/)).toBeVisible(),
+      expect(page.getByText("The gateway lists more grants than are shown here.")).toBeVisible(),
     ),
   },
   {

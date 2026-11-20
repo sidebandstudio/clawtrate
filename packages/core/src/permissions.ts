@@ -438,6 +438,38 @@ export async function readAllowlist(
   }
 }
 
+/**
+ * The most JSON characters a Saved approvals answer may take: room under the web
+ * host's 262,144-character result frame for the envelope it is sent in.
+ */
+export const MAX_SAVED_APPROVALS_CHARS = 250_000;
+
+/**
+ * Fit the answer to `MAX_SAVED_APPROVALS_CHARS` as serialized: entries leave from
+ * the end of the allowlist first, each counted in `omitted`, then grants from the
+ * end, with `more` set. Only the rows shown change: the revision and digest stay
+ * those of the whole file.
+ */
+export function fitSavedApprovals(value: SavedApprovals): SavedApprovals {
+  const size = (answer: SavedApprovals) => JSON.stringify(answer).length;
+  if (size(value) <= MAX_SAVED_APPROVALS_CHARS) return value;
+  let { grants, allowlist } = value;
+  while (allowlist.status === "ready" && allowlist.items.length > 0) {
+    allowlist = {
+      ...allowlist,
+      items: allowlist.items.slice(0, -1),
+      omitted: allowlist.omitted + 1,
+    };
+    if (size({ ...value, grants, allowlist }) <= MAX_SAVED_APPROVALS_CHARS)
+      return { ...value, grants, allowlist };
+  }
+  while (grants.status === "ready" && grants.items.length > 0) {
+    grants = { ...grants, items: grants.items.slice(0, -1), more: true };
+    if (size({ ...value, grants, allowlist }) <= MAX_SAVED_APPROVALS_CHARS) break;
+  }
+  return { ...value, grants, allowlist };
+}
+
 export async function readSavedApprovals(
   ctx: PermissionsContext,
   access: { canApprove: boolean; canAdmin: boolean },
@@ -446,7 +478,7 @@ export async function readSavedApprovals(
     readGrants(ctx, access.canApprove),
     readAllowlist(ctx, access.canAdmin),
   ]);
-  return { readAt: ctx.now(), grants, allowlist };
+  return fitSavedApprovals({ readAt: ctx.now(), grants, allowlist });
 }
 
 /**
