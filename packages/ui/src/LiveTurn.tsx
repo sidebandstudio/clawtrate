@@ -343,6 +343,9 @@ export function RunEnding({
       </button>
     );
   }
+  // A stop at the turn limit stops the other bots' runs it started too, as Stop does (F-296).
+  const also =
+    ending.kind === "turn-limit" ? stoppedWithLines(run, (key) => botOfSession(bots, key)) : [];
   const text = messageTextOf(run, transcript);
   const requestId = run.requestId ?? null;
   const raw = run.error?.raw;
@@ -383,6 +386,18 @@ export function RunEnding({
         <CloseIcon />
       </button>
       <p className="turn-error-reason">{reason}</p>
+      {ending.kind === "turn-limit" && (run.omittedTools ?? 0) > 0 && (
+        <p className="turn-error-reason">
+          Some actions are no longer shown. Other bots' work may continue.
+        </p>
+      )}
+      {also.length > 0 && (
+        <ul className="turn-note-list turn-error-reason" data-testid="stopped-with">
+          {also.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+      )}
       {retryError && (
         <p className="turn-error-reason" data-testid="retry-error">
           Couldn't send it again: {retryError}

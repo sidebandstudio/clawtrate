@@ -1487,6 +1487,55 @@ test.describe("errors and resync", () => {
     await expect(card.getByTestId("run-raw")).toContainText('"errorKind": "provider"');
   });
 
+  test("F-100 F-296: a run stopped at its turn limit says what happened to the other bots' runs it started", async ({
+    page,
+  }) => {
+    await open(page, "run-turn-limit");
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            setState: (f: (s: ClawtrateState) => ClawtrateState) => void;
+          };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => {
+        const key = "agent:otto:disk-space";
+        const transcript = state.transcripts[key]!;
+        return {
+          ...state,
+          transcripts: {
+            ...state.transcripts,
+            [key]: {
+              ...transcript,
+              runs: transcript.runs.map((run) => ({
+                ...run,
+                omittedTools: 2,
+                stoppedWith: {
+                  helpers: 0,
+                  bots: [],
+                  uncertain: [],
+                  refused: ["agent:marlow:main"],
+                  unanswered: [],
+                  omitted: 0,
+                  recipientsAsked: true,
+                },
+              })),
+            },
+          },
+        };
+      });
+    });
+    const card = page.getByTestId("turn-error");
+    await expect(card).toContainText("turn reached its");
+    await expect(card.getByTestId("stopped-with")).toHaveText(
+      "The gateway refused to stop Marlow's run for this message.",
+    );
+    await expect(card).toContainText(
+      "Some actions are no longer shown. Other bots' work may continue.",
+    );
+  });
+
   test("F-102: Try again sends the failed turn's message again with its files", async ({
     page,
   }) => {
