@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { agentEvent, KEY, openTask } from "./client-harness.ts";
 import { GatewayError, sleep, until } from "./fake-gateway.ts";
+import { newRun, type Step, timeoutsInARow } from "../src/runs.ts";
 
 type Opened = Awaited<ReturnType<typeof openTask>>;
 
@@ -107,6 +108,30 @@ describe("tool calls that keep timing out (F-101)", () => {
     expect(task.gateway.calls("chat.abort")).toEqual([]);
     expect(task.transcript().runs[0]!.state).toBe("running");
     task.client.stop();
+  });
+
+  it("F-101: a call still waiting for its approval neither counts nor breaks the count", () => {
+    const tool = (id: string, status: Step["status"], at: number, details?: object) =>
+      ({
+        id: `tool:${id}`,
+        kind: "tool",
+        status,
+        startedAt: at,
+        endedAt: status === "waiting" ? null : at + 5,
+        details: details ?? null,
+      }) as unknown as Step;
+    const run = newRun("run-x", { state: "running", origin: "gateway" }, 0);
+    // c4 asked for approval after c2 timed out, and waits while c3 times out too.
+    run.steps = [
+      tool("c1", "failed", 0, TIMED_OUT),
+      tool("c2", "failed", 10, TIMED_OUT),
+      tool("c4", "waiting", 17),
+      tool("c3", "failed", 15, TIMED_OUT),
+    ];
+    expect(timeoutsInARow(run)).toBe(3);
+    // A call that finished in time still breaks it.
+    run.steps = [...run.steps.slice(0, 2), tool("c4", "done", 12, FINISHED), run.steps[3]!];
+    expect(timeoutsInARow(run)).toBe(1);
   });
 });
 

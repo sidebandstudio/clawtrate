@@ -273,11 +273,12 @@ export function timedOut(step: Step): boolean {
 
 /**
  * How many of a run's latest finished tool calls in a row timed out: counted back from the
- * last one to finish, up to a call that finished in time (F-101).
+ * last one to finish, up to a call that finished in time (F-101). A call still running or
+ * waiting for its approval has not finished, so it neither counts nor breaks the count.
  */
 export function timeoutsInARow(run: Run): number {
   const finished = run.steps
-    .filter((step) => step.kind === "tool" && step.status !== "running")
+    .filter((step) => step.kind === "tool" && !isOpenStep(step))
     .sort((a, b) => (a.endedAt ?? a.startedAt ?? 0) - (b.endedAt ?? b.startedAt ?? 0));
   let count = 0;
   for (let i = finished.length - 1; i >= 0 && timedOut(finished[i]!); i -= 1) count += 1;
