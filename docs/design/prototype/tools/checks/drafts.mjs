@@ -65,7 +65,8 @@ const states = [
   ["view=draft&d=expired", ["Expired at 5:52 PM without an answer. Nothing was sent."]],
   ["view=draft&d=closed", ["The run ended before this was answered. Nothing was sent."]],
   ["view=draft&d=cancelled", ["You stopped the run before answering. Nothing was sent."]],
-  ["view=draft&d=runended", ["Otto's run ended before this was sent. Nothing was sent from this draft."]],
+  ["view=draft&d=runended", ["Otto's run ended. Couldn't confirm whether this was sent."]],
+  ["view=draft&d=restartunknown", ["The gateway restarted. Couldn't confirm whether this was sent."]],
   ["view=draft&d=filechanged", ["Not sent", "report.txt changed after Otto asked (28 bytes then, 44 now), so nothing was sent. Otto was told why. If it asks again, the new draft appears below."]],
   ["view=draft&d=unchecked", ["Couldn't check report.txt: it isn't in Otto's workspace. If it changes before it's sent, Clawtrate can't tell.", "Send email"]],
   ["view=draft&d=norecord", ["Couldn't read this draft. The gateway still lists it as waiting.", "Check again", "Discard"]],
@@ -272,7 +273,18 @@ await p.close();
 (await walk("Edit → second hold → Discard", "view=draft", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1700), tap('[data-d="discard"]')], ["Discarded at 5:44 PM. Nothing was sent. Your edit wasn't used."])).close();
 (await walk("Edit → second hold expires", "view=draft", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1700), tap('[data-proto-event="expire"]')], ["Expired at 5:54 PM without an answer. Nothing was sent. Your edit wasn't used."])).close();
 (await walk("Edit → the gateway restarts", "view=draft", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1700), tap('[data-proto-event="restart"]')], ["The gateway restarted before this was sent. Nothing was sent, and your edit wasn't used."])).close();
-(await walk("Edit → the run is stopped", "view=draft", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1700), tap('[data-proto-event="stop"]')], ["Otto's run ended before this was sent. Nothing was sent from this draft. Your edit wasn't used."])).close();
+(await walk("Edit → the run is stopped", "view=draft", [tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1700), tap('[data-proto-event="stop"]')], ["Otto's run ended. Couldn't confirm whether this was sent."])).close();
+(await walk("Run ends with no recorded outcome → couldn't confirm", "view=draft", [tap('[data-proto-event="close"]')], ["Otto's run ended. Couldn't confirm whether this was sent."])).close();
+(await walk("A bare restart → couldn't confirm", "view=draft", [tap('[data-proto-event="restart"]')], ["The gateway restarted. Couldn't confirm whether this was sent."])).close();
+for (const ev of ["close", "stop", "restart"]) {
+  p = await open("view=draft", { chrome: "1" });
+  await click(p, '[data-d="send"]');
+  await waitText(p, ["Answered"]);
+  await click(p, `[data-proto-event="${ev}"]`);
+  const t = await text(p);
+  check(`a confirmed send keeps Sent after the bar's ${ev} event`, t.includes("Answered") && t.includes("Sent from otto@example.com") && !t.includes("Couldn't confirm whether this was sent"));
+  await p.close();
+}
 (await walk("Edit, a file changed before the second hold", "view=draft", [tap('[data-proto-event="file"]'), tap('[data-d="edit"]'), tap('[data-d="edit-send"]'), pause(1200)], ["report.txt changed after Otto asked", "Your edit wasn't used."])).close();
 (await walk("Edited elsewhere → Send → the second hold → Send", "view=draft&d=elsewhere", [tap('[data-d="send"]'), pause(1300), tap('[data-d="send"]')], ["You edited this before it was sent."])).close();
 (await walk("Disable drafts → off, this draft still waits", "view=draft", [tap('[data-d="disable"]'), tap('[data-d="disable-yes"]')], ["Drafts off for Otto. This draft is still waiting for you."])).close();
@@ -417,7 +429,7 @@ p = await b.newPage();
 await p.goto(pageUrl("gallery.html") + "?chrome=1&section=drafts");
 await p.waitForTimeout(100);
 const links = await p.evaluate(() => [...document.querySelectorAll('#drafts a[href^="drafts.html"]')].map((a) => a.getAttribute("href")));
-check("gallery: the Drafts and the Vault section links to every state", links.length === 90, String(links.length));
+check("gallery: the Drafts and the Vault section links to every state", links.length === 91, String(links.length));
 check("gallery: the section says draft examples use a proposed plugin", (await text(p, "#drafts")).includes(PROPOSED));
 check("the prototype bar links to the drafts page", await p.evaluate(() => [...document.querySelectorAll("#proto-bar a")].some((a) => a.getAttribute("href") === "drafts.html")));
 await p.close();

@@ -409,7 +409,8 @@
     if (st === "editexpired") return resolvedCard(m, kind, "Expired", "", "Expired at 5:54 PM without an answer. Nothing was sent. Your edit wasn't used.", true);
     if (st === "closed") return resolvedCard(base(kind), kind, "Closed", "", "The run ended before this was answered. Nothing was sent.");
     if (st === "cancelled") return resolvedCard(base(kind), kind, "Cancelled", "", "You stopped the run before answering. Nothing was sent.");
-    if (st === "runended") return resolvedCard(m, kind, "Closed", "", `Otto's run ended before this was sent. Nothing was sent from this draft.${used}`, Boolean(S.edited));
+    if (st === "runended") return resolvedCard(m, kind, "Closed", "", "Otto's run ended. Couldn't confirm whether this was sent.", Boolean(S.edited));
+    if (st === "restartunknown") return resolvedCard(m, kind, "Closed", "", "The gateway restarted. Couldn't confirm whether this was sent.", Boolean(S.edited));
     if (st === "editrestart") return resolvedCard(m, kind, "Closed", "", "The gateway restarted before this was sent. Nothing was sent, and your edit wasn't used.", true);
     if (st === "filechanged")
       return resolvedCard(
@@ -1051,9 +1052,13 @@
       const ev = b.dataset.protoEvent;
       if (ev === "file") return go({ file: "changed" }, "report.txt changed on the gateway's machine");
       if (S.view === "secret") return go({ s: ev === "expire" ? "expired" : "skipped" });
-      if (ev === "restart") return S.edited || S.editGiven || S.d === "edit" ? go({ d: "editrestart", edited: true }) : undefined;
       if (ev === "expire") return go({ d: S.edited ? "editexpired" : "expired" });
-      return go({ d: S.edited || S.editGiven ? "runended" : ev === "close" ? "closed" : "cancelled" });
+      // A settled card keeps its result whatever happens to the run afterwards.
+      if (finished(S.kind)) return;
+      // The fixture's restart while an edit waits carries the recorded refusal; a bare restart doesn't.
+      if (ev === "restart") return S.edited || S.editGiven || S.d === "edit" ? go({ d: "editrestart", edited: true }) : go({ d: "restartunknown" });
+      // A bare run-end event says nothing of the tool; a stop of an unanswered first hold is a recorded cancellation.
+      return go({ d: ev === "close" || S.edited || S.editGiven ? "runended" : "cancelled" });
     });
   });
 
