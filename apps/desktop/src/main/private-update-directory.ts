@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { lstat, mkdir, realpath, rm } from "node:fs/promises";
 import { dirname, join, resolve, win32 } from "node:path";
 import { promisify } from "node:util";
@@ -103,23 +104,52 @@ async function makePrivateDirectory(path: string): Promise<void> {
   await runUpdatePowerShell(script, { CLAWTRATE_PRIVATE_DIRECTORY: path }, 15000);
 }
 
+/** Keep the compiler, module loader and command interpreter inside the OS installation. */
+export function updatePowerShellEnvironment(systemRoot: string, profile: NodeJS.ProcessEnv) {
+  const system = win32.join(systemRoot, "System32");
+  const env: NodeJS.ProcessEnv = {
+    SystemRoot: systemRoot,
+    WINDIR: systemRoot,
+    SystemDrive: win32.parse(systemRoot).root.slice(0, 2),
+    PATH: system,
+    ComSpec: win32.join(system, "cmd.exe"),
+    PSModulePath: win32.join(system, "WindowsPowerShell", "v1.0", "Modules"),
+  };
+  for (const key of [
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramData",
+    "TEMP",
+    "TMP",
+    "USERNAME",
+    "USERDOMAIN",
+    "COMPUTERNAME",
+  ]) {
+    if (profile[key] !== undefined) env[key] = profile[key];
+  }
+  return env;
+}
+
 export function runUpdatePowerShell(
   script: string,
   values: Record<string, string>,
   timeout: number,
+  signal?: AbortSignal,
 ) {
-  const shell = join(
-    process.env.SystemRoot ?? "C:\\Windows",
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
+  // The kernel's SystemRoot link cannot be redirected by the app's environment.
+  const root = realpathSync.native(String.raw`\\?\GLOBALROOT\SystemRoot`);
+  const system = win32.join(root, "System32");
+  const shell = win32.join(system, "WindowsPowerShell", "v1.0", "powershell.exe");
   return promisify(execFile)(
     shell,
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
     {
-      env: { ...process.env, ...values },
+      cwd: system,
+      env: { ...updatePowerShellEnvironment(root, process.env), ...values },
+      ...(signal && { signal }),
       windowsHide: true,
       timeout,
     },

@@ -2,6 +2,8 @@
 
 import { buildAddressProblem } from "../src/main/update/address.ts";
 
+import { macSigningRequested, windowsSigningRequested } from "./signing.ts";
+
 export type Env = Record<string, string | undefined>;
 
 export function updateDefines(env: Env, now: Date): Record<string, string> {
@@ -15,7 +17,14 @@ export function updateDefines(env: Env, now: Date): Record<string, string> {
   }
   const address = feed("CLAWTRATE_UPDATE_FEED_URL");
   const nightly = feed("CLAWTRATE_NIGHTLY_UPDATE_FEED_URL");
+  const pin = env.CLAWTRATE_WINDOWS_UPDATE_CERT_SHA256?.trim().toUpperCase();
+  if (pin && !/^[A-F0-9]{64}$/.test(pin))
+    throw Error("Invalid Windows update publisher fingerprint");
   return {
+    __CLAWTRATE_SIGNED_MAC__: JSON.stringify(macSigningRequested(env)),
+    __CLAWTRATE_WINDOWS_PUBLISHER__: JSON.stringify(
+      windowsSigningRequested(env) ? (pin ?? null) : null,
+    ),
     __CLAWTRATE_NIGHTLY_UPDATE_FEED__: JSON.stringify(nightly),
     __CLAWTRATE_UPDATE_FEED__: JSON.stringify(address),
     __CLAWTRATE_RELEASE_DATE__: JSON.stringify(releaseDate(env, now)),

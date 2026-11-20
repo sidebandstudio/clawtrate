@@ -117,6 +117,8 @@ test("opens its window from the packaged app on the connect screen", async () =>
     ).clawtrateHost.desktopUpdates.get(),
   );
   expect(updates).toMatchObject({
+    install: { kind: "unavailable-in-this-build", reason: "build-not-signed" },
+    lastAttempt: null,
     tracks: [],
     preferenceIssue: null,
     lastCheck: null,
@@ -136,6 +138,13 @@ test("opens its window from the packaged app on the connect screen", async () =>
       state: { kind: "failed", reason: "not-configured" },
     },
   });
+  expect(
+    await page.evaluate(() =>
+      (
+        window as unknown as { clawtrateHost: { desktopUpdates: DesktopUpdates } }
+      ).clawtrateHost.desktopUpdates.restart("absent"),
+    ),
+  ).toMatchObject({ outcome: "stale", snapshot: { lastAttempt: null } });
   // A packaged app does not look for the development gateway.
   await expect(page.getByRole("button", { name: "Use the development gateway" })).toHaveCount(0);
 

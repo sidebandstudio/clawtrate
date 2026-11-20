@@ -1,6 +1,9 @@
 import { win32 } from "node:path";
 import { expect, it } from "vitest";
-import { checkWindowsDirectorySpelling } from "../../src/main/private-update-directory.ts";
+import {
+  checkWindowsDirectorySpelling,
+  updatePowerShellEnvironment,
+} from "../../src/main/private-update-directory.ts";
 
 it("accepts a Windows short directory name only when every differing entry identifies the same directory", async () => {
   const base = win32.join("C:\\", "Profiles");
@@ -56,4 +59,24 @@ it("checks case-only aliases, parent identity and UNC roots", async () => {
   const unc = "\\\\server\\share\\folder";
   await expect(compare(unc.toUpperCase(), unc)).resolves.toBeDefined();
   await expect(compare("\\\\server\\other\\folder", unc)).rejects.toThrow(/roots/);
+});
+
+it("builds the update helper's search paths from the OS directory and drops runtime overrides", () => {
+  const system = "C:\\Windows";
+  const env = updatePowerShellEnvironment(system, {
+    SystemRoot: "other",
+    PSModulePath: "other",
+    PATH: "other",
+    ComSpec: "other",
+    COR_ENABLE_PROFILING: "1",
+    TEMP: "profile-temp",
+  });
+  expect(env).toMatchObject({
+    SystemRoot: system,
+    ComSpec: win32.join(system, "System32", "cmd.exe"),
+    PATH: win32.join(system, "System32"),
+    PSModulePath: win32.join(system, "System32", "WindowsPowerShell", "v1.0", "Modules"),
+    TEMP: "profile-temp",
+  });
+  expect(env).not.toHaveProperty("COR_ENABLE_PROFILING");
 });

@@ -244,6 +244,7 @@ async function main(): Promise<void> {
     packaged: app.isPackaged,
     platform: process.platform,
     arch: process.arch,
+    quitAfterLaunch: () => app.quit(),
     downloadDir: join(userDir, "updates"),
     store: createUpdatePreferenceStore(join(userDir, "update-preferences.json")),
     changed(snapshot) {
@@ -252,10 +253,7 @@ async function main(): Promise<void> {
     },
   });
   app.on("before-quit", () => updates.shutdown());
-  ipcMain.handle("clawtrate:update:restart", () => ({
-    outcome: "invalid",
-    snapshot: updates.get(),
-  }));
+  ipcMain.handle("clawtrate:update:restart", (_event, id: unknown) => updates.restart(id));
   ipcMain.handle("clawtrate:update:get", () => updates.get());
   ipcMain.handle("clawtrate:update:check", (_event, track: unknown) => updates.check(track));
   ipcMain.handle("clawtrate:update:track", (_event, track: unknown) => updates.chooseTrack(track));
