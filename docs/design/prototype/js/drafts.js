@@ -902,6 +902,8 @@
     go({ s: "saving" });
     later(() => {
       clearSecret();
+      // An event that settled the card while the save was in flight has the last word.
+      if (S.s !== "saving") return;
       const a = S.secretsave;
       if (S.answer === "already") return go({ s: "already" });
       if (a === "refresh") return go({ s: "savedrefresh" }, "Saved to the gateway");
@@ -1163,7 +1165,13 @@
       if (!b) return;
       const ev = b.dataset.protoEvent;
       if (ev === "file") return go({ file: "changed" }, "report.txt changed on the gateway's machine");
-      if (S.view === "secret") return go({ s: ev === "expire" ? "expired" : "skipped" });
+      if (S.view === "secret") {
+        // A settled masked card keeps its outcome; only a question still waiting can expire or close.
+        if (["saved", "savedrefresh", "unattributed", "already", "skipped", "expired", "cannotask"].includes(S.s)) return;
+        return go({ s: ev === "expire" ? "expired" : "skipped" });
+      }
+      // With the drafts plugin absent or old, only a hold the gateway still lists (its record unread) can end.
+      if ((S.p === "absent" || S.p === "old") && S.d !== "norecord") return;
       // A settled card keeps its result whatever happens afterwards; only a live hold can expire.
       if (finished(S.kind)) return;
       if (ev === "expire") return go({ d: S.edited ? "editexpired" : "expired" });

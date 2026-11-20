@@ -712,6 +712,34 @@ await click(p, '[data-proto-event="file"]');
 check("a sent card opened from the address keeps its receipt when the file changes later", (await text(p)).includes("report.txt (28 bytes)"));
 await p.close();
 
+// A settled masked card is not replaced by any later event of the bar.
+for (const s of ["saved", "savedrefresh", "unattributed", "already", "skipped", "expired", "cannotask"]) {
+  for (const ev of ["expire", "close", "stop", "restart", "file"]) {
+    p = await open(`view=secret&s=${s}${s === "cannotask" ? "&access=interactive" : ""}`, { chrome: "1" });
+    const before = await text(p, '[data-testid="secret"]');
+    await click(p, `[data-proto-event="${ev}"]`);
+    check(`secret: a ${s} card is unchanged by the bar's ${ev} event`, before.length > 0 && (await text(p, '[data-testid="secret"]')) === before);
+    await p.close();
+  }
+}
+// An event that settles the card while a save is in flight has the last word.
+p = await open("view=secret", { chrome: "1" });
+await p.fill("#secret-value", VALUE);
+await click(p, '[data-d="s-save"]');
+await click(p, '[data-proto-event="expire"]');
+await p.waitForTimeout(1200);
+check("secret: a question that expires while a save is in flight stays expired", (await text(p)).includes("Expired without an answer.") && !(await text(p)).includes("Saved to your gateway"));
+await p.close();
+// With the drafts plugin absent or old and no hold listed, there is no hold for the bar to expire or end.
+for (const q of ["view=draft&p=absent", "view=draft&p=old"]) {
+  for (const ev of ["expire", "close", "stop", "restart"]) {
+    p = await open(q, { chrome: "1" });
+    await click(p, `[data-proto-event="${ev}"]`);
+    check(`${q}: the bar's ${ev} event draws no draft result`, (await p.locator('[data-testid="draft"], [data-testid="draft-resolved"]').count()) === 0);
+    await p.close();
+  }
+}
+
 await b.close();
 console.log(out.join("\n"));
 console.log(`${out.filter((l) => l.startsWith("ok")).length} ok, ${failed} failed`);
