@@ -11,44 +11,52 @@ import { APP_ID } from "./identity.ts";
 import { holdMacArchive, type HeldMacArchive } from "./mac-archive.ts";
 import type { UpdateInstaller } from "./update/install.ts";
 
+async function runInspector(
+  args: string[],
+  archive?: HeldMacArchive,
+): Promise<UpdateInstallRefusal | null> {
+  const reason = await new Promise<string>((resolve, reject) => {
+    const child = spawn(
+      join(process.resourcesPath, "..", "Helpers", "ClawtrateUpdateInspection"),
+      args,
+      {
+        env: { PATH: "/usr/bin:/bin" },
+        stdio: ["ignore", "pipe", "ignore", ...(archive ? [archive.file.fd] : [])],
+        timeout: 120000,
+        killSignal: "SIGKILL",
+      },
+    );
+    let output = "";
+    child.stdout!.on("data", (data: Buffer) => {
+      output += data.toString("utf8");
+      if (output.length > 128) child.kill("SIGKILL");
+    });
+    child.once("error", reject);
+    child.once("close", (code) => resolve(code === 0 ? output.trim() : "inspection-failed"));
+  });
+  switch (reason) {
+    case "ok":
+      return null;
+    case "build-not-signed":
+    case "running-signature-untrusted":
+    case "mac-archive":
+    case "mac-bundle-identifier":
+    case "mac-architecture":
+    case "installer-version":
+    case "mac-designated-requirement":
+      return reason;
+    default:
+      return "inspection-failed";
+  }
+}
+
 async function inspectBundle(
   archive: HeldMacArchive,
   arch: string,
 ): Promise<UpdateInstallRefusal | null> {
   const scratch = await mkdtemp(join(dirname(archive.proof.path), ".inspect-"));
   try {
-    const reason = await new Promise<string>((resolve, reject) => {
-      const child = spawn(
-        join(process.resourcesPath, "..", "Helpers", "ClawtrateUpdateInspection"),
-        [scratch, APP_ID, archive.proof.version, arch],
-        {
-          env: { PATH: "/usr/bin:/bin" },
-          stdio: ["ignore", "pipe", "ignore", archive.file.fd],
-          timeout: 120000,
-          killSignal: "SIGKILL",
-        },
-      );
-      let output = "";
-      child.stdout!.on("data", (data: Buffer) => {
-        output += data.toString("utf8");
-        if (output.length > 128) child.kill("SIGKILL");
-      });
-      child.once("error", reject);
-      child.once("close", (code) => resolve(code === 0 ? output.trim() : "inspection-failed"));
-    });
-    switch (reason) {
-      case "ok":
-        return null;
-      case "running-signature-untrusted":
-      case "mac-archive":
-      case "mac-bundle-identifier":
-      case "mac-architecture":
-      case "installer-version":
-      case "mac-designated-requirement":
-        return reason;
-      default:
-        return "inspection-failed";
-    }
+    return await runInspector([scratch, APP_ID, archive.proof.version, arch], archive);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -190,19 +198,22 @@ export async function serveMacArchive(
 
 export function macInstaller(
   arch: string,
-  inspect = inspectBundle,
+  inspect?: typeof inspectBundle,
   stage = stageWithElectron,
   deadlineMs = 120000,
 ): UpdateInstaller {
   let kept: HeldMacArchive | undefined;
   let generation = 0;
+  let unsigned = false;
   function retire() {
     generation++;
     if (kept) void kept.file.close().catch(() => {});
     kept = undefined;
   }
   return {
-    unavailable: null,
+    get unavailable() {
+      return unsigned ? ("build-not-signed" as const) : null;
+    },
     completesOnQuit: true,
     retire,
     async inspect(file) {
@@ -210,10 +221,17 @@ export function macInstaller(
         return null;
       retire();
       const current = generation;
+      if (!inspect) {
+        // The signature-only invocation receives neither a descriptor nor a scratch path.
+        const refusal = await runInspector(["--running-signature", APP_ID]);
+        if (current !== generation) return "artifact-changed";
+        if (refusal === "build-not-signed") unsigned = true;
+        if (refusal) return refusal;
+      }
       const held = await holdMacArchive(file).catch(() => null);
       if (!held) return "artifact-changed";
       try {
-        const reason = await inspect(held, arch);
+        const reason = await (inspect ?? inspectBundle)(held, arch);
         if (reason || current !== generation) return reason ?? "artifact-changed";
         kept = held;
         return null;

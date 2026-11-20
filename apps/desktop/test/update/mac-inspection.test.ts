@@ -20,6 +20,11 @@ describe.skipIf(process.platform !== "darwin")("Mac archive preflight", () => {
 #undef main
 int main(int argc, char **argv) {
   @autoreleasepool {
+    if (argc == 2) {
+      if (strcmp(argv[1], "adhoc") == 0) puts(signatureKind(0, @{(__bridge NSString *)kSecCodeInfoFlags:@(kSecCodeSignatureAdhoc), (__bridge NSString *)kSecCodeInfoIdentifier:@"fixture"}));
+      else puts(signatureKind(0, @{}));
+      return 0;
+    }
     int root=open(argv[1],O_DIRECTORY|O_RDONLY);
     if (!unpack(3,root)) {puts("mac-archive"); return 0;}
     NSURL *url=[NSURL fileURLWithPath:[@(argv[1]) stringByAppendingPathComponent:@"Clawtrate.app"]];
@@ -45,6 +50,12 @@ int main(int argc, char **argv) {
     ]);
   }, 30000);
   afterAll(() => dir.remove());
+  it.each(["adhoc", "unsigned"])(
+    "classifies %s signing information without trust evaluation or an archive",
+    (kind) => {
+      expect(execFileSync(reader, [kind], { encoding: "utf8" }).trim()).toBe("build-not-signed");
+    },
+  );
   const version = "1.2.0-nightly.20261104.10";
   it.each([
     "ok",

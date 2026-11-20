@@ -136,6 +136,16 @@ static const char *bundleFacts(NSURL *url, NSString *identifier, NSString *versi
     return NULL;
 }
 
+static const char *signatureKind(OSStatus status, NSDictionary *information) {
+    if (status == errSecCSUnsigned) return "build-not-signed";
+    if (status != errSecSuccess || !information) return "inspection-failed";
+    NSNumber *flags = information[(__bridge NSString *)kSecCodeInfoFlags];
+    NSString *identifier = information[(__bridge NSString *)kSecCodeInfoIdentifier];
+    if ((flags.unsignedIntValue & kSecCodeSignatureAdhoc) || !identifier)
+        return "build-not-signed";
+    return NULL;
+}
+
 static const char *inspect(NSString *scratch, NSString *identifier, NSString *version, NSString *arch) {
     SecCSFlags flags = kSecCSStrictValidate | kSecCSCheckAllArchitectures |
                        kSecCSCheckNestedCode | kSecCSNoNetworkAccess;
@@ -146,13 +156,18 @@ static const char *inspect(NSString *scratch, NSString *identifier, NSString *ve
     NSString *policy = [NSString stringWithFormat:
         @"anchor apple generic and identifier \"%@\" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
          " and certificate 1[field.1.2.840.113635.100.6.2.6] exists", identifier];
-    const char *result = "running-signature-untrusted";
-    if (SecCodeCopyGuestWithAttributes(NULL, (__bridge CFDictionaryRef)attrs, 0, &host) ||
-        SecCodeCopyStaticCode(host, 0, &running) ||
-        SecRequirementCreateWithString((__bridge CFStringRef)policy, 0, &developer) ||
+    CFDictionaryRef information = NULL;
+    OSStatus status = SecCodeCopyGuestWithAttributes(NULL, (__bridge CFDictionaryRef)attrs, 0, &host);
+    if (!status) status = SecCodeCopyStaticCode(host, 0, &running);
+    if (!status) status = SecCodeCopySigningInformation(running, kSecCSDefaultFlags, &information);
+    const char *result = signatureKind(status, (__bridge NSDictionary *)information);
+    if (result) goto done;
+    result = "running-signature-untrusted";
+    if (SecRequirementCreateWithString((__bridge CFStringRef)policy, 0, &developer) ||
         SecCodeCheckValidity(host, kSecCSNoNetworkAccess, developer) ||
         SecStaticCodeCheckValidity(running, flags, developer) ||
         SecCodeCopyDesignatedRequirement(running, 0, &designated)) goto done;
+    if (!scratch) { result = "ok"; goto done; }
     result = "mac-archive";
     {
         int root = open(scratch.fileSystemRepresentation, O_NOFOLLOW | O_DIRECTORY | O_RDONLY);
@@ -171,6 +186,7 @@ static const char *inspect(NSString *scratch, NSString *identifier, NSString *ve
         result = "ok";
     }
 done:
+    if (information) CFRelease(information);
     if (candidate) CFRelease(candidate);
     if (designated) CFRelease(designated);
     if (developer) CFRelease(developer);
@@ -180,12 +196,14 @@ done:
 }
 
 int main(int argc, char **argv) {
-    if (argc != 5) return 1;
+    BOOL classify = argc == 3 && strcmp(argv[1], "--running-signature") == 0;
+    if (!classify && argc != 5) return 1;
     struct rlimit memory = { 768 * 1024 * 1024, 768 * 1024 * 1024 };
     // Bound allocator growth in the ZIP reader before it sees any archive metadata.
     if (setrlimit(RLIMIT_DATA, &memory) != 0) return 1;
     @autoreleasepool {
-        puts(inspect(@(argv[1]), @(argv[2]), @(argv[3]), @(argv[4])));
+        if (classify) puts(inspect(nil, @(argv[2]), nil, nil));
+        else puts(inspect(@(argv[1]), @(argv[2]), @(argv[3]), @(argv[4])));
     }
     return 0;
 }
