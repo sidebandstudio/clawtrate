@@ -196,6 +196,51 @@ describe("a steered run that waits on you (F-468, F-096)", () => {
     await until(() => gateway.calls("chat.send").length === 1);
     task.client.stop();
   });
+
+  it("F-468: a message held by a question while no run is going shows no run until the question settles, then goes as a turn of its own", async () => {
+    const gateway = grantingGateway();
+    let gap = false;
+    gateway.handlers["chat.history"] = () =>
+      gap
+        ? { messages: [], hasMore: false }
+        : { messages: [], hasMore: false, inFlightRun: { runId: RUN } };
+    gateway.handlers["question.list"] = () => ({ questions: [questionRecord("ask_1", RUN)] });
+    const task = await openTask({ gateway });
+    gateway.emit("agent", agentEvent(RUN, 1, "lifecycle", { phase: "start" }));
+    gateway.emit("question.requested", questionRecord("ask_1", RUN));
+    await until(() => task.transcript().questions[0]?.status === "pending");
+    // A gap after which history holds nothing of the run: its end is inferred, the question listed.
+    gap = true;
+    gateway.dropAll();
+    await until(() => {
+      const state = task.transcript().runs.find((each) => each.id === RUN)?.state;
+      return state !== undefined && state !== "waiting" && state !== "running";
+    }, 10_000);
+    await sleep(200);
+    expect(task.transcript().questions[0]!.status).toBe("pending");
+    const id = task.client.sendMessage(KEY, "About that");
+    await sleep(100);
+    // Held, and nothing shows as running for it: nothing has left.
+    expect(task.transcript().outbox.find((each) => each.id === id)?.status).toBe("held");
+    expect(
+      task
+        .transcript()
+        .runs.filter((each) => ["running", "waiting", "stopping"].includes(each.state)),
+    ).toEqual([]);
+    gateway.emit("question.resolved", {
+      id: "ask_1",
+      status: "answered",
+      sessionKey: KEY,
+      ts: Date.now(),
+    });
+    await until(() => gateway.calls("chat.send").length === 1);
+    // A turn of its own, not a steer into a run of its own making.
+    expect(gateway.calls("chat.send")[0]).toMatchObject({
+      message: "About that",
+      queueMode: "followup",
+    });
+    task.client.stop();
+  });
 });
 
 describe("a call of a run history only infers to have ended (F-468)", () => {

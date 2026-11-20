@@ -1551,7 +1551,8 @@ export class ClawtrateClient {
     }
     this.updateActivity(key, (activity) => {
       const withMessage = { ...activity, outbox: [...activity.outbox, message] };
-      if (resolved === "new") return startLocalRun(withMessage, message, this.now());
+      // A held message starts nothing: once the question settles it is queued, as a turn of its own.
+      if (resolved === "new" && !held) return startLocalRun(withMessage, message, this.now());
       if (resolved === "queue" && !held) return queueLocalRun(withMessage, message, this.now());
       return withMessage;
     });
