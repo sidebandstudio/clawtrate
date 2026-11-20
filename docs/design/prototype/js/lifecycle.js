@@ -167,6 +167,8 @@
     if (L.dialog?.busy) return;
     closeDialog();
   });
+  // An asynchronous completion publishes only into the dialog that started it.
+  const live = (d) => L.dialog === d;
 
   function paint(focus) {
     const d = L.dialog;
@@ -177,6 +179,8 @@
     else dialog.removeAttribute("role");
     const view = VIEWS[d.kind](d);
     dialog.innerHTML = view;
+    // While a write runs, or bytes are with the host, the dialog can't be dismissed.
+    if (d.busy) dialog.querySelectorAll(".b-close").forEach((x) => (x.disabled = true));
     CT.hydrate(dialog);
     paintAllowed(dialog);
     if (focus) requestAnimationFrame(() => ($("[data-lc-focus]", dialog) || $("#lc-title", dialog))?.focus());
@@ -250,6 +254,7 @@
   function savePrimary(id) {
     const d = L.dialog;
     d.status = "saving";
+    d.busy = true;
     paint();
     // users.prefs.set with expectedEntries: the entry the chooser read. Then users.prefs.get.
     L.calls.push(["users.prefs.set", id, { expectedEntries: { "clawtrate.primary": L.primary ? { bot: L.primary, createdAt: L.primaryCreated } : null } }]);
@@ -263,12 +268,16 @@
         announce("Couldn't confirm your choice");
         // The fresh users.prefs.get decides: the new choice (it landed), the old one, or no answer.
         return setTimeout(() => {
+          d.busy = false;
+          if (!live(d)) return;
           if (p("primfail") === "landed") return applyPrimary(id);
           d.status = p("primfail") === "noread" ? "noread" : "failed";
           paint();
           $('[data-lc="confirm-primary"]', dialog)?.focus();
         }, 500);
       }
+      d.busy = false;
+      if (!live(d)) return;
       if (p("primconflict") && !d.conflicted) {
         d.status = "conflict";
         d.conflicted = true;
@@ -372,6 +381,7 @@
     paint();
     setTimeout(() => {
       d.busy = false;
+      if (!live(d)) return;
       if (p("picfail") && !d.retried) {
         d.retried = true;
         d.status = p("picfail") === "dropped" ? "dropped" : "refused";
@@ -1026,6 +1036,7 @@
   // Check again: reads only the rows that couldn't be checked. Here each read answers.
   function checkRows(d) {
     setTimeout(() => {
+      if (!live(d)) return;
       d.unread = {};
       applyBacking(d);
       paint(true);
@@ -1036,7 +1047,10 @@
   // Try again: config.get first; a row whose value is no longer its starting value is not written.
   function retryRows(d) {
     const rows = retryable(d, writeRows(d));
+    d.busy = true;
+    paint();
     setTimeout(() => {
+      d.busy = false;
       if (p("second")) d.g.effort = "High"; // another device set it meanwhile
       for (const r of rows) {
         if (d.g[r.key] !== startOf(r.key)) continue;
@@ -1393,6 +1407,7 @@
       d.status = "checking";
       paint();
       return setTimeout(() => {
+        if (!live(d)) return;
         d.replacedShown = true;
         CREATED[d.bot] += 1;
         d.status = "replaced";
@@ -1405,6 +1420,7 @@
       d.status = "checking";
       paint();
       return setTimeout(() => {
+        if (!live(d)) return;
         d.status = null;
         d.changed = true;
         d.tasks = FACTS[d.bot].tasks + 1;
@@ -1480,6 +1496,7 @@
     if (el.closest("#rail-menu")) closeRailMenu();
     switch (action) {
       case "close":
+        if (L.dialog?.busy) return;
         return closeDialog();
       case "open-choose":
         return L.dialog?.kind === "intro" ? ((L.dialog = { kind: "choose", from: "intro" }), paint(true)) : openDialog("choose", el.closest("#rail-menu") ? $(`#bot-list .bot[data-bot="${bot}"]`) : el);
@@ -1504,9 +1521,10 @@
       case "confirm-primary":
         if (L.dialog.status === "noread") {
           // Check again reads the preference; it writes nothing. Here the read shows the choice landed.
-          L.dialog.status = "unconfirmed";
+          const d = L.dialog;
+          d.status = "unconfirmed";
           paint();
-          return setTimeout(() => applyPrimary(L.dialog.pick), 500);
+          return setTimeout(() => live(d) && applyPrimary(d.pick), 500);
         }
         return savePrimary(L.dialog.pick || primaryId());
       case "open-picture":
@@ -1564,6 +1582,7 @@
         // Reads the bot list; writes nothing. Here it answers, listing a bot of that name.
         const d = L.dialog;
         return setTimeout(() => {
+          if (!live(d)) return;
           d.roster = "listed";
           listNewBot(d);
           paint(true);
@@ -1593,8 +1612,11 @@
         d.bytes ??= exportBytes(d.candidate, d.files);
         L.handoff = d.bytes;
         d.exp = "saving";
+        d.busy = true;
         paint();
         return setTimeout(() => {
+          d.busy = false;
+          if (!live(d)) return;
           const want = p("exp");
           d.exp = want && EXPORT_WORDS[want] && !d.retried ? ((d.retried = !["saved", "web", "saved-anyway"].includes(want)), want) : "saved";
           paint(true);
@@ -1606,14 +1628,18 @@
       case "export-reread":
         return readExport(L.dialog);
       case "import-choose":
-        L.dialog.stage = "reading";
-        L.dialog.refused = null;
-        paint();
-        return setTimeout(() => {
-          L.dialog.stage = Object.keys(REFUSALS).includes(p("imp")) && !L.dialog.triedOther ? ((L.dialog.triedOther = true), "refused") : "review";
-          paint(true);
-          announce(L.dialog.stage === "review" ? "Showing what the file would create" : "Clawtrate can't read this file");
-        }, 400);
+        {
+          const d = L.dialog;
+          d.stage = "reading";
+          d.refused = null;
+          paint();
+          return setTimeout(() => {
+            if (!live(d)) return;
+            d.stage = Object.keys(REFUSALS).includes(p("imp")) && !d.triedOther ? ((d.triedOther = true), "refused") : "review";
+            paint(true);
+            announce(d.stage === "review" ? "Showing what the file would create" : "Clawtrate can't read this file");
+          }, 400);
+        }
       case "import-add":
         // A model this gateway doesn't offer is left out, and its effort and fallback list with it.
         L.dialog.copy.model = p("imp") !== "unavailable";
@@ -1629,6 +1655,7 @@
         d.status = "checking";
         paint();
         return setTimeout(() => {
+          if (!live(d)) return;
           d.status = "result";
           d.checked = true;
           d.reads = deleteReads(d);

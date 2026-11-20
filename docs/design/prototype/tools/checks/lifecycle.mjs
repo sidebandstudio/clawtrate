@@ -612,6 +612,28 @@ const exportReview = async (q) => {
   await waitText(p, "#lc-dialog", "The file will hold exactly this");
   return p;
 };
+// A busy dialog keeps its result: Escape and Close during the two stages of Export.
+p = await open("lc=export&delbot=pip");
+await p.keyboard.press("Escape");
+check("S2 Escape during Export's read closes it", !(await dlg(p)));
+await p.evaluate(() => { const b = document.createElement("button"); b.dataset.lc = "open-export"; b.dataset.lcBot = "marlow"; b.hidden = true; document.body.append(b); b.click(); });
+await waitText(p, "#lc-dialog", "The file will hold exactly this");
+t = await dlg(p);
+check("S2 ... and a new Export is not touched by the earlier read", t.includes("Export Marlow") && !t.includes("Export Pip"));
+await p.close();
+p = await open("lc=export&delbot=pip");
+await waitText(p, "#lc-dialog", "The file will hold exactly this");
+await clickText(p, "#lc-dialog", "Export file…");
+await waitText(p, "#lc-dialog", "Waiting for the save dialog…");
+check("S2 while the bytes are with the host, the header's Close is disabled", await p.evaluate(() => document.querySelector("#lc-dialog .b-close").disabled));
+await p.keyboard.press("Escape");
+await p.evaluate(() => document.querySelector("#lc-dialog .b-close").click());
+check("S2 ... and Escape and Close leave it open", (await dlg(p)).includes("Waiting for the save dialog…"));
+await waitText(p, "#lc-dialog", "Saved Pip backup.clawtrate-bot.json");
+const errorsSeen = out.filter((x) => x.startsWith("PAGEERROR")).length;
+check("S2 ... one terminal state, and no page error", (await p.evaluate(() => document.querySelectorAll("#lc-dialog .b-result h3").length)) === 1 && errorsSeen === 0);
+await p.close();
+
 p = await open("lc=export&delbot=pip");
 check("S9 Export reads and checks the bot before it shows the review", (await dlg(p)).includes("Reading Pip from the gateway…"));
 await waitText(p, "#lc-dialog", "The file will hold exactly this");
