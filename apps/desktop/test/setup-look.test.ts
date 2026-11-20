@@ -937,6 +937,7 @@ describe("the sandbox: a run's description, its folder and its proven instance",
       ["stale run", { runId: fake.runId("d") }, undefined],
       ["another checkout", { checkout: "/elsewhere" }, undefined],
       ["ports disagree", undefined, { gatewayPort: 19980 }],
+      ["provider ports disagree", undefined, { providerPort: 19981 }],
       ["no run record", undefined, null],
     ];
     for (const [name, marker, record] of cases) {
@@ -1026,7 +1027,8 @@ describe("the sandbox: a run's description, its folder and its proven instance",
       if (kind === "symlink") symlinkSync(join(config.base, "elsewhere.json"), path);
       else linkSync(join(config.base, "elsewhere.json"), path);
       expect(await config.outcome(), kind).toBe("state");
-      expect(config.processes.asked, kind).toEqual([]);
+      // The gateway is identified first; the config is looked at only after it.
+      expect(config.processes.asked, kind).toEqual([fake.GATEWAY_PID]);
     }
     expect(linked.processes.asked).toEqual([]);
     // A state folder another account owns.
@@ -1047,6 +1049,54 @@ describe("the sandbox: a run's description, its folder and its proven instance",
       ),
     ).toThrow(SetupRefusedError);
     expect(owned.files.reads).toEqual([]);
+  });
+
+  it("S4: a linked run-record parent is refused before its record is read", async () => {
+    const s = setting();
+    const path = join(s.checkout, "tools/dev-gateway/.run");
+    const elsewhere = join(s.base, "records-elsewhere");
+    renameSync(path, elsewhere);
+    symlinkSync(elsewhere, path);
+    expect(await s.outcome()).toBe("state");
+    expect(s.files.reads).not.toContain(join(path, "instances", s.mine.name, "state.json"));
+    expect(s.processes.asked).toEqual([]);
+  });
+
+  it("S4: a recorded live instance is required to identify its gateway before inspecting config", async () => {
+    const s = setting();
+    s.context.identify = () => ({ state: "unknown", reason: "no process answer" });
+    expect(await s.outcome()).toBe("state");
+    expect(s.files.lookups).not.toContain(join(s.mine.stateDir, "openclaw.json"));
+  });
+
+  it("S4: a pending gateway cannot count as a stopped instance", () => {
+    const at = fake.world();
+    const name = "su1-test";
+    const run = fake.runId("a");
+    fake.instance({
+      home: at.home,
+      checkout: at.checkout,
+      name,
+      run,
+      marker: { gatewayPid: undefined, gatewayIdentity: undefined, gatewayPending: true },
+      record: null,
+    });
+    expect(() =>
+      proveRun(
+        { instance: name, run, scenario: "recorded" },
+        { ...at, identify: fake.identities(new Set()).identify },
+      ),
+    ).toThrow(SetupRefusedError);
+  });
+
+  it("S4: a malformed run record is not treated as an absent record", async () => {
+    const s = setting();
+    s.processes.alive.clear();
+    writeFileSync(
+      join(s.checkout, "tools/dev-gateway/.run/instances", s.mine.name, "state.json"),
+      "{",
+    );
+    expect(await s.outcome()).toBe("state");
   });
 
   it("says an instance `stop` ended is stopped, from its marker alone, and refuses a live gateway without its run record", async () => {

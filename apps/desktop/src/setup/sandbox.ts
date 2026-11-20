@@ -121,8 +121,10 @@ export const nodeFiles: SandboxFiles = {
   lstat(path) {
     try {
       return lstatSync(path);
-    } catch {
-      return null;
+    } catch (error) {
+      // Only "not there" is an answer; any other failure is not, and refuses.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
     }
   },
   realpath(path) {
@@ -135,7 +137,8 @@ export const nodeFiles: SandboxFiles = {
   read(path, maxBytes, uid) {
     let fd: number;
     try {
-      fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+      // Never through a link, and never waiting on something that isn't a regular file.
+      fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     } catch {
       return null;
     }
@@ -333,6 +336,15 @@ export const blockPort = (port: unknown): port is number =>
  * one link. Anything else refuses, and nothing past a failed step is read.
  */
 export function proveRun(description: SandboxDescription, context: ProofContext): RunProof {
+  try {
+    return proveRunOrThrow(description, context);
+  } catch (error) {
+    // A check that couldn't be made refuses in the same fixed words as one that failed.
+    throw error instanceof SetupRefusedError ? error : new SetupRefusedError("state");
+  }
+}
+
+function proveRunOrThrow(description: SandboxDescription, context: ProofContext): RunProof {
   const files = context.files ?? nodeFiles;
   const { home, checkout } = context;
   if (home === null || checkout === null) throw new SetupRefusedError("state");
@@ -349,31 +361,51 @@ export function proveRun(description: SandboxDescription, context: ProofContext)
   if (
     marker?.createdBy !== "clawtrate tools/dev-gateway" ||
     markerProblems(marker, instance).length > 0 ||
-    marker.runId !== description.run
-  )
-    throw new SetupRefusedError("state");
-  const runFile = join(runDirFor(instance, join(checkout, "tools/dev-gateway/.run")), "state.json");
-  const run = runRecordOf(readRecord(files, runFile, context.uid));
-  // `pnpm dev-gateway stop` removes the run file once every process is proven gone, and keeps
-  // the marker. So without a run file, the marker alone must name this checkout, and the
-  // gateway must be proven gone: the instance is stopped. A live gateway needs both.
-  const stoppedHere = run === null && marker.checkout === checkout;
-  if (
-    (!stoppedHere &&
-      (!runMatches(run, marker, instance, checkout) || run!.gatewayPort !== marker.gatewayPort)) ||
+    marker.runId !== description.run ||
+    marker.checkout !== checkout ||
+    marker.gatewayPending === true ||
     !blockPort(marker.gatewayPort)
   )
     throw new SetupRefusedError("state");
-  const config = join(stateDir, "openclaw.json");
-  const configEntry = files.lstat(config);
-  if (configEntry && (!configEntry.isFile() || configEntry.nlink !== 1))
+  // This checkout's run record, reached through real folders only. `pnpm dev-gateway stop`
+  // removes it once every process is proven gone and keeps the marker, so a record that
+  // isn't there means stopped, and only a gateway proven gone passes then. A record that is
+  // there but can't be read, or is of another shape, refuses.
+  const runFile = join(runDirFor(instance, join(checkout, "tools/dev-gateway/.run")), "state.json");
+  let parent = checkout;
+  let parentExists = true;
+  for (const part of ["tools", "dev-gateway", ".run", "instances", instance]) {
+    parent = join(parent, part);
+    const folder = files.lstat(parent);
+    if (folder === null) {
+      parentExists = false;
+      break;
+    }
+    if (!folder.isDirectory()) throw new SetupRefusedError("state");
+  }
+  const runEntry = parentExists ? files.lstat(runFile) : null;
+  if (runEntry && (!runEntry.isFile() || runEntry.nlink !== 1))
     throw new SetupRefusedError("state");
+  const run = runEntry ? runRecordOf(readRecord(files, runFile, context.uid)) : null;
+  if (
+    runEntry &&
+    (!run ||
+      !runMatches(run, marker, instance, checkout) ||
+      run.gatewayPort !== marker.gatewayPort ||
+      run.providerPort !== marker.providerPort)
+  )
+    throw new SetupRefusedError("state");
+  // The gateway, by PID and start time, before anything else in the folder is looked at.
   const gateway = processState(
     marker.gatewayPid,
     marker.gatewayIdentity,
     context.identify ?? processIdentity,
   );
-  if (gateway === "unknown" || (stoppedHere && gateway === "alive"))
+  if (gateway === "none" || gateway === "unknown" || (!runEntry && gateway !== "dead"))
+    throw new SetupRefusedError("state");
+  const config = join(stateDir, "openclaw.json");
+  const configEntry = files.lstat(config);
+  if (configEntry && (!configEntry.isFile() || configEntry.nlink !== 1))
     throw new SetupRefusedError("state");
   return {
     profile: `${INSTANCE_PROFILE_PREFIX}${instance}`,
