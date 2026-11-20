@@ -81,6 +81,14 @@ pnpm dev-gateway start --instance pairing --default-local-pairing
 
 Every instance sets `gateway.nodes.pairing.autoApproveLocal` to `false`, so a device's first pairing waits for approval even on loopback. `--default-local-pairing` leaves that one setting out of a named instance's config, at the gateway's own default, for research into what a first pairing on the gateway's own computer does when nobody has changed it ([`docs/research/setup-flow.md`](../research/setup-flow.md)). The contract follows: such an instance refuses the setting, and an ordinary instance still requires it. The default instance refuses the option.
 
+## A paired machine
+
+```bash
+pnpm dev-gateway start --instance machines --with-node
+```
+
+A development gateway has no paired machine, so Settings, Machines and a bot's "Where it runs" would have nothing to show. `--with-node` (named instances only) starts the gateway's own headless node host, `openclaw node run`, on this computer, on loopback, under the instance's profile, recorded and stopped like the gateway (`status` lists it as `node`). It is called media-box and declares only the two commands that read and write its exec approvals file, so no bot's command can run on it. Its state, its approvals file included, is a folder of its own inside the instance's folder, so its file is not the gateway machine's. `start` approves its pairing request and its command request by id once each is exactly what it must be. `pnpm e2e` starts its accounts instance with it. [The decision](../decisions.md#where-a-bot-runs-and-machines) says what the gateway returned for each method these pages use.
+
 ## Migrating from an older version
 
 Earlier versions of the tool recorded no process start times, so this version cannot prove anything about the state they left and refuses it for good: it never signals its processes, starts it over or deletes it. Move it aside once, by hand, from the checkout that started it. For the default instance:
@@ -158,3 +166,7 @@ Where it matters which bot you ask:
 - **Questions and approvals** need a client with the right scopes. The read-only preview does not show them yet; answer from a client with `operator.questions` or `operator.approvals`.
 
 After `start`, the seed has left finished examples, played through a paired client called "Clawtrate seed" that answers and approves as the user and is unpaired afterwards: Juniper's "Show your work" (reasoning and steps), "A step that fails" and "Hand off to the coding agent" (an MCP call); Pip's "Ask Marlow about the plan" (a bot-to-bot exchange) and "Which route on Saturday" (an answered question); Marlow's "Notes for Pip", where Pip's message arrived; and Otto's "List the workspace (approved)" (a resolved approval).
+
+### Scheduled jobs
+
+`pnpm dev-gateway routines --instance <name>` adds the [sample routines](../../tools/dev-gateway/src/routines.ts) when their names are absent. The development gateway's scheduler is off. To run a sample immediately, use `openclaw --profile clawtrate-dev-<name> gateway call cron.run --params '{"id":"<id>","mode":"force"}'`.

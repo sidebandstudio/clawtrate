@@ -1305,6 +1305,25 @@
       ],
     },
     {
+      id: "proactive",
+      title: "Offers, and a connector that stopped working",
+      note: "automation.md §13. Both are the bot's own words over the ordinary components: Clawtrate draws no offer card, Accept button, signed-out badge or Reconnect button, because the gateway marks nothing as an offer and reports no connector sign-in state.",
+      specimens: [
+        {
+          name: "An offer (F-200)",
+          note: "A reply like any other. The person takes it up by answering, and the work that follows is an ordinary run.",
+          html: CT.msg({ html: "The venue's quote expires on Friday and nobody has answered it yet. Want me to draft a reply asking them to hold the price for another week?" }),
+        },
+        {
+          name: "A connector that stopped working (F-364)",
+          note: "The tool's failure is its action card in the failed state, with the tool's own error, and Raw one step further. That the app signed the bot out, and the offer to reconnect, are in the bot's reply.",
+          html:
+            A({ ...C.server, id: "call_7c01", name: "gmail__search_messages", args: { query: "from:venue newer_than:7d" }, mcp: { server: "gmail", tool: "search_messages" }, details: { mcpServer: "gmail", mcpTool: "search_messages" }, status: "failed", isError: true, text: "401 Unauthorized: the token has been expired or revoked.", took: "0.4s" }) +
+            CT.msg({ html: "Gmail signed me out, so I couldn't look for the venue's reply. If you reconnect Gmail on the gateway, I'll check again." }),
+        },
+      ],
+    },
+    {
       id: "controls",
       title: "Controls",
       note: "What docs/design/controls.md adds to the conversation, and a link to every state of its pages. A refused call says what decided it, recorded, inferred or not recorded; an ask says who asks and offers what it can complete; an answer and what then happened are two lines; only a gateway setting is called enforced without qualification.",

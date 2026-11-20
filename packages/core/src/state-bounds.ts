@@ -29,6 +29,14 @@ import {
   type SignInStep,
   type StoredOrder,
 } from "./accounts.ts";
+import {
+  MAX_ROUTINE_TEXT_CHARS,
+  MAX_ROUTINES,
+  MAX_ROUTINE_RUN_TEXT_CHARS,
+  type Routine,
+  type RoutineSchedule,
+  type RoutinesState,
+} from "./routines.ts";
 import type {
   ApprovalAttempts,
   ApprovalCard,
@@ -58,6 +66,22 @@ import {
   type Bound,
 } from "./bounds.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
+import {
+  MAX_BUDGET_ID_CHARS,
+  MAX_BUDGETS,
+  MAX_LIMIT_PROVIDERS,
+  MAX_LIMIT_TEXT_CHARS,
+  MAX_LIMIT_WINDOWS,
+  MAX_ROUTINE_NAME_CHARS,
+  MAX_TIME_ZONE_CHARS,
+  type Budget,
+  type BudgetCount,
+  type DateRange,
+  type LimitWindow,
+  type ProviderLimit,
+  type ProviderLimits,
+  type UsageState,
+} from "./usage.ts";
 import type {
   CaughtUp,
   ClosedCard,
@@ -73,6 +97,8 @@ import type {
   RunError,
   Step,
   StepFiles,
+  RunErrorRaw,
+  StoppedWith,
   StepText,
 } from "./runs.ts";
 import { MAX_STEP_PATH_CHARS, MAX_STEP_PATHS } from "./file-paths.ts";
@@ -93,8 +119,11 @@ import type {
   ConnectionError,
   ConnectionState,
   DiscoveryState,
+  MessageReaction,
   PairingRequest,
+  ReplyReference,
   ScopeUpgradeState,
+  SendLimits,
   Task,
   TaskContext,
   TaskCreation,
@@ -218,6 +247,16 @@ export const MAX_UNROUTED = 16;
 export const MAX_CREATIONS = 8;
 /** Scopes in a grant or request. */
 export const MAX_SCOPES = 16;
+/** What a stop's note names of each kind it also stopped (`Run.stoppedWith`). */
+export const MAX_STOPPED_NAMED = 8;
+/** The gateway's preview of a message replied to, as kept on the reply (F-067). */
+export const MAX_REPLY_PREVIEW_CHARS = 512;
+/** Messages whose reactions a task keeps: at most one per history row shown. */
+export const MAX_REACTED_MESSAGES = MAX_HISTORY_ITEMS;
+/** Distinct emoji kept per message, the most counted first. */
+export const MAX_REACTIONS_PER_MESSAGE = 12;
+/** One emoji: the gateway accepts one grapheme of at most 32 code points. */
+export const MAX_EMOJI_CHARS = 66;
 
 // The schema -----------------------------------------------------------------------
 
@@ -273,7 +312,11 @@ export const STEP: Bound = flagged<Step>()({
 });
 const pendingCard = object<PendingCard>()({ id: ID, kind: ENUM, since: NUMBER });
 const closedCard = object<ClosedCard>()({ id: ID, kind: ENUM, since: NUMBER, reason: ENUM });
-const runError = object<RunError>()({ message: text(MAX_ERROR_JSON_CHARS), kind: NAME });
+const runError = object<RunError>()({
+  message: text(MAX_ERROR_JSON_CHARS),
+  kind: NAME,
+  raw: object<RunErrorRaw>()({ holds: ENUM, chars: NUMBER }),
+});
 const runEnding = object<RunEnding>()({
   stopReason: NAME,
   timeoutPhase: NAME,
@@ -322,6 +365,19 @@ export const RUN: Bound = flagged<Run>()({
   reasoningAnchor: ID,
   nextReasoning: NUMBER,
   reasoningRevision: NUMBER,
+  requestId: ID,
+  stoppedWith: object<StoppedWith>()({
+    helpers: NUMBER,
+    bots: list(MAX_STOPPED_NAMED, ID),
+    uncertain: list(MAX_STOPPED_NAMED, ID),
+    refused: list(MAX_STOPPED_NAMED, ID),
+    unanswered: list(MAX_STOPPED_NAMED, ID),
+    omitted: NUMBER,
+    recipientsAsked: FLAG,
+  }),
+  stoppedForTimeouts: NUMBER,
+  turnLimit: NUMBER,
+  retry: object<NonNullable<Run["retry"]>>()({ attempt: NUMBER, of: NUMBER, reason: NAME }),
 });
 const attachmentInfo = object<OutgoingAttachmentInfo>()({
   fileName: text(MAX_FILE_NAME_CHARS),
@@ -339,6 +395,7 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   createdAt: NUMBER,
   error: text(MAX_ERROR_JSON_CHARS),
   attachments: list(MAX_FILES_PER_MESSAGE, attachmentInfo),
+  replyToId: ID,
 });
 const questionOption = object<QuestionOption>()({
   index: NUMBER,
@@ -463,6 +520,7 @@ const block = union<TranscriptBlock, "kind">("kind")({
   text: object<Extract<TranscriptBlock, { kind: "text" }>>()({
     kind: ENUM,
     text: text(MAX_BLOCK_CHARS),
+    messageId: ID,
   }),
   reasoning: object<Extract<TranscriptBlock, { kind: "reasoning" }>>()({
     kind: ENUM,
@@ -484,6 +542,17 @@ const item = flagged<TranscriptItem>()({
   blocks: list(MAX_BLOCKS_PER_ITEM, block, { pool: "blocks" }),
   model: NAME,
   truncated: FLAG,
+  messageId: ID,
+  replyTo: object<ReplyReference>()({
+    id: ID,
+    text: text(MAX_REPLY_PREVIEW_CHARS),
+    sender: NAME,
+  }),
+});
+const reaction = object<MessageReaction>()({
+  emoji: id(MAX_EMOJI_CHARS),
+  count: NUMBER,
+  mine: FLAG,
 });
 const interSession = flagged<InterSessionMessage>()({
   itemId: ID,
@@ -531,6 +600,7 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   // Names and a root are ids: a cut one would name another tool or folder.
   builtinTools: list(MAX_BUILTIN_TOOLS, id(MAX_TOOL_NAME_CHARS)),
   workspaceRoot: id(MAX_STEP_PATH_CHARS),
+  reactions: map(MAX_REACTED_MESSAGES, MAX_ID_CHARS, list(MAX_REACTIONS_PER_MESSAGE, reaction)),
   loadedAt: NUMBER,
 });
 
@@ -575,6 +645,12 @@ const connection = object<ConnectionState>()({
   retryAt: NUMBER,
   connectedAt: NUMBER,
   paired: FLAG,
+  sendLimits: object<SendLimits>()({
+    imageBytes: NUMBER,
+    fileBytes: NUMBER,
+    payloadBytes: NUMBER,
+    files: NUMBER,
+  }),
 });
 const discovery = object<DiscoveryState>()({
   status: ENUM,
@@ -624,6 +700,59 @@ const sidebar = object<SidebarState>()({
     hidden: list(MAX_SIDEBAR_BOTS, sidebarId),
     order: list(MAX_SIDEBAR_BOTS, sidebarId),
     rev: NUMBER,
+  }),
+});
+/** Warning budgets, their counts and the providers' limits (`usage.ts`). */
+// An id bound counts JSON characters: a plain id of `MAX_BUDGET_ID_CHARS` and its two quotes,
+// and a budget's key, `routine:` before such an id.
+const usageId = id(MAX_BUDGET_ID_CHARS + 2);
+const budgetKey = id("routine:".length + MAX_BUDGET_ID_CHARS + 2);
+const zone = text(MAX_TIME_ZONE_CHARS + 2);
+// A date, YYYY-MM-DD, quoted.
+const date = text(12);
+const dateRange = object<DateRange>()({ startDate: date, endDate: date, timeZone: zone });
+const budget = object<Budget>()({
+  id: budgetKey,
+  botId: usageId,
+  routineId: usageId,
+  // A name of `MAX_ROUTINE_NAME_CHARS` characters, each escaped at its longest (`\u0000`).
+  routineName: text(MAX_ROUTINE_NAME_CHARS * 6 + 2),
+  period: ENUM,
+  tokens: NUMBER,
+  timeZone: zone,
+  setAt: NUMBER,
+});
+const budgetCount = object<BudgetCount>()({
+  budgetId: budgetKey,
+  range: dateRange,
+  used: NUMBER,
+  asOf: NUMBER,
+  counting: FLAG,
+  partial: FLAG,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+});
+const limitText = text(MAX_LIMIT_TEXT_CHARS * 6 + 2);
+const limitWindow = object<LimitWindow>()({
+  label: limitText,
+  usedPercent: NUMBER,
+  resetAt: NUMBER,
+});
+const providerLimit = object<ProviderLimit>()({
+  provider: usageId,
+  displayName: limitText,
+  windows: list(MAX_LIMIT_WINDOWS, limitWindow),
+  error: limitText,
+});
+export const USAGE: Bound = object<UsageState>()({
+  budgetsStatus: ENUM,
+  budgets: list(MAX_BUDGETS, budget),
+  rev: NUMBER,
+  counts: list(MAX_BUDGETS, budgetCount),
+  limits: object<ProviderLimits>()({
+    status: ENUM,
+    updatedAt: NUMBER,
+    providers: list(MAX_LIMIT_PROVIDERS, providerLimit),
+    refreshing: FLAG,
   }),
 });
 /** A task creation as kept (`MAX_CREATIONS` of them). */
@@ -859,6 +988,51 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   write: accountWrite,
 });
 
+// Routines (routines.ts): the list only; runs and their conversations are never kept.
+const routineSchedule = object<RoutineSchedule>()({
+  kind: ENUM,
+  expr: NAME,
+  tz: NAME,
+  everyMs: NUMBER,
+  at: NAME,
+  name: NAME,
+});
+const routine = object<Routine>()({
+  id: ID,
+  botId: ID,
+  name: NAME,
+  enabled: FLAG,
+  schedule: routineSchedule,
+  payload: ENUM,
+  text: text(MAX_ROUTINE_TEXT_CHARS),
+  target: ENUM,
+  sharedSessionKey: ID,
+  delivery: ENUM,
+  deliveryChannel: NAME,
+  nextRunAt: NUMBER,
+  lastRunAt: NUMBER,
+  lastEndedAt: NUMBER,
+  lastStatus: ENUM,
+  lastError: text(MAX_ROUTINE_RUN_TEXT_CHARS),
+  runningAt: NUMBER,
+  deleteAfterRun: FLAG,
+  gated: FLAG,
+  updatedAt: NUMBER,
+});
+export const ROUTINES: Bound = object<RoutinesState>()({
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  schedulerOn: FLAG,
+  routines: list(MAX_ROUTINES, routine),
+  omitted: NUMBER,
+  revision: NUMBER,
+  removed: object<NonNullable<RoutinesState["removed"]>>()({
+    id: ID,
+    ranOnce: FLAG,
+    runAt: NUMBER,
+  }),
+});
+
 /** Every part of the state but the transcripts, and the transcripts as one map. */
 export const STATE: Bound = flagged<ClawtrateState>()({
   connection,
@@ -870,8 +1044,11 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   unroutedApprovalsOmitted: NUMBER,
   creations: list(MAX_CREATIONS, CREATION),
   accounts: ACCOUNTS,
+  routines: ROUTINES,
   retention: retentionAlarm,
   sidebar,
+  turnLimitMinutes: NUMBER,
+  usage: USAGE,
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };

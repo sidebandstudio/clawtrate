@@ -9,6 +9,7 @@ Every document in the repository, by what you want to do.
 - [Testing](development/testing.md): each check, what CI runs, the fixture mode and the visual tests.
 - [The SSH transport's tests](development/ssh.md): running the tests of "Another computer" over SSH against an `sshd` of their own.
 - [Packaging](development/packaging.md): building the desktop app for macOS and Windows, signing, and the logo and icons.
+- [Desktop release candidates](development/releases.md) covers stable and nightly builds, signing checks, publication and withdrawal.
 - [CONTRIBUTING.md](../CONTRIBUTING.md): how to pick up work and open a pull request.
 - [AGENTS.md](../AGENTS.md): the rules every change follows, written for coding agents and people alike.
 
@@ -46,6 +47,7 @@ Every document in the repository, by what you want to do.
 - `research/setup-flow/`: the probe behind the setup flow note.
 - [The rest of a bot's life](research/bots-lifecycle.md): the primary bot, editing a bot, an image tool, a change to its instructions, copies, the gateway's package format and `agents.delete`, from OpenClaw's source and live runs.
 - `research/bots-lifecycle/`: the probe behind that note.
+- [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
 ## Writing docs

@@ -1,7 +1,6 @@
 // The packaging configuration: what is shipped, and that signing is chosen by
 // the environment alone.
 import { FuseV1Options } from "@electron/fuses";
-import { SENTINEL } from "@electron/fuses/dist/constants.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +9,8 @@ import { APP_ID, builderConfig, fuses, macSigningRequested } from "../packaging/
 import { fuseMismatches } from "../packaging/fuse-check.ts";
 
 const APP = join(import.meta.dirname, "..");
+// The marker Electron embeds before the version and fuse bytes in an executable.
+const FUSE_SENTINEL = "dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX";
 
 describe("packaging configuration", () => {
   it("names the app and ships only the bundled main, preload and renderer", () => {
@@ -80,14 +81,20 @@ describe("packaging configuration", () => {
     expect(mac.notarize).toBe(false);
   });
 
-  it("signs and notarizes when a certificate is given, with no code change", () => {
+  it("signs when a certificate is given, and notarizes only with complete credentials, with no code change", () => {
     for (const env of [{ CSC_LINK: "cert.p12" }, { CSC_NAME: "Some Developer (TEAMID)" }]) {
       expect(macSigningRequested(env)).toBe(true);
       const mac = builderConfig(env, "45.3.2").mac!;
       expect("identity" in mac).toBe(false);
       expect(mac.hardenedRuntime).toBe(true);
-      expect(mac.notarize).toBe(true);
+      expect(mac.notarize).toBe(false);
+      const notarized = builderConfig({ ...env, APPLE_KEYCHAIN_PROFILE: "profile" }, "45.3.2").mac!;
+      expect(notarized.notarize).toBe(true);
     }
+    // Credentials without a certificate notarize nothing.
+    expect(builderConfig({ APPLE_KEYCHAIN_PROFILE: "profile" }, "45.3.2").mac!.notarize).toBe(
+      false,
+    );
   });
 
   it("turns off Node's own entry points in the shipped binary", () => {
@@ -109,7 +116,7 @@ describe("packaging configuration", () => {
         path,
         Buffer.concat([
           Buffer.from("MZ"),
-          Buffer.from(SENTINEL),
+          Buffer.from(FUSE_SENTINEL),
           Buffer.from([1, wire.length]),
           Buffer.from(wire),
         ]),

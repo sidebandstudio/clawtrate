@@ -286,6 +286,17 @@ describe("child process environment", () => {
     }
   });
 
+  it("forwards required native filesystem mode only to named OpenClaw instances", () => {
+    const instance = { name: "memory-test", stateDir: "/unused", gatewayPort: 19500 };
+    const source = { ...shell, FS_SAFE_NATIVE_MODE: "require" };
+    expect(openclawEnv(source, instance).FS_SAFE_NATIVE_MODE).toBe("require");
+    expect(
+      openclawEnv({ ...source, FS_SAFE_NATIVE_MODE: "off" }, instance).FS_SAFE_NATIVE_MODE,
+    ).toBeUndefined();
+    expect(openclawEnv(source).FS_SAFE_NATIVE_MODE).toBeUndefined();
+    expect(providerEnv(source).FS_SAFE_NATIVE_MODE).toBeUndefined();
+  });
+
   it("gives the scripted provider nothing beyond the allowlist", () => {
     expect(providerEnv(shell)).toEqual({ PATH: "/usr/bin", LANG: "en_US.UTF-8" });
   });
