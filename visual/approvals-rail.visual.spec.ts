@@ -224,7 +224,8 @@ for (const size of SIZES) {
           theme,
         );
         // A failed run: the event that failed it is in no snapshot, so Raw shows it once opened,
-        // read from the host, with the run's start beside it; on the card and on the run line.
+        // read from the host, with the run's start beside it. (This scene's run has no steps, so
+        // no run line; the run line's read is checked on a real gateway in approvals-shell.)
         const state = () =>
           page.evaluate(() =>
             JSON.stringify(
@@ -240,14 +241,6 @@ for (const size of SIZES) {
         await expect(raw(error)).toContainText("The model provider is overloaded.");
         await expect(raw(error)).toContainText("(agent (lifecycle start))");
         await fitsWidth(page, error);
-        const failedLine = page.getByTestId("run-line").last();
-        await failedLine.locator("summary").click();
-        await failedLine.getByRole("button", { name: "Raw" }).click();
-        await expect(raw(failedLine)).toContainText(
-          "The chat event that ended the turn, as received",
-        );
-        await expect(raw(failedLine)).toContainText("The model provider is overloaded.");
-        await expect(raw(failedLine)).toContainText("(agent (lifecycle start))");
       });
 
       test("F-057: a task done with failures shows the failed mark, and a blocked task says blocked", async ({
