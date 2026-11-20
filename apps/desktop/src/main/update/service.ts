@@ -71,6 +71,7 @@ export class DesktopUpdateService {
       runningTrack,
       tracks,
       selectedTrack,
+    pendingTrack:null,
       lastCheckedAt,
       state: options.packaged ? state : failed("development-build"),
       install: { kind: "unavailable-in-this-build" },
@@ -103,22 +104,23 @@ export class DesktopUpdateService {
       return this.reply("invalid");
     if (track === this.snapshot.selectedTrack) return this.reply("accepted");
     this.switching = true;
+    const previous = this.engine;
+    this.engine = null;
+    previous?.cancel();
+    this.snapshot = {...this.snapshot,pendingTrack:track};
+    this.publish({kind:"not-checked"});
+    let state: DesktopUpdateState = this.options.packaged ? {kind:"not-checked"} : failed("development-build");
     try {
-      await this.options.store.set("selectedTrack", track);
-      // Detach first. Even bytes already in the rename or a reply awaiting a store write
-      // cannot publish after this point. Drain before cleaning the shared folder.
-      const previous = this.engine;
-      this.engine = null;
-      previous?.cancel();
-      this.snapshot = { ...this.snapshot, selectedTrack: track };
-      this.publish(this.options.packaged ? { kind: "not-checked" } : failed("development-build"));
       await this.work;
       await this.clearDownloads();
+      await this.options.store.set("selectedTrack",track);
+      this.snapshot = {...this.snapshot,selectedTrack:track};
     } catch {
-      this.publish(failed("write-failed", "preferences"));
-    } finally {
-      this.switching = false;
+      state = failed("write-failed","preferences");
     }
+    this.switching=false;
+    this.snapshot={...this.snapshot,pendingTrack:null};
+    this.publish(state);
     return this.reply("accepted");
   }
 

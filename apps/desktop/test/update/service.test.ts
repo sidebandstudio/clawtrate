@@ -119,7 +119,7 @@ it.each(["check", "download"] as const)(
     expect(service.get()).not.toHaveProperty("outcome");
     await service.chooseTrack("nightly");
     resume.resolve();
-    await pending;
+    expect((await pending).outcome).toBe("superseded");
     expect(service.get()).toMatchObject({
       selectedTrack: "nightly",
       state: { kind: "not-checked" },
@@ -202,7 +202,8 @@ it.each(["check", "download"] as const)(
       await completed.promise;
       if (id) expect(readdirSync(updates)).toHaveLength(1);
       const change = service.chooseTrack("nightly");
-      await vi.waitFor(() => expect(service.get().selectedTrack).toBe("nightly"));
+      expect(service.get().pendingTrack).toBe("nightly");
+      expect((await service.chooseTrack("stable")).outcome).toBe("busy");
       release.resolve();
       await Promise.all([pending, change]);
       expect(service.get().state.kind).toBe("not-checked");

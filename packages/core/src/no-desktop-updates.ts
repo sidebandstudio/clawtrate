@@ -6,6 +6,7 @@ async function unavailable(): Promise<DesktopUpdateSnapshot> {
     runningTrack: null,
     tracks: [],
     selectedTrack: null,
+    pendingTrack:null,
     lastCheckedAt: null,
     state: { kind: "failed", stage: "check", reason: "no-updater" },
     install: { kind: "unavailable-in-this-build" },

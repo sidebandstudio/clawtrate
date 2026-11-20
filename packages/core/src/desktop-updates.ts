@@ -43,6 +43,7 @@ export interface DesktopUpdateSnapshot {
   /** Configured tracks only. Each source is a hostname. */
   tracks: ReadonlyArray<{ track: UpdateTrack; source: string }>;
   selectedTrack: UpdateTrack | null;
+  pendingTrack: UpdateTrack | null;
   /** UTC ISO timestamp of the last completed feed read. */
   lastCheckedAt: string | null;
   state: DesktopUpdateState;
