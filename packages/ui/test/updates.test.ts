@@ -124,8 +124,14 @@ it.each(Object.keys(failures) as DesktopUpdateFailure[])(
     if (unsupported) expect(result.html).not.toContain("radio");
     else {
       const dl = render({ kind: "failed", stage: "download", reason });
-      expect(dl.html).toContain("Couldn't download the update. Try again.");
-      expect(dl.actions).toEqual(["Try again"]);
+      const downloadErrors: Partial<Record<DesktopUpdateFailure, string>> = {
+        "hash-mismatch": "The downloaded file doesn't match the update source.",
+        "size-mismatch": "The downloaded file doesn't match the update source.",
+        "artifact-changed": "Couldn't verify the saved update again.",
+        "write-failed": "Couldn't save the update on this device.",
+      };
+      expect(dl.html).toContain(downloadErrors[reason] ?? "Couldn't download the update.");
+      expect(dl.actions).toEqual(["Check for Updates"]);
       expect(dl.footer).toBe(true);
     }
   },

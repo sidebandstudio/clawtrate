@@ -85,8 +85,15 @@ function updateRow(
     case "failed":
       if (state.stage === "preferences")
         return { line: "Couldn't read or save the update settings.", action: "Check for Updates" };
-      if (state.stage === "download")
-        return { line: "Couldn't download the update. Try again.", action: "Try again" };
+      if (state.stage === "download") {
+        let line = "Couldn't download the update.";
+        if (state.reason === "hash-mismatch" || state.reason === "size-mismatch")
+          line = "The downloaded file doesn't match the update source.";
+        else if (state.reason === "artifact-changed")
+          line = "Couldn't verify the saved update again.";
+        else if (state.reason === "write-failed") line = "Couldn't save the update on this device.";
+        return { line, action: "Check for Updates" };
+      }
       if (state.reason === "no-file-for-this-system")
         return {
           line: "The update source has no file for this system.",

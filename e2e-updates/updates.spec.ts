@@ -200,7 +200,7 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   await expect(stable).toBeChecked();
   await page.getByRole("button", { name: "Check for Updates" }).click();
   await page.getByRole("button", { name: "Download", exact: true }).click();
-  await expect(line).toHaveText("Couldn't download the update. Try again.");
+  await expect(line).toHaveText("The downloaded file doesn't match the update source.");
   await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
   const key = fileKeyFor(process.platform, process.arch)!;
   const files = manifest.files as Record<string, { size: number; sha512: string; url: string }>;
@@ -209,7 +209,7 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
     json({ ...manifest, files: { [key]: { ...files[key]!, size: body.length + 1 } } }),
   );
   server.route(filePath, (_req, res) => res.end(body));
-  await page.getByRole("button", { name: "Try again" }).click();
+  await page.getByRole("button", { name: "Check for Updates" }).click();
   await expect(line).toHaveText("Clawtrate 1.1.0 is offered by the update source.");
   expect(server.requests).toEqual([
     "/stable",
@@ -221,7 +221,7 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   ]);
 
   await download.click();
-  await expect(line).toHaveText("Couldn't download the update. Try again.");
+  await expect(line).toHaveText("The downloaded file doesn't match the update source.");
   await expect(page.getByRole("button", { name: "Restart to Update" })).toHaveCount(0);
   const reading = await page.evaluate(() =>
     (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get(),
