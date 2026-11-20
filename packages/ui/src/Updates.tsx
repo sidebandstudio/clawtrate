@@ -88,7 +88,7 @@ function updateRow(
           ["build-not-signed", "windows-install-pending-trial", "no-installer-path"].includes(
             s.install.reason,
           )
-            ? undefined
+            ? "Check for Updates"
             : "Download",
       };
     case "downloading":
@@ -353,7 +353,8 @@ export function Updates({
                 onClick={() => {
                   if (working) return;
                   if (capability) setConfirmId(capability.offerId);
-                  else if (state.kind === "offered") void download(state.offerId);
+                  else if (action === "Download" && state.kind === "offered")
+                    void download(state.offerId);
                   else if (s.selectedTrack) void check(s.selectedTrack, s.revision);
                 }}
               >
@@ -362,7 +363,7 @@ export function Updates({
             </div>
             {action !== "Restart to Update" && (
               <p id="update-source" className="b-hint update-source">
-                {state.kind === "offered"
+                {action === "Download" && state.kind === "offered"
                   ? `Downloads Clawtrate ${state.version} from ${source}, only when you choose to.`
                   : `Checks ${source} for a newer build, only when you choose to.`}
               </p>

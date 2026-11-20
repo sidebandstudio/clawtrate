@@ -659,6 +659,15 @@ test.describe("unsigned build", () => {
     await expect(page.locator(".b-note")).toContainText("This build can't install updates itself.");
     await expect(page.getByRole("button", { name: "Download", exact: true })).toHaveCount(0);
     expect(server.requests).toEqual(["/stable"]);
+    const check = page.getByRole("button", { name: "Check for Updates" });
+    await expect(check).toHaveAccessibleDescription(
+      "Checks 127.0.0.1 for a newer build, only when you choose to.",
+    );
+    await check.click();
+    await expect.poll(() => server.requests).toEqual(["/stable", "/stable"]);
+    await expect(page.locator(".update-result dd")).toHaveText(
+      "Clawtrate 1.1.0 is offered by the update source.",
+    );
   });
 });
 

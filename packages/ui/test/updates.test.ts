@@ -233,7 +233,7 @@ it.each([restartFailures[0], restartFailures[1], restartFailures[2]])(
         install: { kind: "unavailable-in-this-build", reason },
       },
     );
-    expect(offer.actions).toEqual([]);
+    expect(offer.actions).toEqual(["Check for Updates"]);
     expect(offer.html).toContain("Clawtrate 1.1.0 is offered by the update source.");
     expect(offer.html).toContain(line);
     expect(offer.html).not.toContain("Downloads Clawtrate");
