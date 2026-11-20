@@ -4,6 +4,7 @@
 //
 // More address parameters, on top of bots.js:
 //   tmodel=held|saving|refused|loading|failed|unreported   the chip's state
+//   tmodel=unlisted|nolevels   the task on a model the list lacks, or gives with no levels
 //   record=open                                            Otto's last run line, opened
 //   tchange=0                                              no event line in Otto's task
 // `access=read` (bots.js) shows the read-only form.
@@ -25,8 +26,22 @@
     { id: "dev-old", levels: [], def: null, unavailable: true },
   ];
   const PROVIDER = "acme";
-  const word = (level) => (level ? level[0].toUpperCase() + level.slice(1) : "Not offered");
+  const word = (level) => (level ? level[0].toUpperCase() + level.slice(1) : "Not reported");
   const levelsOf = (id) => MODELS.find((m) => m.id === id)?.levels ?? [];
+  // What is known of the shown model's levels (25.2): "Not offered" only for a model listed with none.
+  const known = (id) => {
+    if (S.state === "loading") return "loading";
+    if (S.state === "failed") return "failed";
+    const m = MODELS.find((each) => each.id === id);
+    return !m ? "unlisted" : m.levels.length ? "levels" : "none";
+  };
+  const effortWord = (id, level) => (!level && known(id) === "none" ? "Not offered" : word(level));
+  const why = (id) =>
+    ({
+      loading: "Loading the models…",
+      failed: "Couldn't load the models: The gateway did not answer in time.",
+      unlisted: `${PROVIDER}/${id} isn't in the gateway's list of models, so its effort levels aren't known.`,
+    })[known(id)] ?? null;
   const follow = (model, was) => {
     const m = MODELS.find((each) => each.id === model);
     if (!m || m.levels.length === 0) return null;
@@ -46,6 +61,9 @@
   if (S.state === "refused")
     S.lines.push({ refused: true, text: "Couldn't change the effort to High: thinkingLevel \"high\" is not supported for acme/dev-lite (use off|ultra)", title: "dev-lite doesn't offer High. Changed at 5:40 PM on this device." });
   if (S.state === "refused") S.saved = { model: "dev-lite", effort: "off" };
+  if (S.state === "loading" || S.state === "failed") S.saved = { model: "dev-lite", effort: "ultra" };
+  if (S.state === "unlisted") S.saved = { model: "dev-gone", effort: "ultra" };
+  if (S.state === "nolevels") S.saved = { model: "dev-old", effort: null };
 
   const readOnly = () => params.get("access") === "read" || app.model.access === "read";
   const otto = () => app.model.selectedBot === "otto" && app.model.selectedTask === "o1";
@@ -54,8 +72,9 @@
   const label = () => {
     const v = shown();
     if (S.state === "unreported") return "Model for this task: not reported.";
-    const base = `Model for this task: ${PROVIDER}/${v.model}, ${word(v.effort)} effort.`;
-    return base + (S.state === "held" ? " Held until this turn ends." : "") + (readOnly() ? "" : " Change.");
+    const effort = v.effort ? `${word(v.effort)} effort` : known(v.model) === "none" ? "effort not offered" : "effort not reported";
+    const base = `Model for this task: ${PROVIDER}/${v.model}, ${effort}.`;
+    return base + (S.state === "held" ? " Held until this turn ends." : "") + (S.state === "saving" ? " Saving." : "") + (readOnly() ? "" : " Change.");
   };
   const announce = (text) => {
     const node = $("#b-announce");
@@ -71,7 +90,7 @@
     const inner =
       (S.state === "held" ? icon("clock", "icon t-held") : "") +
       `<span class="t-chip-model">${esc(name())}</span>` +
-      (S.state === "unreported" ? "" : `<span class="t-chip-dot" aria-hidden="true">·</span><span class="t-chip-effort">${word(v.effort)}</span>`);
+      (S.state === "unreported" ? "" : `<span class="t-chip-dot" aria-hidden="true">·</span><span class="t-chip-effort">${effortWord(v.model, v.effort)}</span>`);
     const el = readOnly()
       ? Object.assign(document.createElement("p"), { innerHTML: inner })
       : Object.assign(document.createElement("button"), { type: "button", innerHTML: inner + icon("chevron", "icon t-chev") });
@@ -110,9 +129,12 @@
         : `<li role="none"><ul role="group" aria-label="Model" class="t-group"><li class="menu-label" role="presentation">Model</li>` +
           MODELS.map((m) => item("model", m.id, m.id, m.id === v.model, m.unavailable, m.unavailable ? "Not available" : "")).join("") +
           `</ul></li><li class="menu-rule" role="separator"></li>` +
-          `<li role="none"><ul role="group" aria-label="Effort" class="t-group"><li class="menu-label" role="presentation">Effort</li>` +
-          (levels.length ? levels.map((l) => item("effort", l, word(l), l === v.effort)).join("") : item("effort", "", "Not offered", false, true)) +
-          `</ul></li><li class="menu-rule" role="separator"></li>` +
+          (known(v.model) === "unlisted"
+            ? `<li class="t-menu-wait" role="presentation">Effort: ${esc(why(v.model))}</li>`
+            : `<li role="none"><ul role="group" aria-label="Effort" class="t-group"><li class="menu-label" role="presentation">Effort</li>` +
+              (levels.length ? levels.map((l) => item("effort", l, word(l), l === v.effort)).join("") : item("effort", "", "Not offered", false, true)) +
+              `</ul></li>`) +
+          `<li class="menu-rule" role="separator"></li>` +
           `<li class="t-menu-foot" role="presentation">For this task. Otto's own model is in its settings.</li>`;
     $(".conversation").append(menu);
     const r = button.getBoundingClientRect();
@@ -167,13 +189,16 @@
           ? "Saving…"
           : S.shown
             ? `<span class="t-refused">${esc(S.shown)}</span>`
-            : "For this task. Otto's own model is in Settings.";
+            : why(v.model)
+              ? esc(why(v.model)) + (known(v.model) === "failed" ? ` <button type="button" class="button" data-variant="quiet" data-size="sm" data-t-retry>Try again</button>` : "")
+              : "For this task. Otto's own model is in Settings.";
+    const fixed = what => what === "effort" && known(v.model) !== "levels";
     const select = (what, value) =>
-      `<button type="button" class="b-select" data-t-select="${what}" aria-haspopup="menu" aria-expanded="false" aria-label="${what === "model" ? "Model" : "Effort"} for this task: ${esc(value)}"${S.state === "unreported" && what === "effort" ? " disabled" : ""}>` +
+      `<button type="button" class="b-select" data-t-select="${what}" aria-haspopup="menu" aria-expanded="false" aria-label="${what === "model" ? "Model" : "Effort"} for this task: ${esc(value)}"${fixed(what) ? " disabled" : ""}>` +
       `<span class="b-select-label">${what === "model" ? "Model" : "Effort"}</span><span class="b-select-value">${esc(value)}</span>${icon("chevron", "icon b-select-chev")}</button>`;
     const body = readOnly()
-      ? `<dl class="facts"><div><dt>Model</dt><dd>${esc(S.state === "unreported" ? "Not reported" : `${PROVIDER}/${v.model}`)}</dd></div><div><dt>Effort</dt><dd>${word(v.effort)}</dd></div></dl>`
-      : `<div class="b-pair">${select("model", name())}${select("effort", word(v.effort))}</div><p class="b-hint" id="t-details-line">${line}</p>`;
+      ? `<dl class="facts"><div><dt>Model</dt><dd>${esc(S.state === "unreported" ? "Not reported" : `${PROVIDER}/${v.model}`)}</dd></div><div><dt>Effort</dt><dd>${effortWord(v.model, v.effort)}</dd></div></dl>`
+      : `<div class="b-pair">${select("model", name())}${select("effort", effortWord(v.model, v.effort))}</div><p class="b-hint" id="t-details-line">${line}</p>`;
     const section = document.createElement("section");
     section.id = "t-details";
     section.className = "work-section";

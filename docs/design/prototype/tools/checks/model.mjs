@@ -114,6 +114,34 @@ p = await open("tmodel=failed");
 await p.click("#t-chip");
 check("25.2 a list that failed offers Try again", await p.evaluate(() => document.querySelector(".t-menu-wait").textContent.includes("Couldn't load the models.") && document.activeElement.dataset.tRetry !== undefined));
 await p.close();
+for (const [state, words] of [
+  ["loading", "Loading the models…"],
+  ["failed", "Couldn't load the models: The gateway did not answer in time."],
+  ["unlisted", "acme/dev-gone isn't in the gateway's list of models, so its effort levels aren't known."],
+]) {
+  p = await open(`tmodel=${state}&panel=open`);
+  check(`25.2 ${state}: Details says why the levels are not known, keeps the row's effort and never says Not offered`, await p.evaluate((words) => {
+    const effort = document.querySelector('[data-t-select="effort"]');
+    return document.getElementById("t-details-line").textContent.includes(words) && effort.disabled && effort.textContent.includes("Ultra") && !document.getElementById("t-details").textContent.includes("Not offered") && document.getElementById("t-chip").textContent.includes("Ultra");
+  }, words));
+  await p.close();
+}
+p = await open("tmodel=unlisted");
+await p.click("#t-chip");
+check("25.2 a model the list lacks has no Effort group, and the menu says why", await p.evaluate(() => !document.querySelector('.t-menu [aria-label="Effort"]') && document.querySelector(".t-menu").textContent.includes("Effort: acme/dev-gone isn't in the gateway's list") && !document.querySelector(".t-menu").textContent.includes("Not offered")));
+await p.close();
+p = await open("tmodel=nolevels&panel=open");
+check("25.2 a model listed with no levels is Not offered, and only then", await p.evaluate(() => {
+  const effort = document.querySelector('[data-t-select="effort"]');
+  return effort.disabled && effort.textContent.includes("Not offered") && document.getElementById("t-chip").getAttribute("aria-label") === "Model for this task: acme/dev-old, effort not offered. Change.";
+}));
+await p.close();
+p = await open("tmodel=saving");
+check("25.2 saving: the chip shows the new values, aria-busy, and its name says Saving", await p.evaluate(() => {
+  const chip = document.getElementById("t-chip");
+  return chip.getAttribute("aria-busy") === "true" && chip.textContent.includes("dev-2") && chip.getAttribute("aria-label").includes("Saving.");
+}));
+await p.close();
 p = await open("tmodel=unreported");
 check("25.2 a task whose row names no model has no chip and no Model group", await p.evaluate(() => !document.getElementById("t-chip") && !document.getElementById("t-details")));
 await p.close();
