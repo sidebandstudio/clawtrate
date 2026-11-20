@@ -166,6 +166,7 @@ import {
   registerRunAlias,
   registerSteerAlias,
   settleRunFromSendAnswer,
+  settleRunFromWait,
   settleUnboundStops,
   throughRunAliases,
   removeMessage,
@@ -3538,7 +3539,7 @@ export class ClawtrateClient {
         if (!answer || generation !== this.generation || this.incarnations.get(key) !== incarnation)
           return;
         this.updateActivity(key, (activity, ctx) =>
-          settleRunFromSendAnswer(activity, run.id, answer, ctx),
+          settleRunFromWait(activity, run.id, answer, ctx),
         );
       }),
     );

@@ -1558,12 +1558,12 @@ export function historyQueuePairs(
 }
 
 /**
- * The gateway's answer to a send, or its `agent.wait` record of a run, names a run that is
- * already over: a send it aborted before the turn ran (`status: "timeout"`, `summary: "aborted"`,
- * from its abort of a send not yet registered), a run it aborted (`error`, `error: "aborted"`),
- * or one it had already finished (`ok`) or failed (`error`). No event of that run will follow, so
- * the answer settles it. Any other status (`started`, `in_flight`, `accepted`, `pending`,
- * `timeout`) leaves it to the run's events.
+ * The gateway's answer to a send names a run that is already over: a send it
+ * aborted before the turn ran (`status: "timeout"`, `summary: "aborted"`,
+ * from its abort of a send not yet registered), or a send it had already
+ * finished (`ok`) or failed (`error`). No event of that run will follow, so the
+ * answer settles it. Any other status (`started`, `in_flight`, `accepted`)
+ * leaves it to the run's events.
  */
 export function settleRunFromSendAnswer(
   activity: TaskActivity,
@@ -1575,14 +1575,11 @@ export function settleRunFromSendAnswer(
   const endedAt = num(answer.endedAt) ?? ctx.now;
   return updateRun(activity, runId, (run) => {
     if (isTerminal(run.state) || run.state === "queued") return run;
-    if (
-      (status === "timeout" && answer.summary === "aborted") ||
-      (status === "error" && answer.error === "aborted")
-    )
+    if (status === "timeout" && answer.summary === "aborted")
       return finishRun(run, "stopped", ctx, null, endedAt);
     if (status === "ok") return finishRun(run, "completed", ctx, null, endedAt);
     if (status === "error") {
-      const message = str(answer.summary) ?? str(answer.error) ?? "The gateway reported an error.";
+      const message = str(answer.summary) ?? "The gateway reported an error.";
       const raw = rawEvent(ctx, run.id, "send-answer", answer);
       return finishRun(run, "failed", ctx, { message, kind: "gateway", raw }, endedAt);
     }
@@ -2320,6 +2317,42 @@ function terminalFromLifecycle(
         at,
       );
   }
+}
+
+/**
+ * The gateway's `agent.wait` record of a run, asked with no wait. A record of a run that ended
+ * (`ok`, `error`, or a `timeout` with an end, as OpenClaw 2026.10.6's `isTerminalAgentWaitTimeout`
+ * reads it) settles the run as its terminal lifecycle event would. A bare `timeout` (the run is
+ * still going, or the gateway does not know it) and `pending` (still queued) leave it as it is.
+ */
+export function settleRunFromWait(
+  activity: TaskActivity,
+  runId: string,
+  answer: RawRecord,
+  ctx: EngineContext,
+): TaskActivity {
+  const status = str(answer.status);
+  const ended =
+    status === "ok" ||
+    status === "error" ||
+    (status === "timeout" &&
+      answer.pendingError !== true &&
+      (num(answer.endedAt) !== null ||
+        str(answer.stopReason) !== null ||
+        str(answer.livenessState) !== null ||
+        classifyLifecycleTerminal("end", answer) === "hard_timeout"));
+  if (!ended) return activity;
+  return updateRun(activity, runId, (run) =>
+    isTerminal(run.state) || run.state === "queued"
+      ? run
+      : terminalFromLifecycle(
+          run,
+          status === "error" ? "error" : "end",
+          answer,
+          num(answer.endedAt) ?? ctx.now,
+          ctx,
+        ),
+  );
 }
 
 function endingOf(data: RawRecord, previous: RunEnding | null): RunEnding {
