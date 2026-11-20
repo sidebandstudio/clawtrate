@@ -199,7 +199,7 @@ export function Settings({
     </button>
   );
 
-  const accountsSection = useAccountsSection({ accounts, bots, connection, info, announce, toNav });
+  const accountsSection = useAccountsSection({ refreshOnOpen:!initialUpdates || section!=="updates",accounts, bots, connection, info, announce, toNav });
   const usageSection = useUsageSection({ bots, connection, info, announce, toNav });
   const machinesSection = useMachinesSection({
     active: section === "machines",
