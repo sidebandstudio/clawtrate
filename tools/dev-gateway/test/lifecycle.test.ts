@@ -421,6 +421,21 @@ describe("the stand-in image provider of --with-images", () => {
     expect(existsSync(inst.stateDir)).toBe(false);
   });
 
+  it("keeps the previous start's log when it starts again", async () => {
+    const home = tempDir("clawtrate-home-");
+    const inst = fakedInstance(home, tempDir("clawtrate-run-"), "alpha");
+    await start(inst, { seed: false, images: true });
+    await stop(inst);
+    // What an image process that exited early would have left.
+    writeFileSync(join(inst.runDir, "image.log"), "the earlier image process's last words\n");
+    await start(inst, { seed: false, images: true });
+    expect(readFileSync(join(inst.runDir, "image.previous.log"), "utf8")).toBe(
+      "the earlier image process's last words\n",
+    );
+    expect(existsSync(join(inst.runDir, "image.log"))).toBe(true);
+    await reset(inst);
+    }, 30_000);
+
   it("is not started without the option", async () => {
     const home = tempDir("clawtrate-home-");
     const inst = fakedInstance(home, tempDir("clawtrate-run-"), "alpha");

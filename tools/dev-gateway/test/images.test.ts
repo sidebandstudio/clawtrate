@@ -201,6 +201,34 @@ describe("the stand-in image provider", () => {
     expect(requests[2]).toMatchObject({ model: "scripted-image-1", n: 1, size: "1024x1024" });
   });
 
+  it("answers a body that is not an object, and outlives a request cut off mid-body", async () => {
+    const { base } = await open();
+    for (const body of ["null", "[1]", '"text"', "{"]) {
+      const answer = await fetch(`${base}/v1/images/generations`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${IMAGE_API_KEY}` },
+        body,
+      });
+      expect(answer.status, body).toBe(400);
+    }
+    const { request } = await import("node:http");
+    await new Promise<void>((resolve) => {
+      const cut = request(`${base}/v1/images/generations`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${IMAGE_API_KEY}`, "content-length": "1000" },
+      });
+      cut.on("error", () => resolve());
+      cut.write('{"prompt":"half');
+      setTimeout(() => {
+        cut.destroy();
+        resolve();
+      }, 100);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const after = await generate(base, { prompt: IMAGE_PROMPT });
+    expect(after.status).toBe(200);
+  });
+
   it("reads the outcome from the prompt's marker only", () => {
     expect(imageOutcome(IMAGE_PROMPT)).toBe("picture");
     expect(imageOutcome("please refuse this")).toBe("picture");

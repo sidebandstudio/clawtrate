@@ -1205,7 +1205,12 @@ export async function start(
       closeSync(providerLog);
       await waitFor("the scripted provider", () => inst.listening(ports.providerPort), 10_000);
       if (options.images) {
-        const imageLog = openSync(join(inst.runDir, "image.log"), "w");
+        // The previous start's log is kept beside the new one, so an early exit leaves evidence.
+        const imageLogPath = join(inst.runDir, "image.log");
+        if (existsSync(imageLogPath)) {
+          renameSync(imageLogPath, join(inst.runDir, "image.previous.log"));
+        }
+        const imageLog = openSync(imageLogPath, "w");
         spawnRecorded(inst, runId, "image", () =>
           gatedSpawn(
             inst.spawn,

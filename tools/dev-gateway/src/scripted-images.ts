@@ -140,7 +140,7 @@ export function startScriptedImages(options: {
       sendJson(res, 404, { error: { message: `no such endpoint: ${req.method} ${url.pathname}` } });
       return;
     }
-    void readBody(req).then((text) => {
+    const answer = (text: string) => {
       const record: ImageRequestRecord = {
         seq: requests.length + 1,
         at: new Date().toISOString(),
@@ -160,15 +160,22 @@ export function startScriptedImages(options: {
         });
         return;
       }
-      let body: Record<string, unknown>;
+      let parsed: unknown;
       try {
-        body = JSON.parse(text) as Record<string, unknown>;
+        parsed = JSON.parse(text);
       } catch {
         sendJson(res, 400, {
           error: { message: "body is not JSON", type: "invalid_request_error" },
         });
         return;
       }
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        sendJson(res, 400, {
+          error: { message: "body is not a JSON object", type: "invalid_request_error" },
+        });
+        return;
+      }
+      const body = parsed as Record<string, unknown>;
       record.model = typeof body.model === "string" ? body.model : null;
       record.prompt = typeof body.prompt === "string" ? body.prompt : null;
       record.n = typeof body.n === "number" ? body.n : null;
@@ -205,6 +212,16 @@ export function startScriptedImages(options: {
             data: Array.from({ length: count }, () => ({ b64_json: picture })),
           });
         }
+      }
+    };
+    // A body that cannot be read, a request cut off for instance, is answered
+    // if the connection still allows it, and never ends the process.
+    readBody(req).then(answer, (error: unknown) => {
+      log(`image request unreadable: ${error instanceof Error ? error.message : String(error)}`);
+      if (!res.headersSent && !res.destroyed) {
+        sendJson(res, 400, {
+          error: { message: "the body could not be read", type: "invalid_request_error" },
+        });
       }
     });
   });
