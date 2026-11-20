@@ -111,11 +111,11 @@ await p.waitForTimeout(300);
 check("R1 the live region says the same, never 'No results'", (await live(p)) === "No matches in Bots, Tasks, Messages, Links, Routines and Settings. 1 bot's workspace was not searched.", await live(p));
 await p.close();
 
-p = await open("palette=open&marlow=workspace");
-await type(p, "ephyr");
+p = await open("palette=open&marlow=workspace", undefined, { clock: "paused" });
+await p.fill("#s-field", "ephyr");
+await p.clock.runFor(1600);
 const none = await body(p);
 check("R1 all four workspaces answered: no 'No results' title; the sources that finished are named, and Files keeps its qualification", !none.includes("No results for") && (await text(p, ".s-nomatch")).includes("No matches in Bots, Tasks, Messages, Links, Routines and Settings") && (await groupText(p, "files")).includes("Names the gateway returned from the workspaces of Juniper, Marlow, Otto and Pip. Some folders may be skipped.") && (await groupText(p, "files")).includes("No file names returned from Juniper, Marlow, Otto and Pip."));
-await p.waitForTimeout(300);
 check("R1 and the live region names the finished sources and the Files qualification, never No results", (await live(p)) === "No matches in Bots, Tasks, Messages, Links, Routines and Settings. Some folders may be skipped.", await live(p));
 await p.close();
 
@@ -197,16 +197,18 @@ await settle(p);
 check("R1 an announcement queued for a query is dropped when the text changes", !(await said(p)).some((t) => t.includes("3 messages")), (await said(p)).join(" / "));
 await p.close();
 
-p = await open("palette=open&width=phone&scope=bots", { width: 390, height: 844 });
+p = await open("palette=open&width=phone&scope=bots", { width: 390, height: 844 }, { clock: "paused" });
 await recordLive(p);
-await type(p, "backup");
+await p.fill("#s-field", "backup");
+await p.clock.runFor(1200);
 check("R1 the phone announces only its visible scope", (await said(p)).length > 0 && !(await said(p)).some((t) => /message|file|routine/i.test(t)), (await said(p)).join(" / "));
 check("S11 a scope asks only its own sources", (await requests(p)).length === 0);
 await p.close();
 
-p = await open("palette=open&width=phone&scope=groups", { width: 390, height: 844 });
+p = await open("palette=open&width=phone&scope=groups", { width: 390, height: 844 }, { clock: "paused" });
 await recordLive(p);
-await type(p, "backup");
+await p.fill("#s-field", "backup");
+await p.clock.runFor(1200);
 check("R1 Group Chats always says its one line, with no request and never No results", (await said(p)).length > 0 && (await said(p)).every((t) => t === "Group chats aren't part of Clawtrate yet.") && (await requests(p)).length === 0, (await said(p)).join(" / "));
 await p.close();
 
