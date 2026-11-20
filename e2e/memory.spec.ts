@@ -51,12 +51,19 @@ async function openMemory(page: Page) {
   return memory;
 }
 
+// One session for every ask: a session per ask would fill Otto's rail and push
+// the seeded tasks behind "Show all" for the specs that run after this one.
+let memoryKey: string;
+
 async function askMemory() {
-  const { key } = await gateway.request<{ key: string }>("sessions.create", { agentId });
-  const run = await gateway.send(key, "What do you remember about me?");
+  const run = await gateway.send(memoryKey, "What do you remember about me?");
   expect((await gateway.terminal(String(run.runId))).state).toBe("final");
-  const history = await gateway.request("chat.history", { sessionKey: key, limit: 6 });
-  return JSON.stringify(history);
+  // Only the newest reply: the session's history keeps what earlier turns answered.
+  const history = await gateway.request<{ messages: { role: string; content: unknown }[] }>(
+    "chat.history",
+    { sessionKey: memoryKey, limit: 6 },
+  );
+  return JSON.stringify(history.messages.filter((message) => message.role === "assistant").at(-1));
 }
 
 test.describe.configure({ mode: "serial" });
@@ -75,6 +82,7 @@ test.beforeAll(async () => {
     content: original,
     ...(hash ? { expectedHash: hash } : { expectedMissing: true }),
   });
+  memoryKey = (await gateway.request<{ key: string }>("sessions.create", { agentId })).key;
 });
 
 test.afterAll(async () => gateway?.close());
