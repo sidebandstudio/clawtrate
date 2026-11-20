@@ -392,6 +392,22 @@ test.describe("1440", () => {
     await expect(page.getByTestId("b-announcer")).toHaveText("Deleted Plan the week");
   });
 
+  test("F-192 F-352: a row's menu and a delete confirmation close when the connection is replaced", async ({
+    page,
+  }) => {
+    await open(page);
+    await row(page, "Morning digest").locator(".r-row-main").click({ button: "right" });
+    await expect(page.getByRole("menu")).toBeVisible();
+    // Another hello at the address: the menu's routine was read on the last connection.
+    await setConnection(page, { connectedAt: Date.now() + 5_000 });
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await row(page, "Morning digest").locator(".r-row-main").click({ button: "right" });
+    await page.getByRole("menu").getByRole("menuitem", { name: "Delete…" }).click();
+    await expect(page.getByTestId("routine-delete")).toBeVisible();
+    await setConnection(page, { connectedAt: Date.now() + 10_000 });
+    await expect(page.getByTestId("routine-delete")).toHaveCount(0);
+  });
+
   test("F-192: right-click, Shift+F10 or the Menu key on a routine offers Open, Pause or Resume, Run now, Edit and Delete", async ({
     page,
   }) => {

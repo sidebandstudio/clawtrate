@@ -895,6 +895,14 @@ export function RoutinesView({
   const closeEditor = () => setEditor(null);
   // The delete confirmation holds nothing typed: it closes when admin goes.
   if (!admin && deleting) setDeleting(null);
+  // A row's menu and the delete confirmation name a routine by id from the list they
+  // were opened on: a new connection, maybe another gateway at the address, closes them.
+  const [openedOn, setOpenedOn] = useState(state.connection.connectedAt);
+  if (openedOn !== state.connection.connectedAt) {
+    setOpenedOn(state.connection.connectedAt);
+    setMenu(null);
+    setDeleting(null);
+  }
   const live = shown && !deleted ? shown.routine : null;
   const rowEntries = (routine: Routine): MenuEntry[] =>
     routineEntries(
