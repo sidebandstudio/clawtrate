@@ -4856,6 +4856,9 @@ export class ClawtrateClient {
     this.protocol?.stop();
     this.protocol = null;
     this.streams.clear();
+    // A map read, or its retry, belongs to the connection that is gone; history read after the
+    // next hello reads the map again.
+    for (const key of this.toolReads.keys()) this.forgetToolMapRead(key);
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
     for (const timer of this.historyTimers.values()) clearTimeout(timer);

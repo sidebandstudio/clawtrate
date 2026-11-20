@@ -242,6 +242,30 @@ describe("a released task's map reads", () => {
       client.stop();
     }
   });
+
+  it("a closed connection clears a delayed tool-map retry, so it asks nothing of the connection that is gone", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["tools.effective"] = () => answer([entry("old__tool", "old", "tool")]);
+    const { client, transcript } = await openTask({ gateway });
+    await until(() => "old__tool" in (transcript()?.mcpTools ?? {}));
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    const cleared = vi.spyOn(globalThis, "clearTimeout");
+    try {
+      gateway.handlers["tools.effective"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "busy" });
+      };
+      gateway.emit("plugins.changed", {});
+      await until(() => scheduled.mock.calls.some(([, ms]) => ms === 1000));
+      const index = scheduled.mock.calls.findIndex(([, ms]) => ms === 1000);
+      const retryTimer = scheduled.mock.results[index]!.value;
+      client.stop();
+      expect(cleared).toHaveBeenCalledWith(retryTimer);
+    } finally {
+      scheduled.mockRestore();
+      cleared.mockRestore();
+      client.stop();
+    }
+  });
 });
 
 describe("the inventory's built-in and plugin tools, and the bot's workspace root", () => {
