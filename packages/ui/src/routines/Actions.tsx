@@ -489,6 +489,8 @@ function ZoneDialog({
   // A rewrite names the gateway the routines were read from; the engine refuses
   // a write for another (routines.ts `blocked`).
   const gateway = useClawtrateState().connection.gatewayId;
+  // The gateway the writes went to: a read-back from any other proves nothing about them.
+  const sentTo = useRef(gateway);
   const [zone, setZone] = useState("auto");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ZoneResult | null>(null);
@@ -511,6 +513,10 @@ function ZoneDialog({
       const { routine, schedule } = entry;
       try {
         const current = await bridge.invoke({ type: "readRoutine", id: routine.id });
+        if (bridge.getState().connection.gatewayId !== sentTo.current) {
+          unresolved.push(entry);
+          continue;
+        }
         if (current && sameSchedule(current.schedule, schedule)) changed.push(routine.name);
         else if (current?.schedule.tz && current.schedule.tz !== schedule.tz)
           notes.push(
@@ -541,8 +547,9 @@ function ZoneDialog({
     setBusy(true);
     onChecking(true);
     let fresh: Routine[];
+    let omitted: number;
     try {
-      fresh = (await bridge.invoke({ type: "readBotRoutines", botId })).routines;
+      ({ routines: fresh, omitted } = await bridge.invoke({ type: "readBotRoutines", botId }));
     } catch (error) {
       setResult({ changed: [], notes: [errorText(error)], pending: [] });
       onChecking(false);
@@ -561,6 +568,7 @@ function ZoneDialog({
       return;
     }
     setReconfirm(false);
+    sentTo.current = gateway;
     const outcome: ZoneResult = { changed: [], notes: [], pending: [] };
     for (const routine of next) {
       const original = fieldsOf(routine);
@@ -591,6 +599,10 @@ function ZoneDialog({
         outcome.pending.push({ routine, schedule });
       }
     }
+    if (omitted > 0)
+      outcome.notes.push(
+        `${omitted} more of ${botName}'s routines weren't listed, so they weren't changed.`,
+      );
     await settle(outcome);
   };
   const needsCheck = result && result.pending.length > 0;

@@ -8,8 +8,9 @@
 //     no routines, a failed read, still loading, Morning digest running now,
 //     the gateway's scheduler off, Morning digest with 27 recorded runs, or
 //     more routines than the client keeps, one of them a bot's it does not hold
-//   routinehold=<id>   a routine's runs and conversations wait for releaseRoutineReads()
-//   routinefail=<id>   a routine's runs and conversations fail
+//   routinehold=<id>   a routine's read, runs and conversations wait for releaseRoutineReads()
+//   routinefail=<id>   a routine's read, runs and conversations fail
+//   botomitted=<n>     a bot's own routine read counts n more it did not list
 //   calendar=fail|partial   the calendar's read fails, or says it is partial
 // With `access=admin` (accounts.ts) the routines can be changed, and:
 //   save=refused|noanswer|conflict|changed   how the next save ends; `noanswer`
@@ -51,6 +52,7 @@ export type RoutineParams = {
   run?: "already" | "fail" | "held" | null;
   remove?: "fail" | null;
   hooks?: boolean;
+  botOmitted?: number;
 };
 
 const oneOf = <T extends string>(value: string | null, options: readonly T[]): T | null =>
@@ -80,6 +82,7 @@ export function routineParams(params: URLSearchParams): RoutineParams {
     run: oneOf(params.get("run"), ["already", "fail", "held"] as const),
     remove: oneOf(params.get("delete"), ["fail"] as const),
     hooks: params.get("hooks") === "on",
+    botOmitted: Number(params.get("botomitted")) || 0,
   };
 }
 
@@ -536,7 +539,7 @@ export function routineCommand(
       return later(300, () => made);
     }
     case "readRoutine":
-      return later(300, () => kept(command.id) ?? null);
+      return answer(command.id, () => null).then(() => later(300, () => kept(command.id) ?? null));
     case "updateRoutine": {
       if (!admin()) return Promise.resolve({ status: "not-sent", reason: "admin" });
       if (!bound(command.gateway))
@@ -628,7 +631,7 @@ export function routineCommand(
     case "readBotRoutines":
       return answer(command.botId, () => ({
         routines: fixtureRoutineList(now, params).filter((each) => each.botId === command.botId),
-        omitted: 0,
+        omitted: params.botOmitted ?? 0,
       }));
     case "readRoutineRuns": {
       const routine = find(command.id);

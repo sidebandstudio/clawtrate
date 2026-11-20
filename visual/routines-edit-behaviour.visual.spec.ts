@@ -498,6 +498,70 @@ test.describe("1440", () => {
     await expect(row(page, "Nightly backup check")).toContainText("Every day at 3:30 AM, Berlin");
   });
 
+  test("F-196: a zone change is confirmed only by the gateway it was written to", async ({
+    page,
+  }) => {
+    await open(page, `${ADMIN}&save=noanswer&routinehold=routine-backup`);
+    const gateway = await connectionValue(page, "gatewayId");
+    await view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
+    await view(page).getByTestId("routines-zone").getByRole("button", { name: "Change…" }).click();
+    const dialog = page.getByTestId("routines-zone-dialog");
+    await dialog.getByLabel("Time zone").selectOption("Europe/Berlin");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    // The write was sent to this gateway; another is connected before it is read back.
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } }
+          ).clawtrateFixture.sent.some((each) => each.type === "updateRoutine"),
+        ),
+      )
+      .toBe(true);
+    await setConnection(page, { gatewayId: "another-gateway" });
+    const release = () =>
+      page.evaluate(() =>
+        (window as unknown as { releaseRoutineReads(): void }).releaseRoutineReads(),
+      );
+    const unconfirmed = "Couldn't confirm the time zone of Nightly backup check.";
+    await expect(async () => {
+      await release();
+      await expect(dialog).toContainText(unconfirmed, { timeout: 500 });
+    }).toPass();
+    // Checking again on the other gateway confirms nothing either.
+    await dialog.getByRole("button", { name: "Check now" }).click();
+    await expect(async () => {
+      await release();
+      await expect(dialog.getByRole("button", { name: "Check now" })).toBeEnabled({
+        timeout: 500,
+      });
+    }).toPass();
+    await expect(dialog).toContainText(unconfirmed);
+    await setConnection(page, { gatewayId: gateway });
+    await dialog.getByRole("button", { name: "Check now" }).click();
+    await expect(async () => {
+      await release();
+      await expect(dialog).toHaveCount(0, { timeout: 500 });
+    }).toPass();
+    await expect(page.getByTestId("b-announcer")).toHaveText("Changed the time zone of 1 routine");
+  });
+
+  test("F-196: a zone change says which of a bot's routines it couldn't list, and doesn't call itself done", async ({
+    page,
+  }) => {
+    await open(page, `${ADMIN}&botomitted=3`);
+    await view(page).getByRole("combobox", { name: "Bots" }).selectOption({ label: "Otto" });
+    await view(page).getByTestId("routines-zone").getByRole("button", { name: "Change…" }).click();
+    const dialog = page.getByTestId("routines-zone-dialog");
+    await dialog.getByLabel("Time zone").selectOption("Europe/Berlin");
+    await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog.getByTestId("zone-failed")).toHaveText(
+      "Changed Nightly backup check. 3 more of Otto's routines weren't listed, so they weren't changed.",
+    );
+    await expect(dialog.getByRole("button", { name: "Close" })).toBeFocused();
+    await expect(page.getByTestId("b-announcer")).not.toHaveText(/Changed the time zone/u);
+  });
+
   test("F-349 F-358: with admin and the gateway's hooks on, the page shows their address to copy; a routine has none of its own", async ({
     page,
     context,
