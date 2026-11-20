@@ -35,6 +35,7 @@
 //   cards        a question and an approval from device A, as B and a read-only device see them
 //   order        two replies: the order their runs end against their saved timestamps
 //   ownqueued    a task-wide abort by the device whose input is queued; a run-specific abort
+//   adminapproval  an admin connection lists and answers an approval bound to another device
 //   replaced     an old sessionId alone against a task already replaced; a member removed mid-run
 //   guard        a send to a task deleted after the check, unguarded and guarded
 //   delbot     a member bot deleted (admin): what is left of its task
@@ -617,6 +618,21 @@ const experiments: Record<string, () => Promise<void>> = {
     out("Marlow's run after", await ends(a, [String(run.runId)], 60_000));
     out("Marlow's task after", { exists: !!(await describe(m)).sessionId });
     await call(a, "users.prefs.set", { entries: { [key]: null } });
+  },
+
+  async adminapproval() {
+    const a = await device("a");
+    const admin = await device("admin", ADMIN);
+    const o = await newTask(a, "otto", `Group admin approval ${Date.now()}`);
+    await subscribe(a, o, true);
+    const seq = a.lastSeq;
+    await call(a, "chat.send", { sessionKey: o, message: "#approve", idempotencyKey: randomUUID() });
+    const req = rec((await a.waitFor("approval", (e) => e.event === "exec.approval.requested", 60_000, seq)).payload);
+    out("a: the request", { id: req.id, agentId: rec(req.request).agentId, runId: rec(req.request).runId });
+    const listed = await call(admin, "exec.approval.list", {});
+    out("admin: exec.approval.list holds it", Array.isArray(listed.result) && (listed.result as unknown[]).some((x) => rec(x).id === req.id));
+    out("admin: deny", await call(admin, "exec.approval.resolve", { id: req.id, decision: "deny" }));
+    out("a: allow afterwards", await call(a, "exec.approval.resolve", { id: req.id, decision: "allow-once" }));
   },
 
   async delbot() {
