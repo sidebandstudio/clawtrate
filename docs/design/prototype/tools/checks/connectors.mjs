@@ -114,18 +114,9 @@ const STATES = [
   ["screen=server-remove-confirm&id=notes-work", ["Remove notes-work from the gateway?", "the server's entry in the gateway's settings, with its headers", "its tools", "Removing this entry leaves any saved sign-ins in the gateway's state. The gateway keeps them unencrypted.", "To clear them, run this on the gateway's machine before removing the entry:", "openclaw mcp logout notes-work", "openclaw mcp unset notes-work"]],
   ["screen=server-remove-confirm&id=team-notes", ["Removing this entry leaves any saved sign-ins in the gateway's state. The gateway keeps them unencrypted.", "To remove it and clear them, run this on the gateway's machine instead:", "openclaw mcp unset team-notes"]],
   ["screen=server-remove-confirm&id=search-index", ["Remove search-index from the gateway?", "nothing else: an entry without OAuth has no sign-in the gateway keeps"]],
-  ["screen=server-removed&id=notes-work", ["Removed notes-work.", "The gateway's settings no longer have it."]],
-  ["screen=server-remove-failed&id=notes-work", ["notes-work is still there:", "Try again"]],
-  ["screen=server-changed&id=notes-work", ["The gateway's settings changed.", "Review the current entry before trying again."]],
-  ["screen=server-unconfirmed&id=notes-work", ["Couldn't confirm the change."]],
-  ["screen=add-server-notadded&name=notes-home", ["notes-home wasn't added.", "Try again"]],
-  ["screen=add-server-unconfirmed&name=notes-home", ["Couldn't confirm the change.", "Check again"]],
-  ["screen=add-server-changed&name=notes-home", ["The gateway's settings changed.", "Review the current entry before trying again."]],
   ["screen=add-server", ["Add a custom connector", "Type", "Remote HTTPS", "Command", "Name", "Server URL", "Headers", "Kept by the gateway in its settings file, not encrypted there. Clawtrate can't read a value back once it's saved.", "Sign-in", "None", "Sign in with OAuth", "OpenClaw registers itself with the server when it signs in.", "Add to gateway"]],
   ["screen=add-server&type=command", ["Command", "Arguments", "One per line. Each line is one argument: spaces at its start and end are removed, spaces inside it stay, and an empty line is dropped. Nothing goes through a shell.", "Working folder", "The gateway can start this program on its own machine, as the user it runs as, when it needs this server. The program has that user's access to files, programs and the network.", "The gateway can show saved commands and arguments to operators who can read its settings.", "Continue"]],
   ["screen=add-server&access=read", ["Read-only.", "Adding a custom connector needs admin access."]],
-  ["screen=add-server-refused&name=notes-work", ["Couldn't add notes-work:", "Expected http:// or https:// URL", "Nothing saved."]],
-  ["screen=add-server-checking&name=notes-work", ["Checking what the gateway has…"]],
   ["screen=signin-cli&id=notes-work&server=1", ["Sign in to notes-work", "On the gateway's machine, run:", "openclaw mcp login notes-work", "If it prints an address, open it in a browser and sign in.", "If the terminal is listening for the callback, it waits up to five minutes. Follow the terminal's instructions to finish with a code if the callback cannot reach it.", "It may also find a saved sign-in and say so without printing an address.", "Or sign in from Settings on the gateway's own web page.", "Afterwards this page still reads \"Not reported\"", "Back to notes-work"]],
   ["screen=connector&id=calendrop", ["Open Settings on your OpenClaw gateway to sign in to calendrop.", "Check again"]],
   ["screen=connector&id=calendrop&checked=1", ["Read again at 5:12 PM."]],
@@ -309,13 +300,6 @@ await walk("turn off while the gateway is busy, then try again", "screen=turnoff
   await p.close();
 }
 await walk("remove a connector", "screen=installed", [[row("Tasktide"), "connector"], [link("Remove…"), "remove-confirm"], [link("Remove"), "removed"], [link("Back to the list"), "installed"]]);
-await walk("remove a tool server", "screen=installed", [[row("notes-work"), "server"], [link("Remove…"), "server-remove-confirm"], [link("Remove"), "server-removed"]], ["Removed notes-work."]);
-await walk("a tool server still there after removal", "screen=server-remove-confirm&id=notes-work", [[link("Still has it"), "server-remove-failed"], [link("Try again"), "server-remove-confirm"]]);
-await walk("removal: the settings changed since the confirmation opened", "screen=server-remove-confirm&id=notes-work", [[link("Settings changed"), "server-changed"], [link("Review notes-work"), "server"]]);
-await walk("removal: the read fails", "screen=server-remove-confirm&id=notes-work", [[link("The read fails"), "server-unconfirmed"], [link("Check again"), "server"]]);
-await walk("add: no answer, then the read-back has no such entry", "screen=add-server-saved&name=notes-home", [[link("No answer"), "add-server-checking"], [link("Has no such entry"), "add-server-notadded"], [link("Try again"), "add-server"]]);
-await walk("add: no answer, then the read-back differs", "screen=add-server-saved&name=notes-home", [[link("No answer"), "add-server-checking"], [link("Differs, or the read fails"), "add-server-unconfirmed"], [link("Check again"), "add-server-checking"], [link("Matches what you reviewed"), "add-server-saved"]]);
-await walk("add: the settings changed since the form opened", "screen=add-server-saved&name=notes-home", [[link("Settings changed"), "add-server-changed"], [link("Back to the form"), "add-server"]]);
 await walk("add another account to a tool server", "screen=server&id=notes-work", [[link("Add another account"), "add-server"]]);
 for (const [width, label] of [[1440, "desktop"], [390, "phone"]]) {
   const p = await open("screen=server&id=notes-work", { width, height: width === 390 ? 844 : 900 });
@@ -366,11 +350,127 @@ await walk("add a server by address: Clawtrate's checks, then saved", "screen=ad
   await p.fill("#c-url", "https://notes-home.example/mcp");
   await p.locator("input[name=signin][value=oauth]").check();
   await submit(p);
-  check("an https URL is saved", await at(p, "add-server-saved"));
+  check("an https URL is sent, and nothing says Added before the read", (await at(p, "write-sent")) && !(await text(p)).includes("Added"));
+  await finishWrite(p);
+  check("an https URL is saved after the read matches", (await text(p)).includes("Added notes-home."));
   check("with OAuth, Sign in is the next step", (await p.getByRole("link", { name: "Sign in", exact: true }).count()) === 1);
-  await link("Refused")(p);
-  check("then the gateway refuses it", await at(p, "add-server-refused"));
   await p.close();
+}
+// Change 2: the gateway's reply and the fresh read, chosen independently, at both widths.
+const startAdd = async (width) => {
+  const p = await open("screen=add-server", { width, height: width === 390 ? 844 : 900 });
+  await p.fill("#c-name", "notes-home");
+  await p.fill("#c-url", "https://notes-home.example/mcp");
+  await p.locator(".c-h-name").first().fill("Authorization");
+  await submit(p);
+  await at(p, "write-sent");
+  return p;
+};
+for (const [width, label] of [[1440, "desktop"], [390, "phone"]]) {
+  const size = { width, height: width === 390 ? 844 : 900 };
+  const cases = [
+    ["Refused", "Has no such entry", ["Couldn't add notes-home:", "Expected http:// or https:// URL"]],
+    ["No reply", "Has no such entry", ["The gateway's settings have no entry named notes-home."]],
+    ["No reply", "Matches every reviewed field", ["The gateway lists an entry with these settings.", "Couldn't confirm this save."]],
+    ["Refused", "Matches every reviewed field", ["The gateway lists an entry with these settings.", "Couldn't confirm this save."]],
+    ["Accepted", "Has a different entry", ["Couldn't confirm the change.", "The gateway lists a different entry.", "https://notes-other.example/mcp"]],
+    ["Accepted", "Read failed", ["Couldn't confirm the change.", "The gateway's settings couldn't be read back."]],
+    ["Accepted", "Matches every reviewed field", ["Added notes-home.", "The gateway lists this server.", "The gateway hides saved header values."]],
+  ];
+  for (const [reply, read, words] of cases) {
+    const p = await startAdd(width);
+    const first = await text(p);
+    await link(reply)(p);
+    await at(p, "write-read");
+    const before = await text(p);
+    await link(read)(p);
+    await at(p, "write-result");
+    const t = await text(p);
+    const lack = missing(t, words);
+    const wrong = !(reply === "Accepted" && read === "Matches every reviewed field") && t.includes("Added notes-home");
+    check(`${label}: add, ${reply}, then the read ${read} (change 2)`, !lack && !wrong && !first.includes("Added") && !before.includes("Added"), lack);
+    await p.close();
+  }
+  {
+    const p = await startAdd(width);
+    await link("Accepted")(p);
+    await at(p, "write-read");
+    await link("Read failed")(p);
+    await at(p, "write-result");
+    await link("Check again")(p);
+    check(`${label}: Check again repeats the read only`, await at(p, "write-read"));
+    await link("Read failed")(p);
+    check(`${label}: and can fail again`, (await at(p, "write-result")) && (await text(p)).includes("The gateway's settings couldn't be read back."));
+    await link("Check again")(p);
+    await at(p, "write-read");
+    await link("Matches every reviewed field")(p);
+    await at(p, "write-result");
+    check(`${label}: or then confirm the save`, (await text(p)).includes("Added notes-home."));
+    await p.close();
+  }
+  {
+    const p = await startAdd(width);
+    await link("Settings changed")(p);
+    await at(p, "write-read");
+    await link("The name now exists")(p);
+    await at(p, "write-result");
+    const t = await text(p);
+    check(`${label}: a stale hash, and the name now exists: the gateway's entry is shown apart, and nothing is retried`, t.includes("The gateway's settings changed.") && t.includes("There's already a server named notes-home on the gateway.") && t.includes("https://notes-other.example/mcp") && !t.includes("Added"));
+    await link("Back to the form")(p);
+    await at(p, "add-server");
+    check(`${label}: the draft is kept, and another name is required`, (await p.inputValue("#c-url")) === "https://notes-home.example/mcp" && (await text(p)).includes("There's already a server named notes-home on the gateway."));
+    await submit(p);
+    await p.waitForTimeout(50);
+    check(`${label}: the same name is refused again before anything is sent`, (await screenOf(p)) === "add-server");
+    await p.close();
+  }
+  for (const [reply, read, words, forbidden] of [
+    ["Accepted", "No such entry", ["Removed notes-work.", "The gateway's settings no longer have it."], null],
+    ["Refused", "Still has it", ["notes-work is still in the gateway's settings.", "Another plugin or config operation is already running"], "Removed"],
+    ["No reply", "Still has it", ["notes-work is still in the gateway's settings."], "Removed"],
+    ["Accepted", "Read failed", ["Couldn't confirm the change.", "The gateway's settings couldn't be read back."], "Removed"],
+  ]) {
+    const p = await open("screen=server&id=notes-work", size);
+    await link("Remove…")(p);
+    await at(p, "server-remove-confirm");
+    await inConfirm("Remove")(p);
+    await at(p, "write-sent");
+    const before = await text(p);
+    await link(reply)(p);
+    await at(p, "write-read");
+    await link(read)(p);
+    await at(p, "write-result");
+    const t = await text(p);
+    const lack = missing(t, words);
+    check(`${label}: remove, ${reply}, then the read ${read}`, !lack && !before.includes("Removed") && (!forbidden || !t.includes(forbidden)), lack);
+    if (read === "Read failed") {
+      await link("Check again")(p);
+      await at(p, "write-read");
+      await link("Read failed")(p);
+      await at(p, "write-result");
+      check(`${label}: an unconfirmed removal's Check again can stay unavailable`, (await text(p)).includes("couldn't be read back"));
+      await link("Check again")(p);
+      await at(p, "write-read");
+      await link("Still has it")(p);
+      await at(p, "write-result");
+      check(`${label}: or land on present`, (await text(p)).includes("is still in the gateway's settings."));
+    }
+    await p.close();
+  }
+  {
+    const p = await open("screen=server&id=notes-work", size);
+    await link("Remove…")(p);
+    await inConfirm("Remove")(p);
+    await at(p, "write-sent");
+    await link("Settings changed")(p);
+    await at(p, "write-read");
+    await p.getByRole("link").filter({ hasText: /No such entry|Still has it|Read failed/ }).first().click();
+    await at(p, "write-result");
+    check(`${label}: removal with a stale hash asks for a review, and offers no retry`, (await text(p)).includes("Review the current entry before trying again.") && (await p.getByRole("link", { name: "Remove", exact: true }).count()) === 0);
+    await link("Review notes-work")(p);
+    check(`${label}: and reviewing goes back to the entry`, await at(p, "server"));
+    await p.close();
+  }
 }
 {
   const p = await open("screen=add-server");

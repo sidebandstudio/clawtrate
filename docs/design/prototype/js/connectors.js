@@ -189,7 +189,7 @@
     ["add-server", "Add a custom connector"],
   ];
   const navOf = (s) =>
-    s.startsWith("browse") || s.startsWith("app") || s.startsWith("add-") && !s.startsWith("add-server") ? "browse" : s.startsWith("add-server") || s === "command-confirm" ? "add-server" : "installed";
+    s.startsWith("browse") || s.startsWith("app") || s.startsWith("add-") && !s.startsWith("add-server") ? "browse" : s.startsWith("add-server") || s === "command-confirm" || (s.startsWith("write-") && params.get("op") !== "remove") ? "add-server" : "installed";
   const windowHtml = ({ title, body, back, foot = "", pane = "section", label }) => {
     const current = navOf(screen);
     return (
@@ -383,7 +383,7 @@
             `<fieldset class="c-type"><legend>Type</legend><div class="c-seg" role="radiogroup" aria-label="Type">` +
             `<a role="radio" aria-checked="${remote}" href="${esc(go("add-server", { type: "remote" }))}">Remote HTTPS</a>` +
             `<a role="radio" aria-checked="${!remote}" href="${esc(go("add-server", { type: "command" }))}">Command</a></div></fieldset>` +
-            field("c-name", "Name", base ? "" : raw.name || "", "Letters, digits, hyphens and underscores. Bots see it in tool names.", "notes-work") +
+            field("c-name", "Name", base ? "" : raw.name || "", "Letters, digits, hyphens and underscores. Bots see it in tool names.", "notes-work", params.get("conflict") ? `There's already a server named ${d.reviewed?.name || ""} on the gateway.` : "") +
             (remote
               ? field("c-url", "Server URL", base ? base.url : raw.url || "", "", "https://") +
                 `<fieldset class="c-headers"><legend>Headers</legend><div id="c-header-rows">` +
@@ -407,9 +407,9 @@
         granted(),
     };
   };
-  const field = (id, label, value, hint, placeholder) =>
-    `<label class="c-field"><span>${label}</span><input class="input" id="${id}" value="${esc(value)}" placeholder="${esc(placeholder)}" aria-describedby="${id}-error${hint ? ` ${id}-hint` : ""}" autocomplete="off" />` +
-    `<span class="c-error" id="${id}-error" aria-live="polite"></span>${hint ? `<span class="c-line" id="${id}-hint">${hint}</span>` : ""}</label>`;
+  const field = (id, label, value, hint, placeholder, error = "") =>
+    `<label class="c-field"><span>${label}</span><input class="input" id="${id}" value="${esc(value)}" placeholder="${esc(placeholder)}" aria-describedby="${id}-error${hint ? ` ${id}-hint` : ""}"${error ? ' aria-invalid="true"' : ""} autocomplete="off" />` +
+    `<span class="c-error" id="${id}-error" aria-live="polite">${esc(error)}</span>${hint ? `<span class="c-line" id="${id}-hint">${hint}</span>` : ""}</label>`;
   const radio = (nameAttr, value, label, checked) =>
     `<label class="c-radio"><input type="radio" name="${nameAttr}" value="${value}"${checked ? " checked" : ""} /><span>${label}</span></label>`;
 
@@ -629,7 +629,7 @@
     server: () => windowHtml(serverPage()),
     "server-remove-confirm": () => {
       const name = params.get("id") || "notes-work";
-      const s = SERVERS[name];
+      const s = serverOf(name);
       return (
         windowHtml(serverPage()) +
         confirm(
@@ -637,26 +637,9 @@
           goes([`the server's entry in the gateway's settings${s.kind === "remote" ? ", with its headers" : ""}`, "its tools"], [s.signin ? "Removing this entry leaves any saved sign-ins in the gateway's state. The gateway keeps them unencrypted. The gateway finds them again if a server with the same name and URL is added." : "nothing else: an entry without OAuth has no sign-in the gateway keeps"]) +
             (s.signin === "oauth" ? `<p>To clear them, run this on the gateway's machine before removing the entry:</p>${command(`openclaw mcp logout ${name}`, "sign-out command")}<p>or remove it there with this, which clears them too:</p>${command(`openclaw mcp unset ${name}`, "removal command")}` : "") +
             (s.signin === "each" ? `<p>To remove it and clear them, run this on the gateway's machine instead:</p>${command(`openclaw mcp unset ${name}`, "removal command")}` : ""),
-          [link("Cancel", "server", { id: name }, { variant: "quiet" }), link("Remove", "server-removed", { id: name }, { variant: "primary" })],
-          proto("the gateway", [link("Still has it", "server-remove-failed", { id: name }, { variant: "quiet" }), link("Settings changed", "server-changed", { id: name }, { variant: "quiet" }), link("The read fails", "server-unconfirmed", { id: name }, { variant: "quiet" })]),
+          [link("Cancel", "server", { id: name }, { variant: "quiet" }), `<a class="button" data-variant="primary" data-size="sm" href="${esc(go("write-sent", { op: "remove" }))}" data-remove="${esc(name)}">Remove</a>`],
         )
       );
-    },
-    "server-removed": () => {
-      const name = params.get("id") || "notes-work";
-      return windowHtml({ title: name, back: go("installed"), body: result("", "check", `Removed ${name}.`, "The gateway's settings no longer have it.") + `<div class="c-actions">${link("Back to the list", "installed")}</div>` });
-    },
-    "server-remove-failed": () => {
-      const name = params.get("id") || "notes-work";
-      return windowHtml({ title: name, back: go("server", { id: name }), body: note("danger", `${name} is still there:`, "Another plugin or config operation is already running; retry when it completes.", `<div class="c-actions">${link("Try again", "server-remove-confirm", { id: name })}</div>`) });
-    },
-    "server-changed": () => {
-      const name = params.get("id") || "notes-work";
-      return windowHtml({ title: name, back: go("server", { id: name }), body: note("warn", "The gateway's settings changed.", "Review the current entry before trying again.", `<div class="c-actions">${link(`Review ${name}`, "server", { id: name })}</div>`) });
-    },
-    "server-unconfirmed": () => {
-      const name = params.get("id") || "notes-work";
-      return windowHtml({ title: name, back: go("server", { id: name }), body: note("warn", "Couldn't confirm the change.", "The gateway's settings couldn't be read back.", `<div class="c-actions">${link("Check again", "server", { id: name })}</div>`) });
     },
     "add-server": () => windowHtml(addServerForm()),
     "command-confirm": () => {
@@ -671,35 +654,99 @@
             (r.cwd ? `<div><dt>Working folder</dt><dd><code class="c-cmd" data-c="cwd">${esc(r.cwd)}</code></dd></div>` : "") +
             `</dl>` +
             `<p>The gateway can start this program on its own machine, as the user it runs as, when it needs this server. The program has that user's access to files, programs and the network.</p>`,
-          [link("Cancel", "add-server", { type: "command", focus: "c-submit" }, { variant: "quiet" }), link("Add command server", "add-server-saved", { type: "command" }, { variant: "primary" })],
+          [link("Cancel", "add-server", { type: "command", focus: "c-submit" }, { variant: "quiet" }), link("Add command server", "write-sent", { op: "add" }, { variant: "primary" })],
         )
       );
     },
-    "add-server-saved": () => {
-      const r = draft().reviewed || { name: "notes-work", kind: "remote", url: "https://notes.example/mcp", headers: [], signin: "none" };
+    // A server write (section 12): sent with the reviewed hash, then the gateway's reply, then a fresh read.
+    "write-sent": () => {
+      const op = params.get("op") || "add";
+      const name = (op === "remove" ? store.get("removing") : draft().reviewed?.name) || "notes-work";
+      return windowHtml({
+        title: op === "remove" ? name : "Add a custom connector",
+        body:
+          `<p class="c-state" aria-busy="true" data-c="checking">Checking what the gateway has…</p>` +
+          proto("the gateway's reply", [
+            link("Accepted", "write-read", { op, reply: "accepted" }, { variant: "quiet" }),
+            link("Refused", "write-read", { op, reply: "refused" }, { variant: "quiet" }),
+            link("No reply", "write-read", { op, reply: "lost" }, { variant: "quiet" }),
+            link("Settings changed", "write-read", { op, reply: "stale" }, { variant: "quiet" }),
+          ]),
+      });
+    },
+    "write-read": () => {
+      const op = params.get("op") || "add";
+      const reply = params.get("reply") || "accepted";
+      const name = (op === "remove" ? store.get("removing") : draft().reviewed?.name) || "notes-work";
+      const choices =
+        op === "remove"
+          ? [["No such entry", "absent"], ["Still has it", "present"], ["Read failed", "failed"]]
+          : reply === "stale"
+            ? [["The name now exists", "taken"], ["Has no such entry", "absent"], ["Read failed", "failed"]]
+            : [["Matches every reviewed field", "match"], ["Has no such entry", "absent"], ["Has a different entry", "differs"], ["Read failed", "failed"]];
+      return windowHtml({
+        title: op === "remove" ? name : "Add a custom connector",
+        body: `<p class="c-state" aria-busy="true" data-c="checking">Checking what the gateway has…</p>` + proto("the fresh read", choices.map(([label, read]) => link(label, "write-result", { op, reply, read }, { variant: "quiet" }))),
+      });
+    },
+    "write-result": () => {
+      const op = params.get("op") || "add";
+      const reply = params.get("reply") || "accepted";
+      const read = params.get("read") || "match";
+      const again = `<div class="c-actions">${link("Check again", "write-read", { op, reply })}</div>`;
+      const readFailed = note("warn", "Couldn't confirm the change.", "The gateway's settings couldn't be read back.", again);
+      const changed = note("warn", "The gateway's settings changed.", "Review the current entry before trying again.");
+      if (op === "remove") {
+        const name = store.get("removing") || "notes-work";
+        if (reply === "stale")
+          return windowHtml({ title: name, back: go("server", { id: name }), body: changed + `<div class="c-actions">${link(`Review ${name}`, "server", { id: name })}</div>` });
+        const body =
+          read === "absent"
+            ? result("", "check", `Removed ${name}.`, "The gateway's settings no longer have it.") + `<div class="c-actions">${link("Back to the list", "installed")}</div>`
+            : read === "present"
+              ? note("danger", `${name} is still in the gateway's settings.`, reply === "refused" ? "Another plugin or config operation is already running; retry when it completes." : "", `<div class="c-actions">${link(`Review ${name}`, "server", { id: name })}</div>`)
+              : readFailed;
+        if (read === "absent") {
+          const all = saved();
+          delete all[name];
+          store.set("saved", all);
+        }
+        return windowHtml({ title: name, back: go("installed"), body });
+      }
+      const r = draft().reviewed || { kind: "remote", name: "notes-home", url: "https://notes.example/mcp", headers: [], signin: "none" };
       const name = r.name;
-      if (!SERVERS[name]) store.set("saved", { ...saved(), [name]: r });
-      const cmd = r.kind === "command";
-      return windowHtml({
-        title: "Add a custom connector",
-        body:
-          result("ok", "check", `Added ${name}.`, esc(cmd ? "The gateway lists this server. The gateway can start this program when it needs this server." : `The gateway lists this server.${r.headers?.length ? " The gateway hides saved header values." : ""}`), link(`Open ${name}`, "server", { id: name }, { variant: "primary" }) + (r.signin === "oauth" ? link("Sign in", "signin-cli", { id: name, server: "1" }) : "")) +
-          proto("the write", [link("Refused", "add-server-refused", { name }, { variant: "quiet" }), link("No answer", "add-server-checking", { name }, { variant: "quiet" }), link("Settings changed", "add-server-changed", { name }, { variant: "quiet" })]),
-      });
+      const fields = (e) =>
+        facts(
+          e.kind === "command"
+            ? [["Program", `<span class="mono">${esc(e.command)}</span>`], ["Arguments", e.args.length ? esc(e.args.join(", ")) : "No arguments"], ...(e.cwd ? [["Working folder", `<span class="mono">${esc(e.cwd)}</span>`]] : [])]
+            : [["Address", `<span class="mono">${esc(e.url)}</span>`], ["Headers", e.headers?.length ? esc(e.headers.join(", ")) : "None"], ["Sign-in", e.signin === "oauth" ? "Signs in with OAuth" : "None"]],
+        );
+      let body;
+      if (reply === "stale") {
+        body =
+          read === "taken"
+            ? changed + note("danger", `There's already a server named ${name} on the gateway.`, "Choose another name before adding. This is the gateway's current entry:") + fields({ kind: "remote", url: "https://notes-other.example/mcp", headers: ["Authorization"], signin: "none" }) + `<div class="c-actions">${link("Back to the form", "add-server", { type: r.kind, conflict: "1" })}</div>`
+            : read === "failed"
+              ? changed + readFailed
+              : changed + `<div class="c-actions">${link("Back to the form", "add-server", { type: r.kind })}</div>`;
+      } else if (read === "failed") {
+        body = readFailed;
+      } else if (read === "differs") {
+        body = note("warn", "Couldn't confirm the change.", "The gateway lists a different entry.") + fields({ ...r, url: "https://notes-other.example/mcp", headers: ["Authorization"] }) + again;
+      } else if (read === "match" && reply !== "accepted") {
+        body = note("warn", "The gateway lists an entry with these settings.", "Couldn't confirm this save.") + fields(r) + again;
+      } else if (read === "match") {
+        if (!SERVERS[name]) store.set("saved", { ...saved(), [name]: r });
+        body =
+          result("ok", "check", `Added ${name}.`, esc(r.kind === "command" ? "The gateway lists this server. The gateway can start this program when it needs this server." : `The gateway lists this server.${r.headers?.length ? " The gateway hides saved header values." : ""}`), link(`Open ${name}`, "server", { id: name }, { variant: "primary" }) + (r.signin === "oauth" ? link("Sign in", "signin-cli", { id: name, server: "1" }) : ""));
+      } else {
+        body =
+          reply === "refused"
+            ? result("danger", "x", `Couldn't add ${name}:`, esc(`mcp.servers.${name}.url: Expected http:// or https:// URL`), link("Back to the form", "add-server", { type: r.kind }))
+            : result("danger", "x", `${name} wasn't added.`, esc(`The gateway's settings have no entry named ${name}.`), link("Back to the form", "add-server", { type: r.kind }));
+      }
+      return windowHtml({ title: "Add a custom connector", body });
     },
-    "add-server-refused": () => windowHtml({ title: "Add a custom connector", body: result("danger", "x", `Couldn't add ${params.get("name") || "notes-work"}:`, `mcp.servers.${esc(params.get("name") || "notes-work")}.url: Expected http:// or https:// URL. Nothing saved.`, link("Back to the form", "add-server")) }),
-    "add-server-checking": () => {
-      const name = params.get("name") || "notes-work";
-      return windowHtml({
-        title: "Add a custom connector",
-        body:
-          `<p class="c-state" aria-busy="true">Checking what the gateway has…</p>` +
-          proto("the read-back", [link("Matches what you reviewed", "add-server-saved", { name }, { variant: "quiet" }), link("Has no such entry", "add-server-notadded", { name }, { variant: "quiet" }), link("Differs, or the read fails", "add-server-unconfirmed", { name }, { variant: "quiet" })]),
-      });
-    },
-    "add-server-notadded": () => windowHtml({ title: "Add a custom connector", body: result("danger", "x", `${params.get("name") || "notes-work"} wasn't added.`, "The gateway's settings have no such entry.", link("Try again", "add-server")) }),
-    "add-server-unconfirmed": () => windowHtml({ title: "Add a custom connector", body: note("warn", "Couldn't confirm the change.", `The gateway's settings have an entry named ${params.get("name") || "notes-work"}, and its address differs from the one you reviewed.`, `<div class="c-actions">${link("Check again", "add-server-checking", { name: params.get("name") || "notes-work" })}</div>`) }),
-    "add-server-changed": () => windowHtml({ title: "Add a custom connector", body: note("warn", "The gateway's settings changed.", "Review the current entry before trying again.", `<div class="c-actions">${link("Back to the form", "add-server")}</div>`) }),
     "signin-cli": () => windowHtml(signin()),
     chat: () => "",
     picker: () => picker(),
@@ -712,9 +759,6 @@
     "add-done": `Added ${A().name}`,
     "add-refused": `Couldn't add ${A().name}`,
     removed: `Removed ${app(params.get("id") || "tasktide").name}`,
-    "server-removed": `Removed ${params.get("id") || "notes-work"}`,
-    "add-server-saved": `Added ${params.get("name") || "notes-work"}`,
-    "add-server-refused": `Couldn't add ${params.get("name") || "notes-work"}`,
   };
 
   // The app behind the window: the rail with its footer, as visual-language.md §7 has it.
@@ -843,7 +887,7 @@
       };
       const rawName = document.getElementById("c-name").value;
       const name = rawName.trim();
-      set("c-name", !name ? "Enter a name." : !/^[A-Za-z0-9_-]+$/.test(name) ? "Use letters, digits, hyphens and underscores." : known(name) ? `There's already a server named ${name}.` : "");
+      set("c-name", !name ? "Enter a name." : !/^[A-Za-z0-9_-]+$/.test(name) ? "Use letters, digits, hyphens and underscores." : known(name) || (params.get("conflict") && name === draft().reviewed?.name) ? `There's already a server named ${name}.` : "");
       if (form.dataset.type === "remote") {
         const rawUrl = document.getElementById("c-url").value;
         const url = rawUrl.trim();
@@ -858,7 +902,7 @@
         const headerNames = [...form.querySelectorAll(".c-h-name")].map((i) => i.value.trim()).filter(Boolean);
         const signin = form.querySelector("input[name='signin']:checked").value;
         store.set("draft", { type: "remote", raw: { name: rawName, url: rawUrl, headerNames, signin }, reviewed: { kind: "remote", name, url, headers: headerNames, signin } });
-        location.href = go("add-server-saved", { type: "remote" });
+        location.href = go("write-sent", { op: "add" });
       } else {
         const rawCommand = document.getElementById("c-command").value;
         const rawArgs = document.getElementById("c-args").value;
@@ -874,6 +918,8 @@
       }
     });
   }
+
+  root.querySelector("[data-remove]")?.addEventListener("click", (event) => store.set("removing", event.currentTarget.dataset.remove));
 
   // Copy buttons: a check for 1.4 s, as conversation.md §9 has it.
   root.addEventListener("click", (event) => {
