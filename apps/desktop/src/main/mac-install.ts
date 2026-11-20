@@ -8,7 +8,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { AddressInfo } from "node:net";
 import { APP_ID } from "./identity.ts";
-import { holdMacArchive, type HeldMacArchive } from "./mac-archive.ts";
+import { ChangedMacArchive, holdMacArchive, type HeldMacArchive } from "./mac-archive.ts";
 import type { UpdateInstaller } from "./update/install.ts";
 
 async function runInspector(
@@ -244,8 +244,12 @@ export function macInstaller(
         if (refusal === "build-not-signed") unsigned = true;
         if (refusal) return refusal;
       }
-      const held = await holdMacArchive(file, signal).catch(() => null);
-      if (!held) return "artifact-changed";
+      let held: HeldMacArchive;
+      try {
+        held = await holdMacArchive(file, signal);
+      } catch (error) {
+        return error instanceof ChangedMacArchive ? "artifact-changed" : "inspection-failed";
+      }
       try {
         const reason = await (inspect ?? inspectBundle)(held, arch, signal);
         if (reason || signal.aborted) return reason ?? "artifact-changed";

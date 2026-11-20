@@ -29,10 +29,11 @@ vi.mock(import("node:fs"), async (original) => {
   return fs;
 });
 
-import { rename } from "node:fs/promises";
+import type * as FileSystem from "node:fs/promises";
+import { open, rename } from "node:fs/promises";
 vi.mock(import("node:fs/promises"), async (original) => {
   const actual = await original();
-  return { ...actual, rename: vi.fn(actual.rename) };
+  return { ...actual, rename: vi.fn(actual.rename), open: vi.fn(actual.open) };
 });
 let server: FeedServer;
 let dir: ReturnType<typeof tempDir>;
@@ -1307,6 +1308,43 @@ it.skipIf(process.platform === "win32")(
     } finally {
       if (old) Object.defineProperty(process, "resourcesPath", old);
       else Reflect.deleteProperty(process, "resourcesPath");
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "a full scratch disk leaves the download verified and refuses Restart with inspection-failed",
+  async () => {
+    const fs = await vi.importActual<typeof FileSystem>("node:fs/promises");
+    const full = vi.fn(async () => {
+      throw Object.assign(Error("full"), { code: "ENOSPC" });
+    });
+    vi.mocked(open).mockImplementation(async (...args) => {
+      const fd = await fs.open(...args);
+      if (String(args[0]).includes("/.hold-") && args[1] === "wx") fd.writeFile = full;
+      return fd;
+    });
+    try {
+      const inspect = vi.fn(async () => null);
+      const service = await start({ installer: macInstaller("arm64", inspect) });
+      const id = await offer(service);
+      expect((await service.download(id)).snapshot).toMatchObject({
+        state: { kind: "verified", offerId: id },
+        install: { kind: "unavailable-in-this-build", reason: "inspection-failed" },
+      });
+      expect(full).toHaveBeenCalled();
+      expect(inspect).not.toHaveBeenCalled();
+      const files = readdirSync(join(updates, id));
+      expect(files).toHaveLength(1);
+      expect(
+        createHash("sha512")
+          .update(readFileSync(join(updates, id, files[0]!)))
+          .digest("base64"),
+      ).toBe(fixture.sha512);
+      expect((await service.restart(id)).outcome).toBe("invalid");
+      service.shutdown();
+    } finally {
+      vi.mocked(open).mockImplementation(fs.open);
     }
   },
 );
