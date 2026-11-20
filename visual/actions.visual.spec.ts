@@ -847,14 +847,19 @@ test.describe("action cards", () => {
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await open(page, "actions-becoming-fold");
+    // The scene's later steps wait until the card is open, not a timer that can race the click.
+    await open(page, "actions-becoming-fold", "light", "&steps=manual");
     // An earlier card, opened: the read of AGENTS.md.
     const opened = cards(page).filter({
       has: page.locator(':scope > summary[aria-label^="Read AGENTS.md"]'),
     });
     await line(opened).click();
     await expect(opened).toHaveAttribute("open", "");
+    await paintedFinal(page, { atEnd: false });
     const top = (await line(opened).boundingBox())!.y;
+    await page.evaluate(() =>
+      (window as unknown as { clawtrateFixture: { runSteps(): void } }).clawtrateFixture.runSteps(),
+    );
     // A card below updates: the run's read becomes a fold of two as the second read arrives.
     const fold = page.locator(".transcript details.card.action[data-fold]");
     await expect(fold).toHaveCount(1, { timeout: 5000 });
