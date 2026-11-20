@@ -1248,14 +1248,20 @@ async function settle(ctx: RulesContext, world: World): Promise<boolean> {
   } catch {
     restored = false;
   }
+  // A sweep that fails does not keep the runs from being stopped.
+  let swept = true;
   try {
     for (const id of await waitingCards(admin)) {
       await call(admin, "plugin.approval.resolve", { id, decision: "deny" });
     }
+  } catch {
+    swept = false;
+  }
+  try {
     if (!(await drainSessions(admin, world.keys))) return false;
     // Verified gone, also a card cancelled between the listing and its answer.
     if ((await waitingCards(admin)).length !== 0) return false;
-    if (!restored) return false;
+    if (!restored || !swept) return false;
     await pluginRunning(ctx);
     await clearRules(ctx);
     return true;

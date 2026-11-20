@@ -547,6 +547,16 @@ describe("the rules checks' approval clean-up", () => {
     expect(run.final).toContain("chat.abort agent:otto:task");
   });
 
+  it("stops the runs though the pending approvals come back as something other than a list", async () => {
+    const run = await drive(
+      (final) => (final ? { cards: [] } : []),
+      (_ctx, world) => void world.keys.add("agent:otto:task"),
+    );
+    expect(run.result).toEqual({ passed: 1, failed: 1 });
+    expect(run.lines.at(-1)).toMatch(/^FAIL {2}the final clean-up/);
+    expect(run.final).toContain("chat.abort agent:otto:task");
+  });
+
   it("fails the final clean-up when the pending approvals cannot be listed", async () => {
     const run = await drive((final) => {
       if (final) throw new Error("plugin.approval.list refused");
