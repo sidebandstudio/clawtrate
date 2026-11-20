@@ -387,24 +387,26 @@ A call is never given turns it didn't save: a silent or refused call has no samp
 
 ## 11. Voice memos
 
-A memo is an audio item a bot sent (research §8). Its card is the audio card of `work-pane.md` section 12, with two additions:
+A memo is an audio item a bot sent (research §8). Its card is the audio card of `work-pane.md` section 12: the item's name and length from `artifacts.list` first, with Play. Nothing is downloaded or played when the card is drawn, hovered or read.
 
-- **Speed**: the bot's speed (section 7), shown as "1×" on the player, which cycles through the speeds.
-- **"Show text"**, an expander, when the item came from a `tts` call in the same run: the call's `text`, headed "The text this was made from". Without one: "No text came with this recording." Nothing is called a transcript.
-- **Word highlighting (F-413) is not available**: under the text, in `--text-faint`, "Words aren't highlighted: the gateway gives no timing for each word." Nothing moves while it plays.
+**Play, and only Play, asks for this item** by its artifact id (`artifacts.download`, `operator.read`). What the answer may be follows `docs/decisions.md`, "Addresses a gateway hands the client" (rows "An item a reply hands over" and "Every other address an item carries"; building it is #71):
 
-**Where its sound comes from** follows `docs/decisions.md`, "Addresses a gateway hands the client" (rows "An item a reply hands over" and "Every other address an item carries"; building it is #71). The item is asked for with `artifacts.download` (`operator.read`):
+| The gateway answers | The card | Rests on |
+|---|---|---|
+| `encoding: "base64"` and `data` | Decoded under the 5 MiB item limit, checked to be playable audio, and played as a `data:` address; no HTTP request | The decision: bytes from the existing connection |
+| A grant: a top-level `url` on one of the two grant routes of the connection's own origin, with an unexpired top-level `expiresAt` | The host fetches it (desktop and web preview), at most 5 MiB, with no userinfo, no redirect and no credential but the grant; the grant's address never reaches the interface; then as above | The decision: the host fetches, never a renderer or a viewer's browser |
+| A grant, on the iPhone | "This voice memo can't be played on this iPhone yet: Home gateway offers it as a download, and the iPhone app doesn't make downloads yet." Inline bytes still play there. | The decision: iPhone HTTP downloads wait for their check |
+| An expired grant, another route or another origin | "Clawtrate didn't fetch this voice memo: Home gateway's answer isn't a download it fetches by itself." | The decision's grant check |
+| A grant whose fetch tries to redirect | "Couldn't load the voice memo: the download tried to redirect, which Clawtrate doesn't follow." with "Try again" | The decision: no redirects |
+| More than 5 MiB | "This voice memo is larger than 5 MiB, so Clawtrate can't play it here." A size is named only when the metadata gave one. | The decision's size limit |
+| An address the item carries (`audio_url`, or one passed through from the transcript) | The full address as text, under "This voice memo is at an address Clawtrate doesn't open by itself:", with "Open in browser" and "Opens in your browser." on the desktop, "Open outside Clawtrate" and "Opens outside Clawtrate." on the iPhone, through the shared link rule; an address of any other scheme is text only, with no button | The decision: never fetched in the app; opening follows the link row |
+| A failure | "Couldn't load the voice memo." with "Try again", which returns the card to Play; nothing is asked again until Play | |
 
-| The gateway answers                                                                                                   | The card                                                                                                                                                    | Rests on                                                                                                    |
-| --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `encoding: "base64"` and `data`                                                                                       | Plays from those bytes as a `data:` address, decoded under the 5 MiB item limit; no HTTP request                                                            | The decision: bytes from the existing connection                                                            |
-| A grant: top-level `url` on one of the two grant routes of the connection's own origin, with an unexpired `expiresAt` | The host fetches it, at most 5 MiB, with no redirect, cookie or credential but the grant; the grant's address never reaches the interface; then as above    | The decision: the host fetches, never a renderer or a viewer's browser                                      |
-| A grant, on the iPhone                                                                                                | "This voice memo can't be played on this iPhone yet: Home gateway offers it as a download, and the iPhone app doesn't make downloads yet."                  | The decision: iPhone HTTP downloads stay unavailable until their check exists                               |
-| An address the item carries (`audio_url`, or one `artifacts.download` passes through from the transcript)             | "This voice memo is at an address Clawtrate doesn't open by itself:" and the full address as text, with "Open in browser", which opens it outside Clawtrate | The decision: never fetched; opening follows the link row, and the full address is shown beside the control |
-| More than 5 MiB                                                                                                       | "This voice memo is 7.2 MiB. Clawtrate fetches items up to 5 MiB, so it can't be played here."                                                              | The decision's size limit                                                                                   |
-| A failure                                                                                                             | "Couldn't load the voice memo." with "Try again"                                                                                                            |                                                                                                             |
+**One recording at a time.** A play still waiting for its answer is dropped when the task changes or a call starts. A playing memo is paused before a call can use audio, and starting or ending a call never resumes it. Playing a memo needs only read access.
 
-Nothing an address names is fetched by itself, on the gateway's origin or not. Playing a memo needs only read access. One recording plays at a time, and a memo pauses when a call starts.
+- **Speed**: the bot's speed (section 7), shown as "1×" on the player, which cycles through the speeds. With write access it is saved as in section 2; on a read-only connection, or when the saved settings couldn't be read, it changes only this device's playback for now: "1.25× for now, on this device."
+- **No text.** The gateway gives no verified link between this recording and the text a `tts` call was given: one run can make several clips, and an item is not tied to the call that made it (research §8). So the card says "No text came with this recording." and shows no text; nothing is joined by order or by run.
+- **Word highlighting (F-413) is not available**: "Words aren't highlighted: the gateway gives no timing for each word." Nothing moves while it plays.
 
 ## 12. Settings, Voice
 
