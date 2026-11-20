@@ -11,7 +11,7 @@ How to read the citations, as in `gateway-capabilities.md` and `setup-flow.md`:
 
 Where things were run:
 
-- **Development instance `d7set`**, started by this checkout with `pnpm dev-gateway start --instance d7set`, so `openclaw --profile clawtrate-dev-d7set`, with `autoApproveLocal: false` as every instance has. The probes are in `settings/probe.ts` and use this project's own client (`packages/core`) where the desktop app would, with a client folder of their own. Each device was approved by the gateway's own `devices approve <requestId>`, run through the development tool's guarded runner. Every value the probe prints passes through its redaction: tokens, this machine's names and addresses, the home folder, mounted volumes and the owner's display name.
+- **Development instance `d7set`**, started by this checkout with `pnpm dev-gateway start --instance d7set`, so `openclaw --profile clawtrate-dev-d7set`, with `autoApproveLocal: false` as every instance has. The probes are in `settings/probe.ts` and use this project's own client (`packages/core`) where the desktop app would, with a client folder of their own. Before the client resumes anything, the probe refuses to start when the gateway saved in that client folder is not the named instance's (only `pair` may begin with an empty folder), so it can't reach another gateway through an old folder. Each device was approved by the gateway's own `devices approve <requestId>`, run through the development tool's guarded runner. Every value the probe prints passes through its redaction: tokens, this machine's names and addresses, the home folder, mounted volumes and the owner's display name.
 
 ## Summary
 

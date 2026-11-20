@@ -32,7 +32,7 @@ import { parseArgs } from "node:util";
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { ClawtrateClient } from "../../../packages/core/src/client.ts";
+import { ClawtrateClient, validateGatewayUrl } from "../../../packages/core/src/client.ts";
 import { createNodeHost } from "../../../packages/core/src/node/index.ts";
 import { openInstance, readDevConnection } from "../../../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
@@ -135,8 +135,22 @@ function summary(client: ClawtrateClient) {
   };
 }
 
+/**
+ * `start()` resumes the gateway saved in the --data folder, not the one --instance names. Refuse before it
+ * when the saved gateway isn't this instance's (compared as `connect()` stores it); `pair` may start from an
+ * empty folder.
+ */
+async function sameGatewayOrRefuse(client: ClawtrateClient, { allowNone = false } = {}) {
+  const saved = await client.savedSettings();
+  if (!saved && allowNone) return;
+  if (!saved || saved.url !== validateGatewayUrl(url)) {
+    throw new Error("the --data folder's saved gateway is not this instance's: use a client folder paired with this instance, or a new one with `pair`");
+  }
+}
+
 async function connected() {
   const client = coreClient();
+  await sameGatewayOrRefuse(client);
   await client.start();
   await settle(() => client.state.connection.status === "connected");
   if (client.state.connection.status !== "connected") throw new Error(`not connected: ${JSON.stringify(summary(client))}`);
@@ -155,6 +169,7 @@ async function attempt(request: (m: string, p: unknown) => Promise<unknown>, met
 
 async function pair() {
   const client = coreClient();
+  await sameGatewayOrRefuse(client, { allowNone: true });
   await client.start();
   await client.connect({ url, token: connection!.token });
   await settle(() => ["connected", "pairing", "error"].includes(client.state.connection.status));
