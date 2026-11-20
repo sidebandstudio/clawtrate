@@ -255,6 +255,9 @@ export function fixtureRoutineList(now: number, params: RoutineParams): Routine[
       name: "Plan the week",
       schedule: schedule({ expr: "0 17 * * 0", tz: "Europe/London" }),
       text: "Plan next week's dinners from what is in the fridge and the calendar.",
+      // Bound to the conversation it was made in; its runs record that key.
+      target: "other",
+      sharedSessionKey: "agent:pip:week",
       nextRunAt: nextDay(now, "Europe/London", 17, (weekday) => weekday === "Sun"),
       lastRunAt: now - 3 * DAY,
       lastStatus: "ok",
@@ -336,7 +339,10 @@ const run = (routine: Routine, runAt: number, over: Partial<RoutineRun> = {}): R
   inputTokens: 120,
   outputTokens: 80,
   totalTokens: 200,
-  sessionKey: `agent:${routine.botId}:cron:${routine.id}:run:${runAt}`,
+  // A session-bound routine's runs record the conversation they ran in; isolated
+  // and current ones record the run's own key (observed on OpenClaw 2026.10.6),
+  // and a main target records none.
+  sessionKey: routine.sharedSessionKey ?? `agent:${routine.botId}:cron:${routine.id}:run:${runAt}`,
   manual: false,
   ...over,
 });

@@ -346,17 +346,23 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
     await openRoutines();
     await row(name).click();
     await view().getByTestId("run-row").first().click();
-    await expect(view().getByTestId("run-summary")).toBeVisible();
-    if (target === "main") {
-      await view().getByRole("button", { name: "Open Juniper's main conversation" }).click();
-      await expect(
-        page.getByTestId("transcript").getByRole("heading", { name: "Main", exact: true }),
-      ).toBeVisible();
+    if (target === "current") {
+      // The run's recorded session is its own execution key, so it reads as
+      // isolated and shows the conversation as the run recorded it.
+      await expect(view().getByTestId("scheduled-message")).toBeVisible();
     } else {
-      await view().getByRole("button", { name: "Open conversation", exact: true }).click();
-      await expect(
-        page.getByTestId("transcript").getByRole("heading", { name: title }),
-      ).toBeVisible();
+      await expect(view().getByTestId("run-summary")).toBeVisible();
+      if (target === "main") {
+        // The gateway records no session for a main-target run.
+        await expect(view().getByTestId("run-not-kept")).toContainText(
+          "Clawtrate can't confirm which conversation this run used.",
+        );
+      } else {
+        await view().getByRole("button", { name: "Open conversation", exact: true }).click();
+        await expect(
+          page.getByTestId("transcript").getByRole("heading", { name: title }),
+        ).toBeVisible();
+      }
     }
   }
 });
