@@ -119,6 +119,7 @@ for (const size of SIZES.filter((s) => s.phone || s.width === 1440)) {
       for (const control of [cli, browser, dismiss]) {
         await page.keyboard.press(control === cli ? "Shift+Tab" : "Tab");
         await expect(control).toBeFocused();
+        await expect(control).toHaveCSS("outline-style", "solid");
         await expect(control).toHaveCSS("outline-color", accent);
         await expect(control).toHaveCSS("outline-width", "2px");
         await expect(control).toHaveCSS("outline-offset", "2px");
@@ -129,10 +130,10 @@ for (const size of SIZES.filter((s) => s.phone || s.width === 1440)) {
       await page.keyboard.press("ControlOrMeta+,");
       await page.getByRole("button", { name: "About", exact: true }).click();
       const about = page.getByRole("link", { name: "Star Clawtrate on GitHub" });
-      await about.focus();
-      await page.keyboard.press("Shift+Tab");
+      await expect(page.getByRole("heading", { name: "About", exact: true })).toBeFocused();
       await page.keyboard.press("Tab");
       await expect(about).toBeFocused();
+      await expect(about).toHaveCSS("outline-style", "solid");
       await expect(about).toHaveCSS("outline-color", accent);
       await expect(about).toHaveCSS("outline-width", "2px");
       await expect(about).toHaveCSS("outline-offset", "2px");
