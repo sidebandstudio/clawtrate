@@ -119,7 +119,8 @@ const SETUP = resolveSetupLaunch({
 
 /**
  * What the host starts on, from that launch, also before the lock: a sandbox's
- * checked `app-data` or, refused, a fresh private temporary folder as its data
+ * checked `app-data` or, refused, the folder the launch named with
+ * `--user-data-dir` or else a fresh private temporary folder as its data
  * folder, and then no development gateway and no saved gateway reopened.
  * Only a person's packaged app keeps the ordinary data folder and resumes.
  */
@@ -128,6 +129,7 @@ const STARTUP = desktopStartup(SETUP, {
   devConnection: () =>
     readDevConnection(REPO_ROOT, { instance: selectInstance(undefined, process.env) }),
   autoConnectDev: () => process.env.CLAWTRATE_AUTOCONNECT_DEV === "1",
+  launchData: () => switchValue("user-data-dir") || null,
   privateData: () => mkdtempSync(join(tmpdir(), "clawtrate-refused-")),
 });
 if (STARTUP.userData) app.setPath("userData", STARTUP.userData);
