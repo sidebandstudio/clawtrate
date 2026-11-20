@@ -144,7 +144,7 @@ The console lines were the policies refusing the stylesheet, the pictures and th
 - **"Filters and switches change only the view"** holds for what works without scripts: a checkbox, a menu and a folded section changed on screen and were as written when the page was shown again. Anything a page does with its scripts, a filter that hides rows or a chart drawn at load, does not happen at all.
 - **A link** inside the page navigates the frame itself, which the parent's policy refuses, leaving an error page in place of the Page. Taking out link addresses before framing keeps the Page in place.
 
-The desktop app's request filter cancels a subframe's load as well (remote-content research, §2); the probe stood for the renderer's policy only. One page in one browser showing no request is evidence about that page, not a guarantee for every page: the design states the guarantee (a Page makes no request at all, on load or on any interaction) and leaves to the builder a check per platform that shows it.
+The desktop app's request filter cancels a subframe's load as well ([Addresses a gateway hands the client](remote-content.md), §2); the probe stood for the renderer's policy only. One page in one browser showing no request is evidence about that page, not a guarantee for every page: the design states the guarantee (a Page makes no request at all, on load or on any interaction) and leaves to the builder a check per platform that shows it.
 
 ## 5. "Updated below"
 

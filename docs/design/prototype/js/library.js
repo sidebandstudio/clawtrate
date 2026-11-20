@@ -10,7 +10,7 @@
 //   ?filter=all|pages|media|links|files|pinned
 //   ?lib=loading|partial|error|empty|offline|all
 //   ?pins=device|full|none   ?pinfail=conflict|noanswer|limit   ?exportfail=1
-//   ?page=trail-guide|trail-guide-1|packing-list   ?pageload=failed|large|offline   ?chat=hidden   ?export=open
+//   ?page=trail-guide|trail-guide-1|packing-list   ?pageload=failed|large|offline|unavailable   ?chat=hidden   ?export=open
 //   ?info=library (phone)   ?hold=<item id> (phone)   ?device=desktop (phone width, the desktop app)
 //   ?state=readonly
 
@@ -470,6 +470,15 @@
       exportOff("Nothing to export: the page didn't load");
       return;
     }
+    if (params.get("pageload") === "unavailable") {
+      // No zero-request check on this platform yet: nothing is drawn; the HTML is kept only for Export.
+      view._framed = framedPage(page.html);
+      view._raw = page.html;
+      stage.innerHTML = `<div class="page-state" role="status"><p><strong>Clawtrate can't show pages here yet.</strong></p><p>You can ask ${view.dataset.bot === "juniper" ? "Juniper" : "Marlow"} about this page, or export it as a file.</p></div>`;
+      const ex = $('[data-pv="export"]', view);
+      ex.disabled = false;
+      return;
+    }
     if (params.get("pageload") === "offline") {
       stage.innerHTML = `<div class="page-state" role="alert"><p><strong>Can't reach the gateway. Try again when it's back.</strong></p></div>`;
       exportOff("Nothing to export: the page didn't load");
@@ -638,6 +647,12 @@
 
   // The link confirmation (the remote-content rule's link row) --------------------------------------
 
+  // The written host only, no lookup: loopback, localhost, .local, a name without a dot, a private literal.
+  function nearby(href) {
+    const h = new URL(href).hostname.replace(/\.$/, "");
+    return /(^|\.)localhost$|\.local$|^127\.|^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\.|^\[|^[^.]+$/.test(h);
+  }
+
   function confirmLink(href, from) {
     const u = new URL(href);
     const box = document.createElement("div");
@@ -660,7 +675,11 @@
     const x = item(id) || itemsFor(b).find((y) => y.id === id);
     if (!x) return;
     if (x.kind === "page") return openPage(x.id, from);
-    if (x.kind === "link") return confirmLink(x.href, from);
+    if (x.kind === "link") {
+      // The decision's link row: a control whose text is the full address opens it, unless it is on this device or the person's network.
+      if (x.title === x.href && !nearby(x.href)) return CT.toast(`Opens ${x.href} in your browser.`);
+      return confirmLink(x.href, from);
+    }
     const A = W.artifacts;
     if (["image", "video"].includes(x.kind) && A[x.id]) return W.openViewer(x.id, from);
     // A file or a recording: its task opens, and Files shows the item.
@@ -710,7 +729,7 @@
       `<header class="page-sheet-bar"><button type="button" class="icon-button" data-ps="close" aria-label="Close" title="Close">${icon("x")}</button>` +
       `<strong id="sheet-title">${esc(x.title)}</strong><span></span></header>` +
       `<div class="page-sheet-body"><p class="page-sheet-sub">Page · Marlow · ${x.time}</p>` +
-      `<p class="page-sheet-lead">Pages are shown on the desktop app for now.</p><p>This version of Clawtrate for iPhone can't draw a page.</p>` +
+      `<p class="page-sheet-lead">Clawtrate for iPhone can't show pages yet.</p><p>You can ask Marlow about this page, or share it as a file.</p>` +
       (canWrite() ? `<button type="button" class="button" data-variant="primary" data-ps="message">Message about ${esc(x.title)}</button>` : "") +
       `<button type="button" class="button" data-ps="share">Share as file…</button></div>`;
     $(".app").appendChild(sheet);

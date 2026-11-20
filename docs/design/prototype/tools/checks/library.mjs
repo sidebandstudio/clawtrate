@@ -160,9 +160,11 @@ check("a file opens its task and the item in Files", await q(p, () => window.app
 await p.close();
 p = await open(lib + "&filter=links");
 await p.click('[data-lib-open="k1"]');
-check("a link: the confirmation, host first, the full address, Opens in your browser", (await text(p, ".lib-confirm h2")) === "trails.example" && (await text(p, ".confirm-address")) === "https://trails.example/conditions" && (await q(p, () => document.querySelector(".lib-confirm").innerText.includes("Opens in your browser."))));
+check("a link row whose name is its full address opens it in the browser, no confirmation", await q(p, () => !document.querySelector(".lib-confirm") && document.querySelector("#proto-toast")?.textContent === "Opens https://trails.example/conditions in your browser."));
+await p.click('[data-lib-open="k2"]');
+check("a link row with another name: the confirmation, host first, the full address, Opens in your browser", (await text(p, ".lib-confirm h2")) === "newsletter.example" && (await text(p, ".confirm-address")) === "https://newsletter.example/archive" && (await q(p, () => document.querySelector(".lib-confirm").innerText.includes("Opens in your browser."))));
 await p.keyboard.press("Escape");
-check("…Escape cancels, focus back on the row", await q(p, () => !document.querySelector(".lib-confirm") && document.activeElement.dataset.libOpen === "k1"));
+check("…Escape cancels, focus back on the row", await q(p, () => !document.querySelector(".lib-confirm") && document.activeElement.dataset.libOpen === "k2"));
 await p.close();
 
 // The Page, full window -----------------------------------------------------------------------------
@@ -232,6 +234,11 @@ p = await open("&page=trail-guide&pageload=offline");
 await p.waitForTimeout(500);
 check("connection lost before the Page loaded: says so", (await text(p, ".page-state")) === "Can't reach the gateway. Try again when it's back.");
 await p.close();
+outside = [];
+p = await open("&page=trail-guide&pageload=unavailable");
+await p.waitForTimeout(500);
+check("no zero-request check on this platform yet: says so, draws no frame, Export still works", (await text(p, ".page-state strong")) === "Clawtrate can't show pages here yet." && (await q(p, () => !document.querySelector(".page-frame") && document.querySelector("#page-note").hidden && !document.querySelector('[data-pv="export"]').disabled)) && outside.length === 0);
+await p.close();
 p = await open("&page=trail-guide&state=readonly");
 await p.waitForTimeout(500);
 check("read-only: the chat's messages, and the access bar in the composer's place", (await text(p, ".page-chat .shelf-text")) === "Read-only. Messaging needs permission to change things on the gateway." && (await q(p, () => !document.querySelector("#page-chat-input") && document.querySelectorAll("#page-chat-log .msg").length === 4)));
@@ -293,7 +300,7 @@ check("F-371 Today, five at a time with Show more, and no Look in more tasks", a
 await q(p, () => document.querySelector('[data-lib-open="p2"]').dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
 check("F-372 touch and hold a Page row: Open, Share as file…, Unpin; no Copy Link, no Open in Web", await q(p, () => [...document.querySelectorAll(".lib-hold .menu-item")].map((x) => x.textContent).join() === "Open,Share as file…,Unpin"));
 await p.click('.lib-hold [data-hold="open"]');
-check("F-373 a Page on iPhone: a full-screen sheet that says what is true", (await text(p, ".page-sheet-lead")) === "Pages are shown on the desktop app for now." && (await q(p, () => document.querySelector(".page-sheet").innerText.includes("This version of Clawtrate for iPhone can't draw a page.") && !document.querySelector(".page-sheet iframe"))));
+check("F-373 a Page on iPhone: the unavailable state full screen, saying so, nothing of the Page drawn", (await text(p, ".page-sheet-lead")) === "Clawtrate for iPhone can't show pages yet." && (await q(p, () => document.querySelector(".page-sheet").innerText.includes("You can ask Marlow about this page, or share it as a file.") && !document.querySelector(".page-sheet iframe") && !/Lake loop/.test(document.querySelector(".page-sheet").innerText))));
 await p.click('[data-ps="message"]');
 check("F-373 Message about: the sheet closes, the composer holds the words, caret after them", await q(p, () => !document.querySelector(".page-sheet") && document.activeElement.classList.contains("composer-input") && document.activeElement.value === "About the page “Trail guide”: "));
 await p.close();

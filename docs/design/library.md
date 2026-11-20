@@ -2,7 +2,7 @@
 
 What a bot made, gathered in one place, and the Pages among it: the Library tab in the Work pane, a Page's card in the conversation, a Page opened full window with a chat beside it, exporting a Page as a file, and the iPhone's forms of each. It builds on `visual-language.md` (tokens, the pane's frame), `conversation.md` (the transcript, sending, the access bar) and `work-pane.md` Part 2 (artifact cards, the pane's view of an item, the media viewer), which it reuses as they are designed.
 
-The behaviour comes from the teardown's Library section (`docs/research/grok-bot-flows.md`, §9.5) and is checked by `docs/parity.md` rows F-208 to F-210 and F-371 to F-374. Every fact about the gateway here was verified on a development instance with this project's own client, and is recorded in `docs/research/library.md` (cited as "research §n"). Section 10 maps each fact to what is shown; section 11 lists the rows to reword and the ones that need a decision; section 12 is for builders.
+The behaviour comes from the teardown's Library section (`docs/research/grok-bot-flows.md`, §9.5) and is checked by `docs/parity.md` rows F-208 to F-210 and F-371 to F-374. Every fact about the gateway here was verified on a development instance with this project's own client, and is recorded in `docs/research/library.md` (cited as "research §n"). Section 10 maps each fact to what is shown; section 11 lists the rows reworded and the four decided; section 12 is for builders.
 
 The rule from `conversation.md` holds: **no state claims more than the gateway has reported.** The Library is assembled by the client from per-task reads, so it always says which tasks it looked in. A Page is content a bot wrote: it is shown as data, never with the app's own rights.
 
@@ -20,7 +20,7 @@ The prototype is `prototype/library.html` (styles in `prototype/css/library.css`
 8. On iPhone
 9. Widths, themes, keyboard and screen readers
 10. What the gateway's facts drive
-11. Parity rows to reword, and rows that need a decision
+11. Parity rows reworded and decided
 12. For builders
 13. Not covered here
 
@@ -134,28 +134,29 @@ Two cards of one Page are two rows, one per occurrence, as `work-pane.md` §11 k
 
 ### Opening an item
 
-| Item                  | Opens                                                                                                                                           |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| A Page                | The Page view (section 6), for that occurrence's task                                                                                           |
-| A picture or a video  | The media viewer at that item (`work-pane.md` §14); its sequence is the items of that message                                                   |
-| A file or a recording | Its task opens in the conversation, and the pane shows Files with the item's view (`work-pane.md` §13); Back in Files returns to "Sent in chat" |
-| A link                | The link confirmation: the full address, host first, "Opens in your browser", Cancel and Open. Nothing is fetched before Open                   |
+| Item                  | Opens                                                                                                                                                                                                                                                                                                                             |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A Page                | The Page view (section 6), for that occurrence's task                                                                                                                                                                                                                                                                             |
+| A picture or a video  | The media viewer at that item (`work-pane.md` §14); its sequence is the items of that message                                                                                                                                                                                                                                     |
+| A file or a recording | Its task opens in the conversation, and the pane shows Files with the item's view (`work-pane.md` §13); Back in Files returns to "Sent in chat"                                                                                                                                                                                   |
+| A link                | Nothing is fetched. A row whose name is the link's full address opens it in the browser. Any other row opens the link confirmation first: the full address, host first, "Opens in your browser", Cancel and Open. An address on this device or the person's own network always gets the confirmation, with the decision's warning |
 
-The Library itself fetches no item. What an item's view fetches is `work-pane.md`'s, under the corrected remote-content rule: only what the gateway issued as a download grant is fetched by the app by itself, and a grant's address is never shown, copied, exported or handed to a browser. An address `artifacts.download` passes through from the transcript is not a grant. A row's second line names a type, a size, a task and a time, never an address, except a link's host.
+The Library itself fetches no item. What an item's view fetches is `work-pane.md`'s, under the decision on addresses (`docs/decisions.md`, "Addresses a gateway hands the client"): only what the gateway issued as a download grant is fetched by the app by itself, and a grant's address is never shown, copied, exported or handed to a browser. An address `artifacts.download` passes through from the transcript is not a grant. A row's second line names a type, a size, a task and a time, never an address, except a link's host.
 
 ### States of the tab
 
-| State                       | It shows                                                                                                                                                                                                      |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Loading                     | The filters, the freshness line "Looking in Marlow's tasks…", five skeleton rows, `aria-busy`                                                                                                                 |
-| Loaded                      | As above                                                                                                                                                                                                      |
-| Some tasks couldn't be read | The rows from the others, and above the groups a line on `--danger-soft`: "Couldn't read 2 of the 10 tasks." with "Try again", which reads those two again                                                    |
-| Nothing could be read       | The empty mark with a warning, "Couldn't load Marlow's library", the gateway's reason in one sentence, "Try again"                                                                                            |
-| Empty, All                  | The empty mark, "Nothing found yet", "Pages, pictures, files and links Marlow sends appear here." with the freshness line under it                                                                            |
-| Empty, a filter             | "No pages in these tasks." (or pictures and recordings, links, files), and, while tasks remain, "Look in 10 more tasks"                                                                                       |
-| Pinned, empty               | "Nothing pinned", "Pin an item to keep it here. Pins are kept on the gateway for every device you use." (or "on this device", section 4)                                                                      |
-| The connection is lost      | Rows keep their last look; the freshness line reads "Can't reach the gateway · checked 5:41 PM", without Refresh. Opening an item not on the device says "Can't reach the gateway. Try again when it's back." |
-| Read-only                   | Everything, with the Pin buttons replaced by the access bar at the foot of the tab when the person chooses one (section 4)                                                                                    |
+| State                          | It shows                                                                                                                                                                                                      |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Loading                        | The filters, the freshness line "Looking in Marlow's tasks…", five skeleton rows, `aria-busy`                                                                                                                 |
+| Loaded                         | As above                                                                                                                                                                                                      |
+| Some tasks couldn't be read    | The rows from the others, and above the groups a line on `--danger-soft`: "Couldn't read 2 of the 10 tasks." with "Try again", which reads those two again                                                    |
+| Nothing could be read          | The empty mark with a warning, "Couldn't load Marlow's library", the gateway's reason in one sentence, "Try again"                                                                                            |
+| Empty, All                     | The empty mark, "Nothing found yet", "Pages, pictures, files and links Marlow sends appear here." with the freshness line under it                                                                            |
+| Empty, a filter                | "No pages in these tasks." (or pictures and recordings, links, files), and, while tasks remain, "Look in 10 more tasks"                                                                                       |
+| Pinned, empty                  | "Nothing pinned", "Pin an item to keep it here. Pins are kept on the gateway for every device you use." (or "on this device", section 4)                                                                      |
+| Not shown on this platform yet | "Clawtrate can't show pages here yet." and "You can ask Marlow about this page, or export it as a file." Shown until this platform's zero-request check passes; the HTML is read only for Export              | The note is hidden; the chat and Export work |
+| The connection is lost         | Rows keep their last look; the freshness line reads "Can't reach the gateway · checked 5:41 PM", without Refresh. Opening an item not on the device says "Can't reach the gateway. Try again when it's back." |
+| Read-only                      | Everything, with the Pin buttons replaced by the access bar at the foot of the tab when the person chooses one (section 4)                                                                                    |
 
 ## 4. Pins
 
@@ -226,9 +227,9 @@ The Page's HTML, read over the socket with `canvas.document.view {docId}` (`oper
 
 **What the person sees in a link's place**: the link's own words, as plain text in the style of the sentence around them: not coloured or underlined as a link, not focusable, and a click on them does nothing. The note above the frame says links aren't followed and lists their addresses (below). A picture whose address was taken out shows its alternative text, as a broken picture does.
 
-So the Page has no access to the app, to the gateway connection or to other Pages, runs nothing, sends nothing and loads nothing. Research §4 showed no request reaching the probe's server in Chromium for one page; that is evidence, not the guarantee. **The builder writes a check, for each platform's rendering path, that loads Pages built to reach out in every way (scripts, forms, links, refreshes, pictures, styles, frames, objects, prefetch hints) and drives every interaction (clicking every element, submitting every form, pressing Enter in every field), and asserts that zero requests leave the frame**, counted by a loopback server of the check's own and by the platform's request hook (the desktop's request filter). A platform shows Pages only once that check passes on it; until then a Page there is unavailable, as on iPhone (section 8).
+So the Page has no access to the app, to the gateway connection or to other Pages, runs nothing, sends nothing and loads nothing. Research §4 showed no request reaching the probe's server in Chromium for one page; that is evidence, not the guarantee. **The builder writes a check, for each platform's rendering path, that loads Pages built to reach out in every way (scripts, forms, links, refreshes, pictures, styles, frames, objects, prefetch hints) and drives every interaction (clicking every element, submitting every form, pressing Enter in every field), and asserts that zero requests leave the frame**, counted by a loopback server of the check's own and by the platform's request hook (the desktop's request filter). On the desktop the frame is created inert with `srcdoc` and the window then denies the frame any navigation, since the request filter admits the app's own files. A platform shows Pages only once that check passes on it; until then a Page there is unavailable (the state below), and on iPhone it is the sheet of section 8. This is the decision on addresses (`docs/decisions.md`, "Addresses a gateway hands the client"), "A page" row.
 
-**Addresses the app ignores.** `canvas.document.view` also answers `sandboxUrl`, `sandboxPort` and, when configured, `sandboxOrigin`, and the transcript's block carries a `url`: the app reads none of them. The hosted canvas address (`pluginSurfaceUrls.canvas`) is never read, shown, logged, copied, opened or exported, and `plugin.surface.refresh` is never called: it is a bearer address that opens the gateway's own interface (research §3). The same holds for the handshake's `controlUiUrl` and plugin tab paths: nothing here fetches or opens them.
+**Addresses the app ignores.** `canvas.document.view` also answers `sandboxUrl`, `sandboxPort` and, when configured, `sandboxOrigin`, and the transcript's block carries a `url`: the app reads none of them. The hosted canvas address (`pluginSurfaceUrls.canvas`) is never read, shown, logged, copied, opened or exported, and `plugin.surface.refresh` is never called: it is a bearer address that opens the gateway's own interface (research §3). The same holds for the handshake's `controlUiUrl`, plugin tab paths and `controlUiLinkReaders`: nothing here fetches or opens them, or calls a reader's methods. This is the decision on addresses (`docs/decisions.md`, "Addresses a gateway hands the client"), which the whole of this section follows.
 
 The frame fills the space left of the chat on a white ground (`#fff` in both themes, as a page expects), radius 14, with the pane's hairline. It is a focusable region named "Trail guide, page". The Page scrolls inside it.
 
@@ -237,7 +238,7 @@ The frame fills the space left of the chat on a white ground (`#fff` in both the
 One line on `--bg-pane` above the frame, only with what applies:
 
 - scripts were removed: "Shown without its 3 scripts. Parts that need them don't work here." (the count from the parse);
-- links were taken out: "Links aren't followed here." with **Links (2)**, a menu whose items are the full addresses, unabridged; choosing one opens it in the system browser, since its full address is the control's text (the remote-content rule's link row);
+- links were taken out: "Links aren't followed here." with **Links (2)**, a menu whose items are the full addresses, unabridged; choosing one opens it in the system browser, since its full address is the control's text, unless it is on this device or the person's own network, which gets the confirmation (the decision's link row);
 - always, as its last sentence: "Checkboxes, menus and folded sections change only this view."
 
 **Filters and switches change only the view.** In this frame a Page's own controls can do nothing but change what is on the screen, and only those that work without scripts (research §4): a checkbox, a menu, a folded section. Nothing is sent and nothing is kept: closing and opening the Page shows it as the bot left it (F-374). Controls that need the Page's scripts do nothing at all, and the note says so.
@@ -282,7 +283,7 @@ The person shares that file however they like; Clawtrate offers no link to a Pag
 
 ## 8. On iPhone
 
-The iPhone app follows `visual-language.md` §12 (touch sizes, the three screens) and the remote-content rule.
+The iPhone app follows `visual-language.md` §12 (touch sizes, the three screens) and the decision on addresses (`docs/decisions.md`, "Addresses a gateway hands the client"). There a link's confirmation says "Opens outside Clawtrate" in place of "Opens in your browser".
 
 ### The Library in the conversation's info
 
@@ -294,13 +295,13 @@ On a Page row, touch and hold opens a menu: **Open**, **Share as file…** (sect
 
 ### A Page, full screen
 
-The iPhone app has no web view, so a Page's HTML is not shown there (remote-content rule, "A page", iPhone). Tapping a Page opens a full-screen sheet that says what is true:
+The iPhone app has no web view, and no rendering path there passes the zero-request check, so a Page is unavailable there and its HTML is not shown (the decision's "A page" row). Tapping a Page opens the unavailable state full screen, and says so:
 
 ```
 [Close]                          Trail guide
            Page · Marlow · 5:37 PM
-           Pages are shown on the desktop app for now.
-           This version of Clawtrate for iPhone can't draw a page.
+           Clawtrate for iPhone can't show pages yet.
+           You can ask Marlow about this page, or share it as a file.
            [Message about Trail guide]
            [Share as file…]
 ```
@@ -309,7 +310,7 @@ The iPhone app has no web view, so a Page's HTML is not shown there (remote-cont
 - **Share as file…** as above.
 - **Close** returns to the chat at the same position it left.
 
-This sheet is what the iPhone shows in a Page's place: the title, the bot and the time, the sentence that Pages are shown on the desktop app for now, and the two actions. No part of the Page's HTML is drawn, not even as text. If a web view is approved for the iPhone app (section 11), the sheet shows the Page in it under the desktop frame's treatment, and only once the zero-request check (section 6) passes on the iPhone.
+This sheet is what the iPhone shows in a Page's place: the title, the bot and the time, the sentence that Clawtrate for iPhone can't show pages yet, and the two actions. No part of the Page's HTML is drawn, not even as text. F-373's target stays a Page full screen: that needs a rendering path on the iPhone that passes the zero-request check (section 6), and the row stays `todo` until it has one; then this sheet shows the Page itself, under the desktop frame's treatment.
 
 ## 9. Widths, themes, keyboard and screen readers
 
@@ -347,7 +348,7 @@ All verified on the development instance unless marked; research sections in bra
 | Pins                                      | `users.prefs.get` (read), `users.prefs.set` with `expectedEntries` (write), `conflict`, `value-too-large` at 4,096 bytes, 128 keys, `users.prefs.changed` to every connection of the profile, read-only ones included (§8) | read, write |
 | Pins on this device                       | `{status: "no_durable_identity"}` (§8, source)                                                                                                                                                                             |             |
 
-## 11. Parity rows to reword, and rows that need a decision
+## 11. Parity rows reworded and decided
 
 Reworded (statuses unchanged):
 
@@ -359,14 +360,16 @@ Reworded (statuses unchanged):
 
 F-210's dependency ("available: `canvas.document.view` (`operator.read`); the client writes the export file") and F-374's ("client only") are right as written.
 
-Rows where the design differs from the row, left unchanged in `docs/parity.md` for a decision, with the wording proposed for each:
+Rows decided by the coordinator, as they now read in `docs/parity.md` (a note under `same` may only narrow the target):
 
-| Row   | Why the design differs                                                                                                 | Proposed target                                                                                                                                                                                                                                                                                                                                    | Proposed dependency                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ----- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| F-208 | No Apps filter (section 3; research §9)                                                                                | same; note: no Apps filter: the gateway marks MCP App views only as canvas blocks that run with scripts, which Clawtrate does not run; the Library says which of the Bot's tasks it looked in.                                                                                                                                                     | partial: `sessions.list {agentId}` gives the Bot's tasks; `artifacts.list {sessionKey, messageRole: "assistant"}` for each, not paged and with no time on its entries, and the time, Pages (`canvas` blocks) and links from `chat.history`, aggregated in the client (`operator.read`); pins in `users.prefs` on the person's profile (`users.prefs.get` `operator.read`, `users.prefs.set` `operator.write`, 4,096 bytes a key), kept on the device when the gateway answers `no_durable_identity`. No index across tasks and no count. |
-| F-209 | "Updated below" is not established: the gateway keeps no revision, and a new page is a new id (section 5; research §5) | same; note: an earlier card of the same Page reads "Shown again below"; nothing says a Page was updated, since the gateway keeps no revision.                                                                                                                                                                                                      | available: `canvas.document.view {docId}` (`operator.read`) gives the Page's HTML, shown so that it makes no request; the side chat uses `chat.send` (`operator.write`). The hosted `pluginSurfaceUrls.canvas` is a bearer address and is not used.                                                                                                                                                                                                                                                                                      |
-| F-372 | No "Copy Link" or "Open in Web": the only address for a Page is a bearer capability (section 8; research §3)           | better: touch and hold a Page row for Open, Share as file and Pin; no link is offered, since the gateway's only address for a Page is a bearer capability that also opens its Control UI.                                                                                                                                                          | partial: no link to a Page exists for a client to share; `session.publicShare.set` shares a session, not a Page. Share uses the exported file (`canvas.document.view`, `operator.read`).                                                                                                                                                                                                                                                                                                                                                 |
-| F-373 | The iPhone app has no web view, and no rendering path there has a zero-request check (section 8)                       | better: on iPhone, tapping a Page opens a full-screen sheet with its title, Bot and time saying Pages are shown on the desktop app for now, with "Message about" and "Share as file"; its close control returns to the chat at the same position. The Page itself is drawn there only once an iPhone rendering path passes the zero-request check. | Unchanged: `canvas.document.view` (`operator.read`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Row   | Clawtrate target                                                                                                                                                                                           | Gateway dependency                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-208 | same; note: without the Apps filter: the gateway does not tell an app view apart from a page that runs scripts, which Clawtrate does not run.                                                              | partial: `sessions.list {agentId}` gives the Bot's tasks; `artifacts.list {sessionKey, messageRole: "assistant"}` for each, not paged and with no time on its entries, and the time, Pages (`canvas` blocks) and links from `chat.history`, aggregated in the client (`operator.read`); pins in `users.prefs` on the person's profile (`users.prefs.get` `operator.read`, `users.prefs.set` `operator.write`, 4,096 bytes a key), kept on the device when the gateway answers `no_durable_identity`. No index across tasks and no count. |
+| F-209 | same; note: an earlier card of the same Page reads "Shown again below": the gateway keeps no revision of a Page, so nothing says it was updated.                                                           | partial: `canvas.document.view {docId}` (`operator.read`) gives the Page's HTML; the side chat uses `chat.send` (`operator.write`). The hosted `pluginSurfaceUrls.canvas` is never used. Missing: a rendering path with a check that sees zero requests, until which a Page is unavailable.                                                                                                                                                                                                                                              |
+| F-372 | same; note: without "Copy Link" and "Open in Web": the gateway's only address for a Page is a capability address that also opens its Control UI, so no link is offered; "Share" shares the Page as a file. | partial: no link to a Page exists for a client to share; `session.publicShare.set` shares a session, not a Page. Share uses the exported file (`canvas.document.view`, `operator.read`).                                                                                                                                                                                                                                                                                                                                                 |
+| F-373 | Unchanged: a Page opens full screen with the latest saved version, and its close control returns to the chat at the same position. The row stays `todo`.                                                   | partial: `canvas.document.view {docId}` (`operator.read`) gives the Page's HTML. Missing: a rendering path on the iPhone that passes the zero-request check; the iPhone app has no web view, so a Page is unavailable there. The design draws that unavailable state (section 8).                                                                                                                                                                                                                                                        |
+
+The design's touch-and-hold menu also offers Pin on a Page row (section 4); F-372 does not ask for it.
 
 ## 12. For builders
 
@@ -400,7 +403,7 @@ Nothing new. A Page revision, a cross-task index or a count would let the Librar
 4. The zero-request check for the desktop's rendering path (section 6), then the Page view: the frame, the note, Links. Pages stay unavailable on a platform until its check passes. Check F-209 and F-374.
 5. The side chat. Check F-209's side chat.
 6. Export. Check F-210.
-7. The iPhone's Library, menu and Page sheet. Check F-371, F-372 and F-373 as decided.
+7. The iPhone's Library, menu and Page sheet. Check F-371 and F-372; F-373 waits for an iPhone rendering path that passes the zero-request check, and until then the sheet of section 8 is drawn.
 
 ### Prototype states
 
@@ -414,7 +417,7 @@ Nothing new. A Page revision, a cross-task index or a count would let the Librar
 | `pins`                   | `device` (the gateway keeps no preferences), `full`, `none`                                                                                                                                       |
 | `pinfail`                | `conflict` (refused twice), `noanswer`, `limit` (the profile's 128 settings used)                                                                                                                 |
 | `page`                   | `trail-guide`, `trail-guide-1` (the earlier occurrence), `packing-list` (no scripts, no links): the Page view                                                                                     |
-| `pageload`               | `failed`, `large`, `offline`                                                                                                                                                                      |
+| `pageload`               | `failed`, `large`, `offline`, `unavailable` (no zero-request check on this platform yet)                                                                                                          |
 | `chat`                   | `hidden`                                                                                                                                                                                          |
 | `export`                 | `open` (with `page`); `exportfail=1`: the system refuses the file                                                                                                                                 |
 | `width=phone`            | The iPhone's forms: with `panel=open&tab=library`, the conversation's Library in its info sheet; a Page opens the sheet of section 8. `device=desktop` shows a desktop window that narrow instead |
@@ -427,5 +430,5 @@ Nothing new. A Page revision, a cross-task index or a count would let the Librar
 - Search across the Library: the gateway has none, and the design does not add one.
 - MCP Apps, and any way to run a Page's scripts.
 - Sharing a Page by a link or hosting it anywhere.
-- The iPhone web view, until it is decided (section 11).
+- An iPhone rendering path for Pages: F-373 stays `todo` until one passes the zero-request check (section 8).
 - Pins of tasks or bots (the rail's pins, `visual-language.md` §7), which are a different thing.
