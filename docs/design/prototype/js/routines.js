@@ -330,6 +330,11 @@
     { id: "pip", name: "Pip", preview: "Here is the week, with Thursday kept clear.", time: "3:10 PM" },
   ];
   const botName = (id) => bots.find((b) => b.id === id)?.name ?? id;
+  function targetWords(target, bot) {
+    if (target === "isolated") return "A new conversation each time";
+    if (target === "main") return `${botName(bot)}'s main conversation`;
+    return "The conversation it was made in";
+  }
 
   // `runId` is the run's identity on the gateway (section 7); a fixture's is only unique.
   let runSeq = 0;
@@ -800,7 +805,7 @@
       (r.schedule.kind === "every" || r.schedule.kind === "at" ? "" : fact("Time zone", tz ? `${esc(city(tz))} <small>${esc(tz)}</small>` : "The gateway's own time zone", "zone")) +
       fact("Next run", nextCell, "next") +
       (r.trigger ? fact("Starts", `Only when its check passes<small><code class="r-mono">${esc(r.trigger)}</code></small>`, "starts") : "") +
-      fact("Runs in", r.sessionTarget === "isolated" ? "A new conversation each time" : `${botName(r.bot)}'s main conversation`, "runs-in") +
+      fact("Runs in", targetWords(r.sessionTarget, r.bot), "runs-in") +
       fact("Results", r.delivery?.mode === "none" ? "Kept with the run" : r.delivery?.channel && r.delivery.channel !== "last" ? `Sent to ${esc(r.delivery.channel)}` : "Announced to the gateway's channels", "results") +
       fact("Triggers", "Its schedule only.<small>This gateway's webhooks start a bot directly, not a routine.</small>", "triggers") +
       `</dl>`;
@@ -1118,7 +1123,7 @@
     d.opened = whenKey(d);
     // What the editor opened with: Save sends only what differs from it, and a copy of the
     // job's schedule and delivery for "Save as a new routine".
-    d.base = { name: r.name, message: r.payload.message, sessionTarget: r.sessionTarget, mode: results };
+    d.base = { name: r.name, message: r.payload.message, mode: results };
     d.job = { schedule: r.schedule, delivery: r.delivery, trigger: r.trigger };
     return d;
   }
@@ -1252,7 +1257,7 @@
     const more =
       `<details class="b-disclosure"${d.cron || d.errors.cron ? " open" : ""}><summary>More</summary><div class="b-disclosure-body r-dialog-more">` +
       (d.locked ? "" : field("e-cron", "Cron expression", `<input class="input r-mono" id="e-cron" data-e="cron" value="${esc(d.cron)}" placeholder="0 8 * * 1-5" autocomplete="off"${err("cron")}${dis} />`, d.errors.cron)) +
-      `<div class="r-field"><label for="e-runs">Runs in</label><select class="input" id="e-runs" data-e="runsIn"${dis}><option value="isolated"${d.runsIn === "isolated" ? " selected" : ""}>A new conversation each time</option><option value="main"${d.runsIn === "main" ? " selected" : ""}>${botName(d.bot)}'s main conversation</option></select></div>` +
+      `<div class="r-field"><span class="r-label">Runs in</span><p class="r-locked" id="e-runs">${targetWords(d.runsIn, d.bot)}</p></div>` +
       `<div class="r-field"><label for="e-results">Results</label><select class="input" id="e-results" data-e="results"${dis}><option value="none"${d.results === "none" ? " selected" : ""}>Keep them with the run</option><option value="announce"${d.results === "announce" ? " selected" : ""}>Also announce to the gateway's channels</option></select></div>` +
       `</div></details>`;
     editDialog.innerHTML =
@@ -1260,7 +1265,7 @@
       `<div class="b-body">${notes}${botField}` +
       field("e-name", "Name", `<input class="input" id="e-name" data-e="name" maxlength="80" autocomplete="off" value="${esc(d.name)}"${err("name")}${dis} />`, d.errors.name) +
       (d.payload
-        ? `<div class="r-field"><span class="r-label">${d.payload.kind === "systemEvent" ? "Reminder" : "Command"}</span><div class="r-locked" data-testid="payload-locked">${esc(d.payload.text || d.payload.argv.join(" "))}<br />` +
+        ? `<div class="r-field"><span class="r-label">${d.payload.kind === "systemEvent" ? "Reminder" : "Command"}</span><div class="r-locked" data-testid="payload-locked">${esc(d.payload.text ?? d.payload.script ?? d.payload.argv.join(" "))}<br />` +
           `This ${d.payload.kind === "systemEvent" ? "reminder's text" : "command"} was set on the gateway. You can rename the routine and change when it runs here; change ${d.payload.kind === "systemEvent" ? "its text" : "it"} on the gateway.</div></div>`
         : field("e-instr", "Instruction", `<textarea class="input" id="e-instr" data-e="instruction" placeholder="What should ${botName(d.bot)} do each time? For example: Summarise yesterday's notes and list anything I need to answer."${err("instruction")}${dis}>${esc(d.instruction)}</textarea>`, d.errors.instruction)) +
       whenField + more + (d.id ? "" : `<p class="r-hint">It runs first at its next time; creating it doesn't run it.</p>`) +
@@ -1387,7 +1392,6 @@
     const patch = {};
     if (name !== b.name) patch.name = name;
     if (!d.payload && payload.message !== b.message) patch.payload = payload;
-    if (d.runsIn !== b.sessionTarget) patch.sessionTarget = d.runsIn;
     if (d.results !== b.mode) patch.delivery = { mode: d.results };
     if (!d.locked && whenKey(d) !== d.opened) patch.schedule = schedule;
     return { method: "cron.update", params: { id: d.id, patch } };

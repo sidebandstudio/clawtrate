@@ -15,9 +15,11 @@ import {
   type HostInfo,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useCommand } from "./bridge.tsx";
+import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
+import { useUsageSection } from "./usage/UsageSection.tsx";
+import { useMachinesSection } from "./machines/Machines.tsx";
 import { Dialog } from "./bots/Dialog.tsx";
 import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
@@ -67,12 +69,76 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
   };
 }
 
-type Section = "gateway" | "accounts" | "checkins";
+type Section = "gateway" | "accounts" | "conversation" | "usage" | "machines" | "checkins";
 const SECTIONS: Array<[Section, string]> = [
   ["gateway", "Gateway"],
   ["accounts", "Accounts"],
+  ["conversation", "Conversation"],
+  ["usage", "Usage"],
+  ["machines", "Machines"],
   ["checkins", "Check-ins"],
 ];
+
+/** How long a bot's turn may run before Clawtrate stops it, in minutes; 50 by default (F-100). */
+function ConversationPane({ announce }: { announce: (text: string) => void }) {
+  const send = useCommand();
+  const minutes = useClawtrateState().turnLimitMinutes ?? 50;
+  const [draft, setDraft] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const commit = () => {
+    if (draft === null) return;
+    const next = Number(draft);
+    if (!Number.isInteger(next) || next < 1 || next > 1440) {
+      setError("A turn time limit is a whole number of minutes from 1 to 1440.");
+      return;
+    }
+    setError(null);
+    setDraft(null);
+    if (next === minutes) return;
+    void send({ type: "setTurnLimit", minutes: next }).then(
+      () => announce(`Turn time limit set to ${next} minutes`),
+      (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)),
+    );
+  };
+  return (
+    <>
+      <label className="b-field">
+        <span>Turn time limit</span>
+        <span className="turn-limit-field">
+          <input
+            className="input"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={1440}
+            step={1}
+            value={draft ?? String(minutes)}
+            data-testid="turn-limit"
+            aria-describedby="turn-limit-note"
+            aria-invalid={error ? true : undefined}
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") commit();
+            }}
+          />
+          <span aria-hidden="true">minutes</span>
+        </span>
+      </label>
+      <p className="b-hint" id="turn-limit-note">
+        Minutes. 50 by default. At the limit Clawtrate asks the gateway to stop the turn so it does
+        not hang, and once the gateway confirms, the turn ends with a note naming the limit. Send a
+        message to pick up where it left off. It applies to turns this device starts.
+      </p>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+    </>
+  );
+}
+
 /** ⌘, opens on the section last shown, Gateway the first time. */
 const SHOWN_LAST = "settings-section";
 
@@ -194,6 +260,15 @@ export function Settings({
   );
 
   const accountsSection = useAccountsSection({ accounts, bots, connection, info, announce, toNav });
+  const usageSection = useUsageSection({ bots, connection, info, announce, toNav });
+  const machinesSection = useMachinesSection({
+    active: section === "machines",
+    connection,
+    info,
+    bots,
+    announce,
+    toNav,
+  });
   const checkInsSection = useCheckInsSection({
     active: section === "checkins",
     checkIns,
@@ -337,7 +412,18 @@ export function Settings({
         ? accountsSection.view
         : section === "checkins"
           ? checkInsSection
-          : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+          : section === "conversation"
+            ? {
+                title: "Conversation",
+                back: toNav,
+                body: <ConversationPane announce={announce} />,
+                foot: null,
+              }
+            : section === "usage"
+              ? usageSection
+              : section === "machines"
+                ? machinesSection
+                : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">

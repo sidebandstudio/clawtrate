@@ -3,6 +3,10 @@
 // pause, run now, delete, the request for admin access, check-ins and the
 // away card, at the four widths and in both themes.
 // Run from the repository root:  node docs/design/prototype/tools/checks/routines.mjs
+import { readdir } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { chromium, pageUrl } from "./browser.mjs";
 // The pinned gateway schema: every request a page sends is checked against it.
 import { validateCronAddParams, validateCronGetParams, validateCronRemoveParams, validateCronUpdateParams } from "../../../../../packages/core/node_modules/@openclaw/gateway-protocol/dist/index.mjs";
@@ -412,7 +416,10 @@ p = await open("view=run&routine=reminder&run=0&state=ran-once");
 check("a reminder's run is in the main conversation: no transcript of its own, its summary and a way there", (await text(p, ".b-note")).startsWith("This run happened in Marlow's main conversation.") && (await text(p, '[data-testid="returned"]')) === "Posted the reminder in Marlow's main conversation." && (await has(p, '.b-note [data-r="open-bot"]')) && !(await has(p, '[data-testid="scheduled-message"]')));
 await p.close();
 p = await open("view=routine&routine=digest");
-await event(p, { action: "updated", job: { id: "digest", sessionTarget: "current" } });
+for (const sessionTarget of ["session:planning", "current"]) {
+  await event(p, { action: "updated", job: { id: "digest", sessionTarget } });
+  check(`F-188 a ${sessionTarget} routine names its shared conversation`, (await text(p, '[data-fact="runs-in"] dd')) === "The conversation it was made in");
+}
 await p.click('[data-testid="run-row"]');
 check("F-190 a recorded isolated run still shows its transcript after the routine switches to current", (await text(p, '[data-testid="scheduled-message"] p')).startsWith("Summarise the notes I added yesterday,"));
 await p.click('[data-r="back-to-routine"]');
@@ -452,6 +459,9 @@ await p.click('[data-r="save"]');
 check("validation: name and instruction, focus on the first", (await text(p, "#e-name-error")) === "Give it a name." && (await text(p, "#e-instr-error")) === "Say what the bot should do." && (await p.evaluate(() => document.activeElement.id)) === "e-name");
 await p.fill("#e-name", "Evening wrap-up");
 await p.fill("#e-instr", "List what I finished today.");
+await p.click("#edit-dialog summary");
+if (await has(p, '#e-runs option[value="main"]')) await p.selectOption("#e-runs", "main");
+check("F-189 new agent turns only offer an isolated conversation", (await text(p, "#e-runs")) === "A new conversation each time" && !(await has(p, 'select[data-e="runsIn"]')));
 await p.click('[data-e-kind="every"]');
 await p.fill("#e-n", "2");
 await p.click('[data-r="save"]');
@@ -530,8 +540,21 @@ check("a schedule set on the gateway is shown as written and left alone", (await
 await p.close();
 const lastSent = (p) => p.evaluate(() => window.routines.sent.at(-1));
 const atEq = (a, b) => Date.parse(a) === Date.parse(b);
+p = await open();
+await event(p, { action: "added", job: { ...EVENING, payload: { kind: "script", script: "echo ready" } } });
+await p.click('.r-row-main[data-id="evening"]');
+await p.click('.r-head [data-r="edit"]');
+check("F-189 a script opens with its script text locked", (await text(p, '[data-testid="payload-locked"]')).startsWith("echo ready"));
+await p.fill("#e-name", "Check readiness");
+await p.click('[data-r="save"]');
+await p.waitForTimeout(700);
+check("F-189 renaming a script only patches its name", JSON.stringify((await lastSent(p))?.params.patch) === '{"name":"Check readiness"}');
+await p.close();
 p = await open("edit=open&routine=reminder");
 check("a reminder's text is shown, not offered for editing", (await text(p, '[data-testid="payload-locked"]')).startsWith("Reminder: send the newsletter draft to Sam") && !(await has(p, "#e-instr")));
+await p.click("#edit-dialog summary");
+if (await has(p, '#e-runs option[value="isolated"]')) await p.selectOption("#e-runs", "isolated");
+check("F-189 a main-conversation reminder keeps its target", (await text(p, "#e-runs")) === "Marlow's main conversation" && !(await has(p, 'select[data-e="runsIn"]')));
 check("Once: the editor opens on the saved instant, in your zone", (await p.inputValue("#e-date")) === "2026-11-20" && (await p.inputValue('[data-e="time"]')) === "09:00" && (await p.inputValue("#e-tz")) === "auto");
 await p.fill("#e-name", "Send the draft to Sam today");
 await p.click('[data-r="save"]');
@@ -579,7 +602,8 @@ const CRON_TABLE = [
 const springExpr = "30 2 14 3 *";
 const springRun = "2027-03-14T07:30:00.000Z";
 if (process.env.OPENCLAW_PACKAGE_DIR) {
-  const { Cron } = await import(new URL("../croner/dist/croner.js", `file://${process.env.OPENCLAW_PACKAGE_DIR.replace(/\/?$/, "/")}`).href);
+  const gatewayRequire = createRequire(resolve(process.env.OPENCLAW_PACKAGE_DIR, "package.json"));
+  const { Cron } = gatewayRequire("croner");
   const from = new Date(Date.UTC(2026, 10, 18, 15, 12));
   const spring = new Cron(springExpr, { timezone: "America/New_York", catch: false });
   check("F-195 pinned Croner shifts 2:30 AM into 3:30 AM", spring.nextRun(from)?.toISOString() === springRun);
@@ -1150,6 +1174,25 @@ await p.close();
 
 const invalid = requests.filter((r) => !(r.method === "cron.add" ? validateCronAddParams(r.params) : r.method === "cron.update" ? validateCronUpdateParams(r.params) : r.method === "cron.remove" ? validateCronRemoveParams(r.params) : r.method === "cron.get" ? validateCronGetParams(r.params) : false));
 check(`every request the pages sent (${requests.length}) passes the pinned gateway schema`, requests.length > 30 && invalid.length === 0, JSON.stringify(invalid.slice(0, 2)));
+if (process.env.OPENCLAW_PACKAGE_DIR) {
+  const dist = join(process.env.OPENCLAW_PACKAGE_DIR, "dist");
+  const jobs = (await readdir(dist)).find((file) => /^jobs-[\w-]+\.mjs$/.test(file));
+  // OpenClaw 2026.10.6 exports assertSupportedJobSpec as c in its bundled jobs module.
+  const { c: assertSupportedJobSpec } = await import(pathToFileURL(join(dist, jobs)).href);
+  const invalidJobs = [];
+  for (const { query, method, params } of requests) {
+    const job = method === "cron.add" ? params : method === "cron.update" && params.id === "reminder"
+      ? { sessionTarget: "main", payload: { kind: "systemEvent" }, ...params.patch }
+      : null;
+    if (!job) continue;
+    try {
+      assertSupportedJobSpec(job);
+    } catch (error) {
+      invalidJobs.push({ query, method, error: error.message });
+    }
+  }
+  check("F-189 created jobs and edited reminders pass the gateway's job validator", invalidJobs.length === 0, JSON.stringify(invalidJobs));
+}
 await b.close();
 console.log(out.join("\n"));
 const oks = out.filter((l) => l.startsWith("ok")).length;

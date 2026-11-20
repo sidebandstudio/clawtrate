@@ -9,20 +9,28 @@
 //
 // The decision record is metadata only, one JSON object per line, appended
 // as calls are decided and compacted (rewritten atomically) when it holds
-// records older than the retention or more than its cap.
+// records older than the retention or more than its cap. It has one writer,
+// this store: writes to it from outside at the same time are not supported.
+// The store remembers the version of the file it last read or wrote (its
+// fingerprint) and appends, repairs or replaces only that version; a change
+// it finds is read and merged first. That check runs before each write is
+// committed: a rename alone cannot compare and swap, so a writer that changes
+// the file between the last check and the rename is not detected.
 
 import { createHash, randomBytes } from "node:crypto";
 import {
   appendFileSync,
   closeSync,
+  constants,
+  fstatSync,
   fsyncSync,
+  ftruncateSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
   rmSync,
   statSync,
-  truncateSync,
   utimesSync,
   writeSync,
 } from "node:fs";
@@ -70,26 +78,42 @@ function writeAll(fd, bytes) {
 /**
  * Write `text` to `path` atomically: a temporary file, written whole and
  * flushed, then renamed over it. Anything short of that throws before the
- * rename, so the old file stays as it was.
+ * rename, so the old file stays as it was. With `beforeRename`, which throws
+ * to stop the write, the file installed is returned as `fstat` saw it after
+ * the rename (null if it could not be looked at).
  */
-export function writeFileAtomic(dir, name, text) {
+export function writeFileAtomic(dir, name, text, beforeRename = null) {
   const target = join(dir, name);
   const temp = join(dir, `.${name}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
-  const fd = openSync(temp, "wx", 0o600);
+  let installed = null;
   try {
-    writeAll(fd, Buffer.from(text, "utf8"));
-    fsyncSync(fd);
+    const fd = openSync(temp, "wx", 0o600);
+    try {
+      writeAll(fd, Buffer.from(text, "utf8"));
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    if (beforeRename) {
+      // Kept open through the rename, which can change the file's ctime.
+      installed = openSync(temp, "r");
+      beforeRename();
+    }
+    renameSync(temp, target);
   } catch (error) {
-    closeSync(fd);
+    // Whatever failed, closing included, the temporary file does not stay behind.
+    if (installed !== null) closeQuietly(installed);
     rmSync(temp, { force: true });
     throw error;
   }
-  closeSync(fd);
-  try {
-    renameSync(temp, target);
-  } catch (error) {
-    rmSync(temp, { force: true });
-    throw error;
+  let stat = null;
+  if (installed !== null) {
+    try {
+      stat = fstatSync(installed);
+    } catch {
+      // Unknown: the next write finds it changed and reads it first.
+    }
+    closeQuietly(installed);
   }
   try {
     const dirFd = openSync(dir, "r");
@@ -100,6 +124,15 @@ export function writeFileAtomic(dir, name, text) {
     }
   } catch {
     // Not every platform can flush a folder; the rename is still atomic.
+  }
+  return stat;
+}
+
+function closeQuietly(fd) {
+  try {
+    closeSync(fd);
+  } catch {
+    // Nothing more is done with it.
   }
 }
 
@@ -271,13 +304,14 @@ export class RulesStore {
     }
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     writeFileAtomic(this.dir, RULES_FILE, text);
-    // Written; if the file cannot be looked at now, the next read looks again.
+    // Written, but not read: another writer can replace the file between the
+    // rename and any look at it, so the next look reads the file installed.
+    this.seen = undefined;
     try {
-      this.seen = statKey(statOrNull(this.path));
+      this.observed = statKey(statOrNull(this.path));
     } catch {
-      this.seen = undefined;
+      this.observed = undefined;
     }
-    this.observed = this.seen;
     this.#set({ kind: "read", scopes, readAt: this.now(), problem: null }, false);
   }
 }
@@ -326,6 +360,9 @@ export function parseRules(parsed) {
   return scopes;
 }
 
+/** Thrown to stop a rewrite of a file that changed since it was read or written. */
+const CHANGED = new Error("the decision record changed on disk");
+
 const DECISION_KEYS = [
   "id",
   "at",
@@ -371,34 +408,93 @@ export class DecisionLog {
     this.byId = new Map();
     /** Lines in the file beyond one per record kept: answers, and records since dropped. */
     this.extraLines = 0;
+    /** When the oldest line evicted from memory but still on disk was written, or null. */
+    this.evictedOldestAt = null;
     this.expiryPending = false;
     /** A torn last line still to repair: "end", the byte length to keep, or null. */
     this.tornTail = null;
     /** Records and answers kept in memory that a failed write left off the disk. */
     this.unsaved = 0;
+    /** Whether the record on disk was read (or is missing); until then nothing is written. */
+    this.loaded = false;
+    /**
+     * The file this writer last read or wrote, by `statKey`: "none" when it
+     * found none (or set it aside). Only that version is appended to, repaired
+     * or replaced.
+     */
+    this.fingerprint = "none";
+    /** When the record set aside as oversized was set aside, until that is recorded on it. */
+    this.asideUnstampedAt = null;
     this.problem = null;
     this.#load();
   }
 
+  /**
+   * Read the record into memory. A file that cannot be read (other than
+   * missing) leaves `loaded` false: until it is read, nothing is appended or
+   * rewritten, and each write first tries the load again. Records held in
+   * memory meanwhile are kept after the file's, and written with them.
+   */
   #load() {
-    let text;
+    let text = "";
+    let aside = null;
+    let fingerprint = "none";
     try {
-      // A file past the cap is not read into memory: it is set aside, and a new one started.
-      if (statSync(this.path).size > MAX_DECISIONS_BYTES) {
-        renameSync(this.path, this.oversizePath);
-        // Stamped with when it was set aside, which its removal counts from.
-        const asideAt = this.now() / 1000;
-        utimesSync(this.oversizePath, asideAt, asideAt);
-        this.problem = `the decision record was larger than ${MAX_DECISIONS_BYTES} bytes; it was set aside as ${DECISIONS_FILE}.oversize and a new one started`;
-        return;
+      let oversized = null;
+      const fd = openSync(this.path, "r");
+      try {
+        // Looked at before it is read: a line added after this is not taken as read.
+        const stat = fstatSync(fd);
+        if (stat.size > MAX_DECISIONS_BYTES) oversized = statKey(stat);
+        if (!oversized) {
+          text = readFileSync(fd, "utf8");
+          fingerprint = statKey(stat);
+        }
+      } finally {
+        closeSync(fd);
       }
-      text = readFileSync(this.path, "utf8");
+      // A file past the cap is not read into memory: it is set aside.
+      if (oversized !== null) {
+        aside = this.#setAside(oversized);
+        // Replaced since it was looked at: left in place, and what is there now is read.
+        if (aside === CHANGED) return this.#load();
+        // Not moved: what memory holds stays as it is, nothing is written.
+        if (aside === null) return;
+      }
     } catch (error) {
       if (error?.code !== "ENOENT") {
+        // Unread: what memory holds stays as it is, not rebuilt for each attempt.
+        this.loaded = false;
         this.problem = `the decision record cannot be read (${error.code ?? "error"})`;
+        return;
       }
-      return;
     }
+    const held = this.records;
+    this.records = [];
+    this.byId = new Map();
+    const keep = () => {
+      for (const record of held) {
+        const disk = this.byId.get(record.id);
+        // The same decision on disk: this writer's metadata, and the later of the two answers.
+        if (disk && (disk.answeredAt ?? -Infinity) > (record.answeredAt ?? -Infinity)) {
+          Object.assign(record, { answer: disk.answer, answeredAt: disk.answeredAt });
+        }
+        this.byId.set(record.id, record);
+      }
+      // In time order, the order within a millisecond kept.
+      this.records = [...this.byId.values()].sort((a, b) => a.at - b.at);
+    };
+    // One way on for a record read, a missing one and one just set aside; a
+    // stale read error goes with the read that succeeded.
+    this.problem = aside;
+    this.loaded = true;
+    this.fingerprint = fingerprint;
+    // Counted again from the file as read.
+    this.extraLines = 0;
+    this.evictedOldestAt = null;
+    this.expiryPending = false;
+    this.tornTail = null;
+    this.unsaved = 0;
     // A last line with no newline was torn by a write that did not finish: cut
     // it (or end it, if it is whole) before anything is appended after it.
     if (text.length > 0 && !text.endsWith("\n")) {
@@ -407,6 +503,8 @@ export class DecisionLog {
       this.tornTail = whole ? "end" : Buffer.byteLength(text.slice(0, cut));
       if (this.#repairTail() && !whole) text = text.slice(0, cut);
     }
+    // Replaced between the read and the repair: read again later, nothing written meanwhile.
+    const replaced = !this.loaded;
     for (const line of text.split("\n")) {
       if (!line) continue;
       const value = parseLine(line);
@@ -419,12 +517,59 @@ export class DecisionLog {
         this.extraLines += 1;
       } else {
         const record = pick(value);
-        this.records.push(record);
+        if (this.byId.has(record.id)) this.extraLines += 1;
         this.byId.set(record.id, record);
       }
     }
+    keep();
+    if (replaced) {
+      // Memory keeps its bounds; nothing is written until the file is read again.
+      this.#trim();
+      return;
+    }
+    // What this process held before the file could be read (or before it
+    // changed on disk) may not be on disk: it is written now, with the file's.
+    if (held.length > 0) {
+      this.unsaved += held.length;
+      this.#maintain(true);
+      return;
+    }
     this.prune();
     this.#maintain();
+  }
+
+  /**
+   * Set the record past the byte cap aside, unread: the problem to say, null
+   * when it could not be moved (then nothing is written), or `CHANGED` when
+   * the file there is no longer the one looked at (`expected`, by `statKey`),
+   * which is then left in place. The check comes before the rename, which
+   * cannot compare and swap.
+   */
+  #setAside(expected) {
+    try {
+      if (statKey(statOrNull(this.path)) !== expected) return CHANGED;
+      renameSync(this.path, this.oversizePath);
+    } catch (error) {
+      this.loaded = false;
+      this.problem = `the decision record is larger than ${MAX_DECISIONS_BYTES} bytes and could not be set aside (${error.code ?? "error"}); nothing is written until it is`;
+      return null;
+    }
+    // Set aside: stamped with when, which its removal counts from.
+    this.asideUnstampedAt = this.now();
+    const said = `the decision record was larger than ${MAX_DECISIONS_BYTES} bytes; it was set aside as ${DECISIONS_FILE}.oversize`;
+    try {
+      this.#stampAside();
+      return said;
+    } catch (error) {
+      return `${said}, but when could not be recorded on it (${error.code ?? "error"}); its removal waits until it is`;
+    }
+  }
+
+  #stampAside() {
+    if (this.asideUnstampedAt === null) return;
+    const at = this.asideUnstampedAt / 1000;
+    utimesSync(this.oversizePath, at, at);
+    this.asideUnstampedAt = null;
   }
 
   /**
@@ -432,16 +577,14 @@ export class DecisionLog {
    * file when it holds a fifth more lines than records kept.
    */
   #maintain(force = false) {
-    const cutoff = this.now() - this.retentionMs;
-    let drop = 0;
-    while (drop < this.records.length && this.records[drop].at < cutoff) drop += 1;
-    this.expiryPending ||= drop > 0;
-    drop = Math.max(drop, this.records.length - this.max);
-    if (drop > 0) {
-      for (const record of this.records.slice(0, drop)) this.byId.delete(record.id);
-      this.records = this.records.slice(drop);
-      this.extraLines += drop;
+    // Never rewrite a record that could not be read from what memory holds of it.
+    if (!this.loaded) {
+      this.#load();
+      // Still unread: memory keeps its bounds, the read error stays said, nothing is written.
+      if (!this.loaded) this.#trim();
+      return;
     }
+    this.#trim();
     // Rewritten only when asked (expiry) or when the file holds a fifth more
     // lines than records kept, never once per append.
     const bloated = this.extraLines > 0 && this.extraLines >= this.records.length / 5;
@@ -449,15 +592,87 @@ export class DecisionLog {
     try {
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
       const lines = this.records.map((record) => JSON.stringify(record));
-      writeFileAtomic(this.dir, DECISIONS_FILE, lines.length > 0 ? `${lines.join("\n")}\n` : "");
+      const installed = writeFileAtomic(
+        this.dir,
+        DECISIONS_FILE,
+        lines.length > 0 ? `${lines.join("\n")}\n` : "",
+        () => {
+          // Changed since this writer read or wrote it: not replaced from memory.
+          if (statKey(statOrNull(this.path)) !== this.fingerprint) throw CHANGED;
+        },
+      );
+      this.fingerprint = installed ? statKey(installed) : "unknown";
       this.extraLines = 0;
+      this.evictedOldestAt = null;
       this.tornTail = null;
       this.unsaved = 0;
       this.expiryPending = false;
       this.problem = null;
     } catch (error) {
+      if (error === CHANGED) {
+        this.#changed();
+        return;
+      }
       this.problem = `the decision record cannot be written (${error.code ?? "error"})`;
     }
+  }
+
+  /** The file changed on disk: what memory holds waits for the next load, which merges it. */
+  #changed() {
+    this.loaded = false;
+    this.problem = "the decision record changed on disk; waiting to read it again";
+  }
+
+  /**
+   * The file as this writer last read or wrote it, opened to append without
+   * creating it (created only where it found none): its descriptor, or null
+   * when it changed or went since.
+   */
+  #openExpected() {
+    if (this.fingerprint === "none") {
+      try {
+        return openSync(this.path, "ax", 0o600);
+      } catch (error) {
+        if (error?.code === "EEXIST") return null;
+        throw error;
+      }
+    }
+    let fd;
+    try {
+      fd = openSync(this.path, constants.O_WRONLY | constants.O_APPEND);
+    } catch (error) {
+      if (error?.code === "ENOENT") return null;
+      throw error;
+    }
+    let same = false;
+    try {
+      same = statKey(fstatSync(fd)) === this.fingerprint;
+    } finally {
+      if (!same) closeSync(fd);
+    }
+    return same ? fd : null;
+  }
+
+  /**
+   * Drop from memory the records past the retention or the cap, oldest first.
+   * What the file still holds of them is counted only once it was read.
+   */
+  #trim() {
+    const cutoff = this.now() - this.retentionMs;
+    let drop = 0;
+    while (drop < this.records.length && this.records[drop].at < cutoff) drop += 1;
+    if (this.loaded) this.expiryPending ||= drop > 0;
+    drop = Math.max(drop, this.records.length - this.max);
+    if (drop === 0) return;
+    for (const record of this.records.slice(0, drop)) {
+      this.byId.delete(record.id);
+      // An evicted line stays on disk until a rewrite: remember when the oldest expires.
+      if (this.loaded && (this.evictedOldestAt === null || record.at < this.evictedOldestAt)) {
+        this.evictedOldestAt = record.at;
+      }
+    }
+    this.records = this.records.slice(drop);
+    if (this.loaded) this.extraLines += drop;
   }
 
   /**
@@ -466,14 +681,24 @@ export class DecisionLog {
    */
   #repairTail() {
     if (this.tornTail === null) return true;
+    let fd = null;
     try {
-      if (this.tornTail === "end") appendFileSync(this.path, "\n");
-      else truncateSync(this.path, this.tornTail);
+      fd = this.#openExpected();
+      if (fd === null) {
+        this.#changed();
+        return false;
+      }
+      // Through the descriptor: a file put in its place is never cut.
+      if (this.tornTail === "end") appendFileSync(fd, "\n");
+      else ftruncateSync(fd, this.tornTail);
+      this.fingerprint = statKey(fstatSync(fd));
       this.tornTail = null;
       return true;
     } catch (error) {
       this.problem = `the decision record's last line is torn and could not be repaired (${error.code ?? "error"}); nothing is appended after it`;
       return false;
+    } finally {
+      if (fd !== null) closeQuietly(fd);
     }
   }
 
@@ -483,18 +708,42 @@ export class DecisionLog {
    * is written instead, and the problem is cleared only when that succeeds.
    */
   #append(value) {
+    if (!this.loaded) {
+      // Read it first; once read, what memory holds (this line too) is written with it.
+      this.unsaved += 1;
+      this.#load();
+      return;
+    }
     if (this.unsaved > 0 || !this.#repairTail()) {
       this.unsaved += 1;
       this.#maintain(true);
       return;
     }
+    let fd = null;
     try {
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-      appendFileSync(this.path, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+      fd = this.#openExpected();
+      if (fd === null) {
+        // Changed or gone since: read and merged, then written whole; never appended to.
+        this.#load();
+        return;
+      }
+      appendFileSync(fd, `${JSON.stringify(value)}\n`);
+      this.fingerprint = statKey(fstatSync(fd));
       if (!this.expiryPending) this.problem = null;
     } catch (error) {
       this.unsaved += 1;
+      // What this append left on disk, if anything, is this writer's own.
+      if (fd !== null) {
+        try {
+          this.fingerprint = statKey(fstatSync(fd));
+        } catch {
+          this.fingerprint = "unknown";
+        }
+      }
       this.problem = `the decision record cannot be written (${error.code ?? "error"})`;
+    } finally {
+      if (fd !== null) closeQuietly(fd);
     }
   }
 
@@ -505,7 +754,17 @@ export class DecisionLog {
   prune() {
     const cutoff = this.now() - this.retentionMs;
     this.#pruneOversize(cutoff);
-    if (this.expiryPending || (this.records.length > 0 && this.records[0].at < cutoff)) {
+    // Latched: a failed rewrite leaves it due, and said, until one succeeds.
+    this.expiryPending ||= this.evictedOldestAt !== null && this.evictedOldestAt < cutoff;
+    const heldExpired = this.records.length > 0 && this.records[0].at < cutoff;
+    // A record a failed write left off the disk is retried here too, on an idle gateway.
+    if (
+      !this.loaded ||
+      this.tornTail !== null ||
+      this.expiryPending ||
+      heldExpired ||
+      this.unsaved > 0
+    ) {
       this.#maintain(true);
     }
   }
@@ -513,6 +772,8 @@ export class DecisionLog {
   /** Remove a record set aside as oversized once it was set aside before `cutoff`. */
   #pruneOversize(cutoff) {
     try {
+      // A stamp that failed is tried again first: the file's own time is not when it was set aside.
+      this.#stampAside();
       if (statSync(this.oversizePath).mtimeMs < cutoff) rmSync(this.oversizePath, { force: true });
     } catch {
       // None set aside, or it cannot be looked at: the next prune looks again.
@@ -526,7 +787,9 @@ export class DecisionLog {
     this.byId.set(record.id, record);
     this.#append(record);
     if (this.records.length > this.max || this.records[0].at < this.now() - this.retentionMs) {
-      this.#maintain();
+      // A read that just failed for this record is not tried again: memory is trimmed alone.
+      if (this.loaded) this.#maintain();
+      else this.#trim();
     }
     return record.id;
   }
