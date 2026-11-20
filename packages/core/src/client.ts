@@ -2698,8 +2698,9 @@ export class ClawtrateClient {
     if (known.lossy) void this.lookUpOutcome(known.id);
     this.approvalOutcomes.delete(known.id);
     this.approvalOutcomes.set(known.id, known);
-    // Settled: nothing about it is outstanding any more.
+    // Settled: nothing about it is outstanding any more, and its task no longer waits on it.
     this.approvalAttempts.delete(known.id);
+    if (this.waiting.onApprovalResolved(known.id)) this.publishTasks();
     while (this.approvalOutcomes.size > MAX_APPROVAL_OUTCOMES) {
       this.approvalOutcomes.delete(this.approvalOutcomes.keys().next().value as string);
     }

@@ -90,6 +90,47 @@ describe("F-057: the task's status in the rail", () => {
     }
   });
 
+  it("an outcome the gateway reports through a read-back, with no resolved event, ends its task's wait", async () => {
+    const gateway = grantingGateway();
+    const rows = [{ key: KEY, agentId: "otto", sessionId: "s-1", status: "done", updatedAt: 900 }];
+    gateway.handlers["sessions.list"] = () => ({ sessions: rows, hasMore: false });
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: rows, hasMore: false },
+    });
+    const { client, transcript } = await openTask({ gateway });
+    const task = () => client.state.tasksByBot.otto?.find((each) => each.key === KEY);
+    const request = {
+      id: "read-back",
+      request: { command: "sleep 2", host: "gateway", sessionKey: KEY, runId: "run-1" },
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 200,
+    };
+    // The lists still hold it, so no list closes it here; at the deadline the gateway's record
+    // says how it ended, and no resolved event follows.
+    gateway.handlers["exec.approval.list"] = () => [request];
+    gateway.handlers["approval.get"] = () => ({
+      approval: {
+        id: request.id,
+        status: "expired",
+        reason: "timeout",
+        resolvedAtMs: request.expiresAtMs,
+        presentation: { kind: "exec" },
+      },
+    });
+    try {
+      gateway.emit("agent", agentEvent("run-1", 1, "lifecycle", { phase: "start" }));
+      gateway.emit("exec.approval.requested", request);
+      await until(() => task()?.status === "waiting");
+      gateway.emit("agent", agentEvent("run-1", 2, "lifecycle", { phase: "end" }));
+      await until(() => transcript().approvals[0]?.status === "expired");
+      await until(() => task()?.status !== "waiting");
+      expect(task()?.waitingFor ?? null).toBeNull();
+    } finally {
+      client.stop();
+    }
+  });
+
   it("an older run's failed result or blocked end leaves the newer gateway row Done, with no failed count", async () => {
     const gateway = grantingGateway();
     const rows = [
