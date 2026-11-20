@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  effortLevels,
   emptyTaskModel,
   followingEffort,
   shownChoice,
@@ -580,6 +581,34 @@ describe("a task's model and effort", () => {
     await opened(r);
     expect(r.view()).toMatchObject({ events: [] });
     expect(emptyTaskModel.events).toEqual([]);
+  });
+
+  it("F-043: a model's levels are none only when the list gives it with none; a list not read, a failed read and a model it lacks are each their own", () => {
+    const listed = (models: CatalogModel[]): TaskModelView => ({
+      ...emptyTaskModel,
+      catalog: "ready",
+      models,
+    });
+    const none: CatalogModel = { ...MODELS[0]!, id: "dev-old", levels: [], defaultLevel: null };
+    expect(effortLevels(listed(MODELS), "acme/dev-lite")).toEqual({
+      kind: "levels",
+      levels: ["off", "ultra"],
+    });
+    expect(effortLevels(listed([...MODELS, none]), "acme/dev-old")).toEqual({ kind: "none" });
+    expect(effortLevels(undefined, "acme/dev-lite")).toEqual({ kind: "loading" });
+    expect(effortLevels(emptyTaskModel, "acme/dev-lite")).toEqual({ kind: "loading" });
+    expect(effortLevels({ ...emptyTaskModel, catalog: "loading" }, "acme/dev-lite")).toEqual({
+      kind: "loading",
+    });
+    expect(
+      effortLevels(
+        { ...emptyTaskModel, catalog: "error", catalogError: "timed out" },
+        "acme/dev-1",
+      ),
+    ).toEqual({ kind: "failed", error: "timed out" });
+    expect(effortLevels(listed(MODELS), "acme/dev-gone")).toEqual({ kind: "unlisted" });
+    // An empty list is not a model with no levels.
+    expect(effortLevels(listed([]), "acme/dev-1")).toEqual({ kind: "unlisted" });
   });
 });
 

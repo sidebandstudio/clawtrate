@@ -178,6 +178,28 @@ export function catalogEntry(models: readonly CatalogModel[], ref: string | null
     : undefined;
 }
 
+/**
+ * What is known of a model's effort levels (25.2): the levels the gateway
+ * lists for it; none, which is "Not offered" and said only then; or why they
+ * are not known: the list is not read yet, its read failed, or it does not
+ * contain the model.
+ */
+export type EffortLevels =
+  | { kind: "levels"; levels: string[] }
+  | { kind: "none" }
+  | { kind: "loading" }
+  | { kind: "failed"; error: string | null }
+  | { kind: "unlisted" };
+
+export function effortLevels(view: TaskModelView | undefined, ref: string | null): EffortLevels {
+  const entry = catalogEntry(view?.models ?? [], ref);
+  if (entry)
+    return entry.levels.length ? { kind: "levels", levels: entry.levels } : { kind: "none" };
+  if (!view || view.catalog === "idle" || view.catalog === "loading") return { kind: "loading" };
+  if (view.catalog === "error") return { kind: "failed", error: view.catalogError };
+  return { kind: "unlisted" };
+}
+
 /** The effort the task's row says it uses: its own level, or the gateway's default for it. */
 export function rowEffort(task: Task | null | undefined): string | null {
   return task?.effort ?? task?.effortDefault ?? null;

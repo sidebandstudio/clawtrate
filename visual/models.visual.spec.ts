@@ -61,6 +61,12 @@ const SCENES: Scene[] = [
       if (size.phone) await openDetails(page);
     },
   },
+  {
+    name: "model-unlisted",
+    rows: "F-043",
+    scene: "model-unlisted",
+    prepare: openDetails,
+  },
 ];
 
 for (const size of SIZES) {
@@ -179,6 +185,72 @@ test.describe("a task's model and effort, behaviour", () => {
     await expect(page.getByTestId("task-model-line")).toContainText(
       "Couldn't change the effort: thinkingLevel",
     );
+  });
+
+  test("F-042: while a save is on its way the chip shows the chosen value as pending, with aria-busy", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=model-saving&${OTTO_DISK}`, "light");
+    await expect(chip(page)).toHaveAccessibleName(
+      "Model for this task: acme/dev-2, High effort. Saving. Change.",
+    );
+    await expect(chip(page)).toHaveAttribute("aria-busy", "true");
+    await expect(chip(page)).toHaveText(/dev-2·High/);
+    await openDetails(page);
+    await expect(page.getByTestId("task-model-line")).toHaveText("Saving…");
+  });
+
+  test("F-043: Not offered is said only for a model the gateway lists with no levels; a list not read, a failed read and a model the list lacks each say so, and the last effort stays", async ({
+    page,
+  }) => {
+    const effort = page.getByTestId("task-effort-select");
+    const line = page.getByTestId("task-model-line");
+    const menu = page.getByRole("menu", { name: "Model and effort for this task" });
+    const cases: Array<[string, string | RegExp]> = [
+      ["model-list-loading", "Loading the models…"],
+      ["model-list-failed", "Couldn't load the models: The gateway did not answer in time."],
+      [
+        "model-unlisted",
+        "acme/dev-gone isn't in the gateway's list of models, so its effort levels aren't known.",
+      ],
+    ];
+    for (const [scene, words] of cases) {
+      await openFixture(page, `scene=${scene}&${OTTO_DISK}`, "light");
+      await expect(chip(page)).toHaveAccessibleName(/, Ultra effort\. Change\.$/);
+      await chip(page).click();
+      await expect(menu).toBeVisible();
+      await expect(menu).not.toContainText("Not offered");
+      await page.keyboard.press("Escape");
+      await openDetails(page);
+      await expect(effort).toHaveAccessibleName("Effort: Ultra");
+      await expect(effort).toBeDisabled();
+      await expect(line).toContainText(words);
+      await expect(details(page)).not.toContainText("Not offered");
+    }
+    await expect(menu).toBeHidden();
+    await chip(page).click();
+    await expect(menu).toContainText("Effort: acme/dev-gone isn't in the gateway's list of models");
+    await expect(menu.getByRole("group", { name: "Effort" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    // A failed read is offered again.
+    await openFixture(page, `scene=model-list-failed&${OTTO_DISK}`, "light");
+    await openDetails(page);
+    await expect(details(page).getByRole("button", { name: "Try again" })).toBeVisible();
+    // Listed with no levels: Not offered, and only then.
+    await openFixture(page, `scene=model-no-levels&${OTTO_DISK}`, "light");
+    await expect(chip(page)).toHaveAccessibleName(
+      "Model for this task: acme/dev-old, effort not offered. Change.",
+    );
+    await chip(page).click();
+    await expect(
+      menu
+        .getByRole("group", { name: "Effort" })
+        .getByRole("menuitemradio", { name: "Not offered" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await page.keyboard.press("Escape");
+    await openDetails(page);
+    await expect(effort).toHaveAccessibleName("Effort: Not offered");
+    await expect(line).toHaveText("For this task. Otto's own model is in Settings.");
   });
 
   test("F-042 F-043: a read-only connection sees the values and no control", async ({ page }) => {

@@ -9,6 +9,12 @@
 //   model-refused  interactive; a change of effort to High was refused, because
 //                  the task now uses acme/dev-lite, which offers Off and Ultra
 //   model-read     model-set on a connection that may only read
+//   model-saving   model-set while a change to High is on its way
+//   model-list-loading, model-list-failed
+//                  model-set on acme/dev-lite at Ultra before the list of models
+//                  is read, and after its read failed
+//   model-unlisted the task is on acme/dev-gone at Ultra, which the list does not contain
+//   model-no-levels the task is on acme/dev-old, which the list gives with no levels
 //
 // `access=read` (accounts.ts) gives any of them the read-only form. Invented content only.
 
@@ -25,7 +31,17 @@ import {
 import { actionScene } from "./actions.ts";
 import { OPEN_TASK } from "./data.ts";
 
-export const MODEL_SCENES = ["model-set", "model-held", "model-refused", "model-read"] as const;
+export const MODEL_SCENES = [
+  "model-set",
+  "model-held",
+  "model-refused",
+  "model-read",
+  "model-saving",
+  "model-list-loading",
+  "model-list-failed",
+  "model-unlisted",
+  "model-no-levels",
+] as const;
 export type ModelScene = (typeof MODEL_SCENES)[number];
 
 export function isModelScene(name: string | null): name is ModelScene {
@@ -177,7 +193,34 @@ export function modelScene(name: ModelScene, base: ClawtrateState, now: number):
       },
     };
   }
+  // What is known of the task's levels: not yet, a failed read, a model not listed, none.
+  const unknown: Partial<Record<ModelScene, [string, Partial<TaskModelView>]>> = {
+    "model-list-loading": ["acme/dev-lite", { catalog: "loading", models: [] }],
+    "model-list-failed": [
+      "acme/dev-lite",
+      { catalog: "error", catalogError: "The gateway did not answer in time", models: [] },
+    ],
+    "model-unlisted": ["acme/dev-gone", {}],
+    "model-no-levels": ["acme/dev-old", {}],
+  };
+  const known = unknown[name];
+  if (known) {
+    const [model, change] = known;
+    state = withRow(state, ({ effort: _effort, effortDefault: _default, ...task }) => ({
+      ...task,
+      model,
+      ...(model === "acme/dev-old" ? {} : { effort: "ultra" }),
+    }));
+    return { ...state, taskModels: { [OPEN_TASK]: view(state, change) } };
+  }
   state = withRow(state, (task) => ({ ...task, model: "acme/dev-2", effortDefault: "low" }));
+  if (name === "model-saving")
+    return {
+      ...state,
+      taskModels: {
+        [OPEN_TASK]: view(state, { saving: true, pending: { model: null, effort: "high" } }),
+      },
+    };
   const scene = {
     ...state,
     taskModels: {

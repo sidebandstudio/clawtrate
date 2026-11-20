@@ -4,10 +4,11 @@
 // with is the run line's record (actions/ActionCards.tsx).
 
 import {
-  catalogEntry,
+  effortLevels,
   shownChoice,
   taskModelLine,
   type Bot,
+  type EffortLevels,
   type Task,
   type TaskModelEvent,
   type TaskModelView,
@@ -26,6 +27,22 @@ const clock = (at: number) =>
   new Date(at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
 type Chosen = { model: string | null; effort: string | null };
+
+/** The effort's word: the level known, else "Not offered" only for a model listed with none (25.2). */
+function effortWord(effort: string | null, known: EffortLevels): string {
+  if (effort) return levelWord(effort);
+  return known.kind === "none" ? "Not offered" : "Not reported";
+}
+
+/** Why a model's levels are not known, in the menu and under the selects (25.2). */
+function unknownLevels(known: EffortLevels, model: string | null): string | null {
+  if (known.kind === "loading") return "Loading the models…";
+  if (known.kind === "failed")
+    return `Couldn't load the models${known.error ? `: ${known.error}` : ""}.`;
+  if (known.kind === "unlisted")
+    return `${model ?? "This model"} isn't in the gateway's list of models, so its effort levels aren't known.`;
+  return null;
+}
 
 /** The view of a task, and a way to choose for it that announces what happened. */
 function useTaskModel(task: Task, announce: (text: string) => void) {
@@ -74,7 +91,41 @@ function menuEntries(
       { kind: "label", text: "Couldn't load the models." },
       { kind: "item", label: "Try again", onSelect: reread },
     ];
-  const levels = catalogEntry(view.models, shown.model)?.levels ?? [];
+  const known = effortLevels(view, shown.model);
+  const why = unknownLevels(known, shown.model);
+  // The Effort group: the levels, or "Not offered" for a model listed with none; when the levels
+  // are not known, why, in place of the group.
+  const efforts: MenuEntry[] =
+    known.kind === "levels" || known.kind === "none"
+      ? [
+          {
+            kind: "group",
+            label: "Effort",
+            entries:
+              known.kind === "levels"
+                ? known.levels.map((level) => ({
+                    kind: "radio" as const,
+                    label: levelWord(level),
+                    checked: level === shown.effort,
+                    onSelect: () => choose({ model: null, effort: level }),
+                  }))
+                : [
+                    {
+                      kind: "radio" as const,
+                      label: "Not offered",
+                      checked: false,
+                      disabled: true,
+                      onSelect: () => {},
+                    },
+                  ],
+          },
+        ]
+      : [
+          { kind: "label", text: `Effort: ${why ?? ""}` },
+          ...(known.kind === "failed"
+            ? [{ kind: "item" as const, label: "Try again", onSelect: reread }]
+            : []),
+        ];
   return [
     {
       kind: "group",
@@ -91,36 +142,26 @@ function menuEntries(
       }),
     },
     { kind: "rule" },
-    {
-      kind: "group",
-      label: "Effort",
-      entries: levels.length
-        ? levels.map((level) => ({
-            kind: "radio" as const,
-            label: levelWord(level),
-            checked: level === shown.effort,
-            onSelect: () => choose({ model: null, effort: level }),
-          }))
-        : [
-            {
-              kind: "radio" as const,
-              label: "Not offered",
-              checked: false,
-              disabled: true,
-              onSelect: () => {},
-            },
-          ],
-    },
+    ...efforts,
     { kind: "rule" },
     { kind: "label", text: `For this task. ${bot.name}'s own model is in its settings.` },
   ];
 }
 
 /** The chip's accessible name and tooltip (25.1). */
-function chipName(shown: ReturnType<typeof shownChoice>, interactive: boolean): string {
+function chipName(
+  shown: ReturnType<typeof shownChoice>,
+  known: EffortLevels,
+  interactive: boolean,
+): string {
   if (!shown.model) return `Model for this task: not reported.${interactive ? " Change." : ""}`;
+  const effort = shown.effort
+    ? `${levelWord(shown.effort)} effort`
+    : known.kind === "none"
+      ? "effort not offered"
+      : "effort not reported";
   return (
-    `Model for this task: ${shown.model}, ${levelWord(shown.effort)} effort.` +
+    `Model for this task: ${shown.model}, ${effort}.` +
     (shown.held ? " Held until this turn ends." : "") +
     (shown.pending ? " Saving." : "") +
     (interactive ? " Change." : "")
@@ -158,7 +199,8 @@ export function ModelChip({
   );
   const openFrom = (element: HTMLButtonElement) =>
     setAnchor({ rect: element.getBoundingClientRect(), element });
-  const name = chipName(shown, interactive);
+  const known = effortLevels(view, shown.model);
+  const name = chipName(shown, known, interactive);
   const body = (
     <>
       {shown.held && <ClockIcon className="model-chip-held" />}
@@ -170,7 +212,7 @@ export function ModelChip({
           <span className="model-chip-dot" aria-hidden="true">
             ·
           </span>
-          <span className="model-chip-effort">{levelWord(shown.effort)}</span>
+          <span className="model-chip-effort">{effortWord(shown.effort, known)}</span>
         </>
       )}
     </>
@@ -245,8 +287,9 @@ export function TaskModelDetails({
   connected: boolean;
   onAnnounce: (text: string) => void;
 }) {
-  const { view, choose, keep } = useTaskModel(task, onAnnounce);
+  const { view, choose, keep, reread } = useTaskModel(task, onAnnounce);
   const shown = shownChoice(task, view);
+  const known = effortLevels(view, shown.model);
   if (!interactive)
     return (
       <section className="task-model" data-testid="task-model">
@@ -258,13 +301,14 @@ export function TaskModelDetails({
           </div>
           <div>
             <dt>Effort</dt>
-            <dd>{levelWord(shown.effort)}</dd>
+            <dd>{effortWord(shown.effort, known)}</dd>
           </div>
         </dl>
       </section>
     );
   const models = view?.models ?? [];
-  const levels = catalogEntry(models, shown.model)?.levels ?? [];
+  const levels = known.kind === "levels" ? known.levels : [];
+  const why = unknownLevels(known, shown.model);
   const held = view?.held ?? null;
   const was = task.model ? idOf(task.model) : "the model it has";
   let line: ReactNode = `For this task. ${bot.name}'s own model is in Settings.`;
@@ -286,7 +330,26 @@ export function TaskModelDetails({
         Couldn't change {what}: {view.refused.error}.
       </span>
     );
-  }
+  } else if (why)
+    line = (
+      <>
+        {why}
+        {known.kind === "failed" && (
+          <>
+            {" "}
+            <button
+              type="button"
+              className="button"
+              data-variant="quiet"
+              data-size="sm"
+              onClick={reread}
+            >
+              Try again
+            </button>
+          </>
+        )}
+      </>
+    );
   return (
     <section className="task-model" data-testid="task-model">
       <h3 className="work-group">Model</h3>
@@ -306,7 +369,13 @@ export function TaskModelDetails({
         />
         <Select
           label="Effort"
-          value={levels.length === 0 ? "Not offered" : (shown.effort ?? "")}
+          value={
+            known.kind === "none"
+              ? "Not offered"
+              : levels.length === 0
+                ? effortWord(shown.effort, known)
+                : (shown.effort ?? "")
+          }
           choices={levels.map((level) => ({ value: level, label: levelWord(level) }))}
           onChoose={(effort) => void choose({ model: null, effort })}
           disabled={!connected || levels.length === 0}
