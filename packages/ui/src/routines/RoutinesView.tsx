@@ -601,7 +601,9 @@ function RunView({
   const bridge = useBridge();
   // The run's own session says it was an agent turn, whatever the routine was edited to since.
   const isolated = run.sessionKey?.includes(`:cron:${run.jobId}:run:`) === true;
-  const command = routine.payload === "other" && !isolated;
+  // A recorded session outranks what the routine runs now: an edit to a command
+  // later does not take an earlier run's conversation away.
+  const command = routine.payload === "other" && run.sessionKey === null;
   // The run's recorded session is the only evidence of the conversation it used: the
   // gateway writes a job's updatedAtMs as its last run's end, so no timestamp can
   // bound an edit, and the routine's current target may not be the one it ran with.

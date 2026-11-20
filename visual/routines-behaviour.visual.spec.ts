@@ -729,6 +729,22 @@ test.describe("phone", () => {
     await expect(page.locator(".conversation h1")).toBeFocused();
   });
 
+  test("F-190: a run that recorded a shared conversation keeps it after its routine is changed to a command", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByTestId("routine-row").filter({ hasText: "Plan the week" }).click();
+    await view(page).getByTestId("run-row").first().click();
+    const link = view(page).getByRole("button", { name: "Open conversation", exact: true });
+    await expect(link).toBeVisible();
+    await change(
+      page,
+      `(routines) => ({ ...routines, routines: routines.routines.map((each) =>
+        each.id === "routine-week" ? { ...each, payload: "other" } : each) })`,
+    );
+    await expect(link).toBeVisible();
+  });
+
   test("Back to bots leaves the view for the rail, with focus on the Routines button", async ({
     page,
   }) => {
