@@ -25,6 +25,13 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
   const version = versionFor(selectedTrack);
   const offer = { version, releaseDate: "2026-11-01T00:00:00Z", offerId: "fixture-offer" };
   const states = {
+    ready: { kind: "verified", version, size: 120000, offerId: offer.offerId },
+    preparing: { kind: "preparing", ...offer },
+    "handing-off": { kind: "handing-off", ...offer },
+    "handed-to-system": { kind: "handed-to-system", ...offer },
+    "quit-blocked": { kind: "handoff-failed", version, reason: "quit-blocked" },
+    "handoff-unconfirmed": { kind: "handoff-failed", version, reason: "handoff-unconfirmed" },
+    "installer-failed": { kind: "handoff-failed", version, reason: "installer-failed" },
     "not-checked": { kind: "not-checked" },
     checking: { kind: "checking" },
     "nothing-newer": { kind: "nothing-newer" },
@@ -53,6 +60,9 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
         : params.get("tracks") === "one"
           ? [runningTrack]
           : ["stable", "nightly"];
+  const after = params.get("after");
+  const observed =
+    after === "target-running" ? version : after === "unconfirmed" ? "0.3.0" : runningVersion;
   let snapshot: DesktopUpdateSnapshot = {
     state: states[kind],
     revision: 0,
@@ -65,7 +75,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
             ? "last-check-not-saved"
             : null,
     pendingTrack: kind === "pending" ? "nightly" : null,
-    runningVersion: kind === "invalid" ? null : runningVersion,
+    runningVersion: kind === "invalid" ? null : observed,
     runningTrack: kind === "invalid" ? null : runningTrack,
     selectedTrack: tracks.length ? selectedTrack : null,
     tracks: tracks.map((track) => ({
@@ -80,7 +90,20 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
           readAt: "2026-11-16T22:41:00Z",
         }
       : null,
-    install: { kind: "unavailable-in-this-build" },
+    lastAttempt:
+      after === "target-running" || after === "old-version-running" || after === "unconfirmed"
+        ? {
+            kind: after,
+            from: runningVersion,
+            target: version,
+            track: selectedTrack,
+            running: observed,
+          }
+        : null,
+    install:
+      kind === "ready"
+        ? { kind: "restart-available", offerId: offer.offerId, completesOnQuit: true }
+        : { kind: "unavailable-in-this-build", reason: "build-not-signed" },
   };
   const listeners = new Set<(s: DesktopUpdateSnapshot) => void>();
   function publish(patch: Partial<DesktopUpdateSnapshot>) {
@@ -116,6 +139,17 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
       if (params.get("save") === "failed")
         publish({ pendingTrack: null, preferenceIssue: "track-not-saved" });
       else publish({ pendingTrack: null, selectedTrack: track });
+      return reply("accepted");
+    },
+    restart: async (id) => {
+      if (snapshot.state.kind !== "verified" || snapshot.state.offerId !== id)
+        return reply("stale");
+      if (snapshot.install.kind !== "restart-available" || snapshot.install.offerId !== id)
+        return reply("invalid");
+      publish({
+        state: { kind: "preparing", version: snapshot.state.version, offerId: id },
+        install: { kind: "unavailable-in-this-build", reason: "no-verified-download" },
+      });
       return reply("accepted");
     },
     download: async (id) => {
