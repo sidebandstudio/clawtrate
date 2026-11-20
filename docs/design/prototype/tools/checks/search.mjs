@@ -490,36 +490,27 @@ await p.waitForTimeout(800);
 check("R5 the next batch is asked", (await requests(p, "files")).length === 16 && (await groupText(p, "files")).includes("16 of 30 bots' workspaces searched."));
 await p.close();
 
-p = await open("palette=open&ws=changed");
-await type(p, "md");
-await activate(p, "disk-2026-11-16.md");
-await p.keyboard.press("Enter");
-await p.waitForTimeout(150);
-check("R5 a workspace that changed since the search: stop and say so", (await paletteOpen(p)) && (await body(p)).includes("This result is from a workspace that changed. Search again.") && p.url().includes("search.html"));
-await p.close();
-
-p = await open("palette=open");
-await type(p, "md");
-await activate(p, "disk-2026-11-16.md");
-await p.keyboard.press("Enter");
-await p.waitForURL(/work\.html/);
-await p.waitForTimeout(250);
-check("R5 a file opens in the Work reader of the task it was found through", p.url().includes("task=o1") && p.url().includes("file=notes%2Fdisk-2026-11-16.md") && (await p.evaluate(() => document.querySelector(".shell").dataset.panel === "open")));
-await p.goto(base + "&palette=open&q=trail");
-await settle(p);
-await activate(p, "trail-map.png");
-await p.keyboard.press("Enter");
-await p.waitForURL(/work\.html/);
-await p.waitForTimeout(250);
-check("R5 the reader's refusal reaches the file's open state", p.url().includes("file=pictures%2Ftrail-map.png") && (await text(p, '[data-testid="reader-refused"]')).includes("Couldn't open trail-map.png."));
-await p.close();
-
-p = await open("palette=open&platform=ios&width=phone", { width: 390, height: 844 });
-await type(p, "md");
-await p.click('.s-row[data-kind="file"]');
-await p.waitForTimeout(150);
-check("R7 the iPhone keeps files as names: previews are on desktop, and nothing opens", (await body(p)).includes("File previews are available on desktop.") && p.url().includes("search.html") && (await paletteOpen(p)));
-await p.close();
+// A file name doesn't bind a reader to the workspace searched: file results are names, with no
+// open hint, on the desktop and the iPhone, and nothing opens or is read.
+const fileLine = "Opening a file from search is unavailable until the gateway can bind the read to the workspace searched.";
+for (const [query, file, how, extra, viewport] of [
+  ["md", "disk-2026-11-16.md", "Enter", "", undefined],
+  ["trail", "trail-map.png", "click", "", undefined],
+  ["disk", "disk-2026-11-16.md", "click", "&platform=ios&width=phone", { width: 390, height: 844 }],
+]) {
+  p = await open("palette=open" + extra, viewport);
+  await type(p, query);
+  const asked = (await requests(p)).length;
+  const row = p.locator(`.s-row[data-kind="file"]:has-text("${file}")`);
+  const hintless = await row.evaluate((r) => !r.querySelector(".s-hint"));
+  if (how === "Enter") {
+    await activate(p, file);
+    await p.keyboard.press("Enter");
+  } else await row.click();
+  await p.waitForTimeout(300);
+  check(`R5 ${file}${extra ? " on the iPhone" : ""}: the name stays in the palette, with no open hint and the reason, and no Work route or read is asked`, hintless && (await paletteOpen(p)) && p.url().includes("search.html") && !p.url().includes("work.html") && (await groupText(p, "files")).includes(file) && (await row.innerText()).includes(fileLine) && (await requests(p)).length === asked);
+  await p.close();
+}
 
 // R6 and the alignments: the full address, and when to confirm ------------------------------------------------------------
 p = await open("palette=open");

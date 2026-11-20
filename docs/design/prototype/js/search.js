@@ -108,8 +108,8 @@
     marlow: { via: p("marlow") === "workspace" ? "m1" : null, root: "/srv/openclaw/workspaces/marlow", entries: [["AGENTS.md", "file"], ["drafts/newsletter-march.md", "file"]] },
     pip: { via: "p1", root: "/srv/openclaw/workspaces/pip", entries: [["AGENTS.md", "file"], ["lists/mountain-weekend.md", "file"], ["pictures", "directory"], ["pictures/trail-map.png", "file"]] },
   };
-  // The files work.html's reader holds. For any other, the reader's refusal is passed on.
-  const WORK_READS = new Set(["inventory.md", "notes/disk-2026-11-16.md", "notes/voice-memo.m4a", "notes/cache-walkthrough.mp4", "charts/usage.png", "tools/dashboard.js"]);
+  // A file result is a name: nothing binds a reader's read to the workspace that was searched.
+  const FILE_LINE = "Opening a file from search is unavailable until the gateway can bind the read to the workspace searched.";
 
   // Routines, by the ids routines.html holds, so a result opens that routine's page.
   const ROUTINES = [
@@ -545,10 +545,9 @@
     }, (reply, current) => {
       free();
       if (!current) return;
-      const expected = WORKSPACES[e.bot]?.root || ws.root;
+      // An ordinary local task: the gateway's workspace binding and the root it returned.
       if (reply.error) g.per[e.bot] = { state: reply.error === "timeout" ? "timeout" : "refused", error: reply.error };
       else if (!reply.root) g.per[e.bot] = { state: "noroot" };
-      else if (reply.root !== expected) g.per[e.bot] = { state: "notverified" };
       // Only file entries; a folder whose name matches is not a file result.
       else g.per[e.bot] = { state: "done", root: reply.root, via: e.via.id, sessionId: e.via.sessionId, rows: reply.browser.entries.filter((x) => x.kind === "file").map((x) => x.path), truncated: Boolean(reply.browser.truncated) };
       if (!Object.values(g.per).some((v) => v.state === "searching")) g.state = "done";
@@ -710,7 +709,7 @@
     const empty = done.filter((id) => !gf.per[id].rows.length);
     if (empty.length) g.lines.push(`No file names returned from ${list(empty.map(botName))}.`);
     for (const id of done) if (gf.per[id].truncated) g.lines.push(`${botName(id)}: the gateway stopped at its limit of 500 names or 5,000 entries walked.`);
-    const unverified = [...R.filter((e) => !e.via).map((e) => e.bot), ...by("notverified")];
+    const unverified = R.filter((e) => !e.via).map((e) => e.bot);
     if (unverified.length) g.lines.push(`Not searched: ${list(unverified.map((id) => `${botName(id)}'s workspace`))} could not be verified.`);
     for (const id of by("noroot")) g.lines.push(`${botName(id)}: the gateway returned no workspace for its task, so nothing was searched.`);
     for (const id of [...by("refused"), ...by("timeout")]) {
@@ -729,7 +728,7 @@
       for (const path of gf.per[id].rows) {
         const name = path.split("/").pop();
         const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : `${botName(id)}'s workspace`;
-        g.rows.push({ kind: "file", key: `file:${id}:${path}`, bot: id, path, from: gf.per[id], first: esc(name), second: `${esc(folder)} · ${esc(botName(id))}`, name: `File ${path}, ${botName(id)}` });
+        g.rows.push({ kind: "file", key: `file:${id}:${path}`, bot: id, path, first: esc(name), second: `${esc(folder)} · ${esc(botName(id))}`, name: `File ${path}, ${botName(id)}` });
       }
     g.complete = done.length === R.length && done.every((id) => !gf.per[id].truncated);
     g.say = [unverified.length || notAsked.length || by("noroot").length ? `${plural(R.length - done.length, "bot's workspace was", "bots' workspaces were")} not searched.` : "", g.tone ? "Some workspaces couldn't be searched." : ""].filter(Boolean).join(" ");
@@ -953,8 +952,8 @@
   }
 
   function hintFor(r) {
-    if (r.kind === "file" && IOS) return "";
-    return { bot: "Open", task: "Open", message: "Go to message", file: "Open in Work", link: "Go to message", routine: "Open routine", setting: "Open" }[r.kind];
+    if (r.kind === "file") return "";
+    return { bot: "Open", task: "Open", message: "Go to message", link: "Go to message", routine: "Open routine", setting: "Open" }[r.kind];
   }
 
   function leading(r) {
@@ -969,7 +968,7 @@
     const opening = S.opening && S.opening.key === r.key ? S.opening : null;
     const note = blocked || (opening && opening.note) || "";
     const name = r.name + (note ? `. ${note}` : "");
-    const hint = blocked ? "Can't open" : hintFor(r);
+    const hint = blocked && r.kind !== "file" ? "Can't open" : hintFor(r);
     let html =
       `<div class="s-row" role="option" id="${id}" data-key="${esc(r.key)}" data-kind="${r.kind}" aria-selected="false" aria-label="${esc(name)}">` +
       `<span class="s-lead">${leading(r)}</span>` +
@@ -1010,10 +1009,9 @@
   // What cannot open, and why (section 9). Each case is decided from the device's lists now and
   // the identity the reply returned, never from an empty history.
   function blockedLine(r) {
-    if (r.kind === "file" && IOS) return "File previews are available on desktop.";
-    if (!["message", "link", "file"].includes(r.kind)) return "";
+    if (r.kind === "file") return FILE_LINE;
+    if (!["message", "link"].includes(r.kind)) return "";
     if (!roster().some((b) => b.id === r.bot)) return `${botName(r.bot)} is no longer in this connection's list of bots.`;
-    if (r.kind === "file") return S.opening?.key === r.key && S.opening.state === "changed" ? "This result is from a workspace that changed. Search again." : "";
     const id = r.kind === "message" ? r.hit : r;
     const row = listRow(id.sessionKey);
     if (!row) {
@@ -1029,6 +1027,7 @@
 
   function openRow(r) {
     (S.tried ||= new Set()).add(r.key);
+    // Every file result returns here, on the desktop and the iPhone: it says why, and nothing opens.
     if (blockedLine(r)) {
       render();
       return announce(blockedLine(r), S.gen);
@@ -1049,19 +1048,6 @@
     }
     if (r.kind === "setting") {
       location.href = `controls.html?open=settings&section=${encodeURIComponent(r.section)}${carry()}`;
-      return;
-    }
-    if (r.kind === "file") {
-      // The same task, session and workspace the search answered for, or nothing.
-      const via = listRow(keyOf(r.bot, r.from.via));
-      const root = p("ws") === "changed" ? `${r.from.root}-moved` : r.from.root;
-      if (!via || via.sessionId !== r.from.sessionId || via.roots || root !== r.from.root) {
-        S.opening = { key: r.key, state: "changed" };
-        render();
-        return announce("This result is from a workspace that changed. Search again.", S.gen);
-      }
-      const refusal = WORK_READS.has(r.path) && r.bot === "otto" ? "" : `&fileerror=${encodeURIComponent("The gateway's reader refused it.")}`;
-      location.href = `work.html?bot=${r.bot}&task=${r.from.via}&panel=open&tab=files&file=${encodeURIComponent(r.path)}${refusal}${carry()}`;
       return;
     }
     // A message, or the message that holds a link: the task's loaded rows are read for the returned

@@ -752,14 +752,6 @@
   }
 
   function readerLevel(b, t, st, level) {
-    if (level.refused) {
-      const name = level.path.split("/").pop();
-      return (
-        `<div class="files">${head(st, name)}<div class="work-empty" role="alert" data-testid="reader-refused"><span class="empty-mark">${glyph("failed")}</span>` +
-        `<h4>Couldn't open ${esc(name)}.</h4><p>${esc(level.refused)}</p>` +
-        `<button type="button" class="button" data-files="retry" data-key="retry">Try again</button></div></div>`
-      );
-    }
     const path = level.path;
     const f = files[path];
     const name = path.split("/").pop();
@@ -1059,12 +1051,6 @@
       const file = params.get("file");
       if (folder !== null) st.stack.push({ kind: "folder", path: folder === "/" ? "" : folder });
       if (file && files[file]) st.stack.push({ kind: "file", path: file, view: params.get("fileview") || undefined });
-      // A file the reader refuses (search.html opens one), in the task the address names: its
-      // failed state, with the reader's reason.
-      else if (file && params.get("fileerror")) {
-        const named = bots.find((b) => b.id === params.get("bot"))?.tasks.find((t) => t.id === params.get("task")) || disk;
-        paneFor(named).stack.push({ kind: "file", path: file, refused: params.get("fileerror") });
-      }
     },
     panel(b, t) {
       renderFiles(b, t);
