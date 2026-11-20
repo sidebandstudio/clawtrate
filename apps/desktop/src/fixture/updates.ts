@@ -72,7 +72,7 @@ export function fixtureUpdates(params: URLSearchParams): DesktopUpdates {
       track,
       source: params.has("longhost")
         ? "a".repeat(63) + ".example.test"
-        : track + ".updates.example",
+        : (track === "nightly" ? "beta" : track) + ".updates.example",
     })),
     lastCheck: ["nothing-newer", "history"].includes(kind)
       ? {
