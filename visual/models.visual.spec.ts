@@ -11,7 +11,10 @@ const runLine = (page: Page) => page.getByTestId("run-line").last();
 
 /** At phone width the chip is not drawn: the task's Details hold the control. */
 async function openDetails(page: Page) {
-  await page.getByRole("button", { name: "Show work panel" }).click();
+  // The pane stays open from one opening of the fixture to the next.
+  const show = page.getByRole("button", { name: "Show work panel" });
+  await expect(show.or(details(page))).toBeVisible();
+  if (await show.isVisible()) await show.click();
   await expect(details(page)).toBeVisible();
 }
 
