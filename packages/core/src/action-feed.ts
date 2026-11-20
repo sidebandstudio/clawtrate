@@ -289,8 +289,12 @@ export function callFromBlock(
     const withArgs = Object.keys(fromStep.args).length
       ? fromStep
       : { ...fromStep, args: parseArgs(block.argumentsText) };
-    // History's row may hold T3 Code's facts the step has not got yet.
-    const call = !withArgs.t3?.read && block.t3?.read ? { ...withArgs, t3: block.t3 } : withArgs;
+    // History's row may hold T3 Code's facts the step has not got yet: its result's, or, for a
+    // step with none, those of the arguments it took from the row.
+    const call =
+      block.t3 && ((!withArgs.t3?.read && block.t3.read) || !withArgs.t3)
+        ? { ...withArgs, t3: block.t3 }
+        : withArgs;
     // History holds no result, and the step's error says nothing (it came from an item's end,
     // not a result): nothing establishes how the call ended.
     if (!block.result && call.isError && !call.text)

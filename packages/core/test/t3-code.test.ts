@@ -1113,3 +1113,66 @@ it("F-137: a stopped run that only asked T3 Code to stop did not hand off work",
     workMayContinue([{ ...interruption, call: { ...interruption.call, runStopped: true } }]),
   ).toBe(false);
 });
+
+describe("a viewer sent only a call's item events", () => {
+  it("F-313: a running call shows with the thread its history row's arguments name", () => {
+    const id = "call_items_only";
+    const ctx = { sessionKey: "agent:otto:backup", now: 9_000, raw: new RawTable() };
+    let activity = emptyActivity;
+    const events: Array<[string, Rec]> = [
+      ["lifecycle", { phase: "start", startedAt: 1_000 }],
+      // The item's start alone: no arguments reach this viewer.
+      [
+        "item",
+        {
+          kind: "tool",
+          phase: "start",
+          toolCallId: id,
+          name: name("t3_thread_wait"),
+          startedAt: 1_100,
+        },
+      ],
+    ];
+    events.forEach(([stream, data], i) => {
+      activity = applyAgentEvent(
+        activity,
+        {
+          runId: "run-1",
+          seq: i + 1,
+          stream,
+          ts: 1_000 + i * 100,
+          sessionKey: ctx.sessionKey,
+          data,
+        },
+        ctx,
+      ).activity;
+    });
+    const run = activity.runs[0]!;
+    const step = run.steps.find((s) => s.toolCallId === id)!;
+    expect(step.t3).toBeUndefined();
+    const rows = [
+      { role: "user", content: "Go.", timestamp: 1_000, __openclaw: { id: "u1" } },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id,
+            name: name("t3_thread_wait"),
+            arguments: { threadId: THREAD, timeoutMs: 30_000 },
+          },
+        ],
+        timestamp: 2_000,
+        __openclaw: { id: "a1", runId: "run-1" },
+      },
+    ];
+    const block = mapHistory(rows)
+      .flatMap((each) => each.blocks)
+      .find((each) => each.kind === "tool-call")!;
+    const call = t3(
+      callFromBlock(block as Extract<typeof block, { kind: "tool-call" }>, step, run),
+    );
+    expect(call?.state).toBe("started");
+    expect(call?.thread?.threadId).toBe(THREAD);
+  });
+});
