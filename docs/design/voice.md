@@ -74,18 +74,18 @@ The composer is built on `main` (`packages/ui/src/Composer.tsx`, `conversation.m
 
 ### New components
 
-| Component                                     | Class                  | Section |
-| --------------------------------------------- | ---------------------- | ------- |
-| The microphone button and its listening state | `.mic-button`          | 3, 4    |
-| The dictation line under the composer's row   | `.dictation-line`      | 4       |
-| The voice chat button                         | `.call-button`         | 3, 5    |
-| Where the audio goes, before the first use    | `.voice-consent`       | 2, 4, 5 |
-| The call band                                 | `.call-band`           | 6       |
-| The microphone mark                           | `.mic-mark`            | 2       |
-| The call's settings, a dialog | `.v-call-settings` | 7 |
-| The live transcript                           | `.call-transcript`     | 6       |
-| The "Voice chat" line                         | `.call-line`           | 10      |
-| The memo's speed | `.speed` | 11 |
+| Component                                     | Class              | Section |
+| --------------------------------------------- | ------------------ | ------- |
+| The microphone button and its listening state | `.mic-button`      | 3, 4    |
+| The dictation line under the composer's row   | `.dictation-line`  | 4       |
+| The voice chat button                         | `.call-button`     | 3, 5    |
+| Where the audio goes, before the first use    | `.voice-consent`   | 2, 4, 5 |
+| The call band                                 | `.call-band`       | 6       |
+| The microphone mark                           | `.mic-mark`        | 2       |
+| The call's settings, a dialog                 | `.v-call-settings` | 7       |
+| The live transcript                           | `.call-transcript` | 6       |
+| The "Voice chat" line                         | `.call-line`       | 10      |
+| The memo's speed                              | `.speed`           | 11      |
 
 ### Tokens
 
@@ -95,11 +95,11 @@ No new token. The microphone mark is `--danger` (a filled dot) while the microph
 
 Every route has one sentence. Before the microphone opens, the consent sheet names, in full and never cut short, the gateway (its name in the rail's footer) and the provider (its `label` in `talk.catalog`, as text), and says the sentence; Settings › Voice says it too (section 12). Long names wrap.
 
-| Route | The sentence | Rests on |
-|---|---|---|
-| Voice chat | "Your voice goes to Home gateway, which sends it to OpenAI Realtime Voice. The gateway can save finalized captions as text in this task. Clawtrate discards its audio buffers when capture or playback stops. The gateway and provider manage their own copies." | research §2, §6 |
-| Dictation through the gateway | "Your voice goes to Home gateway, which sends it to OpenAI Realtime Transcription and sends the text back. The words go into your message as an editable draft, and nothing is posted to the task until you send it. Clawtrate discards its audio buffers when capture stops. The gateway and provider manage their own copies." | research §3 |
-| Dictation on this Mac or iPhone | "Apple's speech recognition turns your voice into text on this Mac. Clawtrate requires on-device recognition, so the recognizer doesn't send your voice over the network. The words go into your message as an editable draft." Offered only where the recognizer is eligible with on-device recognition required, on the Mac and the iPhone alike. | research §3 |
+| Route                           | The sentence                                                                                                                                                                                                                                                                                                                                        | Rests on        |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| Voice chat                      | "Your voice goes to Home gateway, which sends it to OpenAI Realtime Voice. The gateway can save finalized captions as text in this task. Clawtrate discards its audio buffers when capture or playback stops. The gateway and provider manage their own copies."                                                                                    | research §2, §6 |
+| Dictation through the gateway   | "Your voice goes to Home gateway, which sends it to OpenAI Realtime Transcription and sends the text back. The words go into your message as an editable draft, and nothing is posted to the task until you send it. Clawtrate discards its audio buffers when capture stops. The gateway and provider manage their own copies."                    | research §3     |
+| Dictation on this Mac or iPhone | "Apple's speech recognition turns your voice into text on this Mac. Clawtrate requires on-device recognition, so the recognizer doesn't send your voice over the network. The words go into your message as an editable draft." Offered only where the recognizer is eligible with on-device recognition required, on the Mac and the iPhone alike. | research §3     |
 
 "Clawtrate discards its audio buffers" is a rule for the builder: no audio is written to disk, to a log, to a crash report or to the bridge's history, and in-memory audio is dropped when capture or playback stops (section 15). Nothing here promises what the gateway or the provider keep. A route whose destination cannot be stated is not offered: Chromium's speech recognition, and on-device dictation on Windows (research §3).
 
@@ -114,14 +114,14 @@ Every route has one sentence. Before the microphone opens, the consent sheet nam
 
 None of these has a gateway setting (research §7), so Clawtrate keeps them itself:
 
-| Setting | Kept | Why there |
-|---|---|---|
-| Each bot's voice, speed and language for its next calls | The `clawtrate.voice` user preference on the gateway (`users.prefs`), so every device of the person uses them | The same store and compare-and-set as `clawtrate.sidebar` and `clawtrate.budgets` on `main` (`packages/core/README.md`); written at the interactive tier |
-| The same, when `users.prefs.get` answers `no_durable_identity` | This device, per gateway identity (`gateway.identity.get`) and bot | As the sidebar does when its `status` is `unavailable` |
-| The microphone | This device | A device's names are its own |
-| The dictation route | This device, per gateway | What a device can recognize is its own |
-| A call's duration, for its line | This device, with the exact voice session ids it held (section 10) | Only the device that held the call counted it |
-| Accepted destinations | This device, per gateway identity, route and provider id (section 2) | They were said to the person at this device |
+| Setting                                                        | Kept                                                                                                          | Why there                                                                                                                                                |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Each bot's voice, speed and language for its next calls        | The `clawtrate.voice` user preference on the gateway (`users.prefs`), so every device of the person uses them | The same store and compare-and-set as `clawtrate.sidebar` and `clawtrate.budgets` on `main` (`packages/core/README.md`); written at the interactive tier |
+| The same, when `users.prefs.get` answers `no_durable_identity` | This device, per gateway identity (`gateway.identity.get`) and bot                                            | As the sidebar does when its `status` is `unavailable`                                                                                                   |
+| The microphone                                                 | This device                                                                                                   | A device's names are its own                                                                                                                             |
+| The dictation route                                            | This device, per gateway                                                                                      | What a device can recognize is its own                                                                                                                   |
+| A call's duration, for its line                                | This device, with the exact voice session ids it held (section 10)                                            | Only the device that held the call counted it                                                                                                            |
+| Accepted destinations                                          | This device, per gateway identity, route and provider id (section 2)                                          | They were said to the person at this device                                                                                                              |
 
 **Reading.** The preference is validated on read; a value that isn't one of the allowed rates, a known language code or a plain voice name is ignored for that field. Only a confirmed `no_durable_identity` makes the device keep the settings; a read that fails for access, identity or any other reason stays unknown: "Couldn't read Otto's saved voice settings on Home gateway, so changes aren't saved.", and nothing is written. Speed then changes only this device's playback, labelled as for now.
 
@@ -143,7 +143,7 @@ On a read-only connection the built conversation shows the access bar in the com
   - iPhone: the microphone, and for Apple dictation speech recognition, each asked separately. Refused: "Clawtrate can't use the microphone. Allow it in Settings › Clawtrate." with "Open Settings"; for speech, "Clawtrate can't use speech recognition. Allow it in Settings › Clawtrate."
   - Windows: no prompt; the desktop microphone privacy setting decides, and a device that won't open says "Clawtrate couldn't open the microphone. Check Settings › Privacy & security › Microphone."
   - The web preview: its own origin's audio-only permission, in a secure context; refused: "This page can't use the microphone. Allow it in this browser's site settings." Over plain http from another computer it has no microphone (research §4): both buttons are disabled, described "This page can't use a microphone: a browser allows one only over https or on this computer itself."
-  While a prompt is open, the band or the dictation line says "Waiting for microphone access…". Nothing is recorded or sent before it is allowed.
+    While a prompt is open, the band or the dictation line says "Waiting for microphone access…". Nothing is recorded or sent before it is allowed.
 - **At most one route has the microphone at a time.** The microphone button is disabled during a call ("The microphone is in use by the voice chat.").
 - **While the microphone is open there is always a mark**, "Microphone on" or "Microphone off", in the dictation line or in the call band, and the band says "Listening" only once a capture track is live and the relay is ready (section 6).
 - **No microphone**: "No microphone found."
@@ -171,10 +171,10 @@ The conversation's one polite status region speaks for voice, one change at a ti
 
 The built row is, in order: "Attach files" (+), the field, "How to send" (only while a run is on and the field has text), "Stopping…", Stop (while a run can be stopped), Send (`Composer.tsx`). The two buttons go after "How to send" and before "Stopping…" and Stop, so Stop and Send keep their place at the end of the row. They are the row's own round icon buttons (`icon-button`), quiet, the size of their neighbours; on touch, where those are 40 px, each has a 44 px hit area.
 
-| Button | Label | Shown | States |
-|---|---|---|---|
-| Microphone | Desktop: "Start voice input" (⌘D, Ctrl+D off the Mac); iPhone: "Start dictation" | Always, in the composer | Ready; Listening (filled `--danger`, "Stop voice input" or "Stop dictation"); Disabled with a reason (during a call; a page over plain http) |
-| Voice chat (the waveform) | "Start voice chat" | Only while the built `hasContent` is false: no text, no attachment (pending or refused), no "/" or "@" chip (F-254). While dictating, it stays shown as long as only words not yet final exist | Ready; "In a voice chat" while this task's bot is on a call (pressed; it moves focus to the call band); Disabled with a reason (not set up; a page over plain http; an earlier session may still be open, section 8) |
+| Button                    | Label                                                                            | Shown                                                                                                                                                                                          | States                                                                                                                                                                                                               |
+| ------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Microphone                | Desktop: "Start voice input" (⌘D, Ctrl+D off the Mac); iPhone: "Start dictation" | Always, in the composer                                                                                                                                                                        | Ready; Listening (filled `--danger`, "Stop voice input" or "Stop dictation"); Disabled with a reason (during a call; a page over plain http)                                                                         |
+| Voice chat (the waveform) | "Start voice chat"                                                               | Only while the built `hasContent` is false: no text, no attachment (pending or refused), no "/" or "@" chip (F-254). While dictating, it stays shown as long as only words not yet final exist | Ready; "In a voice chat" while this task's bot is on a call (pressed; it moves focus to the call band); Disabled with a reason (not set up; a page over plain http; an earlier session may still be open, section 8) |
 
 A disabled button keeps focus and its reason as its description (`aria-description`, as the built Send does), so a keyboard or screen reader user hears why. Pressing the waveform while dictating stops dictation first, then checks again that no final words entered the draft before it starts anything. Both buttons are shown during a run.
 
@@ -184,16 +184,16 @@ A disabled button keeps focus and its reason as its description (`aria-descripti
 
 ### Where the built composer would have to change
 
-| Change | In `Composer.tsx` today | Why |
-|---|---|---|
-| Two buttons in the row, after "How to send" and before "Stopping…" and Stop | The row ends: How to send, Stopping…, Stop, Send | Section 3 |
-| A voice state and its actions as props: the catalog's answer, this device's call, dictation | The props have no voice | The buttons' states |
-| The waveform's rule is the built `hasContent` | It already decides Send | F-254 |
-| Final words edit the current selection of the current task's draft, after any edit made since, through `setText`, without `watchCaret`; files and chips are kept | Text changes only from typing, pasting and the menus | Section 4 |
-| A dictation line under the row (`.dictation-line`) for "Listening", where the words go and the words not yet final | The field is a plain `textarea`, which cannot colour part of its text | Section 4: words not yet final are never put in the field |
-| ⌘D and its key-ups in the window-wide key handler, under its `command()` and `reachable()` guards; nothing in the web preview | The handler has ⌘., ⌘↵, ⌘I and ⌘L | Hold to talk |
-| The microphone button and a lifecycle subscription stop dictation when a draft is handed to send; later results of that dictation are dropped | `sendAs` sends the field | The send path itself stays the composer's (#18): any change to `sendAs` or to the key dispatch is made with #18 |
-| Dictation's failures are notices on the shelf (`onNotice`, with "Try again" and "Dismiss") | Built: the shelf already shows notices with a title, a reason and Try again | No new surface |
+| Change                                                                                                                                                           | In `Composer.tsx` today                                                     | Why                                                                                                             |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Two buttons in the row, after "How to send" and before "Stopping…" and Stop                                                                                      | The row ends: How to send, Stopping…, Stop, Send                            | Section 3                                                                                                       |
+| A voice state and its actions as props: the catalog's answer, this device's call, dictation                                                                      | The props have no voice                                                     | The buttons' states                                                                                             |
+| The waveform's rule is the built `hasContent`                                                                                                                    | It already decides Send                                                     | F-254                                                                                                           |
+| Final words edit the current selection of the current task's draft, after any edit made since, through `setText`, without `watchCaret`; files and chips are kept | Text changes only from typing, pasting and the menus                        | Section 4                                                                                                       |
+| A dictation line under the row (`.dictation-line`) for "Listening", where the words go and the words not yet final                                               | The field is a plain `textarea`, which cannot colour part of its text       | Section 4: words not yet final are never put in the field                                                       |
+| ⌘D and its key-ups in the window-wide key handler, under its `command()` and `reachable()` guards; nothing in the web preview                                    | The handler has ⌘., ⌘↵, ⌘I and ⌘L                                           | Hold to talk                                                                                                    |
+| The microphone button and a lifecycle subscription stop dictation when a draft is handed to send; later results of that dictation are dropped                    | `sendAs` sends the field                                                    | The send path itself stays the composer's (#18): any change to `sendAs` or to the key dispatch is made with #18 |
+| Dictation's failures are notices on the shelf (`onNotice`, with "Try again" and "Dismiss")                                                                       | Built: the shelf already shows notices with a title, a reason and Try again | No new surface                                                                                                  |
 
 Nothing else of the composer changes: its layout, the menus, the send modes, the shelf, drafts, attachments and a failed send's restoration stay as built. The call band lives in `Conversation.tsx`, directly above the composer and under the usage notes (`UsageNotes`), and is not part of the composer.
 
@@ -203,13 +203,13 @@ Nothing else of the composer changes: its layout, the menus, the send modes, the
 
 The first press opens the consent sheet for dictation, which lists the routes this device has, each a choice row (one tab stop; arrows, Home, End and Space) with its sentence in full (section 2):
 
-| Device | Routes listed |
-|---|---|
-| Mac, with a language the recognizer supports on its own | "On this Mac" and "Through Home gateway" (when the gateway's transcription is ready) |
-| Mac, without one | "Through Home gateway" only, with "On this Mac isn't available for English (United States): this Mac can't recognize it without the network." |
-| Windows | "Through Home gateway" only, with "Windows has no speech recognition Clawtrate can use without sending your voice to Microsoft." |
-| iPhone | "On this iPhone", and "Through Home gateway" |
-| Neither available | The sheet says "Dictation isn't available here" with the reasons, and offers only "Close". |
+| Device                                                  | Routes listed                                                                                                                                 |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mac, with a language the recognizer supports on its own | "On this Mac" and "Through Home gateway" (when the gateway's transcription is ready)                                                          |
+| Mac, without one                                        | "Through Home gateway" only, with "On this Mac isn't available for English (United States): this Mac can't recognize it without the network." |
+| Windows                                                 | "Through Home gateway" only, with "Windows has no speech recognition Clawtrate can use without sending your voice to Microsoft."              |
+| iPhone                                                  | "On this iPhone", and "Through Home gateway"                                                                                                  |
+| Neither available                                       | The sheet says "Dictation isn't available here" with the reasons, and offers only "Close".                                                    |
 
 The chosen route is kept (section 2) and can be changed in Settings › Voice; that choice is not consent, and each route's destination is accepted on its own.
 
@@ -227,12 +227,12 @@ The chosen route is kept (section 2) and can be changed in Settings › Voice; t
 
 What is known before pressing disables the button with its reason; what is learnt by trying is a notice on the composer's shelf (the built `onNotice`: a title, a reason, "Try again" where trying again can help, and "Dismiss").
 
-| Cause | Where | The words | Rests on |
-|---|---|---|---|
-| No route this device can use | The consent sheet | "Dictation isn't available here", with the reasons | research §3 |
-| The gateway refused | A notice | "Couldn't start dictation." and the gateway's message, as text, with "Try again" | The create's error, `MISSING_SCOPE` among them |
-| The microphone refused, or none | A notice | "Microphone not allowed." with the platform's words (section 2), or "No microphone found.", with "Try again" | research §4 |
-| Speech recognition refused (Apple route) | A notice | "Speech recognition not allowed." with the platform's words, and "Try again" | research §3 |
+| Cause                                    | Where             | The words                                                                                                    | Rests on                                       |
+| ---------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| No route this device can use             | The consent sheet | "Dictation isn't available here", with the reasons                                                           | research §3                                    |
+| The gateway refused                      | A notice          | "Couldn't start dictation." and the gateway's message, as text, with "Try again"                             | The create's error, `MISSING_SCOPE` among them |
+| The microphone refused, or none          | A notice          | "Microphone not allowed." with the platform's words (section 2), or "No microphone found.", with "Try again" | research §4                                    |
+| Speech recognition refused (Apple route) | A notice          | "Speech recognition not allowed." with the platform's words, and "Try again"                                 | research §3                                    |
 
 ## 5. Starting a voice chat
 
@@ -240,12 +240,12 @@ What is known before pressing disables the button with its reason; what is learn
 
 The client reads `talk.catalog` after every hello and when Settings › Voice opens (research §1).
 
-| The catalog says | The voice chat button | Pressing it |
-|---|---|---|
-| `realtime.ready: true`, its active provider offers `gateway-relay` | Ready | The walk below |
-| `realtime.ready: false` | Disabled: "Voice chat isn't set up on Home gateway." | Nothing |
-| Ready, but the active provider offers no `gateway-relay` | Disabled: "Home gateway's voice provider talks to apps directly, which Clawtrate doesn't do." | Nothing |
-| Couldn't be read (`AGENT_SELECTION_REQUIRED`, a failure) | Ready, described "Can't tell whether voice chat is set up on Home gateway." | "Can't verify where your voice would go", with "Retry" (section 2); nothing is created |
+| The catalog says                                                   | The voice chat button                                                                         | Pressing it                                                                            |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `realtime.ready: true`, its active provider offers `gateway-relay` | Ready                                                                                         | The walk below                                                                         |
+| `realtime.ready: false`                                            | Disabled: "Voice chat isn't set up on Home gateway."                                          | Nothing                                                                                |
+| Ready, but the active provider offers no `gateway-relay`           | Disabled: "Home gateway's voice provider talks to apps directly, which Clawtrate doesn't do." | Nothing                                                                                |
+| Couldn't be read (`AGENT_SELECTION_REQUIRED`, a failure)           | Ready, described "Can't tell whether voice chat is set up on Home gateway."                   | "Can't verify where your voice would go", with "Retry" (section 2); nothing is created |
 
 The not-set-up sentence is all the client can establish: the provider is set up by the gateway's owner in OpenClaw's own Talk settings, which need admin (research §1). Settings › Voice says that much. A ready catalog means the gateway is configured; it does not establish that a session will be ready.
 
@@ -258,13 +258,13 @@ Every start passes the same gate, in this order: connected; no earlier relay of 
 3. **Connecting.** `talk.session.create {sessionKey, provider, voice?, language?, capabilities: ["voice-selection"]}` for the open task (research §2, §7). The band says "Connecting to Otto…" with "Cancel". Capture may already be open, and the mark says so, but nothing is sent until the relay is ready.
 4. **Ready.** The create's answer (with the provider checked, section 2), then the `ready` event of that same relay, matched by id; a `ready` that arrives before the answer is held until its id matches it. With a live capture track and a ready relay the band says "Listening", the time starts, and the region says "Voice chat with Otto started".
 
-| At step 3 the gateway answers | The band |
-|---|---|
+| At step 3 the gateway answers                                                  | The band                                                                                                                                                                                |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | A refusal, such as `UNAVAILABLE` with `talkIssue.code: "realtime_unavailable"` | "Couldn't start voice chat", and the gateway's message as text: "Realtime voice provider "openai" is not configured." (live, research §1). No call was made, so nothing says one ended. |
-| "Too many active realtime relay sessions…" | "Couldn't start voice chat", with that message |
-| Another provider than the one asked for | The unused session is closed and the sheet asks again (section 2) |
-| No answer, and the connection drops | "Voice chat failed", "Connection lost" (section 8) |
-| Not connected when pressed | "Voice chat failed", "No connection" |
+| "Too many active realtime relay sessions…"                                     | "Couldn't start voice chat", with that message                                                                                                                                          |
+| Another provider than the one asked for                                        | The unused session is closed and the sheet asks again (section 2)                                                                                                                       |
+| No answer, and the connection drops                                            | "Voice chat failed", "Connection lost" (section 8)                                                                                                                                      |
+| Not connected when pressed                                                     | "Voice chat failed", "No connection"                                                                                                                                                    |
 
 **"Cancel" during connecting** stops capture at once and drops the attempt. If the create answers afterwards, that relay is closed at once and nothing is attached to it; until its close is confirmed, the next start waits ("Ending the previous voice session…").
 
@@ -274,11 +274,11 @@ A call is started only on the open task, so the bot is the task's (`sessionKey` 
 
 Siri, Shortcuts and the Action Button only open states this design already has (F-407, F-408, F-460), through the same gate:
 
-| Entry point | Opens |
-|---|---|
-| "Start Dictation" (Siri, Shortcuts) | The last open task's composer, dictating on the chosen route, after consent and permission as above; an existing draft is kept, and the words go in at the caret |
+| Entry point                                      | Opens                                                                                                                                                                                                                                |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| "Start Dictation" (Siri, Shortcuts)              | The last open task's composer, dictating on the chosen route, after consent and permission as above; an existing draft is kept, and the words go in at the caret                                                                     |
 | "Start Voice Chat" (Siri, Shortcuts), with a bot | That bot's last task, never another bot's, and the walk above. If that task has a draft, nothing starts: the draft is kept and the shelf says "Voice chat not started. Start Voice Chat needs an empty message. Your draft is kept." |
-| The Action Button, "Start Voice Chat" | The same, for the bot it was set up with; pressed during a call, it hangs up as Hang up does (section 8) |
+| The Action Button, "Start Voice Chat"            | The same, for the bot it was set up with; pressed during a call, it hangs up as Hang up does (section 8)                                                                                                                             |
 
 No system screen is drawn here: the system draws its own.
 
@@ -338,11 +338,11 @@ The band's "Settings" opens a small dialog, "Voice chat settings for Otto", that
 
 Hang up (and "End and Chat", section 9) stops capture and playback at once and drops any start still pending. Then the band waits for the gateway:
 
-| Step | The band | Rests on |
-|---|---|---|
-| Hang up | The microphone is released and the reply audio stops; "Ending…" | This device |
-| The gateway answers `talk.session.close`, or sends that relay's own terminal `close` event | The band goes; the line is left (section 10); "Voice chat ended" | research §2 |
-| The close fails, or no answer comes | The band goes; the line is left with "Ended on this device. Home gateway did not confirm the call ended.", announced in the same words. The next start waits (below) | research §5 |
+| Step                                                                                       | The band                                                                                                                                                             | Rests on    |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| Hang up                                                                                    | The microphone is released and the reply audio stops; "Ending…"                                                                                                      | This device |
+| The gateway answers `talk.session.close`, or sends that relay's own terminal `close` event | The band goes; the line is left (section 10); "Voice chat ended"                                                                                                     | research §2 |
+| The close fails, or no answer comes                                                        | The band goes; the line is left with "Ended on this device. Home gateway did not confirm the call ended.", announced in the same words. The next start waits (below) | research §5 |
 
 A relay whose end wasn't confirmed may still be open. Until the gateway confirms it (its `close` event, matched by id), or until its scheduled end (`expiresAt` from its create) has passed, the voice chat button is disabled, described "The previous voice session may still be open on Home gateway. A new voice chat can start after 6:06 PM, when that session is scheduled to end." While a close is still waiting for its answer: "Ending the previous voice session…". Starts, handovers and ends are serialized by the host, across its windows and tabs, by connection, task and attempt.
 
@@ -350,11 +350,11 @@ A relay whose end wasn't confirmed may still be open. Until the gateway confirms
 
 The app reconnects to the gateway by itself (the status strip, as always). The call does not. The gateway starts closing a connection's sessions when it sees the socket close, without waiting for that to finish; a new connection can neither use the old session ("Talk session is not owned by this connection" while the gateway still holds it, "Unknown Talk session" once it has forgotten it) nor learn when its cleanup ended (research §5). So:
 
-| Step | The band |
-|---|---|
-| The connection drops | "Voice chat failed", "Connection lost", "Microphone off. Reconnecting to Home gateway…"; capture and playback stop at once; the line is left with the time this device counted; the region says "Voice chat failed: Connection lost" |
-| The app is connected again (hello) | "Reconnected to Home gateway. The voice session could not be resumed. This device stopped sending audio when it detected the drop.", then "The previous voice session may still be open on Home gateway. A new voice chat can start after 6:06 PM, when that session is scheduled to end." A hello starts no media and announces no reconnected call. |
-| The old session's scheduled end has passed | "Start a new voice chat", which goes through the whole gate (section 5) and keeps the bot's voice and language choices, under their usual checks; the new call has its own time |
+| Step                                       | The band                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The connection drops                       | "Voice chat failed", "Connection lost", "Microphone off. Reconnecting to Home gateway…"; capture and playback stop at once; the line is left with the time this device counted; the region says "Voice chat failed: Connection lost"                                                                                                                  |
+| The app is connected again (hello)         | "Reconnected to Home gateway. The voice session could not be resumed. This device stopped sending audio when it detected the drop.", then "The previous voice session may still be open on Home gateway. A new voice chat can start after 6:06 PM, when that session is scheduled to end." A hello starts no media and announces no reconnected call. |
+| The old session's scheduled end has passed | "Start a new voice chat", which goes through the whole gate (section 5) and keeps the bot's voice and language choices, under their usual checks; the new call has its own time                                                                                                                                                                       |
 
 Nothing starts a call by itself. Captions already saved stay in the task, and the measured time of the call that dropped stays on its line. The 30 minutes are the gateway's schedule for a relay, not evidence of when its cleanup ended; Clawtrate uses the scheduled end only because nothing earlier establishes that the old session is gone.
 
@@ -362,11 +362,11 @@ Nothing starts a call by itself. Captions already saved stay in the task, and th
 
 The band turns `--danger-soft`, says "Voice chat failed" and one reason, with "Dismiss". When nothing may still be open and the connection is there, the voice chat button offers "Start voice chat", which starts a new call.
 
-| Reason | Second line | When |
-|---|---|---|
-| "Connection lost" | As above | The connection drops during a call, or while one was starting |
-| "No connection" | "This device isn't connected to Home gateway. Start again when it reconnects." | Pressed while not connected |
-| "The call ended unexpectedly" | "Home gateway ended the call: <its reason, as text>." | An `error` frame, or a `close` frame with reason `error`, for a relay that was ready (research §2) |
+| Reason                        | Second line                                                                    | When                                                                                               |
+| ----------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| "Connection lost"             | As above                                                                       | The connection drops during a call, or while one was starting                                      |
+| "No connection"               | "This device isn't connected to Home gateway. Start again when it reconnects." | Pressed while not connected                                                                        |
+| "The call ended unexpectedly" | "Home gateway ended the call: <its reason, as text>."                          | An `error` frame, or a `close` frame with reason `error`, for a relay that was ready (research §2) |
 
 A refusal at the start is not a failed call: it is "Couldn't start voice chat" (section 5).
 
@@ -381,12 +381,12 @@ A refusal at the start is not a failed call: it is "Couldn't start voice chat" (
 
 Saved history rows with `provenance.kind: "realtime_voice"` carry an id of the form `voice:<voiceSessionId>:<n>` (the relay's caption id, which the gateway also uses for the stored message, and history shows in `__openclaw.id`; research §6). The transcript groups them by that voice session, never by their order or their times, so two calls with the same times, or a typed message between two turns, are never mixed. One `.call-line` button stands where a session's first saved row is:
 
-| Where | The line | Rests on |
-|---|---|---|
-| The device that held the call | "Voice chat · 2:14", the time it counted for that voice session | Its own count, kept with the exact voice session ids it held (section 2) |
-| Any other device | "Voice chat · 6 turns · 5:31–5:36 PM" | The saved rows of that session, their count and their first and last time |
-| A call this device held with no saved row found in the history it read | "Voice chat · 0:07 · No saved turns found" | Its own count, and the history it actually checked |
-| A spoken row with no voice session id | Shown on its own, marked "Spoken · 5:31 PM" | No reliable id to group it by |
+| Where                                                                  | The line                                                        | Rests on                                                                  |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| The device that held the call                                          | "Voice chat · 2:14", the time it counted for that voice session | Its own count, kept with the exact voice session ids it held (section 2)  |
+| Any other device                                                       | "Voice chat · 6 turns · 5:31–5:36 PM"                           | The saved rows of that session, their count and their first and last time |
+| A call this device held with no saved row found in the history it read | "Voice chat · 0:07 · No saved turns found"                      | Its own count, and the history it actually checked                        |
+| A spoken row with no voice session id                                  | Shown on its own, marked "Spoken · 5:31 PM"                     | No reliable id to group it by                                             |
 
 A call is never given turns it didn't save: a silent or refused call has no sample transcript, and a short call keeps the time it measured. Pressing the line opens its turns in place (F-111): the saved messages, "You" and "Otto", each with its time; `aria-expanded` follows. Turns typed during the call stay where they fall. The line is a heading-level landmark for moving by call.
 
@@ -396,16 +396,16 @@ A memo is an audio item a bot sent (research §8). Its card is the audio card of
 
 **Play, and only Play, asks for this item** by its artifact id (`artifacts.download`, `operator.read`). What the answer may be follows `docs/decisions.md`, "Addresses a gateway hands the client" (rows "An item a reply hands over" and "Every other address an item carries"; building it is #71):
 
-| The gateway answers | The card | Rests on |
-|---|---|---|
-| `encoding: "base64"` and `data` | Decoded under the 5 MiB item limit, checked to be playable audio, and played as a `data:` address; no HTTP request | The decision: bytes from the existing connection |
-| A grant: a top-level `url` on one of the two grant routes of the connection's own origin, with an unexpired top-level `expiresAt` | The host fetches it (desktop and web preview), at most 5 MiB, with no userinfo, no redirect and no credential but the grant; the grant's address never reaches the interface; then as above | The decision: the host fetches, never a renderer or a viewer's browser |
-| A grant, on the iPhone | "This voice memo can't be played on this iPhone yet: Home gateway offers it as a download, and the iPhone app doesn't make downloads yet." Inline bytes still play there. | The decision: iPhone HTTP downloads wait for their check |
-| An expired grant, another route or another origin | "Clawtrate didn't fetch this voice memo: Home gateway's answer isn't a download it fetches by itself." | The decision's grant check |
-| A grant whose fetch tries to redirect | "Couldn't load the voice memo: the download tried to redirect, which Clawtrate doesn't follow." with "Try again" | The decision: no redirects |
-| More than 5 MiB | "This voice memo is larger than 5 MiB, so Clawtrate can't play it here." A size is named only when the metadata gave one. | The decision's size limit |
-| An address the item carries (`audio_url`, or one passed through from the transcript) | The full address as text, under "This voice memo is at an address Clawtrate doesn't open by itself:", with "Open in browser" and "Opens in your browser." on the desktop, "Open outside Clawtrate" and "Opens outside Clawtrate." on the iPhone, through the shared link rule; an address of any other scheme is text only, with no button | The decision: never fetched in the app; opening follows the link row |
-| A failure | "Couldn't load the voice memo." with "Try again", which returns the card to Play; nothing is asked again until Play | |
+| The gateway answers                                                                                                               | The card                                                                                                                                                                                                                                                                                                                                   | Rests on                                                               |
+| --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| `encoding: "base64"` and `data`                                                                                                   | Decoded under the 5 MiB item limit, checked to be playable audio, and played as a `data:` address; no HTTP request                                                                                                                                                                                                                         | The decision: bytes from the existing connection                       |
+| A grant: a top-level `url` on one of the two grant routes of the connection's own origin, with an unexpired top-level `expiresAt` | The host fetches it (desktop and web preview), at most 5 MiB, with no userinfo, no redirect and no credential but the grant; the grant's address never reaches the interface; then as above                                                                                                                                                | The decision: the host fetches, never a renderer or a viewer's browser |
+| A grant, on the iPhone                                                                                                            | "This voice memo can't be played on this iPhone yet: Home gateway offers it as a download, and the iPhone app doesn't make downloads yet." Inline bytes still play there.                                                                                                                                                                  | The decision: iPhone HTTP downloads wait for their check               |
+| An expired grant, another route or another origin                                                                                 | "Clawtrate didn't fetch this voice memo: Home gateway's answer isn't a download it fetches by itself."                                                                                                                                                                                                                                     | The decision's grant check                                             |
+| A grant whose fetch tries to redirect                                                                                             | "Couldn't load the voice memo: the download tried to redirect, which Clawtrate doesn't follow." with "Try again"                                                                                                                                                                                                                           | The decision: no redirects                                             |
+| More than 5 MiB                                                                                                                   | "This voice memo is larger than 5 MiB, so Clawtrate can't play it here." A size is named only when the metadata gave one.                                                                                                                                                                                                                  | The decision's size limit                                              |
+| An address the item carries (`audio_url`, or one passed through from the transcript)                                              | The full address as text, under "This voice memo is at an address Clawtrate doesn't open by itself:", with "Open in browser" and "Opens in your browser." on the desktop, "Open outside Clawtrate" and "Opens outside Clawtrate." on the iPhone, through the shared link rule; an address of any other scheme is text only, with no button | The decision: never fetched in the app; opening follows the link row   |
+| A failure                                                                                                                         | "Couldn't load the voice memo." with "Try again", which returns the card to Play; nothing is asked again until Play                                                                                                                                                                                                                        |                                                                        |
 
 **One recording at a time.** A play still waiting for its answer is dropped when the task changes or a call starts. A playing memo is paused before a call can use audio, and starting or ending a call never resumes it. Playing a memo needs only read access.
 
@@ -417,52 +417,52 @@ A memo is an audio item a bot sent (research §8). Its card is the audio card of
 
 A section of the Settings dialog (`bots.md` section 7), after the shell's own sections.
 
-| Group | Rows |
-|---|---|
-| Microphone (F-392) | "System Default", then each device by its name, a radio group. Before access is allowed, names are unknown: "Allow microphone access to see your microphones' names." with "Allow", which first explains the brief opening (section 2). The chosen device, when not connected: "USB Microphone isn't connected. Voice won't use another microphone without asking." "Kept on this device." |
-| Dictation | The routes, as in section 4, each with its sentence in full; the unavailable ones with their reason. "Choosing a route here starts nothing; its first use still says where your voice goes." |
-| Voice chat | The voice chat sentence of section 2, from `talk.catalog`, or "Voice chat isn't set up on Home gateway. Its owner sets up a voice provider in OpenClaw's Talk settings." or "Can't tell whether voice chat is set up on Home gateway." |
-| Bots | Each bot's saved voice ("Provider default" when none), speed and language, read-only, with "Reset" per bot, and under them where they are kept: "Saved on Home gateway, so your other devices use them too.", "Kept on this device, for each bot: this connection has no user profile on the gateway.", or "Couldn't read the saved voice settings on Home gateway." A write in progress or its outcome is said per bot (section 2). On a read-only connection, or when the settings couldn't be read, "Reset" is disabled with its reason. |
+| Group              | Rows                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Microphone (F-392) | "System Default", then each device by its name, a radio group. Before access is allowed, names are unknown: "Allow microphone access to see your microphones' names." with "Allow", which first explains the brief opening (section 2). The chosen device, when not connected: "USB Microphone isn't connected. Voice won't use another microphone without asking." "Kept on this device."                                                                                                                                                  |
+| Dictation          | The routes, as in section 4, each with its sentence in full; the unavailable ones with their reason. "Choosing a route here starts nothing; its first use still says where your voice goes."                                                                                                                                                                                                                                                                                                                                                |
+| Voice chat         | The voice chat sentence of section 2, from `talk.catalog`, or "Voice chat isn't set up on Home gateway. Its owner sets up a voice provider in OpenClaw's Talk settings." or "Can't tell whether voice chat is set up on Home gateway."                                                                                                                                                                                                                                                                                                      |
+| Bots               | Each bot's saved voice ("Provider default" when none), speed and language, read-only, with "Reset" per bot, and under them where they are kept: "Saved on Home gateway, so your other devices use them too.", "Kept on this device, for each bot: this connection has no user profile on the gateway.", or "Couldn't read the saved voice settings on Home gateway." A write in progress or its outcome is said per bot (section 2). On a read-only connection, or when the settings couldn't be read, "Reset" is disabled with its reason. |
 
 On a read-only connection the section also says "Dictation and voice chat need more access on this connection." The device list follows `devicechange`: a device added appears, one removed is marked as not connected.
 
 ## 13. What each fact drives
 
-| Shown | Driven by | Tier | Evidence |
-|---|---|---|---|
-| Voice chat set up, its provider's id and name | `talk.catalog` `realtime.ready`, `activeProvider`, the provider's `label` and `transports` | read | research §1, live |
-| Dictation through the gateway set up | `talk.catalog` `transcription.ready`, `activeProvider` | read | research §1, live |
-| Starting a call, its provider checked | `talk.session.create {sessionKey, provider, voice?, language?, capabilities}` (realtime, `gateway-relay`, `agent-consult`); its answer's `provider`, `relaySessionId`, `voiceSessionId`, `expiresAt` | `operator.talk` (write) | research §1 live refusals; §2 source |
-| Listening | The relay's `ready`, matched by id, and a live capture track | read | research §2, source |
-| Sending audio | `talk.session.appendAudio` (PCM16 24 kHz), to a ready relay only | `operator.talk` | research §2, source |
-| Thinking, speaking, captions, a failure | `talk.event` frames to this connection, by relay id; local playback | read | research §2, source |
-| Hang up, confirmed | `talk.session.close`'s answer, or that relay's `close` event | `operator.talk` | research §2, §5, source |
-| A drop ends the call; nothing resumes | Asynchronous connection cleanup; ownership by connection; "Unknown Talk session" once forgotten | | research §5, source |
-| The next start's wait | The relay's `expiresAt`, its scheduled end | | research §5, source |
-| One call at a time | This client's host | | research §5 |
-| Voice | `talk.voice.get` (`canChange`, voices), `talk.voice.set`, `talk.voice.change` `requested`, one replacement create with `voiceChangeId`, `talk.voice.complete`, `applied` | `operator.talk` | research §7, source and live (no call) |
-| Speed | This device's playback | | research §7 |
-| Language for new calls | `language` on `talk.session.create` | `operator.talk` | research §7, live validation |
-| Where each bot's settings are kept | `users.prefs.get` and `set` (`clawtrate.voice`, `expectedEntries`), `users.prefs.changed`, 4,096 bytes per value | read to read it, write to change it | `docs/research/gateway-capabilities.md` (`users.prefs`, live); as `clawtrate.sidebar` on `main` |
-| The "Voice chat" line and its turns | History rows with `provenance.kind: "realtime_voice"` and ids `voice:<voiceSessionId>:<n>`; this device's count | read | research §6, source |
-| Dictation through the gateway | `talk.session.create {mode: "transcription"}`, its `ready`, `appendAudio` (µ-law 8 kHz), `transcript.done`, `close` and its drain | `operator.talk` | research §3 |
-| Dictation on the device | Apple's Speech framework with on-device required | | research §3, documented |
-| A memo | `artifacts.list`, then on Play `artifacts.download` (bytes or a grant, under `docs/decisions.md`) | read | research §8, source |
-| No text and no word highlighting | No verified link from a recording to a `tts` call; no word timings | | research §8 |
-| The microphone | `getUserMedia`, `enumerateDevices`, `devicechange`, the track's `ended`, the permission's state; macOS's `askForMediaAccess` | | research §4, documented |
+| Shown                                         | Driven by                                                                                                                                                                                            | Tier                                | Evidence                                                                                        |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Voice chat set up, its provider's id and name | `talk.catalog` `realtime.ready`, `activeProvider`, the provider's `label` and `transports`                                                                                                           | read                                | research §1, live                                                                               |
+| Dictation through the gateway set up          | `talk.catalog` `transcription.ready`, `activeProvider`                                                                                                                                               | read                                | research §1, live                                                                               |
+| Starting a call, its provider checked         | `talk.session.create {sessionKey, provider, voice?, language?, capabilities}` (realtime, `gateway-relay`, `agent-consult`); its answer's `provider`, `relaySessionId`, `voiceSessionId`, `expiresAt` | `operator.talk` (write)             | research §1 live refusals; §2 source                                                            |
+| Listening                                     | The relay's `ready`, matched by id, and a live capture track                                                                                                                                         | read                                | research §2, source                                                                             |
+| Sending audio                                 | `talk.session.appendAudio` (PCM16 24 kHz), to a ready relay only                                                                                                                                     | `operator.talk`                     | research §2, source                                                                             |
+| Thinking, speaking, captions, a failure       | `talk.event` frames to this connection, by relay id; local playback                                                                                                                                  | read                                | research §2, source                                                                             |
+| Hang up, confirmed                            | `talk.session.close`'s answer, or that relay's `close` event                                                                                                                                         | `operator.talk`                     | research §2, §5, source                                                                         |
+| A drop ends the call; nothing resumes         | Asynchronous connection cleanup; ownership by connection; "Unknown Talk session" once forgotten                                                                                                      |                                     | research §5, source                                                                             |
+| The next start's wait                         | The relay's `expiresAt`, its scheduled end                                                                                                                                                           |                                     | research §5, source                                                                             |
+| One call at a time                            | This client's host                                                                                                                                                                                   |                                     | research §5                                                                                     |
+| Voice                                         | `talk.voice.get` (`canChange`, voices), `talk.voice.set`, `talk.voice.change` `requested`, one replacement create with `voiceChangeId`, `talk.voice.complete`, `applied`                             | `operator.talk`                     | research §7, source and live (no call)                                                          |
+| Speed                                         | This device's playback                                                                                                                                                                               |                                     | research §7                                                                                     |
+| Language for new calls                        | `language` on `talk.session.create`                                                                                                                                                                  | `operator.talk`                     | research §7, live validation                                                                    |
+| Where each bot's settings are kept            | `users.prefs.get` and `set` (`clawtrate.voice`, `expectedEntries`), `users.prefs.changed`, 4,096 bytes per value                                                                                     | read to read it, write to change it | `docs/research/gateway-capabilities.md` (`users.prefs`, live); as `clawtrate.sidebar` on `main` |
+| The "Voice chat" line and its turns           | History rows with `provenance.kind: "realtime_voice"` and ids `voice:<voiceSessionId>:<n>`; this device's count                                                                                      | read                                | research §6, source                                                                             |
+| Dictation through the gateway                 | `talk.session.create {mode: "transcription"}`, its `ready`, `appendAudio` (µ-law 8 kHz), `transcript.done`, `close` and its drain                                                                    | `operator.talk`                     | research §3                                                                                     |
+| Dictation on the device                       | Apple's Speech framework with on-device required                                                                                                                                                     |                                     | research §3, documented                                                                         |
+| A memo                                        | `artifacts.list`, then on Play `artifacts.download` (bytes or a grant, under `docs/decisions.md`)                                                                                                    | read                                | research §8, source                                                                             |
+| No text and no word highlighting              | No verified link from a recording to a `tts` call; no word timings                                                                                                                                   |                                     | research §8                                                                                     |
+| The microphone                                | `getUserMedia`, `enumerateDevices`, `devicechange`, the track's `ended`, the permission's state; macOS's `askForMediaAccess`                                                                         |                                     | research §4, documented                                                                         |
 
 ## 14. Parity rows
 
 Rows reworded in `docs/parity.md`, statuses unchanged. Each target keeps its first word; a note after `same` only narrows it; no target is weakened to fit this design. Where the gateway can't honor a target, the dependency cell names what is missing.
 
-| Row | Clawtrate column | Dependency column |
-|---|---|---|
-| F-111 | same | partial: verified voice event ids (`voice:<voiceSessionId>:<n>`, the relay's caption id, which the stored message keeps and history shows in `__openclaw.id`; `operator.read`) group saved history by voice session; the holding device records elapsed time. A shared call-duration record is unavailable, so another device shows the saved turns' count and times, not a duration (research §6). |
-| F-253 | same; note: the text comes from Apple's recognizer with on-device recognition required (macOS) or from the gateway's transcription session; Windows has the gateway route only; the screen names where the audio goes before the first recording. | partial: gateway route `talk.session.create {mode: "transcription", transport: "gateway-relay", brain: "none"}` with `appendAudio` and `close` (`operator.talk`, which `operator.write` satisfies), not exercised beyond its refusal with no transcription provider; device route: Apple's Speech framework with `requiresOnDeviceRecognition`; Chromium's recognition is not used (research §3). |
-| F-254 | same; note: the call is relayed through the gateway (`talk.session.create`), never connected by the app to the voice provider. | partial, not exercised beyond its refusal with no voice provider: `talk.session.create` (realtime, `gateway-relay`, `agent-consult`) with the Bot's `sessionKey`, audio by `appendAudio`, `close`; frames from `talk.event` to the owning connection; `talk.catalog` (`operator.read`) says whether it is set up (research §1, §2). `talk.client.create` is not used: its media goes between the device and the provider's own address, which `docs/decisions.md` ("Addresses a gateway hands the client") never opens. |
-| F-255 | same | partial: artifacts deliver the audio under the item policy (`artifacts.list`, `artifacts.download`, `operator.read`; `docs/decisions.md`, "Addresses a gateway hands the client"). The attachment has no transcript field or verified spoken-word timing. TTS source text can be shown only if the exact tool-output association is established; in 2026.10.6 it is not, so no transcript is shown (research §8). |
-| F-392 | same; note: device names appear once microphone access is allowed; a chosen device that isn't connected is never silently replaced. | client only: `enumerateDevices`, `devicechange`; the choice is kept on the device (research §4). |
-| F-409 | same; note: Apple's recognizer with on-device recognition required, or the gateway's transcription session. | client only, or as F-253's gateway route (research §3). |
+| Row   | Clawtrate column                                                                                                                                                                                                                                  | Dependency column                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-111 | same                                                                                                                                                                                                                                              | partial: verified voice event ids (`voice:<voiceSessionId>:<n>`, the relay's caption id, which the stored message keeps and history shows in `__openclaw.id`; `operator.read`) group saved history by voice session; the holding device records elapsed time. A shared call-duration record is unavailable, so another device shows the saved turns' count and times, not a duration (research §6).                                                                                                                     |
+| F-253 | same; note: the text comes from Apple's recognizer with on-device recognition required (macOS) or from the gateway's transcription session; Windows has the gateway route only; the screen names where the audio goes before the first recording. | partial: gateway route `talk.session.create {mode: "transcription", transport: "gateway-relay", brain: "none"}` with `appendAudio` and `close` (`operator.talk`, which `operator.write` satisfies), not exercised beyond its refusal with no transcription provider; device route: Apple's Speech framework with `requiresOnDeviceRecognition`; Chromium's recognition is not used (research §3).                                                                                                                       |
+| F-254 | same; note: the call is relayed through the gateway (`talk.session.create`), never connected by the app to the voice provider.                                                                                                                    | partial, not exercised beyond its refusal with no voice provider: `talk.session.create` (realtime, `gateway-relay`, `agent-consult`) with the Bot's `sessionKey`, audio by `appendAudio`, `close`; frames from `talk.event` to the owning connection; `talk.catalog` (`operator.read`) says whether it is set up (research §1, §2). `talk.client.create` is not used: its media goes between the device and the provider's own address, which `docs/decisions.md` ("Addresses a gateway hands the client") never opens. |
+| F-255 | same                                                                                                                                                                                                                                              | partial: artifacts deliver the audio under the item policy (`artifacts.list`, `artifacts.download`, `operator.read`; `docs/decisions.md`, "Addresses a gateway hands the client"). The attachment has no transcript field or verified spoken-word timing. TTS source text can be shown only if the exact tool-output association is established; in 2026.10.6 it is not, so no transcript is shown (research §8).                                                                                                       |
+| F-392 | same; note: device names appear once microphone access is allowed; a chosen device that isn't connected is never silently replaced.                                                                                                               | client only: `enumerateDevices`, `devicechange`; the choice is kept on the device (research §4).                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| F-409 | same; note: Apple's recognizer with on-device recognition required, or the gateway's transcription session.                                                                                                                                       | client only, or as F-253's gateway route (research §3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 Rows whose target is left as written, with their dependency cell corrected:
 
@@ -484,9 +484,9 @@ Rows met as written, their cells unchanged: F-407, F-408 and F-460 (entry points
 | The consent sheet                      | The small dialog; choice rows (`bots.md`)                                    | `.voice-consent`                                 |
 | The call band                          | `--bg-bubble`, buttons, the avatar                                           | `.call-band`, `.mic-mark`                        |
 | The live transcript                    | Message text styles                                                          | `.call-transcript` (`role="log"`)                |
-| The call's settings | The small dialog; native selects | `.v-call-settings` |
+| The call's settings                    | The small dialog; native selects                                             | `.v-call-settings`                               |
 | The line                               | Event line, expander                                                         | `.call-line`                                     |
-| Memos | The audio card (`work-pane.md` §12) | `.speed` |
+| Memos                                  | The audio card (`work-pane.md` §12)                                          | `.speed`                                         |
 | Settings › Voice                       | Settings sections and rows (`bots.md` §7)                                    |                                                  |
 
 ### What the host does
@@ -527,30 +527,30 @@ Nothing new for what is designed here. Three targets wait on it: a relayed sessi
 
 `prototype/voice.html` takes the prototype's own `theme`, `width`, `motion` and `chrome`, and these. Nothing records, plays, fetches or opens: the microphone, the gateway and the player are counters (`window.voice.S.io`), and the gateway's and the device's events are fired one at a time by the bar or by `window.voice.ev(name, data)`. With `auto=0` nothing answers by itself.
 
-| Parameter | Values |
-|---|---|
-| `bot`, `task` | `otto` (`o1`), `juniper` (`j1`), `pip` (`p1`) |
-| `access` | `read`, `write` (default) |
-| `run` | `running`: the bot is working, so the composer shows Stop |
-| `prefs` | `none`: no durable user, so settings are kept on this device; `unknown`: the saved settings couldn't be read |
-| `voice` | `ready` (default), `none` (not set up), `direct` (no relay), `unknown` (couldn't be read) |
-| `provider` | `openai-eu`: the same label as before under another id, so consent is asked again |
-| `drift` | `1`: the gateway answers the create with another provider |
-| `dict` | `ready` (default), `none` |
-| `route` | `device` or `gateway`: the dictation route already chosen |
-| `os` | `mac` (default), `windows`, `web` (the browser preview on this computer), `remote` (the browser preview from another computer over plain http), `iphone` |
-| `ondevice` | `0`: this Mac can't recognize the language on its own |
-| `mic` | `granted` (default), `prompt`, `denied`, `none`, `missing` (the chosen one isn't connected) |
-| `speech` | `prompt`, `denied`: Apple speech recognition |
-| `seen` | `1`: these destinations were accepted before |
-| `long` | `1`: long gateway and provider names |
-| `inject` | `1`: markup-shaped names, voice, refusal and caption, which must show as text |
-| `files`, `token`, `picker`, `draft` | `pending` or `refused`; `slash` or `mention`; `1`: the "/" menu open; a draft's text |
-| `state` | `consent`, `dictconsent`, `dictating`, `dictfail`, `connecting`, `live`, `muted`, `speaking`, `thinking`, `transcript`, `settings`, `micgone`, `revoked`, `background`, `limit`, `second`, `ending`, `unconfirmed`, `lost`, `reconnected`, `refused`, `failed` with `reason=none` or `error`, `voicechange`, `voicefail`, `novoices`, `langsaved`, `voicegone` |
-| `line` | `here` (this device's line), `elsewhere`, `interleave` (two calls and a typed message), `noid`, `empty` |
-| `memo` | `inline` (default), `grant`, `expired`, `wrongroute`, `redirect`, `big`, `fail`, `address`, `scheme`, `nohttp` (a grant, on the iPhone), `two` (two clips and an attachment) |
-| `shortcut` | `dict`, `call` (with `shortcutbot`), `action` |
-| `page` | `settings`: Settings › Voice |
+| Parameter                           | Values                                                                                                                                                                                                                                                                                                                                                         |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bot`, `task`                       | `otto` (`o1`), `juniper` (`j1`), `pip` (`p1`)                                                                                                                                                                                                                                                                                                                  |
+| `access`                            | `read`, `write` (default)                                                                                                                                                                                                                                                                                                                                      |
+| `run`                               | `running`: the bot is working, so the composer shows Stop                                                                                                                                                                                                                                                                                                      |
+| `prefs`                             | `none`: no durable user, so settings are kept on this device; `unknown`: the saved settings couldn't be read                                                                                                                                                                                                                                                   |
+| `voice`                             | `ready` (default), `none` (not set up), `direct` (no relay), `unknown` (couldn't be read)                                                                                                                                                                                                                                                                      |
+| `provider`                          | `openai-eu`: the same label as before under another id, so consent is asked again                                                                                                                                                                                                                                                                              |
+| `drift`                             | `1`: the gateway answers the create with another provider                                                                                                                                                                                                                                                                                                      |
+| `dict`                              | `ready` (default), `none`                                                                                                                                                                                                                                                                                                                                      |
+| `route`                             | `device` or `gateway`: the dictation route already chosen                                                                                                                                                                                                                                                                                                      |
+| `os`                                | `mac` (default), `windows`, `web` (the browser preview on this computer), `remote` (the browser preview from another computer over plain http), `iphone`                                                                                                                                                                                                       |
+| `ondevice`                          | `0`: this Mac can't recognize the language on its own                                                                                                                                                                                                                                                                                                          |
+| `mic`                               | `granted` (default), `prompt`, `denied`, `none`, `missing` (the chosen one isn't connected)                                                                                                                                                                                                                                                                    |
+| `speech`                            | `prompt`, `denied`: Apple speech recognition                                                                                                                                                                                                                                                                                                                   |
+| `seen`                              | `1`: these destinations were accepted before                                                                                                                                                                                                                                                                                                                   |
+| `long`                              | `1`: long gateway and provider names                                                                                                                                                                                                                                                                                                                           |
+| `inject`                            | `1`: markup-shaped names, voice, refusal and caption, which must show as text                                                                                                                                                                                                                                                                                  |
+| `files`, `token`, `picker`, `draft` | `pending` or `refused`; `slash` or `mention`; `1`: the "/" menu open; a draft's text                                                                                                                                                                                                                                                                           |
+| `state`                             | `consent`, `dictconsent`, `dictating`, `dictfail`, `connecting`, `live`, `muted`, `speaking`, `thinking`, `transcript`, `settings`, `micgone`, `revoked`, `background`, `limit`, `second`, `ending`, `unconfirmed`, `lost`, `reconnected`, `refused`, `failed` with `reason=none` or `error`, `voicechange`, `voicefail`, `novoices`, `langsaved`, `voicegone` |
+| `line`                              | `here` (this device's line), `elsewhere`, `interleave` (two calls and a typed message), `noid`, `empty`                                                                                                                                                                                                                                                        |
+| `memo`                              | `inline` (default), `grant`, `expired`, `wrongroute`, `redirect`, `big`, `fail`, `address`, `scheme`, `nohttp` (a grant, on the iPhone), `two` (two clips and an attachment)                                                                                                                                                                                   |
+| `shortcut`                          | `dict`, `call` (with `shortcutbot`), `action`                                                                                                                                                                                                                                                                                                                  |
+| `page`                              | `settings`: Settings › Voice                                                                                                                                                                                                                                                                                                                                   |
 
 ## 16. Not covered here
 
