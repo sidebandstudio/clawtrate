@@ -1049,7 +1049,9 @@ test("F-476 F-490: an account only another bot keeps is no account for this bot,
   });
   try {
     const settings = await accountPage();
-    await settings.getByRole("button", { name: "Check now" }).click();
+    // The read after the patch may already show it; otherwise Check now reads it.
+    const check = settings.getByRole("button", { name: "Check now" });
+    if (await check.isVisible()) await check.click();
     await expect(
       settings.getByText("No account. The gateway's list does not show Acme · Studio for Second.", {
         exact: false,
