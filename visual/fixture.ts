@@ -1,4 +1,5 @@
-import { expect, type Page } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+import { writeFileSync } from "node:fs";
 
 /** Where the fixture is served: 5341 unless `CLAWTRATE_FIXTURE_PORT` names another. */
 export const FIXTURE_PORT = Number(process.env.CLAWTRATE_FIXTURE_PORT ?? 5341);
@@ -106,59 +107,96 @@ export async function paintedFinal(
       { message: "fonts loaded and images decoded" },
     )
     .toBe(true);
-  await expect
-    .poll(
-      () =>
-        page.evaluate(
-          (toEnd) =>
-            new Promise<boolean>((resolve) => {
-              const geometry = () => {
-                const transcript = document.querySelector<HTMLElement>("[data-testid=transcript]");
-                const rows = [...document.querySelectorAll("[data-testid=shelf-row]")];
-                return JSON.stringify([
-                  transcript
-                    ? [transcript.scrollTop, transcript.scrollHeight, transcript.clientHeight]
-                    : null,
-                  rows.map((row) => {
-                    const box = row.getBoundingClientRect();
-                    return [box.top, box.height];
-                  }),
-                ]);
-              };
-              const atEnd = () => {
-                const transcript = document.querySelector<HTMLElement>("[data-testid=transcript]");
-                return (
-                  !transcript ||
-                  transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 1
-                );
-              };
-              // A finite animation still running (a card rising in, a line closing up) can still
-              // move what is drawn; the spinning working mark never ends and moves nothing.
-              const settled = () =>
-                document
-                  .getAnimations()
-                  .every(
-                    (each) =>
-                      each.playState !== "running" ||
-                      each.effect?.getComputedTiming().iterations === Infinity,
+  // When the wait times out, keep what each frame looked like so the artifact shows
+  // whether the transcript stopped following the end or the shelf kept moving.
+  type Frame = {
+    scrollTop: number | null;
+    scrollHeight: number | null;
+    clientHeight: number | null;
+    shelf: number[][];
+  };
+  const frames: Frame[] = [];
+  try {
+    await expect
+      .poll(
+        async () => {
+          const attempt = await page.evaluate(
+            (toEnd) =>
+              new Promise<{ final: boolean; frames: Frame[] }>((resolve) => {
+                const geometry = () => {
+                  const transcript = document.querySelector<HTMLElement>(
+                    "[data-testid=transcript]",
                   );
-              const seen = [geometry()];
-              const frame = () => {
-                seen.push(geometry());
-                if (seen.length < 6) requestAnimationFrame(frame);
-                else resolve(new Set(seen).size === 1 && settled() && (!toEnd || atEnd()));
-              };
-              requestAnimationFrame(frame);
-            }),
-          toEnd,
-        ),
-      {
-        message: toEnd
-          ? "the transcript at its end and the shelf, unchanged for five frames, no animation running"
-          : "the transcript and the shelf, unchanged for five frames, no animation running",
-      },
-    )
-    .toBe(true);
+                  const rows = [...document.querySelectorAll("[data-testid=shelf-row]")];
+                  return {
+                    scrollTop: transcript ? transcript.scrollTop : null,
+                    scrollHeight: transcript ? transcript.scrollHeight : null,
+                    clientHeight: transcript ? transcript.clientHeight : null,
+                    shelf: rows.map((row) => {
+                      const box = row.getBoundingClientRect();
+                      return [box.left, box.top, box.width, box.height];
+                    }),
+                  };
+                };
+                const atEnd = () => {
+                  const transcript = document.querySelector<HTMLElement>(
+                    "[data-testid=transcript]",
+                  );
+                  return (
+                    !transcript ||
+                    transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 1
+                  );
+                };
+                // A finite animation still running (a card rising in, a line closing up) can still
+                // move what is drawn; the spinning working mark never ends and moves nothing.
+                const settled = () =>
+                  document
+                    .getAnimations()
+                    .every(
+                      (each) =>
+                        each.playState !== "running" ||
+                        each.effect?.getComputedTiming().iterations === Infinity,
+                    );
+                const seen = [geometry()];
+                const frame = () => {
+                  seen.push(geometry());
+                  if (seen.length < 6) requestAnimationFrame(frame);
+                  else {
+                    // Record the full boxes, but keep the wait on the vertical layout.
+                    const layouts = seen.map(({ shelf, ...transcript }) =>
+                      JSON.stringify([transcript, shelf.map(([, top, , height]) => [top, height])]),
+                    );
+                    resolve({
+                      final: new Set(layouts).size === 1 && settled() && (!toEnd || atEnd()),
+                      frames: seen,
+                    });
+                  }
+                };
+                requestAnimationFrame(frame);
+              }),
+            toEnd,
+          );
+          frames.push(...attempt.frames);
+          return attempt.final;
+        },
+        {
+          message: toEnd
+            ? "the transcript at its end and the shelf, unchanged for five frames, no animation running"
+            : "the transcript and the shelf, unchanged for five frames, no animation running",
+        },
+      )
+      .toBe(true);
+  } catch (error) {
+    // A body attachment reaches disk only through the trace, so write the file where
+    // the artifact is gathered from and attach it by path.
+    const path = test.info().outputPath("painted-final-frames.json");
+    writeFileSync(path, JSON.stringify(frames, null, 2));
+    await test.info().attach("painted-final-frames", {
+      path,
+      contentType: "application/json",
+    });
+    throw error;
+  }
 }
 
 /** On a phone the conversation covers the list; show the list. */
