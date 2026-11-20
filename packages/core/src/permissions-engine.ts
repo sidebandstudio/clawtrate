@@ -21,6 +21,7 @@ import {
   hasOwnAsk,
   keptScope,
   type KeptScope,
+  pageAsk,
   permissionsView,
   pluginHolds,
   readToolCatalog,
@@ -322,6 +323,28 @@ export class PermissionsEngine {
       return;
     }
     if (choice === "never" || choice === "allow") {
+      // Allow also takes off an Ask this page wrote for these tools, whatever the line shows now
+      // (a Never set over it hides it), keeping every other rule; then the deny comes off.
+      if (choice === "allow" && pluginHolds(facts.plugin) && facts.rules.from === "now") {
+        const answer = await request(RULES_GET_METHOD, { scope: botId });
+        const scope = readScope(answer, botId);
+        const version = scope?.version ?? 0;
+        if (base.rulesVersion !== null && version !== base.rulesVersion) throw new ConflictError();
+        const rules = rulesForSet(answer, botId);
+        if (!rules)
+          throw new Error("The rules plugin's rules for this bot couldn't be read whole.");
+        const kept = rules.filter((rule) => !pageAsk(rule, tools));
+        if (kept.length < rules.length) {
+          this.writeSent = true;
+          await request(RULES_SET_METHOD, {
+            scope: botId,
+            rules: kept,
+            fallback: scope?.fallback ?? false,
+            expectedVersion: version,
+          });
+          this.rulesSaved = true;
+        }
+      }
       const write = denyWrite(botId, settings, line, choice === "never", catalog);
       if (write) await this.patch(request, write, settings.hash);
       return;

@@ -18,6 +18,7 @@ import {
   denyWrite,
   EVERY_BOT,
   execWrite,
+  pageAsk,
   permissionsView,
   readToolCatalog,
   readToolSettings,
@@ -306,6 +307,14 @@ export function permissionCommands(now: number, params: PermissionParams, admin:
         const deny = denyWrite(command.botId, settings, line, false, catalog);
         if (deny) apply(deny);
       } else {
+        // Allow also takes off an Ask this page wrote for the line's tools.
+        const scope = scopes[command.botId];
+        if (choice === "allow" && scope?.rules.some((r) => pageAsk(r, line.tools)))
+          scopes[command.botId] = {
+            ...scope,
+            version: scope.version + 1,
+            rules: scope.rules.filter((r) => !pageAsk(r, line.tools)),
+          };
         const deny = denyWrite(command.botId, settings, line, choice === "never", catalog);
         if (deny) apply(deny);
       }

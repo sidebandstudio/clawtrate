@@ -333,10 +333,49 @@ describe("what a bot may do", () => {
       mark: "plugin",
       ownAsk: true,
     });
-    // The Ask is the plugin's: Allow does not undo it here.
-    expect(choiceRefusal(result.view!, line(result.view!, "read"), "allow", true)).toMatch(
-      /rules page/,
-    );
+  });
+
+  it("Allow takes off an Ask this page wrote, after a Never too, keeping every other rule; an Ask it didn't write stays for the rules page", async () => {
+    const gw = new Gateway();
+    gw.scopes.pip = {
+      version: 1,
+      fallback: false,
+      rules: [{ id: "a1", version: 1, action: "never", tools: ["write"], note: "Keep" }],
+    };
+    const engine = new PermissionsEngine(gw.ctx());
+    let view = await engine.read("pip");
+    const step = async (lineId: string, choice: "ask" | "never" | "allow") => {
+      const result = await engine.choose("pip", lineId, choice, {
+        configHash: view.configHash,
+        rulesVersion: view.versions.bot,
+      });
+      view = result.view!;
+      return result.outcome;
+    };
+    expect(await step("read", "ask")).toBe("saved");
+    expect(line(view, "read")).toMatchObject({ ownAsk: true, undoAsk: true, choice: "ask" });
+    expect(choiceRefusal(view, line(view, "read"), "allow", true)).toBeNull();
+    expect(await step("read", "allow")).toBe("saved");
+    expect(gw.scopes.pip!.rules.map((r) => r.id)).toEqual(["a1"]);
+    expect(line(view, "read")).toMatchObject({ value: "allowed", choice: "allow" });
+    // Ask, then Never, then Allow: no Ask is left behind.
+    expect(await step("read", "ask")).toBe("saved");
+    expect(await step("read", "never")).toBe("saved");
+    expect(await step("read", "allow")).toBe("saved");
+    expect(gw.scopes.pip!.rules.map((r) => r.id)).toEqual(["a1"]);
+    expect(botTools(gw, "pip").deny).toBeUndefined();
+    // An Ask with a note, or on more tools than the line's, isn't this page's to take off.
+    gw.scopes.pip!.rules.push({
+      id: "b1",
+      version: 1,
+      action: "ask",
+      tools: ["read", "ls"],
+      note: "Ask me",
+    });
+    gw.scopes.pip!.version += 1;
+    view = await engine.read("pip");
+    expect(line(view, "read")).toMatchObject({ ownAsk: true, undoAsk: false });
+    expect(choiceRefusal(view, line(view, "read"), "allow", true)).toMatch(/rules page/);
   });
 
   it("Ask replaces the deny list it read and no newer one: another client's change after the rule landed is kept, and both outcomes are said", async () => {

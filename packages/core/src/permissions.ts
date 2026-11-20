@@ -51,6 +51,8 @@ export type PluginRule = {
   action: RuleAction;
   tools: string[];
   target: { kind: string; pattern: string } | null;
+  /** Whether the rule carries a note: one this page never writes. */
+  noted?: boolean;
 };
 
 export type RulesScope = { version: number; fallback: boolean; rules: PluginRule[] };
@@ -379,6 +381,7 @@ function readRule(value: unknown): PluginRule | null {
     version: typeof r?.version === "number" ? r.version : 0,
     action,
     tools,
+    noted: typeof r?.note === "string" && r.note.length > 0,
     target:
       target && pattern !== null && pattern.length <= 1_000
         ? { kind: typeof target.kind === "string" ? cut(target.kind, 16) : "path", pattern }
@@ -449,6 +452,7 @@ export function keptScope(scope: RulesScope | null, readAt: number): KeptScope {
       action: rule.action,
       tools: rule.tools.slice(0, MAX_RULE_TOOLS),
       target,
+      noted: rule.noted === true,
     });
   }
   return {
@@ -574,6 +578,11 @@ export type PermissionLine = {
   choice: "allow" | "ask" | "never" | ExecPolicy | null;
   /** Whether the checked Ask is a rule of the plugin this line wrote (a whole-tool Ask of this bot). */
   ownAsk: boolean;
+  /**
+   * Whether Allow here can take that Ask off: every Ask of the bot's that makes
+   * it is one this page writes (the line's tools exactly, no pattern, no note).
+   */
+  undoAsk: boolean;
   exec: ExecFacts | null;
   /** In the bot's latest task's tools: yes, no, or not listed (no task, or the listing failed). */
   offered: "yes" | "no" | "unknown";
@@ -680,6 +689,22 @@ export function rulesEnforcement(plugin: RulesPluginStatus, rules: RulesSource):
   }
 }
 
+/** Whether a rule is an Ask as this page writes it for these tools: exactly them, no pattern, no note. */
+export function pageAsk(
+  rule: { action?: unknown; tools?: unknown; target?: unknown; note?: unknown; noted?: boolean },
+  tools: readonly string[],
+): boolean {
+  const named = Array.isArray(rule.tools) ? rule.tools : [];
+  return (
+    rule.action === "ask" &&
+    (rule.target === undefined || rule.target === null) &&
+    rule.note === undefined &&
+    rule.noted !== true &&
+    named.length === tools.length &&
+    tools.every((t) => named.includes(t))
+  );
+}
+
 /** Whether the plugin is enforcing rules this page can show as held. */
 export const pluginHolds = (plugin: RulesPluginStatus) =>
   plugin.kind === "running" && (plugin.enforcing === "rules" || plugin.enforcing === "nothing");
@@ -758,6 +783,7 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
       exec: null,
       offered: facts.offered.status === "listed" ? "no" : "unknown",
       ownAsk: false,
+      undoAsk: false,
       value: facts.offered.status === "listed" ? "not-offered" : "unknown",
       mark: null,
       exceptions: [{ kind: "unnamed" }],
@@ -801,6 +827,7 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
     exec,
     offered,
     ownAsk: false,
+    undoAsk: false,
   };
   const exceptions: LineException[] = [];
   const leftOutBy = (): LineException[] => [
@@ -871,7 +898,9 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
   const wholeAsk = asks.some((r) => whole(r.rule));
   // A Never that holds back only part of the line: under a pattern, or on some of its tools.
   const targetNevers = rules.filter((r) => r.rule.action === "never" && !whole(r.rule));
-  const ownAsk = asks.some((r) => r.scope === "bot" && whole(r.rule));
+  const ownAsks = asks.filter((r) => r.scope === "bot" && whole(r.rule));
+  const ownAsk = ownAsks.length > 0;
+  const undoAsk = ownAsk && ownAsks.every((r) => pageAsk(r.rule, def.tools));
   for (const { rule, scope } of [...(wholeNever ? [wholeNever] : []), ...targetNevers, ...asks]) {
     if (exceptions.length >= MAX_EXCEPTIONS) break;
     exceptions.push({
@@ -926,11 +955,19 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
     const choice = policy === "none" ? null : policy;
     if (pluginPart && !holds)
       return listed(
-        rulesOver({ ...base, value: "unknown", mark: "not-now", exceptions, choice, ownAsk }),
+        rulesOver({
+          ...base,
+          value: "unknown",
+          mark: "not-now",
+          exceptions,
+          choice,
+          ownAsk,
+          undoAsk,
+        }),
       );
     if (wholeNever)
       return listed(
-        rulesOver({ ...base, value: "never", mark: "plugin", exceptions, choice, ownAsk }),
+        rulesOver({ ...base, value: "never", mark: "plugin", exceptions, choice, ownAsk, undoAsk }),
       );
     const limited = asks.length > 0 || targetNevers.length > 0 || partial;
     const value: LineValue =
@@ -949,7 +986,7 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
             : "asks";
     const mark: LineMark =
       asks.length > 0 || targetNevers.length > 0 ? pluginMark : exec.own ? "gateway" : "set";
-    return listed(rulesOver({ ...base, value, mark, exceptions, choice, ownAsk }));
+    return listed(rulesOver({ ...base, value, mark, exceptions, choice, ownAsk, undoAsk }));
   }
   // The bot's own deny on some of the line's tools is no one choice: none is checked, and Never
   // denies the rest. Never is checked only when the gateway removes every tool of the line.
@@ -964,19 +1001,27 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
     });
   if (pluginPart && !holds)
     return listed(
-      rulesOver({ ...base, value: "unknown", mark: "not-now", exceptions, choice, ownAsk }),
+      rulesOver({
+        ...base,
+        value: "unknown",
+        mark: "not-now",
+        exceptions,
+        choice,
+        ownAsk,
+        undoAsk,
+      }),
     );
   if (wholeNever)
     return listed(
-      rulesOver({ ...base, value: "never", mark: "plugin", exceptions, choice, ownAsk }),
+      rulesOver({ ...base, value: "never", mark: "plugin", exceptions, choice, ownAsk, undoAsk }),
     );
   if (wholeAsk)
     return listed(
-      rulesOver({ ...base, value: "asks", mark: "plugin", exceptions, choice, ownAsk }),
+      rulesOver({ ...base, value: "asks", mark: "plugin", exceptions, choice, ownAsk, undoAsk }),
     );
   if (asks.length > 0 || targetNevers.length > 0)
     return listed(
-      rulesOver({ ...base, value: "limited", mark: "plugin", exceptions, choice, ownAsk }),
+      rulesOver({ ...base, value: "limited", mark: "plugin", exceptions, choice, ownAsk, undoAsk }),
     );
   return listed(
     rulesOver({
@@ -986,6 +1031,7 @@ function lineOf(def: LineDef, facts: PermissionFacts): PermissionLine {
       exceptions,
       choice,
       ownAsk,
+      undoAsk,
     }),
   );
 }
@@ -1107,8 +1153,14 @@ export function choiceRefusal(
     if (view.versions.bot === null && view.rules.from !== "now")
       return "The rules plugin's rules weren't read.";
   }
-  if (choice === "allow" && line.ownAsk)
-    return "This Ask is a rule of Clawtrate's rules plugin. It's changed on the rules page in Settings, Permissions, which isn't built yet.";
+  if (choice === "allow" && line.ownAsk && !line.undoAsk)
+    return "This Ask is a rule of Clawtrate's rules plugin that this page didn't write. It's changed on the rules page in Settings, Permissions, which isn't built yet.";
+  if (
+    choice === "allow" &&
+    line.undoAsk &&
+    (!pluginHolds(view.plugin) || view.rules.from !== "now")
+  )
+    return "Taking off this Ask needs Clawtrate's rules plugin running.";
   return null;
 }
 

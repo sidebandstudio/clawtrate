@@ -859,7 +859,8 @@ function sentence(line: PermissionLine, name: string): string {
   const ownDeny = line.exceptions.find((e) => e.kind === "bot-deny");
   if (line.choice === null && ownDeny?.kind === "bot-deny")
     return `${name}'s own settings deny only some of these tools: ${list(ownDeny.tools)}. The gateway still offers the rest unless something else removes them. Never denies them all; Allow takes ${name}'s deny off.`;
-  if (line.ownAsk) return `${name} asks you first. Only while Clawtrate's rules plugin runs.`;
+  if (line.ownAsk)
+    return `${name} asks you first. Only while Clawtrate's rules plugin runs.${line.undoAsk ? " Allow takes this Ask off." : ""}`;
   if (line.exceptions.some((e) => e.kind === "rule" || e.kind === "fallback"))
     return `${name}'s own setting is Allow. See Effective for the rules that apply.`;
   return `${name}'s own setting is Allow: nothing in its settings denies or asks.`;
