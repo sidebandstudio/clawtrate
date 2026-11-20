@@ -41,6 +41,20 @@ import {
 import { MARKER_FILE } from "../../../tools/dev-gateway/src/state-guard.ts";
 import { authJson, statusJson, VERSION_LINE } from "./fixtures/openclaw-outputs.ts";
 import * as fake from "./fixtures/sandbox.ts";
+import type { Identify } from "../../../tools/dev-gateway/src/state-guard.ts";
+
+/** The recorded status's listener (pid 4242), alive with this start time. */
+const LISTENER_STARTED = "Mon Nov 16 21:27:01 2026";
+const listening: Identify = (pid) =>
+  pid === 4242
+    ? { state: "alive", identity: LISTENER_STARTED }
+    : { state: "exited", how: "absent" };
+/** The look, with the recorded listener alive unless a test says otherwise. */
+const look = (
+  world: LookWorld,
+  run: Parameters<typeof lookHere>[1],
+  identify: Identify = listening,
+) => lookHere(world, run, { identify });
 
 let dir: string;
 beforeEach(() => {
@@ -53,6 +67,14 @@ function executable(path: string): string {
   writeFileSync(path, "#!/bin/sh\nexit 1\n");
   chmodSync(path, 0o755);
   return path;
+}
+
+/** A recorded status with one fact changed by `change`. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function withStatus(json: string, change: (status: any) => void): string {
+  const status = JSON.parse(json) as unknown;
+  change(status);
+  return JSON.stringify(status);
 }
 
 /** A production-shaped world in a temporary home, with its program list kept to that home. */
@@ -104,7 +126,7 @@ describe("the look on this computer", () => {
   it("F-492: a running gateway of the tested version is found and named by profile, version, how it listens and its service", async () => {
     const world = homeWorld();
     const { run, requests } = fakeRunner(defaultTable());
-    const report = await lookHere(world, run);
+    const report = await look(world, run);
     expect(report?.look).toEqual({
       outcome: "running",
       reason: null,
@@ -133,18 +155,18 @@ describe("the look on this computer", () => {
   });
 
   it("F-492: the service is named as observed: a LaunchAgent, a systemd user service, or none", async () => {
-    const running = await lookHere(
+    const running = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, service: "running" }))).run,
     );
     expect(running?.look.service).toBe("launchagent");
-    const systemd = await lookHere(
+    const systemd = await look(
       homeWorld({ platform: "linux" }),
       fakeRunner(defaultTable(statusJson({ port: 18789, service: "running", label: "systemd" })))
         .run,
     );
     expect(systemd?.look.service).toBe("systemd");
-    const network = await lookHere(
+    const network = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, bind: "lan" }))).run,
     );
@@ -152,13 +174,13 @@ describe("the look on this computer", () => {
   });
 
   it("F-515: another version is named and not offered for Connect", async () => {
-    const report = await lookHere(
+    const report = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, answered: "2026.9.37" }))).run,
     );
     expect(report?.look).toMatchObject({ outcome: "untested", version: "2026.9.37" });
     expect(report?.found).toBe(null);
-    const newer = await lookHere(
+    const newer = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, answered: "2026.11.2" }))).run,
     );
@@ -166,7 +188,7 @@ describe("the look on this computer", () => {
   });
 
   it("F-515: a version below the protocol this client speaks is too old", async () => {
-    const report = await lookHere(
+    const report = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, answered: "2026.6.2" }))).run,
     );
@@ -175,12 +197,12 @@ describe("the look on this computer", () => {
   });
 
   it("F-515: a version of the wrong shape is a gateway the look can't tell", async () => {
-    const program = await lookHere(
+    const program = await look(
       homeWorld(),
       fakeRunner({ ...defaultTable(), "--version": { stdout: "openclaw version 9\n" } }).run,
     );
     expect(program?.look).toMatchObject({ outcome: "cant-tell", reason: "shape" });
-    const gateway = await lookHere(
+    const gateway = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, answered: "v10; rm -rf" }))).run,
     );
@@ -189,7 +211,7 @@ describe("the look on this computer", () => {
   });
 
   it("a gateway that signs in another way than a token is named and not connected to", async () => {
-    const report = await lookHere(
+    const report = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789 }), authJson("password"))).run,
     );
@@ -198,7 +220,7 @@ describe("the look on this computer", () => {
   });
 
   it("a gateway started by hand and stopped is installed but not running", async () => {
-    const report = await lookHere(
+    const report = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, answered: null }))).run,
     );
@@ -212,7 +234,7 @@ describe("the look on this computer", () => {
   });
 
   it("a registered service that is stopped, with nothing listening, is proven stopped", async () => {
-    const report = await lookHere(
+    const report = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, answered: null, service: "stopped" }))).run,
     );
@@ -224,13 +246,13 @@ describe("the look on this computer", () => {
       statusJson({ port: 18789, answered: null, service: "running" }),
       statusJson({ port: 18789, answered: null, listening: true }),
     ]) {
-      const report = await lookHere(homeWorld(), fakeRunner(defaultTable(status)).run);
+      const report = await look(homeWorld(), fakeRunner(defaultTable(status)).run);
       expect(report?.look).toMatchObject({ outcome: "cant-tell", reason: "no-answer" });
     }
   });
 
   it("a step that times out can't be told", async () => {
-    const report = await lookHere(
+    const report = await look(
       homeWorld(),
       fakeRunner({ ...defaultTable(), "gateway status --json": { timedOut: true, exitCode: null } })
         .run,
@@ -239,7 +261,7 @@ describe("the look on this computer", () => {
   });
 
   it("a program with no gateway set up can't be told, and offers nothing to connect to", async () => {
-    const report = await lookHere(
+    const report = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ configExists: false, answered: null }))).run,
     );
@@ -248,7 +270,7 @@ describe("the look on this computer", () => {
 
   it("no program, no ~/.openclaw and no service is not found, and nothing runs", async () => {
     const { run, requests } = fakeRunner({});
-    const report = await lookHere(homeWorld({ program: false }), run);
+    const report = await look(homeWorld({ program: false }), run);
     expect(report?.look.outcome).toBe("not-found");
     expect(requests).toEqual([]);
   });
@@ -256,23 +278,23 @@ describe("the look on this computer", () => {
   it("no program, with ~/.openclaw or a service, is set up with its program missing", async () => {
     const world = homeWorld({ program: false });
     mkdirSync(join(world.home, ".openclaw"));
-    expect((await lookHere(world, fakeRunner({}).run))?.look.outcome).toBe("program-missing");
+    expect((await look(world, fakeRunner({}).run))?.look.outcome).toBe("program-missing");
     rmSync(join(world.home, ".openclaw"), { recursive: true });
     mkdirSync(join(world.home, "Library/LaunchAgents"), { recursive: true });
     writeFileSync(join(world.home, "Library/LaunchAgents/ai.openclaw.gateway.plist"), "");
-    expect((await lookHere(world, fakeRunner({}).run))?.look.outcome).toBe("program-missing");
+    expect((await look(world, fakeRunner({}).run))?.look.outcome).toBe("program-missing");
   });
 
   it("a file that is not executable is not the program", async () => {
     const world = homeWorld({ program: false });
     mkdirSync(join(world.home, ".local/bin"), { recursive: true });
     writeFileSync(world.candidates[1]!, "not a program");
-    expect((await lookHere(world, fakeRunner({}).run))?.look.outcome).toBe("not-found");
+    expect((await look(world, fakeRunner({}).run))?.look.outcome).toBe("not-found");
   });
 
   it("on Windows the look doesn't run", async () => {
     const { run, requests } = fakeRunner(defaultTable());
-    const report = await lookHere(homeWorld({ platform: "win32" }), run);
+    const report = await look(homeWorld({ platform: "win32" }), run);
     expect(report?.look.outcome).toBe("windows");
     expect(requests).toEqual([]);
   });
@@ -292,7 +314,7 @@ describe("the look on this computer", () => {
       },
       "--profile clawtrate config get gateway.auth.mode --json": { stdout: authJson() },
     });
-    const report = await lookHere(world, run);
+    const report = await look(world, run);
     expect(report?.look.outcome).toBe("running");
     expect(report?.look.profile).toBe("default");
     expect(report?.look.others).toEqual(["service com.example.openclaw-gateway", "profile work"]);
@@ -308,7 +330,7 @@ describe("the look on this computer", () => {
   it("F-516: Clawtrate's own profile is chosen when the default profile has no gateway", async () => {
     const world = homeWorld();
     mkdirSync(join(world.home, ".openclaw-clawtrate"));
-    const report = await lookHere(
+    const report = await look(
       world,
       fakeRunner({
         ...defaultTable(statusJson({ port: 18789, configExists: false, answered: null })),
@@ -321,7 +343,7 @@ describe("the look on this computer", () => {
   });
 
   it("F-516: a found gateway is identified by its profile, config path, service, port and answer", async () => {
-    const report = await lookHere(homeWorld(), fakeRunner(defaultTable()).run);
+    const report = await look(homeWorld(), fakeRunner(defaultTable()).run);
     expect(report?.found).toMatchObject({
       configPath: "<state>/openclaw.json",
       port: 18789,
@@ -334,7 +356,7 @@ describe("the look on this computer", () => {
   it("runs every program in the world's own working folder, never the app's", async () => {
     const world = homeWorld();
     const { run, requests } = fakeRunner(defaultTable());
-    await lookHere(world, run);
+    await look(world, run);
     expect(requests.length).toBeGreaterThan(0);
     for (const request of requests) expect(request.cwd).toBe(world.home);
   });
@@ -358,10 +380,14 @@ describe("the look on this computer", () => {
     const opened = await opener.open();
     if (opened instanceof SetupRefusedError) throw opened;
     const requests: ProgramRequest[] = [];
-    const report = await lookHere(opened.world, (request) => {
-      requests.push(request);
-      return opened.run(request);
-    });
+    const report = await look(
+      opened.world,
+      (request) => {
+        requests.push(request);
+        return opened.run(request);
+      },
+      opened.identify,
+    );
     expect(report?.look.outcome).toBe("running");
     expect(requests.map((request) => request.args.slice(2).join(" ")).sort()).toEqual([
       "--version",
@@ -377,24 +403,139 @@ describe("the look on this computer", () => {
       statusJson({ port: 18789, rpcUrl: "wss://127.0.0.1:18789" }),
       statusJson({ port: 18789, probeUrl: "ws://192.0.2.10:18789" }),
     ]) {
-      const report = await lookHere(homeWorld(), fakeRunner(defaultTable(status)).run);
+      const report = await look(homeWorld(), fakeRunner(defaultTable(status)).run);
       expect(report?.look).toMatchObject({ outcome: "cant-tell", reason: "endpoint" });
       expect(report?.found).toBe(null);
     }
   });
 
+  it("F-492 F-516: only the exact endpoint is a gateway Connect may use: IPv6, localhost, TLS, a path, a query, a user or another port is not", async () => {
+    const at = (probe: string, rpc = probe) =>
+      statusJson({ port: 19940, probeUrl: probe, rpcUrl: rpc });
+    for (const status of [
+      at("ws://[::1]:19940"),
+      at("ws://localhost:19940"),
+      at("wss://127.0.0.1:19940"),
+      at("ws://127.0.0.1:19940/gateway"),
+      at("ws://127.0.0.1:19940/?token=x"),
+      at("ws://someone@127.0.0.1:19940"),
+      at("ws://127.0.0.1:19940//"),
+      at("ws://127.0.0.1:19940", "ws://[::1]:19940"),
+      at("ws://127.0.0.1:19941", "ws://127.0.0.1:19940"),
+      withStatus(statusJson({ port: 19940 }), (value) => {
+        value.port.port = 19941;
+      }),
+    ]) {
+      const report = await look(homeWorld(), fakeRunner(defaultTable(status)).run);
+      expect(report?.look, status.slice(0, 0)).toMatchObject({
+        outcome: "cant-tell",
+        reason: "endpoint",
+      });
+      expect(report?.found).toBeNull();
+    }
+    // One terminal slash is the same address.
+    const slash = await look(
+      homeWorld(),
+      fakeRunner(defaultTable(at("ws://127.0.0.1:19940/"))).run,
+    );
+    expect(slash?.found?.url).toBe("ws://127.0.0.1:19940");
+  });
+
+  it("F-492 F-516: a gateway with no identifiable listener, two listeners, a listener that isn't running, or another config file for its service is not offered", async () => {
+    const cases = [
+      withStatus(statusJson({ port: 19940 }), (value) => {
+        value.port.listeners = [];
+      }),
+      withStatus(statusJson({ port: 19940 }), (value) => {
+        value.port.listeners.push({ pid: 5151, address: "127.0.0.1:19940" });
+      }),
+      withStatus(statusJson({ port: 19940 }), (value) => {
+        value.port.listeners[0].address = "0.0.0.0:19940";
+      }),
+      withStatus(statusJson({ port: 19940 }), (value) => {
+        value.config.daemon.path = "<other>/openclaw.json";
+      }),
+    ];
+    for (const status of cases) {
+      const report = await look(homeWorld(), fakeRunner(defaultTable(status)).run);
+      expect(report?.look).toMatchObject({ outcome: "cant-tell", reason: "endpoint" });
+    }
+    const gone = await look(
+      homeWorld(),
+      fakeRunner(defaultTable(statusJson({ port: 19940 }))).run,
+      () => ({
+        state: "exited",
+        how: "absent",
+      }),
+    );
+    expect(gone?.look).toMatchObject({ outcome: "cant-tell", reason: "endpoint" });
+    // The positive control: one listener, alive, the same config.
+    const found = await look(
+      homeWorld(),
+      fakeRunner(defaultTable(statusJson({ port: 19940 }))).run,
+    );
+    expect(found?.found).toMatchObject({
+      url: "ws://127.0.0.1:19940",
+      listener: { pid: 4242, started: LISTENER_STARTED },
+    });
+    // The identities stay in the host: none of them is in what the interface sees.
+    expect(JSON.stringify(found?.look)).not.toContain("4242");
+    expect(JSON.stringify(found?.look)).not.toContain(LISTENER_STARTED);
+  });
+
+  it("F-516: two profiles that report the same endpoint can't be told apart, and neither is offered; distinct endpoints choose the default", async () => {
+    const world = homeWorld();
+    mkdirSync(join(dir, "home/.openclaw-clawtrate"), { recursive: true });
+    const same = await look(
+      world,
+      fakeRunner({
+        ...defaultTable(statusJson({ port: 19940 })),
+        "--profile clawtrate gateway status --json": { stdout: statusJson({ port: 19940 }) },
+        "--profile clawtrate config get gateway.auth.mode --json": { stdout: authJson() },
+      }).run,
+    );
+    expect(same?.look).toMatchObject({ outcome: "cant-tell", reason: "endpoint" });
+    expect(same?.found).toBeNull();
+    const distinct = await look(
+      world,
+      fakeRunner({
+        ...defaultTable(statusJson({ port: 19940 })),
+        "--profile clawtrate gateway status --json": { stdout: statusJson({ port: 19960 }) },
+        "--profile clawtrate config get gateway.auth.mode --json": { stdout: authJson() },
+      }).run,
+    );
+    expect(distinct?.look).toMatchObject({ outcome: "running", profile: "default", port: 19940 });
+  });
+
+  it("F-516: Clawtrate's own profile is looked at only when its state is a real folder, not a file or a link", async () => {
+    for (const make of [
+      () => writeFileSync(join(dir, "home/.openclaw-clawtrate"), "x"),
+      () => {
+        mkdirSync(join(dir, "elsewhere"), { recursive: true });
+        symlinkSync(join(dir, "elsewhere"), join(dir, "home/.openclaw-clawtrate"));
+      },
+    ]) {
+      rmSync(join(dir, "home"), { recursive: true, force: true });
+      const world = homeWorld();
+      make();
+      const { run, requests } = fakeRunner(defaultTable(statusJson({ port: 19940 })));
+      await look(world, run);
+      expect(requests.some((request) => request.args.includes("clawtrate"))).toBe(false);
+    }
+  });
+
   it("F-516: a bind or a service the status doesn't describe is not reported, never a fact", async () => {
-    const odd = await lookHere(
+    const odd = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, bind: "mystery" }))).run,
     );
     expect(odd?.look.listens).toBe(null);
-    const unknown = await lookHere(
+    const unknown = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, label: "Something else" }))).run,
     );
     expect(unknown?.look.service).toBe(null);
-    const diagnostic = await lookHere(
+    const diagnostic = await look(
       homeWorld(),
       fakeRunner(defaultTable(statusJson({ port: 18789, service: "unknown" }))).run,
     );
@@ -405,13 +546,13 @@ describe("the look on this computer", () => {
     const world = homeWorld();
     writeFileSync(join(world.home, ".openclaw-work"), "not a folder");
     symlinkSync(join(dir, "app"), join(world.home, ".openclaw-linked"));
-    const report = await lookHere(world, fakeRunner(defaultTable()).run);
+    const report = await look(world, fakeRunner(defaultTable()).run);
     expect(report?.look.others).toEqual([]);
   });
 
   it("a program that can't be started is its own result, not an answer of the wrong shape", async () => {
     for (const reply of [{ failed: true, exitCode: null }, { exitCode: 127 }, { exitCode: 126 }]) {
-      const report = await lookHere(
+      const report = await look(
         homeWorld(),
         fakeRunner({ ...defaultTable(), "--version": reply }).run,
       );
@@ -421,7 +562,7 @@ describe("the look on this computer", () => {
 
   it("F-516: Clawtrate's own profile is not asked when its folder isn't there", async () => {
     const { run, requests } = fakeRunner(defaultTable());
-    await lookHere(homeWorld(), run);
+    await look(homeWorld(), run);
     expect(requests.some((request) => request.args.includes("clawtrate"))).toBe(false);
   });
 });
@@ -854,7 +995,7 @@ describe("the sandbox: a run's description, its folder and its proven instance",
     stopped.processes.alive.clear();
     const opened = await stopped.opener().open();
     if (opened instanceof SetupRefusedError) throw opened;
-    const report = await lookHere(opened.world, opened.run);
+    const report = await lookHere(opened.world, opened.run, { identify: opened.identify });
     expect(report?.look.outcome).toBe("stopped");
     const unknown = setting();
     const proof = () =>

@@ -7,23 +7,28 @@
 
 import {
   initialSetupState,
+  SETUP_ENDPOINT_CHANGED,
   type ClawtrateClient,
   type ClawtrateState,
   type SetupFailure,
   type SetupHost,
   type SetupState,
 } from "@clawtrate/core";
-import { LIMITS, lookHere, type FoundGateway } from "./look.ts";
+import { fileIdentity, LIMITS, lookHere, type FoundGateway } from "./look.ts";
 import { parseAuthMode, parseSetupCode, parseStatus } from "./parse.ts";
-import type { RunProgram } from "./programs.ts";
+import type { ProgramResult } from "./programs.ts";
 import type { Opened } from "./sandbox.ts";
-import { guardPort, programPath, SetupRefusedError, type LookWorld } from "./world.ts";
+import { guardPort, programPath, SetupRefusedError } from "./world.ts";
 
 /** A prepared operation expires after this long and can't be repeated (§2). */
 export const OPERATION_LIFETIME_MS = 2 * 60_000;
 /** After this long, the look says it is still looking (§4). */
 export const SLOW_LOOK_MS = 8_000;
 const QR_LIMIT = { timeoutMs: 20_000, maxBytes: 16 * 1024 };
+
+/** A program that ran to its end, in time and within its limit, and exited 0. */
+const succeeded = (result: ProgramResult) =>
+  result.exitCode === 0 && !result.timedOut && !result.tooLarge && !result.failed;
 
 /** What the host's own dialog shows: its words, nothing the page wrote. */
 export type Confirmation = { message: string; detail: string; confirm: string };
@@ -161,6 +166,7 @@ export class SetupController implements SetupHost {
         this.publish({ ...this.state, slow: true });
     }, SLOW_LOOK_MS);
     const report = await lookHere(opened.world, opened.run, {
+      identify: opened.identify,
       onStep: (step) => {
         if (attempt === this.attempt && this.state.phase === "looking")
           this.publish({ ...this.state, step });
@@ -191,9 +197,7 @@ export class SetupController implements SetupHost {
     this.found = report.found;
     // What this device can already do on the gateway found, said on its card and in the dialog.
     const access = report.found
-      ? await this.options.client
-          .deviceAccess(`ws://127.0.0.1:${report.found.port}`)
-          .catch(() => "new" as const)
+      ? await this.options.client.deviceAccess(report.found.url).catch(() => "new" as const)
       : null;
     if (attempt !== this.attempt) return;
     this.publish({
@@ -259,6 +263,7 @@ export class SetupController implements SetupHost {
     }
     // Prepared from the host's own state; the page gave nothing but the request.
     const prepared = { found, at: this.now(), used: false };
+    const expired = () => this.now() - prepared.at > OPERATION_LIFETIME_MS;
     this.publish({ ...this.state, phase: "confirming", failure: null });
     const access = this.state.look?.access ?? "new";
     let yes: boolean;
@@ -273,7 +278,7 @@ export class SetupController implements SetupHost {
       this.publish({ ...this.state, phase: "found" });
       return;
     }
-    if (prepared.used || this.now() - prepared.at > OPERATION_LIFETIME_MS) {
+    if (prepared.used || expired()) {
       this.fail({ kind: "changed" });
       return;
     }
@@ -289,59 +294,71 @@ export class SetupController implements SetupHost {
       if (attempt === this.attempt) this.refused(error);
       return;
     }
-    const { world, run } = opened;
     this.publish({ ...this.state, phase: "connecting", step: 0, failure: null });
-    // The facts are read again: anything other than what the dialog showed, and nothing runs.
-    if (!(await this.unchanged(world, run, found))) {
-      if (attempt === this.attempt) this.fail({ kind: "changed" });
-      return;
-    }
-    if (attempt !== this.attempt) return;
-    const url = `ws://127.0.0.1:${found.port}`;
     const client = this.options.client;
     await this.letGo();
     // A setup cancelled while the earlier connection was let go starts nothing more.
     if (attempt !== this.attempt) return;
-    // Already paired with this gateway: the next Connect reuses the device (§7), with the
-    // access the dialog named.
-    const paired = await client.hasDeviceToken(url);
+    const paired = await client.hasDeviceToken(found.url);
     if (attempt !== this.attempt) return;
+    // The facts are read again after every wait that can be long, and the consent's two
+    // minutes hold on every branch: anything other than what the dialog named, and nothing runs.
+    const changed = async () => !(await this.unchanged(opened, found)) || expired();
+    if (await changed()) {
+      if (attempt === this.attempt) this.fail({ kind: "changed" });
+      return;
+    }
+    if (attempt !== this.attempt) return;
+    // Every socket the client opens for this, retries included, finds the same listener first.
+    const listening = () => this.sameListener(opened, found);
     if (paired) {
+      // Already paired with this gateway: the next Connect reuses the device (§7).
       this.publish({ ...this.state, step: 1 });
       this.watch(attempt, found.port);
-      await client.connect({ url, token: null });
+      await client.connect({ url: found.url, token: null });
       return;
     }
-    // The operation's two minutes hold until the code is made, not only until the answer.
-    if (this.now() - prepared.at > OPERATION_LIFETIME_MS) {
-      this.fail({ kind: "changed" });
-      return;
-    }
-    const made = await run({
+    const made = await opened.run({
       program: found.program,
-      args: [...found.profile.args, "qr", "--json", "--voice-node", "--url", url],
-      env: { ...world.env, PATH: programPath(found.program), ...found.profile.env },
-      cwd: world.cwd,
+      args: [...found.profile.args, "qr", "--json", "--voice-node", "--url", found.url],
+      env: { ...opened.world.env, PATH: programPath(found.program), ...found.profile.env },
+      cwd: opened.world.cwd,
       ...QR_LIMIT,
     });
     if (attempt !== this.attempt) return;
-    const code = made.exitCode === 0 ? parseSetupCode(made.stdout, url, this.now()) : null;
+    const code = succeeded(made) ? parseSetupCode(made.stdout, found.url, this.now()) : null;
     if (!code) {
       this.fail({ kind: "code-failed", exitCode: made.exitCode });
       return;
     }
+    // The listener is checked again after the code is made and before it is sent.
+    if (await changed()) {
+      if (attempt === this.attempt) this.fail({ kind: "changed" });
+      return;
+    }
+    if (attempt !== this.attempt) return;
     this.publish({ ...this.state, step: 1 });
     this.watch(attempt, found.port);
     // Handed to the client and dropped here: the code lives in the client's memory until its hello.
-    await client.connectWithSetupCode(code);
+    await client.connectWithSetupCode(code, { check: listening });
   }
 
-  /** Whether the profile's gateway still is what the dialog named. */
-  private async unchanged(
-    world: LookWorld,
-    run: RunProgram,
-    found: FoundGateway,
-  ): Promise<boolean> {
+  /** The same process, by PID and start time, still listens where the look found the gateway. */
+  private sameListener(opened: Opened, found: FoundGateway): boolean {
+    const now = opened.identify(found.listener.pid);
+    return now.state === "alive" && now.identity === found.listener.started;
+  }
+
+  /**
+   * Whether the profile's gateway still is what the dialog named: the same
+   * program file, the same endpoint, config files, service and version, the
+   * same listener by PID and start time, and token sign-in, each command
+   * having finished in time and within its limit.
+   */
+  private async unchanged(opened: Opened, found: FoundGateway): Promise<boolean> {
+    const { world, run } = opened;
+    const identity = world.installed ? "stand-in" : await fileIdentity(found.program);
+    if (identity !== found.programIdentity) return false;
     const env = { ...world.env, PATH: programPath(found.program), ...found.profile.env };
     const [statusRun, authRun] = await Promise.all([
       run({
@@ -359,18 +376,19 @@ export class SetupController implements SetupHost {
         ...LIMITS.auth,
       }),
     ]);
-    const status =
-      statusRun.exitCode === 0 && !statusRun.timedOut ? parseStatus(statusRun.stdout) : null;
+    if (!succeeded(statusRun) || !succeeded(authRun)) return false;
+    const status = parseStatus(statusRun.stdout);
     return (
       status !== null &&
       status.configExists &&
-      status.configPath === found.configPath &&
-      status.port === found.port &&
+      status.url === found.url &&
       status.endpointConfirmed &&
+      status.configPath === found.configPath &&
+      status.daemonConfigPath === found.daemonConfigPath &&
       status.serviceKey === found.serviceKey &&
       status.answered?.text === found.version &&
-      authRun.exitCode === 0 &&
-      !authRun.timedOut &&
+      status.listenerPid === found.listener.pid &&
+      this.sameListener(opened, found) &&
       parseAuthMode(authRun.stdout) === "token"
     );
   }
@@ -403,7 +421,9 @@ export class SetupController implements SetupHost {
                 ? "code-refused"
                 : code === "UNREACHABLE"
                   ? "unreachable"
-                  : "other",
+                  : code === SETUP_ENDPOINT_CHANGED
+                    ? "changed"
+                    : "other",
           port,
         });
       }

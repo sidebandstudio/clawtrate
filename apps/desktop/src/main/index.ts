@@ -37,6 +37,7 @@ import { SetupController } from "../setup/controller.ts";
 import { ProgramRunner } from "../setup/programs.ts";
 import { resolveSetupLaunch, sandboxOpener, type Opened } from "../setup/sandbox.ts";
 import { startSyntheticGateway } from "../setup/synthetic-gateway.ts";
+import { processIdentity } from "../../../../tools/dev-gateway/src/state-guard.ts";
 import { accountHome, productionWorld, type SetupRefusedError } from "../setup/world.ts";
 
 app.setName("Clawtrate");
@@ -157,6 +158,7 @@ function setupOpener(): {
         lang: process.env.LANG,
       }),
       run: programs.run,
+      identify: processIdentity,
     }),
     close,
   };

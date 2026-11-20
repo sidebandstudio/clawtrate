@@ -4,7 +4,12 @@
 // operator role and exactly `operator.read`.
 
 import { describe, expect, it } from "vitest";
-import { ClawtrateClient, SETUP_GRANT_REFUSED, setupGrant } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  SETUP_ENDPOINT_CHANGED,
+  SETUP_GRANT_REFUSED,
+  setupGrant,
+} from "../src/client.ts";
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol";
 import {
   FakeGateway,
@@ -364,5 +369,64 @@ describe("what a setup connection publishes, whatever the gateway sends", () => 
     expect(await client.deviceAccess(URL)).toBe("read");
     expect(await client.deviceAccess("ws://127.0.0.1:19960")).toBe("more");
     expect(await client.deviceAccess("ws://127.0.0.1:19980")).toBe("new");
+  });
+});
+
+describe("the setup connection's endpoint check", () => {
+  it("F-492: a setup connection opens no socket when the host's check of its listener fails, and sends no code", async () => {
+    const gateway = gatewayGranting({
+      role: "operator",
+      scopes: ["operator.read"],
+      deviceToken: "device-token",
+    });
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connectWithSetupCode(
+      { url: URL, bootstrapToken: CODE, expiresAtMs: LATER() },
+      { check: () => false },
+    );
+    await until(() => client.state.connection.status === "error");
+    expect(client.state.connection.error?.code).toBe(SETUP_ENDPOINT_CHANGED);
+    expect(gateway.sockets).toHaveLength(0);
+    expect(storage.data.has(tokenKey(URL))).toBe(false);
+    expect(everywhere(client, storage)).not.toContain(CODE);
+    client.stop();
+  });
+
+  it("F-492: while a pairing waits, a retry after the listener changed opens no second socket", async () => {
+    const gateway = new FakeGateway();
+    let approved = false;
+    gateway.connectReply = () =>
+      approved
+        ? { ok: true, payload: helloOk(["operator.read"], "device-token") }
+        : {
+            ok: false,
+            error: {
+              code: "NOT_PAIRED",
+              message: "device pairing required",
+              details: {
+                code: "PAIRING_REQUIRED",
+                requestId: "e5eb4aa8-175f-40f1-bc7a-8f15cfc40942",
+              },
+            },
+          };
+    let same = true;
+    const storage = memoryStorage();
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    await client.start();
+    await client.connectWithSetupCode(
+      { url: URL, bootstrapToken: CODE, expiresAtMs: LATER() },
+      { check: () => same },
+    );
+    await until(() => client.state.connection.status === "pairing");
+    expect(gateway.sockets).toHaveLength(1);
+    same = false;
+    approved = true;
+    await client.retryNow();
+    await until(() => client.state.connection.error?.code === SETUP_ENDPOINT_CHANGED);
+    expect(gateway.sockets).toHaveLength(1);
+    expect(storage.data.has(tokenKey(URL))).toBe(false);
+    client.stop();
   });
 });

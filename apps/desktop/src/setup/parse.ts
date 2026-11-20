@@ -69,22 +69,44 @@ export type GatewayStatus = {
   answered: Version | null;
   /** `rpc.ok` was false. */
   unanswered: boolean;
+  /** The one endpoint Connect may use: `ws://127.0.0.1:<port>`. */
+  url: string;
   /**
-   * The status probed and its RPC answered on this computer's loopback, plain
-   * `ws`, on the gateway's own port. Anything else and Clawtrate can't
-   * confirm where the gateway answers.
+   * Both addresses the status reports, the one it probed and the one its RPC
+   * answered on, are exactly `url` (at most one terminal slash), and the
+   * port it checked is the gateway's. Anything else (`localhost`, IPv6, TLS,
+   * a path, a query, a user, another port) and Clawtrate can't confirm where
+   * the gateway answers.
    */
   endpointConfirmed: boolean;
+  /** The one process listening on exactly `127.0.0.1:<port>`, or null when none or several. */
+  listenerPid: number | null;
+  /** The config file the service runs with, when reported. */
+  daemonConfigPath: string | null;
+  /** Whether the status says its service belongs to this gateway (not `diagnostic-only`). */
+  serviceAssociated: boolean;
 };
 
 /** Bind modes OpenClaw names; the look knows which of them listen beyond this computer. */
 const NETWORK_BINDS = new Set(["lan", "tailnet", "custom", "auto"]);
 
-/** A loopback plain-`ws` address and its port, or null. */
-function loopbackPort(value: unknown): number | null {
-  if (typeof value !== "string") return null;
-  const match = /^ws:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):([0-9]{4,5})\/?$/.exec(value);
-  return match ? Number(match[1]) : null;
+/** A reported address, compared with the endpoint after taking off at most one terminal slash. */
+const sameEndpoint = (value: unknown, url: string) =>
+  typeof value === "string" && (value === url || value === `${url}/`);
+
+const pid = (value: unknown): number | null =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 1 ? value : null;
+
+/** The single process listening on exactly `127.0.0.1:<port>`, or null. */
+function listenerOf(value: unknown, port: number): number | null {
+  if (!Array.isArray(value)) return null;
+  const pids = new Set<number | null>();
+  for (const entry of value) {
+    const listener = record(entry);
+    if (listener?.address === `127.0.0.1:${port}`) pids.add(pid(listener.pid));
+  }
+  const [only] = [...pids];
+  return pids.size === 1 && only !== null && only !== undefined ? only : null;
 }
 
 /** `gateway status --json`, or null when any fact the look needs has the wrong shape. */
@@ -99,6 +121,9 @@ export function parseStatus(stdout: string): GatewayStatus | null {
   const rpc = record(root.rpc);
   if (!config || typeof config.exists !== "boolean") return null;
   if (typeof config.path !== "string" || config.path.length > 1024) return null;
+  const daemon = record(record(root.config)?.daemon);
+  const daemonPath =
+    typeof daemon?.path === "string" && daemon.path.length <= 1024 ? daemon.path : null;
   if (!gateway || !service || !port || !rpc || typeof rpc.ok !== "boolean") return null;
   const number = gateway.port;
   if (typeof number !== "number" || !Number.isInteger(number) || number < 1024 || number > 65535)
@@ -134,8 +159,7 @@ export function parseStatus(stdout: string): GatewayStatus | null {
     // An answer must carry its version.
     if (!answered) return null;
   }
-  const probed = loopbackPort(gateway.probeUrl);
-  const replied = loopbackPort(rpc.url);
+  const url = `ws://127.0.0.1:${number}`;
   return {
     configExists: config.exists,
     configPath: config.path,
@@ -147,11 +171,26 @@ export function parseStatus(stdout: string): GatewayStatus | null {
           ? "network"
           : null,
     service: described,
-    serviceKey: JSON.stringify([label, service.loaded ?? null, status ?? null, missing]),
+    // What tells this service apart: its label, role, process, state and the unit it names.
+    serviceKey: JSON.stringify([
+      label,
+      typeof service.targetRole === "string" ? service.targetRole.slice(0, 64) : null,
+      pid(runtime?.pid),
+      service.loaded ?? null,
+      status ?? null,
+      missing,
+      typeof service.unit === "string" ? service.unit.slice(0, 128) : null,
+    ]),
     listening: port.status === "busy",
     answered,
     unanswered: !rpc.ok,
-    endpointConfirmed: probed === number && replied === number,
+    url,
+    endpointConfirmed:
+      sameEndpoint(gateway.probeUrl, url) && sameEndpoint(rpc.url, url) && port.port === number,
+    listenerPid: listenerOf(port.listeners, number),
+    daemonConfigPath: daemonPath,
+    serviceAssociated:
+      typeof service.targetRole === "string" && service.targetRole !== "diagnostic-only",
   };
 }
 

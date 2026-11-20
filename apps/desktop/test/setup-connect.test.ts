@@ -39,7 +39,16 @@ import {
   type ProgramResult,
 } from "../src/setup/programs.ts";
 import { productionWorld, SetupRefusedError, type LookWorld } from "../src/setup/world.ts";
+import type { Identify } from "../../../tools/dev-gateway/src/state-guard.ts";
 import { authJson, qrJson, statusJson, VERSION_LINE } from "./fixtures/openclaw-outputs.ts";
+
+/** A recorded status with one fact changed by `change`. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function withStatus(json: string, change: (status: any) => void): string {
+  const status = JSON.parse(json) as unknown;
+  change(status);
+  return JSON.stringify(status);
+}
 
 const PORT = 19940;
 const URL = `ws://127.0.0.1:${PORT}`;
@@ -104,6 +113,12 @@ function harness(
       ...(result ?? { exitCode: 1 }),
     };
   };
+  // The listener the recorded status names (pid 4242), by its start time; a test may replace it.
+  const listeners = new Map<number, string>([[4242, "Mon Nov 16 21:27:01 2026"]]);
+  const identify: Identify = (pid) => {
+    const started = listeners.get(pid);
+    return started ? { state: "alive", identity: started } : { state: "exited", how: "absent" };
+  };
   const gateway = options.gateway ?? new FakeGateway();
   if (!options.gateway) {
     gateway.connectReply = (params) => {
@@ -122,6 +137,7 @@ function harness(
   const client = new ClawtrateClient(host, { reconnect: { initialMs: 20, maxMs: 40 } });
   const snapshots: string[] = [];
   client.store.subscribe((state: ClawtrateState) => snapshots.push(JSON.stringify(state)));
+  const theWorld = options.world ?? world();
   const dialogs: Confirmation[] = [];
   let stopped = 0;
   const confirm =
@@ -135,8 +151,8 @@ function harness(
   const setup = new SetupController({
     client,
     open: async () => {
-      const chosen = options.world ?? world();
-      return chosen instanceof SetupRefusedError ? chosen : { world: chosen, run };
+      const chosen = theWorld;
+      return chosen instanceof SetupRefusedError ? chosen : { world: chosen, run, identify };
     },
     stopPrograms: () => void (stopped += 1),
     confirm,
@@ -164,6 +180,7 @@ function harness(
     logs,
     everywhere,
     stopped: () => stopped,
+    listeners,
   };
 }
 
@@ -674,10 +691,61 @@ describe("Connect goes only to the gateway that answered, and says what is true"
     [
       "the auth command timed out",
       {
+        // Exit 0 and a well-shaped answer: only the timeout says it didn't finish.
         "config get gateway.auth.mode --json": {
           timedOut: true,
-          exitCode: null,
+          exitCode: 0,
           stdout: authJson(),
+        },
+      },
+    ],
+    [
+      "the status timed out with a well-shaped answer",
+      {
+        "gateway status --json": {
+          timedOut: true,
+          exitCode: 0,
+          stdout: statusJson({ port: PORT }),
+        },
+      },
+    ],
+    [
+      "the status went over its limit with a well-shaped answer",
+      {
+        "gateway status --json": {
+          tooLarge: true,
+          exitCode: 0,
+          stdout: statusJson({ port: PORT }),
+        },
+      },
+    ],
+    [
+      "its service's unit was replaced",
+      {
+        "gateway status --json": {
+          stdout: withStatus(statusJson({ port: PORT }), (status) => {
+            status.service.runtime = { status: "unknown", missingUnit: true, pid: 5151 };
+          }),
+        },
+      },
+    ],
+    [
+      "the service's config is another file",
+      {
+        "gateway status --json": {
+          stdout: withStatus(statusJson({ port: PORT }), (status) => {
+            status.config.daemon.path = "<other>/openclaw.json";
+          }),
+        },
+      },
+    ],
+    [
+      "another process listens on the port",
+      {
+        "gateway status --json": {
+          stdout: withStatus(statusJson({ port: PORT }), (status) => {
+            status.port.listeners[0].pid = 5252;
+          }),
         },
       },
     ],
@@ -690,6 +758,170 @@ describe("Connect goes only to the gateway that answered, and says what is true"
       h.client.stop();
     });
   }
+
+  it("F-492 F-516: the listener replaced by another process, or restarted under its PID, between the dialog and its answer mints nothing and saves no route", async () => {
+    for (const replace of [
+      (h: ReturnType<typeof harness>) => h.listeners.delete(4242),
+      (h: ReturnType<typeof harness>) => h.listeners.set(4242, "Tue Nov 17 08:00:00 2026"),
+    ]) {
+      const h: ReturnType<typeof harness> = harness({
+        confirm: async () => {
+          replace(h);
+          return true;
+        },
+      });
+      await h.client.start();
+      await h.setup.look();
+      await h.setup.connect();
+      expect(h.setup.current.failure?.kind).toBe("changed");
+      expect(minted(h.requests)).toEqual([]);
+      expect(h.gateway.sockets).toHaveLength(0);
+      expect(h.storage.data.has("connection")).toBe(false);
+      h.client.stop();
+    }
+  });
+
+  it("F-492 F-516: a listener replaced while the code is made sends no code: nothing connects and no route is saved", async () => {
+    const h: ReturnType<typeof harness> = harness({
+      replies: {
+        [`qr --json --voice-node --url ${URL}`]: () => {
+          h.listeners.set(4242, "Tue Nov 17 08:00:00 2026");
+          return { stdout: qrJson(URL, CODE, Date.now() + 600_000) };
+        },
+      },
+    });
+    await h.client.start();
+    await h.setup.look();
+    await h.setup.connect();
+    expect(minted(h.requests)).toHaveLength(1);
+    expect(h.setup.current.failure?.kind).toBe("changed");
+    expect(h.gateway.sockets).toHaveLength(0);
+    expect(h.storage.data.has("connection")).toBe(false);
+    expect(h.everywhere()).not.toContain(CODE);
+    h.client.stop();
+  });
+
+  it("F-492 F-516: a service replaced while the code is made sends no code", async () => {
+    let made = false;
+    const h = harness({
+      replies: {
+        "gateway status --json": () => ({
+          stdout: made
+            ? withStatus(statusJson({ port: PORT }), (status) => {
+                status.service.runtime = { status: "unknown", missingUnit: true, pid: 5151 };
+              })
+            : statusJson({ port: PORT }),
+        }),
+        [`qr --json --voice-node --url ${URL}`]: () => {
+          made = true;
+          return { stdout: qrJson(URL, CODE, Date.now() + 600_000) };
+        },
+      },
+    });
+    await h.client.start();
+    await h.setup.look();
+    await h.setup.connect();
+    expect(minted(h.requests)).toHaveLength(1);
+    expect(h.setup.current.failure?.kind).toBe("changed");
+    expect(h.gateway.sockets).toHaveLength(0);
+    h.client.stop();
+  });
+
+  it("F-492 F-494: a code that timed out or went over its limit is not read, even well shaped, and nothing connects", async () => {
+    for (const late of [{ timedOut: true }, { tooLarge: true }, { failed: true }]) {
+      const h = harness({
+        replies: {
+          [`qr --json --voice-node --url ${URL}`]: {
+            exitCode: 0,
+            ...late,
+            stdout: qrJson(URL, CODE, Date.now() + 600_000),
+          },
+        },
+      });
+      await h.client.start();
+      await h.setup.look();
+      await h.setup.connect();
+      expect(h.setup.current.failure?.kind, JSON.stringify(late)).toBe("code-failed");
+      expect(h.gateway.sockets).toHaveLength(0);
+      expect(h.everywhere()).not.toContain(CODE);
+      h.client.stop();
+    }
+  });
+
+  it("F-492: a program file replaced at the same path after the look runs nothing more", async () => {
+    const h: ReturnType<typeof harness> = harness({
+      confirm: async () => {
+        const program = join(dir, "bin/openclaw");
+        rmSync(program);
+        writeFileSync(program, "#!/bin/sh\nexit 0\n");
+        chmodSync(program, 0o755);
+        return true;
+      },
+    });
+    await h.client.start();
+    await h.setup.look();
+    const before = h.requests.length;
+    await h.setup.connect();
+    expect(h.setup.current.failure?.kind).toBe("changed");
+    expect(h.requests.length).toBe(before);
+    h.client.stop();
+  });
+
+  it("F-492: the consent's two minutes hold on the branch of a device already paired too", async () => {
+    let now = 1_000_000;
+    const h: ReturnType<typeof harness> = harness({
+      now: () => now,
+      replies: {
+        "gateway status --json": () => {
+          // The recheck after the dialog ends past the consent's two minutes.
+          if (h.dialogs.length > 0) now += OPERATION_LIFETIME_MS + 1;
+          return { stdout: statusJson({ port: PORT }) };
+        },
+      },
+    });
+    await h.storage.set(
+      tokenKey(URL),
+      JSON.stringify({
+        token: "device-token",
+        grantedScopes: ["operator.read"],
+        heldScopes: ["operator.read"],
+      }),
+    );
+    await h.client.start();
+    await h.setup.look();
+    await h.setup.connect();
+    expect(h.setup.current.failure?.kind).toBe("changed");
+    expect(h.gateway.sockets).toHaveLength(0);
+    h.client.stop();
+  });
+
+  it("F-516: with the default and Clawtrate's own profile both confirmed at distinct endpoints, the default is chosen and only its commands run", async () => {
+    const own = join(dir, "home/.openclaw-clawtrate");
+    mkdirSync(own, { recursive: true });
+    const home = productionWorld({ home: join(dir, "home"), appData: dir, platform: "darwin" });
+    const program = join(dir, "bin/openclaw");
+    mkdirSync(join(dir, "bin"), { recursive: true });
+    writeFileSync(program, "#!/bin/sh\nexit 1\n");
+    chmodSync(program, 0o755);
+    const h = harness({
+      world: { ...home, candidates: [program], deep: false },
+      replies: {
+        "--profile clawtrate gateway status --json": { stdout: statusJson({ port: 19960 }) },
+        "--profile clawtrate config get gateway.auth.mode --json": { stdout: authJson() },
+      },
+    });
+    await h.client.start();
+    await h.setup.look();
+    expect(h.setup.current.look).toMatchObject({ outcome: "running", profile: "default" });
+    const looked = h.requests.length;
+    await h.setup.connect();
+    await until(() => h.setup.current.phase === "done");
+    const after = h.requests.slice(looked);
+    expect(after.length).toBeGreaterThan(0);
+    for (const request of after) expect(request.args).not.toContain("--profile");
+    expect(minted(after)[0]!.args.at(-1)).toBe(URL);
+    h.client.stop();
+  });
 
   it("F-492: a device already paired with more than read is told so, in the dialog and on its card", async () => {
     const h = harness();

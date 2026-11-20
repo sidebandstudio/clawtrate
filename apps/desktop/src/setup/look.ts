@@ -5,6 +5,7 @@
 // world's own working folder. A sandboxed world never runs the deep status.
 
 import { lstat, readdir, stat } from "node:fs/promises";
+import { processIdentity, type Identify } from "../../../../tools/dev-gateway/src/state-guard.ts";
 import { join } from "node:path";
 import {
   MAX_LOOK_OTHERS,
@@ -44,17 +45,38 @@ export const FILE_CHECK_MS = 2_000;
 /** The steps the person sees: "Finding OpenClaw", "Checking its version", "Asking the gateway". */
 export const LOOK_STEPS = 3;
 
-/** A gateway the look found and Connect may pair with: the facts the host's dialog shows and checks again. */
+/**
+ * A gateway the look found and Connect may pair with: the facts the host's
+ * dialog shows and checks again. Its identities stay in the host, never in a
+ * snapshot.
+ */
 export type FoundGateway = {
   program: string;
+  /** The program file's identity when it was found (`fileIdentity`). */
+  programIdentity: string;
   profile: LookProfile;
   port: number;
+  /** The exact endpoint Connect uses: `ws://127.0.0.1:<port>`. */
+  url: string;
   version: string;
-  /** The config file `gateway status` named for this profile. */
+  /** The config file `gateway status` named for this profile, and the service's. */
   configPath: string;
+  daemonConfigPath: string | null;
   /** The service as the status reported it. */
   serviceKey: string;
+  /** The one process listening on the endpoint, by PID and the system's start time. */
+  listener: { pid: number; started: string };
 };
+
+/** A program file's identity: device, inode, size and time, read without opening it. */
+export async function fileIdentity(path: string): Promise<string | null> {
+  try {
+    const found = await stat(path, { bigint: true });
+    return [found.dev, found.ino, found.size, found.mtimeNs, found.ctimeNs].join(":");
+  } catch {
+    return null;
+  }
+}
 
 export type LookReport = { look: SetupLook; found: FoundGateway | null };
 
@@ -143,6 +165,8 @@ export type LookOptions = {
   onStep?: (step: number) => void;
   /** Set when the person went Back: nothing more is started. */
   cancelled?: () => boolean;
+  /** A process's start time, to identify a gateway's listener; `ps` by default. */
+  identify?: Identify;
 };
 
 /** Whether a program couldn't be started at all: spawn failed, or the system said it can't run it. */
@@ -209,8 +233,18 @@ export async function lookHere(
   options.onStep?.(2);
   let considered: LookProfile[];
   try {
+    // An optional profile is looked at only when its state is a real folder.
     const present = await withDeadline(
-      Promise.all(world.profiles.map((profile) => profile.required || exists(profile.stateDir))),
+      Promise.all(
+        world.profiles.map(
+          (profile) =>
+            profile.required ||
+            lstat(profile.stateDir).then(
+              (found) => found.isDirectory(),
+              () => false,
+            ),
+        ),
+      ),
       Date.now() + FILE_CHECK_MS,
     );
     considered = world.profiles.filter((_, index) => present[index]);
@@ -253,9 +287,17 @@ export async function lookHere(
     MAX_LOOK_OTHERS,
   );
 
-  const results = considered.map((profile, index) =>
-    classify(profile, looks[index]!, programVersion, program),
-  );
+  // Two profiles that report the same port can't be told apart: neither is offered.
+  const ports = looks.flatMap((look) => (look.kind === "status" ? [look.status.port] : []));
+  const shared = new Set(ports.filter((port, index) => ports.indexOf(port) !== index));
+  const identify = options.identify ?? processIdentity;
+  const programIdentity = world.installed ? "stand-in" : await fileIdentity(program);
+  const results = considered.map((profile, index) => {
+    const look = looks[index]!;
+    if (look.kind === "status" && shared.has(look.status.port))
+      return { look: cantTell("endpoint", programVersion.text), found: null };
+    return classify(profile, look, programVersion, program, programIdentity, identify);
+  });
   // A gateway that answers comes first, then a stopped one, then what the default profile gave.
   const rank = (outcome: LookOutcome) =>
     ["running", "untested", "too-old", "not-token"].includes(outcome)
@@ -276,6 +318,8 @@ function classify(
   result: ProfileLook,
   programVersion: Version,
   program: string,
+  programIdentity: string | null,
+  identify: Identify,
 ): LookReport {
   if (result.kind === "fail")
     return { look: cantTell(result.reason, programVersion.text), found: null };
@@ -291,8 +335,17 @@ function classify(
   };
   if (status.answered) {
     const version = status.answered;
-    // The gateway that answered is the one Connect would go to, or it is not offered.
-    if (!status.endpointConfirmed) return { look: cantTell("endpoint", version.text), found: null };
+    // The gateway that answered is the one Connect would go to, or it is not offered: the
+    // exact endpoint, one identifiable listener on it, and the service's config the same
+    // as the program's. A version alone is not enough.
+    const listener = status.listenerPid === null ? null : identify(status.listenerPid);
+    if (
+      !status.endpointConfirmed ||
+      listener?.state !== "alive" ||
+      programIdentity === null ||
+      (status.daemonConfigPath !== null && status.daemonConfigPath !== status.configPath)
+    )
+      return { look: cantTell("endpoint", version.text), found: null };
     const look = (outcome: LookOutcome, extra: Partial<SetupLook> = {}): SetupLook => ({
       ...facts,
       outcome,
@@ -307,11 +360,15 @@ function classify(
       look: look("running", { access: "new" }),
       found: {
         program,
+        programIdentity,
         profile,
         port: status.port,
+        url: status.url,
         version: version.text,
         configPath: status.configPath,
+        daemonConfigPath: status.daemonConfigPath,
         serviceKey: status.serviceKey,
+        listener: { pid: status.listenerPid!, started: listener.identity },
       },
     };
   }

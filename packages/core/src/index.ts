@@ -71,6 +71,7 @@ export {
   REQUESTED_SCOPES,
   SendTooLargeError,
   SESSION_PAGE_SIZE,
+  SETUP_ENDPOINT_CHANGED,
   validateGatewayUrl,
   type ClientOptions,
   type ConnectOptions,

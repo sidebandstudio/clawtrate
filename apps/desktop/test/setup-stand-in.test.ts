@@ -92,7 +92,8 @@ function sandbox(scenario?: Scenario) {
     run: run.run,
     ...(scenario ? { scenario } : {}),
   });
-  const processes = fake.identities();
+  // The pairing scenario's synthetic gateway listens in this process.
+  const processes = fake.identities(new Set([fake.GATEWAY_PID, fake.START_PID, process.pid]));
   const minted: string[] = [];
   let started = 0;
   const gateway: SyntheticGateway = {
@@ -164,7 +165,11 @@ describe("the stand-in for openclaw", () => {
       },
       config: { cli: { path: join(s.run.stateDir, "openclaw.json"), exists: true } },
       gateway: { bindMode: "loopback", port: s.run.port, probeUrl: `ws://127.0.0.1:${s.run.port}` },
-      port: { port: s.run.port, status: "busy" },
+      port: {
+        port: s.run.port,
+        status: "busy",
+        listeners: [{ pid: fake.GATEWAY_PID, address: `127.0.0.1:${s.run.port}` }],
+      },
       rpc: { ok: true, version: "2026.10.6", url: `ws://127.0.0.1:${s.run.port}` },
     });
     // The run is proven again for each status: the gateway's process asked each time.
@@ -227,7 +232,9 @@ describe("the stand-in for openclaw", () => {
   it("reports the untested version in its scenario, and no program in the not-found and program-missing scenarios", async () => {
     const untested = sandbox("untested-version");
     const opened = await openOrThrow(untested.opener);
-    expect((await lookHere(opened.world, opened.run))?.look).toMatchObject({
+    expect(
+      (await lookHere(opened.world, opened.run, { identify: opened.identify }))?.look,
+    ).toMatchObject({
       outcome: "untested",
       version: UNTESTED_VERSION,
     });
@@ -238,10 +245,14 @@ describe("the stand-in for openclaw", () => {
       const s = sandbox(scenario);
       const world = await openOrThrow(s.opener);
       const asked: ProgramRequest[] = [];
-      const report = await lookHere(world.world, (request) => {
-        asked.push(request);
-        return world.run(request);
-      });
+      const report = await lookHere(
+        world.world,
+        (request) => {
+          asked.push(request);
+          return world.run(request);
+        },
+        { identify: world.identify },
+      );
       expect(report?.look.outcome, scenario).toBe(outcome);
       expect(asked, scenario).toEqual([]);
     }

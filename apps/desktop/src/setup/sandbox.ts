@@ -278,6 +278,7 @@ export type RunProof = {
   port: number;
   /** The gateway process the run recorded, by PID and start time: alive, or proven gone. */
   running: boolean;
+  gatewayPid: number | null;
 };
 
 export type ProofContext = {
@@ -375,6 +376,7 @@ export function proveRun(description: SandboxDescription, context: ProofContext)
     configExists: configEntry !== null,
     port: marker.gatewayPort,
     running: gateway === "alive",
+    gatewayPid: typeof marker.gatewayPid === "number" ? marker.gatewayPid : null,
   };
 }
 
@@ -394,6 +396,8 @@ function statusJson(options: {
   configExists: boolean;
   port: number;
   running: boolean;
+  /** The process listening on the port while it runs. */
+  listener: number | null;
   version: string;
 }): string {
   const url = `ws://127.0.0.1:${options.port}`;
@@ -405,7 +409,14 @@ function statusJson(options: {
     },
     config: { cli: { path: options.configPath, exists: options.configExists } },
     gateway: { bindMode: "loopback", port: options.port, probeUrl: url },
-    port: { port: options.port, status: options.running ? "busy" : "free" },
+    port: {
+      port: options.port,
+      status: options.running ? "busy" : "free",
+      listeners:
+        options.running && options.listener !== null
+          ? [{ pid: options.listener, address: `127.0.0.1:${options.port}` }]
+          : [],
+    },
     rpc: options.running ? { ok: true, version: options.version, url } : { ok: false, url },
   });
 }
@@ -455,17 +466,21 @@ export function standIn(options: StandInOptions): RunProgram {
       }
       if (description.scenario === "pairing") {
         const gateway = await options.gateway();
+        // The synthetic gateway listens in this process.
         return answer(
           statusJson({
             ...proof,
             platform: options.platform,
             port: gateway.port,
             running: true,
+            listener: process.pid,
             version,
           }),
         );
       }
-      return answer(statusJson({ ...proof, platform: options.platform, version }));
+      return answer(
+        statusJson({ ...proof, platform: options.platform, listener: proof.gatewayPid, version }),
+      );
     }
     if (description.scenario === "pairing" && args[2] === "qr" && args.length === 7) {
       const gateway = await options.gateway();
@@ -515,8 +530,8 @@ export function sandboxWorld(
   };
 }
 
-/** What the look and Connect run against, or why they can't. */
-export type Opened = { world: LookWorld; run: RunProgram };
+/** What the look and Connect run against, and how they identify a listening process. */
+export type Opened = { world: LookWorld; run: RunProgram; identify: Identify };
 
 /**
  * Opens a validated sandbox for one look or one Connect: the description
@@ -540,6 +555,7 @@ export function sandboxOpener(options: {
       const port = pairing ? (await pairingGateway()).port : null;
       return {
         world: sandboxWorld(sandbox, options.platform, proof, port),
+        identify: options.context.identify ?? processIdentity,
         run: standIn({
           sandbox,
           platform: options.platform,

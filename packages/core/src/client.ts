@@ -522,6 +522,8 @@ type StagedDeviceToken = { deviceId: string; role: string; token: string; scopes
 
 /** The error a setup connection ends with when the gateway granted other than exactly read. */
 export const SETUP_GRANT_REFUSED = "SETUP_GRANT_REFUSED";
+/** A setup connection's endpoint no longer passed the host's check before a socket was opened. */
+export const SETUP_ENDPOINT_CHANGED = "SETUP_ENDPOINT_CHANGED";
 
 /**
  * What a setup connection's hello granted: `read` only for this protocol, the
@@ -737,6 +739,11 @@ export class ClawtrateClient {
    * a disconnect, and when it expires.
    */
   private setupCode: { url: string; bootstrapToken: string; expiresAtMs: number } | null = null;
+  /**
+   * The host's check of a setup connection's endpoint, asked before every
+   * socket until the first hello: the listener the host found is still there.
+   */
+  private setupCheck: { url: string; check: () => boolean } | null = null;
   /**
    * The setup connection whose first device token is staged here until its
    * grant is checked (`setupGrant`): written only for the operator role with
@@ -1036,6 +1043,7 @@ export class ClawtrateClient {
     const token = options.token?.trim() || null;
     if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
     this.setupCode = null;
+    this.setupCheck = null;
     this.settings = { url, token };
     this.pairingSeen = null;
     await this.host.storage.set(SETTINGS_KEY, JSON.stringify(this.settings));
@@ -1050,17 +1058,17 @@ export class ClawtrateClient {
    * exactly `operator.read`; anything else writes nothing and disconnects. The
    * gateway is saved once that token is.
    */
-  async connectWithSetupCode(options: {
-    url: string;
-    bootstrapToken: string;
-    expiresAtMs: number;
-  }): Promise<void> {
+  async connectWithSetupCode(
+    options: { url: string; bootstrapToken: string; expiresAtMs: number },
+    setup: { check?: () => boolean } = {},
+  ): Promise<void> {
     const url = validateGatewayUrl(options.url);
     if (!this.isAllowed(url)) throw new GatewayNotAllowedError(url);
     if (!options.bootstrapToken) throw new Error("A setup code needs its token.");
     if (this.settings?.url !== url) this.abandonAccessRequest("Switched to another gateway.");
     this.settings = { url, token: null };
     this.pairingSeen = null;
+    this.setupCheck = setup.check ? { url, check: setup.check } : null;
     this.setupCode = {
       url,
       bootstrapToken: options.bootstrapToken,
@@ -1097,6 +1105,7 @@ export class ClawtrateClient {
     this.abandonAccessRequest("Disconnected from the gateway.");
     this.close();
     this.setupCode = null;
+    this.setupCheck = null;
     this.settings = null;
     this.pairingSeen = null;
     this.rows = new Map();
@@ -4728,6 +4737,24 @@ export class ClawtrateClient {
           }
           throw new GatewayNotAllowedError(settings.url);
         }
+        // A setup connection opens no socket once its endpoint stops passing the host's check.
+        const setupCheck = this.setupCheck;
+        if (setupCheck?.url === settings.url && !setupCheck.check()) {
+          this.setupCheck = null;
+          this.setupCode = null;
+          if (generation === this.generation) {
+            this.setConnection({
+              status: "error",
+              retryAt: null,
+              error: {
+                code: SETUP_ENDPOINT_CHANGED,
+                message: "The gateway on this computer changed, so Clawtrate didn't connect.",
+                hint: null,
+              },
+            });
+          }
+          throw new Error("the setup connection's endpoint changed");
+        }
         this.attemptGreeted = false;
         // An attempt is under way: no retry is waiting any more.
         if (this.state.connection.retryAt !== null) this.setConnection({ retryAt: null });
@@ -4817,6 +4844,8 @@ export class ClawtrateClient {
       onHello: (hello) => {
         if (generation !== this.generation) return;
         this.attemptGreeted = true;
+        // Setup has reached its gateway: later reconnects are the saved gateway's own.
+        this.setupCheck = null;
         if (hello.protocol !== PROTOCOL_VERSION) {
           // Outside this client's range: nothing else is asked of this gateway.
           const protocol = { gateway: hello.protocol, client: PROTOCOL_VERSION };
