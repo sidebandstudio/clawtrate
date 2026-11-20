@@ -687,3 +687,9 @@ The host side of "Another computer" (`docs/design/setup.md` sections 5, 8 and 19
 - The decision record's retention and listing assume records are appended in time order, so a clock set backwards can delay a record's removal or its listing by the size of the step; a time-ordered index is a larger change than this unit takes.
 - At 50,000 records an append past the cap copies the list of record references, small beside a tool call; a ring buffer can follow.
 - The rules store has no test, and no support, for a file whose identity changes while it is read: the plugin checks the file's metadata separately from opening it, so such a test would have to assert that the reader reports lost and keeps the prior verified policy, which needs a single-descriptor bounded read the store does not have.
+
+## Asking for a GitHub star
+
+After the sixth nonempty reply to a message sent from this viewer, the composer offers a GitHub invitation. Only gateway-confirmed completions rendered in the foreground conversation count. The local preference holds a count from zero to six. Six also records that the invitation was shown. Settings keeps the repository link in About.
+
+Opening the link navigates the person's browser to the fixed project address. On Electron, choosing the CLI button runs `gh api --method PUT /user/starred/sidebandstudio/clawtrate --hostname github.com --silent` without a shell. Only exit zero confirms the star. Clawtrate makes no request before either choice, reads no star status, names no account and handles no GitHub token. The button is absent when the executable cannot be found and in the web preview, where the server account belongs to the host operator.

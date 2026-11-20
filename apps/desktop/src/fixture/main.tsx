@@ -15,7 +15,14 @@
 //   &access=admin, &lock=locked, &signin=failed …   accounts (accounts.ts)
 //   &usage=…, &budget=…, &plimit=…, &uview=usage     usage and budgets (usage.ts)
 
-import { App, BridgeProvider, requestUsagePage, rosterKey, rosterScope } from "@clawtrate/ui";
+import {
+  StarScene,
+  App,
+  BridgeProvider,
+  requestUsagePage,
+  rosterKey,
+  rosterScope,
+} from "@clawtrate/ui";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createFixtureBridge, GATEWAY_ID, GATEWAY_URL, isScene } from "./bridge-fixture.ts";
@@ -82,6 +89,16 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   usage: usageParams(params),
   machines: machineParams(params),
 });
+const star = params.get("star");
+const starScene =
+  star === "cli" || star === "cli-fails" || star === "open-fails" || star === "browser"
+    ? "ask"
+    : star === "success" || star === "failure"
+      ? star
+      : null;
+if (star === "cli" || star === "cli-fails")
+  Object.assign(bridge, { starWithCli: async () => star === "cli" });
+if (star === "open-fails") Object.assign(bridge, { openProjectPage: async () => false });
 // Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.
 if (params.get("uview") === "usage")
   requestUsagePage(params.get("bot") ?? OPEN_BOT, params.get("budget") === "invalid");
@@ -91,7 +108,9 @@ Object.assign(window, { clawtrateFixture: bridge });
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <BridgeProvider bridge={bridge}>
-      <App info={bridge.info} onUnreadCount={(count) => (bridge.badge = count)} />
+      <StarScene.Provider value={starScene}>
+        <App info={bridge.info} onUnreadCount={(count) => (bridge.badge = count)} />
+      </StarScene.Provider>
     </BridgeProvider>
   </StrictMode>,
 );
