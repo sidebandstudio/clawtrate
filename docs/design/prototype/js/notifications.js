@@ -153,6 +153,8 @@
     timeError: false,
     taskRoom: false,
     resolved: new Set(), // waits answered or ended
+    pendingCards: {}, // pending cards this device received, by task: { ev, confirmed }
+    relist: p("relist") || "same", // what the pending lists return on the next reconnect
     sectionOpen: "notifications",
     settingsPane: "section",
   };
@@ -275,6 +277,8 @@
     if (!ev) return;
     if (ev.task) S.resolved.delete(`${ev.task}:${ev.kind}`);
     if (S.conn === "up") markRail(ev);
+    // A pending card this device received and can see: kept as confirmed until a list says otherwise.
+    if (S.conn === "up" && (ev.kind === "approval" || ev.kind === "question") && hasRecord(ev)) S.pendingCards[ev.task] = { ev, confirmed: true };
     const outcome = decide(ev);
     if (outcome.show) {
       post(outcome.show);
@@ -292,6 +296,8 @@
   // The rail goes on updating, notifications or not (section 6).
   function markRail(ev) {
     if (!ev.task) return;
+    // A device marks only what it received: a read-only device gets no question at all.
+    if (ev.kind === "question" && !hasRecord(ev)) return;
     const { t } = findTask(ev.task);
     if (ev.kind === "approval" || ev.kind === "question") t.wait = ev.kind === "question" ? "question" : hasRecord(ev) ? "approval" : "phase";
     if (ev.kind === "finished") t.unread = true;
@@ -376,6 +382,7 @@
   }
   function answeredElsewhere() {
     for (const ev of S.held) {
+      delete S.pendingCards[ev.task];
       S.resolved.add(`${ev.task}:${ev.kind}`);
       findTask(ev.task).t.wait = null;
     }
@@ -388,17 +395,38 @@
     for (const b of BOTS) for (const t of b.tasks) if (t.wait === "phase") t.wait = null;
     S.pics = S.pics.filter((pic) => !(pic.ev.kind === "approval" && !hasRecord(pic.ev)));
     S.held = S.held.filter((ev) => hasRecord(ev));
+    for (const card of Object.values(S.pendingCards)) card.confirmed = false; // unconfirmed while down
     S.why = "Disconnected. Waits this device has no request for were cleared, and their notifications withdrawn.";
     setStrip({ tone: "warn", text: "Reconnecting in 4s", more: "showing saved messages" });
     refresh();
   }
   // Reconnect: the rail, the reloaded transcripts and visible pending cards update; nothing is posted.
-  function reconnect() {
+  // A successful pending list confirms only the requests it includes; a failed one confirms nothing.
+  function reconnect(list = S.relist) {
     S.conn = "up";
     findTask("o3").t.unread = true; // a reply missed while down shows as unread
     S.why = "Reconnected. Missed events can appear in your tasks; no notification is posted for them.";
+    if (list !== "failed") {
+      const listed = new Set(Object.keys(S.pendingCards).filter((task) => !(list === "omit" && S.pendingCards[task].ev.kind === "approval")));
+      if (list === "missedq") listed.add("j1");
+      for (const task of Object.keys(S.pendingCards)) {
+        if (listed.has(task)) continue;
+        // Omitted by a successful list: its notification is withdrawn and its mark cleared.
+        S.pics = S.pics.filter((pic) => pic.ev.task !== task);
+        findTask(task).t.wait = null;
+        S.pendingCards[task].confirmed = false;
+        S.pendingCards[task].gone = true;
+      }
+      for (const task of listed) {
+        const ev = S.pendingCards[task]?.ev || EVENTS.question;
+        S.pendingCards[task] = { ev, confirmed: true };
+        findTask(task).t.wait = ev.kind === "question" ? "question" : "approval";
+      }
+    }
     setStrip(null);
+    render();
     refresh();
+    if (S.opened && S.pendingCards[S.opened.task]?.gone) setStrip({ tone: "warn", text: "Clawtrate couldn't find that item in this task." });
   }
   function refresh() {
     renderLayer();
@@ -503,7 +531,12 @@
     S.sel = { bot: ev.bot, task: ev.task };
     S.view = "detail";
     S.opened = S.click === "itemgone" ? null : ev;
-    if (S.click === "itemgone") setStrip({ tone: "warn", text: "Clawtrate couldn't find that item in this task." });
+    if (S.click === "itemgone") {
+      // The confirmed task no longer has the card: nothing of it is drawn as pending.
+      delete S.pendingCards[ev.task];
+      findTask(ev.task).t.wait = null;
+      setStrip({ tone: "warn", text: "Clawtrate couldn't find that item in this task." });
+    }
     if (S.click === "offline") setStrip({ tone: "warn", text: "Reconnecting in 4s", more: "showing saved messages" });
     if (ev.kind === "finished") findTask(ev.task).t.unread = false;
     render();
@@ -603,14 +636,19 @@
 
   const turn = (role, html) => `<div class="turn" data-role="${role}">${html}</div>`;
   const user = (text) => turn("user", CT.msg({ role: "user", html: esc(text) }));
-  // Offline, a cached card's answers stay disabled until the gateway confirms the request (section 5).
+  // A cached card's answers stay disabled until the gateway confirms the request (sections 3 and 5):
+  // while the connection is down, and after a reconnect whose list did not confirm it.
   const OFFLINE_LINE = `<p class="request-ended" data-testid="offline-line">Clawtrate is reconnecting. You can answer once the gateway confirms this request is still open.</p>`;
+  const UNCONFIRMED_LINE = `<p class="request-ended" data-testid="offline-line">Clawtrate couldn't confirm this request is still open. Its answers stay off until it can.</p>`;
   function offlineCard(html) {
-    if (S.click !== "offline") return html;
+    const card = S.pendingCards[S.sel.task];
+    const down = S.conn === "down" || S.click === "offline";
+    if (!down && (!card || card.confirmed)) return html;
+    const OFFLINE_LINE_NOW = down ? OFFLINE_LINE : UNCONFIRMED_LINE;
     return html
       .replace(/<button type="button" class="(button|option|icon-button)"/g, '<button type="button" disabled class="$1"')
       .replace(/<input type="text"/g, "<input disabled type=\"text\"")
-      .replace('<div class="card-actions">', `${OFFLINE_LINE}<div class="card-actions">`);
+      .replace('<div class="card-actions">', `${OFFLINE_LINE_NOW}<div class="card-actions">`);
   }
 
   function transcript() {
@@ -622,7 +660,8 @@
       return CT.hydrate(el);
     }
     const { t } = findTask(S.sel.task);
-    const ev = S.opened && S.opened.task === t.id ? S.opened : null;
+    const pending = S.pendingCards[t.id];
+    const ev = S.opened && S.opened.task === t.id ? S.opened : pending ? pending.ev : null;
     let body = `<div class="stamp">Today ${t.when}</div>`;
     if (t.from) body += `<p class="event-line" data-side="center">A message from ${bot(t.from).name}</p>`;
     if (t.ask) body += user(t.ask);
@@ -672,7 +711,7 @@
             ),
           );
     } else if (ev?.kind === "failed") {
-      body += CT.turnError({ title: "Otto couldn't finish this turn", reason: "The model request failed. Nothing ran.", retry: S.access !== "read" }).replace('class="card turn-error"', 'class="card turn-error" id="n-target" tabindex="-1"');
+      body += CT.turnError({ title: "Otto couldn't finish this turn", reason: "The model request failed. Nothing ran.", retry: S.access !== "read" && S.device !== "read" }).replace('class="card turn-error"', 'class="card turn-error" id="n-target" tabindex="-1"');
     } else if (ev?.kind === "budget") {
       body += turn("assistant", CT.msg({ html: `<p>${esc(t.reply)}</p>` }));
       body += `<div class="event-line" data-side="center" id="n-target" tabindex="-1" data-testid="budget-line">Otto has used 82% of its weekly budget: 1.64M of 2M tokens.</div>`;

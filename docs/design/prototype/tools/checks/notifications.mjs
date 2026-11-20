@@ -243,6 +243,37 @@ r = await iv("2026-03-08", "02:30", "07:00", "America/New_York");
 check("ruling 6: a skipped start uses the first valid time after it", r[0] === "2026-03-08T07:00:00.000Z", r.join(" "));
 await p.close();
 
+// Fix 5: the rail and restored waits stay within what the device received.
+for (const ev of ["question", "unsupported", "marlow"]) {
+  p = await open(`event=${ev}&device=read`);
+  check(`fix 5: a read-only device: no picture and no question mark in the rail (${ev})`, (await pics(p)).length === 0 && !(await text(p, ".bot-list")).includes("a question"));
+  await p.close();
+}
+p = await open("event=failed&device=read");
+await click(p, "[data-n-open]");
+check("fix 5: a read-only device's opened task offers no Retry and no composer", await p.evaluate(() => !document.querySelector('[data-action="retry-turn"]') && !document.querySelector(".composer-input")));
+await p.close();
+p = await open("chrome=1&relist=missedq");
+await click(p, '[data-bar="drop"]');
+await p.evaluate(() => window.notif.fire("question"));
+await click(p, '[data-bar="reconnect"]');
+await click(p, '.bot[data-bot="juniper"]');
+await click(p, '.task[data-task="j1"]');
+check("fix 5: a question missed offline appears as a card and a mark, with no new notification", (await pics(p)).length === 0 && (await text(p, ".bot-list")).includes("Waiting for you: a question") && (await text(p, "#transcript")).includes("Which matters more to you"));
+await p.close();
+p = await open("event=approval&chrome=1&relist=omit");
+check("fix 5: the approval's notification is shown", (await pics(p)).length === 1);
+await click(p, '[data-bar="drop"]');
+await click(p, '[data-bar="reconnect"]');
+check("fix 5: a successful list that omits the request withdraws its old notification and mark", (await pics(p)).length === 0 && !(await text(p, ".bot-list")).includes("approve a command"));
+await p.close();
+p = await open("event=approval&chrome=1&relist=failed");
+await click(p, '[data-bar="drop"]');
+await click(p, '[data-bar="reconnect"]');
+await click(p, '.task[data-task="o1"]');
+check("fix 5: a failed list cannot enable the cached card's actions", await p.evaluate(() => { const b = [...document.querySelectorAll("#n-target button.button")]; return b.length > 0 && b.every((x) => x.disabled); }) && (await text(p, "#transcript")).includes("Clawtrate couldn't confirm this request is still open."));
+await p.close();
+
 // Fix 3: the on-screen end is the resolved one; touching or overlapping intervals are one.
 p = await open("open=settings&quiet=1&quietzone=ny&quietdate=2026-03-08&qfrom=01:00&qto=02:30");
 check("fix 3: on March 8 in New York, 01:00 to 02:30 reads Quiet until 03:00", (await text(p, '[data-testid="quiet-now"]')).includes("Quiet until 03:00, New York time."), await text(p, '[data-testid="quiet-now"]'));
