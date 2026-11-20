@@ -20,6 +20,7 @@ const SCANNED = ["packages/core/src", "apps/desktop/src/web-host", "apps/desktop
 const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/approvals.ts:APPROVAL_KINDS": "static, three kinds",
+  "packages/core/src/stop-words.ts:STOP_NOW": "static, the three ways of typing Stop now",
   "packages/core/src/file-paths.ts:FILE_TOOLS": "static, four tool names",
   "packages/core/src/file-paths.ts:CHANGE_TOOLS": "static, three tool names",
   "packages/core/src/file-paths.ts:COMMAND_TOOLS": "static, one tool name",
@@ -150,6 +151,7 @@ const ALLOWED: Record<string, string> = {
     "one upload's body while it arrives, within its declared length, dropped at the deadline",
   // The SSH transport of "Another computer".
   "apps/desktop/src/main/ssh/forward.ts:BACKOFF_MS": "static, five delays",
+  "apps/desktop/src/main/update/feed.ts:FILE_KEYS": "static, the three artifacts a feed names",
   "apps/desktop/src/main/ssh/known-hosts.ts:KEY_TYPES": "static, seven key types",
   "apps/desktop/src/main/ssh/look.ts:PROGRAM_PLACES": "static, five fixed places",
   "apps/desktop/src/main/ssh/person-config.ts:TAKEN": "static, the eight settings taken",
