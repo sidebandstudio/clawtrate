@@ -4,7 +4,7 @@
 // answers are shaped as OpenClaw 2026.10.6 gave them on a development instance.
 
 import { describe, expect, it } from "vitest";
-import { parseBridgeCommand } from "../src/bridge.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import {
   ACTIVITY_PAGE_RECORDS,
   activityRows,
@@ -27,7 +27,12 @@ import {
   type LoadedCall,
   type PermissionsContext,
 } from "../src/permissions.ts";
-import { APPROVALS_TIER_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
+import {
+  ADMIN_SCOPES,
+  APPROVALS_TIER_SCOPES,
+  INTERACTIVE_SCOPES,
+  READ_SCOPES,
+} from "../src/scopes.ts";
 import { grantingGateway, openTask } from "./client-harness.ts";
 import { helloOk, until } from "./fake-gateway.ts";
 
@@ -536,11 +541,15 @@ describe("F-178: Revoke and Remove say only what the read back shows", () => {
   };
 
   it("remove writes the shown revision without exactly that entry, and names it from the file", async () => {
-    const gateway = approvalsGateway(approvalsFile([LS_ENTRY, NODE_ENTRY]));
+    const shown = approvalsFile([LS_ENTRY, NODE_ENTRY]);
+    const otherAgent = { allowlist: [NODE_ENTRY] };
+    const agents = { ...shown.file.agents, ["__proto__"]: otherAgent };
+    const original = { ...shown, file: { ...shown.file, agents } };
+    const gateway = approvalsGateway(original);
     const result = await removeAllowlistEntry(gateway.ctx, {
       agentId: "otto",
       entryId: LS_ENTRY.id,
-      ...shownOf(approvalsFile([LS_ENTRY, NODE_ENTRY])),
+      ...shownOf(original),
     });
     expect(result).toMatchObject({
       outcome: "removed",
@@ -553,6 +562,7 @@ describe("F-178: Revoke and Remove say only what the read back shows", () => {
     ]);
     expect(gateway.calls[1]!.params.baseHash).toBe("hash-2");
     expect(gateway.file().file.agents.otto.allowlist).toEqual([NODE_ENTRY]);
+    expect(Object.entries(gateway.file().file.agents)).toContainEqual(["__proto__", otherAgent]);
   });
 
   it("an entry edited in place under the same id after the confirmation opened is not removed", async () => {
@@ -1509,6 +1519,40 @@ describe("F-178 F-324: every answer fits its result frame once serialized", () =
 });
 
 describe("F-178 F-324: the bridge's Permissions commands", () => {
+  it("F-178: closing the viewer during the approvals read cancels its pending removal", async () => {
+    const gateway = grantingGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk([...ADMIN_SCOPES], "device-token"),
+    });
+    const { client } = await openTask({ gateway });
+    const viewer = createBridgeSession(client);
+    const shown = approvalsFile([LS_ENTRY]);
+    const held = Promise.withResolvers<typeof shown>();
+    gateway.handlers["exec.approvals.get"] = () => held.promise;
+    try {
+      const connection = client.state.connection;
+      const result = viewer.apply({
+        type: "removeAllowlistEntry",
+        agentId: "otto",
+        entryId: LS_ENTRY.id,
+        ...shownOf(shown),
+        connectedAt: connection.connectedAt!,
+        gatewayId: connection.gatewayId,
+        gatewayUrl: connection.gatewayUrl!,
+      });
+      await until(() => gateway.calls("exec.approvals.get").length === 1);
+      viewer.dispose();
+      held.resolve(shown);
+      await result;
+      expect(gateway.calls("exec.approvals.set")).toEqual([]);
+    } finally {
+      held.resolve(shown);
+      viewer.dispose();
+      client.stop();
+    }
+  });
+
   it("are validated before they reach the client", () => {
     expect(
       parseBridgeCommand({

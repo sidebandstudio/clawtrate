@@ -1253,6 +1253,7 @@ class ViewerSession implements BridgeSession {
         return client.revokeGrant(command.grantId);
       case "removeAllowlistEntry":
         return client.removeAllowlistEntry({
+          owner,
           agentId: command.agentId,
           entryId: command.entryId,
           shownHash: command.shownHash,

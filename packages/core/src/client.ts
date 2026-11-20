@@ -5881,6 +5881,7 @@ export class ClawtrateClient {
 
   /** Remove one entry of the gateway machine's allowlist, then read the file back (`operator.admin`). */
   async removeAllowlistEntry(target: {
+    owner?: object;
     agentId: string;
     entryId: string;
     shownHash: string;
@@ -5894,6 +5895,7 @@ export class ClawtrateClient {
       throw new Error("Removing an allowlist entry needs admin access.");
     // Only on the connection the person confirmed on: checked now, and again before the write.
     const assertCurrent = () => {
+      this.checkNotWithdrawn(target.owner);
       const now = this.state.connection;
       if (
         now.status !== "connected" ||

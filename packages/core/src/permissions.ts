@@ -335,7 +335,7 @@ export function approvalsSnapshot(value: unknown): ApprovalsSnapshot | { invalid
   const file = asRecord(answer.file);
   if (!file || file.version !== 1)
     return { invalid: "The gateway's answer has no approvals file of version 1." };
-  const agents: Record<string, Record<string, unknown>> = {};
+  const agents: Record<string, Record<string, unknown>> = Object.create(null);
   if (file.agents !== undefined) {
     const listed = asRecord(file.agents);
     if (!listed) return { invalid: "The approvals file's bots are not a list of bots." };
