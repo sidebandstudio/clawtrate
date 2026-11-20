@@ -33,15 +33,7 @@
   const sent = [];
 
   // A revision is a hash of the whole SKILL.md and its files, as on the gateway (research section 3).
-  const hash = (text) => {
-    let out = "";
-    for (let seed = 0; out.length < 64; seed += 1) {
-      let h = 0x811c9dc5 ^ seed;
-      for (let i = 0; i < text.length; i += 1) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0;
-      out += h.toString(16).padStart(8, "0");
-    }
-    return out.slice(0, 64);
-  };
+  const hash = CT.skillsFixtureHash;
   // SKILL.md from its parts. `extra` holds every frontmatter line other than name and
   // description, exactly as read; a save keeps them as they are (section 5).
   const markdown = (s) => s.raw || `---\nname: ${s.slug}\ndescription: ${s.description}\n${(s.extra || []).map((l) => `${l}\n`).join("")}---\n\n${s.body}\n`;
@@ -215,7 +207,7 @@
     page: p("skill") || null, // null, a skill's id, or "new"
     read: null, // the page's last read of the skill
     draft: null,
-    mode: { save: p("save"), remove: p("remove"), share: p("share"), enable: p("enable"), task: p("taskw"), cfg: p("cfg"), card: p("cardw") },
+    mode: { save: p("save"), remove: p("remove"), share: p("share"), enable: p("enable"), task: p("taskw"), cfg: p("cfg"), card: p("cardw"), cardread: p("cardread") },
     pending: null, // the word of a write waiting for its answer or its read: "Saving…"
     status: null, // what the last write's read showed
     compare: null, // {theirs}
@@ -1145,16 +1137,37 @@
   }
 
   // The cards (section 12): the line under a library save, from a read of this task.
+  // The card's recorded skillId, for the fixture's library entry it names (the fixture keys
+  // its entries by short names; the gateway keys them by this id).
+  const CARD_ID = JSON.parse(CT.skillsCalls.find((c) => c.id === "k-card-saved").result).entry.skillId;
+  const cardEntry = (skillId) => (skillId && skillId === CARD_ID ? "trail" : null);
   function paintCards() {
+    // Each card's state, now that the library's profileId says who is viewing.
+    for (const c of CT.skillsCalls || []) {
+      const el = document.getElementById(c.id);
+      if (!el) continue;
+      const k = CT.skillsCardOf(c, G.profile);
+      el.querySelector(".action-state .state").textContent = k.state;
+      el.querySelector(":scope > summary").setAttribute("aria-label", `${k.verb} ${k.object}, ${k.state}`);
+    }
     const line = $("#k-card-attach");
-    if (!line || taskKey() !== "jlearn") return;
-    const slug = line.dataset.kAttachFor;
-    const s = G.skills.find((x) => x.slug === slug && x.id === "trail");
-    const held = shown("jlearn").list.find((x) => x.skillId === s?.id);
-    if (!s || !visible(s)) line.innerHTML = `<span>It isn't in your library now, so it can't be attached here.</span>`;
-    else if (held) line.innerHTML = `<span>This task has it, revision ${esc(held.rev.slice(0, 12))}.</span>`;
+    const key = taskKey();
+    if (!line || !key || line.querySelector(".k-pending")) return;
+    const id = cardEntry(line.dataset.kSkillId);
+    const cardRev = line.dataset.kRev;
+    if (K.mode.cardread === "fail") return (line.innerHTML = `<span>Couldn't read this task's skills.</span>`);
+    const list = shown(key).list;
+    const s = id && gw(id);
+    const held = list.find((x) => x.skillId === id);
+    const offered = attachableFor(list).find((x) => x.skillId === id);
+    const why = "This task doesn't have it: a skill saved during a task isn't added to that task.";
+    if (held) line.innerHTML = `<span>This task has it, revision ${esc(held.rev.slice(0, 12))}.</span>`;
+    else if (!s || !visible(s) || !offered) line.innerHTML = `<span>It isn't in your library now, so it can't be attached here.</span>`;
     else if (!canWrite()) line.innerHTML = `<span>This task doesn't have it. Attaching it needs write access.</span>`;
-    else line.innerHTML = `<span>This task doesn't have it: a skill saved during a task isn't added to that task.</span><button type="button" class="button" data-size="sm" data-k="card-attach"${online() ? "" : " disabled"}>Use in this task</button>`;
+    else if (list.length >= CAP) line.innerHTML = `<span>This task already has 64 library skills. Detach one to make room.</span>`;
+    else if (offered.rev !== cardRev)
+      line.innerHTML = `<span>${why} The library now offers revision ${esc(offered.rev.slice(0, 12))}.</span><button type="button" class="button" data-size="sm" data-k="card-attach" data-rev="${offered.rev}"${online() ? "" : " disabled"}>Attach current revision</button>`;
+    else line.innerHTML = `<span>${why}</span><button type="button" class="button" data-size="sm" data-k="card-attach" data-rev="${cardRev}"${online() ? "" : " disabled"}>Use in this task</button>`;
   }
   CT.skillsCards = paintCards;
 
@@ -1423,32 +1436,48 @@
         });
       }
       // The cards
-      case "card-open":
-        openPage("trail");
+      case "card-open": {
+        const id = cardEntry($("#k-card-attach")?.dataset.kSkillId);
+        if (id) openPage(id);
         return D.openSettings(t, "skills");
+      }
       case "card-learned":
         K.learnedOpen = "trail-checklist";
         return CT.botsOpenSettings ? CT.botsOpenSettings("juniper", "learned") : null;
       case "card-attach": {
+        // Captured at the click: the actual task, the card's recorded skill and the revision the line offered.
         const line = $("#k-card-attach");
-        const sub = { key: "jlearn", skillId: "trail", rev: gw("trail").rev };
+        const sub = { key: taskKey(), skillId: cardEntry(line.dataset.kSkillId), revision: t.dataset.rev };
+        if (!sub.key || !sub.skillId || !canWrite() || !online()) return;
+        sent.push({ method: "skills.library.activate", sessionKey: sub.key, action: "attach", skillId: sub.skillId, revision: sub.revision });
         const mode = takeMode("card");
         line.innerHTML = `<span class="k-pending"><span class="status-dot" data-status="connecting"></span>Attaching…</span>`;
         return later(ANSWER, () => {
-          if (mode !== "refused") pins[sub.key].push(pinOf(sub.skillId, sub.rev));
+          const list = pins[sub.key] || (pins[sub.key] = []);
+          const pin = pinOf(sub.skillId, sub.revision);
+          let answer;
+          if (mode === "refused") answer = { error: "Session changed before activation; refresh and retry." };
+          else if (list.length >= CAP) answer = { error: "This session already has 64 library skills." };
+          else if (!pin) answer = { error: "Skill revision not found." };
+          else list.push(pin), (answer = { ok: true, selection: { skillId: pin.skillId, revision: pin.rev } });
           later(READ, () => {
             const v = shown(sub.key);
-            v.list = readTask(sub.key);
-            v.at = clock();
-            const held = v.list.find((x) => x.skillId === sub.skillId);
-            if (taskKey() === sub.key) {
-              const l = $("#k-card-attach");
-              if (l)
-                l.innerHTML = held
-                  ? `<span>Attached: reading the task again, it has revision ${esc(held.rev.slice(0, 12))} from its next turn.</span>`
-                  : `<span>The gateway answered: Session changed before activation; refresh and retry. Reading the task again, it doesn't have it.</span><button type="button" class="button" data-size="sm" data-k="card-attach">Use in this task</button>`;
-            }
-            announce(held ? "Attached" : "Couldn't attach");
+            const after = mode === "readfail" ? null : readTask(sub.key);
+            if (after) (v.list = after), (v.at = clock());
+            const held = after?.find((x) => x.skillId === sub.skillId);
+            const told = answer.error ? `The gateway answered: ${esc(answer.error)} ` : "";
+            const words = !after
+              ? `${told}Couldn't read this task's skills again.`
+              : !held
+                ? `${told}Reading the task again, it doesn't have it.`
+                : answer.ok && held.rev === answer.selection.revision
+                  ? `Attached: reading the task again, it has revision ${esc(held.rev.slice(0, 12))} from its next turn.`
+                  : `${told || `The gateway returned revision ${esc(answer.selection.revision.slice(0, 12))}. `}Reading the task again, it has revision ${esc(held.rev.slice(0, 12))}.`;
+            // Only the task the write was for shows or announces it.
+            if (taskKey() !== sub.key) return;
+            const l = $("#k-card-attach");
+            if (l) l.innerHTML = `<span>${words}</span>` + (after && !held ? `<button type="button" class="button" data-size="sm" data-k="card-attach" data-rev="${esc(sub.revision)}">Use in this task</button>` : "");
+            announce(!after ? "Couldn't read this task's skills again." : held && answer.ok ? "Attached" : "Couldn't attach");
             paintTask();
           });
         });

@@ -871,20 +871,77 @@ p = await open("bot=juniper&task=jlearn");
 const cards = await p.evaluate(() => [...document.querySelectorAll(".k-card > summary")].map((s) => s.getAttribute("aria-label")));
 check(
   "F-198 S12 R7 every card from its call and result, in the family's words",
-  cards.join("|") === "Saved a skill trail-checklist, Saved to your library|Looked at skills 1 in the library, Done|Shared a skill trail-checklist, Shared on this gateway|Couldn't save a skill trail-checklist, Failed|Learned a skill trail-checklist, Learned",
+  cards.join("|") === "Saved a skill trail-checklist, Saved to your library|Looked at skills Listed 1 skill., Done|Shared a skill trail-checklist, Shared|Couldn't save a skill trail-checklist, Failed|Learned a skill trail-checklist, Learned",
   cards.join("|"),
 );
 check("S12 R7 every card has Raw: the call's arguments and the gateway's result", await p.evaluate(() => [...document.querySelectorAll(".k-card")].every((c) => { const r = c.querySelector(":scope > .action-body > .k-raw"); return r && r.textContent.includes("Arguments") && /Result|Error/.test(r.textContent); })));
 check("S12 R7 the destination comes from the result's target", await p.evaluate(() => window.CT.skillsCardOf({ args: { action: "create", name: "x", proposal_content: "---\nname: x\ndescription: d\n---\n\nb\n" }, result: JSON.stringify({ state: "published", target: "team", entry: { revision: "a".repeat(64) } }), isError: false }).state === "Saved to the team library"));
+{
+  const shapes = await p.evaluate(() => {
+    const md = "---\nname: x\ndescription: d\n---\n\nb\n";
+    const entry = { skillId: "id-x", slug: "x", revision: "c".repeat(64), ownerProfileId: "gateway-owner", shared: false, enabled: true };
+    const k = (args, result, isError = false, viewer = "gateway-owner") => {
+      const c = window.CT.skillsCardOf({ args, result: result === undefined ? undefined : typeof result === "string" ? result : JSON.stringify(result), isError }, viewer);
+      return `${c.verb} | ${c.object} | ${c.state} | ${c.rows.map((r) => r[0]).join(",")}`;
+    };
+    return {
+      unchanged: k({ action: "create", name: "x", proposal_content: md }, { state: "unchanged", target: "personal", entry }),
+      filesOnly: k({ action: "update", skill_id: "id-x", expected_revision: "b".repeat(64), files: [{ path: "a.md", content: "a" }] }, { state: "published", target: "personal", entry }),
+      read: k({ action: "read", skill_id: "id-x" }, { skillId: "id-x", slug: "x", revision: entry.revision, content: md }),
+      view: k({ action: "view", name: "x" }, "---\nname: x\n---"),
+      unshare: k({ action: "unshare", skill_id: "id-x", expected_revision: entry.revision }, { state: "published", target: "personal", entry }),
+      remove: k({ action: "remove", skill_id: "id-x", expected_revision: entry.revision }, { state: "removed", target: "personal", entry: { ...entry, removed: true } }),
+      shareMismatch: k({ action: "share", skill_id: "id-x", expected_revision: entry.revision }, { state: "published", target: "personal", entry }),
+      otherProfile: k({ action: "create", name: "x", proposal_content: md }, { state: "published", target: "personal", entry: { ...entry, ownerProfileId: "robin" } }),
+      noViewer: k({ action: "create", name: "x", proposal_content: md }, { state: "published", target: "personal", entry }, false, null),
+      truncated: k({ action: "list" }, { entries: Array.from({ length: 20 }, (_, i) => ({ slug: `s${i}` })), omitted: 3 }),
+      failedShare: k({ action: "share", skill_id: "id-x" }, "Skill changed. Read the current revision and review your edit before saving again.", true),
+      pending: k({ action: "create", name: "x", proposal_content: md }, undefined),
+    };
+  });
+  const want = {
+    unchanged: "Skill unchanged | x | Unchanged | Name,Use when…,Submitted instructions,Result revision",
+    filesOnly: "Updated a skill | x | Saved to your library | Name,Result revision",
+    read: "Looked at skills | x | Done | ",
+    view: "Looked at skills | x | Done | ",
+    unshare: "Stopped sharing a skill | x | Not shared | The tool's recorded result,Result revision",
+    remove: "Removed a skill | x | Removed | The tool's recorded result,Result revision",
+    shareMismatch: "Used skill workshop | x | Done | ",
+    otherProfile: "Saved a skill | x | Saved to a personal library | Name,Use when…,Submitted instructions,Result revision",
+    noViewer: "Saved a skill | x | Saved to a personal library | Name,Use when…,Submitted instructions,Result revision",
+    truncated: "Looked at skills | Listed 20 skills. 3 omitted. | Done | ",
+    failedShare: "Skill action failed |  | Failed | ",
+    pending: "Using skill workshop | x | Running | ",
+  };
+  for (const [name, words] of Object.entries(want)) check(`S12 R7 the adapter, ${name}: its words from the action and the recorded result`, shapes[name] === words, shapes[name]);
+}
 await p.click("#k-card-saved > summary");
 await wait(p, 100);
+await p.click("#k-card-saved .k-raw > summary");
+await wait(p, 100);
+{
+  const raw = await p.evaluate(() => JSON.parse(document.querySelector("#k-card-saved .k-raw pre:last-of-type").textContent));
+  const initial = await p.evaluate(() => window.skills.G.skills.find((s) => s.id === "trail").history.at(-1).rev);
+  check(
+    "S12 the saved card's recorded revision: 64 hex, the trail entry's initial read, its prefix on the card",
+    /^[0-9a-f]{64}$/.test(raw.entry.revision) && raw.entry.revision === initial && (await text(p, "#k-card-saved .k-card-facts")).includes(`Result revision${raw.entry.revision.slice(0, 12)}`),
+  );
+  check("S12 R7 the attach line is keyed by the recorded skillId and revision", (await p.evaluate(() => [document.querySelector("#k-card-attach").dataset.kSkillId, document.querySelector("#k-card-attach").dataset.kRev])).join() === [raw.entry.skillId, raw.entry.revision].join());
+  check("S12 R7 the card's Raw says it stands for the conversation card's Raw tab", (await text(p, "#k-card-saved .k-raw")).includes("This stands for the action card's Raw tab in the conversation."));
+  check("S12 R7 the saved card labels what the arguments carried as Submitted instructions", (await text(p, "#k-card-saved .k-card-facts")).includes("Submitted instructions"));
+}
 check("S12 S2 the saved card's instructions are text: angle brackets kept, no element inside", await p.evaluate(() => { const pre = document.querySelector("#k-card-saved .k-card-facts pre"); return Boolean(pre) && pre.childElementCount === 0 && pre.textContent.includes("<important>"); }));
 await p.click("#k-card-learned > summary");
 await wait(p, 100);
 check("S12 R7 the learned card shows its instructions", await p.evaluate(() => { const pre = document.querySelector("#k-card-learned .k-card-facts pre"); return Boolean(pre) && pre.textContent.includes("1. Check the forecast for the day of the walk.") && pre.childElementCount === 0; }));
 check("S12 R7 the attach line is from this task's read: not held, attachable", (await text(p, "#k-card-attach")).includes("This task doesn't have it: a skill saved during a task isn't added to that task.") && Boolean(await p.$('[data-k="card-attach"]')));
+check("S12 R7 the card's revision is still the library's: Use in this task", (await text(p, '[data-k="card-attach"]')) === "Use in this task");
 await p.click('[data-k="card-attach"]');
 await wait(p, 100);
+check(
+  "S12 R7 Use in this task sends the actual task, the recorded entry and the card's revision",
+  JSON.stringify(await p.evaluate(() => window.skills.sent.at(-1))) === JSON.stringify({ method: "skills.library.activate", sessionKey: "jlearn", action: "attach", skillId: "trail", revision: await p.evaluate(() => document.querySelector("#k-card-attach").dataset.kRev) }),
+);
 check("S12 R4 Use in this task: pending, no outcome yet", (await text(p, "#k-card-attach")) === "Attaching…");
 await wait(p);
 const held = await p.evaluate(() => window.skills.pins.jlearn.find((x) => x.skillId === "trail")?.rev.slice(0, 12));
@@ -898,6 +955,27 @@ check("S12 Open in Skills opens the skill's page", (await p.evaluate(() => docum
 await p.close();
 p = await open("bot=juniper&task=jlearn&access=read");
 check("S12 R7 read-only: no attach offered, and why", (await text(p, "#k-card-attach")) === "This task doesn't have it. Attaching it needs write access." && !(await p.$('[data-k="card-attach"]')));
+await p.close();
+p = await open("bot=juniper&task=jlearn");
+await p.evaluate(() => {
+  window.skills.otherSave("trail");
+  window.CT.skillsCards();
+});
+{
+  const now = await p.evaluate(() => window.skills.G.skills.find((s) => s.id === "trail").rev);
+  check("S12 R7 the library moved on after the card: it says so, and offers the current revision", (await text(p, "#k-card-attach")).includes(`The library now offers revision ${now.slice(0, 12)}.`) && (await text(p, '[data-k="card-attach"]')) === "Attach current revision");
+  await p.click('[data-k="card-attach"]');
+  await wait(p);
+  const pin = await p.evaluate(() => window.skills.pins.jlearn.find((x) => x.skillId === "trail"));
+  const lib = await gwRead(p, "trail");
+  check(
+    "S12 R7 Attach current revision sends that revision, and the task holds its text",
+    (await p.evaluate(() => window.skills.sent.at(-1).revision)) === now && pin.rev === now && pin.body === lib.body && (await text(p, "#k-card-attach")) === `Attached: reading the task again, it has revision ${now.slice(0, 12)} from its next turn.`,
+  );
+}
+await p.close();
+p = await open("bot=juniper&task=jlearn&cardread=fail");
+check("S12 R7 the task's read failed: said, no button", (await text(p, "#k-card-attach")) === "Couldn't read this task's skills." && !(await p.$('[data-k="card-attach"]')));
 await p.close();
 p = await open("bot=juniper&task=jlearn&cardw=refused");
 await p.click('[data-k="card-attach"]');

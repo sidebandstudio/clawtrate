@@ -29,12 +29,25 @@
     return { name: /^name: (.*)$/m.exec(head)?.[1] || "", description: /^description: (.*)$/m.exec(head)?.[1] || "", body: m ? m[2].replace(/\n$/, "") : String(md || "") };
   };
 
+  // A revision is a hash of the whole SKILL.md and its files' paths, as on the gateway
+  // (research section 3); skills.js uses the same function for the library's revisions.
+  const hash = (text) => {
+    let out = "";
+    for (let seed = 0; out.length < 64; seed += 1) {
+      let h = 0x811c9dc5 ^ seed;
+      for (let i = 0; i < text.length; i += 1) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0;
+      out += h.toString(16).padStart(8, "0");
+    }
+    return out.slice(0, 64);
+  };
+  CT.skillsFixtureHash = hash;
+
   // The calls, as the agent stream and the history hold them: arguments, the
   // gateway's result, and whether it is an error.
   const RECEIPT = {
     state: "published",
     target: "personal",
-    entry: { skillId: "cd9e6020-db2d-47a9-8065-9a169d30d18e", slug: SKILL.slug, name: "s_trail_che_cd9e6020db2d47a98065", revision: "b36b51e15fe26c0fca7959c3e953b44436e3a9924b15963ed79b50ecda6461a7", shared: false, enabled: true },
+    entry: { skillId: "cd9e6020-db2d-47a9-8065-9a169d30d18e", slug: SKILL.slug, name: "s_trail_che_cd9e6020db2d47a98065", ownerProfileId: "gateway-owner", revision: hash(SKILL_MD + "[]"), shared: false, enabled: true },
     sessionActivation: "new-sessions",
   };
   const CALLS = [
@@ -54,25 +67,48 @@
       return null;
     }
   };
-  function cardOf(c) {
+  // Which actions only look, and which act on an entry without saving its text.
+  const LOOK = ["list", "read", "view"];
+  const ACT = ["share", "unshare", "remove", "archive", "restore"];
+  const mono = (v) => `<span class="mono">${esc(v)}</span>`;
+  // `viewer` is the library list's profileId, once skills.js has read it; until then a
+  // personal receipt's owner isn't established as the person viewing.
+  function cardOf(c, viewer) {
+    const a = c.args.action;
     const r = json(c.result);
-    const skill = parts(c.args.proposal_content || c.args.content);
-    const object = c.args.name || r?.entry?.slug || "";
-    if (c.isError) return { verb: c.args.action === "list" || c.args.action === "read" ? "Couldn't look at skills" : "Couldn't save a skill", object, state: "Failed", tone: "danger", rows: [], says: c.result };
-    if (r?.state === "published" && c.args.action === "share") return { verb: r.entry?.shared ? "Shared a skill" : "Changed a skill", object, state: r.entry?.shared ? "Shared on this gateway" : "Done", rows: [], says: null };
-    if (r?.state === "published" && c.args.action === "unshare") return { verb: "Stopped sharing a skill", object, state: "Not shared", rows: [], says: null };
-    if (r?.state === "removed") return { verb: "Removed a skill", object, state: "Removed", rows: [], says: null };
-    if (r?.state === "published" || r?.state === "unchanged")
-      return { verb: "Saved a skill", object, state: r.target === "team" ? "Saved to the team library" : "Saved to your library", rows: [["Name", `<span class="mono">${esc(skill.name)}</span>`], ["Use when…", esc(skill.description)], ["Instructions", `<pre class="k-plain">${esc(skill.body)}</pre>`], ["Revision", `<span class="mono">${esc(String(r.entry?.revision || "").slice(0, 12))}</span>`]], says: null, library: true };
-    if (r?.entries) return { verb: "Looked at skills", object: `${r.entries.length} in the library`, state: "Done", rows: [], says: null };
-    if (/^Created "/.test(c.result)) return { verb: "Learned a skill", object, state: "Learned", rows: [["Name", `<span class="mono">${esc(skill.name)}</span>`], ["Use when…", esc(skill.description)], ["Instructions", `<pre class="k-plain">${esc(skill.body)}</pre>`]], says: c.result, learned: true };
-    return { verb: "Used the skill tool", object, state: "Done", rows: [], says: c.result };
+    const submitted = c.args.proposal_content ?? c.args.content;
+    const skill = submitted ? parts(submitted) : null;
+    const entry = r?.entry;
+    const object = c.args.name || entry?.slug || r?.slug || "";
+    // Pending, or a result this adapter doesn't know: the conversation's general card (conversation.md 8.3).
+    if (c.result == null) return { verb: "Using skill workshop", object, state: "Running", rows: [], says: null };
+    if (c.isError) return { verb: LOOK.includes(a) ? "Couldn't look at skills" : ACT.includes(a) ? "Skill action failed" : "Couldn't save a skill", object, state: "Failed", tone: "danger", rows: [], says: c.result };
+    if (a === "list" && Array.isArray(r?.entries)) {
+      const n = r.entries.length;
+      return { verb: "Looked at skills", object: `Listed ${n} ${n === 1 ? "skill" : "skills"}.${r.omitted > 0 ? ` ${r.omitted} omitted.` : ""}`, state: "Done", rows: [], says: null };
+    }
+    if ((a === "read" && r?.revision) || a === "view") return { verb: "Looked at skills", object, state: "Done", rows: [], says: null };
+    const recorded = (words) => ["The tool's recorded result", words];
+    const revRow = entry?.revision ? [["Result revision", mono(entry.revision.slice(0, 12))]] : [];
+    if (entry && a === "share" && r.state === "published" && entry.shared === true) return { verb: "Shared a skill", object, state: "Shared", rows: [recorded("Shared on this gateway"), ...revRow], says: null };
+    if (entry && a === "unshare" && r.state === "published" && entry.shared === false) return { verb: "Stopped sharing a skill", object, state: "Not shared", rows: [recorded("Not shared"), ...revRow], says: null };
+    if (entry && a === "remove" && r.state === "removed") return { verb: "Removed a skill", object, state: "Removed", rows: [recorded("Removed from the library"), ...revRow], says: null };
+    if (entry && (a === "create" || a === "update") && (r.state === "published" || r.state === "unchanged")) {
+      const verb = r.state === "unchanged" ? "Skill unchanged" : a === "create" ? "Saved a skill" : "Updated a skill";
+      const where = r.state === "unchanged" ? "Unchanged" : r.target === "team" ? "Saved to the team library" : viewer != null && entry.ownerProfileId === viewer ? "Saved to your library" : "Saved to a personal library";
+      const rows = [["Name", mono(object)]];
+      // Only what the arguments actually carried: an update can leave the text out.
+      if (skill) rows.push(["Use when…", esc(skill.description)], ["Submitted instructions", `<pre class="k-plain">${esc(skill.body)}</pre>`]);
+      return { verb, object, state: where, rows: [...rows, ...revRow], says: null, library: r.state === "published", skillId: entry.skillId, rev: entry.revision };
+    }
+    if (/^Created "/.test(c.result)) return { verb: "Learned a skill", object, state: "Learned", rows: [["Name", mono(skill?.name)], ["Use when…", esc(skill?.description)], ["Submitted instructions", `<pre class="k-plain">${esc(skill?.body)}</pre>`]], says: c.result, learned: true };
+    return { verb: "Used skill workshop", object, state: "Done", rows: [], says: null };
   }
   CT.skillsCardOf = cardOf;
   CT.skillsParts = parts;
 
   const raw = (c) =>
-    `<details class="k-raw"><summary>Raw</summary><p class="k-label">Arguments</p><pre class="k-plain">${esc(JSON.stringify(c.args, null, 2))}</pre>` +
+    `<details class="k-raw"><summary>Raw</summary><p class="b-hint">This stands for the action card's Raw tab in the conversation.</p><p class="k-label">Arguments</p><pre class="k-plain">${esc(JSON.stringify(c.args, null, 2))}</pre>` +
     `<p class="k-label">${c.isError ? "Error" : "Result"}</p><pre class="k-plain">${esc(c.result)}</pre></details>`;
   function card(c) {
     const k = cardOf(c);
@@ -89,7 +125,7 @@
       `<span class="action-detail"></span><span class="action-state"><span class="state"${k.tone ? ` data-tone="${k.tone}"` : ""}>${esc(k.state)}</span></span>${icon("chevron", "icon chevron")}</summary>` +
       `<div class="action-body">${body}</div></details>` +
       // The line under a library save: skills.js fills it once it has read this task's skills.
-      (k.library ? `<div class="k-card-line" id="k-card-attach" data-k-attach-for="${esc(k.object)}" role="status"><span>Reading this task's skills…</span></div>` : "")
+      (k.library ? `<div class="k-card-line" id="k-card-attach" data-k-card="${c.id}" data-k-skill-id="${esc(k.skillId)}" data-k-rev="${esc(k.rev)}" role="status"><span>Reading this task's skills…</span></div>` : "")
     );
   }
   const at = (id) => CALLS.find((c) => c.id === id);
