@@ -1,6 +1,6 @@
 // The same main entry, sandboxed preload and renderer as the launch check.
 // Only this temporary build links the service to the test's own feed.
-import { expect, test as base, type Page } from "@playwright/test";
+import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
 import { once } from "node:events";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
@@ -13,11 +13,13 @@ import {
   symlinkSync,
   rmSync,
   writeFileSync,
+  mkdirSync,
   cpSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
+import { setTimeout as pause } from "node:timers/promises";
 import { join } from "node:path";
 import { sidebarGateway } from "../apps/desktop/test/update/sidebar-gateway.ts";
 import { feedFor, feedServer, json, payload } from "../apps/desktop/test/update/harness.ts";
@@ -35,6 +37,12 @@ type TestApp = {
   manifest: Record<string, unknown>;
   rendererRequests: string[];
 };
+
+type ProbeWindow = Window & {
+  clawtrateHost: { desktopUpdates: DesktopUpdates };
+  seenUpdates: string[];
+};
+
 async function stopElectron(app: ChildProcess) {
   const { pid } = app;
   if (!pid || app.exitCode !== null || app.signalCode !== null) return;
@@ -163,6 +171,13 @@ const test = base.extend<{ desktopApp: TestApp }>({
     }
   },
 });
+
+// A failure may be visible only in the host's state, which fixture teardown closes away.
+test.afterEach(async ({ desktopApp }, testInfo) => {
+  if (testInfo.status === "passed" || testInfo.status === "skipped") return;
+  await captureHostState(desktopApp.page, testInfo, desktopApp.server, desktopApp.rendererRequests);
+});
+
 test("F-231: checks only the chosen feed and downloads matching bytes on request", async ({
   desktopApp,
 }) => {
@@ -268,10 +283,30 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   expect(rendererRequests).toEqual([]);
 });
 
-type ProbeWindow = Window & {
-  clawtrateHost: { desktopUpdates: DesktopUpdates };
-  seenUpdates: string[];
-};
+/** A failure may be visible only in the host's state, which teardown closes away. */
+async function captureHostState(
+  page: Page,
+  info: TestInfo,
+  server: TestApp["server"],
+  rendererRequests: string[],
+) {
+  try {
+    const reading = await Promise.race([
+      page.evaluate(() => (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get()),
+      pause(10_000).then(() => null),
+    ]).catch((cause) => ({ error: String(cause) }));
+    const file = join(info.outputDir, "host-state.json");
+    mkdirSync(info.outputDir, { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({ reading, requests: server.requests, rendererRequests }, null, 2),
+    );
+    info.attach("host-state", { path: file, contentType: "application/json" });
+  } catch {
+    // The failure under diagnosis still outranks the diagnostics.
+  }
+}
+
 async function checkStable() {
   const api = (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates;
   return api.check("stable", (await api.get()).revision);
