@@ -88,10 +88,13 @@ public static class VerifiedInstaller {
   static string Scope(string dir) {
     const string key = @"Software\ccda9b3a-da36-5fc3-9c37-0011d2510f25";
     string result = null;
+    bool otherUserRegistration = false;
     foreach (var hive in new [] { RegistryHive.CurrentUser, RegistryHive.LocalMachine }) {
       using (var root = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64))
       using (var own = root.OpenSubKey(key))
       using (var uninstall = root.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\" + Path.GetFileName(key))) {
+        if (hive == RegistryHive.CurrentUser && (own != null || uninstall != null))
+          otherUserRegistration = true;
         if (own == null || uninstall == null) continue;
         var location = own.GetValue("InstallLocation") as string;
         if (!String.Equals(location, dir, StringComparison.Ordinal)) continue;
@@ -99,7 +102,7 @@ public static class VerifiedInstaller {
         result = hive == RegistryHive.CurrentUser ? "/currentuser" : "/allusers";
       }
     }
-    return result;
+    return result == "/allusers" && otherUserRegistration ? null : result;
   }
 
   [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]

@@ -1113,3 +1113,22 @@ it.each([{ selectedTrack: 42 }, { lastCheck: false }])(
     expect((await service.chooseTrack("nightly")).snapshot.selectedTrack).toBe("nightly");
   },
 );
+
+it("keeps the handoff visible through actual exit and leaves a blocked quit recoverable", async () => {
+  const installer = installStandIn();
+  installer.launch = async () => "quit-blocked";
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  expect((await service.restart(id)).snapshot.state).toMatchObject({
+    kind: "handoff-failed",
+    reason: "quit-blocked",
+  });
+  const next = await offer(service);
+  await service.download(next);
+  installer.launch = async () => {
+    service.shutdown();
+    return null;
+  };
+  expect((await service.restart(next)).snapshot.state.kind).toBe("handing-off");
+});

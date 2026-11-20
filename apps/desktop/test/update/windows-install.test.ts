@@ -134,3 +134,16 @@ it("requests quit only after the owner holds the process and package and reports
   native.finish("quit-blocked");
   expect(await pending).toBe("quit-blocked");
 });
+
+it("refuses a coexisting per-user registration at another location before a machine handoff", async () => {
+  const native = nativeStandIn();
+  const pending = windowsInstall(file, pin, true);
+  const [script] = vi.mocked(runUpdatePowerShell).mock.lastCall!;
+  expect(script.indexOf("otherUserRegistration = true")).toBeLessThan(
+    script.indexOf("String.Equals(location, dir"),
+  );
+  expect(script).toContain('result == "/allusers" && otherUserRegistration ? null');
+  native.finish("installation-context");
+  expect(await pending).toBe("installation-context");
+  expect(native.end).not.toHaveBeenCalled();
+});

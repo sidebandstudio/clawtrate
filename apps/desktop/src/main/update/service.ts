@@ -219,7 +219,7 @@ export class DesktopUpdateService {
       revision: this.snapshot.revision + 1,
       install: idleCapability(this.options.installer),
       pendingTrack: null,
-      state: { kind: "not-checked" },
+      state: this.restarting ? this.snapshot.state : { kind: "not-checked" },
     };
   }
 

@@ -28,3 +28,20 @@
 !ifndef BUILD_UNINSTALLER
   VIAddVersionKey /LANG=1033 "OriginalFilename" "ClawtrateSetup.exe"
 !endif
+
+; A host-authorized setup inherits the exact install directory only after
+; the native owner has observed the initiating process handle exit.
+!include "getProcessInfo.nsh"
+Var pid
+!macro customCheckAppRunning
+  ReadEnvStr $R9 "CLAWTRATE_EXITED_INSTALL_DIR"
+  ${if} $R9 != ""
+  ${andIf} ${isUpdated}
+    ${if} $R9 != $INSTDIR
+      Abort
+    ${endif}
+  ${else}
+    !insertmacro IS_POWERSHELL_AVAILABLE
+    !insertmacro _CHECK_APP_RUNNING
+  ${endIf}
+!macroend
