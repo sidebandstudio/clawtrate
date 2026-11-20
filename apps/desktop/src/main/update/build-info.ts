@@ -1,6 +1,7 @@
 // Feed addresses and the release date are compiled into the main bundle.
 import { DesktopUpdateService, type UpdateServiceOptions } from "./service.ts";
 
+import { macInstaller } from "../mac-install.ts";
 import type { UpdateInstaller } from "./install.ts";
 import type { UpdateInstallRefusal } from "@clawtrate/core";
 
@@ -17,6 +18,7 @@ function buildInstaller(platform: string, arch: string, packaged: boolean): Upda
     platform === "darwin" &&
     typeof __CLAWTRATE_SIGNED_MAC__ !== "undefined" &&
     __CLAWTRATE_SIGNED_MAC__;
+  if (packaged && signedMac && (arch === "x64" || arch === "arm64")) return macInstaller(arch);
   const unavailable: UpdateInstallRefusal =
     (platform === "win32" && arch !== "x64") ||
     (platform === "darwin" && arch !== "x64" && arch !== "arm64") ||

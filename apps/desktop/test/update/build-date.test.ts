@@ -58,7 +58,7 @@ describe("the build's release date", () => {
 
 it.each([
   ["darwin", false, "build-not-signed"],
-  ["darwin", true, "no-installer-path"],
+  ["darwin", true, "no-verified-download"],
   ["win32", false, "build-not-signed"],
   ["linux", false, "no-installer-path"],
 ] as const)(

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { linkSync } from "node:fs";
-import { stageAtLoopback } from "./mac-handoff-stand-in.ts";
+import { macInstaller } from "../../src/main/mac-install.ts";
 import type { UpdateInstaller } from "../../src/main/update/install.ts";
 import type { DesktopUpdateReply, DesktopUpdateSnapshot } from "@clawtrate/core";
 import { createUpdatePreferenceStore } from "../../src/main/update/preferences.ts";
@@ -1027,41 +1027,49 @@ it("quit during signature inspection retires Restart without a handoff", async (
   expect(await store().get("attempt")).toBeNull();
 });
 
-it.each(["success", "failure", "quit"])(
-  "the macOS stand-in's loopback listener on %s",
+it.skipIf(process.platform === "win32").each(["success", "failure", "quit"])(
+  "one confirmed Mac handoff serves the preflight archive once (%s)",
   async (action) => {
-    const installer = installStandIn();
     let url: string | undefined;
-    installer.launch = async (file) => {
-      await stageAtLoopback(file, async (address) => {
-        url = address;
-        const feed = (await (await fetch(address)).json()) as {
-          url: string;
-          size: number;
-          sha256: string;
-        };
-        const body = Buffer.from(await (await fetch(feed.url)).arrayBuffer());
-        expect(body).toEqual(fixture.body);
-        expect(feed.size).toBe(body.length);
-        expect(feed.sha256).toBe(createHash("sha256").update(body).digest("hex"));
-        expect((await fetch(new URL("/unrelated", address))).status).toBe(404);
-        if (action === "failure") throw Error("staging refused");
-      });
-      return null;
-    };
+    const inspected = vi.fn(async () => null);
+    const installer = macInstaller("arm64", inspected, async (address, _signal, handed) => {
+      url = address;
+      handed();
+      expect(service.get().state.kind).toBe("handed-to-system");
+      expect(await store().get("attempt")).not.toBeNull();
+      const response = await fetch(address);
+      const feed = (await response.json()) as { url: string; size: number; sha256: string };
+      expect((await fetch(address)).status).toBe(404);
+      const archive = await fetch(feed.url);
+      expect(archive.headers.get("content-length")).toBe(String(fixture.body.length));
+      expect(Buffer.from(await archive.arrayBuffer())).toEqual(fixture.body);
+      expect(feed.size).toBe(fixture.body.length);
+      expect(feed.sha256).toBe(createHash("sha256").update(fixture.body).digest("hex"));
+      expect((await fetch(feed.url)).status).toBe(404);
+      expect((await fetch(new URL("/unrelated", address))).status).toBe(404);
+      if (action === "failure") throw Error("Staging response lost");
+    });
     const service = await start({ installer });
     const id = await offer(service);
     await service.download(id);
+    expect(inspected).toHaveBeenCalledTimes(1);
+    expect(service.get().install).toEqual({
+      kind: "restart-available",
+      offerId: id,
+      completesOnQuit: true,
+    });
     expect(url).toBeUndefined();
     if (action === "quit") {
       service.shutdown();
       expect(url).toBeUndefined();
+      expect(await store().get("attempt")).toBeNull();
       return;
     }
-    const reply = await service.restart(id);
-    expect(reply.snapshot.state.kind).toBe(action === "failure" ? "handoff-failed" : "handing-off");
+    expect((await service.restart(id)).snapshot.state.kind).toBe("handed-to-system");
+    expect((await service.restart(id)).outcome).toBe("busy");
     expect(url).toBeDefined();
     await expect(fetch(url!)).rejects.toThrow();
+    service.shutdown();
   },
 );
 
