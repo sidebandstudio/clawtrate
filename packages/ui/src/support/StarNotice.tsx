@@ -4,13 +4,15 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useId,
+  type MouseEvent,
   useRef,
   useState,
   useSyncExternalStore,
   type RefObject,
 } from "react";
-import { useBridge, useClawtrateState } from "../bridge.tsx";
-import { useInvitationReplies } from "../bridge.tsx";
+import { useBridge, useClawtrateState, useInvitationReplies } from "../bridge.tsx";
+import { ExternalIcon } from "../icons.tsx";
 import "./star.css";
 
 type NoticeState = "ask" | "busy" | "success" | "failure" | "open-error";
@@ -19,43 +21,68 @@ const openError = "Couldn't open GitHub. Try again from About.";
 
 export function ProjectLink({
   about = false,
+  primary = false,
+  take,
   onResult,
 }: {
   about?: boolean;
+  primary?: boolean;
+  take?: () => boolean;
   onResult?: (opened: boolean) => void;
 }) {
   const bridge = useBridge();
+  const pending = useRef(false);
   const [failed, setFailed] = useState(false);
-  return (
-    <div className="star-link">
-      <a
-        href={PROJECT_URL}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Open GitHub to star Clawtrate"
-        onClick={(event) => {
-          event.preventDefault();
-          const answer = (opened: boolean) => {
-            setFailed(!opened);
-            onResult?.(opened);
-          };
-          if (bridge.openProjectPage)
-            void bridge.openProjectPage().then(answer, () => answer(false));
-          else {
-            try {
-              window.open(PROJECT_URL, "_blank", "noopener,noreferrer");
-              answer(true);
-            } catch {
-              answer(false);
-            }
-          }
-        }}
-      >
-        {about ? "Star Clawtrate on GitHub" : "Open GitHub"}
-      </a>
-      <small>Opens in your browser.</small>
-      {about && failed && <p role="status">{openError}</p>}
+  async function open(event: MouseEvent<HTMLAnchorElement>) {
+    if (event.type === "auxclick" && event.button !== 1) return;
+    event.preventDefault();
+    if (pending.current || (take && !take())) return;
+    pending.current = true;
+    let opened = false;
+    try {
+      if (bridge.openProjectPage) opened = await bridge.openProjectPage();
+      else {
+        window.open(PROJECT_URL, "_blank", "noopener,noreferrer");
+        opened = true;
+      }
+    } catch {
+      // The platform refused the handoff.
+    } finally {
+      if (about) {
+        pending.current = false;
+        setFailed(!opened);
+      }
+      onResult?.(opened);
+    }
+  }
+  const link = (
+    <a
+      href={PROJECT_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={about ? "star-about-link" : primary ? "button" : "star-browser-link"}
+      data-variant={primary ? "primary" : undefined}
+      title="Opens in your browser."
+      aria-label={about ? undefined : "Open GitHub to star Clawtrate"}
+      onClick={open}
+      onAuxClick={open}
+    >
+      {about ? (
+        <>
+          Star Clawtrate on GitHub <ExternalIcon />
+        </>
+      ) : (
+        "Open GitHub"
+      )}
+    </a>
+  );
+  return about ? (
+    <div className="star-about">
+      {link}
+      {failed && <p role="status">{openError}</p>}
     </div>
+  ) : (
+    link
   );
 }
 
@@ -110,6 +137,21 @@ export function StarNotice({
     return () => window.clearTimeout(timer);
   }, [notice, scene]);
   const element = useRef<HTMLElement>(null);
+  const hintId = useId();
+  const taken = useRef(false);
+  const take = () => {
+    if (taken.current) return false;
+    taken.current = true;
+    return true;
+  };
+  const restoreFocus = () => {
+    if (
+      element.current?.isConnected &&
+      !element.current.closest("[inert]") &&
+      (element.current.contains(document.activeElement) || document.activeElement === document.body)
+    )
+      field.current?.focus();
+  };
   const close = () => {
     setNotice(null);
     field.current?.focus();
@@ -146,53 +188,53 @@ export function StarNotice({
             <>
               <h3>Enjoying Clawtrate?</h3>
               <p>Clawtrate is open source. If it helped, consider starring it on GitHub.</p>
-              {bridge.starWithCli && (
-                <div className="star-link">
-                  <button
-                    type="button"
-                    className="button"
-                    disabled={notice === "busy"}
-                    onClick={async () => {
-                      setNotice("busy");
-                      const ok = await bridge.starWithCli!().catch(() => false);
-                      setNotice((current) =>
-                        current === "busy" ? (ok ? "success" : "failure") : current,
-                      );
-                      if (
-                        element.current?.isConnected &&
-                        !element.current.closest("[inert]") &&
-                        (element.current.contains(document.activeElement) ||
-                          document.activeElement === document.body)
-                      )
-                        field.current?.focus();
-                    }}
-                  >
-                    Star with GitHub CLI
-                  </button>
-                  <small>
-                    Stars sidebandstudio/clawtrate as the account the GitHub CLI is signed in to on
-                    this computer.
-                  </small>
-                </div>
-              )}
             </>
           )}
-          {notice !== "success" && notice !== "busy" && notice !== "open-error" && (
-            <ProjectLink
-              onResult={(ok) => {
-                if (!element.current?.isConnected) return;
-                if (ok) close();
-                else {
-                  setNotice("open-error");
-                  field.current?.focus();
-                }
-              }}
-            />
-          )}
           {notice !== "success" && (
-            <button type="button" className="link-button" onClick={close}>
-              Dismiss
-            </button>
+            <div className="star-actions">
+              {(notice === "ask" || notice === "busy") && bridge.starWithCli && (
+                <button
+                  type="button"
+                  className="button"
+                  data-variant="primary"
+                  disabled={notice === "busy"}
+                  aria-describedby={hintId}
+                  onClick={async () => {
+                    if (!take()) return;
+                    setNotice("busy");
+                    const ok = await bridge.starWithCli!().catch(() => false);
+                    if (!element.current?.isConnected) return;
+                    if (!ok) taken.current = false;
+                    restoreFocus();
+                    setNotice((current) =>
+                      current === "busy" ? (ok ? "success" : "failure") : current,
+                    );
+                  }}
+                >
+                  Star with GitHub CLI
+                </button>
+              )}
+              {notice !== "busy" && notice !== "open-error" && (
+                <ProjectLink
+                  primary={!bridge.starWithCli || notice === "failure"}
+                  take={take}
+                  onResult={(ok) => {
+                    if (!element.current?.isConnected) return;
+                    restoreFocus();
+                    setNotice(ok ? null : "open-error");
+                  }}
+                />
+              )}
+              <button type="button" className="link-button" onClick={close}>
+                Dismiss
+              </button>
+            </div>
+          )}
+          {(notice === "ask" || notice === "busy") && bridge.starWithCli && (
+            <p className="star-account" id={hintId}>
+              Stars sidebandstudio/clawtrate as the account the GitHub CLI is signed in to on this
+              computer.
+            </p>
           )}
         </section>
       )}

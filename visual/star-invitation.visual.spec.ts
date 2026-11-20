@@ -16,7 +16,7 @@ for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
             await page.keyboard.press("ControlOrMeta+,");
             await page.getByRole("button", { name: "About", exact: true }).click();
             await expect(
-              page.getByRole("link", { name: "Open GitHub to star Clawtrate" }),
+              page.getByRole("link", { name: "Star Clawtrate on GitHub" }),
             ).toBeVisible();
           } else {
             const notice = page.getByRole("region", { name: "GitHub invitation" });
@@ -73,9 +73,112 @@ test("F-520: a reported browser failure leaves the repository available in About
   await expect(page.getByTestId("composer-input")).toBeFocused();
   await page.keyboard.press("ControlOrMeta+,");
   await page.getByRole("button", { name: "About", exact: true }).click();
-  await link.click();
+  const about = page.getByRole("link", { name: "Star Clawtrate on GitHub" });
+  await about.click();
   await expect(page.getByRole("dialog")).toContainText(
     "Couldn't open GitHub. Try again from About.",
   );
-  await expect(link).toBeVisible();
+  await expect(about).toBeVisible();
+});
+
+for (const size of SIZES.filter((s) => s.phone || s.width === 1440)) {
+  test.describe("invitation controls at " + size.width, () => {
+    test.use(contextFor(size, "light"));
+    test("F-519 F-520 F-521: one action row leaves the composer pinned and restores keyboard focus", async ({
+      page,
+    }) => {
+      const query = `scene=main&${OTTO_DISK}&panel=closed&access=write`;
+      await openFixture(page, query, "light");
+      const field = page.getByTestId("composer-input");
+      const before = (await field.boundingBox())!;
+      await openFixture(page, query + "&star=cli", "light");
+      const panel = page.getByRole("region", { name: "GitHub invitation" });
+      const cli = panel.getByRole("button", { name: "Star with GitHub CLI" });
+      const browser = panel.getByRole("link");
+      const dismiss = panel.getByRole("button", { name: "Dismiss" });
+      const buttons = await Promise.all([cli, browser, dismiss].map((x) => x.boundingBox()));
+      expect((await field.boundingBox())!.y).toBe(before.y);
+      expect(
+        buttons.every(
+          (b) => b && Math.abs(b.y + b.height / 2 - (buttons[0]!.y + buttons[0]!.height / 2)) <= 1,
+        ),
+      ).toBe(true);
+      if (size.phone) expect(buttons.every((b) => b!.height >= 44 && b!.width >= 44)).toBe(true);
+      await expect(cli).toHaveAccessibleDescription(
+        "Stars sidebandstudio/clawtrate as the account the GitHub CLI is signed in to on this computer.",
+      );
+      await field.focus();
+      for (const control of [dismiss, browser, cli]) {
+        await page.keyboard.press("Shift+Tab");
+        await expect(control).toBeFocused();
+        await expect(control).toHaveCSS("outline-width", "2px");
+        await expect(control).toHaveCSS("outline-offset", "2px");
+      }
+      await page.keyboard.press("Escape");
+      await expect(field).toBeFocused();
+      await expect(panel).toHaveCount(0);
+      await page.keyboard.press("ControlOrMeta+,");
+      await page.getByRole("button", { name: "About", exact: true }).click();
+      const about = page.getByRole("link", { name: "Star Clawtrate on GitHub" });
+      const rect = (await about.boundingBox())!;
+      expect(rect.height).toBeGreaterThanOrEqual(44);
+      if (size.phone) expect(rect.width).toBeGreaterThanOrEqual(size.width - 40);
+    });
+  });
+}
+
+for (const activation of ["primary", "keyboard", "middle"]) {
+  test(`F-519: ${activation} activation hands the browser the repository once and consumes the notice`, async ({
+    page,
+    context,
+  }) => {
+    const requests: string[] = [];
+    await context.route("https://github.com/**", (route) => {
+      requests.push(route.request().url());
+      return route.abort();
+    });
+    await openFixture(page, `scene=main&${OTTO_DISK}&access=write&star=browser`, "light");
+    await page.evaluate(() => {
+      window.open = (url, target, features) => {
+        document.body.dataset.opens =
+          (document.body.dataset.opens ?? "") + JSON.stringify([url, target, features]);
+        return null;
+      };
+    });
+    const notice = page.getByRole("region", { name: "GitHub invitation" });
+    const link = notice.getByRole("link");
+    await link.focus();
+    if (activation === "keyboard") await link.press("Enter");
+    else await link.click({ button: activation === "middle" ? "middle" : "left" });
+    await expect(notice).toHaveCount(0);
+    await expect(page.getByTestId("composer-input")).toBeFocused();
+    await expect(page.locator("body")).toHaveAttribute(
+      "data-opens",
+      JSON.stringify([
+        "https://github.com/sidebandstudio/clawtrate",
+        "_blank",
+        "noopener,noreferrer",
+      ]),
+    );
+    expect(requests).toEqual([]);
+  });
+}
+
+test("F-521: a second dispatch in the same click cannot start the CLI twice", async ({ page }) => {
+  await openFixture(page, `scene=main&${OTTO_DISK}&access=write&star=cli`, "light");
+  await page.evaluate(() => {
+    const bridge = (window as unknown as { clawtrateFixture: { starWithCli(): Promise<boolean> } })
+      .clawtrateFixture;
+    let calls = 0;
+    bridge.starWithCli = async () => {
+      document.body.dataset.cliCalls = String(++calls);
+      if (calls === 1) document.querySelector<HTMLButtonElement>(".star-actions button")!.click();
+      return true;
+    };
+  });
+  await page.getByRole("button", { name: "Star with GitHub CLI" }).click();
+  await expect(page.getByRole("region", { name: "GitHub invitation" })).toHaveText(
+    "Starred. Thank you.",
+  );
+  await expect(page.locator("body")).toHaveAttribute("data-cli-calls", "1");
 });

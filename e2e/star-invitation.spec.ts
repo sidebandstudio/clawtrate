@@ -82,6 +82,14 @@ test("F-519 F-520: the sixth finished reply invites once and About keeps the bro
       }
       await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 20_000 });
     };
+    await page.evaluate(() => {
+      const live = document.querySelector(".composer-inner > [role=status]")!;
+      new MutationObserver(() => {
+        if (live.textContent)
+          document.documentElement.dataset.invitationAnnouncements =
+            (document.documentElement.dataset.invitationAnnouncements ?? "") + live.textContent;
+      }).observe(live, { childList: true, subtree: true, characterData: true });
+    });
     commands.length = 0;
     for (let i = 1; i <= 6; i++) {
       await expect(notice(page)).toHaveCount(0);
@@ -89,6 +97,12 @@ test("F-519 F-520: the sixth finished reply invites once and About keeps the bro
       if (i < 6) await expect(notice(page)).toHaveCount(0);
     }
     await expect(notice(page)).toBeVisible();
+    await expect(field(page)).toBeFocused();
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-invitation-announcements",
+      "Enjoying Clawtrate? Clawtrate is open source. If it helped, consider starring it on GitHub.",
+    );
+
     expect(commands.filter((type) => type !== "markTask")).toEqual(Array(6).fill("sendMessage"));
     await expect(notice(page).getByRole("button", { name: "Star with GitHub CLI" })).toHaveCount(0);
     await notice(page).getByRole("button", { name: "Dismiss" }).focus();
@@ -104,7 +118,7 @@ test("F-519 F-520: the sixth finished reply invites once and About keeps the bro
     commands.length = 0;
     await page.keyboard.press("ControlOrMeta+,");
     await page.getByRole("button", { name: "About", exact: true }).click();
-    const link = page.getByRole("link", { name: "Open GitHub to star Clawtrate" });
+    const link = page.getByRole("link", { name: "Star Clawtrate on GitHub" });
     await expect(link).toHaveText("Star Clawtrate on GitHub");
     expect(await page.locator("html").getAttribute("data-opened")).toBeNull();
     await link.click();
