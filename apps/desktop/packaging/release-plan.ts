@@ -1,6 +1,13 @@
 import { artifactFormat } from "./candidate-format.ts";
 import { feedAddresses, localFeedAddress } from "./candidate-addresses.ts";
-import { lstatSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdtempDisposableSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 import { MAX_DOWNLOAD_BYTES, MAX_FEED_BYTES } from "../src/main/update/engine.ts";
@@ -254,8 +261,12 @@ export function runPlan(args: string[], print = console.log) {
     if (mode === "assemble") assemble(candidate);
     const record = plan(candidate);
     const output = join(dir, "release-plan.json");
-    writeFileSync(output + ".tmp", JSON.stringify(record, null, 2) + "\n", { flag: "wx" });
-    renameSync(output + ".tmp", output);
+    {
+      using staging = mkdtempDisposableSync(join(dir, ".release-plan-"));
+      const next = join(staging.path, "release-plan.json");
+      writeFileSync(next, JSON.stringify(record, null, 2) + "\n");
+      renameSync(next, output);
+    }
     const windows = record.files.find((file) => file.installedArchitecture);
     print(
       [record.track, record.version, record.verdict].join(" ") +

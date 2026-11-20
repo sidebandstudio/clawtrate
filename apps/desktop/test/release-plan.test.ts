@@ -278,6 +278,16 @@ it("rechecks the saved candidate from the command line and preserves the feed on
     verdict: "complete and consistent",
   });
   const feed = read("update-feed.json");
+  // An interrupted previous write left extra output. A recheck must replace
+  // the earlier successful verdict even while the leftover is present.
+  write("release-plan.json.tmp", {});
+  expect(check()).toBe(1);
+  expect(read("release-plan.json")).toMatchObject({
+    verdict: "refused",
+    issues: ["The candidate folder contains unexpected entries."],
+  });
+  rmSync(path("release-plan.json.tmp"));
+  expect(check()).toBe(0);
   writeFileSync(file(), "changed");
   expect(check()).toBe(1);
   expect(read("update-feed.json")).toEqual(feed);

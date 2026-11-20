@@ -54,14 +54,19 @@ function build(dir: string, version: string) {
   const temp = mkdtempSync(join(tmpdir(), "clawtrate-pack-"));
   const log = join(temp, "pack.log");
   const fd = openSync(log, "wx", 0o600);
+  let keepLog = false;
   try {
     writeFileSync(manifest, JSON.stringify({ ...JSON.parse(original), version }, null, 2) + "\n");
     const result = spawnSync(
       win ? "cmd.exe" : "pnpm",
       win ? ["/d", "/c", "pnpm package:win"] : ["package:mac"],
-      { stdio: ["ignore", fd, fd] },
+      { stdio: ["ignore", fd, process.env.GITHUB_ACTIONS === "true" ? "inherit" : fd] },
     );
-    if (result.status !== 0) throw new Error("Packaging failed.");
+    if (result.status !== 0) {
+      keepLog = true;
+      const reason = result.error?.message ?? result.signal ?? `exit ${result.status}`;
+      throw new Error(`Packaging failed (${reason}). Build log: ${log}`);
+    }
     const keys = FILE_KEYS.filter((key) => key.startsWith(win ? "win-" : "mac-"));
     const names = keys.map((key) => artifactName(version, key));
     if (readdirSync(dist).some((name) => /\.(zip|exe)$/i.test(name) && !names.includes(name)))
@@ -84,7 +89,7 @@ function build(dir: string, version: string) {
   } finally {
     closeSync(fd);
     writeFileSync(manifest, original);
-    rmSync(temp, { recursive: true, force: true });
+    if (!keepLog) rmSync(temp, { recursive: true, force: true });
   }
 }
 
