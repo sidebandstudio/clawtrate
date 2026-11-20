@@ -8,16 +8,20 @@ import {
   botIdFromSessionKey,
   mainTaskKey,
   type Bot,
+  type CheckInsState,
   type ClawtrateState,
+  type HostInfo,
   type Routine,
   type RoutineRun,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Avatar } from "../Avatar.tsx";
 import { useBridge } from "../bridge.tsx";
+import { useCheckInsSection } from "../check-ins/CheckIns.tsx";
+import { summary } from "../check-ins/words.ts";
 import { BackIcon, ChevronIcon, ClockIcon } from "../icons.tsx";
 import { Markdown } from "../Markdown.tsx";
-import { Note } from "../bots/parts.tsx";
+import { Note, useAnnouncer } from "../bots/parts.tsx";
 import { Calendar } from "./Calendar.tsx";
 import { useKeyedRead } from "./read.ts";
 import {
@@ -165,12 +169,14 @@ function List({
   bots,
   bot,
   now,
+  checkIns,
   onOpen,
 }: {
   routines: Routine[];
   bots: Bot[];
   bot: string | null;
   now: number;
+  checkIns: CheckInsState | undefined;
   onOpen: (id: string) => void;
 }) {
   const groups = owners(bots, routines)
@@ -204,6 +210,18 @@ function List({
           <div className="r-group">
             <Avatar bot={each} />
             <h2 id={`r-group-${each.id}`}>{each.name}</h2>
+            {/* In the list across bots each group head says the bot's check-ins; with one
+                bot chosen the block above already does. A bot the client does not hold is
+                named by id, and its check-ins are not known here; nor are any bot's until
+                they have been read. */}
+            {bot === null &&
+              checkIns?.status === "ready" &&
+              checkIns.readBotIds?.includes(each.id) &&
+              bots.some((held) => held.id === each.id) && (
+                <span className="ci-summary" data-testid="check-in-summary">
+                  {summary(checkIns?.jobs.find((job) => job.botId === each.id))}
+                </span>
+              )}
           </div>
           <ul className="r-rows" aria-label={each.name}>
             {rows.map((routine) => (
@@ -711,6 +729,7 @@ export function RoutinesView({
   onNav,
   onClose,
   onOpenTask,
+  info,
   narrow,
   phone,
 }: {
@@ -719,6 +738,7 @@ export function RoutinesView({
   onNav: (nav: RoutinesNav) => void;
   onClose: () => void;
   onOpenTask: (botId: string, key: string) => void;
+  info: HostInfo;
   /** Below 800 px: the header has less room. */
   narrow: boolean;
   /** One pane: the view switch offers List and Day, and Back goes to the bots. */
@@ -728,6 +748,7 @@ export function RoutinesView({
   const bridge = useBridge();
   const { routines: store, bots } = state;
   const gateway = state.connection.gatewayUrl ?? "";
+  const [announcer, announce] = useAnnouncer();
   // Kept fewer routines than the gateway has: one bot's are read from the gateway when chosen.
   const [botRead, retryBot] = useKeyedRead(
     store.omitted > 0 && nav.bot !== null
@@ -797,6 +818,23 @@ export function RoutinesView({
       : store.routines.filter((each) => nav.bot === null || each.botId === nav.bot);
   const count = listed.length;
   const refresh = () => void bridge.invoke({ type: "refreshRoutines" });
+  // The chosen bot's check-ins (automation.md section 13) above its routines,
+  // in list mode only: the hook reads on entering and mounts the dialog, and
+  // its draft lives here for as long as the block does.
+  const chosen =
+    nav.bot !== null && !shown && mode === "list"
+      ? (bots.find((each) => each.id === nav.bot) ?? null)
+      : null;
+  // Read in the list across bots too: its group heads say each bot's check-ins.
+  const checkInsSection = useCheckInsSection({
+    active: !shown && mode === "list",
+    checkIns: state.checkIns,
+    bots: chosen ? [chosen] : bots,
+    connection: state.connection,
+    info,
+    announce,
+    toNav: null,
+  });
 
   return (
     <main
@@ -985,13 +1023,26 @@ export function RoutinesView({
                 onRetry={retryBot}
               />
             ) : mode === "list" ? (
-              <List
-                routines={listed}
-                bots={bots}
-                bot={nav.bot}
-                now={now}
-                onOpen={(id) => onNav({ ...nav, routine: id, run: null })}
-              />
+              <>
+                {chosen && (
+                  <section
+                    className="r-checkins"
+                    data-testid="routines-check-ins"
+                    aria-labelledby="r-check-ins-title"
+                  >
+                    <h2 id="r-check-ins-title">Check-ins</h2>
+                    {checkInsSection.body}
+                  </section>
+                )}
+                <List
+                  routines={listed}
+                  bots={bots}
+                  bot={nav.bot}
+                  now={now}
+                  checkIns={state.checkIns}
+                  onOpen={(id) => onNav({ ...nav, routine: id, run: null })}
+                />
+              </>
             ) : (
               <Calendar
                 gateway={gateway}
@@ -1004,6 +1055,7 @@ export function RoutinesView({
             )}
           </>
         )}
+        {announcer}
       </div>
     </main>
   );

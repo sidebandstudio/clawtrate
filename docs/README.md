@@ -36,6 +36,7 @@ Every document in the repository, by what you want to do.
 - [Controls](design/controls.md): what each bot may do and who enforces it, saved approvals, activity, memory, where a bot runs, usage and warning budgets.
 - [Setting up](design/setup.md): the first run, where OpenClaw runs and what Clawtrate found there, connecting on this computer or over SSH, installing OpenClaw, setup codes and approvals.
 - [A bot's life](design/bots-lifecycle.md): the primary bot, a bot's picture, name, label and instructions, a change to its instructions in a conversation, and duplicate, export, import and delete.
+- [Search](design/search.md): the Cmd/Ctrl+K palette, what each source covers, opening a result in its place, and the iPhone's scopes.
 - [Prototype](design/prototype/README.md): static pages that show the design working.
 
 ## Research
@@ -47,6 +48,8 @@ Every document in the repository, by what you want to do.
 - `research/setup-flow/`: the probe behind the setup flow note.
 - [The rest of a bot's life](research/bots-lifecycle.md): the primary bot, editing a bot, an image tool, a change to its instructions, copies, the gateway's package format and `agents.delete`, from OpenClaw's source and live runs.
 - `research/bots-lifecycle/`: the probe behind that note.
+- [Search](research/search.md): what the gateway's message search matches, its order and limits, what a narrower search finds, its cost, and the file and routine lists, from OpenClaw's source and a development instance.
+- `research/search/`: the probe behind the search note.
 - [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
