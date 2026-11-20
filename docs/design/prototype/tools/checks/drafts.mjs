@@ -636,6 +636,26 @@ for (const [q, opener] of [
   await p.close();
 }
 
+// Saved entries keep their own kind and hosts; opening or cancelling the form changes no row.
+p = await open("view=vault", { chrome: "1" });
+await click(p, '[data-d="v-new"]');
+await p.fill("#v-name", "ENV_ONE");
+await p.check('input[name="v-kind"][value="env"]');
+await p.waitForTimeout(80);
+await p.fill("#secret-value", VALUE);
+await click(p, '[data-d="v-save"]');
+await waitText(p, ["Saved in the Vault."]);
+await click(p, '[data-d="v-new"]');
+await click(p, '[data-d="v-cancel"]');
+await click(p, '[data-d="v-new"]');
+await p.fill("#v-name", "SECOND_ONE");
+await p.fill("#secret-value", VALUE);
+await click(p, '[data-d="v-save"]');
+await waitText(p, ["Saved in the Vault."]);
+const rowOf = (name) => p.evaluate((n) => document.querySelector(`[data-item="${n}"] .d-vmeta`)?.textContent ?? "", name);
+check("Vault: a saved environment value stays one after the form opens and cancels, and a second save keeps it", (await rowOf("ENV_ONE")).startsWith("Environment value") && (await rowOf("SECOND_ONE")).startsWith("Protected"));
+await p.close();
+
 await b.close();
 console.log(out.join("\n"));
 console.log(`${out.filter((l) => l.startsWith("ok")).length} ok, ${failed} failed`);

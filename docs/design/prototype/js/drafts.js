@@ -37,7 +37,7 @@
     hosts: ["api.example.com"],
     item: P.get("item") || "STORE_API_KEY",
     vkind: "secret",
-    added: false,
+    saved: {}, // entries a write listed, by name, each with its own kind and hosts; never the form's state
     removed: false,
     drafts: { otto: true, pip: true, marlow: true, juniper: false },
     unknownSwitch: null,
@@ -658,11 +658,10 @@
   }
 
   const vaultEntries = () => {
-    let list = VAULT.slice();
-    if (S.added)
-      list = list
-        .concat([{ name: S.newName || "PRICE_TRACKER_KEY", kind: S.addedOther ? "secret" : S.vkind, hosts: S.addedOther ? ["api.example.net"] : S.vkind === "env" ? [] : ["api.example.com"], updated: "Nov 19", refs: [] }])
-        .sort((a, b) => a.name.localeCompare(b.name));
+    const entry = (name) => ({ name, updated: "Nov 19", refs: [], ...S.saved[name] });
+    let list = VAULT.map((e) => (S.saved[e.name] ? { ...e, ...S.saved[e.name], updated: "Nov 19" } : e))
+      .concat(Object.keys(S.saved).filter((n) => !VAULT.some((e) => e.name === n)).map(entry))
+      .sort((a, b) => a.name.localeCompare(b.name));
     if (S.removed) list = list.filter((e) => e.name !== S.item);
     return list;
   };
@@ -1045,15 +1044,21 @@
         const f = document.getElementById("secret-value");
         if (f) f.value = "";
         go({ v: "vsaving", newName: S.replacing ? S.item : name, badName: false });
+        // What a listing shows of a new name is recorded with the kind this save sent, apart from the form.
+        const kind = S.vkind;
+        const listed = (hosts) => {
+          if (!S.replacing) S.saved[name] = { kind: hosts ? "secret" : kind, hosts: hosts || (kind === "env" ? [] : ["api.example.com"]) };
+        };
         return later(() => {
           const a = S.vanswer;
           if (a === "refused") return go({ v: "failed" }, "Couldn't save");
           if (a === "lostnot") return go({ v: "notlisted" }, "Couldn't confirm the save");
-          if (a === "lostlisted") return go({ v: "listedonly", added: !S.replacing }, "Listed; the value isn't confirmed");
-          if (a === "lostother") return go({ v: "listedother", added: !S.replacing, addedOther: !S.replacing }, "Listed with other settings");
+          if (a === "lostlisted") return listed(), go({ v: "listedonly" }, "Listed; the value isn't confirmed");
+          if (a === "lostother") return listed(["api.example.net"]), go({ v: "listedother" }, "Listed with other settings");
           if (a === "lostunread") return go({ v: "saveunread" }, "Couldn't confirm the save");
-          if (a === "refresh") return go({ v: "savedrefresh", added: !S.replacing }, "Saved");
-          go({ v: "saved", added: !S.replacing }, "Saved");
+          listed();
+          if (a === "refresh") return go({ v: "savedrefresh" }, "Saved");
+          go({ v: "saved" }, "Saved");
         });
       }
       case "v-back":
