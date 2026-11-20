@@ -37,8 +37,8 @@ const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
 /** Run records of this checkout's end-to-end runs. Git-ignored. */
 export const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
-/** The default instance's ports and the web preview's. An e2e run uses none of them. */
-export const FORBIDDEN_PORTS = [19001, 19091, 5310, 5311];
+import { FORBIDDEN_PORTS } from "./ports.ts";
+export { FORBIDDEN_PORTS } from "./ports.ts";
 
 export type ListedInstance = {
   name: string | null;

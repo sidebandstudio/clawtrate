@@ -30,9 +30,10 @@ export type DesktopHostApi = {
 function invokeUpdateTrack(
   channel: "clawtrate:update:check" | "clawtrate:update:track",
   track: unknown,
+  ...revision: number[]
 ) {
   return track === "stable" || track === "nightly"
-    ? ipcRenderer.invoke(channel, track)
+    ? ipcRenderer.invoke(channel, track, ...revision)
     : ipcRenderer.invoke(channel);
 }
 
@@ -40,7 +41,10 @@ const api: DesktopHostApi = {
   platform: process.platform,
   desktopUpdates: {
     get: () => ipcRenderer.invoke("clawtrate:update:get"),
-    check: (track) => invokeUpdateTrack("clawtrate:update:check", track),
+    check: (track, revision) =>
+      typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0
+        ? invokeUpdateTrack("clawtrate:update:check", track, revision)
+        : ipcRenderer.invoke("clawtrate:update:check"),
     chooseTrack: (track) => invokeUpdateTrack("clawtrate:update:track", track),
     download: (id) =>
       typeof id === "string"

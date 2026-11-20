@@ -23,15 +23,23 @@ describe("the parity table", () => {
     () => {
       const rows = parseTable(readFileSync(join(ROOT, "docs/parity.md"), "utf8"));
       expect(rows.length).toBeGreaterThan(400);
-      const checks = [
-        ...listVitest(ROOT),
-        ...listPlaywright(ROOT, join(ROOT, "playwright.config.ts")),
-        ...listPlaywright(ROOT, join(ROOT, "playwright.visual.config.ts")),
+      const configs = [
+        "playwright.config.ts",
+        "playwright.visual.config.ts",
+        "playwright.updates.config.ts",
       ];
+      const listings = new Map(
+        configs.map((config) => [config, listPlaywright(ROOT, join(ROOT, config))]),
+      );
+      const desktopUpdates = listings.get("playwright.updates.config.ts") ?? [];
+      expect(desktopUpdates.length).toBeGreaterThan(0);
+      for (const titlePath of desktopUpdates) expect(checkIds([titlePath])).toContain("F-231");
+      expect(checkIds(listings.get("playwright.visual.config.ts") ?? [])).toContain("F-030");
+      const checks = [...listVitest(ROOT), ...[...listings.values()].flat()];
       expect(checks.length).toBeGreaterThan(400);
       expect(parityProblems(rows, new Set(checkIds(checks)))).toEqual([]);
       // No file that names a row skips any of its checks. The guard's own tests are exempt.
-      const files = ["e2e", "visual", "test", "packages", "apps", "tools"]
+      const files = ["e2e", "e2e-updates", "visual", "test", "packages", "apps", "tools"]
         .flatMap((dir) => testFiles(join(ROOT, dir)))
         .map((path) => relative(ROOT, path))
         .filter((path) => !path.startsWith("test/parity"));

@@ -25,6 +25,7 @@ import { OPEN_BOT, OPEN_TASK } from "./data.ts";
 import { fileParams } from "./files.ts";
 import { accountParams } from "./accounts.ts";
 import { usageParams } from "./usage.ts";
+import { fixtureUpdates } from "./updates.ts";
 import { machineParams } from "./machines.ts";
 import { permissionParams } from "./permissions.ts";
 
@@ -79,12 +80,14 @@ seedPreferences();
 document.documentElement.dataset.host = "web";
 const sceneName = params.get("scene");
 const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
+  desktopUpdates: fixtureUpdates(params),
   files: fileParams(params),
   accounts: accountParams(params),
   usage: usageParams(params),
   machines: machineParams(params),
   permissions: permissionParams(params),
 });
+if (params.has("hold")) bridge.hold();
 // Otto's Usage page in the Work pane's Settings tab, with the budget form open for `budget=invalid`.
 if (params.get("uview") === "usage")
   requestUsagePage(params.get("bot") ?? OPEN_BOT, params.get("budget") === "invalid");
