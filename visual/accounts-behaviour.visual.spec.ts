@@ -625,10 +625,9 @@ test("F-490 F-476: an account only another bot keeps is no account for this bot,
   await openFixture(page, `${SETTINGS_TAB}&lock=elsewhere`, "light");
   await page.getByRole("button", { name: /^Account: .*No account\. Open\.$/ }).click();
   await expect(
-    page.getByText(
-      "No account. Otto's account, Anthropic · Pip's key, is kept by Pip only, so Otto can't use it.",
-      { exact: false },
-    ),
+    page.getByText("No account. The gateway's list does not show Anthropic · Pip's key for Otto.", {
+      exact: false,
+    }),
   ).toBeVisible();
   await expect(page.getByTestId("locked-note")).toHaveCount(0);
 });
