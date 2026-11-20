@@ -23,6 +23,7 @@
 //   files=1             Delete's folder option ticked
 //   delread=loading|failed   reading what the bot has
 //   delresult=partial|refused|uncertain   how the delete ends
+//   delreplaced=1       the bot is replaced (same id, another creation record) before Delete
 //   dupacct=own         the bot's account is kept by it alone
 //   dup=partial|refused the copy is made but its instructions are not copied, or the gateway refuses to make it
 //   onlybot=1           the gateway has one bot
@@ -95,6 +96,11 @@
     pip: { folder: "workspace-pip", files: 23, memory: "MEMORY.md and 3 notes", tasks: 4, routines: ["Weekly plan", "Sunday reminder"], routes: 0, own: ["Pip's key"] },
   };
   if (p("shared")) FACTS.pip.folder = FACTS.juniper.folder;
+  // Each bot's creation record (agents.list createdAt). A delete compares it with the preview's.
+  const CREATED = { juniper: 1763000000000, marlow: 1763100000000, otto: 1763200000000, pip: 1763300000000 };
+  // Every gateway write the prototype sends, for the checks: [method, bot].
+  L.calls = [];
+  CT.lifecycleCalls = () => L.calls.slice();
   const sharers = (id) => app.bots.filter((b) => b.id !== id && FACTS[b.id] && FACTS[id] && FACTS[b.id].folder === FACTS[id].folder).map((b) => b.name);
   const INSTR = {
     juniper: { agents: "# Juniper\n\nYou research questions for the household.\nCite every source you use.\nKeep answers under 300 words.\n", soul: "Curious, careful, plain-spoken.\n", at: "Nov 17, 5:38 PM" },
@@ -1014,6 +1020,7 @@
 
   // Delete (section 10) ---------------------------------------------------------------------------------
 
+  const CHANGED_WORDS = "The bot you reviewed has changed. Open Delete from its current bot page to review it again.";
   VIEWS.delete = (d) => {
     const id = d.bot;
     // Named as it was when the dialog opened: afterwards the list no longer has it.
@@ -1031,6 +1038,7 @@
       );
     if (d.status === "deleting" || d.status === "checking")
       return sheet(d.status === "checking" ? `Delete ${name}?` : `Deleting ${name}`, `<p class="b-wait" role="status"><span class="status-dot" data-status="connecting"></span>${d.status === "checking" ? `Reading what ${name} has again…` : `Deleting ${name}…`}</p>`, "");
+    if (d.status === "replaced") return sheet(`Delete ${name}?`, note(`<p>${CHANGED_WORDS}</p>`, "warn"), button("Close", 'data-lc="close" data-size="lg" data-lc-focus'));
     if (d.status) return resultView(d, name, f, share);
     const workspaceLine = share.length
       ? `<li data-state="stays"><span>Its workspace folder, ${esc(f.folder)}, stays: also used by ${esc(share.join(" and "))}.</span></li>`
@@ -1100,23 +1108,31 @@
         ? note(`<p>The gateway answered: “Agent "${d.bot}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted.”</p>`, "danger") +
           `<p class="b-hint">Other bots use sign-ins kept in ${name}'s folder. The gateway's owner moves them first, on the gateway's machine.</p>`
         : d.status === "lost"
-          ? `<p class="b-hint lc-first">${d.checked ? "Read again just now." : "The delete was sent; its answer was lost."} You asked ${d.files ? "to move its folders to the Trash" : "to keep its folders"}; a retry asks the same.</p>`
+          ? `<p class="b-hint lc-first">Clawtrate didn't get the delete result. You asked to ${d.files ? "move the folders to the Trash" : "leave the folders in place"}. Check again reads the gateway.</p>` + (d.checked ? `<p class="b-hint">Read again just now.</p>` : "")
           : "";
-    const actions =
-      d.status === "partial"
-        ? button("Retry cleanup", 'data-lc="del-retry" data-size="lg" data-lc-focus', "primary") + button("Leave it", 'data-lc="close" data-size="lg"', "quiet")
-        : d.status === "lost"
-          ? button("Check again", 'data-lc="del-check" data-size="lg" data-lc-focus', "primary") + button("Retry the same delete", 'data-lc="del-retry" data-size="lg"') + button("Close", 'data-lc="close" data-size="lg"', "quiet")
-          : d.status === "purge"
-            ? button("Retry the same delete", 'data-lc="del-retry" data-size="lg" data-lc-focus', "primary") + button("Close", 'data-lc="close" data-size="lg"', "quiet")
-            : button("Close", 'data-lc="close" data-size="lg" data-lc-focus');
+    // No retry of a delete: a request carries only an id, which may name a bot made since.
+    const actions = ["lost", "partial", "purge"].includes(d.status)
+      ? button("Check again", 'data-lc="del-check" data-size="lg" data-lc-focus', "primary") + button("Close", 'data-lc="close" data-size="lg"', "quiet")
+      : button("Close", 'data-lc="close" data-size="lg" data-lc-focus');
     return sheet(titles[d.status], head + `<p class="b-hint lc-first">Read back from the gateway just now:</p><ul class="lc-result" aria-label="What the gateway has now">${reads}</ul>` + paths, actions);
   }
 
-  function runDelete(retry) {
+  function runDelete() {
     const d = L.dialog;
+    // The bot was replaced after the preview: the same id, another creation record. Nothing is sent.
+    if (p("delreplaced") && !d.replacedShown) {
+      d.status = "checking";
+      paint();
+      return setTimeout(() => {
+        d.replacedShown = true;
+        CREATED[d.bot] += 1;
+        d.status = "replaced";
+        paint(true);
+        announce(CHANGED_WORDS);
+      }, 400);
+    }
     // The preview is read again before anything is sent; a change asks again.
-    if (!retry && p("delchanged") && !d.changed) {
+    if (p("delchanged") && !d.changed) {
       d.status = "checking";
       paint();
       return setTimeout(() => {
@@ -1129,14 +1145,15 @@
     }
     d.status = "deleting";
     d.busy = true;
+    L.calls.push(["agents.delete", d.bot]);
     paint(true);
     setTimeout(() => {
       d.busy = false;
       const want = p("delresult");
-      if (!retry && want === "refused") d.status = "refused";
-      else if (!retry && want === "uncertain") d.status = "lost";
-      else if (!retry && want === "purge") d.status = "purge";
-      else if (!retry && want === "partial" && d.files) d.status = "partial";
+      if (want === "refused") d.status = "refused";
+      else if (want === "uncertain") d.status = "lost";
+      else if (want === "purge") d.status = "purge";
+      else if (want === "partial" && d.files) d.status = "partial";
       else d.status = "done";
       if (d.status !== "refused" && botOf(d.bot)) {
         const i = app.bots.findIndex((b) => b.id === d.bot);
@@ -1326,18 +1343,18 @@
         L.dialog.read = null;
         return paint(true);
       case "del-go":
-        return runDelete(false);
-      case "del-check":
+        return runDelete();
+      case "del-check": {
+        const was = L.dialog.status;
         L.dialog.status = "checking";
         paint();
         return setTimeout(() => {
-          L.dialog.status = "lost";
+          L.dialog.status = was;
           L.dialog.checked = true;
           paint(true);
           announce("Read again");
         }, 400);
-      case "del-retry":
-        return runDelete(true);
+      }
     }
   });
   document.addEventListener("change", (e) => {

@@ -122,6 +122,7 @@
     ["lc=delete&delbot=pip&delresult=refused", "Delete: refused (Delete Pip)"],
     ["lc=delete&delbot=pip&files=1&delresult=purge", "Delete: the task records weren't removed (Delete Pip)"],
     ["lc=delete&delbot=pip&delchanged=1", "Delete: what the bot has changed meanwhile (Delete Pip)"],
+    ["lc=delete&delbot=pip&delreplaced=1", "Delete: the bot was replaced before Delete (Delete Pip)"],
     ["lc=delete&delbot=otto", "Delete Otto, with a channel route"],
     ["bot=otto&" + st + "&onlybot=1", "The gateway's only bot"],
   ];

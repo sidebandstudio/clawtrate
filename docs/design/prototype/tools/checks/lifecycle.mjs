@@ -77,6 +77,8 @@ await p.locator("#rail-menu:not([hidden]) .menu-item").first().waitFor();
   return p.evaluate(() => [...document.querySelectorAll("#rail-menu .menu-item")].map((x) => x.textContent.trim()));
 };
 const settings = "panel=open&tab=settings";
+// A result sheet offers nothing that sends a delete again.
+const noDestructive = (p) => p.evaluate(() => ![...document.querySelectorAll("#lc-dialog button")].some((x) => x.dataset.lc === "del-retry" || x.dataset.lc === "del-go" || x.dataset.tone === "danger" || /Retry|Delete /.test(x.textContent)));
 
 process.on("uncaughtException", (e) => {
   console.log(out.join("\n"));
@@ -665,30 +667,41 @@ p = await open("lc=delete&delbot=pip&files=1&delresult=partial");
 await clickText(p, "#lc-dialog", "Delete Pip");
 await waitText(p, "#lc-dialog", "permission denied");
 t = await dlg(p);
-check("S10 a path the gateway couldn't move is named with its reason, and Retry cleanup is offered", has(t, "Pip was deleted, but the gateway couldn't move one folder", "workspace-pip: Gateway couldn't move this: permission denied", "Retry cleanup", "Leave it") && !t.includes("still on the gateway"));
-await clickText(p, "#lc-dialog", "Retry cleanup");
-await waitText(p, "#lc-dialog", "workspace-pip: Gateway reported moving this to Trash");
-check("S10 Retry cleanup reports again from the answer", (await text(p, '[data-lc-path="workspace-pip"]')).includes("Gateway reported moving this to Trash"));
+check("S10 a path the gateway couldn't move is named with its reason, with Check again and Close", has(t, "Pip was deleted, but the gateway couldn't move one folder", "workspace-pip: Gateway couldn't move this: permission denied", "Check again", "Close") && !t.includes("still on the gateway"));
+check("S10 ... and no control that deletes again", await noDestructive(p));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&files=1&delresult=purge");
 await clickText(p, "#lc-dialog", "Delete Pip");
 await waitText(p, "#lc-dialog", "its task records weren't");
 t = await dlg(p);
-check("S10 a session-store failure in its own words, and no folder claims", has(t, "Pip was deleted, but its task records weren't", "The gateway couldn't remove Pip's task records, so it moved no folders.", "Retry the same delete") && !t.includes("Gateway reported moving"));
+check("S10 a session-store failure in its own words, and no folder claims", has(t, "Pip was deleted, but its task records weren't", "The gateway couldn't remove Pip's task records, so it moved no folders.", "Check again") && !t.includes("Gateway reported moving"));
+check("S10 ... and no control that deletes again", await noDestructive(p));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&files=1&delresult=uncertain");
 await clickText(p, "#lc-dialog", "Delete Pip");
 await waitText(p, "#lc-dialog", "Clawtrate didn't get the gateway's answer");
 t = await dlg(p);
-check("S10 a lost answer keeps the choice and promises nothing", has(t, "Clawtrate didn't get the gateway's answer", "You asked to move its folders to the Trash; a retry asks the same.", "workspace-pip: The gateway didn't confirm what happened to this path", "Check again", "Retry the same delete"));
+check("S10 a lost answer keeps the choice and promises nothing", has(t, "Clawtrate didn't get the gateway's answer", "Clawtrate didn't get the delete result. You asked to move the folders to the Trash. Check again reads the gateway.", "workspace-pip: The gateway didn't confirm what happened to this path", "Check again", "Close") && !t.includes("Retry"));
+check("S10 ... and no control that deletes again", await noDestructive(p));
 await clickText(p, "#lc-dialog", "Check again");
 await waitText(p, "#lc-dialog", "Read again just now.");
-check("S10 Check again reads again", (await dlg(p)).includes("Read again just now.") && (await dlg(p)).includes("Not in the gateway's list of bots"));
-await clickText(p, "#lc-dialog", "Retry the same delete");
-await waitText(p, "#lc-dialog", "Pip was deleted");
-check("S10 Retry the same delete reports what the answer says", (await dlg(p)).includes("Pip was deleted"));
+check("S10 Check again reads again, and sends nothing", (await dlg(p)).includes("Read again just now.") && (await dlg(p)).includes("Not in the gateway's list of bots") && (await p.evaluate(() => CT.lifecycleCalls().length)) === 1);
+await p.close();
+
+p = await open("lc=delete&delbot=pip&delresult=uncertain");
+await clickText(p, "#lc-dialog", "Delete Pip");
+await waitText(p, "#lc-dialog", "Clawtrate didn't get the gateway's answer");
+check("S10 a lost answer with the box clear says the folders were to stay", (await dlg(p)).includes("You asked to leave the folders in place. Check again reads the gateway."));
+await p.close();
+
+p = await open("lc=delete&delbot=pip&delreplaced=1");
+await clickText(p, "#lc-dialog", "Delete Pip");
+await waitText(p, "#lc-dialog", "The bot you reviewed has changed.");
+t = await dlg(p);
+check("F-050 a bot replaced before Delete: the confirmation closes with its reason", t.includes("The bot you reviewed has changed. Open Delete from its current bot page to review it again.") && (await noDestructive(p)));
+check("F-050 ... zero calls, and the replacement still listed", (await p.evaluate(() => CT.lifecycleCalls().length)) === 0 && (await p.evaluate(() => app.bots.some((b) => b.id === "pip"))));
 await p.close();
 
 p = await open("lc=delete&delbot=pip&delresult=refused");
