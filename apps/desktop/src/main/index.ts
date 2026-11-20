@@ -20,7 +20,8 @@ import {
   shell,
   type WebContents,
 } from "electron";
-import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -39,6 +40,7 @@ import { SetupController } from "../setup/controller.ts";
 import { ProgramRunner } from "../setup/programs.ts";
 import { resolveSetupLaunch, sandboxOpener, type Opened } from "../setup/sandbox.ts";
 import { startSyntheticGateway } from "../setup/synthetic-gateway.ts";
+import { desktopStartup } from "../setup/startup.ts";
 import { processIdentity } from "../../../../tools/dev-gateway/src/state-guard.ts";
 import { accountHome, productionWorld, type SetupRefusedError } from "../setup/world.ts";
 
@@ -116,6 +118,21 @@ const SETUP = resolveSetupLaunch({
 });
 
 /**
+ * What the host starts on, from that launch, also before the lock: a sandbox's
+ * checked `app-data` or, refused, a fresh private temporary folder as its data
+ * folder, and then no development gateway and no saved gateway reopened.
+ * Only a person's packaged app keeps the ordinary data folder and resumes.
+ */
+const STARTUP = desktopStartup(SETUP, {
+  packaged: app.isPackaged,
+  devConnection: () =>
+    readDevConnection(REPO_ROOT, { instance: selectInstance(undefined, process.env) }),
+  autoConnectDev: () => process.env.CLAWTRATE_AUTOCONNECT_DEV === "1",
+  privateData: () => mkdtempSync(join(tmpdir(), "clawtrate-refused-")),
+});
+if (STARTUP.userData) app.setPath("userData", STARTUP.userData);
+
+/**
  * The checkout whose run records prove a sandbox's run: this development
  * build's own; a packaged app is told by its launch check.
  */
@@ -138,6 +155,7 @@ function setupOpener(): {
   if (SETUP.kind === "sandbox") {
     return sandboxOpener({
       file: SETUP.file,
+      sandbox: SETUP.sandbox,
       platform: process.platform,
       context: {
         platform: process.platform,
@@ -321,7 +339,9 @@ async function saveHeld(
 
 /** The device key and tokens live here, readable by this user only. */
 function privateDataDir(): string {
-  const dir = process.env.CLAWTRATE_DATA_DIR ?? join(app.getPath("userData"), "gateway");
+  // Only a person's app takes its folder from the environment; every other run keeps its own.
+  const chosen = SETUP.kind === "production" ? process.env.CLAWTRATE_DATA_DIR : undefined;
+  const dir = chosen ?? join(app.getPath("userData"), "gateway");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (process.platform !== "win32") chmodSync(dir, 0o700);
   return dir;
@@ -334,19 +354,17 @@ async function main(): Promise<void> {
     app.dock?.setIcon(join(RESOURCES, "icon-mac.png"));
   }
 
-  const devInstance = selectInstance(undefined, process.env);
+  const devInstance = STARTUP.devGateway ? selectInstance(undefined, process.env) : null;
   runtime = await startHostRuntime({
     kind: "desktop",
     displayName: "Clawtrate Desktop",
     dataDir: privateDataDir(),
-    // Only development builds look for the local development gateway.
-    // CLAWTRATE_DEV_INSTANCE selects a named development instance. Its address
-    // is opened only while this checkout can still prove it, before every attempt.
-    devGateway: app.isPackaged ? null : readDevConnection(REPO_ROOT, { instance: devInstance }),
+    // A sandboxed or refused start (every development build and automated run) has no
+    // development gateway, doesn't auto-connect and never resumes a saved gateway.
+    devGateway: STARTUP.devGateway,
     recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance: devInstance }),
-    autoConnectDev: process.env.CLAWTRATE_AUTOCONNECT_DEV === "1",
-    // A development build and every automated run never resume a saved gateway.
-    resume: SETUP.kind === "production",
+    autoConnectDev: STARTUP.autoConnectDev,
+    resume: STARTUP.resume,
   });
   const { client, info, policy } = runtime;
   const userDir = app.getPath("userData");

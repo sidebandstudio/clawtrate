@@ -311,11 +311,13 @@ export const CHECKOUT = realpathSync(ROOT);
  * current run. On Windows the look reads nothing and no instance runs, so the
  * description there names none that is running.
  */
-function setupSandbox(dir: string, instance: string): string {
+function setupSandbox(dir: string, instance: string): { file: string; appData: string } {
   const parent = join(dir, "setup");
   mkdirSync(parent, { recursive: true });
   const run = process.platform === "win32" ? { run: "0".repeat(48) } : {};
-  return writeSandbox({ instance, parent, ...run }).file;
+  const sandbox = writeSandbox({ instance, parent, ...run });
+  // The app keeps its data in the sandbox's own folder; the check passes and reads that one.
+  return { file: sandbox.file, appData: realpathSync.native(sandbox.appData) };
 }
 
 export default async function globalSetup() {
@@ -390,7 +392,8 @@ export default async function globalSetup() {
   const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
   record.dirs.push(dir);
   saveRecord(RECORDS, record);
-  const userData = join(realpathSync.native(dir), "user-data");
+  // The sandbox's data folder once it is written; nothing of the app's runs before that.
+  let userData = join(realpathSync.native(dir), "user-data");
 
   const teardown = async () => {
     const problems: string[] = [];
@@ -463,13 +466,14 @@ export default async function globalSetup() {
       }
     }
 
-    mkdirSync(userData);
     // What the app writes to its output, its log, kept beside its data folder for the checks.
     const log = join(dir, "app.log");
     const logFd = openSync(log, "a", 0o600);
     record.hostPending = true;
     saveRecord(RECORDS, record);
-    const sandbox = setupSandbox(dir, name);
+    const written = setupSandbox(dir, name);
+    const sandbox = written.file;
+    userData = written.appData;
     process.env.CLAWTRATE_PACKAGED_SANDBOX = sandbox;
     const place = launchPlace(dir);
     process.env.CLAWTRATE_PACKAGED_PLACE = dir;
@@ -522,8 +526,8 @@ async function windowsSetup() {
   const REAL_DATA = realData();
   const realBefore = fingerprint(REAL_DATA);
   const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
-  const userData = join(realpathSync.native(dir), "user-data");
-  mkdirSync(userData);
+  // The sandbox's data folder once it is written.
+  let userData = join(realpathSync.native(dir), "user-data");
   let appProcess: ChildProcess | null = null;
 
   /** Ends whatever is left of the app by PID and removes the folder. Synchronous, for the exit handler too. */
@@ -567,7 +571,9 @@ async function windowsSetup() {
   };
 
   try {
-    const sandbox = setupSandbox(dir, `e2e-${randomBytes(4).toString("hex")}`);
+    const written = setupSandbox(dir, `e2e-${randomBytes(4).toString("hex")}`);
+    const sandbox = written.file;
+    userData = written.appData;
     process.env.CLAWTRATE_PACKAGED_SANDBOX = sandbox;
     const place = launchPlace(dir);
     process.env.CLAWTRATE_PACKAGED_PLACE = dir;

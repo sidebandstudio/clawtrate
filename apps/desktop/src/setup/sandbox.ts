@@ -1,8 +1,8 @@
 // The sandbox of the look on this computer (docs/development/setup.md).
 //
 // A run that must be sandboxed (`mustSandbox`) is given a description,
-// `sandbox.json`, in a private folder of the launch's own under the system's
-// temporary root. The description selects a development instance, that
+// `sandbox.json`, in a private folder of the account's under a temporary root
+// fixed in code, reached without links and outside the account's home. The description selects a development instance, that
 // instance's run, and a fixture scenario from a closed set, and nothing else:
 // no program, no folder, no port. Every path is computed here from the
 // description's own folder; inside the account's home the only one is the
@@ -229,7 +229,11 @@ export function validateSandbox(path: string, context: SandboxContext): Validate
   if (within(canonical, realHome) || within(realHome, canonical) || within(canonical, home))
     throw new SetupRefusedError("home");
   if (!privateFolder(files.lstat(canonical), context.uid)) throw new SetupRefusedError("file");
-  const folders = { home: join(canonical, "home"), cwd: join(canonical, "work") };
+  const folders = {
+    home: join(canonical, "home"),
+    cwd: join(canonical, "work"),
+    appData: join(canonical, "app-data"),
+  };
   for (const folder of Object.values(folders)) {
     if (!privateFolder(files.lstat(folder), context.uid)) throw new SetupRefusedError("file");
   }
@@ -240,7 +244,6 @@ export function validateSandbox(path: string, context: SandboxContext): Validate
     root: canonical,
     file: join(canonical, SANDBOX_FILE),
     ...folders,
-    appData: join(canonical, "app-data"),
   };
 }
 

@@ -109,6 +109,7 @@ export function runFolder(parent: string, description: unknown): { root: string;
   const root = mkdtempSync(join(parent, "clawtrate-setup-"));
   mkdirSync(join(root, "home"), { mode: 0o700 });
   mkdirSync(join(root, "work"), { mode: 0o700 });
+  mkdirSync(join(root, "app-data"), { mode: 0o700 });
   const file = join(root, SANDBOX_FILE);
   writeFileSync(file, typeof description === "string" ? description : JSON.stringify(description), {
     mode: 0o600,

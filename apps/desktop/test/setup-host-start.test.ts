@@ -17,6 +17,9 @@ import {
 } from "../../../packages/core/test/fake-gateway.ts";
 import { startHostRuntime } from "../src/host/runtime.ts";
 import { setupLookChoice } from "../src/web-host/setup-look.ts";
+import { desktopStartup, webStartup } from "../src/setup/startup.ts";
+import { resolveSetupLaunch } from "../src/setup/sandbox.ts";
+import { vi } from "vitest";
 import * as fake from "./fixtures/sandbox.ts";
 
 /** Another gateway this device was connected to before: never one a sandboxed start reopens. */
@@ -77,18 +80,97 @@ describe("a sandboxed host's start", () => {
     runtime.client.stop();
   });
 
+  it("S8: sandboxed and refused startup never resolve an independent gateway or ordinary data", async () => {
+    const at = fake.world();
+    const run = fake.instance({
+      home: at.home,
+      checkout: at.checkout,
+      name: "su1-test",
+      run: fake.runId("a"),
+    });
+    const folder = fake.runFolder(join(at.base, "runs"), { instance: run.name, run: run.run });
+    const context = { platform: "darwin" as NodeJS.Platform, home: at.home, uid: at.uid };
+    const launch = (file: string | null) =>
+      resolveSetupLaunch({
+        packaged: false,
+        env: {},
+        switches: (name) => name === "clawtrate-setup-sandbox",
+        switchValue: (name) => (name === "clawtrate-setup-sandbox" ? (file ?? "") : ""),
+        context,
+      });
+    const sandboxed = launch(folder.file);
+    const refused = launch(null);
+    expect([sandboxed.kind, refused.kind]).toEqual(["sandbox", "refused"]);
+    for (const resolved of [sandboxed, refused]) {
+      // A development gateway, an auto-connect setting and the ordinary data folder, all on offer.
+      const devConnection = vi.fn(() => ({ url: SAVED, token: "dev-token", instance: "su1-test" }));
+      const autoConnectDev = vi.fn(() => true);
+      const privateData = vi.fn(() => fake.base());
+      const startup = desktopStartup(resolved, {
+        packaged: false,
+        devConnection,
+        autoConnectDev,
+        privateData,
+      });
+      expect(devConnection).not.toHaveBeenCalled();
+      expect(autoConnectDev).not.toHaveBeenCalled();
+      expect(startup).toMatchObject({ devGateway: null, autoConnectDev: false, resume: false });
+      expect(startup.userData).toBe(
+        resolved.kind === "sandbox"
+          ? join(folder.root, "app-data")
+          : privateData.mock.results[0]?.value,
+      );
+      // And a data folder that remembers a gateway, started that way, opens nothing.
+      const dataDir = join(startup.userData!, "gateway");
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(
+        join(dataDir, "state.json"),
+        JSON.stringify({ connection: JSON.stringify({ url: SAVED, token: null }) }),
+      );
+      const runtime = await startHostRuntime({
+        kind: "desktop",
+        displayName: "Clawtrate Test",
+        dataDir,
+        ...startup,
+      });
+      expect(runtime.client.state.connection).toMatchObject({ status: "idle", gatewayUrl: null });
+      runtime.client.stop();
+    }
+    // The web host's setup look: no development gateway, no ordinary data folder.
+    const chosen = setupLookChoice({ "setup-look": true, "setup-sandbox": folder.file }, context);
+    if (chosen.kind !== "sandbox") throw new Error(chosen.kind);
+    const devConnection = vi.fn(() => null);
+    const dataDir = vi.fn(() => "/ordinary");
+    expect(webStartup(chosen, { devConnection, dataDir, autoConnectDev: true })).toEqual({
+      dataDir: join(folder.root, "app-data"),
+      devGateway: null,
+      autoConnectDev: false,
+      resume: false,
+    });
+    expect(devConnection).not.toHaveBeenCalled();
+    expect(dataDir).not.toHaveBeenCalled();
+  });
+
   it("the desktop host resolves the launch before its lock and its runtime, and resumes only a person's app", () => {
     const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
     const resolved = main.indexOf("resolveSetupLaunch({");
+    const chosen = main.indexOf("desktopStartup(SETUP,");
+    const placed = main.indexOf('app.setPath("userData", STARTUP.userData)');
     expect(resolved).toBeGreaterThan(-1);
-    expect(resolved).toBeLessThan(main.indexOf("app.requestSingleInstanceLock()"));
-    expect(resolved).toBeLessThan(main.indexOf("await startHostRuntime("));
-    expect(main).toContain('resume: SETUP.kind === "production",');
+    expect(resolved).toBeLessThan(chosen);
+    expect(chosen).toBeLessThan(placed);
+    expect(placed).toBeLessThan(main.indexOf("app.requestSingleInstanceLock()"));
+    expect(placed).toBeLessThan(main.indexOf("await startHostRuntime("));
+    expect(main).toContain("devGateway: STARTUP.devGateway,");
+    expect(main).toContain("resume: STARTUP.resume,");
     const web = readFileSync(new URL("../src/web-host/main.ts", import.meta.url), "utf8");
     expect(web.indexOf("setupLookChoice(values")).toBeLessThan(
+      web.indexOf("webStartup(setupLook,"),
+    );
+    expect(web.indexOf("webStartup(setupLook,")).toBeLessThan(
       web.indexOf("await startHostRuntime("),
     );
-    expect(web).toContain('resume: setupLook.kind !== "sandbox",');
+    expect(web).toContain("resume: start.resume,");
   });
 });
 
@@ -140,7 +222,7 @@ describe("the web host's setup look", () => {
     expect(refused).toEqual({
       kind: "refused",
       message:
-        "The look on this computer refused to start: the sandbox's description is not in a private run folder of its own, or has the wrong shape.",
+        "The look on this computer refused to start: the sandbox's description is not in a private folder of the account's under the system's temporary root, reached without links, or has the wrong shape.",
     });
   });
 });

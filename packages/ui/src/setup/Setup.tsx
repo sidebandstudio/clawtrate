@@ -560,7 +560,7 @@ const CONNECT_STEPS: Record<NonNullable<SetupLook["access"]>, string[]> = {
 /** Why a run that must look in a sandbox couldn't use the one it was given, in words. */
 const REFUSED: Record<SetupRefusal, string> = {
   missing: "none was given to this run.",
-  file: "its description isn't in a private run folder of its own, or has the wrong shape.",
+  file: "its description isn't in a private folder of yours under the system's temporary root, reached without links, or has the wrong shape.",
   home: "its home and working folder must be outside the account's home.",
   state: "its state folder or config didn't pass the run's checks.",
   pairing: "it pairs only in its pairing scenario.",

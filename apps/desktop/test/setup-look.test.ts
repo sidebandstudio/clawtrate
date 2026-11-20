@@ -851,6 +851,22 @@ describe("the sandbox: a run's description, its folder and its proven instance",
     expect(s.gateways()).toBe(0);
   });
 
+  it("S2: setup refuses a linked app-data directory before starting the host", () => {
+    const s = setting();
+    rmSync(join(s.root, "app-data"), { recursive: true });
+    symlinkSync(s.home, join(s.root, "app-data"));
+    const launched = resolveSetupLaunch({
+      packaged: true,
+      env: {},
+      switches: (name) => name === "clawtrate-setup-sandbox",
+      switchValue: (name) => (name === "clawtrate-setup-sandbox" ? s.file : ""),
+      context: s.context,
+    });
+    expect(launched.kind === "refused" && launched.error.reason).toBe("file");
+    expect(s.files.reads).toEqual([]);
+    expect(s.processes.asked).toEqual([]);
+  });
+
   it("refuses when the account can't be read, instead of trusting HOME", async () => {
     const s = setting();
     expect(accountHome(() => ({ homedir: "/accounts/someone" }))).toBe("/accounts/someone");
@@ -1202,6 +1218,9 @@ describe("the sandbox: a run's description, its folder and its proven instance",
         context: s.context,
       });
     expect(launch({}).kind).toBe("production");
+    // An unmarked packaged start reads and looks up nothing at all.
+    expect(s.files.reads).toEqual([]);
+    expect(s.files.lookups).toEqual([]);
     const refused = (value: ReturnType<typeof launch>) =>
       value.kind === "refused" ? value.error.reason : value.kind;
     // Each marker by itself, no debugging switch, no file: refused, as given none.

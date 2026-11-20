@@ -58,7 +58,7 @@ export type LookWorld = {
 /** Each refusal's line in the host's log: fixed words, never a path or an error's text. */
 const REFUSAL_LINES: Record<SetupRefusal, string> = {
   missing: "this run must look in a sandbox and was given none",
-  file: "the sandbox's description is not in a private run folder of its own, or has the wrong shape",
+  file: "the sandbox's description is not in a private folder of the account's under the system's temporary root, reached without links, or has the wrong shape",
   home: "the sandbox's home and working folder must be outside the account's home",
   state:
     "the development instance's state folder, its run or its config did not pass the run's checks",

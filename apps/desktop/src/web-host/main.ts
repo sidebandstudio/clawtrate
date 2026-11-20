@@ -23,6 +23,7 @@ import { parseArgs } from "node:util";
 import { readDevConnection, selectInstance, startHostRuntime } from "../host/runtime.ts";
 import { createAccessToken, startWebHost } from "./server.ts";
 import { setupLookChoice } from "./setup-look.ts";
+import { webStartup } from "../setup/startup.ts";
 import { SetupController } from "../setup/controller.ts";
 import { ProgramRunner } from "../setup/programs.ts";
 import { sandboxOpener } from "../setup/sandbox.ts";
@@ -61,17 +62,8 @@ function networkUrls(port: number, query: string): string[] {
 }
 
 async function main(): Promise<void> {
-  const instance = selectInstance(values.instance, process.env);
-  const devGateway = readDevConnection(REPO_ROOT, { instance });
-  const tokenDisabled = values["no-access-token"];
-  if (tokenDisabled && !devGateway) {
-    const flag = instance === null ? "" : ` --instance ${instance}`;
-    throw new Error(
-      `--no-access-token is only allowed with the development gateway. Run \`pnpm dev-gateway up${flag}\` first.`,
-    );
-  }
-  const port = Number(values.port);
-  // Decided before anything starts: the setup look's sandbox, or why there is none.
+  // Decided before anything starts: the setup look's sandbox, or why there is none. A setup
+  // look then resolves no development gateway, no ordinary data folder and no saved gateway.
   const context = {
     platform: process.platform,
     home: accountHome(),
@@ -79,13 +71,27 @@ async function main(): Promise<void> {
   };
   const setupLook = setupLookChoice(values, context);
   if (setupLook.kind === "refused") throw new Error(setupLook.message);
+  const instance = setupLook.kind === "off" ? selectInstance(values.instance, process.env) : null;
+  const tokenDisabled = values["no-access-token"];
+  const start = webStartup(setupLook, {
+    devConnection: () => readDevConnection(REPO_ROOT, { instance }),
+    dataDir: () => values["data-dir"] ?? defaultDataDir(),
+    autoConnectDev: values["dev-gateway"] || tokenDisabled,
+  });
+  const devGateway = start.devGateway;
+  if (tokenDisabled && !devGateway) {
+    const flag = instance === null ? "" : ` --instance ${instance}`;
+    throw new Error(
+      `--no-access-token is only allowed with the development gateway. Run \`pnpm dev-gateway up${flag}\` first.`,
+    );
+  }
+  const port = Number(values.port);
   const runtime = await startHostRuntime({
     kind: "web",
     displayName: "Clawtrate Web",
-    dataDir:
-      setupLook.kind === "sandbox" ? setupLook.dataDir : (values["data-dir"] ?? defaultDataDir()),
+    dataDir: start.dataDir,
     devGateway,
-    autoConnectDev: values["dev-gateway"] || tokenDisabled,
+    autoConnectDev: start.autoConnectDev,
     // Without an access token, anyone who can reach the port can use this host,
     // so it may only ever talk to the local development gateway: saved, typed,
     // retried or otherwise.
@@ -93,7 +99,7 @@ async function main(): Promise<void> {
     recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance }),
     readOnly: values["read-only"],
     // The setup look never resumes a saved gateway.
-    resume: setupLook.kind !== "sandbox",
+    resume: start.resume,
   });
   const programs = new ProgramRunner();
   let closeSetup = async () => {};
@@ -101,6 +107,7 @@ async function main(): Promise<void> {
     // A development and review host: it looks only in its sandbox, through the stand-in.
     const opener = sandboxOpener({
       file: setupLook.file,
+      sandbox: setupLook.sandbox,
       platform: process.platform,
       context: { ...context, checkout: realpathSync(REPO_ROOT) },
       startGateway: startSyntheticGateway,

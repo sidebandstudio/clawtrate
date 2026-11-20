@@ -23,7 +23,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { devGateway, FORBIDDEN_PORTS, listInstances } from "./global-setup.ts";
 import { cleanUp, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
 import { writeSandbox } from "./setup-sandbox.ts";
@@ -97,21 +97,22 @@ async function launch(
   options: { sandbox?: string | null; scenario?: Scenario; answer?: number } = {},
 ): Promise<Launched> {
   const dir = folder("app");
-  const data = join(dir, "user-data");
+  const file =
+    options.sandbox === null
+      ? null
+      : (options.sandbox ??
+        writeSandbox({
+          instance: SETUP,
+          // The run this file started the instance with, from its own record.
+          run: record.instances[0]!.runId,
+          parent: dir,
+          ...(options.scenario ? { scenario: options.scenario } : {}),
+        }).file);
+  // A sandboxed app keeps its data in the sandbox's own folder; the check passes and reads that one.
+  const data = file === null ? join(dir, "user-data") : join(dirname(file), "app-data");
   const args = [DESKTOP, `--user-data-dir=${data}`];
   if (process.platform === "linux") args.push("--no-sandbox");
-  if (options.sandbox !== null) {
-    const file =
-      options.sandbox ??
-      writeSandbox({
-        instance: SETUP,
-        // The run this file started the instance with, from its own record.
-        run: record.instances[0]!.runId,
-        parent: dir,
-        ...(options.scenario ? { scenario: options.scenario } : {}),
-      }).file;
-    args.push(`--clawtrate-setup-sandbox=${file}`);
-  }
+  if (file !== null) args.push(`--clawtrate-setup-sandbox=${file}`);
   const app = await _electron.launch({ executablePath: ELECTRON!, args, env: appEnv(), cwd: dir });
   let output = "";
   app.process().stdout?.on("data", (chunk: Buffer) => (output += chunk.toString("utf8")));

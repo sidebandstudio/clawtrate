@@ -1,5 +1,6 @@
 // A sandbox for the look on this computer (docs/development/setup.md): a
-// private folder of the launch's own under the system's temporary folder,
+// private folder of the account's, made here under the system's temporary
+// folder (the app takes any such folder and binds none to a launch),
 // holding the look's home and working folder and the description,
 // `sandbox.json`, which names a development instance of this checkout's, that
 // instance's current run and a scenario, and nothing else. The checks write
@@ -20,7 +21,8 @@ import { SANDBOX_FILE, SCENARIOS, type Scenario } from "../apps/desktop/src/setu
 
 const ROOT = join(import.meta.dirname, "..");
 
-export type Sandbox = { file: string; root: string; home: string };
+/** A written sandbox: its description, its folder, the look's home, and the app's data folder. */
+export type Sandbox = { file: string; root: string; home: string; appData: string };
 
 /** The run id this checkout recorded when it last started the instance. */
 export function currentRun(instance: string, checkout = ROOT): string {
@@ -51,6 +53,7 @@ export function writeSandbox(options: {
   const home = join(root, "home");
   mkdirSync(home, { mode: 0o700 });
   mkdirSync(join(root, "work"), { mode: 0o700 });
+  mkdirSync(join(root, "app-data"), { mode: 0o700 });
   const file = join(root, SANDBOX_FILE);
   const description = {
     instance,
@@ -58,7 +61,7 @@ export function writeSandbox(options: {
     ...(options.scenario ? { scenario: options.scenario } : {}),
   };
   writeFileSync(file, JSON.stringify(description), { mode: 0o600 });
-  return { file, root, home };
+  return { file, root, home, appData: join(root, "app-data") };
 }
 
 if (import.meta.main) {

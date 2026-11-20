@@ -293,7 +293,7 @@ test("a refused sandbox says why it was refused", async ({ page }) => {
   for (const [state, why] of [
     [
       "refused",
-      "its description isn't in a private run folder of its own, or has the wrong shape.",
+      "its description isn't in a private folder of yours under the system's temporary root, reached without links, or has the wrong shape.",
     ],
     ["refused-home", "its home and working folder must be outside the account's home."],
     ["refused-state", "its state folder or config didn't pass the run's checks."],
