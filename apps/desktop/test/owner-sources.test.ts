@@ -161,6 +161,9 @@ const ALLOWED: Record<string, string> = {
   // The SSH transport of "Another computer".
   "apps/desktop/src/main/ssh/forward.ts:BACKOFF_MS": "static, five delays",
   "apps/desktop/src/main/update/feed.ts:FILE_KEYS": "static, the three artifacts a feed names",
+  "apps/desktop/src/main/update/address.ts:GITHUB_RELEASE_ASSETS.assetOrigins":
+    "static, the one host GitHub redirects a release download to",
+  "apps/desktop/src/main/update/fetch.ts:REDIRECTS": "static, the five redirect statuses",
   "apps/desktop/src/main/ssh/known-hosts.ts:KEY_TYPES": "static, seven key types",
   "apps/desktop/src/main/ssh/look.ts:PROGRAM_PLACES": "static, five fixed places",
   "apps/desktop/src/main/ssh/person-config.ts:TAKEN": "static, the eight settings taken",
