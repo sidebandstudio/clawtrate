@@ -48,57 +48,53 @@ async function drive(page: Page, ordering: Ordering) {
     element.style.marginBottom = `${view}px`;
   }, ordering.view);
   await settle(page);
-  return transcript.evaluate(
-    (element, { shrink, grow, pin }) =>
-      new Promise<Array<{ top: number; short: number }>>((resolve) => {
-        const spacer = element.querySelector<HTMLElement>("[data-follow-spacer]")!;
-        const steps = new ResizeObserver(() => {
-          steps.disconnect();
-          spacer.style.height = `${pin - shrink}px`;
-          element.style.marginBottom = "";
-          void element.scrollHeight;
-          spacer.style.height = `${pin - shrink + grow}px`;
-        });
-        steps.observe(element.firstElementChild!);
-        spacer.style.height = `${pin}px`;
-        const seen: Array<{ top: number; short: number }> = [];
-        const frame = () => {
-          const top = element.scrollTop;
-          seen.push({ top, short: element.scrollHeight - top - element.clientHeight });
-          if (seen.length < 10) requestAnimationFrame(frame);
-          else resolve(seen);
-        };
-        requestAnimationFrame(frame);
-      }),
-    { ...ordering, pin: PIN },
-  );
+  return afterGrowth(page, PIN, ordering);
 }
 
-/**
- * Grows the spacer at the end of the content by `px` (0 only watches) and
- * returns each following frame's scroll position and how far it is above the end.
- */
-const afterGrowth = (page: Page, px: number) =>
+type Frame = { top: number; short: number };
+
+/** Sample throughout the change and for ten frames after the observer receives the final size. */
+const afterGrowth = (page: Page, px: number, ordering: Ordering | null = null) =>
   page.getByTestId("transcript").evaluate(
-    (element, px) =>
-      new Promise<Array<{ top: number; short: number }>>((resolve) => {
-        let spacer = element.querySelector<HTMLElement>("[data-follow-spacer]");
+    (element, { px, ordering }) =>
+      new Promise<{ frames: Frame[]; afterResize: Frame[] }>((resolve) => {
+        const inner = element.firstElementChild!;
+        let spacer = inner.querySelector<HTMLElement>("[data-follow-spacer]");
         if (!spacer) {
           spacer = document.createElement("div");
           spacer.dataset.followSpacer = "";
-          element.firstElementChild!.append(spacer);
+          inner.append(spacer);
         }
-        spacer.style.height = `${(Number.parseFloat(spacer.style.height) || 0) + px}px`;
-        const seen: Array<{ top: number; short: number }> = [];
+        const height = (Number.parseFloat(spacer.style.height) || 0) + px;
+        const frames: Frame[] = [];
+        let resizedAt: number | null = null;
+        const observer = new ResizeObserver(() => {
+          if (ordering) {
+            spacer.style.height = `${height - ordering.shrink}px`;
+            element.style.marginBottom = "";
+            void element.scrollHeight;
+            spacer.style.height = `${height - ordering.shrink + ordering.grow}px`;
+            ordering = null;
+            return;
+          }
+          // The transcript's observer was registered first and has now seen the final size.
+          observer.disconnect();
+          resizedAt = frames.length;
+        });
+        observer.observe(inner);
+        spacer.style.height = `${height}px`;
         const frame = () => {
           const top = element.scrollTop;
-          seen.push({ top, short: element.scrollHeight - top - element.clientHeight });
-          if (seen.length < 10) requestAnimationFrame(frame);
-          else resolve(seen);
+          frames.push({ top, short: element.scrollHeight - top - element.clientHeight });
+          if (resizedAt !== null && frames.length - resizedAt === 10) {
+            resolve({ frames, afterResize: frames.slice(resizedAt) });
+          } else {
+            requestAnimationFrame(frame);
+          }
         };
         requestAnimationFrame(frame);
       }),
-    px,
+    { px, ordering },
   );
 
 const atEnd = (page: Page) =>
@@ -119,14 +115,11 @@ for (const theme of THEMES) {
         test(`${rows}: ${scene}, ${name}`, async ({ page }) => {
           await openFixture(page, `scene=${scene}&${OTTO_DISK}&panel=closed`, theme);
           await atEnd(page);
-          const frames = await drive(page, ordering);
-          // Each sample is taken before its frame's resize observer runs, so the
-          // first frames show the spacer and the steps before they are followed.
-          // From then on the transcript stays at the end, frame after frame.
-          const shorts = frames.map(({ short }) => short);
+          const { afterResize } = await drive(page, ordering);
+          const shorts = afterResize.map(({ short }) => short);
           expect(
-            shorts.slice(4).every((short) => short <= 1),
-            `px short of the end, frame by frame: ${shorts}`,
+            shorts.every((short) => short <= 1),
+            `px short of the end after the resize, frame by frame: ${shorts}`,
           ).toBe(true);
         });
       }
@@ -142,7 +135,7 @@ for (const theme of THEMES) {
           return element.scrollTop;
         });
         await settle(page);
-        const tops = (await drive(page, ordering)).map((frame) => frame.top);
+        const tops = (await drive(page, ordering)).frames.map((frame) => frame.top);
         expect(tops, "the reader's scroll position, frame by frame").toEqual(tops.map(() => top));
       });
     }
@@ -165,10 +158,10 @@ for (const theme of THEMES) {
         .filter({ hasText: "Edited disk-2026-11-16.md" })
         .click();
       await settle(page);
-      const held = await afterGrowth(page, 1500);
+      const { frames: held } = await afterGrowth(page, 1500);
       const heldTop = held.at(-1)!.top;
       expect(held.at(-1)!.short, "the held line stops following").toBeGreaterThan(96);
-      const grown = await afterGrowth(page, 300);
+      const { frames: grown } = await afterGrowth(page, 300);
       expect(tops(grown), "the held place, while the content grows").toEqual(
         grown.map(() => heldTop),
       );
@@ -182,11 +175,11 @@ for (const theme of THEMES) {
         return element.scrollTop;
       });
       expect(top).toBeGreaterThan(heldTop);
-      const watched = await afterGrowth(page, 0);
+      const { frames: watched } = await afterGrowth(page, 0);
       expect(tops(watched), "the reader's scroll position, frame by frame").toEqual(
         watched.map(() => top),
       );
-      const growing = await afterGrowth(page, 100);
+      const { frames: growing } = await afterGrowth(page, 100);
       expect(tops(growing), "the reader's place while the content grows").toEqual(
         growing.map(() => top),
       );
@@ -194,9 +187,9 @@ for (const theme of THEMES) {
       // Only once the reader is back at the end is the end followed again.
       await transcript.evaluate((element) => (element.scrollTop = element.scrollHeight));
       await atEnd(page);
-      const followed = (await afterGrowth(page, 100)).map(({ short }) => short);
+      const followed = (await afterGrowth(page, 100)).afterResize.map(({ short }) => short);
       expect(
-        followed.slice(4).every((short) => short <= 1),
+        followed.every((short) => short <= 1),
         `px short of the end, frame by frame: ${followed}`,
       ).toBe(true);
     });
