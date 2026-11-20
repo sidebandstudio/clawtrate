@@ -15,7 +15,8 @@ import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
 import { fuseMismatches } from "../apps/desktop/packaging/fuse-check.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
-import { appEnv, packagedExecutable } from "./global-setup.ts";
+import { appEnv } from "./desktop-driver.ts";
+import { packagedExecutable } from "./global-setup.ts";
 import {
   integrityLevels,
   mainWindowTitle,

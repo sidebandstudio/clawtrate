@@ -27,11 +27,12 @@ describe("the parity table", () => {
         ...listVitest(ROOT),
         ...listPlaywright(ROOT, join(ROOT, "playwright.config.ts")),
         ...listPlaywright(ROOT, join(ROOT, "playwright.visual.config.ts")),
+        ...listPlaywright(ROOT, join(ROOT, "playwright.updates.config.ts")),
       ];
       expect(checks.length).toBeGreaterThan(400);
       expect(parityProblems(rows, new Set(checkIds(checks)))).toEqual([]);
       // No file that names a row skips any of its checks. The guard's own tests are exempt.
-      const files = ["e2e", "visual", "test", "packages", "apps", "tools"]
+      const files = ["e2e", "e2e-updates", "visual", "test", "packages", "apps", "tools"]
         .flatMap((dir) => testFiles(join(ROOT, dir)))
         .map((path) => relative(ROOT, path))
         .filter((path) => !path.startsWith("test/parity"));
