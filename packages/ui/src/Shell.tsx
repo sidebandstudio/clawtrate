@@ -517,6 +517,7 @@ export function Shell({
             nav={routines}
             onNav={setRoutines}
             onClose={closeRoutines}
+            info={info}
             onOpenTask={(botId, key) => {
               selection.selectTask(botId, key, mapSessionRow({ key, agentId: botId }));
               openDetail();

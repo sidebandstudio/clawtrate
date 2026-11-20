@@ -61,6 +61,7 @@ import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machin
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
+import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-ins.ts";
 import { memoryCommands } from "./memory.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 
@@ -481,6 +482,7 @@ export function createFixtureBridge(
     routines?: RoutineParams;
     usage?: UsageParams;
     machines?: MachineParams;
+    checkIns?: CheckInParams;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
@@ -494,8 +496,8 @@ export function createFixtureBridge(
   raceArchive(): void;
   /**
    * Hold the fixture's timed scene steps and delayed answers (a decision applied, refused, or read
-   * back; a reconnect answered) until `release`: a test that must see a state lasting only until the
-   * answer comes holds it, looks, then lets the answer through.
+   * back; a reconnect answered; admin access granted) until `release`: a test that must see a state
+   * lasting only until the answer comes holds it, looks, then lets the answer through.
    */
   hold(): void;
   release(): void;
@@ -521,6 +523,18 @@ export function createFixtureBridge(
       },
       accountParams,
     );
+  const checkInParams = options.checkIns ?? {
+    checkins: null,
+    defaultPrompt: false,
+    scheduler: true,
+    save: null,
+  };
+  const checkInCommand = checkInCommands(checkInParams);
+  if (state.bots.length > 0)
+    state = {
+      ...state,
+      checkIns: fixtureCheckIns(now, checkInParams, state.connection.gatewayId),
+    };
   // And the usage the gateway reports, with this person's budgets.
   const usageParams = options.usage ?? NO_USAGE_PARAMS;
   if (state.bots.length > 0) state = { ...state, usage: fixtureUsage(now, usageParams) };
@@ -565,6 +579,11 @@ export function createFixtureBridge(
   const machineCommand = machineCommands(now, options.machines ?? NO_MACHINE_PARAMS);
   const memory = memoryCommands(now);
   async function apply(command: BridgeCommand): Promise<unknown> {
+    const checkIn = checkInCommand(command, () => state, set);
+    if (checkIn) {
+      sent.push(command);
+      return checkIn;
+    }
     if (
       command.type === "listMemory" ||
       command.type === "readMemory" ||
@@ -595,6 +614,7 @@ export function createFixtureBridge(
       () => state,
       set,
       accountParams,
+      deferred,
       (botId) => [...openKeys].filter((key) => botIdFromSessionKey(key) === botId).at(-1) ?? null,
     );
     if (account) {
