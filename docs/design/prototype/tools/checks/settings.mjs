@@ -396,6 +396,19 @@ for (const [kind, waiting] of [["unsent", "1"], ["unconfirmed", "unconfirmed"]])
   await p.close();
 }
 
+{
+  // CodeRabbit 3: a switch still under way when Add takes over is dropped; Cancel reconnects to the gateway saved before.
+  const p = await open("bot=otto&task=o1");
+  await click(p, ".gateway-pill");
+  await click(p, '#gateway-menu [data-gw="studio"]', 200);
+  await click(p, ".gateway-pill");
+  await click(p, '#gateway-menu [data-s="add"]', 2000);
+  check("walk: Add during a switch: the switch is dropped, setup stays", (await p.evaluate(() => document.querySelector("#s-stand").open)) && (await rail(p)).includes("Adding a gateway") && !(await rail(p)).includes("Marlow") && !(await footer(p)).includes("Studio gateway"), `${await rail(p)} | ${await footer(p)}`);
+  await press(p, "button", "Cancel", SWITCHED + 300);
+  check("walk: Add during a switch, Cancel: back to Home gateway", (await rail(p)).includes("Otto") && (await footer(p)).includes("Home gateway"), await footer(p));
+  await p.close();
+}
+
 // Part 5: removing (section 7) ------------------------------------------------------------------------------
 
 const REMOVED_WORDS = [

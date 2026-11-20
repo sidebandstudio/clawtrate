@@ -483,6 +483,9 @@
       }
       S.waiting = 0;
       S.removal = null;
+      // A switch or a handshake still under way is dropped: setup takes the app's place.
+      clearTimeout(timer);
+      S.target = null;
       // The gateway to go back to: the one in use, or the last one, only while it is still saved.
       S.addFrom = [S.inUse, S.last].find((id) => id && S.order.includes(id)) || null;
       if (settingsDialog.open) settingsDialog.close();
