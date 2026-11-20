@@ -564,7 +564,12 @@ export async function readArtifact(
   } catch (error) {
     return failure(error);
   }
-  if (!record) return { status: "gone", message: "The gateway no longer lists this item." };
+  // A record that can't be read says nothing about removal: only `artifact_not_found` does.
+  if (!record)
+    return {
+      status: "failed",
+      message: "The gateway didn't return a usable record for this item.",
+    };
   if (record.mode === "unsupported") return { status: "unsupported" };
   const preview = part === "preview";
   if (preview && record.kind !== "image")

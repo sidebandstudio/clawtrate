@@ -422,6 +422,14 @@ describe("reading an item", () => {
       status: "failed",
       message: "The gateway's download for this item expired or isn't available now.",
     });
+    // A record the gateway answers that can't be read says nothing about removal either.
+    const unreadable = world({
+      records: [{ id: "artifact_odd", type: "hologram", download: { mode: "url" } }],
+    });
+    expect(await readArtifact(unreadable.ctx, SESSION, "artifact_odd", "full")).toEqual({
+      status: "failed",
+      message: "The gateway didn't return a usable record for this item.",
+    });
   });
 
   it("F-118: nothing over Clawtrate's limit is fetched, and a body that grows past it is dropped", async () => {

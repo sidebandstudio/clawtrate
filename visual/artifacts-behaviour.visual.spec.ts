@@ -298,7 +298,7 @@ test.describe("the card's menu", () => {
       "# Borrowing e-books\n\n## Found\n\n- Your library lends through Shelfwise.\n- Holds take about nine days.\n\n## Left\n\n- Renew the card before March.\n",
     );
     // The browser chooses where, and whether: the web preview says only that it started.
-    await expect(announcer(page)).toHaveText("Download started: borrowing-report.md");
+    await expect(announcer(page)).toHaveText("Sent a download request for borrowing-report.md.");
   });
 
   test("F-304: Download all hands the browser each on-gateway item of the message with its exact bytes, says how many requests it received, and names what it left out", async ({
@@ -529,6 +529,43 @@ test.describe("a Page", () => {
     expect(away).toEqual([]);
   });
 
+  test("F-115: export names the HTML source and reports only the browser request", async ({
+    page,
+  }) => {
+    await openFixture(page, ARTIFACTS, "light");
+    await cardsDrawn(page);
+    await page.locator(".transcript").hover();
+    await page.mouse.wheel(0, -10000);
+    await page.getByTestId("page-card").nth(0).getByRole("button").click();
+    await page.getByRole("button", { name: "Export…" }).click();
+    const dialog = page.getByTestId("page-export");
+    await expect(dialog.getByRole("radio")).toHaveCount(2);
+    // What each file is, by where its HTML came from, and what saving does: no author, no version.
+    await expect(dialog.locator("label").nth(0)).toContainText(
+      "Clawtrate versionSaves a copy with scripts and link controls removed.",
+    );
+    await expect(dialog.locator("label").nth(1)).toContainText(
+      "Original HTML from the gatewaySaves the original HTML.",
+    );
+    await expect(dialog).not.toContainText("made it");
+    await expect(dialog.locator(".page-export-note")).toHaveText(
+      "The file holds the page's HTML only: files kept beside it on the gateway aren't included. Saving exports the HTML as a local file.",
+    );
+    await dialog.getByRole("radio", { name: /^Clawtrate version/ }).check();
+    const [copy] = await Promise.all([
+      page.waitForEvent("download"),
+      dialog.getByRole("button", { name: "Save…" }).click(),
+    ]);
+    // No style travels in the copy: not an element, not an attribute.
+    const html = readFileSync((await copy.path())!, "utf8");
+    expect(html).not.toContain("<style");
+    expect(html).not.toContain("style=");
+    // The browser decides whether it saves: only the request is reported.
+    await expect(announcer(page)).toHaveText(
+      "Sent a download request for E-book apps compared.html.",
+    );
+  });
+
   test("F-115: Escape closes only Export after a click on its note, and restores focus to Export", async ({
     page,
   }) => {
@@ -611,10 +648,12 @@ test.describe("a Page", () => {
     // The link's words and the table stay; the button no longer submits anything.
     expect(inert).toContain("the comparison");
     expect(inert).toContain('<button type="button">Sort</button>');
-    await expect(announcer(page)).toHaveText("Download started: E-book apps compared.html");
+    await expect(announcer(page)).toHaveText(
+      "Sent a download request for E-book apps compared.html.",
+    );
 
     await page.keyboard.press("ControlOrMeta+e");
-    await dialog.getByRole("radio", { name: /^As Juniper made it/ }).check();
+    await dialog.getByRole("radio", { name: /^Original HTML from the gateway/ }).check();
     const [original] = await Promise.all([
       page.waitForEvent("download"),
       dialog.getByRole("button", { name: "Save…" }).click(),

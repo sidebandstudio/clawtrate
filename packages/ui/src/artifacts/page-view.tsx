@@ -128,7 +128,11 @@ function ExportDialog({
           onClose();
           return;
         }
-        setError(`Couldn't save ${name}. ${result.message}`);
+        setError(
+          `Couldn't save ${name}. ${result.message}${
+            result.target === "saved-anyway" ? " The chosen file holds these bytes." : ""
+          }`,
+        );
       } catch (reason) {
         setError(
           `Couldn't save ${name}. ${reason instanceof Error ? reason.message : String(reason)}`,
@@ -146,7 +150,7 @@ function ExportDialog({
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 30_000);
-    announce(`Download started: ${name}`);
+    announce(`Sent a download request for ${name}.`);
     onClose();
   };
 
@@ -169,7 +173,7 @@ function ExportDialog({
       )}
       {value.status === "failed" && (
         <p role="alert" data-testid="page-export-failed">
-          The gateway couldn't send this page. The gateway said: {value.message}{" "}
+          Couldn't read this page. {value.message}{" "}
           <button type="button" className="button" onClick={() => setAttempt((n) => n + 1)}>
             Try again
           </button>
@@ -192,8 +196,8 @@ function ExportDialog({
               <strong>{same ? "The page's HTML" : "Clawtrate version"}</strong>
               <span>
                 {same
-                  ? "Nothing in it runs or contacts other sites."
-                  : "Saves the page with scripts, navigable controls and outside references removed."}{" "}
+                  ? "The gateway's HTML matches the export copy."
+                  : "Saves a copy with scripts and link controls removed."}{" "}
                 {formatSize(value.inert.length)}.
               </span>
             </span>
@@ -207,7 +211,7 @@ function ExportDialog({
                 onChange={() => setChoice("original")}
               />
               <span>
-                <strong>As {occurrence.bot} made it</strong>
+                <strong>Original HTML from the gateway</strong>
                 <span>
                   Saves the original HTML. When opened, it can run scripts or contact other sites.{" "}
                   {formatSize(value.original.length)}.
@@ -218,8 +222,8 @@ function ExportDialog({
         </fieldset>
       )}
       <p className="page-export-note">
-        The file holds the page's HTML only: files kept beside it on the gateway aren't included. It
-        is saved on this device; Clawtrate uploads nothing.
+        The file holds the page's HTML only: files kept beside it on the gateway aren't included.
+        Saving exports the HTML as a local file.
       </p>
       {error && (
         <p role="alert" className="files-alert">

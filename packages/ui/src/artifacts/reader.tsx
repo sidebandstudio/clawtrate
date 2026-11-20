@@ -119,9 +119,7 @@ export function ArtifactReader({
             {api.list ? "Not in this task's items" : "Loading…"}
           </h3>
         </div>
-        {api.list && (
-          <p className="reader-why">The gateway no longer lists this item for this task.</p>
-        )}
+        {api.list && <p className="reader-why">This item is outside the current list.</p>}
       </div>
     );
 

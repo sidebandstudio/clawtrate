@@ -98,11 +98,6 @@ function canonical(address: string): string | null {
   }
 }
 
-/** A style text with every outside reference taken out: `url()` and `@import`. */
-function inertStyle(text: string): string | null {
-  return /url\s*\(|@import|expression\s*\(|image-set\s*\(|-moz-binding/i.test(text) ? null : text;
-}
-
 export type InertPage = {
   /** The framed form: what an export's "Clawtrate version" saves, and what would be drawn. */
   html: string;
@@ -145,15 +140,13 @@ export function inertPage(source: string): InertPage {
     if (type === "submit" || type === "image" || type === "reset")
       input.setAttribute("type", "button");
   }
-  for (const style of [...page.querySelectorAll("style")]) {
-    if (inertStyle(style.textContent ?? "") === null) style.remove();
-  }
+  // No style travels: what CSS can reach is more than a check of its text can prove.
+  for (const style of [...page.querySelectorAll("style")]) style.remove();
   for (const element of page.querySelectorAll("*")) {
     for (const attribute of [...element.attributes]) {
       const name = attribute.name.toLowerCase();
       if (name.startsWith("on")) element.removeAttribute(attribute.name);
-      else if (name === "style" && inertStyle(attribute.value) === null)
-        element.removeAttribute(attribute.name);
+      else if (name === "style") element.removeAttribute(attribute.name);
       else if (name === "src" && element.tagName === "IMG") {
         const kept = inlinePicture(attribute.value);
         if (kept) element.setAttribute("src", kept);

@@ -2,7 +2,7 @@
 // supplied, under the file's own name. The desktop app saves through its main
 // process and says what reached the disk. A browser downloads: it chooses
 // where, and whether, and tells the page neither, so the web preview says
-// only that the download started.
+// only that it sent the browser a download request.
 
 import type { ClawtrateBridge } from "@clawtrate/core";
 
@@ -31,7 +31,7 @@ export async function downloadBytes(
 ): Promise<DownloadOutcome | null> {
   if (!bridge.save) {
     browserDownload(name, data);
-    return { ok: true, announcement: `Download started: ${name}` };
+    return { ok: true, announcement: `Sent a download request for ${name}.` };
   }
   const buffer = new ArrayBuffer(data.length);
   new Uint8Array(buffer).set(data);
@@ -45,7 +45,7 @@ export async function downloadBytes(
         : result.target === "absent"
           ? "Nothing was saved."
           : result.target === "saved-anyway"
-            ? "The file there now holds these bytes."
+            ? "The chosen file holds these bytes."
             : "The file there may be incomplete.";
     return {
       ok: result.target === "saved-anyway",

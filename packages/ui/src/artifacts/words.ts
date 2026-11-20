@@ -185,3 +185,26 @@ export const undecodable = (title: string, kind: "image" | "video") =>
 export const isPdf = (artifact: Artifact) =>
   (artifact.mimeType ?? "").split(";")[0]!.trim().toLowerCase() === "application/pdf" ||
   /\.pdf$/i.test(artifact.title);
+
+/**
+ * What Download all says after writing into a chosen folder, from what reached
+ * the disk: how many it saved, what it left out, and each item saved under a
+ * name other than its own. A name is adjusted for a file already there or for
+ * a name a file system can't take; the sentence doesn't say which.
+ */
+export function folderSaveWords(
+  folder: string,
+  total: number,
+  saved: string[],
+  left: string[],
+  renamed: string[],
+): string {
+  return [
+    left.length === 0
+      ? `Saved ${saved.length} ${saved.length === 1 ? "item" : "items"} in ${folder}.`
+      : `Saved ${saved.length} of ${total} in ${folder}. Not saved: ${left.join(", ")}.`,
+    renamed.length ? `Saved under adjusted names: ${renamed.join(", ")}.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}

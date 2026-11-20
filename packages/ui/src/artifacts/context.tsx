@@ -34,6 +34,7 @@ import {
   downloadable,
   downloadName,
   fetchable,
+  folderSaveWords,
   shownAgainBelow as pagesShownAgain,
 } from "./words.ts";
 import { PageView, type PageOccurrence } from "./page-view.tsx";
@@ -468,16 +469,7 @@ export function ArtifactsProvider({
         saved.push(result.name);
         if (result.name !== name) renamed.push(`${name} as ${result.name}`);
       }
-      announce(
-        [
-          left.length === 0
-            ? `Saved ${saved.length} ${saved.length === 1 ? "item" : "items"} in ${folder.name}.`
-            : `Saved ${saved.length} of ${artifacts.length} in ${folder.name}. Not saved: ${left.join(", ")}.`,
-          renamed.length ? `A file of that name was there, so it saved ${renamed.join(", ")}.` : "",
-        ]
-          .filter(Boolean)
-          .join(" "),
-      );
+      announce(folderSaveWords(folder.name, artifacts.length, saved, left, renamed));
     },
     [announce, bridge, content],
   );
